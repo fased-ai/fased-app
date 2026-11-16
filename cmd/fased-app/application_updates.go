@@ -100,6 +100,20 @@ func applicationUpdatesCommand(args []string, in *os.File, out, errOut io.Writer
 	if *dir, e = defaultPackageLocalData(*dir, explicit); e != nil {
 		return e
 	}
+	if action == "recover" {
+		abs, err := filepath.Abs(*dir)
+		if err != nil {
+			return err
+		}
+		_, packaged, err := desktop.PackageLocalDataRoot(abs, os.Getuid())
+		if err != nil {
+			return err
+		}
+		if packaged {
+			// Use the same exact-instance offline recovery as `fased update`.
+			return ordinaryUpdateCommand([]string{"recover", "--data-dir", *dir}, in, out, errOut)
+		}
+	}
 	ctx := context.Background()
 	c, e := openApplicationUpdatesClient(ctx, *dir)
 	if e != nil {

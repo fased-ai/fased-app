@@ -21,7 +21,7 @@ func (p *Prepared) WriteCandidate(ctx context.Context, out io.Writer) error {
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if p.closed || p.root == nil || p.candidate == nil && !p.report.LinuxPackageDigestsVerified {
+	if p.closed || p.root == nil || p.candidate == nil && !p.report.LinuxPackageDigestsVerified && !p.report.LinuxBundleVerified {
 		return errors.New("held candidate required")
 	}
 	if err := p.revalidateHeld(); err != nil {
@@ -124,8 +124,8 @@ func ReceiveCandidate(ctx context.Context, in io.Reader, directory, packetSHA256
 		return errors.New("candidate stream packet differs from the reviewed identity")
 	}
 	var packet AttestedPacket
-	if update.StrictJSON(raw, &packet) != nil || (packet.Version != 2 && packet.Version != 3) || !attestedBuildIdentity(packet, "") || packet.Archive.File != archiveTarget || packet.Installer.File != "fased-install-linux-amd64" || packet.Entry.File != "install.sh" || packet.Release.Provenance.File != provenanceFile ||
-		packet.Version == 2 && (packet.Deb != (update.Artifact{}) || packet.RPM != (update.Artifact{})) ||
+	if update.StrictJSON(raw, &packet) != nil || (packet.Version != 2 && packet.Version != 3 && packet.Version != 4) || !attestedBuildIdentity(packet, "") || packet.Archive.File != archiveTarget || packet.Installer.File != "fased-install-linux-amd64" || packet.Entry.File != "install.sh" || packet.Release.Provenance.File != provenanceFile ||
+		(packet.Version == 2 || packet.Version == 4) && (packet.Deb != (update.Artifact{}) || packet.RPM != (update.Artifact{})) ||
 		packet.Version == 3 && (packet.Deb.File != "fased-app-linux-amd64.deb" || packet.RPM.File != "fased-app-linux-amd64.rpm") {
 		return errors.New("candidate stream inventory invalid")
 	}

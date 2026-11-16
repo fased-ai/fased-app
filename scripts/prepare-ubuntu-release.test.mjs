@@ -332,7 +332,7 @@ return options.encoding?value.toString():Buffer.from(value);
         variant === "package-only" ? "" : source.tagObject,
       );
       assert.equal(
-        inputs.nativePackages,
+        inputs.linuxBundle,
         variant === "package-only" ? true : undefined,
       );
       assert.equal(inputs.seedSha256, rawConfig.seedSha256);
@@ -628,7 +628,58 @@ test("unpublished browser-first candidate binds both native packages", () => {
   );
 });
 
-test("package-only workflow builds and attests both formats without a desktop", () => {
+test("unpublished browser bundle contains the signer without native packages", () => {
+  const pairedInput = {
+    ...input,
+    buildRef: "refs/heads/main",
+    tagObject: "",
+    releaseAuthority: "github-attestation-v1",
+    linuxBundle: true,
+  };
+  const pairedReport = {
+    ...report,
+    manifest: {
+      ...report.manifest,
+      schema: 4,
+      files: {
+        "fased-app": { sha256: "d".repeat(64), bytes: 31 },
+        "fased-signer": { sha256: "e".repeat(64), bytes: 32 },
+      },
+    },
+  };
+  const inventory = candidateInventory(
+    pairedInput,
+    archive,
+    installer,
+    pairedReport,
+  );
+  const entry = { file: "install.sh", size: 15, sha256: "3".repeat(64) };
+  const proof = {
+    file: "fased-app-linux-amd64.provenance.sigstore.json",
+    size: 16,
+    sha256: "4".repeat(64),
+  };
+  const packet = attestedCandidatePacket(pairedInput, inventory, entry, proof);
+  assert.equal(packet.version, 4);
+  assert.equal(packet.deb, undefined);
+  assert.equal(packet.rpm, undefined);
+  assert.throws(() =>
+    candidateInventory(pairedInput, archive, installer, {
+      ...pairedReport,
+      manifest: { ...pairedReport.manifest, files: {} },
+    }),
+  );
+  assert.throws(() =>
+    candidateInventory(
+      { ...pairedInput, nativePackages: true },
+      archive,
+      installer,
+      pairedReport,
+    ),
+  );
+});
+
+test("package-only workflow builds one browser-first bundle", () => {
   const workflow = readFileSync(
     new URL("../.github/workflows/release.yml", import.meta.url),
     "utf8",
@@ -641,22 +692,24 @@ test("package-only workflow builds and attests both formats without a desktop", 
     build.indexOf('if [[ "$FASED_PACKAGE_ONLY" == true ]]'),
     build.indexOf("          else\n"),
   );
-  assert.match(nativeBranch, /install -y --no-install-recommends rpm/);
   assert.match(nativeBranch, /export CGO_ENABLED=0/);
-  assert.doesNotMatch(nativeBranch, /gtk|webkit|build-desktop/i);
-  assert.match(build, /fased-package --linux-system-packages/);
+  assert.doesNotMatch(nativeBranch, /rpm|gtk|webkit|build-desktop/);
+  assert.match(
+    build,
+    /build-core\.mjs --installer[^\n]*"\$\{desktop_args\[@\]\}"/,
+  );
+  assert.match(build, /--linux-bundle-format/);
   const attest = workflow.slice(
-    workflow.indexOf("- name: Attest the browser-first Linux package pair"),
+    workflow.indexOf("- name: Attest the browser-first Linux bundle"),
     workflow.indexOf("- name: Verify original provenance"),
   );
   assert.match(attest, /if: \$\{\{ inputs\.package_only \}\}/);
   for (const name of [
     "fased-app-linux-amd64.tar.gz",
     "fased-install-linux-amd64",
-    "fased-app-linux-amd64.deb",
-    "fased-app-linux-amd64.rpm",
   ])
     assert.ok(attest.includes(name), `missing attested ${name}`);
+  assert.doesNotMatch(attest, /\.deb|\.rpm/);
 });
 
 test("staging requires actual verifier timestamp enums, exact policy and tag identity", () => {

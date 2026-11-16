@@ -294,10 +294,12 @@ func (s *Server) ConfigureConnection(location string, owner ...int) error {
 		if err != nil {
 			return err
 		}
-		if activated {
+		if activated && !tailnet.ProtectedPackageData(s.dir, uid) {
 			// Keep the original root-peer-only listener alive during the
 			// conditional Serve handoff. It remains available if the route
 			// change fails; no existing route is reset or silently adopted.
+			// New package instances have no older route to hand off and must not
+			// expose an app-writable replacement for their protected socket.
 			s.RemoteLegacy, err = tailnet.Listen(s.dir)
 			if err != nil {
 				listener.Close()

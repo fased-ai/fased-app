@@ -150,7 +150,11 @@ export function onchainAccounts(accounts: Account[]) {
 }
 
 // Public exact intent only; credentials are collected by the isolated owner window.
-export function tradeOwnerLink(p: SwapProposal, origin = ""): string {
+export function tradeOwnerLink(
+  p: SwapProposal,
+  origin = "",
+  packageOwner = false,
+): string {
   const a = p.account as { version?: number };
   if (p.version !== "ordinary-controlled-swap-v1" || a?.version !== 3)
     return "";
@@ -159,6 +163,7 @@ export function tradeOwnerLink(p: SwapProposal, origin = ""): string {
     p.quote.network,
     "setup",
     origin,
+    packageOwner,
   );
   if (!base) return "";
   const encoded = btoa(

@@ -14,6 +14,7 @@ import (
 
 	"github.com/fased-ai/fased-app/internal/custodyinstall"
 	"github.com/fased-ai/fased-app/internal/maintenance"
+	"github.com/fased-ai/fased-app/internal/signer"
 	"github.com/fased-ai/fased-app/internal/update"
 )
 
@@ -28,12 +29,48 @@ func packageMaintenanceArguments(args []string) (int, string, string, error) {
 	if _, err = update.PackageMaintenanceRoot(owner, args[3], args[5]); err != nil {
 		return 0, "", "", err
 	}
+	if compiledFixtureSourceAllowed != nil && !fixturePackageCandidateAllowed(owner, args[3], args[5]) {
+		return 0, "", "", errors.New("the exact authorized disposable package is required")
+	}
 	return owner, args[3], args[5], nil
+}
+
+// A real-host test helper must never act on an existing owner-key instance.
+// Production helpers have no compiled fixture selector and use their normal
+// authenticated package identity checks.
+func requireFixturePackage(owner int, location, instance string, allowMissing bool) error {
+	if compiledFixtureSourceAllowed == nil {
+		return nil
+	}
+	root, err := custodyinstall.PackageRoot(owner, location, instance)
+	if err != nil {
+		return err
+	}
+	if _, err = os.Lstat(root); errors.Is(err, os.ErrNotExist) && allowMissing {
+		return nil
+	} else if err != nil {
+		return err
+	}
+	m, err := custodyinstall.LoadPackageInstance(owner, root)
+	if err != nil {
+		return errors.New("the existing fixture package is unclassified; preserve it")
+	}
+	return requireControlledFixtureManifest(m)
+}
+
+func requireControlledFixtureManifest(m custodyinstall.Manifest) error {
+	if m.Provenance != signer.ControlledCustodyProfile {
+		return errors.New("the real-host fixture cannot operate on owner-key custody")
+	}
+	return nil
 }
 
 func maintenancePackageRegisterCommand(args []string, out io.Writer) error {
 	owner, location, instance, err := packageMaintenanceArguments(args)
 	if err != nil {
+		return err
+	}
+	if err = requireFixturePackage(owner, location, instance, true); err != nil {
 		return err
 	}
 	a, err := maintenance.RegisterPackage(owner, location, instance)
@@ -52,6 +89,9 @@ func maintenancePackageGateCommand(args []string) error {
 	if err != nil {
 		return err
 	}
+	if err = requireFixturePackage(owner, location, instance, false); err != nil {
+		return err
+	}
 	return custodyinstall.VerifyPackageStart(owner, location, instance, args[7])
 }
 
@@ -67,6 +107,9 @@ func maintenancePackageWorkerCommand(action string, args []string) error {
 	if boot && len(args) != 6 || !boot && (len(args) != 8 || args[6] != "--operation" || !update.IDOK(args[7])) {
 		return errors.New("one exact package operation required")
 	}
+	if err = requireFixturePackage(owner, location, instance, false); err != nil {
+		return err
+	}
 	a, err := maintenance.ValidatePackageProcess(owner, location, instance)
 	if err != nil {
 		return err
@@ -75,7 +118,7 @@ func maintenancePackageWorkerCommand(action string, args []string) error {
 	defer cancel()
 	id := ""
 	if boot {
-		lock, e := maintenance.PackageLock(owner, location, instance)
+		lock, e := maintenance.WaitPackageLock(ctx, owner, location, instance)
 		if e != nil {
 			return e
 		}
@@ -83,8 +126,12 @@ func maintenancePackageWorkerCommand(action string, args []string) error {
 			return errors.Join(e, lock.Close())
 		}
 		r, readErr := update.ReadPackageMaintenanceRecord(owner, location, instance)
+		if readErr == nil && r.Phase == "wallet-initializing" {
+			e = custodyinstall.RecoverProtectedPackageWallet(ctx, owner, location, instance)
+			return errors.Join(e, lock.Close())
+		}
 		if readErr == nil && r.Phase == "idle" {
-			m, validErr := custodyinstall.ValidateInitialPackageMaintenanceRecord(r, owner, location, instance)
+			m, validErr := custodyinstall.ValidateIdlePackageMaintenanceRecord(r, owner, location, instance)
 			if validErr == nil {
 				var actual custodyinstall.Manifest
 				actual, validErr = custodyinstall.LoadPackageInstance(owner, m.Root)
@@ -94,8 +141,11 @@ func maintenancePackageWorkerCommand(action string, args []string) error {
 				if validErr == nil {
 					validErr = custodyinstall.VerifyPackageInstance(actual)
 				}
-				if validErr == nil {
+				if validErr == nil && actual.Network == "" {
 					validErr = custodyinstall.VerifyUnconfiguredPackageSigner(ctx, actual)
+				}
+				if validErr == nil && actual.Network != "" {
+					_, validErr = custodyinstall.ReadEnrollmentCommit(actual)
 				}
 				if validErr == nil {
 					for _, name := range []string{"update-active.json", "update-start-blocked.json"} {
@@ -164,6 +214,10 @@ func maintenancePackageRequestCommand(args []string, in io.Reader, out io.Writer
 	if _, err = maintenance.ValidatePackageProcess(owner, location, instance); err != nil {
 		return err
 	}
+	allowMissing := r.Action == "provision" || r.Action == "candidate-stage" && r.Candidate.Scope == "fresh"
+	if err = requireFixturePackage(owner, location, instance, allowMissing); err != nil {
+		return err
+	}
 	workCtx, stop := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer stop()
 	if stream != nil {
@@ -203,7 +257,20 @@ func maintenancePackageRequestCommand(args []string, in io.Reader, out io.Writer
 		return json.NewEncoder(out).Encode(maintenance.Response{Version: 1, Action: r.Action, Complete: true})
 	}
 	if r.Action == "provision" {
-		if err := maintenancePackageProvision(workCtx, owner, location, instance, r.Listen); err != nil {
+		if err := maintenancePackageProvision(workCtx, owner, location, instance, r.Listen, lock); err != nil {
+			return err
+		}
+		return json.NewEncoder(out).Encode(maintenance.Response{Version: 1, Action: r.Action, Complete: true})
+	}
+	if r.Action == "wallet-initialize" {
+		a, err := maintenance.ValidatePackageProcess(owner, location, instance)
+		if err != nil {
+			return err
+		}
+		if err = preparePackageWalletAfterUpdate(workCtx, a, location, instance, *r.Wallet); err != nil {
+			return err
+		}
+		if err := custodyinstall.ConfigureProtectedPackageWallet(workCtx, owner, location, instance, *r.Wallet, lock); err != nil {
 			return err
 		}
 		return json.NewEncoder(out).Encode(maintenance.Response{Version: 1, Action: r.Action, Complete: true})
@@ -216,7 +283,11 @@ func maintenancePackageRequestCommand(args []string, in io.Reader, out io.Writer
 		return err
 	} else {
 		if record.Phase == "idle" {
-			if _, err = custodyinstall.ValidateInitialPackageMaintenanceRecord(record, owner, location, instance); err != nil {
+			if _, err = custodyinstall.ValidateIdlePackageMaintenanceRecord(record, owner, location, instance); err != nil {
+				return err
+			}
+		} else if record.Phase == "wallet-initializing" {
+			if _, _, err = custodyinstall.ValidatePackageWalletInitialization(record, owner, location, instance); err != nil {
 				return err
 			}
 		} else if !record.RecoveryEligible() {

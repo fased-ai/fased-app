@@ -18,6 +18,12 @@ type Package struct {
 	LocalPaths                             localinstall.Paths
 }
 
+// LocalPackageOwnerTarget selects the installed owner entry by its committed
+// public workspace identity, never by a path supplied by the browser.
+func LocalPackageOwnerTarget(instance string) (string, error) {
+	return localPackageOwnerTarget(os.Getuid(), instance)
+}
+
 func NativePackage(executable string) (Package, error) {
 	var p Package
 	if runtime.GOOS != "linux" {

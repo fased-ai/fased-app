@@ -6,15 +6,94 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
+	"io"
 	"net"
 	"os"
 	"path/filepath"
 	"strings"
 
+	"github.com/fased-ai/fased-app/internal/core"
 	"github.com/fased-ai/fased-app/internal/maintenance"
 	"github.com/fased-ai/fased-app/internal/privateaccess"
 	"github.com/fased-ai/fased-app/internal/tailnet"
+	"github.com/fased-ai/fased-app/internal/update"
 )
+
+// enableProtectedPackageRemote uses the existing conditional Serve manager
+// and the original device approval for this one package instance. It never
+// changes a foreign route or grants the app access to the daemon's admin API.
+func enableProtectedPackageRemote(ctx context.Context, m Manifest, out io.Writer) error {
+	if m.validatePackage() != nil || m.Location != "remote" || out == nil {
+		return errors.New("the original Remote package is required")
+	}
+	a, err := maintenance.ValidatePackageProcess(m.Owner, m.Location, m.ID)
+	if err != nil {
+		return err
+	}
+	lock, err := maintenance.WaitPackageLock(ctx, m.Owner, m.Location, m.ID)
+	if err != nil {
+		return err
+	}
+	defer lock.Close()
+	approval, err := privateaccess.ReadProtectedPackageInitialApproval(m.Owner, m.ID)
+	if err != nil || !approval.MatchesPackage(m.Owner, m.ID, m.PublicOrigin, m.Listen, approval.Sequence, approval.ReleaseSHA256, approval.CoreSHA256) {
+		return errors.New("the original private device approval is required")
+	}
+	commit, err := ReadEnrollmentCommit(m)
+	if err != nil {
+		return err
+	}
+	socket, err := tailnet.ProtectedSocket("package-"+m.ID, m.Owner)
+	if err != nil {
+		return err
+	}
+	validate := func(plan privateaccess.Plan) error {
+		if plan.Origin != m.PublicOrigin || plan.Target != "unix:"+socket || VerifyPackageOwnerTarget(m) != nil || !tailnet.ProtectedSocketReady("package-"+m.ID, m.Owner) {
+			return errors.New("the original protected Remote listener is required")
+		}
+		if err := verifyLoadedPackageServices(ctx, m); err != nil {
+			return err
+		}
+		return privateaccess.ProbeProtectedIngress(ctx, m.PublicOrigin, m.Owner, commit.InstanceID, func(ctx context.Context) (net.Conn, error) {
+			return (&net.Dialer{}).DialContext(ctx, "unix", socket)
+		})
+	}
+	manager := privateaccess.System()
+	plan, err := manager.Plan(ctx, "tailscale", m.Listen)
+	if err != nil {
+		return err
+	}
+	plan, err = privateaccess.BindOrigin(plan, m.PublicOrigin)
+	if err != nil {
+		return err
+	}
+	plan.Target = "unix:" + socket
+	if err = validate(plan); err != nil {
+		return err
+	}
+	manager.ValidateIngress, manager.ProofOut = validate, out
+	manager.ExpectedPeer = &approval.Device
+	manager.InitialPeer = func() (tailnet.Identity, bool, error) { return approval.Device, true, nil }
+	manager.Proof = func(ctx context.Context, request core.PrivateAccessProofRequest) (core.PrivateAccessProof, error) {
+		var proof core.PrivateAccessProof
+		err := protectedAppPeer(ctx, a, m, maintenance.AppMaintenanceRequest{Action: "private-access", PrivateProof: &request}, &proof)
+		return proof, err
+	}
+	root, err := update.PackageMaintenanceRoot(m.Owner, m.Location, m.ID)
+	if err != nil {
+		return err
+	}
+	if err = manager.Enable(ctx, filepath.Join(root, "remote"), plan, commit.InstanceID); err != nil {
+		return err
+	}
+	var link string
+	if err = protectedAppPeer(ctx, a, m, maintenance.AppMaintenanceRequest{Action: "remote-claim", RemotePeer: &approval.Device}, &link); err != nil {
+		return err
+	}
+	_, err = fmt.Fprintf(out, "Open Fased on your approved device:\n%s\n", link)
+	return err
+}
 
 // ProtectedRemoteIngressReady is called only inside the installed helper. It
 // binds the live protected listener to the original enrollment instance.

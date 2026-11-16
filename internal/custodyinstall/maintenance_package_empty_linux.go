@@ -5,6 +5,7 @@ package custodyinstall
 import (
 	"context"
 	"errors"
+	"os"
 	"path/filepath"
 	"time"
 
@@ -17,25 +18,18 @@ import (
 // been configured. The stopped signer and its empty directory are checked by
 // the protected helper; an app checkpoint is never treated as a signer hold.
 func runEmptyPackageUpdate(ctx context.Context, a maintenance.Authority, r update.MaintenanceRecord, base, target Manifest, boot bool) (result error) {
-	// The package manager is part of this same transaction. Until its exact
-	// RPM/DEB replacement and restart reconciliation are connected, do not
-	// stop the app, replace files, or report an update as complete.
-	if !nativePackageManagerConnected {
-		return errors.New("native package-manager recovery is not yet connected; preserve the installation")
+	// Update only the selected instance under its existing journal and lock;
+	// the OS package is installed separately and remains unchanged.
+	if !packageUpdateConnected {
+		return errors.New("package update recovery is unavailable; preserve the installation")
 	}
 	if base.Network != "" || target.Network != "" || base.Layout != PackageLayout || !r.RecoveryEligible() ||
 		r.PreviousPackage == nil || !packagePairMatches(*r.PreviousPackage, base) || !packagePairMatches(*r.Package, target) ||
 		r.Application != nil && r.Application.PreviousEngineSHA256 != base.CoreHash {
 		return errors.New("original empty-signer package operation required")
 	}
-	// All instances share the OS package. Hold its lock across the preflight,
-	// stop and replacement so another instance cannot invalidate the checked
-	// predecessor after this instance has been stopped.
-	lock, err := maintenance.PackageSystemLock(ctx)
-	if err != nil {
-		return err
-	}
-	defer func() { result = errors.Join(result, lock.Close()) }()
+	// The instance lock protects its own pair and journal. The system launcher
+	// stays unchanged; another instance may be on a different release.
 	if err := verifyPackageRootUnits(ctx, a, base, r.OperationID); err != nil {
 		return err
 	}
@@ -47,6 +41,18 @@ func runEmptyPackageUpdate(ctx context.Context, a maintenance.Authority, r updat
 	}
 	if r.Phase == "completed" {
 		if err := VerifyPackageInstance(target); err != nil {
+			return err
+		}
+		if r.Package.NativeDesktop != nil {
+			if err := verifyProtectedDesktop(target, r.Package); err != nil {
+				return err
+			}
+		}
+		if _, err := os.Lstat(base.Root + "/update-active.json"); err == nil {
+			if err = verifyPendingNativeTarget(ctx, target, r.Package); err != nil {
+				return err
+			}
+		} else if !errors.Is(err, os.ErrNotExist) {
 			return err
 		}
 		if err := maintenance.RemoveProtected(base.Root+"/update-active.json", sum(update.MaintenanceFence(r.OperationID)), 0644); err != nil {
@@ -64,7 +70,7 @@ func runEmptyPackageUpdate(ctx context.Context, a maintenance.Authority, r updat
 			_, err := protectedSystemctl(ctx, "start", "--no-block", "--", instanceWorkerUnit(base, r.OperationID))
 			return err
 		}
-		if _, _, err := preflightNativePackage(ctx, base, r.PreviousPackage, *r.Package, false); err != nil {
+		if err := verifyInstanceUpdatePackages(ctx, base, r.PreviousPackage, *r.Package); err != nil {
 			return err
 		}
 		if r.OwnerLease == "" {
@@ -139,16 +145,21 @@ func runEmptyPackageUpdate(ctx context.Context, a maintenance.Authority, r updat
 				return errors.New("the original protected package pair is unavailable")
 			}
 		}
+		if r.PreviousPackage.NativeDesktop != nil {
+			hash, size, e := maintenance.ProtectedDigest(filepath.Join(dir, "previous-desktop"), 0755, 64<<20)
+			if e != nil || hash != r.PreviousPackage.NativeDesktop.SHA256 || size != r.PreviousPackage.NativeDesktop.Size || r.Package.NativeDesktop == nil {
+				return errors.New("the original protected wallet client is unavailable")
+			}
+		} else if r.Package.NativeDesktop != nil {
+			return errors.New("the original protected wallet client is required")
+		}
 		if r.Phase == "held" {
-			if _, _, err = preflightNativePackage(ctx, base, r.PreviousPackage, *r.Package, false); err != nil {
+			if err = verifyInstanceUpdatePackages(ctx, base, r.PreviousPackage, *r.Package); err != nil {
 				return err
 			}
 		}
 		r.Phase = "replacing"
 		if err = storeProtectedRecord(r); err != nil {
-			return err
-		}
-		if err = applyNativePackageLocked(ctx, base, r.PreviousPackage, *r.Package, true); err != nil {
 			return err
 		}
 		for _, component := range r.Package.Components {
@@ -157,6 +168,14 @@ func runEmptyPackageUpdate(ctx context.Context, a maintenance.Authority, r updat
 				previous = base.SignerHash
 			}
 			if err = maintenance.CopyProtected(filepath.Join(dir, component.Artifact.File), filepath.Join(base.Root, component.Artifact.File), 0755, component.Artifact.SHA256, component.Artifact.Size, previous); err != nil {
+				return err
+			}
+		}
+		if r.Package.NativeDesktop != nil {
+			if err = maintenance.CopyProtected(filepath.Join(dir, "fased-desktop"), filepath.Join(base.Root, "fased-desktop"), 0755, r.Package.NativeDesktop.SHA256, r.Package.NativeDesktop.Size, r.PreviousPackage.NativeDesktop.SHA256); err != nil {
+				return err
+			}
+			if err = verifyProtectedDesktop(target, r.Package); err != nil {
 				return err
 			}
 		}
@@ -175,6 +194,14 @@ func runEmptyPackageUpdate(ctx context.Context, a maintenance.Authority, r updat
 		return errors.New("the original application recovery direction is required")
 	}
 	if err := VerifyPackageInstance(target); err != nil {
+		return err
+	}
+	if r.Package.NativeDesktop != nil {
+		if err := verifyProtectedDesktop(target, r.Package); err != nil {
+			return err
+		}
+	}
+	if err := verifyPendingNativeTarget(ctx, target, r.Package); err != nil {
 		return err
 	}
 	if boot {
@@ -219,11 +246,11 @@ func runEmptyPackageUpdate(ctx context.Context, a maintenance.Authority, r updat
 	return maintenance.RemoveProtected(base.Root+"/update-active.json", sum(update.MaintenanceFence(r.OperationID)), 0644)
 }
 
-const nativePackageManagerConnected = false
+const packageUpdateConnected = true
 
-// NativePackageUpdateAvailable remains false until package-manager recovery
-// joins the same protected update transaction.
-func NativePackageUpdateAvailable() bool { return nativePackageManagerConnected }
+// NativePackageUpdateAvailable reports the connected instance controller.
+// Each operation must still verify its package, identity and recovery journal.
+func NativePackageUpdateAvailable() bool { return packageUpdateConnected }
 
 func matchEmptyPackageOperation(view core.ApplicationOwnerView, r update.MaintenanceRecord, base Manifest) error {
 	o := view.View.Operation

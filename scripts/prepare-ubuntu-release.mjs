@@ -332,9 +332,7 @@ function prepare(c) {
   write("build-inputs.json", {
     ...context,
     releaseAuthority: c.releaseAuthority,
-    ...(process.env.FASED_PACKAGE_ONLY === "true"
-      ? { nativePackages: true }
-      : {}),
+    ...(process.env.FASED_PACKAGE_ONLY === "true" ? { linuxBundle: true } : {}),
     configSha256: sha(readFileSync("release/ubuntu.json")),
     seedSha256: c.seedSha256,
     custodyApprovalSha256: c.custodyApprovalSha256,
@@ -383,7 +381,7 @@ export function candidateInventory(input, archive, installer, report, system) {
       throw Error("Exact candidate artifact identity required");
   if (
     report.publicRelease !== false ||
-    report.manifest?.schema !== 2 ||
+    report.manifest?.schema !== (input.linuxBundle === true ? 4 : 2) ||
     report.manifest.unsignedEngineering !== false ||
     report.manifest.desktop !== false ||
     report.manifest.version !== input.version ||
@@ -395,6 +393,26 @@ export function candidateInventory(input, archive, installer, report, system) {
     !hash.test(report.manifestIdentity?.sha256 ?? "")
   )
     throw Error("Producer/archive version or identity changed");
+  if (input.linuxBundle === true) {
+    const signer = report.manifest.files?.["fased-signer"];
+    const core = report.manifest.files?.["fased-app"];
+    if (
+      input.nativePackages === true ||
+      input.buildRef !== "refs/heads/main" ||
+      input.releaseAuthority !== "github-attestation-v1" ||
+      !hash.test(signer?.sha256 ?? "") ||
+      !Number.isSafeInteger(signer?.bytes) ||
+      signer.bytes <= 0 ||
+      signer.bytes > 64 * 1024 * 1024 ||
+      !hash.test(core?.sha256 ?? "") ||
+      !Number.isSafeInteger(core?.bytes) ||
+      core.bytes <= 0 ||
+      core.bytes > 64 * 1024 * 1024
+    )
+      throw Error("The browser bundle requires one bounded core and signer");
+  } else if (input.linuxBundle !== undefined && input.linuxBundle !== false) {
+    throw Error("Unexpected Linux bundle input");
+  }
   const result = {
     archive,
     installer,
@@ -533,6 +551,15 @@ export function verifiedCandidate(c, input, objects, decision, proof, policy) {
 }
 export function attestedCandidatePacket(input, objects, entry, proof) {
   if (
+    input.linuxBundle === true &&
+    (input.nativePackages === true ||
+      input.buildRef !== "refs/heads/main" ||
+      input.tagObject !== "" ||
+      objects.deb ||
+      objects.rpm)
+  )
+    throw Error("Linux bundle requires one unpublished main candidate");
+  if (
     input.nativePackages === true &&
     (input.buildRef !== "refs/heads/main" ||
       input.tagObject !== "" ||
@@ -541,7 +568,14 @@ export function attestedCandidatePacket(input, objects, entry, proof) {
   )
     throw Error("Native packages require an unpublished main candidate");
   return {
-    version: input.nativePackages === true ? 3 : input.buildRef ? 2 : 1,
+    version:
+      input.linuxBundle === true
+        ? 4
+        : input.nativePackages === true
+          ? 3
+          : input.buildRef
+            ? 2
+            : 1,
     productVersion: input.version,
     source: input.sourceCommit,
     bundleSha256: objects.manifestSha256,
@@ -585,13 +619,13 @@ function finish(c) {
         JSON.stringify(identity)
     )
       throw Error("Candidate artifact changed after verification");
-  if (input.nativePackages === true) {
+  if (input.nativePackages === true || input.linuxBundle === true) {
     const current = candidateInventory(
       input,
       objects.archive,
       objects.installer,
       read("fased-app-linux-amd64.json"),
-      nativePackageInputs(),
+      input.nativePackages === true ? nativePackageInputs() : undefined,
     );
     if (JSON.stringify(current) !== JSON.stringify(objects))
       throw Error("Native packages changed after provenance verification");

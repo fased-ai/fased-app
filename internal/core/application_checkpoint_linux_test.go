@@ -18,6 +18,19 @@ import (
 	"testing"
 )
 
+func TestRemotePackageDoesNotFallBackToAppWritableSocket(t *testing.T) {
+	t.Setenv("LISTEN_PID", "")
+	t.Setenv("LISTEN_FDS", "")
+	t.Setenv("LISTEN_FDNAMES", "")
+	data := "/var/lib/fased-app-package/1000/remote/" + strings.Repeat("a", 32) + "/app-state"
+	h := &HTTPHandler{publicHost: "node.example.ts.net"}
+	server := &Server{HTTP: &http.Server{Handler: h}, dir: data}
+	err := server.ConfigureConnection("remote", 1000)
+	if err == nil || !strings.Contains(err.Error(), "protected private listener") || server.Remote != nil || server.RemoteLegacy != nil {
+		t.Fatal("Remote package fell back without its protected listener", err)
+	}
+}
+
 func TestUnconfiguredProtectedSignerAllowsLocalOwnerAndApplicationCheckpoint(t *testing.T) {
 	uid := os.Getuid()
 	if uid <= 0 {
@@ -277,6 +290,64 @@ func TestApplicationCheckpointFencesBacksUpAndRecoversWithoutWallet(t *testing.T
 	setup, e := other.Setup(t.Context())
 	if e != nil || setup.Settings.Host != "local" {
 		t.Fatal("owner records changed", setup, e)
+	}
+}
+
+func TestApplicationCheckpointOwnerRetryAfterRestartReusesOriginalHold(t *testing.T) {
+	s := fixtureStore(t)
+	fixture := fixtureUpdateController()
+	starts := 0
+	if err := s.BindApplicationMaintenance(fixture.Check, func(context.Context, string) error {
+		starts++
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	updateCommandFixture(t, s, "check")
+	updateTickFixture(t, s)
+	updateCommandFixture(t, s, "apply")
+	updateTickFixture(t, s)
+	view, err := s.ApplicationUpdates(t.Context())
+	if err != nil || view.Operation.Phase != "applying" || starts != 1 {
+		t.Fatal("original update was not dispatched once", starts, err)
+	}
+	id := view.Operation.ID
+	if _, err = s.ApplicationOwnerCommand(t.Context(), ApplicationOwnerCommand{Action: "claim", ID: id, Lease: id}); err != nil {
+		t.Fatal(err)
+	}
+	first, err := s.ApplicationOwnerCommand(t.Context(), ApplicationOwnerCommand{Action: "prepare", ID: id, Lease: id})
+	if err != nil || first.Checkpoint == nil {
+		t.Fatal("original checkpoint was not saved", err)
+	}
+	// The application committed its checkpoint, but the protected controller
+	// has not yet saved it. Reopen the same store as the original app identity.
+	dir, boot := s.dir, s.bootID
+	if err = s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	restarted, err := OpenStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer restarted.Close()
+	if restarted.bootID == boot {
+		t.Fatal("the reopened core did not have a new process identity")
+	}
+	if _, err = restarted.ApplicationOwnerCommand(t.Context(), ApplicationOwnerCommand{Action: "prepare", ID: id, Lease: update.NewProbe()}); err == nil {
+		t.Fatal("another lease was allowed to reuse the checkpoint")
+	}
+	claim, err := restarted.ApplicationOwnerCommand(t.Context(), ApplicationOwnerCommand{Action: "claim", ID: id, Lease: id})
+	if err != nil || claim.MayApply || claim.View.Operation.OwnerLease != id {
+		t.Fatal("restarted owner did not retain the original claim", claim, err)
+	}
+	second, err := restarted.ApplicationOwnerCommand(t.Context(), ApplicationOwnerCommand{Action: "prepare", ID: id, Lease: id})
+	if err != nil || second.Checkpoint == nil || update.SnapshotDigest("original-checkpoint", *second.Checkpoint) != update.SnapshotDigest("original-checkpoint", *first.Checkpoint) {
+		t.Fatal("restarted owner did not reopen the original checkpoint", err)
+	}
+	offline, err := ReadApplicationOwnerOffline(t.Context(), dir, id)
+	if err != nil || offline.Checkpoint == nil || offline.View.Operation.OwnerLease != id ||
+		update.SnapshotDigest("original-checkpoint", *offline.Checkpoint) != update.SnapshotDigest("original-checkpoint", *first.Checkpoint) || starts != 1 {
+		t.Fatal("offline recovery changed the original operation", starts, err)
 	}
 }
 

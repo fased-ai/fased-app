@@ -47,6 +47,91 @@ func TestAttestedInspectOlderPublicReleaseWithoutExecutingIt(t *testing.T) {
 	}
 }
 
+func TestAttestedPairedBundleCandidateKeepsLegacyInstallerClosed(t *testing.T) {
+	f, o, payloads := attestedFixture(t, "paired-staged")
+	dir := filepath.Join(f.parent, "paired-candidate")
+	if err := os.Mkdir(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	for name, b := range payloads {
+		if err := os.WriteFile(filepath.Join(dir, name), b, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	r, err := VerifyAttestedCandidate(o, dir)
+	if err != nil || !r.ProvenanceVerified || !r.LinuxBundleVerified || r.LinuxPackageDigestsVerified {
+		t.Fatal("verified paired bundle was not admitted", r, err)
+	}
+	o.githubFixture = nil
+	o.Directory = filepath.Join(f.parent, "paired-held")
+	admission := CandidateAdmission{PacketSHA256: digest(payloads[AttestedPacketFile]), OperationID: strings.Repeat("f", 32), BaselineSHA256: strings.Repeat("e", 64), ExpiresAt: f.now.Add(5 * time.Minute).Unix()}
+	p, err := PrepareAttestedCandidate(t.Context(), o, dir, admission)
+	if err != nil {
+		t.Fatal("paired candidate could not be held", err)
+	}
+	defer p.Close()
+	if err := p.revalidate(); err == nil {
+		t.Fatal("paired candidate was admitted to the legacy archive installer")
+	}
+	if _, err := p.PackageIdentity(); err == nil {
+		t.Fatal("ordinary process obtained the protected package identity")
+	}
+	var stream bytes.Buffer
+	if err := p.WriteCandidate(t.Context(), &stream); err != nil {
+		t.Fatal("held paired candidate could not reach the protected receiver", err)
+	}
+	received := filepath.Join(f.parent, "received-paired")
+	if err := os.Mkdir(received, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := ReceiveCandidate(t.Context(), &stream, received, admission.PacketSHA256); err != nil {
+		t.Fatal("protected stream refused the same candidate", err)
+	}
+	if _, err := VerifyAttestedCandidate(o, received); err != nil {
+		t.Fatal("received candidate lost its attestation", err)
+	}
+	// The fixed helper sets this internal flag after validating its owner.
+	p.options.protectedOwner = os.Getuid()
+	identity, err := p.PackageIdentity()
+	if err != nil || identity.ReleaseSHA256 != admission.PacketSHA256 || identity.Signer.SHA256 != digest([]byte("disposable signer")) || identity.Archive.File != archiveTarget || identity.Deb.File != "" || identity.RPM.File != "" {
+		t.Fatal("protected identity differs from the attested pair", identity, err)
+	}
+	if err := os.WriteFile(filepath.Join(o.Directory, "bundle", "fased-signer"), []byte("changed signer"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := p.PackageIdentity(); err == nil {
+		t.Fatal("modified signer was accepted after original bundle verification")
+	}
+}
+
+func TestPublicPairedBundleUsesPackageController(t *testing.T) {
+	_, o, payloads := attestedFixture(t, "paired-staged")
+	if p, err := Prepare(t.Context(), o); err == nil {
+		p.Close()
+		t.Fatal("paired release reached legacy installer")
+	}
+	p, err := PrepareNative(t.Context(), o)
+	if err != nil {
+		t.Fatal("package-aware public acquisition refused paired bundle", err)
+	}
+	defer p.Close()
+	r := p.Report()
+	if !r.ProvenanceVerified || !r.LinuxBundleVerified || r.LinuxPackageDigestsVerified || r.DescriptorSHA256 != digest(payloads[AttestedPacketFile]) {
+		t.Fatal("paired public release identity differs", r)
+	}
+	remoteHash := sha256.Sum256([]byte(fmt.Sprintf("%d\x00%s\x00remote", os.Getuid(), r.DescriptorSHA256)))
+	if err := p.ValidateFreshPackageCandidate("remote", fmt.Sprintf("%x", remoteHash)[:32]); err != nil {
+		t.Fatal("paired public release cannot enter its exact Remote setup", err)
+	}
+	if err := p.ValidateFreshPackageCandidate("remote", strings.Repeat("f", 32)); err == nil {
+		t.Fatal("paired public release accepted another Remote instance")
+	}
+	var stream bytes.Buffer
+	if err := p.WriteCandidate(t.Context(), &stream); err != nil {
+		t.Fatal("paired public release could not reach the protected receiver", err)
+	}
+}
+
 func TestNativeLinuxCandidateInspectionBindsBothPackagesWithoutInstalling(t *testing.T) {
 	f, o, payloads := attestedFixture(t, "staged")
 	var packet AttestedPacket
@@ -262,6 +347,11 @@ func TestPublicNativeReleaseRetainsAttestedPackagesForTheInstalledController(t *
 	if err = p.ValidateFreshPackageCandidate("remote", instance); err == nil {
 		t.Fatal("Local package verification admitted Remote setup")
 	}
+	remoteHash := sha256.Sum256([]byte(fmt.Sprintf("%d\x00%s\x00remote", os.Getuid(), digest(payloads[AttestedPacketFile]))))
+	remoteInstance := fmt.Sprintf("%x", remoteHash)[:32]
+	if err = p.ValidateFreshPackageCandidate("remote", remoteInstance); err != nil {
+		t.Fatal("authenticated public release cannot enter its exact Remote setup", err)
+	}
 	for held, name := range map[string]string{
 		"candidate-deb":       "fased-app-linux-amd64.deb",
 		"candidate-rpm":       "fased-app-linux-amd64.rpm",
@@ -371,6 +461,9 @@ func attestedFixture(t *testing.T, variant string, profile ...string) (*firstFix
 	t.Helper()
 	f := newFirstFixture(t, profile...)
 	f.archive, f.descriptor.BundleSHA256 = releaseArchive(t, f.archive, false)
+	if strings.HasPrefix(variant, "paired-") {
+		f.archive, f.descriptor.BundleSHA256 = pairedReleaseArchive(t, f.archive)
+	}
 	policy := releaseops.GitHubPolicy{Version: 1, Repository: "fased-ai/fased-app", RepositoryID: "7", MetadataBranch: "release-metadata", MetadataHost: "raw.githubusercontent.com", APIHost: "api.github.com", CDNHost: "release-assets.githubusercontent.com", CDNPathPrefix: "/github-production-release-asset/7/", APIVersion: releaseops.GitHubAPIVersion}
 	f.seed.Binding = Binding{Version: 4, Purpose: AttestedPurpose, Repository: policy.Repository, Channel: "stable", Target: update.Target{OS: "linux", Arch: "amd64"}}
 	f.seed.Root = nil
@@ -398,10 +491,13 @@ func attestedFixture(t *testing.T, variant string, profile ...string) (*firstFix
 	expected := releaseprovenance.Expected{InstallerSHA256: digest(installer), ArchiveName: archive.File, ArchiveSHA256: archive.SHA256, SourceCommit: release.WorkflowCommit, WorkflowCommit: release.WorkflowCommit, Tag: "v1.2.3", RunID: "23", RunAttempt: "1"}
 	tagObject := release.TagObject
 	packetVersion := 1
-	if variant == "staged" || variant == "staged-running-installer" || variant == "staged-installer-file" || variant == "legacy-extra" || strings.HasPrefix(variant, "native-") {
+	if variant == "staged" || variant == "staged-running-installer" || variant == "staged-installer-file" || variant == "legacy-extra" || strings.HasPrefix(variant, "native-") || strings.HasPrefix(variant, "paired-") {
 		release.BuildRef, release.TagObject, expected.BuildRef, packetVersion = "refs/heads/main", "", "refs/heads/main", 2
 	}
 	native := strings.HasPrefix(variant, "native-")
+	if strings.HasPrefix(variant, "paired-") {
+		packetVersion = 4
+	}
 	deb, rpm := []byte("disposable Debian package"), []byte("disposable RPM package")
 	if native {
 		packetVersion = 3

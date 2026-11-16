@@ -21,4 +21,7 @@ type PackageMaintenanceIdentity struct {
 	ProvenanceSHA256 string
 	Target           update.Target
 	Deb, RPM         update.Artifact
+	Archive          update.Artifact
+	BundleSHA256     string
+	Signer           bundle.File
 }

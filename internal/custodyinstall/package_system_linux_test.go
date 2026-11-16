@@ -15,6 +15,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/fased-ai/fased-app/internal/update"
 )
 
 func testPackageFiles() map[string]string {
@@ -256,6 +258,13 @@ func TestNativeRPMInspectionOfRetainedPackage(t *testing.T) {
 	if err = validateRPMListing(listing, version, arch, files); err != nil {
 		t.Fatal("the retained Fased RPM was refused", err)
 	}
+	paths, err := packageTool(t.Context(), 64<<10, "/usr/bin/rpm", "-qpl", "--", packagePath)
+	if err != nil {
+		t.Fatal("RPM file inventory could not be read", err)
+	}
+	if err = verifyInstalledPackagePaths(paths, "dnf", files, false); err != nil {
+		t.Fatal("the retained RPM file inventory was refused", err)
+	}
 }
 
 func TestNativeDebInspectionOfRetainedPackage(t *testing.T) {
@@ -285,27 +294,77 @@ func TestNativePackageTrailerIsBoundedAndEmpty(t *testing.T) {
 	}
 }
 
-func TestNativeBaseRecoveryRequiresOriginalCompletePackage(t *testing.T) {
-	for _, test := range []struct {
-		name, family, version, status string
-		filesErr                      error
-		wantOK, wantFileCheck         bool
-	}{
-		{"original RPM", "dnf", "0.1.10", "installed", nil, true, true},
-		{"original DEB", "apt", "0.1.10", "install ok installed", nil, true, true},
-		{"newer target", "dnf", "0.1.12", "installed", nil, false, false},
-		{"interrupted DEB", "apt", "0.1.10", "install ok unpacked", nil, false, false},
-		{"changed package files", "dnf", "0.1.10", "installed", fmt.Errorf("changed files"), false, true},
-		{"unknown package family", "other", "0.1.10", "installed", nil, false, false},
+func TestPendingPackageRecoveryRequiresTheOriginalTarget(t *testing.T) {
+	_, target := packageGateInitialRecord(t)
+	if err := verifyPendingNativeTarget(t.Context(), target, nil); err == nil {
+		t.Fatal("pending package recovery accepted a missing target")
+	}
+	if err := verifyPendingNativeTarget(t.Context(), target, &update.MaintenancePackage{}); err == nil {
+		t.Fatal("pending package recovery accepted an unauthenticated target")
+	}
+	if err := verifyPendingNativeTarget(t.Context(), target, &update.MaintenancePackage{NativePackage: &update.NativePackage{Family: "dnf"}}); err == nil {
+		t.Fatal("pending package recovery accepted an invalid native package")
+	}
+	target.Layout = ""
+	if err := verifyPendingNativeTarget(t.Context(), target, nil); err != nil {
+		t.Fatal("legacy recovery was incorrectly forced into the new package layout", err)
+	}
+}
+
+func TestInstanceCompletionDoesNotDependOnSharedPackageVersion(t *testing.T) {
+	r, m := packageGateInitialRecord(t)
+	r.Package.NativePackage = &update.NativePackage{Family: "dnf", Artifact: update.Artifact{File: "fased-app-linux-amd64.rpm", Size: 1, SHA256: strings.Repeat("6", 64)}, InstallerSHA256: strings.Repeat("7", 64)}
+	if err := r.Package.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	// Substitute only physical root-owned-file inspection. No RPM/DEB database
+	// exists in this test: completing one instance must not query or mutate it.
+	checked := 0
+	verify := func(got Manifest) error {
+		checked++
+		if got != m {
+			return errors.New("another instance selected")
+		}
+		return nil
+	}
+	if err := verifyInstalledInstancePackage(m, r.Package, verify); err != nil || checked != 1 {
+		t.Fatal("instance completion depended on global package state", err, checked)
+	}
+	m.CoreHash = strings.Repeat("9", 64)
+	if err := verifyInstalledInstancePackage(m, r.Package, verify); err == nil || checked != 1 {
+		t.Fatal("different core accepted before checking the recorded package", err, checked)
+	}
+	m.CoreHash = r.Package.Components[0].Artifact.SHA256
+	if err := verifyInstalledInstancePackage(m, r.Package, func(Manifest) error { return errors.New("interrupted file replacement") }); err == nil {
+		t.Fatal("an incomplete physical pair was accepted")
+	}
+}
+
+func TestBootstrapRecoveryRetainsOriginalPackageAndReceiver(t *testing.T) {
+	r, m := packageGateInitialRecord(t)
+	r.Package.NativePackage = &update.NativePackage{Family: "dnf", Artifact: update.Artifact{File: "fased-app-linux-amd64.rpm", Size: 1, SHA256: strings.Repeat("6", 64)}, InstallerSHA256: strings.Repeat("7", 64)}
+	original := nativeBootstrap{Version: 1, Base: m, Package: *r.Package}
+	f := hostFile{UID: 0, Regular: true, Mode: 0644, Data: mustJSON(original)}
+	read, err := retainedNativeBootstrap(f)
+	if err != nil || !bytes.Equal(mustJSON(read), mustJSON(original)) {
+		t.Fatal("retained bootstrap identity changed", err)
+	}
+	for name, change := range map[string]func(*hostFile){
+		"owner writable": func(v *hostFile) { v.Mode = 0664 },
+		"foreign owner":  func(v *hostFile) { v.UID = m.Owner },
+		"symlink":        func(v *hostFile) { v.Regular = false },
+		"unknown record": func(v *hostFile) { v.Data = []byte(`{"version":2}`) },
+		"changed receiver": func(v *hostFile) {
+			b := original
+			b.Base.CoreHash = strings.Repeat("9", 64)
+			v.Data = mustJSON(b)
+		},
 	} {
-		t.Run(test.name, func(t *testing.T) {
-			checked := false
-			err := requireInstalledNativeBase(test.family, "0.1.10", test.version, test.status, func() error {
-				checked = true
-				return test.filesErr
-			})
-			if (err == nil) != test.wantOK || checked != test.wantFileCheck {
-				t.Fatalf("original package decision: err=%v, files checked=%v", err, checked)
+		t.Run(name, func(t *testing.T) {
+			bad := f
+			change(&bad)
+			if _, err := retainedNativeBootstrap(bad); err == nil {
+				t.Fatal("unverified bootstrap could be installed or recovered")
 			}
 		})
 	}

@@ -254,11 +254,16 @@ func verifyLinuxPackageBinding(stage, source string, files map[string]bundle.Fil
 		return errors.New("core and signer are not bound to this release")
 	}
 	desktop, hasDesktop := files["fased-desktop"]
-	if hasDesktop != (binding.Version == 1) || hasDesktop && desktop.SHA256 != binding.DesktopSHA256 {
+	if hasDesktop && (binding.Version != 1 || desktop.SHA256 != binding.DesktopSHA256) {
 		return errors.New("desktop input differs from the core release binding")
 	}
 	for _, item := range []struct{ option, name string }{{"--emit-embedded-signer", "fased-signer"}, {"--emit-embedded-native", "fased-desktop"}} {
 		want, present := files[item.name]
+		if item.name == "fased-desktop" && binding.Version == 1 && !present {
+			// The browser-first OS package need not install a shared client;
+			// its verified installer still contains the exact bound owner client.
+			want.SHA256, present = binding.DesktopSHA256, true
+		}
 		if !present {
 			continue
 		}
@@ -276,7 +281,7 @@ func verifyLinuxPackageBinding(stage, source string, files map[string]bundle.Fil
 		if readErr != nil {
 			_ = cmd.Process.Kill()
 		}
-		if err = errors.Join(readErr, cmd.Wait()); err != nil || identity.SHA256 != want.SHA256 || identity.Bytes != want.Bytes {
+		if err = errors.Join(readErr, cmd.Wait()); err != nil || identity.SHA256 != want.SHA256 || want.Bytes != 0 && identity.Bytes != want.Bytes {
 			return errors.New("installer payload differs from the bound release")
 		}
 	}

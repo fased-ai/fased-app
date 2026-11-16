@@ -100,3 +100,52 @@ func TestProtectedSocketRequiresKnownOwnerAndProfile(t *testing.T) {
 		t.Fatalf("protected path = %q, %v", path, err)
 	}
 }
+
+func TestRemotePackageRequiresProtectedInstanceSocket(t *testing.T) {
+	id := strings.Repeat("a", 32)
+	kind := "package-" + id
+	path, err := ProtectedSocket(kind, 1000)
+	want := "/run/fased-package-1000-" + id + "/tailscale.sock"
+	if err != nil || path != want {
+		t.Fatal("Remote package did not select its own protected socket", path, err)
+	}
+	name, unit, err := ProtectedSocketUnit(kind, 1000)
+	service := "fased-package-1000-remote-" + id + "-app.service"
+	if err != nil || !strings.Contains(string(unit), "ListenStream="+want+"\n") ||
+		!strings.Contains(string(unit), "Service="+service+"\n") || !strings.Contains(string(unit), "PartOf="+service+"\n") {
+		t.Fatal("Remote package socket unit is not bound to its app", name, err)
+	}
+	if _, _, err := ProtectedSocketDropIn(kind, 1000); err == nil {
+		t.Fatal("package socket acquired a conflicting legacy drop-in")
+	}
+	for _, invalid := range []string{"package-", "package-../foreign", "package-" + strings.Repeat("A", 32)} {
+		if _, err := ProtectedSocket(invalid, 1000); err == nil {
+			t.Fatal("invalid package socket identity accepted", invalid)
+		}
+	}
+	t.Setenv("LISTEN_PID", "")
+	t.Setenv("LISTEN_FDS", "")
+	t.Setenv("LISTEN_FDNAMES", "")
+	data := "/var/lib/fased-app-package/1000/remote/" + id + "/app-state"
+	selected, scoped, err := protectedDataKind(data, 1000)
+	if err != nil || !scoped || selected != kind || !ProtectedPackageData(data, 1000) {
+		t.Fatal("Remote package data did not bind the original socket", selected, scoped, err)
+	}
+	for _, entry := range []struct {
+		data  string
+		owner int
+	}{
+		{data, 1000},
+		{data, 1001},
+		{strings.Replace(data, "/remote/", "/local/", 1), 1000},
+		{strings.Replace(data, id, "..", 1), 1000},
+	} {
+		listener, activated, err := ActivatedListener(entry.data, entry.owner)
+		if err == nil || !activated || listener != nil {
+			t.Fatal("a package attempted unprotected private ingress", entry, activated, err)
+		}
+	}
+	if listener, activated, err := ActivatedListener("/tmp/other-app", 1000); err != nil || activated || listener != nil {
+		t.Fatal("legacy unactivated behavior changed", activated, err)
+	}
+}

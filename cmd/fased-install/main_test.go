@@ -26,6 +26,33 @@ func TestInitialInstallerHasNoPublicOrImplicitExecutionDefaults(t *testing.T) {
 	}
 }
 
+func TestFixturePackageIdentityHasNoProductionOverride(t *testing.T) {
+	if os.Getuid() <= 0 || os.Getuid() != os.Geteuid() {
+		t.Skip("ordinary Local owner required")
+	}
+	previous := compiledFixturePackageInstance
+	t.Cleanup(func() { compiledFixturePackageInstance = previous })
+	compiledFixturePackageInstance = nil
+	var out bytes.Buffer
+	if err := run([]string{"--fixture-package-instance"}, nil, &out, io.Discard); err != nil || out.Len() != 0 {
+		t.Fatal("ordinary installer advertised a fixture instance", err)
+	}
+	want := strings.Repeat("a", 32)
+	compiledFixturePackageInstance = func(owner int) (string, error) {
+		if owner != os.Getuid() {
+			t.Fatal("fixture owner changed")
+		}
+		return want, nil
+	}
+	if err := run([]string{"--fixture-package-instance"}, nil, &out, io.Discard); err != nil || strings.TrimSpace(out.String()) != want {
+		t.Fatal("compiled fixture instance was not returned", err)
+	}
+	compiledFixturePackageInstance = func(int) (string, error) { return "invalid", nil }
+	if err := run([]string{"--fixture-package-instance"}, nil, io.Discard, io.Discard); err == nil {
+		t.Fatal("invalid fixture instance was accepted")
+	}
+}
+
 func TestInstallerUpgradeRefusesMixedModesBeforeAcquisition(t *testing.T) {
 	for _, args := range [][]string{{"--upgrade", "--install"}, {"--remote"}, {"--upgrade", "--start=false"}} {
 		if e := run(args, nil, io.Discard, io.Discard); e == nil || !strings.Contains(e.Error(), "choose installation") {
@@ -57,7 +84,7 @@ func TestFreshCandidateRejectsUntrustedOrMixedModes(t *testing.T) {
 	}
 }
 
-func TestPublicPackageRequiresExactLocalOwnerAndRelease(t *testing.T) {
+func TestPublicPackageRequiresExactOwnerProfileAndRelease(t *testing.T) {
 	if os.Getuid() <= 0 || os.Getuid() != os.Geteuid() {
 		t.Skip("ordinary Local owner required")
 	}
@@ -73,13 +100,45 @@ func TestPublicPackageRequiresExactLocalOwnerAndRelease(t *testing.T) {
 		{"--install-public-package", "--candidate-packet-sha256", packet, "--package-location", "local", "--package-instance", strings.Repeat("c", 32), "--profile", "local"},
 		{"--install-public-package", "--candidate-packet-sha256", packet, "--package-location", "local", "--package-instance", instance, "--profile", "local", "--upgrade"},
 	} {
-		if err := run(args, nil, io.Discard, io.Discard); err == nil || !strings.Contains(err.Error(), "fresh Local package") {
+		if err := run(args, nil, io.Discard, io.Discard); err == nil || !strings.Contains(err.Error(), "fresh package") {
 			t.Fatal("mixed or foreign public package accepted", args, err)
 		}
 	}
 	args := []string{"--install-public-package", "--candidate-packet-sha256", packet, "--package-location", "local", "--package-instance", instance, "--profile", "local"}
-	if err := run(args, nil, io.Discard, io.Discard); err == nil || !strings.Contains(err.Error(), "not available yet") {
-		t.Fatal("the incomplete package controller did not refuse before acquisition", err)
+	if err := run(args, nil, io.Discard, io.Discard); err == nil || !strings.Contains(err.Error(), "independently pinned first-install seed") {
+		t.Fatal("the Local package did not reach the original trust check", err)
+	}
+	remoteSum := sha256.Sum256([]byte(fmt.Sprintf("%d\x00%s\x00remote", os.Getuid(), packet)))
+	remoteID := hex.EncodeToString(remoteSum[:])[:32]
+	args = []string{"--install-public-package", "--candidate-packet-sha256", packet, "--package-location", "remote", "--package-instance", remoteID, "--profile", "remote"}
+	if err := run(args, nil, io.Discard, io.Discard); err == nil || !strings.Contains(err.Error(), "independently pinned first-install seed") {
+		t.Fatal("the exact Remote package did not reach the trust check", err)
+	}
+	args[6] = instance
+	if err := run(args, nil, io.Discard, io.Discard); err == nil || !strings.Contains(err.Error(), "fresh package") {
+		t.Fatal("Remote installation accepted a Local instance identity", err)
+	}
+}
+
+func TestFreshPackageCandidateRequiresItsExactProfileBeforeAcquisition(t *testing.T) {
+	if os.Getuid() <= 0 || os.Getuid() != os.Geteuid() {
+		t.Skip("ordinary owner required")
+	}
+	previous := compiledFirstInstallBinding
+	compiledFirstInstallBinding = &firstInstallBinding{Seed: []byte("not read"), SHA256: strings.Repeat("a", 64)}
+	t.Cleanup(func() { compiledFirstInstallBinding = previous })
+	directory := filepath.Join(t.TempDir(), "candidate")
+	packet, instance := strings.Repeat("b", 64), strings.Repeat("c", 32)
+	args := []string{"--install-candidate", directory, "--candidate-packet-sha256", packet, "--package-location", "remote", "--package-instance", instance, "--profile", "remote"}
+	if err := run(args, nil, io.Discard, io.Discard); err == nil || !strings.Contains(err.Error(), "private absolute candidate directory required") {
+		t.Fatal("the exact Remote candidate did not reach candidate validation", err)
+	}
+	args[len(args)-1] = "local"
+	if err := run(args, nil, io.Discard, io.Discard); err == nil || !strings.Contains(err.Error(), "fresh package") {
+		t.Fatal("a different profile reached the package readiness gate", err)
+	}
+	if _, err := os.Lstat(directory); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("readiness refusal changed the candidate", err)
 	}
 }
 

@@ -40,8 +40,8 @@ func TestPackageInstanceDoesNotBindLegacyCustodyWorker(t *testing.T) {
 		called = true
 		return maintenance.Authority{}, errors.New("legacy authority consulted")
 	}
-	if err = bindCustodyMaintenance(nil, owner, filepath.Join(root, "app-state"), readAuthority); err != nil || called {
-		t.Fatalf("package instance selected the legacy worker: called=%v err=%v", called, err)
+	if err = bindCustodyMaintenance(nil, owner, filepath.Join(root, "app-state"), readAuthority); err == nil || called {
+		t.Fatalf("unverified package instance was admitted or selected the legacy worker: called=%v err=%v", called, err)
 	}
 	if err = bindCustodyMaintenance(nil, owner, filepath.Join(custodyinstall.Root(owner), "app-state"), readAuthority); err == nil || !called {
 		t.Fatal("legacy instance did not inspect its own authority")

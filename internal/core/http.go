@@ -130,6 +130,9 @@ func (h *HTTPHandler) api(w http.ResponseWriter, r *http.Request) {
 	case "/api/v1/auth/remote":
 		h.remoteOwnerAPI(w, r)
 		return
+	case "/api/v1/auth/remote-setup":
+		h.remotePackageSetupAPI(w, r)
+		return
 	case "/api/v1/auth/local":
 		h.localOwnerAPI(w, r)
 		return

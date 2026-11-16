@@ -200,6 +200,16 @@ func PackageLock(owner int, location, instance string) (*os.File, error) {
 	return lockPackage(root)
 }
 
+// WaitPackageLock is for boot recovery, which may overlap a short protected
+// owner request. It uses the same instance lock and remains context-bounded.
+func WaitPackageLock(ctx context.Context, owner int, location, instance string) (*os.File, error) {
+	root, err := update.PackageMaintenanceRoot(owner, location, instance)
+	if err != nil || os.Getuid() != 0 || os.Geteuid() != 0 {
+		return nil, errors.New("protected package lock required")
+	}
+	return waitPackageFile(ctx, root+"/operation.lock", 0, 0)
+}
+
 func lockPackage(root string) (*os.File, error) {
 	return lockPackageFile(root+"/operation.lock", 0, 0)
 }
@@ -297,7 +307,7 @@ func PackageOwnerStreamCommand(ctx context.Context, location, instance string, d
 // PackageCall uses only this instance's fixed installed helper and a bounded
 // semantic request. It accepts neither a path nor an executable from callers.
 func PackageCall(ctx context.Context, location, instance string, request PackageRequest, diagnostics io.Writer) error {
-	if request.Action != "provision" {
+	if request.Action != "provision" && request.Action != "wallet-initialize" {
 		return errors.New("unsupported package operation")
 	}
 	b, err := json.Marshal(request)
@@ -319,7 +329,7 @@ func PackageCall(ctx context.Context, location, instance string, request Package
 	}
 	var response Response
 	if update.StrictJSON(output.data, &response) != nil || response.Version != 1 || response.Action != request.Action || !response.Complete || len(response.Payload) != 0 {
-		return errors.New("package provisioning result is unconfirmed")
+		return errors.New("package operation result is unconfirmed")
 	}
 	return nil
 }

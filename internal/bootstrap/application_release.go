@@ -52,7 +52,7 @@ func (p *Prepared) PackageApplicationRelease() (*core.ApplicationRelease, string
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if p.root == nil || p.closed || p.invoked || !p.report.BundleVerified || !p.report.ProvenanceVerified || !p.report.LinuxPackageDigestsVerified || p.seed.Version != 4 {
+	if p.root == nil || p.closed || p.invoked || !p.report.BundleVerified || !p.report.ProvenanceVerified || (!p.report.LinuxPackageDigestsVerified && !p.report.LinuxBundleVerified) || p.seed.Version != 4 {
 		return nil, "", errors.New("authenticated native package required")
 	}
 	if err := p.revalidateHeld(); err != nil {

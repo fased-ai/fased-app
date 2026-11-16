@@ -39,7 +39,7 @@ func attestedBuildIdentity(packet AttestedPacket, tagObject string) bool {
 	if packet.Version == 1 {
 		return packet.Release.BuildRef == "" && sourceHash(packet.Release.TagObject) && packet.Release.TagObject == tagObject
 	}
-	return (packet.Version == 2 || packet.Version == 3) && packet.Release.BuildRef == "refs/heads/main" && packet.Release.TagObject == ""
+	return (packet.Version == 2 || packet.Version == 3 || packet.Version == 4) && packet.Release.BuildRef == "refs/heads/main" && packet.Release.TagObject == ""
 }
 
 func attestedDescriptor(seed Seed, docs map[string][]byte) (Descriptor, error) {
@@ -56,7 +56,7 @@ func attestedDescriptor(seed Seed, docs map[string][]byte) (Descriptor, error) {
 	if packet.Release.InstallerSHA256 != packet.Installer.SHA256 || !hashOK(packet.Release.InstallerSHA256) {
 		return d, errors.New("attested installer digest required")
 	}
-	if err != nil || sequence < seed.MinimumSequence || (packet.Version != 1 && packet.Version != 2 && packet.Version != 3) || release.Tag != "v"+packet.ProductVersion || packet.Source != release.Source || !attestedBuildIdentity(packet, release.TagObject) || !sourceHash(packet.Source) || !sourceHash(packet.Release.SourceTree) || !hashOK(packet.Release.PackageLockSHA256) || !hashOK(packet.Release.GoSumSHA256) || !hashOK(packet.BundleSHA256) {
+	if err != nil || sequence < seed.MinimumSequence || (packet.Version != 1 && packet.Version != 2 && packet.Version != 3 && packet.Version != 4) || release.Tag != "v"+packet.ProductVersion || packet.Source != release.Source || !attestedBuildIdentity(packet, release.TagObject) || !sourceHash(packet.Source) || !sourceHash(packet.Release.SourceTree) || !hashOK(packet.Release.PackageLockSHA256) || !hashOK(packet.Release.GoSumSHA256) || !hashOK(packet.BundleSHA256) {
 		return d, errors.New("attested source/tag/sequence mismatch")
 	}
 	expected := map[string]update.Artifact{archiveTarget: packet.Archive, "fased-install-linux-amd64": packet.Installer, "install.sh": packet.Entry, provenanceFile: packet.Release.Provenance}
@@ -81,7 +81,7 @@ func attestedDescriptor(seed Seed, docs map[string][]byte) (Descriptor, error) {
 	if !ok || p.SHA256 != digest(docs[AttestedPacketFile]) || p.Size != int64(len(docs[AttestedPacketFile])) {
 		return d, errors.New("attested packet differs from immutable digest")
 	}
-	d = Descriptor{Binding: seed.Binding, Sequence: sequence, ProductVersion: packet.ProductVersion, Source: packet.Source, BundleSHA256: packet.BundleSHA256, Archive: packet.Archive, Deb: packet.Deb, RPM: packet.RPM, GitHub: release.Assets[archiveTarget], Release: packet.Release}
+	d = Descriptor{Binding: seed.Binding, Sequence: sequence, ProductVersion: packet.ProductVersion, Source: packet.Source, BundleSHA256: packet.BundleSHA256, Archive: packet.Archive, Deb: packet.Deb, RPM: packet.RPM, LinuxBundle: packet.Version == 4, GitHub: release.Assets[archiveTarget], Release: packet.Release}
 	if d.provenanceExpected().Validate() != nil {
 		return d, errors.New("attested build identity invalid")
 	}
@@ -145,15 +145,25 @@ func revalidateAttested(seed Seed, docs map[string][]byte, d Descriptor, now tim
 // installer or to execute a package.
 func (p *Prepared) revalidatePublicPackages() error {
 	var packet AttestedPacket
-	if update.StrictJSON(p.metadata[AttestedPacketFile], &packet) != nil || packet.Version != 3 ||
+	if update.StrictJSON(p.metadata[AttestedPacketFile], &packet) != nil || (packet.Version != 3 && packet.Version != 4) ||
 		digest(p.metadata[AttestedPacketFile]) != p.report.DescriptorSHA256 ||
 		packet.Deb != p.descriptor.Deb || packet.RPM != p.descriptor.RPM {
 		return errors.New("public native package identity changed")
 	}
-	for _, item := range []struct {
+	items := []struct {
 		artifact update.Artifact
 		held     string
-	}{{packet.Installer, "candidate-installer"}, {packet.Entry, "candidate-entry"}, {packet.Deb, "candidate-deb"}, {packet.RPM, "candidate-rpm"}} {
+	}{{packet.Installer, "candidate-installer"}, {packet.Entry, "candidate-entry"}}
+	if packet.Version == 3 {
+		items = append(items, struct {
+			artifact update.Artifact
+			held     string
+		}{packet.Deb, "candidate-deb"}, struct {
+			artifact update.Artifact
+			held     string
+		}{packet.RPM, "candidate-rpm"})
+	}
+	for _, item := range items {
 		got, err := bundle.Inspect(filepath.Join(p.options.Directory, item.held))
 		if err != nil || got.SHA256 != item.artifact.SHA256 || got.Bytes != item.artifact.Size {
 			return errors.New("public native release asset changed after verification")

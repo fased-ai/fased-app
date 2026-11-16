@@ -3,6 +3,7 @@
 package custodyinstall
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -16,6 +17,106 @@ import (
 	"github.com/fased-ai/fased-app/internal/signer"
 	"github.com/fased-ai/fased-app/internal/update"
 )
+
+func TestProvisionedPackageReleasesLockBeforeRecoveryServiceStarts(t *testing.T) {
+	_, m := packageGateInitialRecord(t)
+	path := filepath.Join(t.TempDir(), "operation.lock")
+	first, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer first.Close()
+	second, err := os.OpenFile(path, os.O_RDWR, 0600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer second.Close()
+	if err = syscall.Flock(int(first.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		t.Fatal(err)
+	}
+	waited := false
+	start := func(_ context.Context, args ...string) ([]byte, error) {
+		if strings.Join(args, " ") != "start -- "+instanceUnit(m, "app") {
+			return nil, errors.New("the wrong instance was started")
+		}
+		if err := syscall.Flock(int(second.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+			return nil, err
+		}
+		return nil, syscall.Flock(int(second.Fd()), syscall.LOCK_UN)
+	}
+	ready := func(_ context.Context, got Manifest) error {
+		waited = true
+		if got != m {
+			return errors.New("the selected instance changed")
+		}
+		return nil
+	}
+	bind := func(context.Context, Manifest) error { return nil }
+	if err = startProvisionedPackage(t.Context(), m, first, start, ready, bind); err != nil || !waited {
+		t.Fatal("initial recovery could not acquire the instance lock before startup", err)
+	}
+	called := false
+	if err = startProvisionedPackage(t.Context(), m, first, func(context.Context, ...string) ([]byte, error) {
+		called = true
+		return nil, nil
+	}, ready, bind); err == nil || called {
+		t.Fatal("startup ran without releasing the original lock", err)
+	}
+	retry, err := os.OpenFile(path, os.O_RDWR, 0600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer retry.Close()
+	if err = syscall.Flock(int(retry.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		t.Fatal(err)
+	}
+	startError := errors.New("service start failed")
+	waited = false
+	if err = startProvisionedPackage(t.Context(), m, retry, func(context.Context, ...string) ([]byte, error) {
+		return nil, startError
+	}, ready, bind); !errors.Is(err, startError) || waited {
+		t.Fatal("failed startup was treated as healthy", err)
+	}
+	if err = syscall.Flock(int(second.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		t.Fatal("failed startup kept the recovery lock", err)
+	}
+	if err = syscall.Flock(int(second.Fd()), syscall.LOCK_UN); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestProvisionedPackageBindsOwnerBeforeInstallerReturns(t *testing.T) {
+	_, m := packageGateInitialRecord(t)
+	lock, err := os.OpenFile(filepath.Join(t.TempDir(), "operation.lock"), os.O_CREATE|os.O_RDWR, 0600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lock.Close()
+	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		t.Fatal(err)
+	}
+	ready, bound := false, false
+	err = startProvisionedPackage(t.Context(), m, lock,
+		func(context.Context, ...string) ([]byte, error) { return nil, nil },
+		func(_ context.Context, got Manifest) error { ready = got == m; return nil },
+		func(_ context.Context, got Manifest) error { bound = ready && got == m; return nil })
+	if err != nil || !ready || !bound {
+		t.Fatal("installer returned before binding the healthy package owner", err)
+	}
+	lock, err = os.OpenFile(filepath.Join(t.TempDir(), "operation.lock"), os.O_CREATE|os.O_RDWR, 0600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lock.Close()
+	bindError := errors.New("owner commitment unavailable")
+	err = startProvisionedPackage(t.Context(), m, lock,
+		func(context.Context, ...string) ([]byte, error) { return nil, nil },
+		func(context.Context, Manifest) error { return nil },
+		func(context.Context, Manifest) error { return bindError })
+	if !errors.Is(err, bindError) {
+		t.Fatal("installer reported success without the protected owner", err)
+	}
+}
 
 func TestPackageOwnerReleasesLockBeforeUpdateRequest(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "operation.lock")
@@ -88,6 +189,33 @@ func TestPackageOwnerCommitBindsTheRunningLocalInstance(t *testing.T) {
 	}
 }
 
+func TestPackageOwnerCommitBindsTheRunningRemoteInstance(t *testing.T) {
+	_, m := packageGateInitialRecord(t)
+	m.Location, m.PublicOrigin = "remote", "https://node.example.ts.net:8443"
+	m.Root, _ = PackageRoot(m.Owner, m.Location, m.ID)
+	m.App.Name = packageAccountName(m.Owner, m.Location, m.ID, "app")
+	m.Signer.Name = packageAccountName(m.Owner, m.Location, m.ID, "signer")
+	instance := base64.RawURLEncoding.EncodeToString([]byte(strings.Repeat("x", 32)))
+	health := core.Health{Status: "ok", APIVersion: core.APIVersion, InstanceID: instance,
+		Connection: &core.ConnectionInfo{Location: "remote", Transport: "loopback", OwnerUID: m.Owner}}
+	commit, err := packageOwnerCommit(m, health)
+	if err != nil || !validPackageOwnerCommit(m, commit) {
+		t.Fatal("running Remote instance did not receive its own owner binding", err)
+	}
+	other := m
+	other.ID = strings.Repeat("f", 32)
+	other.Root, _ = PackageRoot(other.Owner, other.Location, other.ID)
+	other.App.Name = packageAccountName(other.Owner, other.Location, other.ID, "app")
+	other.Signer.Name = packageAccountName(other.Owner, other.Location, other.ID, "signer")
+	if validPackageOwnerCommit(other, commit) {
+		t.Fatal("another Remote package accepted the owner binding")
+	}
+	health.Connection.Location = "local"
+	if _, err = packageOwnerCommit(m, health); err == nil {
+		t.Fatal("Local health was accepted for the Remote package")
+	}
+}
+
 func packageGateInitialRecord(t *testing.T) (update.MaintenanceRecord, Manifest) {
 	t.Helper()
 	r := initialMaintenanceFixture()
@@ -103,6 +231,40 @@ func packageGateInitialRecord(t *testing.T) (update.MaintenanceRecord, Manifest)
 	r.Package.ProvenanceSHA256 = strings.Repeat("e", 64)
 	r.Base, r.Target = mustJSON(m), mustJSON(m)
 	return r, m
+}
+
+func TestLocalPackageJournalRetainsVerifiedWalletClient(t *testing.T) {
+	r, m := packageGateInitialRecord(t)
+	r.Package.NativeDesktop = &update.Artifact{File: "fased-desktop", Size: 20, SHA256: strings.Repeat("d", 64)}
+	r.Package.NativePackage = &update.NativePackage{
+		Family: "dnf", Artifact: update.Artifact{File: "fased-app-linux-amd64.rpm", Size: 30, SHA256: strings.Repeat("6", 64)},
+		InstallerSHA256: strings.Repeat("7", 64),
+	}
+	if _, err := ValidateIdlePackageMaintenanceRecord(r, m.Owner, m.Location, m.ID); err != nil {
+		t.Fatal("the authenticated Local wallet client was refused by its journal", err)
+	}
+	if !packagePairMatches(*r.Package, m) {
+		t.Fatal("the Local wallet client was refused by the package gate")
+	}
+	files, err := nativePackageFiles(*r.Package)
+	if err != nil || len(files) != 5 {
+		t.Fatal("wallet client metadata changed the fixed OS package surface", err)
+	}
+	if _, ok := files["usr/lib/fased-app/fased-desktop"]; ok {
+		t.Fatal("instance-owned wallet client entered the shared OS package")
+	}
+	remote := m
+	remote.Location = "remote"
+	if packagePairMatches(*r.Package, remote) {
+		t.Fatal("a Local wallet client was accepted for a Remote instance")
+	}
+	bad := *r.Package
+	artifact := *bad.NativeDesktop
+	artifact.SHA256 = "invalid"
+	bad.NativeDesktop = &artifact
+	if packagePairMatches(bad, m) {
+		t.Fatal("a wallet client without a valid digest was accepted")
+	}
 }
 
 func TestPackageGateSelectsOnlyBoundStartState(t *testing.T) {
@@ -152,6 +314,53 @@ func TestPackageGateSelectsOnlyBoundStartState(t *testing.T) {
 	}
 	if _, err := packageStartSelection(r, m.Owner, "remote", m.ID, nil); err == nil {
 		t.Fatal("another location's record was accepted")
+	}
+}
+
+func TestPackageOfflineRecoverySelectsOnlyItsRecordedOperation(t *testing.T) {
+	r, base := packageGateInitialRecord(t)
+	previous := *r.Package
+	previous.NativePackage = &update.NativePackage{Family: "dnf", Artifact: update.Artifact{File: "fased-app-linux-amd64.rpm", Size: 1, SHA256: strings.Repeat("1", 64)}, InstallerSHA256: strings.Repeat("2", 64)}
+	next := previous
+	next.Sequence++
+	next.ReleaseSHA256 = strings.Repeat("3", 64)
+	next.Components = append([]update.Component(nil), previous.Components...)
+	target := base
+	target.CoreHash, target.SignerHash = strings.Repeat("4", 64), strings.Repeat("5", 64)
+	next.Components[0].Artifact.SHA256, next.Components[1].Artifact.SHA256 = target.CoreHash, target.SignerHash
+	r.OperationID, r.Phase, r.Start = strings.Repeat("f", 32), "prepared", "base"
+	r.Base, r.Target, r.PreviousPackage, r.Package = mustJSON(base), mustJSON(target), &previous, &next
+	if got, err := PackageRecoveryOperation(base, r); err != nil || got != r.OperationID {
+		t.Fatal("the original package recovery was refused", got, err)
+	}
+	if _, err := PackageRecoveryOperation(target, r); err == nil {
+		t.Fatal("the target was accepted while the journal still selects the base")
+	}
+	for name, change := range map[string]func(*update.MaintenanceRecord){
+		"idle":                       func(v *update.MaintenanceRecord) { v.Phase = "idle" },
+		"other owner":                func(v *update.MaintenanceRecord) { v.Owner++ },
+		"bootstrap":                  func(v *update.MaintenanceRecord) { v.Bootstrap = true },
+		"no predecessor":             func(v *update.MaintenanceRecord) { v.PreviousPackage = nil },
+		"same operation as instance": func(v *update.MaintenanceRecord) { v.OperationID = base.ID },
+		"foreign target": func(v *update.MaintenanceRecord) {
+			wrong := target
+			wrong.Network = "devnet"
+			v.Target = mustJSON(wrong)
+		},
+		"missing hold": func(v *update.MaintenanceRecord) { v.Phase, v.Start = "held", "" },
+	} {
+		t.Run(name, func(t *testing.T) {
+			bad := r
+			change(&bad)
+			if _, err := PackageRecoveryOperation(base, bad); err == nil {
+				t.Fatal("foreign or incomplete package recovery was accepted")
+			}
+		})
+	}
+	foreign := base
+	foreign.CoreHash = strings.Repeat("6", 64)
+	if _, err := PackageRecoveryOperation(foreign, r); err == nil {
+		t.Fatal("an unrelated installed pair was accepted")
 	}
 }
 
@@ -218,11 +427,49 @@ func TestPackageGateRequiresOriginalEmptySignerCheckpoint(t *testing.T) {
 	if selected, err := packageStartSelection(r, base.Owner, base.Location, base.ID, nil); err != nil || selected != target {
 		t.Fatal("completed target did not survive restart", err)
 	}
+	initial, err := walletInitialRecord(r, base.Owner, base.Location, base.ID)
+	if !signer.OrdinaryOwnerAdmissionEnabled() {
+		if !errors.Is(err, signer.ErrUnavailable) || r.Phase != "completed" {
+			t.Fatal("a disabled owner signer must preserve the completed update", err)
+		}
+		// A later verified signer may support owner admission even when the
+		// original pinned helper was built while admission was disabled.
+		supported := r
+		pkg := *r.Package
+		pkg.Components = append([]update.Component(nil), pkg.Components...)
+		for i := range pkg.Components {
+			if pkg.Components[i].Contract.Component == "signer" {
+				pkg.Components[i].Contract.Features = append(append([]string(nil), pkg.Components[i].Contract.Features...), update.OwnerKeyAdmissionFeature)
+			}
+		}
+		supported.Package = &pkg
+		initial, err = walletInitialRecord(supported, base.Owner, base.Location, base.ID)
+		if err != nil {
+			t.Fatal("a supported recorded signer was refused by the older helper", err)
+		}
+		if selected, err := ValidateInitialPackageMaintenanceRecord(initial, base.Owner, base.Location, base.ID); err != nil || selected != target || supported.Phase != "completed" {
+			t.Fatal("wallet setup did not preserve the supported completed target", err)
+		}
+	} else {
+		if err != nil {
+			t.Fatal("a completed empty-signer update blocked wallet setup", err)
+		}
+		if selected, err := ValidateInitialPackageMaintenanceRecord(initial, base.Owner, base.Location, base.ID); err != nil || selected != target || r.Phase != "completed" {
+			t.Fatal("wallet setup did not preserve the completed target", err)
+		}
+	}
+	for _, phase := range []string{"held", "ready", "replacing"} {
+		unfinished := r
+		unfinished.Phase = phase
+		if _, err := walletInitialRecord(unfinished, base.Owner, base.Location, base.ID); err == nil {
+			t.Fatal("unfinished update became a wallet setup", phase)
+		}
+	}
 }
 
 func TestPackageStagingRequiresProtectedNativeRecovery(t *testing.T) {
 	_, m := packageGateInitialRecord(t)
-	p := update.MaintenancePackage{NativePackage: &update.NativePackage{}}
+	p := update.MaintenancePackage{NativePackage: &update.NativePackage{InstallerSHA256: strings.Repeat("a", 64)}}
 	if validateNativePackageUpdateScope(m, p, false) == nil {
 		t.Fatal("disabled native package update was admitted")
 	}
@@ -248,6 +495,104 @@ func TestPackageStagingRequiresProtectedNativeRecovery(t *testing.T) {
 	m.Network = ""
 	if validateNativePackageUpdateScope(m, p, true) == nil {
 		t.Fatal("empty-signer update without native package was admitted")
+	}
+}
+
+func TestBundleJournalKeepsTheOriginalPairAndRecoveryIdentity(t *testing.T) {
+	r, m := packageGateInitialRecord(t)
+	r.Package.Bundle = &update.LinuxBundle{Archive: update.Artifact{File: "fased-app-linux-amd64.tar.gz", Size: 1, SHA256: strings.Repeat("6", 64)}, ManifestSHA256: strings.Repeat("7", 64), InstallerSHA256: strings.Repeat("8", 64)}
+	if err := r.Package.Validate(); err != nil {
+		t.Fatal("matching bundle pair refused", err)
+	}
+	if selected, err := ValidateInitialPackageMaintenanceRecord(r, m.Owner, m.Location, m.ID); err != nil || selected != m {
+		t.Fatal("initial bundle record lost its original identity", err)
+	}
+	bad := *r.Package
+	bad.Components = append([]update.Component(nil), r.Package.Components...)
+	bad.Components[0].Contract.Features = nil
+	if err := bad.Validate(); err == nil {
+		t.Fatal("a reader without the bundle journal feature was accepted")
+	}
+	bad = *r.Package
+	bad.NativePackage = &update.NativePackage{InstallerSHA256: strings.Repeat("8", 64)}
+	if err := bad.Validate(); err == nil || bad.InstallerDigest() != "" {
+		t.Fatal("two competing distribution identities were accepted")
+	}
+	b := nativeBootstrap{Version: 1, Base: m, Package: *r.Package}
+	if _, err := retainedNativeBootstrap(hostFile{UID: 0, Regular: true, Mode: 0644, Data: mustJSON(b)}); err != nil {
+		t.Fatal("the original bundle bootstrap could not be resumed", err)
+	}
+	previous := *r.Package
+	next := previous
+	next.Sequence++
+	next.ReleaseSHA256 = strings.Repeat("c", 64)
+	next.Components = append([]update.Component(nil), previous.Components...)
+	target := m
+	target.CoreHash, target.SignerHash = strings.Repeat("a", 64), strings.Repeat("b", 64)
+	next.Components[0].Artifact.SHA256, next.Components[1].Artifact.SHA256 = target.CoreHash, target.SignerHash
+	r.OperationID, r.Phase, r.Start = strings.Repeat("f", 32), "prepared", "base"
+	r.PreviousPackage, r.Package, r.Target = &previous, &next, mustJSON(target)
+	if got, err := PackageRecoveryOperation(m, r); err != nil || got != r.OperationID {
+		t.Fatal("original bundle recovery was not selected", got, err)
+	}
+	otherArch := next
+	changedBundle := *next.Bundle
+	changedBundle.Archive.File = "fased-app-linux-arm64.tar.gz"
+	otherArch.Bundle = &changedBundle
+	r.Package = &otherArch
+	if _, err := PackageRecoveryOperation(m, r); err == nil {
+		t.Fatal("bundle recovery crossed architectures")
+	}
+	r.Package = &next
+	r.Target = mustJSON(m)
+	if _, err := PackageRecoveryOperation(m, r); err == nil {
+		t.Fatal("bundle recovery selected a different target")
+	}
+}
+
+func TestPackageWalletAdmissionPreservesIdleJournalWhenOwnerSignerHeld(t *testing.T) {
+	if signer.OrdinaryOwnerAdmissionEnabled() {
+		t.Skip("owner signer admission is enabled in this build")
+	}
+	r, m := packageGateInitialRecord(t)
+	before := mustJSON(r)
+	if err := CheckPackageWalletSigner(m, r.Package); !errors.Is(err, signer.ErrUnavailable) {
+		t.Fatal("the disabled owner signer was offered wallet initialization", err)
+	}
+	if _, err := walletInitialRecord(r, m.Owner, m.Location, m.ID); !errors.Is(err, signer.ErrUnavailable) {
+		t.Fatal("the idle journal was admitted with a disabled signer", err)
+	}
+	if string(mustJSON(r)) != string(before) {
+		t.Fatal("the original idle journal changed")
+	}
+}
+
+func TestPackageWalletAdmissionBindsSignerContract(t *testing.T) {
+	r, m := packageGateInitialRecord(t)
+	p := *r.Package
+	p.Components = append([]update.Component(nil), p.Components...)
+	for i := range p.Components {
+		if p.Components[i].Contract.Component == "signer" {
+			p.Components[i].Contract.Features = append(append([]string(nil), p.Components[i].Contract.Features...), update.OwnerKeyAdmissionFeature)
+		}
+	}
+	if err := CheckPackageWalletSigner(m, &p); err != nil {
+		t.Fatal("a matching signer advertising owner admission was refused", err)
+	}
+	wrongHash := m
+	wrongHash.SignerHash = strings.Repeat("9", 64)
+	if err := CheckPackageWalletSigner(wrongHash, &p); err == nil {
+		t.Fatal("a different signer was admitted")
+	}
+	coreOnly := *r.Package
+	coreOnly.Components = append([]update.Component(nil), coreOnly.Components...)
+	for i := range coreOnly.Components {
+		if coreOnly.Components[i].Contract.Component == "core" {
+			coreOnly.Components[i].Contract.Features = append(append([]string(nil), coreOnly.Components[i].Contract.Features...), update.OwnerKeyAdmissionFeature)
+		}
+	}
+	if err := CheckPackageWalletSigner(m, &coreOnly); err == nil {
+		t.Fatal("the core cannot claim signer admission")
 	}
 }
 

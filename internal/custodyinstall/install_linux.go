@@ -675,6 +675,28 @@ func verifyTopology(m Manifest) error {
 }
 
 func verifyValidatedTopology(m Manifest) error {
+	if err := verifyManagedIdentities(m); err != nil {
+		return err
+	}
+	cfg, e := signer.LoadConfig(m.Root + "/identity.json")
+	if e != nil {
+		return e
+	}
+	if cfg != identityConfig(m) {
+		return errors.New("installed signer configuration changed")
+	}
+	for name, b := range definitions(m) {
+		f, e := readRoot(m.Root + "/" + name)
+		if e != nil || !known(f, b, 0644) {
+			return errors.New("stored unit definition changed")
+		}
+	}
+	return nil
+}
+
+// Identity and state directories can be checked while a journalled metadata
+// transition has temporarily left old and new configuration files side by side.
+func verifyManagedIdentities(m Manifest) error {
 	if e := verifyProbe(m.Root+"/app-readonly-probe", m.App); e != nil {
 		return e
 	}
@@ -703,19 +725,6 @@ func verifyValidatedTopology(m Manifest) error {
 		st, ok := i.Sys().(*syscall.Stat_t)
 		if !ok || !i.IsDir() || i.Mode()&os.ModeSymlink != 0 || int(st.Uid) != d.i.UID || int(st.Gid) != d.i.GID || i.Mode().Perm() != d.mode {
 			return errors.New("managed state ownership changed; preserving it")
-		}
-	}
-	cfg, e := signer.LoadConfig(m.Root + "/identity.json")
-	if e != nil {
-		return e
-	}
-	if cfg != identityConfig(m) {
-		return errors.New("installed signer configuration changed")
-	}
-	for name, b := range definitions(m) {
-		f, e := readRoot(m.Root + "/" + name)
-		if e != nil || !known(f, b, 0644) {
-			return errors.New("stored unit definition changed")
 		}
 	}
 	return nil
@@ -928,6 +937,16 @@ func validateLoadedUnitFields(m Manifest, role, image string, fields map[string]
 		}
 		if !slices.Contains(strings.Fields(fields["Requires"]), recovery) || !slices.Contains(strings.Fields(fields["After"]), recovery) {
 			return errors.New("package service does not require its recovery; preserving it")
+		}
+		if m.Location == "remote" && role == "app" {
+			name, socket, err := tailnet.ProtectedSocketUnit("package-"+m.ID, m.Owner)
+			if err != nil || read == nil {
+				return errors.New("protected package ingress is unavailable")
+			}
+			f, err := read("/etc/systemd/system/" + name)
+			if err != nil || !known(f, socket, 0644) || !slices.Contains(strings.Fields(fields["Requires"]), name) || !slices.Contains(strings.Fields(fields["After"]), name) {
+				return errors.New("protected package ingress differs; preserving it")
+			}
 		}
 		return nil
 	}

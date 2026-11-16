@@ -20,7 +20,7 @@ import (
 
 // CandidateAdmission is a maintainer's bounded acceptance request, not a
 // customer update channel or a transferable execution permit. An update binds
-// its original baseline; a fresh Local install has no existing baseline and is
+// its original baseline; a fresh install has no existing baseline and is
 // explicitly marked. The compiled trust independently verifies packet/proof.
 type CandidateAdmission struct {
 	PacketSHA256   string `json:"packetSha256"`
@@ -46,11 +46,12 @@ func (a CandidateAdmission) validate(now time.Time) error {
 	}
 	scope := updateScope || freshScope
 	packageScope := false
-	if a.FreshProfile == "package-local" && a.FreshOwner > 0 && a.BaselineSHA256 == "" {
-		prefix := "/var/lib/fased-app-package/" + strconv.Itoa(a.FreshOwner) + "/local/"
+	location, packageProfile := strings.CutPrefix(a.FreshProfile, "package-")
+	if packageProfile && (location == "local" || location == "remote") && a.FreshOwner > 0 && a.BaselineSHA256 == "" {
+		prefix := "/var/lib/fased-app-package/" + strconv.Itoa(a.FreshOwner) + "/" + location + "/"
 		if strings.HasPrefix(a.FreshRoot, prefix) {
 			instance := strings.TrimPrefix(a.FreshRoot, prefix)
-			root, err := update.PackageInstanceRoot(a.FreshOwner, "local", instance)
+			root, err := update.PackageInstanceRoot(a.FreshOwner, location, instance)
 			packageScope = err == nil && root == a.FreshRoot && a.FreshData == filepath.Join(root, "app-state")
 		}
 	}
@@ -108,7 +109,7 @@ func prepareAttestedCandidate(ctx context.Context, o Options, directory string, 
 		return nil, errors.New("candidate differs from the reviewed packet")
 	}
 	var packet AttestedPacket
-	if update.StrictJSON(raw, &packet) != nil || (packet.Version != 2 && packet.Version != 3) || !attestedBuildIdentity(packet, "") {
+	if update.StrictJSON(raw, &packet) != nil || (packet.Version != 2 && packet.Version != 3 && packet.Version != 4) || !attestedBuildIdentity(packet, "") {
 		return nil, errors.New("only protected main-dispatch candidates admit installed acceptance")
 	}
 	sequence, err := releaseSequence(packet.ProductVersion)
@@ -118,7 +119,7 @@ func prepareAttestedCandidate(ctx context.Context, o Options, directory string, 
 	if err = checkReaderRelease(sequence); err != nil {
 		return nil, err
 	}
-	d := Descriptor{Binding: seed.Binding, Sequence: sequence, ProductVersion: packet.ProductVersion, Source: packet.Source, BundleSHA256: packet.BundleSHA256, Archive: packet.Archive, Release: packet.Release}
+	d := Descriptor{Binding: seed.Binding, Sequence: sequence, ProductVersion: packet.ProductVersion, Source: packet.Source, BundleSHA256: packet.BundleSHA256, Archive: packet.Archive, LinuxBundle: packet.Version == 4, Release: packet.Release}
 	proof, err := update.ReadDocument(filepath.Join(directory, provenanceFile))
 	if err != nil {
 		return nil, err
@@ -197,18 +198,18 @@ func prepareAttestedCandidate(ctx context.Context, o Options, directory string, 
 	if err != nil || m.Version != packet.ProductVersion || m.Source != packet.Source {
 		return p, errors.New("candidate held bundle differs from reviewed source")
 	}
-	if err = verifyBundleProfile(seed, m); err != nil {
+	if err = verifyAttestedBundleProfile(seed, m, packet.Version); err != nil {
 		return p, err
 	}
 	engine, _ := bundle.Names()
 	p.engine = m.Files[engine]
 	identity := ApplicationDescriptorIdentity(d)
-	if packet.Version == 3 {
+	if packet.Version == 3 || packet.Version == 4 {
 		// The packet digest includes both package identities; the legacy
 		// archive-only descriptor does not.
 		identity = admission.PacketSHA256
 	}
-	p.report = Report{Version: 4, Purpose: "fased-app-installed-candidate-acceptance:v1", MetadataVerified: true, ArchiveVerified: true, BundleVerified: true, Sequence: sequence, Target: d.Target, SeedSHA256: o.SeedSHA256, DescriptorSHA256: identity, ArchiveSHA256: d.Archive.SHA256, BundleSHA256: d.BundleSHA256, BundleDirectory: filepath.Join(o.Directory, "bundle"), ProvenanceVerified: true, LinuxPackageDigestsVerified: packet.Version == 3, ProvenanceSHA256: decision.BundleSHA256, TrustPolicySHA256: decision.PolicySHA256}
+	p.report = Report{Version: 4, Purpose: "fased-app-installed-candidate-acceptance:v1", MetadataVerified: true, ArchiveVerified: true, BundleVerified: true, Sequence: sequence, Target: d.Target, SeedSHA256: o.SeedSHA256, DescriptorSHA256: identity, ArchiveSHA256: d.Archive.SHA256, BundleSHA256: d.BundleSHA256, BundleDirectory: filepath.Join(o.Directory, "bundle"), ProvenanceVerified: true, LinuxPackageDigestsVerified: packet.Version == 3, LinuxBundleVerified: packet.Version == 4, ProvenanceSHA256: decision.BundleSHA256, TrustPolicySHA256: decision.PolicySHA256}
 	for name, data := range p.metadata {
 		if err = writeNew(root, name, data); err != nil {
 			return p, err
@@ -257,10 +258,10 @@ func (p *Prepared) revalidateCandidate(seed Seed, now time.Time) error {
 		return errors.New("reviewed candidate identity changed")
 	}
 	var packet AttestedPacket
-	if update.StrictJSON(p.metadata[AttestedPacketFile], &packet) != nil || (packet.Version != 2 && packet.Version != 3) || !attestedBuildIdentity(packet, "") || (packet.Version == 3) != p.report.LinuxPackageDigestsVerified {
+	if update.StrictJSON(p.metadata[AttestedPacketFile], &packet) != nil || (packet.Version != 2 && packet.Version != 3 && packet.Version != 4) || !attestedBuildIdentity(packet, "") || (packet.Version == 3) != p.report.LinuxPackageDigestsVerified || (packet.Version == 4) != p.report.LinuxBundleVerified {
 		return errors.New("candidate packet changed")
 	}
-	d := Descriptor{Binding: seed.Binding, Sequence: p.descriptor.Sequence, ProductVersion: packet.ProductVersion, Source: packet.Source, BundleSHA256: packet.BundleSHA256, Archive: packet.Archive, Release: packet.Release}
+	d := Descriptor{Binding: seed.Binding, Sequence: p.descriptor.Sequence, ProductVersion: packet.ProductVersion, Source: packet.Source, BundleSHA256: packet.BundleSHA256, Archive: packet.Archive, LinuxBundle: packet.Version == 4, Release: packet.Release}
 	if d != p.descriptor {
 		return errors.New("candidate descriptor changed")
 	}

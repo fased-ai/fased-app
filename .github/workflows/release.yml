@@ -101,12 +101,11 @@ jobs:
           GOFLAGS: -mod=readonly -overlay=${{ steps.prepare.outputs.overlay }}
         run: |
           go mod verify
-          sudo apt-get update
           desktop_args=()
           if [[ "$FASED_PACKAGE_ONLY" == true ]]; then
-            sudo apt-get install -y --no-install-recommends rpm
             export CGO_ENABLED=0
           else
+            sudo apt-get update
             sudo apt-get install -y --no-install-recommends libgtk-3-dev libwebkit2gtk-4.1-dev
             node scripts/build-desktop.mjs
             desktop_args=(--wallet-desktop=.evidence/bin/fased-desktop)
@@ -114,13 +113,12 @@ jobs:
           go build -trimpath -o .evidence/bin/fased-signer ./cmd/fased-signer
           node scripts/build-core.mjs --version="$FASED_RELEASE_VERSION" --wallet-signer=.evidence/bin/fased-signer "${desktop_args[@]}" --source="$GITHUB_SHA"
           node scripts/build-core.mjs --installer --version="$FASED_RELEASE_VERSION" --wallet-signer=.evidence/bin/fased-signer "${desktop_args[@]}" --source="$GITHUB_SHA"
-          go run -ldflags "-X github.com/fased-ai/fased-app/internal/core.Version=$FASED_RELEASE_VERSION" ./cmd/fased-package --engine .evidence/bin/fased-app --source "$GITHUB_SHA" --out .evidence/ubuntu-release --ubuntu-release-format
-          cp .evidence/bin/fased-install .evidence/ubuntu-release/fased-install-linux-amd64
           if [[ "$FASED_PACKAGE_ONLY" == true ]]; then
-            go run -ldflags "-X github.com/fased-ai/fased-app/internal/core.Version=$FASED_RELEASE_VERSION" ./cmd/fased-package --linux-system-packages --engine .evidence/bin/fased-app --signer .evidence/bin/fased-signer --installer .evidence/bin/fased-install --source "$GITHUB_SHA" --out .evidence/ubuntu-release
-            cp .evidence/ubuntu-release/fased-linux-system-amd64/*.deb .evidence/ubuntu-release/
-            cp .evidence/ubuntu-release/fased-linux-system-amd64/*.rpm .evidence/ubuntu-release/
+            go run -ldflags "-X github.com/fased-ai/fased-app/internal/core.Version=$FASED_RELEASE_VERSION" ./cmd/fased-package --engine .evidence/bin/fased-app --signer .evidence/bin/fased-signer --source "$GITHUB_SHA" --out .evidence/ubuntu-release --linux-bundle-format
+          else
+            go run -ldflags "-X github.com/fased-ai/fased-app/internal/core.Version=$FASED_RELEASE_VERSION" ./cmd/fased-package --engine .evidence/bin/fased-app --source "$GITHUB_SHA" --out .evidence/ubuntu-release --ubuntu-release-format
           fi
+          cp .evidence/bin/fased-install .evidence/ubuntu-release/fased-install-linux-amd64
           node scripts/prepare-ubuntu-release.mjs inventory
       - name: Attest the actual archive from this main-dispatch run
         if: ${{ !inputs.package_only }}
@@ -132,7 +130,7 @@ jobs:
             .evidence/ubuntu-release/fased-install-linux-amd64
           push-to-registry: false
           create-storage-record: false
-      - name: Attest the browser-first Linux package pair
+      - name: Attest the browser-first Linux bundle
         if: ${{ inputs.package_only }}
         id: native_provenance
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
@@ -140,8 +138,6 @@ jobs:
           subject-path: |
             .evidence/ubuntu-release/fased-app-linux-amd64.tar.gz
             .evidence/ubuntu-release/fased-install-linux-amd64
-            .evidence/ubuntu-release/fased-app-linux-amd64.deb
-            .evidence/ubuntu-release/fased-app-linux-amd64.rpm
           push-to-registry: false
           create-storage-record: false
       - name: Verify original provenance offline and stage public signing inputs
@@ -154,9 +150,6 @@ jobs:
       - name: Preserve verified staged artifact modes
         run: |
           chmod 600 .evidence/ubuntu-release/fased-app-linux-amd64.tar.gz .evidence/ubuntu-release/fased-install-linux-amd64 .evidence/ubuntu-release/fased-app-linux-amd64.provenance.sigstore.json .evidence/ubuntu-release/install.sh .evidence/ubuntu-release/fased-release.json .evidence/ubuntu-release/first-install-seed.json
-          if [[ "$FASED_PACKAGE_ONLY" == true ]]; then
-            chmod 600 .evidence/ubuntu-release/fased-app-linux-amd64.deb .evidence/ubuntu-release/fased-app-linux-amd64.rpm
-          fi
       - name: Retain original verified release artifacts
         if: ${{ always() && steps.prepare.outcome == 'success' }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -179,8 +172,6 @@ jobs:
             .evidence/ubuntu-release/artifact-inventory.json
             .evidence/ubuntu-release/signing-inputs.json
             .evidence/ubuntu-release/fased-release.json
-            .evidence/ubuntu-release/*.deb
-            .evidence/ubuntu-release/*.rpm
   installed-acceptance:
     needs: [candidate-inputs, ubuntu-amd64]
     if: always() && !inputs.package_only && needs.candidate-inputs.result == 'success' && github.ref == 'refs/heads/main' && github.sha == inputs.source && github.repository == 'fased-ai/fased-app' && github.repository_id == '1426211857' && github.repository_owner_id == '279582504' && (needs.ubuntu-amd64.result == 'success' || (needs.ubuntu-amd64.result == 'skipped' && inputs.candidate_run != '' && inputs.candidate_attempt != '' && github.run_attempt == 1))

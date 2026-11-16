@@ -28,7 +28,11 @@ import (
 )
 
 func main() {
-	if err := run(os.Args[1:], os.Stdin, os.Stdout, os.Stderr); err != nil {
+	err := dispatchPackageInstance(os.Args[1:])
+	if err == nil {
+		err = run(os.Args[1:], os.Stdin, os.Stdout, os.Stderr)
+	}
+	if err != nil {
 		fmt.Fprintln(os.Stderr, "fased-app:", err)
 		if errors.Is(err, core.ErrCoreUnavailable) {
 			os.Exit(75)

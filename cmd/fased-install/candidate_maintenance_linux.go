@@ -49,7 +49,7 @@ func stageAttestedFreshPackageCandidate(ctx context.Context, p *bootstrap.Prepar
 }
 
 func stageAttestedCandidate(ctx context.Context, p *bootstrap.Prepared, packetSHA, scope string, diagnostics io.Writer) error {
-	if p == nil || p.Report().LinuxPackageDigestsVerified {
+	if p == nil || p.Report().LinuxPackageDigestsVerified || p.Report().LinuxBundleVerified {
 		return errors.New("native packages require the package-aware installation controller")
 	}
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Minute)
@@ -87,7 +87,7 @@ func stageAttestedScopedPackageCandidate(ctx context.Context, p *bootstrap.Prepa
 	report := p.Report()
 	hash, err := hex.DecodeString(baseline)
 	validScope := scope == "fresh" && baseline == "" || scope == "update" && err == nil && len(hash) == 32 && hex.EncodeToString(hash) == baseline
-	if !report.LinuxPackageDigestsVerified || !report.ProvenanceVerified || report.DescriptorSHA256 != packetSHA || !validScope {
+	if (!report.LinuxPackageDigestsVerified && !report.LinuxBundleVerified) || !report.ProvenanceVerified || report.DescriptorSHA256 != packetSHA || !validScope {
 		return errors.New("verified native package and exact installation scope required")
 	}
 	if _, err = update.PackageInstanceRoot(os.Getuid(), location, instance); err != nil {

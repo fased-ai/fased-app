@@ -33,8 +33,8 @@ func TestPackageInstanceIdentityIsSeparateFromLegacyAndOtherProfiles(t *testing.
 			}
 		}
 		signerUnit := string(definitions(m)["fased-signer.service"])
-		if strings.Contains(signerUnit, "Restart=on-failure") || strings.Contains(signerUnit, "WantedBy=multi-user.target") {
-			t.Fatal("an unconfigured signer must not be enabled or restarted")
+		if !strings.Contains(signerUnit, "ConditionPathExists="+m.Root+"/wallet-configured.json\n") {
+			t.Fatal("an unconfigured signer must be skipped until Wallets is configured")
 		}
 		for _, change := range []func(*Manifest){
 			func(v *Manifest) { v.Owner++ },

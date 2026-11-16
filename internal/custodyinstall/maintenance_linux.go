@@ -131,7 +131,7 @@ func stageProtectedPackage(ctx context.Context, a maintenance.Authority, m Manif
 		if bootstrap {
 			return errors.New("package update cannot use legacy bootstrap")
 		}
-		if err = validateNativePackageUpdateScope(m, p, nativePackageManagerConnected); err != nil {
+		if err = validateNativePackageUpdateScope(m, p, packageUpdateConnected); err != nil {
 			return err
 		}
 		if p.Validate() != nil {
@@ -243,7 +243,7 @@ func stageProtectedPackage(ctx context.Context, a maintenance.Authority, m Manif
 			if old.Phase == "idle" {
 				var e error
 				if m.Layout == PackageLayout {
-					_, e = ValidateInitialPackageMaintenanceRecord(old, owner, m.Location, m.ID)
+					_, e = ValidateIdlePackageMaintenanceRecord(old, owner, m.Location, m.ID)
 				} else {
 					_, e = ValidateInitialMaintenanceRecord(old)
 				}
@@ -284,8 +284,15 @@ func stageProtectedPackage(ctx context.Context, a maintenance.Authority, m Manif
 	if m.Layout == PackageLayout && previousPackage == nil {
 		return errors.New("the original authenticated installed package is required")
 	}
+	if p.Bundle != nil && previousPackage != nil {
+		for _, component := range previousPackage.Components {
+			if !slices.Contains(component.Contract.Features, update.BundleJournalFeature) {
+				return errors.New("the installed predecessor needs a verified bundle-reader migration")
+			}
+		}
+	}
 	previous := []struct{ name, path, hash string }{{"previous-core", m.Root + "/fased-app", m.CoreHash}, {"previous-signer", m.Root + "/fased-signer", m.SignerHash}}
-	if m.NativeOwnerAccess {
+	if m.NativeOwnerAccess || m.Layout == PackageLayout && m.Location == "local" && (p.NativeDesktop != nil || previousPackage != nil && previousPackage.NativeDesktop != nil) {
 		if p.NativeDesktop == nil || p.Validate() != nil || previousPackage == nil || previousPackage.NativeDesktop == nil {
 			return errors.New("the enrolled Local desktop must join the protected update")
 		}
@@ -329,11 +336,11 @@ func validateNativePackageUpdateScope(m Manifest, p update.MaintenancePackage, e
 	if m.Layout != PackageLayout {
 		return nil
 	}
-	if p.NativePackage == nil {
-		return errors.New("the original native package is required")
+	if p.InstallerDigest() == "" {
+		return errors.New("the original authenticated Linux release is required")
 	}
 	if !enabled {
-		return errors.New("native package-manager recovery is not yet connected; preserve the installation")
+		return errors.New("package update recovery is unavailable; preserve the installation")
 	}
 	return nil
 }
@@ -496,7 +503,15 @@ func describeProtectedPair(ctx context.Context, m Manifest, dir, version, native
 		if !desktopOK || binding.ProductVersion != version || binding.Source != nativeSource || !validHex(binding.SignerSHA256, 32) || binding.SignerSHA256 != out[1].Artifact.SHA256 {
 			return nil, errors.New("protected signer differs from the authenticated native release")
 		}
-		if m.NativeOwnerAccess {
+		if m.Layout == PackageLayout && m.Location == "local" && binding.Version == 2 {
+			if _, _, err := digest(dir+"/fased-desktop", 0755, 64<<20); !errors.Is(err, os.ErrNotExist) {
+				return nil, errors.New("headless release cannot authorize a Local wallet client")
+			}
+		}
+		if m.NativeOwnerAccess || m.Layout == PackageLayout && m.Location == "local" && binding.Version == 1 {
+			if !slices.Contains(coreContract.Contract.Features, update.NativeDesktopJournalFeature) || !slices.Contains(signerContract.Features, update.NativeDesktopJournalFeature) {
+				return nil, errors.New("the core and signer must both support the protected desktop journal")
+			}
 			desktop, size, err := digest(dir+"/fased-desktop", 0755, 64<<20)
 			if err != nil || size <= 0 || desktop != binding.DesktopSHA256 {
 				return nil, errors.New("protected desktop differs from the authenticated native release")
@@ -908,7 +923,12 @@ func RunProtectedPackageUpdate(ctx context.Context, owner int, location, instanc
 	if err != nil || !update.IDOK(id) {
 		return errors.New("exact protected package operation required")
 	}
-	lock, err := maintenance.PackageLock(owner, location, instance)
+	var lock *os.File
+	if boot {
+		lock, err = maintenance.WaitPackageLock(ctx, owner, location, instance)
+	} else {
+		lock, err = maintenance.PackageLock(owner, location, instance)
+	}
 	if err != nil {
 		return err
 	}
@@ -947,23 +967,12 @@ func runProtectedUpdateScoped(ctx context.Context, a maintenance.Authority, owne
 	if location != "" && base.Network == "" {
 		return runEmptyPackageUpdate(ctx, a, r, base, target, boot)
 	}
-	// Package instances share the OS package even though their signer and app
-	// state are separate. Keep the package lock through the predecessor check,
-	// signer hold, replacement and any attempted base recovery.
-	nativePackage := location != "" && r.Package.NativePackage != nil
-	if nativePackage {
-		if r.PreviousPackage == nil || r.PreviousPackage.NativePackage == nil {
-			return errors.New("the original native package is required for signer recovery")
-		}
-		packageLock, e := maintenance.PackageSystemLock(ctx)
-		if e != nil {
-			return e
-		}
-		defer func() { result = errors.Join(result, packageLock.Close()) }()
-		if r.Phase == "prepared" {
-			if _, _, e = preflightNativePackage(ctx, base, r.PreviousPackage, *r.Package, false); e != nil {
-				return e
-			}
+	// Only this instance's protected pair changes. The machine-wide launcher
+	// and other instances remain on their own authenticated versions.
+	nativePackage := location != "" && r.Package.InstallerDigest() != ""
+	if nativePackage && r.Phase == "prepared" {
+		if err = verifyInstanceUpdatePackages(ctx, base, r.PreviousPackage, *r.Package); err != nil {
+			return err
 		}
 	}
 	if successorImage == "" {
@@ -1001,6 +1010,11 @@ func runProtectedUpdateScoped(ctx context.Context, a maintenance.Authority, owne
 		if markerErr != nil && !errors.Is(markerErr, os.ErrNotExist) {
 			return markerErr
 		}
+		if markerErr == nil && nativePackage {
+			if err = verifyPendingNativeTarget(ctx, target, r.Package); err != nil {
+				return err
+			}
+		}
 		if boot {
 			// The app cannot answer while this boot service precedes it. Queue
 			// the same worker after the services to validate any remaining fence.
@@ -1034,7 +1048,7 @@ func runProtectedUpdateScoped(ctx context.Context, a maintenance.Authority, owne
 			return err
 		}
 		if nativePackage {
-			if err = verifyInstalledNativePackage(ctx, base, *r.PreviousPackage); err != nil {
+			if err = verifyInstalledInstancePackage(base, r.PreviousPackage, VerifyPackageInstance); err != nil {
 				return err
 			}
 		}
@@ -1122,11 +1136,6 @@ func runProtectedUpdateScoped(ctx context.Context, a maintenance.Authority, owne
 	if err = storeProtectedRecord(r); err != nil {
 		return err
 	}
-	if nativePackage {
-		if err = applyNativePackageLocked(ctx, base, r.PreviousPackage, *r.Package, true); err != nil {
-			return err
-		}
-	}
 	for _, c := range r.Package.Components {
 		previous := base.CoreHash
 		if c.Contract.Component == "signer" {
@@ -1136,7 +1145,7 @@ func runProtectedUpdateScoped(ctx context.Context, a maintenance.Authority, owne
 			return err
 		}
 	}
-	if base.NativeOwnerAccess && (r.Package.NativeDesktop != nil || r.PreviousPackage != nil && r.PreviousPackage.NativeDesktop != nil) {
+	if (base.NativeOwnerAccess || base.Layout == PackageLayout && base.Location == "local") && (r.Package.NativeDesktop != nil || r.PreviousPackage != nil && r.PreviousPackage.NativeDesktop != nil) {
 		if r.Package.NativeDesktop == nil || r.PreviousPackage == nil || r.PreviousPackage.NativeDesktop == nil {
 			return errors.New("the original protected desktop update is required")
 		}
@@ -1146,7 +1155,7 @@ func runProtectedUpdateScoped(ctx context.Context, a maintenance.Authority, owne
 		if err = verifyProtectedDesktop(target, r.Package); err != nil {
 			return err
 		}
-	} else if !base.NativeOwnerAccess && r.Package.NativeDesktop != nil {
+	} else if r.Package.NativeDesktop != nil {
 		return errors.New("headless custody cannot replace a Local desktop")
 	}
 	if err = maintenance.ReplaceProtected(base.Root+"/install.json", mustJSON(target), 0644, sum(mustJSON(base))); err != nil {
@@ -1419,11 +1428,11 @@ func recoverProtectedBase(ctx context.Context, a maintenance.Authority, r *updat
 	if err := verifyProtectedPair(base); err != nil {
 		return err
 	}
-	if base.Layout == PackageLayout && r.Package != nil && r.Package.NativePackage != nil {
-		if r.PreviousPackage == nil || r.PreviousPackage.NativePackage == nil {
+	if base.Layout == PackageLayout && r.Package != nil && r.Package.InstallerDigest() != "" {
+		if r.PreviousPackage == nil || r.PreviousPackage.InstallerDigest() == "" {
 			return errors.New("the original native package is required before restarting the base")
 		}
-		if err := verifyInstalledNativePackage(ctx, base, *r.PreviousPackage); err != nil {
+		if err := verifyInstalledInstancePackage(base, r.PreviousPackage, VerifyPackageInstance); err != nil {
 			return err
 		}
 	}

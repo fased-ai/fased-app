@@ -21,6 +21,7 @@ import (
 
 	"github.com/fased-ai/fased-app/internal/core"
 	"github.com/fased-ai/fased-app/internal/maintenance"
+	"github.com/fased-ai/fased-app/internal/privateaccess"
 	"github.com/fased-ai/fased-app/internal/update"
 )
 
@@ -180,8 +181,8 @@ func verifyNativePolicy(ctx context.Context, m Manifest, s *System) error {
 // VerifyPackageOwnerTarget binds owner access to the running instance and its
 // existing protected update direction. It never selects a legacy owner root.
 func VerifyPackageOwnerTarget(m Manifest) error {
-	if m.validatePackage() != nil || m.Location != "local" || !m.Enrollment {
-		return errors.New("exact protected Local package required")
+	if m.validatePackage() != nil || (m.Location != "local" && m.Location != "remote") || !m.Enrollment {
+		return errors.New("exact protected package required")
 	}
 	r, err := update.ReadPackageMaintenanceRecord(m.Owner, m.Location, m.ID)
 	if err != nil {
@@ -191,14 +192,17 @@ func VerifyPackageOwnerTarget(m Manifest) error {
 	if err != nil || selected != m || VerifyPackageInstance(m) != nil {
 		return errors.New("package owner target differs from its protected recovery state")
 	}
+	if err = verifyPackageWalletMarker(m); err != nil {
+		return err
+	}
 	return verifyPackageStartFences(m, r, readRoot)
 }
 
 // PackageOwnerChannel is reached only through the instance's fixed root
 // helper and its already-held instance lock. The app itself runs as AppUID.
 func PackageOwnerChannel(ctx context.Context, owner int, location, instance string, lock *os.File, in io.Reader, out io.Writer) error {
-	if in == nil || out == nil || lock == nil || location != "local" {
-		return errors.New("one protected Local owner request required")
+	if in == nil || out == nil || lock == nil || (location != "local" && location != "remote") {
+		return errors.New("one protected package owner request required")
 	}
 	if _, err := maintenance.ValidatePackageProcess(owner, location, instance); err != nil {
 		return err
@@ -209,7 +213,14 @@ func PackageOwnerChannel(ctx context.Context, owner int, location, instance stri
 	}
 	m, err := LoadPackageInstance(owner, root)
 	if err != nil || VerifyPackageOwnerTarget(m) != nil || loadedUnit(m, "app") != nil {
-		return errors.New("original protected Local package required")
+		return errors.New("original protected package required")
+	}
+	var approval privateaccess.ProtectedInitialApproval
+	if location == "remote" {
+		approval, err = privateaccess.ReadProtectedPackageInitialApproval(owner, instance)
+		if err != nil || !approval.MatchesPackage(owner, instance, m.PublicOrigin, m.Listen, approval.Sequence, approval.ReleaseSHA256, approval.CoreSHA256) {
+			return errors.New("the original private device approval is required")
+		}
 	}
 	request, err := http.ReadRequest(bufio.NewReader(io.LimitReader(in, 64*1024+1)))
 	if err != nil || request.ContentLength < 0 || request.ContentLength > 16*1024 || len(request.TransferEncoding) != 0 {
@@ -233,7 +244,10 @@ func PackageOwnerChannel(ctx context.Context, owner int, location, instance stri
 	if _, err = os.Lstat(commitPath); errors.Is(err, os.ErrNotExist) {
 		r, readErr := update.ReadPackageMaintenanceRecord(owner, location, instance)
 		if readErr != nil || r.Phase != "idle" || m.Network != "" || VerifyUnconfiguredPackageSigner(ctx, m) != nil {
-			return errors.New("only the original empty Local installation can establish its owner")
+			return errors.New("only the original empty installation can establish its owner")
+		}
+		if location == "remote" && (r.Package == nil || !approval.MatchesPackage(owner, instance, m.PublicOrigin, m.Listen, r.Package.Sequence, r.Package.ReleaseSHA256, m.CoreHash)) {
+			return errors.New("private device approval differs from the installed package")
 		}
 		var response bytes.Buffer
 		probe := []byte("GET /api/v1/health HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n")

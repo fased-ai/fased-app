@@ -120,6 +120,7 @@ func TestProtectedLocalPairRequiresMatchingDesktopBytes(t *testing.T) {
 		{"wrong desktop", strings.Repeat("e", 64), 1, false},
 		{"missing desktop", "", 1, false},
 		{"headless cannot replace desktop", desktopHash, 2, false},
+		{"browser-only package", "", 2, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			bindingVersion, bindingDesktop = tc.version, desktopHash
@@ -140,8 +141,12 @@ func TestProtectedLocalPairRequiresMatchingDesktopBytes(t *testing.T) {
 				return "", 0, os.ErrNotExist
 			}
 			_, err := describeProtectedPair(t.Context(), Manifest{Owner: 1000, NativeOwnerAccess: true}, dir, "0.1.12", source, read, digest)
-			if (err == nil) != tc.wantOK {
+			if (err == nil) != (tc.wantOK && tc.version == 1) {
 				t.Fatal("desktop admission did not match authenticated core binding", err)
+			}
+			_, err = describeProtectedPair(t.Context(), Manifest{Owner: 1000, Layout: PackageLayout, Location: "local"}, dir, "0.1.12", source, read, digest)
+			if (err == nil) != tc.wantOK {
+				t.Fatal("Local package client differs from its authenticated binding", err)
 			}
 		})
 	}

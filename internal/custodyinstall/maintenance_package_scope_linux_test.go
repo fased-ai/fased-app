@@ -12,8 +12,93 @@ import (
 
 	"github.com/fased-ai/fased-app/internal/maintenance"
 	"github.com/fased-ai/fased-app/internal/signer"
+	"github.com/fased-ai/fased-app/internal/tailnet"
 	"github.com/fased-ai/fased-app/internal/update"
 )
+
+func TestPackageUpdateCannotWriteAnotherInstancesBootstrap(t *testing.T) {
+	_, m := packageGateInitialRecord(t)
+	m.Owner = os.Getuid()
+	m.Root, _ = PackageRoot(m.Owner, m.Location, m.ID)
+	m.App = Identity{Name: packageAccountName(m.Owner, m.Location, m.ID, "app"), UID: m.Owner + 1, GID: m.Owner + 1}
+	m.Signer = Identity{Name: packageAccountName(m.Owner, m.Location, m.ID, "signer"), UID: m.Owner + 2, GID: m.Owner + 2}
+	a := maintenance.Authority{Owner: m.Owner, Profile: m.Location, ImageSHA256: strings.Repeat("b", 64)}
+	files, err := packageMaintenanceFiles(a, m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, _ := update.PackageMaintenanceRoot(m.Owner, m.Location, m.ID)
+	for name, contents := range files {
+		if !strings.HasSuffix(name, ".service") {
+			continue
+		}
+		for _, line := range strings.Split(string(contents), "\n") {
+			if !strings.HasPrefix(line, "ReadWritePaths=") {
+				continue
+			}
+			for _, path := range strings.Fields(strings.TrimPrefix(line, "ReadWritePaths=")) {
+				if path != m.Root && path != state {
+					t.Errorf("%s can mutate a shared path during an instance update: %s", name, path)
+				}
+			}
+		}
+	}
+}
+
+func TestRemotePackageUnitsRequireTheirProtectedSocket(t *testing.T) {
+	_, m := packageGateInitialRecord(t)
+	m.Owner, m.Location, m.PublicOrigin = os.Getuid(), "remote", "https://node.example.ts.net"
+	if m.Owner <= 0 {
+		t.Skip("ordinary owner required")
+	}
+	m.Root, _ = PackageRoot(m.Owner, m.Location, m.ID)
+	m.App = Identity{Name: packageAccountName(m.Owner, m.Location, m.ID, "app"), UID: m.Owner + 1, GID: m.Owner + 1}
+	m.Signer = Identity{Name: packageAccountName(m.Owner, m.Location, m.ID, "signer"), UID: m.Owner + 2, GID: m.Owner + 2}
+	a := maintenance.Authority{Owner: m.Owner, Profile: m.Location, ImageSHA256: strings.Repeat("b", 64)}
+	name, socket, err := tailnet.ProtectedSocketUnit("package-"+m.ID, m.Owner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	files, err := packageMaintenanceFiles(a, m)
+	if err != nil || string(files["/etc/systemd/system/"+name]) != string(socket) {
+		t.Fatal("Remote package did not provision its protected socket unit", err)
+	}
+	app := string(definitions(m)["fased-app.service"])
+	for _, line := range []string{"Requires=" + name, "After=" + name, "Sockets=" + name} {
+		if !strings.Contains(app, line+"\n") {
+			t.Fatal("Remote application is not bound to its private socket", line)
+		}
+	}
+	if strings.Contains(string(definitions(m)["fased-signer.service"]), name) {
+		t.Fatal("the signer acquired private network ingress")
+	}
+	fields := map[string]string{
+		"FragmentPath": "/etc/systemd/system/" + instanceUnit(m, "app"),
+		"User":         strconv.Itoa(m.App.UID), "Group": strconv.Itoa(m.App.GID), "NoNewPrivileges": "yes",
+		"ProtectSystem": "strict", "ExecStart": "{ path=" + m.Root + "/fased-app ; argv[]=... ; }", "NeedDaemonReload": "no", "LimitCORE": "0",
+		"Requires": packageRecoveryUnit(m) + " " + name, "After": packageRecoveryUnit(m) + " " + name,
+	}
+	read := func(path string) (hostFile, error) {
+		if path != "/etc/systemd/system/"+name {
+			return hostFile{}, os.ErrNotExist
+		}
+		return hostFile{UID: 0, Regular: true, Mode: 0644, Data: socket}, nil
+	}
+	if err := validateLoadedUnitFields(m, "app", m.Root+"/fased-app", fields, read, nil); err != nil {
+		t.Fatal("exact protected Remote socket was refused", err)
+	}
+	for _, key := range []string{"Requires", "After"} {
+		old := fields[key]
+		fields[key] = packageRecoveryUnit(m)
+		if err := validateLoadedUnitFields(m, "app", m.Root+"/fased-app", fields, read, nil); err == nil {
+			t.Fatal("Remote service accepted without its socket dependency", key)
+		}
+		fields[key] = old
+	}
+	if err := validateLoadedUnitFields(m, "app", m.Root+"/fased-app", fields, func(string) (hostFile, error) { return hostFile{}, os.ErrNotExist }, nil); err == nil {
+		t.Fatal("missing protected socket unit was accepted")
+	}
+}
 
 func TestPackageMaintenanceRecordUsesOnlyItsInstanceJournal(t *testing.T) {
 	r, m := packageGateInitialRecord(t)
@@ -86,11 +171,9 @@ func TestPackageMaintenanceUnitsAreInstanceScoped(t *testing.T) {
 		t.Fatal("worker does not remain in the selected instance")
 	}
 	for _, unit := range []string{worker, recovery} {
-		if !strings.Contains(unit, " "+maintenance.StateRoot+"/images ") {
-			t.Fatal("update and recovery cannot serialize package operations or retain the target installer")
-		}
-		if !strings.Contains(unit, " -/usr/lib -/usr/share/doc ") {
-			t.Fatal("package recovery cannot recreate interrupted package directories")
+		state, _ := update.PackageMaintenanceRoot(m.Owner, m.Location, m.ID)
+		if !strings.Contains(unit, "ReadWritePaths="+m.Root+" "+state+"\n") {
+			t.Fatal("update and recovery must write only their instance and original journal")
 		}
 	}
 	if !strings.Contains(worker, "LimitCORE=0\n") || !strings.Contains(recovery, "LimitCORE=0\n") {
@@ -105,8 +188,8 @@ func TestPackageMaintenanceUnitsAreInstanceScoped(t *testing.T) {
 			t.Fatal("instance service must limit crash dumps", role)
 		}
 	}
-	if strings.Contains(worker, "Wants="+instanceUnit(m, "signer")) {
-		t.Fatal("an unconfigured signer would be started during an update")
+	if !strings.Contains(worker, "Wants="+instanceUnit(m, "signer")) || !strings.Contains(string(definitions(m)["fased-signer.service"]), "ConditionPathExists="+m.Root+"/wallet-configured.json\n") {
+		t.Fatal("the stable worker must skip an unconfigured signer")
 	}
 	a.Profile = "remote"
 	if _, err = packageMaintenanceFiles(a, m); err == nil {

@@ -59,6 +59,7 @@ type Store struct {
 	protectedOwnerUID             int  // Verified Local OS-owner identity; never wallet authority.
 	unconfiguredProtectedSigner   bool // Verified pre-wallet configuration; it does not prove the signer directory is empty.
 	custodyOwnerSupported         bool
+	custodyPackageLocal           bool                                                               // Exact package-local signer topology; public routing metadata only.
 	custodyNetwork                string                                                             // Public immutable v2 configuration; no key material.
 	researchRead                  func(context.Context, researchFactResult) (json.RawMessage, error) // Test-only local projection fault; never configuration/IPC.
 }

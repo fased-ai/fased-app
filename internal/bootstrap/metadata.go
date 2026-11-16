@@ -74,6 +74,7 @@ type Descriptor struct {
 	Archive        update.Artifact        `json:"archive"`
 	Deb            update.Artifact        `json:"deb,omitzero"`
 	RPM            update.Artifact        `json:"rpm,omitzero"`
+	LinuxBundle    bool                   `json:"linuxBundle,omitzero"`
 	GitHub         releaseops.GitHubAsset `json:"github,omitzero"`
 	Release        ProductionRelease      `json:"release,omitzero"`
 }

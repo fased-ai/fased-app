@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/fased-ai/fased-app/internal/tailnet"
 	"github.com/fased-ai/fased-app/internal/update"
 )
 
@@ -155,7 +156,7 @@ func (m Manifest) validate() error {
 func (m Manifest) validatePackage() error {
 	root, err := PackageRoot(m.Owner, m.Location, m.ID)
 	if err != nil || m.Layout != PackageLayout || m.Root != root || m.Version != 3 ||
-		m.Mode != "ordinary-custody:v1" || m.Profile != "owner-authorized:v1" || m.Provenance != "owner-input:v1" ||
+		m.Mode != "ordinary-custody:v1" || m.Profile != "owner-authorized:v1" || (m.Provenance != "owner-input:v1" && !(m.Provenance == "controlled-disposable:v1" && controlledPackageFixture(m))) ||
 		!m.Enrollment || m.NativeOwnerAccess || m.InspectionBridge != "" ||
 		!validLocation(m.Location, m.PublicOrigin) || m.Location == "remote" && m.PublicOrigin == "" ||
 		(m.Network != "" && m.Network != "devnet" && m.Network != "mainnet-beta") ||
@@ -230,17 +231,22 @@ func definitions(m Manifest) map[string][]byte {
 			description = "Fased " + role
 			service += "LimitCORE=0\n"
 			ordering = "Requires=" + packageRecoveryUnit(m) + "\nAfter=" + packageRecoveryUnit(m) + "\n"
+			if role == "application" && m.Location == "remote" {
+				if socket, _, err := tailnet.ProtectedSocketUnit("package-"+m.ID, m.Owner); err == nil {
+					ordering += "Requires=" + socket + "\nAfter=" + socket + "\n"
+					service += "Sockets=" + socket + "\n"
+				}
+			}
+			if role == "signer" {
+				// This unit is installed once. Wallet setup publishes this marker
+				// only as part of the protected instance journal transition.
+				ordering += "ConditionPathExists=" + m.Root + "/wallet-configured.json\n"
+			}
 			gateRole := role
 			if gateRole == "application" {
 				gateRole = "app"
 			}
 			gate = fmt.Sprintf("ExecStartPre=%s/fased-install maintenance-package-gate --owner %d --location %s --instance %s --role %s\n", m.Root, m.Owner, m.Location, m.ID, gateRole)
-			if role == "signer" && m.Network == "" {
-				// A fresh installation has no wallet/network yet. Never make its
-				// deliberately unavailable signer restart repeatedly at boot.
-				service = strings.Replace(service, "Restart=on-failure", "Restart=no", 1)
-				install = ""
-			}
 		}
 		return []byte(fmt.Sprintf("[Unit]\nDescription=%s\n%s\n[Service]\nType=simple\nUser=%d\nGroup=%d\n%sExecStart=%s%sReadWritePaths=%s\nRestrictAddressFamilies=%s\n%s", description, ordering, i.UID, i.GID, gate, exec, service, write, addresses, install))
 	}

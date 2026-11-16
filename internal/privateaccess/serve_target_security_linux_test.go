@@ -13,6 +13,32 @@ import (
 	"testing"
 )
 
+func TestLegacyOwnerServeGuardRejectsPackageScope(t *testing.T) {
+	id := strings.Repeat("a", 32)
+	plan := Plan{Mode: "tailscale", Origin: "https://node.owner.ts.net:8443", Target: "unix:/run/fased-package-1300-" + id + "/tailscale.sock"}
+	if ownedServeTarget(plan, 1300) {
+		t.Fatal("legacy owner-wide Serve authority must not adopt an instance-scoped package route")
+	}
+	if ownedServeTarget(plan, 1301) {
+		t.Fatal("another owner acquired the package route")
+	}
+	for _, bad := range []string{
+		"unix:/run/fased-package-1300-../tailscale.sock",
+		"unix:/run/fased-package-1300-" + strings.ToUpper(id) + "/tailscale.sock",
+		"unix:/run/fased-package-1300-" + id + "/other.sock",
+		"unix:/tmp/fased-package-1300-" + id + "/tailscale.sock",
+	} {
+		foreign := plan
+		foreign.Target = bad
+		if ownedServeTarget(foreign, 1300) {
+			t.Fatal("foreign package route was accepted", bad)
+		}
+	}
+	if protectedServeDestination(plan, 1300) {
+		t.Fatal("an absent protected package socket was accepted")
+	}
+}
+
 func TestManagedDirectServeRefusesUnprotectedIngressBeforeWriting(t *testing.T) {
 	root := fixture(t)
 	plan := Plan{Mode: "tailscale", Origin: "https://node.owner.ts.net", Target: "unix:/var/lib/fased-app-vps-1000/app-state/tailscale.sock"}

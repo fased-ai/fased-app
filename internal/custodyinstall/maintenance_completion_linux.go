@@ -165,6 +165,9 @@ func completeProtectedInstallation(ctx context.Context, a maintenance.Authority,
 	if err := verifyProtectedPair(m); err != nil {
 		return err
 	}
+	if err := verifyPendingNativeTarget(ctx, m, r.Package); err != nil {
+		return err
+	}
 	for _, phase := range []string{"healthy-held", "committed-held", "completed"} {
 		current, err := protectedOwnerPeerImage(ctx, a, m, appImage, lock, signer.Request{Action: "fixture-install-controller", Install: &update.InstallRequest{Action: "status", IntentID: r.OperationID}})
 		if err != nil || current.Installation == nil {
@@ -212,6 +215,9 @@ func completeProtectedInstallation(ctx context.Context, a maintenance.Authority,
 		err := protectedAppPeerImage(ctx, a, m, appImage, lock, maintenance.AppMaintenanceRequest{Action: "pause", OperationID: r.OperationID, Pause: &update.CorePauseCommand{Action: "complete", ProbeID: update.NewProbe(), Completed: receipt}}, &released)
 		return released, err
 	}, func() error {
+		if err := verifyPendingNativeTarget(ctx, m, r.Package); err != nil {
+			return err
+		}
 		return maintenance.RemoveProtected(m.Root+"/update-active.json", sum(update.MaintenanceFence(r.OperationID)), 0644)
 	})
 }

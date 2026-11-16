@@ -8,8 +8,10 @@ import (
 	"flag"
 	"fmt"
 	"github.com/fased-ai/fased-app/internal/core"
+	"github.com/fased-ai/fased-app/internal/desktop"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 )
@@ -191,22 +193,49 @@ func ordinaryUpdateCommand(args []string, in *os.File, out, errOut io.Writer) er
 				if *prefix != "" {
 					return errors.New("enrolled recovery uses its original installation; omit --prefix")
 				}
-				if err = client.NativeLocalOwner(ctx); err != nil {
-					return err
+				if err = client.NativeLocalOwner(ctx); err == nil {
+					err = applicationUpdatesWithClient(ctx, client, "recover", in, out, errOut)
 				}
-				return applicationUpdatesWithClient(ctx, client, "recover", in, out, errOut)
+				if errors.Is(err, core.ErrCoreUnavailable) {
+					abs, pathErr := filepath.Abs(*dir)
+					if pathErr != nil {
+						return errors.Join(err, pathErr)
+					}
+					_, packaged, pathErr := desktop.PackageLocalDataRoot(abs, os.Getuid())
+					if pathErr != nil {
+						return errors.Join(err, pathErr)
+					}
+					if packaged {
+						if recoveryErr := enrolledOfflineRecovery(ctx, *dir, out, errOut); recoveryErr != nil {
+							return errors.Join(err, recoveryErr)
+						}
+						return nil
+					}
+				}
+				return err
 			}
 			client.Close()
-		} else if !errors.Is(err, core.ErrCoreUnavailable) {
-			return err
-		} else if !ordinaryUpdateRecoveryData(*dir) {
-			if *prefix != "" {
-				return errors.New("enrolled recovery uses its original installation; omit --prefix")
+		} else {
+			abs, pathErr := filepath.Abs(*dir)
+			if pathErr != nil {
+				return errors.Join(err, pathErr)
 			}
-			if recoveryErr := enrolledOfflineRecovery(ctx, *dir, out, errOut); recoveryErr != nil {
-				return errors.Join(err, recoveryErr)
+			_, packaged, pathErr := desktop.PackageLocalDataRoot(abs, os.Getuid())
+			if pathErr != nil {
+				return errors.Join(err, pathErr)
 			}
-			return nil
+			if packaged || errors.Is(err, core.ErrCoreUnavailable) && !ordinaryUpdateRecoveryData(*dir) {
+				if *prefix != "" {
+					return errors.New("enrolled recovery uses its original installation; omit --prefix")
+				}
+				if recoveryErr := enrolledOfflineRecovery(ctx, *dir, out, errOut); recoveryErr != nil {
+					return errors.Join(err, recoveryErr)
+				}
+				return nil
+			}
+			if !errors.Is(err, core.ErrCoreUnavailable) {
+				return err
+			}
 		}
 		return recoverInstalledLocalUpdate(*prefix, *dir, in, out, errOut)
 	}

@@ -13,6 +13,7 @@ import (
 	"strings"
 
 	"github.com/fased-ai/fased-app/internal/maintenance"
+	"github.com/fased-ai/fased-app/internal/tailnet"
 	"github.com/fased-ai/fased-app/internal/update"
 )
 
@@ -69,20 +70,29 @@ func packageMaintenanceFiles(a maintenance.Authority, m Manifest) (map[string][]
 	}
 	image := maintenance.ImagePath(a.ImageSHA256)
 	args := fmt.Sprintf("--owner %d --location %s --instance %s", m.Owner, m.Location, m.ID)
-	units := protectedInstanceUnits(m)
+	// The signer has its own protected condition and is skipped until Wallets
+	// is configured. Keep the worker unit unchanged during that transition.
+	units := []string{instanceUnit(m, "signer"), instanceUnit(m, "app")}
 	ordering := strings.Join(units, " ")
-	// The package manager must be able to recreate its directories after an
-	// interrupted replacement. The inspected package still limits its files to
-	// Fased's fixed paths, and its maintainer scripts and triggers are disabled.
-	protect := fmt.Sprintf("TimeoutStartSec=10min\nNoNewPrivileges=yes\nPrivateTmp=yes\nProtectSystem=strict\nProtectHome=read-only\nReadWritePaths=%s %s %s/images -/usr/bin -/usr/lib -/usr/share/doc -/var/lib/dpkg -/var/lib/rpm -/usr/lib/sysimage/rpm\nRestrictSUIDSGID=yes\nLimitCORE=0\n", m.Root, state, maintenance.StateRoot)
+	// Payload updates cannot alter the shared bootstrap, package database or
+	// another instance. Provisioning owns the one-time OS package installation.
+	protect := fmt.Sprintf("TimeoutStartSec=10min\nNoNewPrivileges=yes\nPrivateTmp=yes\nProtectSystem=strict\nProtectHome=read-only\nReadWritePaths=%s %s\nRestrictSUIDSGID=yes\nLimitCORE=0\n", m.Root, state)
 	recovery := fmt.Sprintf("[Unit]\nDescription=Fased update recovery\nBefore=%s %s\n[Service]\nType=oneshot\nRemainAfterExit=yes\nExecStart=%s maintenance-package-recover %s\n%s[Install]\nWantedBy=multi-user.target\n", instanceUnit(m, "app"), instanceUnit(m, "signer"), image, args, protect)
 	worker := fmt.Sprintf("[Unit]\nDescription=Fased update\nWants=%s\nAfter=%s %s\n[Service]\nType=oneshot\nExecStart=%s maintenance-package-worker %s --operation %%i\n%s", ordering, packageRecoveryUnit(m), ordering, image, args, protect)
 	policy := fmt.Sprintf("polkit.addRule(function(action, subject) {\n  if (action.id == 'org.freedesktop.systemd1.manage-units' && (subject.user == %s || subject.user == %s) && action.lookup('verb') == 'start' && /^fased-package-maintenance-%d-%s-%s@[0-9a-f]{32}\\.service$/.test(action.lookup('unit'))) return polkit.Result.YES;\n});\n", strconv.Quote(u.Username), strconv.Quote(m.App.Name), m.Owner, m.Location, m.ID)
-	return map[string][]byte{
+	files := map[string][]byte{
 		filepath.Join("/etc/systemd/system", packageRecoveryUnit(m)):                                    []byte(recovery),
 		filepath.Join("/etc/systemd/system", packageWorkerTemplate(m)):                                  []byte(worker),
 		fmt.Sprintf("/etc/polkit-1/rules.d/60-fased-package-%d-%s-%s.rules", m.Owner, m.Location, m.ID): []byte(policy),
-	}, nil
+	}
+	if m.Location == "remote" {
+		name, socket, err := tailnet.ProtectedSocketUnit("package-"+m.ID, m.Owner)
+		if err != nil {
+			return nil, err
+		}
+		files[filepath.Join("/etc/systemd/system", name)] = socket
+	}
+	return files, nil
 }
 
 func installPackageMaintenanceUnits(ctx context.Context, a maintenance.Authority, m Manifest) error {

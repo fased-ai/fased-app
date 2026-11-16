@@ -54,7 +54,7 @@ func TestPackageBootstrapHealthBindsVerifiedEndpoint(t *testing.T) {
 				t.Fatal(err)
 			}
 			response := &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": {"application/json"}}, Body: io.NopCloser(bytes.NewReader(data))}
-			err = verifyPackageBootstrapHealth(response, "verified", 1000)
+			err = verifyPackageBootstrapHealth(response, "verified", 1000, "local")
 			if (err == nil) != tc.ok {
 				t.Fatalf("health result = %v", err)
 			}
@@ -65,6 +65,12 @@ func TestPackageBootstrapHealthBindsVerifiedEndpoint(t *testing.T) {
 				}
 			}
 		})
+	}
+	remote := core.Health{Status: "ok", APIVersion: core.APIVersion, InstanceID: "verified", Connection: &core.ConnectionInfo{Location: "remote", Transport: "loopback", OwnerUID: 1000}}
+	data, _ := json.Marshal(remote)
+	response := &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": {"application/json"}}, Body: io.NopCloser(bytes.NewReader(data))}
+	if err := verifyPackageBootstrapHealth(response, "verified", 1000, "remote"); err != nil {
+		t.Fatal("Remote package's own IPC health was refused", err)
 	}
 }
 

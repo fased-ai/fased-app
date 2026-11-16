@@ -141,6 +141,9 @@ func ExtractVerifiedArchive(archivePath, directory string, expected File, manife
 	}
 	engine, desktop := Names()
 	executables := []string{engine}
+	if manifest.Schema == 4 {
+		executables = append(executables, "fased-signer")
+	}
 	if manifest.Desktop {
 		executables = append(executables, desktop)
 	}

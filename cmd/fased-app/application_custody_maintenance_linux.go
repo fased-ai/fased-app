@@ -496,17 +496,27 @@ func bindPackageMaintenance(store *core.Store, owner int, dir string) error {
 	if err != nil || selected != m {
 		return errors.New("the installed package differs from its recovery record")
 	}
-	unit := func(id string) (string, error) { return custodyinstall.PackageWorkerUnit(owner, m.Location, m.ID, id) }
-	c := &custodyMaintenanceController{
-		owner: owner, manualOnly: true, readRecord: readRecord, readCandidate: readCandidate,
-		verifyTarget: custodyinstall.VerifyPackageInstance,
-		validateIdle: func(r update.MaintenanceRecord) error {
-			_, err := custodyinstall.ValidateInitialPackageMaintenanceRecord(r, owner, m.Location, m.ID)
-			return err
-		},
-		pauseStatus: func(ctx context.Context) (update.CorePauseReceipt, error) {
-			return store.UpdatePause(ctx, update.CorePauseCommand{Action: "status", ProbeID: update.NewProbe()})
-		},
+	c := packageMaintenanceWorker(owner, m.Location, m.ID)
+	c.manualOnly, c.readRecord, c.readCandidate = true, readRecord, readCandidate
+	c.verifyTarget = custodyinstall.VerifyPackageInstance
+	c.validateIdle = func(r update.MaintenanceRecord) error {
+		_, err := custodyinstall.ValidateIdlePackageMaintenanceRecord(r, owner, m.Location, m.ID)
+		return err
+	}
+	c.pauseStatus = func(ctx context.Context) (update.CorePauseReceipt, error) {
+		return store.UpdatePause(ctx, update.CorePauseCommand{Action: "status", ProbeID: update.NewProbe()})
+	}
+	c.check = packageChannelCheck(owner, m.Location, m.ID, dir, readRecord, readCandidate)
+	return store.BindApplicationUpdateController(c, true)
+}
+
+// Both the live core and offline CLI address the same fixed instance worker.
+func packageMaintenanceWorker(owner int, location, instance string) *custodyMaintenanceController {
+	unit := func(id string) (string, error) {
+		return custodyinstall.PackageWorkerUnit(owner, location, instance, id)
+	}
+	return &custodyMaintenanceController{
+		owner: owner,
 		startWorker: func(ctx context.Context, id string) error {
 			name, err := unit(id)
 			if err != nil {
@@ -524,8 +534,6 @@ func bindPackageMaintenance(store *core.Store, owner int, dir string) error {
 			return inspectCustodyWorker(ctx, name)
 		},
 	}
-	c.check = packageChannelCheck(owner, m.Location, m.ID, dir, readRecord, readCandidate)
-	return store.BindApplicationUpdateController(c, true)
 }
 
 func packageChannelCheck(owner int, location, instance, data string, readRecord func(int) (update.MaintenanceRecord, error), readCandidate func(int) (maintenance.CandidateReceipt, error)) func(context.Context) (*core.ApplicationRelease, error) {

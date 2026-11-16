@@ -22,6 +22,7 @@ type Enrollment struct {
 	pair         Package
 	core, signer string
 	arguments    []string
+	packageSetup bool
 }
 
 func PrepareEnrollment(ctx context.Context, intent signer.OwnerIntent, origin, user string, pair Package) (*Enrollment, error) {
@@ -32,6 +33,12 @@ func PrepareEnrollment(ctx context.Context, intent signer.OwnerIntent, origin, u
 	c, err := locate(ctx, intent, origin, user, filepath.Join(home, ".ssh", "known_hosts"), os.Getuid(), run)
 	if err != nil {
 		return nil, err
+	}
+	if c.host == "" {
+		c.packageOwner, err = localPackageOwnerTarget(c.Peer.OwnerUID, intent.InstanceID)
+		if err != nil {
+			return nil, err
+		}
 	}
 	return prepareEnrollment(ctx, c, pair)
 }
@@ -52,8 +59,16 @@ func prepareEnrollment(ctx context.Context, c *Client, pair Package) (*Enrollmen
 		return nil, errors.New("protected wallet enrollment is not enabled in this package")
 	}
 	// An existing or foreign target is inspected/reconciled, never overwritten.
-	if c.inspect(ctx) == nil {
+	inspectErr := c.inspect(ctx)
+	if inspectErr == nil {
 		return nil, errors.New("wallets are already enrolled; reconnect")
+	}
+	if c.packageOwner != "" {
+		if !errors.Is(inspectErr, ErrEnrollmentRequired) || c.Peer.CoreSHA256 != pair.CoreSHA256 || c.Peer.SignerSHA256 != pair.SignerSHA256 {
+			return nil, errors.New("the installed wallet differs from the verified owner client")
+		}
+		args := append(c.arguments(), "--initialize", "--operation", c.Intent.OperationID)
+		return &Enrollment{client: c, pair: pair, core: c.packageOwner, arguments: args, packageSetup: true}, nil
 	}
 	_, err = c.invoke(ctx, "/usr/bin/test", []string{"-e", "/var/lib/fased-app-custody-" + strconv.Itoa(c.Peer.OwnerUID) + "/install.json"}, nil)
 	var exited *commandExit
@@ -163,12 +178,28 @@ func (c *Client) hashMatches(ctx context.Context, path, want string) bool {
 // Terminal is a fixed command vector. Remote PTY exists solely for initial OS
 // consent; reconnect and every key operation keep the normal no-PTY channel.
 func (e *Enrollment) Terminal() (string, []string) {
+	if e.packageSetup {
+		return "", nil
+	}
 	if e.client.host == "" {
 		return e.core, append([]string(nil), e.arguments...)
 	}
 	args := append([]string{"-F", "/dev/null", "-tt", "-a"}, e.client.sshPolicy()...)
 	args = append(args, "-l", e.client.user, "--", e.client.host, e.core)
 	return "/usr/bin/ssh", append(args, e.arguments...)
+}
+
+// RunPackage invokes the installed owner entry without an approval terminal.
+// It carries public operation identifiers only; the fixed helper verifies the
+// package and empty signer before changing its protected journal.
+func (e *Enrollment) RunPackage(ctx context.Context) (bool, error) {
+	if !e.packageSetup {
+		return false, nil
+	}
+	if _, err := e.client.invoke(ctx, e.core, e.arguments, nil); err != nil {
+		return true, errors.New("wallet setup was interrupted; resume the same operation")
+	}
+	return true, nil
 }
 
 // Wait reconciles the installed target after the synchronous approval terminal

@@ -23,6 +23,7 @@ func ProtectedSocket(string, int) (string, error) {
 
 func ProtectedSocketReady(string, int) bool     { return false }
 func ProtectedDataSocketReady(string, int) bool { return false }
+func ProtectedPackageData(string, int) bool     { return false }
 
 func ProtectedSocketUnit(string, int) (string, []byte, error) {
 	return "", nil, errors.New("protected Remote ingress currently requires Linux")

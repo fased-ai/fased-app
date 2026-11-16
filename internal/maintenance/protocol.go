@@ -9,6 +9,7 @@ import (
 	"net"
 	"strconv"
 
+	"github.com/fased-ai/fased-app/internal/core"
 	"github.com/fased-ai/fased-app/internal/tailnet"
 	"github.com/fased-ai/fased-app/internal/update"
 )
@@ -41,10 +42,11 @@ type Request struct {
 // identity supplied in the request body. Mutating package actions must be
 // added only when their complete protected operation is implemented.
 type PackageRequest struct {
-	Version   int               `json:"version"`
-	Action    string            `json:"action"`
-	Candidate *CandidateRequest `json:"candidate,omitempty"`
-	Listen    string            `json:"listen,omitempty"`
+	Version   int                          `json:"version"`
+	Action    string                       `json:"action"`
+	Candidate *CandidateRequest            `json:"candidate,omitempty"`
+	Wallet    *update.WalletInitialization `json:"wallet,omitempty"`
+	Listen    string                       `json:"listen,omitempty"`
 }
 
 func DecodePackageRequest(data []byte) (PackageRequest, error) {
@@ -76,6 +78,10 @@ func DecodePackageRequest(data []byte) (PackageRequest, error) {
 		n, numberErr := strconv.Atoi(port)
 		if len(fields) != 3 || fields["listen"] == nil || r.Candidate != nil || err != nil || host != "127.0.0.1" || numberErr != nil || n < 1024 || n > 65535 || strconv.Itoa(n) != port {
 			return PackageRequest{}, errors.New("one fixed Local listener is required")
+		}
+	case "wallet-initialize":
+		if len(fields) != 3 || fields["wallet"] == nil || r.Wallet == nil || !r.Wallet.Valid() {
+			return PackageRequest{}, errors.New("one exact wallet initialization is required")
 		}
 	default:
 		return PackageRequest{}, errors.New("invalid package maintenance request")
@@ -203,10 +209,12 @@ type Response struct {
 }
 
 type AppMaintenanceRequest struct {
-	Action      string                   `json:"action"`
-	OperationID string                   `json:"operationId,omitempty"`
-	ProbeID     string                   `json:"probeId,omitempty"`
-	Pause       *update.CorePauseCommand `json:"pause,omitempty"`
+	Action       string                          `json:"action"`
+	OperationID  string                          `json:"operationId,omitempty"`
+	ProbeID      string                          `json:"probeId,omitempty"`
+	Pause        *update.CorePauseCommand        `json:"pause,omitempty"`
+	PrivateProof *core.PrivateAccessProofRequest `json:"privateProof,omitempty"`
+	RemotePeer   *tailnet.Identity               `json:"remotePeer,omitempty"`
 }
 
 func DecodeRequest(data []byte) (Request, error) {

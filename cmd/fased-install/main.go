@@ -42,6 +42,7 @@ var compiledFirstInstallBinding *firstInstallBinding
 var candidateMaintenanceStage = stageAttestedCandidate
 var packageCandidateUpdateBaseline = candidatePackageUpdateBaseline
 var packageCandidateMaintenanceStage = stageAttestedPackageCandidate
+var compiledFixturePackageInstance func(int) (string, error)
 
 func retailInstallerOptions(binding *firstInstallBinding, cache string) (bootstrap.Options, error) {
 	if binding == nil || len(binding.Seed) == 0 {
@@ -54,6 +55,20 @@ func retailInstallerOptions(binding *firstInstallBinding, cache string) (bootstr
 	return bootstrap.Options{Seed: append([]byte(nil), binding.Seed...), SeedSHA256: binding.SHA256, Directory: filepath.Join(parent, "verified-"+update.NewProbe())}, nil
 }
 func run(args []string, in io.Reader, out, errOut io.Writer) error {
+	if len(args) == 1 && args[0] == "--fixture-package-instance" {
+		if os.Getuid() <= 0 || os.Geteuid() != os.Getuid() {
+			return errors.New("ordinary Local fixture owner required")
+		}
+		if compiledFixturePackageInstance == nil {
+			return nil
+		}
+		instance, err := compiledFixturePackageInstance(os.Getuid())
+		if err != nil || !update.IDOK(instance) {
+			return errors.New("the compiled Local package fixture is unavailable")
+		}
+		_, err = fmt.Fprintln(out, instance)
+		return err
+	}
 	if len(args) == 1 && args[0] == "--package-controller-ready" {
 		return packageControllerReady()
 	}
@@ -70,7 +85,7 @@ func run(args []string, in io.Reader, out, errOut io.Writer) error {
 		if err != nil {
 			return err
 		}
-		if descriptor.Deb == (update.Artifact{}) && descriptor.RPM == (update.Artifact{}) {
+		if descriptor.Deb == (update.Artifact{}) && descriptor.RPM == (update.Artifact{}) && !descriptor.LinuxBundle {
 			_, err = fmt.Fprintln(out, "legacy")
 		} else {
 			_, err = fmt.Fprintln(out, "native", packet, descriptor.ProductVersion, descriptor.Release.InstallerSHA256)
@@ -142,7 +157,7 @@ func run(args []string, in io.Reader, out, errOut io.Writer) error {
 	entryAction := f.String("entry-action", "", "fixed installed-instance action for the entry launcher")
 	verifyCandidate := f.String("verify-candidate", "", "verify a retained release candidate without installation")
 	installCandidate := f.String("install-candidate", "", "install one independently attested Local candidate")
-	installPublicPackage := f.Bool("install-public-package", false, "install the authenticated public Local package")
+	installPublicPackage := f.Bool("install-public-package", false, "install the authenticated public Linux package")
 	stageCandidate := f.String("stage-candidate", "", "admit one independently attested manual update candidate")
 	candidatePacket := f.String("candidate-packet-sha256", "", "exact reviewed candidate packet digest")
 	packageLocation := f.String("package-location", "", "installed package profile for candidate acceptance")
@@ -170,11 +185,11 @@ func run(args []string, in io.Reader, out, errOut io.Writer) error {
 		})
 		root, pathErr := update.PackageInstanceRoot(os.Getuid(), *packageLocation, *packageInstance)
 		digest, digestErr := hex.DecodeString(*candidatePacket)
-		instanceHash := sha256.Sum256([]byte(fmt.Sprintf("%d\x00%s\x00local", os.Getuid(), *candidatePacket)))
-		if mixed || pathErr != nil || *packageLocation != "local" || *profile != "local" || os.Getuid() <= 0 || os.Getuid() != os.Geteuid() ||
+		instanceHash := sha256.Sum256([]byte(fmt.Sprintf("%d\x00%s\x00%s", os.Getuid(), *candidatePacket, *packageLocation)))
+		if mixed || pathErr != nil || (*packageLocation != "local" && *packageLocation != "remote") || *profile != *packageLocation || os.Getuid() <= 0 || os.Getuid() != os.Geteuid() ||
 			digestErr != nil || len(digest) != 32 || hex.EncodeToString(digest) != *candidatePacket ||
 			*packageInstance != hex.EncodeToString(instanceHash[:])[:32] || compiledFirstInstallBinding == nil {
-			return errors.New("fresh Local package requires its exact public release and owner")
+			return errors.New("fresh package requires its exact public release, profile and owner")
 		}
 		if err := packageControllerReady(); err != nil {
 			return err
@@ -192,7 +207,7 @@ func run(args []string, in io.Reader, out, errOut io.Writer) error {
 		}
 		for _, entry := range entries {
 			if entry.Name() != *packageInstance && entry.Name() != "."+*packageInstance+".pending" {
-				return errors.New("an existing Local package requires its installed Update command")
+				return errors.New("an existing package requires its installed Update command")
 			}
 		}
 		cache, err := os.UserCacheDir()
@@ -216,7 +231,11 @@ func run(args []string, in io.Reader, out, errOut io.Writer) error {
 			return err
 		}
 		p.RetainAcquisitionEvidence()
-		_, err = fmt.Fprintln(out, "Fased is installed. Run /usr/bin/fased open to continue.")
+		if *packageLocation == "remote" {
+			_, err = fmt.Fprintln(out, "Fased Remote is installed.")
+		} else {
+			_, err = fmt.Fprintln(out, "Fased is installed. Run /usr/bin/fased open to continue.")
+		}
 		return err
 	}
 	if *stageCandidate != "" {
@@ -285,9 +304,12 @@ func run(args []string, in io.Reader, out, errOut io.Writer) error {
 		})
 		root, pathErr := update.PackageInstanceRoot(os.Getuid(), *packageLocation, *packageInstance)
 		digest, digestErr := hex.DecodeString(*candidatePacket)
-		if mixed || pathErr != nil || *packageLocation != "local" || *profile != "local" || !filepath.IsAbs(*installCandidate) || filepath.Clean(*installCandidate) != *installCandidate ||
+		if mixed || pathErr != nil || *profile != *packageLocation || !filepath.IsAbs(*installCandidate) || filepath.Clean(*installCandidate) != *installCandidate ||
 			digestErr != nil || len(digest) != 32 || hex.EncodeToString(digest) != *candidatePacket || compiledFirstInstallBinding == nil {
-			return errors.New("fresh Local package requires its exact candidate and instance")
+			return errors.New("fresh package requires its exact candidate, profile and instance")
+		}
+		if err := packageControllerReady(); err != nil {
+			return err
 		}
 		if *listen == "" {
 			*listen = "127.0.0.1:7331"
@@ -304,7 +326,7 @@ func run(args []string, in io.Reader, out, errOut io.Writer) error {
 		if err != nil {
 			return err
 		}
-		admission := bootstrap.CandidateAdmission{PacketSHA256: *candidatePacket, OperationID: update.NewProbe(), FreshProfile: "package-local", FreshOwner: os.Getuid(), FreshRoot: root, FreshData: filepath.Join(root, "app-state"), ExpiresAt: time.Now().Add(15 * time.Minute).Unix()}
+		admission := bootstrap.CandidateAdmission{PacketSHA256: *candidatePacket, OperationID: update.NewProbe(), FreshProfile: "package-" + *packageLocation, FreshOwner: os.Getuid(), FreshRoot: root, FreshData: filepath.Join(root, "app-state"), ExpiresAt: time.Now().Add(15 * time.Minute).Unix()}
 		p, err := bootstrap.PrepareAttestedCandidate(context.Background(), options, *installCandidate, admission)
 		if err != nil {
 			return err
@@ -314,7 +336,11 @@ func run(args []string, in io.Reader, out, errOut io.Writer) error {
 			return err
 		}
 		p.RetainAcquisitionEvidence()
-		_, err = fmt.Fprintln(out, "Fased is installed. Run /usr/bin/fased open to continue.")
+		if *packageLocation == "remote" {
+			_, err = fmt.Fprintln(out, "Fased Remote is installed.")
+		} else {
+			_, err = fmt.Fprintln(out, "Fased is installed. Run /usr/bin/fased open to continue.")
+		}
 		return err
 	}
 	if packageFlags {

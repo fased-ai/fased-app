@@ -62,6 +62,9 @@ func VerifyPackageStart(owner int, location, instance, role string) error {
 	if err != nil || actual != selected || VerifyPackageInstance(actual) != nil {
 		return errors.New("installed package pair differs from the selected recovery state")
 	}
+	if err = verifyPackageWalletMarker(actual); err != nil {
+		return err
+	}
 	if role == "app" && r.Application != nil && r.Phase != "completed" {
 		view, e := core.ReadApplicationOwnerOffline(context.Background(), root+"/app-state", r.OperationID)
 		if e != nil || view.Checkpoint == nil || view.View.Operation.OwnerLease != r.OwnerLease ||
@@ -80,6 +83,28 @@ func SelectProtectedPackageStart(r update.MaintenanceRecord, owner int, location
 	})
 }
 
+// PackageRecoveryOperation selects only the operation already recorded for the
+// exact Local installation. The protected worker still verifies all files,
+// signer holds and recovery decisions before changing anything.
+func PackageRecoveryOperation(m Manifest, r update.MaintenanceRecord) (string, error) {
+	if m.validatePackage() != nil || m.Location != "local" || r.Owner != m.Owner || r.OperationID == m.ID || r.Bootstrap || !r.RecoveryEligible() ||
+		r.PreviousPackage == nil || r.Package == nil || !update.SameLinuxDistribution(*r.PreviousPackage, *r.Package) || r.Package.Sequence <= r.PreviousPackage.Sequence {
+		return "", errors.New("the original Local package recovery is required")
+	}
+	base, target, err := protectedRecordManifests(r)
+	if err != nil || m != base && m != target || r.Start == "base" && m != base || r.Start == "target" && m != target ||
+		!packagePairMatches(*r.PreviousPackage, base) || !packagePairMatches(*r.Package, target) {
+		return "", errors.New("package recovery belongs to another installation")
+	}
+	if r.Installation != nil {
+		binding := r.Installation.Binding
+		if binding.InstallationID != m.ID || binding.PreviousCore != base.CoreHash || binding.PreviousSigner != base.SignerHash || binding.PreviousManifest != sum(mustJSON(base)) || binding.TargetCore != target.CoreHash || binding.TargetSigner != target.SignerHash {
+			return "", errors.New("the original signer update hold differs")
+		}
+	}
+	return r.OperationID, nil
+}
+
 // packageStartSelection accepts only a fully bound initial pair or the exact
 // recorded base/target of an authenticated operation. A stopped phase is
 // never treated as a start instruction.
@@ -95,7 +120,7 @@ func packageStartSelection(r update.MaintenanceRecord, owner int, location, inst
 		return Manifest{}, errors.New("package update cannot change its instance identity")
 	}
 	if r.Phase == "idle" {
-		m, err := ValidateInitialPackageMaintenanceRecord(r, owner, location, instance)
+		m, err := ValidateIdlePackageMaintenanceRecord(r, owner, location, instance)
 		return m, err
 	}
 	if r.OwnerLease != "" || r.Application != nil {
@@ -171,7 +196,7 @@ func verifyPackageApproval(r update.MaintenanceRecord, base Manifest, readApprov
 }
 
 func packagePairMatches(p update.MaintenancePackage, m Manifest) bool {
-	if p.Validate() != nil || p.NativeDesktop != nil || p.DevelopmentOnly && m.Provenance == signer.OwnerKeyProvenance {
+	if p.Validate() != nil || p.NativeDesktop != nil && (m.Layout != PackageLayout || m.Location != "local") || p.DevelopmentOnly && m.Provenance == signer.OwnerKeyProvenance {
 		return false
 	}
 	for _, component := range p.Components {

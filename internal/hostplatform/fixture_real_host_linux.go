@@ -6,10 +6,13 @@ import (
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/hex"
+	"errors"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
+
+	"github.com/fased-ai/fased-app/internal/update"
 )
 
 // These values are bound into the explicitly compiled disposable build. There
@@ -51,4 +54,26 @@ func FixtureSourceAllowed(owner int, data string) bool {
 func FixtureSourceLocationAllowed(owner int, root, data string) bool {
 	return FixtureSourceAllowed(owner, data) && FixtureSourceRoot != "/" && filepath.IsAbs(FixtureSourceRoot) &&
 		!strings.ContainsAny(FixtureSourceRoot, "\x00\r\n") && filepath.Clean(FixtureSourceRoot) == FixtureSourceRoot && root == FixtureSourceRoot
+}
+
+// FixturePackageSignerFeature binds the signer's contract to the exact
+// disposable host, owner and paths compiled into that signer.
+func FixturePackageSignerFeature() string {
+	owner, err := strconv.Atoi(FixtureOwnerUID)
+	if err != nil || FixtureSourceData != filepath.Join(FixtureSourceRoot, "app-state") ||
+		!FixtureSourceLocationAllowed(owner, FixtureSourceRoot, FixtureSourceData) {
+		return ""
+	}
+	return "fixture-signer-" + update.SnapshotDigest("package-fixture-signer-v1", []string{FixtureOwnerUID, FixtureMachineSHA256, FixtureSourceRoot, FixtureSourceData})
+}
+
+// FixturePackageInstance exposes only the already compiled Local fixture
+// identity. The release packet can be hashed after the fixture is built.
+func FixturePackageInstance(owner int) (string, error) {
+	instance := filepath.Base(FixtureSourceRoot)
+	root, err := update.PackageInstanceRoot(owner, "local", instance)
+	if err != nil || root != FixtureSourceRoot || !FixtureSourceLocationAllowed(owner, root, filepath.Join(root, "app-state")) {
+		return "", errors.New("the compiled Local package fixture is unavailable")
+	}
+	return instance, nil
 }

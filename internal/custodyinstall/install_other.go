@@ -18,13 +18,16 @@ type System struct {
 
 var unsupported = errors.New("installer-managed custody identities are supported only by the Ubuntu fixture; wallets remain disabled")
 
-func Install(context.Context, Options, *System) (Manifest, error)                { return Manifest{}, unsupported }
-func Load(int) (Manifest, error)                                                 { return Manifest{}, unsupported }
-func LoadPackageInstance(int, string) (Manifest, error)                          { return Manifest{}, unsupported }
-func Verify(Manifest) error                                                      { return unsupported }
-func VerifyPackageInstance(Manifest) error                                       { return unsupported }
-func VerifyUnconfiguredPackageSigner(context.Context, Manifest) error            { return unsupported }
-func ProtectedNativeRelease(Manifest) (*update.MaintenancePackage, error)        { return nil, unsupported }
+func Install(context.Context, Options, *System) (Manifest, error)         { return Manifest{}, unsupported }
+func Load(int) (Manifest, error)                                          { return Manifest{}, unsupported }
+func LoadPackageInstance(int, string) (Manifest, error)                   { return Manifest{}, unsupported }
+func Verify(Manifest) error                                               { return unsupported }
+func VerifyPackageInstance(Manifest) error                                { return unsupported }
+func VerifyUnconfiguredPackageSigner(context.Context, Manifest) error     { return unsupported }
+func ProtectedNativeRelease(Manifest) (*update.MaintenancePackage, error) { return nil, unsupported }
+func ProtectedPackageNativeRelease(Manifest, string) (*update.MaintenancePackage, error) {
+	return nil, unsupported
+}
 func Runtime(Manifest) error                                                     { return unsupported }
 func Remove(context.Context, Manifest, *System) error                            { return unsupported }
 func Control(context.Context, Manifest, string, string, *System) error           { return unsupported }

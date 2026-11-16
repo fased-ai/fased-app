@@ -48,6 +48,7 @@ export type AccountsView = {
     network: string;
     state:
       | "not-installed"
+      | "configuration-required"
       | "unavailable"
       | "empty"
       | "locked"
@@ -58,6 +59,7 @@ export type AccountsView = {
     fixtureOnly: boolean;
     networkWatchEnabled: boolean;
     ownerSupported: boolean;
+    packageOwner?: boolean;
   };
   addresses?: Record<string, string>;
   record: AccountsRecord;
@@ -104,9 +106,11 @@ export function walletOwnerLink(
   network: string,
   action: "setup" | "import" | "recover",
   origin = "",
+  packageOwner = false,
 ): string {
   if (!/^[A-Za-z0-9_-]{43}$/.test(instance) || !walletNetwork(network))
     return "";
+  if (packageOwner && origin) return "";
   const q = new URLSearchParams({ action, instance, network });
   if (origin) {
     try {
@@ -116,7 +120,7 @@ export function walletOwnerLink(
     }
   }
   q.sort();
-  return `fased://wallet-owner?${q.toString()}`;
+  return `${packageOwner ? "fased-wallet" : "fased"}://wallet-owner?${q.toString()}`;
 }
 
 export function accountAddress(a: Account, view: AccountsView): string {
@@ -157,6 +161,7 @@ export function rpcEndpoint(account: Account): string {
 export function walletSetupLabel(view: AccountsView): string {
   const labels = {
     "not-installed": "Install signer",
+    "configuration-required": "Set up wallet",
     unavailable: "Signer unavailable",
     empty: "No wallet",
     locked: "Locked",

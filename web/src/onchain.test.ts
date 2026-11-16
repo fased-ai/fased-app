@@ -74,6 +74,7 @@ it("hands only the public exact trade to the private owner window", () => {
     "proposal",
   ]);
   expect(tradeOwnerLink(p, "https://public.example")).toBe("");
+  expect(tradeOwnerLink(p, "", true)).toMatch(/^fased-wallet:\/\//);
   expect(tradeOwnerLink({ ...p, version: "unsupported" })).toBe("");
   expect(tradeOwnerLink({ ...p, digest: "x".repeat(13000) })).toBe("");
 });

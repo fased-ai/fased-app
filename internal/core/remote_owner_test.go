@@ -1,6 +1,7 @@
 package core
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -113,6 +114,49 @@ func TestRemoteOwnerEnrollmentPreservationAndReplay(t *testing.T) {
 				t.Fatal("device revocation missing from snapshot", err)
 			}
 		})
+	}
+}
+
+func TestRemotePackageSetupUsesPrivateIPCAndOriginalDevice(t *testing.T) {
+	s, err := OpenStore(filepath.Join(t.TempDir(), "fased"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	h, err := NewHTTPHandler(s, "http://127.0.0.1:7331", "https://node.tail-test.ts.net", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.instanceLocation, h.instanceOwnerUID, h.instanceOwnerKind, h.remoteIngress = "remote", 1000, "custody", true
+	s.protectedOwnerUID = 1000
+	request := func(peer tailnet.Identity, ipc bool) *httptest.ResponseRecorder {
+		body, _ := json.Marshal(map[string]any{"device": peer})
+		r := httptest.NewRequest(http.MethodPost, "http://127.0.0.1:7331/api/v1/auth/remote-setup", bytes.NewReader(body))
+		r.Header.Set("Origin", "http://127.0.0.1:7331")
+		r.Header.Set("Content-Type", "application/json")
+		if ipc {
+			r = r.WithContext(context.WithValue(r.Context(), privateIPCKey{}, true))
+		}
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, r)
+		return w
+	}
+	owner := tailnet.Identity{UserID: 7, NodeID: "approved-device", Login: "owner@example.test"}
+	if w := request(owner, false); w.Code != http.StatusForbidden {
+		t.Fatalf("ordinary HTTP gained Remote setup: %d", w.Code)
+	}
+	w := request(owner, true)
+	var result struct{ InstanceID, Code string }
+	if w.Code != http.StatusOK || json.Unmarshal(w.Body.Bytes(), &result) != nil || result.InstanceID != s.Health().InstanceID || len(result.Code) != 43 {
+		t.Fatalf("approved setup did not reach the existing instance: HTTP %d", w.Code)
+	}
+	other := owner
+	other.NodeID = "different-device"
+	if w = request(other, true); w.Code == http.StatusOK {
+		t.Fatal("a different device replaced the pending owner")
+	}
+	if w = request(owner, true); w.Code != http.StatusOK {
+		t.Fatalf("the original device could not retry: %d", w.Code)
 	}
 }
 

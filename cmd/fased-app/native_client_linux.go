@@ -53,8 +53,8 @@ func nativeAppClient(args []string, in io.Reader, out io.Writer) error {
 			err = packageRunningImageMatches(filepath.Join(m.Root, "fased-app"))
 		}
 	}
-	if err != nil || m.Location != "local" || !m.Enrollment || m.App.UID != os.Getuid() || m.App.UID != os.Geteuid() || signer.CheckApplication(*config, m.Root, *data) != nil {
-		return errors.New("protected Local owner helper required")
+	if err != nil || (m.Location != "local" && m.Location != "remote") || !m.Enrollment || m.App.UID != os.Getuid() || m.App.UID != os.Geteuid() || signer.CheckApplication(*config, m.Root, *data) != nil {
+		return errors.New("protected package owner helper required")
 	}
 	r, err := http.ReadRequest(bufio.NewReader(io.LimitReader(in, 64*1024)))
 	if err != nil {
@@ -63,6 +63,11 @@ func nativeAppClient(args []string, in io.Reader, out io.Writer) error {
 	defer r.Body.Close()
 	if r.ContentLength > 16*1024 || !nativeClientRequestAllowed(r) {
 		return errors.New("native route unavailable")
+	}
+	// Remote bootstrap may observe health only. It must never obtain a Local
+	// owner session or treat the app UID as a Tailscale device identity.
+	if m.Location == "remote" && !packageOwnerBootstrapProbe(r) {
+		return errors.New("Remote package bootstrap permits only anonymous health")
 	}
 	commit, err := custodyinstall.ReadEnrollmentCommit(m)
 	if err != nil {
@@ -105,7 +110,7 @@ func nativeAppClient(args []string, in io.Reader, out io.Writer) error {
 	}
 	defer response.Body.Close()
 	if commit.InstanceID == "" {
-		if err = verifyPackageBootstrapHealth(response, client.Endpoint.InstanceID, m.Owner); err != nil {
+		if err = verifyPackageBootstrapHealth(response, client.Endpoint.InstanceID, m.Owner, m.Location); err != nil {
 			return err
 		}
 	}
@@ -129,14 +134,14 @@ func packageRunningImageMatches(installed string) error {
 
 // The first protected owner record must use the same IPC endpoint identity
 // that NewClient just verified, not a different subsequent health response.
-func verifyPackageBootstrapHealth(response *http.Response, instance string, owner int) error {
+func verifyPackageBootstrapHealth(response *http.Response, instance string, owner int, location string) error {
 	if response == nil || response.Body == nil || response.StatusCode != http.StatusOK || !strings.HasPrefix(response.Header.Get("Content-Type"), "application/json") {
 		return errors.New("Local package health is unavailable")
 	}
 	data, err := io.ReadAll(io.LimitReader(response.Body, 32*1024+1))
 	var health core.Health
 	if err != nil || len(data) > 32*1024 || json.Unmarshal(data, &health) != nil || health.Status != "ok" || health.APIVersion != core.APIVersion ||
-		health.InstanceID != instance || instance == "" || health.Connection == nil || health.Connection.Location != "local" ||
+		health.InstanceID != instance || instance == "" || health.Connection == nil || (location != "local" && location != "remote") || health.Connection.Location != location ||
 		health.Connection.Transport != "loopback" || health.Connection.OwnerUID != owner {
 		return errors.New("Local package health differs from its verified endpoint")
 	}

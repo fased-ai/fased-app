@@ -52,6 +52,7 @@ type Report struct {
 	GitHubTransport             bool          `json:"githubTransport,omitzero"`
 	ProvenanceVerified          bool          `json:"provenanceVerified,omitzero"`
 	LinuxPackageDigestsVerified bool          `json:"linuxPackageDigestsVerified,omitzero"`
+	LinuxBundleVerified         bool          `json:"linuxBundleVerified,omitzero"`
 	ProvenanceSHA256            string        `json:"provenanceSha256,omitzero"`
 	TrustPolicySHA256           string        `json:"trustPolicySha256,omitzero"`
 }
@@ -117,10 +118,10 @@ func (p *Prepared) Close() error {
 		if cleanupErr == nil {
 			cleanupErr = p.root.Remove("download.tar.gz")
 		}
-		if cleanupErr == nil && (p.candidate != nil || p.report.LinuxPackageDigestsVerified) {
+		if cleanupErr == nil && (p.candidate != nil || p.report.LinuxPackageDigestsVerified || p.report.LinuxBundleVerified) {
 			cleanupErr = p.root.Remove("candidate-installer")
 		}
-		if cleanupErr == nil && (p.candidate != nil || p.report.LinuxPackageDigestsVerified) {
+		if cleanupErr == nil && (p.candidate != nil || p.report.LinuxPackageDigestsVerified || p.report.LinuxBundleVerified) {
 			cleanupErr = p.root.Remove("candidate-entry")
 		}
 		if cleanupErr == nil && p.report.LinuxPackageDigestsVerified {
@@ -354,6 +355,14 @@ func prepare(ctx context.Context, o Options, metadataOnly, nativeOnly bool) (pre
 	if err != nil {
 		return nil, err
 	}
+	pairedBundle := false
+	if seed.Version == 4 {
+		var packet AttestedPacket
+		if update.StrictJSON(docs[AttestedPacketFile], &packet) != nil {
+			return nil, errors.New("attested release packet invalid")
+		}
+		pairedBundle = packet.Version == 4
+	}
 	if metadataOnly {
 		if seed.Version != 4 {
 			if _, e := initialChain(seed, docs["timestamp.json"], docs["snapshot.json"], docs["targets.json"], o.clock()); e != nil {
@@ -361,16 +370,16 @@ func prepare(ctx context.Context, o Options, metadataOnly, nativeOnly bool) (pre
 			}
 		}
 		identity := applicationIdentity(descriptor, digest(docs["descriptor.json"]))
-		if descriptor.Deb != (update.Artifact{}) {
+		if descriptor.Deb != (update.Artifact{}) || pairedBundle {
 			identity = digest(docs[AttestedPacketFile])
 		}
 		return &Prepared{descriptor: descriptor, report: Report{MetadataVerified: true, DescriptorSHA256: identity}}, nil
 	}
 	nativePackages := descriptor.Deb != (update.Artifact{}) || descriptor.RPM != (update.Artifact{})
-	if nativePackages && !nativeOnly {
+	if (nativePackages || pairedBundle) && !nativeOnly {
 		return nil, errors.New("native packages require the package-aware installation controller")
 	}
-	if nativeOnly && !nativePackages {
+	if nativeOnly && !nativePackages && !pairedBundle {
 		return nil, errors.New("an authenticated native Linux package release is required")
 	}
 	if seed.Version == 4 {
@@ -416,19 +425,29 @@ func prepare(ctx context.Context, o Options, metadataOnly, nativeOnly bool) (pre
 		return nil, err
 	}
 	prepared = &Prepared{options: o, seed: seed, descriptor: descriptor, directoryInfo: created, root: root, metadata: docs, startedAt: start}
-	if nativePackages {
+	if nativePackages || pairedBundle {
 		if seed.Version != 4 || source.asset == nil {
 			return prepared, errors.New("authenticated public native packages required")
 		}
 		var packet AttestedPacket
 		var release releaseops.PublishedRelease
-		if update.StrictJSON(docs[AttestedPacketFile], &packet) != nil || packet.Version != 3 || update.StrictJSON(docs["github-release.json"], &release) != nil {
+		if update.StrictJSON(docs[AttestedPacketFile], &packet) != nil || (packet.Version != 3 && packet.Version != 4) || update.StrictJSON(docs["github-release.json"], &release) != nil {
 			return prepared, errors.New("authenticated public package inventory required")
 		}
-		for _, item := range []struct {
+		items := []struct {
 			artifact update.Artifact
 			held     string
-		}{{packet.Installer, "candidate-installer"}, {packet.Entry, "candidate-entry"}, {packet.Deb, "candidate-deb"}, {packet.RPM, "candidate-rpm"}} {
+		}{{packet.Installer, "candidate-installer"}, {packet.Entry, "candidate-entry"}}
+		if nativePackages {
+			items = append(items, struct {
+				artifact update.Artifact
+				held     string
+			}{packet.Deb, "candidate-deb"}, struct {
+				artifact update.Artifact
+				held     string
+			}{packet.RPM, "candidate-rpm"})
+		}
+		for _, item := range items {
 			asset, ok := release.Assets[item.artifact.File]
 			if !ok || asset.SHA256 != item.artifact.SHA256 || asset.Size != item.artifact.Size {
 				return prepared, errors.New("native release asset identity changed")
@@ -453,7 +472,7 @@ func prepare(ctx context.Context, o Options, metadataOnly, nativeOnly bool) (pre
 		f.Close()
 		return prepared, err
 	}
-	if nativePackages {
+	if nativePackages || pairedBundle {
 		err = source.asset(ctx, descriptor.GitHub, f)
 	} else {
 		var body io.ReadCloser
@@ -479,7 +498,16 @@ func prepare(ctx context.Context, o Options, metadataOnly, nativeOnly bool) (pre
 	if m.Version != descriptor.ProductVersion || m.Source != descriptor.Source {
 		return prepared, errors.New("inner bundle version/source differs from signed descriptor")
 	}
-	if err = verifyBundleProfile(seed, m); err != nil {
+	if seed.Version == 4 {
+		var packet AttestedPacket
+		if update.StrictJSON(docs[AttestedPacketFile], &packet) != nil {
+			return prepared, errors.New("attested bundle packet invalid")
+		}
+		err = verifyAttestedBundleProfile(seed, m, packet.Version)
+	} else {
+		err = verifyBundleProfile(seed, m)
+	}
+	if err != nil {
 		return prepared, err
 	}
 	engine, _ := bundle.Names()
@@ -499,8 +527,9 @@ func prepare(ctx context.Context, o Options, metadataOnly, nativeOnly bool) (pre
 		return prepared, err
 	}
 	prepared.report = Report{Version: seed.Version, DevelopmentOnly: seed.DevelopmentOnly, Purpose: seed.Purpose, MetadataVerified: true, ArchiveVerified: true, BundleVerified: true, Sequence: descriptor.Sequence, Target: descriptor.Target, SeedSHA256: o.SeedSHA256, DescriptorSHA256: applicationIdentity(descriptor, digest(docs["descriptor.json"])), ArchiveSHA256: descriptor.Archive.SHA256, BundleSHA256: descriptor.BundleSHA256, BundleDirectory: filepath.Join(o.Directory, "bundle"), GitHubTransport: seed.Version >= 2, ProvenanceVerified: seed.Version >= 3, ProvenanceSHA256: decision.BundleSHA256, TrustPolicySHA256: decision.PolicySHA256}
-	if nativePackages {
-		prepared.report.LinuxPackageDigestsVerified = true
+	if nativePackages || pairedBundle {
+		prepared.report.LinuxPackageDigestsVerified = nativePackages
+		prepared.report.LinuxBundleVerified = pairedBundle
 		prepared.report.DescriptorSHA256 = digest(docs[AttestedPacketFile])
 		if err = prepared.revalidateHeld(); err != nil {
 			return prepared, err
@@ -517,7 +546,7 @@ func prepare(ctx context.Context, o Options, metadataOnly, nativeOnly bool) (pre
 }
 
 func (p *Prepared) revalidate() error {
-	if p.report.LinuxPackageDigestsVerified {
+	if p.report.LinuxPackageDigestsVerified || p.report.LinuxBundleVerified {
 		return errors.New("native packages require the package-aware installation controller")
 	}
 	return p.revalidateHeld()
@@ -552,7 +581,7 @@ func (p *Prepared) revalidateHeld() error {
 		if err = revalidateAttested(seed, p.metadata, d, now); err != nil {
 			return err
 		}
-		if p.report.LinuxPackageDigestsVerified {
+		if p.report.LinuxPackageDigestsVerified || p.report.LinuxBundleVerified {
 			if err = p.revalidatePublicPackages(); err != nil {
 				return err
 			}
@@ -581,6 +610,13 @@ func (p *Prepared) revalidateHeld() error {
 	}
 	if m.Version != d.ProductVersion || m.Source != d.Source {
 		return fmt.Errorf("bootstrap source/version changed")
+	}
+	if seed.Version == 4 {
+		var packet AttestedPacket
+		if update.StrictJSON(p.metadata[AttestedPacketFile], &packet) != nil {
+			return errors.New("attested bundle packet is unavailable")
+		}
+		return verifyAttestedBundleProfile(seed, m, packet.Version)
 	}
 	return verifyBundleProfile(seed, m)
 }

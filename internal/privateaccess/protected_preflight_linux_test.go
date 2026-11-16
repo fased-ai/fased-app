@@ -60,6 +60,58 @@ func TestProtectedInitialApprovalBindsBrowserAndOriginalRelease(t *testing.T) {
 	}
 }
 
+func TestPackageRemoteApprovalDoesNotBecomeOwnerWideAuthority(t *testing.T) {
+	release, coreHash := strings.Repeat("a", 64), strings.Repeat("b", 64)
+	a := ProtectedInitialApproval{Version: 1, Owner: 1300, Instance: strings.Repeat("c", 32), Origin: "https://node.owner.ts.net:8443", Listen: "127.0.0.1:7332", Sequence: 8, ReleaseSHA256: release, CoreSHA256: coreHash, Device: tailnet.Identity{UserID: 42, NodeID: "device", Login: "owner@example.com"}}
+	if a.Matches(a.Owner, a.Origin, a.Listen, a.Sequence, release, coreHash) {
+		t.Fatal("a package-scoped approval was accepted as owner-wide authority")
+	}
+	if !a.MatchesPackage(a.Owner, a.Instance, a.Origin, a.Listen, a.Sequence, release, coreHash) || a.MatchesPackage(a.Owner, strings.Repeat("d", 32), a.Origin, a.Listen, a.Sequence, release, coreHash) {
+		t.Fatal("package approval was not restricted to its original instance")
+	}
+	manager := Manager{Run: func(context.Context, ...string) ([]byte, error) {
+		return []byte(`{"BackendState":"Running","Self":{"DNSName":"node.owner.ts.net.","Online":true}}`), nil
+	}}
+	var saved ProtectedInitialApproval
+	writes, confirmations := 0, 0
+	load := func() (ProtectedInitialApproval, error) {
+		if writes == 0 {
+			return saved, os.ErrNotExist
+		}
+		return saved, nil
+	}
+	save := func(got ProtectedInitialApproval) error { writes++; saved = got; return nil }
+	before := func(context.Context, Plan) (tailnet.Identity, error) { confirmations++; return a.Device, nil }
+	got, err := confirmProtectedRemoteInitial(t.Context(), manager, a.Owner, a.Origin, a.Listen, a.Sequence, release, coreHash, load, save, before, a.Instance)
+	if err != nil || got != a.Device || saved.Instance != a.Instance || writes != 1 || confirmations != 1 {
+		t.Fatal("device approval was not recorded for this package", err)
+	}
+	if _, err = confirmProtectedRemoteInitial(t.Context(), manager, a.Owner, a.Origin, a.Listen, a.Sequence, release, coreHash, load, save, before, strings.Repeat("d", 32)); err == nil || writes != 1 || confirmations != 1 {
+		t.Fatal("another package reused the original device approval", err)
+	}
+}
+
+func TestPackageRemotePreflightSocketFitsLinux(t *testing.T) {
+	instance := strings.Repeat("a", 32)
+	dir, err := protectedPackageApprovalDir(4294967294, instance)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// MkdirTemp appends at most ten decimal digits. Linux includes a NUL in
+	// its 108-byte sockaddr_un path, so the full pathname must fit in 107.
+	socket := filepath.Join(dir, "fased-private-4294967295", "tailscale.sock")
+	if len([]byte(socket)) > 107 {
+		t.Fatalf("protected Remote preflight socket is too long for Linux (%d bytes): %s", len([]byte(socket)), socket)
+	}
+	other, err := protectedPackageApprovalDir(4294967294, strings.Repeat("b", 32))
+	if err != nil || other == dir || !preflightSocketTarget("unix:"+socket, dir) || preflightSocketTarget("unix:"+socket, other) {
+		t.Fatal("different package instances share their preflight state")
+	}
+	if _, err = protectedPackageApprovalDir(0, instance); err == nil {
+		t.Fatal("invalid package owner admitted")
+	}
+}
+
 func TestProtectedPendingOriginRejectsConflicts(t *testing.T) {
 	want := "https://node.owner.ts.net:8443"
 	dir := "/var/lib/fased-maintenance/owners/1300/remote"

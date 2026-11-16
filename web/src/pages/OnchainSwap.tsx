@@ -112,6 +112,7 @@ export function OnchainSwap() {
   const [loaded, setLoaded] = useState("");
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [ownerSource, setOwnerSource] = useState<"local" | "remote">();
+  const [ownerPackage, setOwnerPackage] = useState(false);
   const [view, setView] = useState<OnchainView>();
   const [review, setReview] = useState<SwapReview>();
   const [busy, setBusy] = useState(false);
@@ -147,6 +148,7 @@ export function OnchainSwap() {
         if (!current()) return;
         setAccounts(onchainAccounts(a.record.accounts));
         setOwnerSource(a.setup?.source);
+        setOwnerPackage(a.setup?.packageOwner === true);
       } catch (e) {
         failure = e instanceof Error ? e.message : t("Unavailable");
       }
@@ -171,6 +173,7 @@ export function OnchainSwap() {
     const link = tradeOwnerLink(
       review.proposal,
       ownerSource === "remote" ? location.origin : "",
+      ownerPackage,
     );
     if (!link) {
       setError(t("Unavailable"));
@@ -223,6 +226,7 @@ export function OnchainSwap() {
     setAccounts([]);
     setReadError("");
     setOwnerSource(undefined);
+    setOwnerPackage(false);
     setError("");
     try {
       const saved = JSON.parse(localStorage.getItem(storageKey) ?? "null");

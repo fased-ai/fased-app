@@ -71,13 +71,6 @@ func hostCommand(args []string, out, errOut io.Writer) error {
 	if err = f.Parse(remaining); err != nil {
 		return err
 	}
-	if command == "open" {
-		explicit := false
-		f.Visit(func(option *flag.Flag) { explicit = explicit || option.Name == "data-dir" })
-		if *data, err = defaultPackageLocalData(*data, explicit); err != nil {
-			return err
-		}
-	}
 	ownerLink := ""
 	if command == "open" && f.NArg() == 1 {
 		ownerLink = f.Arg(0)
@@ -86,6 +79,25 @@ func hostCommand(args []string, out, errOut io.Writer) error {
 		}
 	} else if f.NArg() != 0 {
 		return errors.New("unexpected positional arguments")
+	}
+	if command == "open" {
+		explicit := false
+		f.Visit(func(option *flag.Flag) { explicit = explicit || option.Name == "data-dir" })
+		if strings.HasPrefix(ownerLink, "fased-wallet://") && !explicit {
+			intent, privateOrigin, _ := ownerclient.ParseLink(ownerLink)
+			if privateOrigin == "" {
+				image, e := ownerclient.LocalPackageOwnerTarget(intent.InstanceID)
+				if e != nil {
+					return e
+				}
+				if image != "" {
+					*data, explicit = filepath.Join(filepath.Dir(image), "app-state"), true
+				}
+			}
+		}
+		if *data, err = defaultPackageLocalData(*data, explicit); err != nil {
+			return err
+		}
 	}
 	if *packageSHA256 != "" && (command != "install" || *packageDir == "") {
 		return errors.New("--bundle-sha256 requires install --bundle")
@@ -130,10 +142,44 @@ func hostCommand(args []string, out, errOut io.Writer) error {
 			return packageErr
 		}
 		if packaged {
-			if command != "open" || ownerLink != "" || *origin != "" {
+			if command != "open" || *origin != "" {
 				return errors.New("this Local package operation is unavailable; preserve its instance")
 			}
-			address, e := localOwnerSetupLink(ctx, abs, "")
+			if ownerLink != "" {
+				intent, privateOrigin, e := ownerclient.ParseLink(ownerLink)
+				if e != nil || privateOrigin != "" || *printOnly {
+					return errors.New("the original Local wallet request is required")
+				}
+				root := filepath.Dir(abs)
+				m, e := custodyinstall.LoadPackageInstance(os.Getuid(), root)
+				if e != nil {
+					return errors.New("the original Local package is unavailable")
+				}
+				if _, e = custodyinstall.ProtectedPackageNativeRelease(m, intent.InstanceID); e != nil {
+					return e
+				}
+				desktop := filepath.Join(root, localinstall.DesktopName())
+				if e = checkDesktopRuntime(desktop); e != nil {
+					return e
+				}
+				process := exec.Command(desktop, "--wallet-owner", ownerLink)
+				if e = process.Start(); e != nil {
+					return errors.New("cannot open the protected Fased window")
+				}
+				return process.Process.Release()
+			}
+			address, e := preparePackageBrowser(ctx, errOut, func(ctx context.Context) (string, error) {
+				return localOwnerSetupLink(ctx, abs, "")
+			}, func(ctx context.Context) error {
+				m, err := custodyinstall.LoadPackageInstance(os.Getuid(), filepath.Dir(abs))
+				if err != nil {
+					return err
+				}
+				if _, err = custodyinstall.ProtectedPackageNativeRelease(m, ""); err != nil {
+					return err
+				}
+				return registerPackageWalletShortcut(ctx)
+			})
 			if e != nil {
 				return e
 			}
@@ -534,6 +580,17 @@ func hostCommand(args []string, out, errOut io.Writer) error {
 		return nil
 	}
 	return errors.New("unknown installation command")
+}
+
+func preparePackageBrowser(ctx context.Context, diagnostics io.Writer, ownerLink func(context.Context) (string, error), register func(context.Context) error) (string, error) {
+	address, err := ownerLink(ctx)
+	if err != nil {
+		return "", err
+	}
+	if err := register(ctx); err != nil {
+		fmt.Fprintln(diagnostics, "Wallets browser connection is unavailable:", err)
+	}
+	return address, nil
 }
 
 // Bind installation to the running core and the exact verified inventory.

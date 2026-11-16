@@ -43,20 +43,20 @@ func ReadEnrollmentCommit(m Manifest) (EnrollmentCommit, error) {
 // The fresh package has no imported source image. Its protected owner record
 // binds the actual running core identity and the immutable instance topology.
 func packageOwnerCommit(m Manifest, health core.Health) (EnrollmentCommit, error) {
-	if m.validatePackage() != nil || m.Location != "local" || m.Network != "" || health.Status != "ok" || health.APIVersion != core.APIVersion || !enrollmentInstance(health.InstanceID) ||
-		health.Connection == nil || health.Connection.Location != "local" || health.Connection.Transport != "loopback" || health.Connection.OwnerUID != m.Owner {
-		return EnrollmentCommit{}, errors.New("original running Local package owner required")
+	if m.validatePackage() != nil || (m.Location != "local" && m.Location != "remote") || m.Network != "" || health.Status != "ok" || health.APIVersion != core.APIVersion || !enrollmentInstance(health.InstanceID) ||
+		health.Connection == nil || health.Connection.Location != m.Location || health.Connection.Transport != "loopback" || health.Connection.OwnerUID != m.Owner {
+		return EnrollmentCommit{}, errors.New("original running package owner required")
 	}
 	return EnrollmentCommit{Version: 1, ManifestSHA256: sum(mustJSON(EnrollmentIdentity(m))), InstanceID: health.InstanceID, Digest: packageOwnerDigest(m, health.InstanceID)}, nil
 }
 
 func validPackageOwnerCommit(m Manifest, c EnrollmentCommit) bool {
-	return m.validatePackage() == nil && m.Location == "local" && c.Version == 1 && enrollmentInstance(c.InstanceID) &&
+	return m.validatePackage() == nil && (m.Location == "local" || m.Location == "remote") && c.Version == 1 && enrollmentInstance(c.InstanceID) &&
 		c.ManifestSHA256 == sum(mustJSON(EnrollmentIdentity(m))) && c.Digest == packageOwnerDigest(m, c.InstanceID)
 }
 
 func packageOwnerDigest(m Manifest, instance string) string {
-	return sum([]byte("fased-package-local-owner:v1\x00" + m.ID + "\x00" + instance))
+	return sum([]byte("fased-package-" + m.Location + "-owner:v1\x00" + m.ID + "\x00" + instance))
 }
 
 func (s *System) enrollmentCommand(ctx context.Context, m Manifest, uid, gid int, action, dir, instance, digest string) (*exec.Cmd, []byte, error) {

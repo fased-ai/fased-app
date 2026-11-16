@@ -74,6 +74,50 @@ func TestNativeEnrollmentLocalPlanRetainsConsentAndExactPair(t *testing.T) {
 	}
 }
 
+func TestPackageEnrollmentUsesExistingOwnerWithoutTerminal(t *testing.T) {
+	p := enrollmentPair(t)
+	i := intent()
+	ready := false
+	calls := 0
+	c := &Client{Intent: i, Peer: Peer{Version: 1, InstanceID: i.InstanceID, OwnerUID: 1000, Network: i.Network}, packageOwner: p.Core}
+	c.run = func(_ context.Context, path string, args []string, input []byte) ([]byte, error) {
+		if path != p.Core || len(input) != 0 {
+			t.Fatal("package preparation changed its owner or sent secrets")
+		}
+		if strings.Join(args, " ") == "custody enrollment-capability" {
+			return []byte(`{"version":1,"supported":true,"walletSigner":false}`), nil
+		}
+		if strings.HasSuffix(strings.Join(args, " "), "--inspect") {
+			return json.Marshal(Peer{Version: 1, InstanceID: i.InstanceID, SignerID: strings.Repeat("b", 32), Network: i.Network, OwnerUID: 1000, CoreSHA256: p.CoreSHA256, SignerSHA256: p.SignerSHA256, Ready: &ready})
+		}
+		if !strings.Contains(strings.Join(args, " "), "--initialize --operation "+i.OperationID) {
+			t.Fatal("the original wallet operation was not retained", args)
+		}
+		calls++
+		if calls == 1 {
+			return nil, &commandExit{1}
+		}
+		ready = true
+		return nil, nil
+	}
+	plan, err := prepareEnrollment(t.Context(), c, p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if path, _ := plan.Terminal(); path != "" {
+		t.Fatal("package setup requested a terminal")
+	}
+	if used, err := plan.RunPackage(t.Context()); !used || err == nil || calls != 1 {
+		t.Fatal("interrupted package setup did not preserve its operation", used, err)
+	}
+	if used, err := plan.RunPackage(t.Context()); !used || err != nil || calls != 2 {
+		t.Fatal("the same package operation did not resume", used, err)
+	}
+	if _, err := plan.Wait(t.Context()); err != nil {
+		t.Fatal("the original package wallet did not reconnect", err)
+	}
+}
+
 func TestNativeEnrollmentRemoteStagesPairBeforePTYAndResumes(t *testing.T) {
 	for _, state := range []string{"fresh", "retained-stage", "suspended-recovery"} {
 		existing := state != "fresh"

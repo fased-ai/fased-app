@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 
 	"github.com/fased-ai/fased-app/internal/core"
 	"github.com/fased-ai/fased-app/internal/tailnet"
@@ -21,6 +22,7 @@ import (
 type ProtectedInitialApproval struct {
 	Version       int              `json:"version"`
 	Owner         int              `json:"owner"`
+	Instance      string           `json:"instance,omitempty"`
 	Origin        string           `json:"origin"`
 	Listen        string           `json:"listen"`
 	Sequence      uint64           `json:"sequence"`
@@ -35,6 +37,15 @@ func validApprovalDigest(value string) bool {
 }
 
 func (a ProtectedInitialApproval) Matches(owner int, origin, listen string, sequence uint64, release, coreHash string) bool {
+	return a.Instance == "" && a.matches(owner, origin, listen, sequence, release, coreHash)
+}
+
+// MatchesPackage binds the same browser approval to one package instance.
+func (a ProtectedInitialApproval) MatchesPackage(owner int, instance, origin, listen string, sequence uint64, release, coreHash string) bool {
+	return update.IDOK(instance) && a.Instance == instance && a.matches(owner, origin, listen, sequence, release, coreHash)
+}
+
+func (a ProtectedInitialApproval) matches(owner int, origin, listen string, sequence uint64, release, coreHash string) bool {
 	validCore := a.CoreSHA256 == "" || validApprovalDigest(a.CoreSHA256)
 	if coreHash != "" {
 		validCore = validCore && validApprovalDigest(coreHash) && a.CoreSHA256 == coreHash
@@ -44,6 +55,17 @@ func (a ProtectedInitialApproval) Matches(owner int, origin, listen string, sequ
 
 func protectedApprovalPath(owner int) string {
 	return filepath.Join(update.MaintenanceOwnerRoot(owner), "remote", "initial-approval.json")
+}
+
+const protectedPackageSetupRoot = "/var/lib/fased-setup"
+
+func protectedPackageApprovalDir(owner int, instance string) (string, error) {
+	if _, err := update.PackageMaintenanceRoot(owner, "remote", instance); err != nil {
+		return "", err
+	}
+	// Both the persistent receipt and its protected socket need a short path:
+	// Linux limits Unix sockets to 107 pathname bytes.
+	return filepath.Join(protectedPackageSetupRoot, strconv.Itoa(owner)+"-"+instance), nil
 }
 
 // ReadProtectedInitialApproval never accepts an operator-writable witness.
@@ -62,6 +84,79 @@ func ReadProtectedInitialApproval(owner int) (ProtectedInitialApproval, error) {
 		return ProtectedInitialApproval{}, errors.New("invalid protected Remote approval; preserve it")
 	}
 	return approval, nil
+}
+
+// ReadProtectedPackageInitialApproval keeps Remote package approvals separate
+// from both the old owner-wide installation and every other package instance.
+func ReadProtectedPackageInitialApproval(owner int, instance string) (ProtectedInitialApproval, error) {
+	var approval ProtectedInitialApproval
+	dir, err := protectedPackageApprovalDir(owner, instance)
+	if err != nil || os.Getuid() != 0 || os.Geteuid() != 0 {
+		return approval, errors.New("protected Remote package approval required")
+	}
+	f, err := update.OpenProtected(filepath.Join(dir, "initial-approval.json"), 16<<10, 0600)
+	if err != nil {
+		return approval, err
+	}
+	b, readErr := io.ReadAll(io.LimitReader(f, (16<<10)+1))
+	if err = errors.Join(readErr, f.Close()); err != nil || len(b) > 16<<10 || update.StrictJSON(b, &approval) != nil ||
+		!approval.MatchesPackage(owner, instance, approval.Origin, approval.Listen, approval.Sequence, approval.ReleaseSHA256, approval.CoreSHA256) || !validApprovalDigest(approval.CoreSHA256) {
+		return ProtectedInitialApproval{}, errors.New("invalid protected Remote package approval; preserve it")
+	}
+	return approval, nil
+}
+
+// ConfirmProtectedPackageRemoteInitial uses the existing device challenge but
+// stores its result under this instance's protected maintenance directory.
+func ConfirmProtectedPackageRemoteInitial(ctx context.Context, owner int, instance, listen string, sequence uint64, release, coreHash string, out io.Writer) (ProtectedInitialApproval, error) {
+	var empty ProtectedInitialApproval
+	dir, err := protectedPackageApprovalDir(owner, instance)
+	if err != nil || os.Getuid() != 0 || os.Geteuid() != 0 || !validApprovalDigest(coreHash) || out == nil {
+		return empty, errors.New("protected Remote package identity required")
+	}
+	if err = core.EnsurePrivateDirectory(protectedPackageSetupRoot); err != nil {
+		return empty, err
+	}
+	if err = core.EnsurePrivateDirectory(dir); err != nil {
+		return empty, err
+	}
+	manager := System()
+	load := func() (ProtectedInitialApproval, error) { return ReadProtectedPackageInitialApproval(owner, instance) }
+	previous, err := load()
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return empty, err
+	}
+	origin := previous.Origin
+	if origin == "" {
+		plan, e := manager.Plan(ctx, "tailscale", listen)
+		if e != nil {
+			return empty, e
+		}
+		plan, e = manager.SelectIsolated(ctx, dir, plan)
+		if e != nil {
+			return empty, e
+		}
+		origin = plan.Origin
+	}
+	path := filepath.Join(dir, "initial-approval.json")
+	_, err = confirmProtectedRemoteInitial(ctx, manager, owner, origin, listen, sequence, release, coreHash, load,
+		func(a ProtectedInitialApproval) error {
+			if err := core.WritePrivateJSON(path, a); err != nil {
+				return err
+			}
+			f, err := os.Open(dir)
+			if err != nil {
+				return err
+			}
+			return errors.Join(f.Sync(), f.Close())
+		},
+		func(ctx context.Context, p Plan) (tailnet.Identity, error) {
+			return manager.beforeInstall(ctx, dir, p, out, dir)
+		}, instance)
+	if err != nil {
+		return empty, err
+	}
+	return load()
 }
 
 // ProtectedPendingOrigin exposes only the helper-owned port needed to retry
@@ -138,10 +233,14 @@ func ConfirmProtectedRemoteInitial(ctx context.Context, owner int, origin, liste
 		})
 }
 
-func confirmProtectedRemoteInitial(ctx context.Context, m Manager, owner int, origin, listen string, sequence uint64, release, coreHash string, load func() (ProtectedInitialApproval, error), save func(ProtectedInitialApproval) error, before func(context.Context, Plan) (tailnet.Identity, error)) (tailnet.Identity, error) {
+func confirmProtectedRemoteInitial(ctx context.Context, m Manager, owner int, origin, listen string, sequence uint64, release, coreHash string, load func() (ProtectedInitialApproval, error), save func(ProtectedInitialApproval) error, before func(context.Context, Plan) (tailnet.Identity, error), instances ...string) (tailnet.Identity, error) {
 	var empty tailnet.Identity
-	if owner <= 0 || sequence == 0 || !validApprovalDigest(release) || coreHash != "" && !validApprovalDigest(coreHash) {
+	if len(instances) > 1 || len(instances) == 1 && !update.IDOK(instances[0]) || owner <= 0 || sequence == 0 || !validApprovalDigest(release) || coreHash != "" && !validApprovalDigest(coreHash) {
 		return empty, errors.New("protected Remote installation identity required")
+	}
+	instance := ""
+	if len(instances) == 1 {
+		instance = instances[0]
 	}
 	plan, err := m.Plan(ctx, "tailscale", listen)
 	if err != nil {
@@ -153,7 +252,7 @@ func confirmProtectedRemoteInitial(ctx context.Context, m Manager, owner int, or
 		return empty, errors.New("Remote installation requires this enrolled device's private HTTPS")
 	}
 	if approval, err := load(); err == nil {
-		if !approval.Matches(owner, origin, listen, sequence, release, coreHash) {
+		if instance == "" && !approval.Matches(owner, origin, listen, sequence, release, coreHash) || instance != "" && !approval.MatchesPackage(owner, instance, origin, listen, sequence, release, coreHash) {
 			return empty, errors.New("protected Remote approval differs; preserve it")
 		}
 		return approval.Device, nil
@@ -165,8 +264,8 @@ func confirmProtectedRemoteInitial(ctx context.Context, m Manager, owner int, or
 	if err != nil {
 		return empty, err
 	}
-	approval := ProtectedInitialApproval{Version: 1, Owner: owner, Origin: origin, Listen: listen, Sequence: sequence, ReleaseSHA256: release, CoreSHA256: coreHash, Device: device}
-	if !approval.Matches(owner, origin, listen, sequence, release, coreHash) {
+	approval := ProtectedInitialApproval{Version: 1, Owner: owner, Instance: instance, Origin: origin, Listen: listen, Sequence: sequence, ReleaseSHA256: release, CoreSHA256: coreHash, Device: device}
+	if instance == "" && !approval.Matches(owner, origin, listen, sequence, release, coreHash) || instance != "" && !approval.MatchesPackage(owner, instance, origin, listen, sequence, release, coreHash) {
 		return empty, errors.New("private browser identity is invalid")
 	}
 	if err = save(approval); err != nil {

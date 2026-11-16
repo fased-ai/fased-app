@@ -9,6 +9,40 @@ import (
 	"github.com/fased-ai/fased-app/internal/signer"
 )
 
+func TestUnconfiguredPackageWalletOnlyOffersControlledOwnerSetup(t *testing.T) {
+	s, err := OpenStore(fixtureDir(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	s.installationSource.Store(1)
+	s.unconfiguredProtectedSigner = true
+	s.fixture = func(context.Context, signer.Request) (signer.Response, error) {
+		t.Fatal("an unconfigured signer must not be queried")
+		return signer.Response{}, nil
+	}
+	v := s.walletSetup(s.fixtureView(t.Context()))
+	if v.OwnerSupported || v.State != "unavailable" {
+		t.Fatal("ordinary owner admission was enabled without authorization", v)
+	}
+	s.custodyOwnerSupported = true
+	s.custodyPackageLocal = true
+	v = s.walletSetup(s.fixtureView(t.Context()))
+	if v.State != "configuration-required" || !v.OwnerSupported || !v.FixtureOnly || !v.AdmissionHeld {
+		t.Fatal("the controlled package cannot open its owner setup", v)
+	}
+	s.installationSource.Store(2)
+	v = s.walletSetup(s.fixtureView(t.Context()))
+	if v.State != "unavailable" || v.OwnerSupported {
+		t.Fatal("Local package setup was offered for a Remote installation", v)
+	}
+	s.installationSource.Store(1)
+	s.custodyPackageLocal = false
+	if v = s.walletSetup(s.fixtureView(t.Context())); v.State != "unavailable" || v.OwnerSupported {
+		t.Fatal("package setup was offered for a different installation", v)
+	}
+}
+
 func TestWalletSetupWatchAddressAndPreservation(t *testing.T) {
 	s, err := OpenStore(fixtureDir(t))
 	if err != nil {

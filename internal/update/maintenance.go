@@ -2,6 +2,7 @@ package update
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -21,6 +22,10 @@ const NativeDesktopJournalFeature = "custody-journal-native-desktop-v1"
 // NativePackageJournalFeature binds OS package identity to the same protected
 // pair transaction. Both installed readers must refuse unknown journal fields.
 const NativePackageJournalFeature = "linux-package-journal-v1"
+
+// BundleJournalFeature declares that both readers understand the authenticated
+// paired Linux bundle in an instance maintenance record.
+const BundleJournalFeature = "linux-bundle-journal-v1"
 
 const MaintenanceRoot = "/var/lib/fased-maintenance"
 const PackageInstanceLayout = "linux-package-v1"
@@ -216,6 +221,21 @@ type ApplicationCheckpoint struct {
 	Snapshot             MetadataSnapshot `json:"snapshot"`
 }
 
+// WalletInitialization records only a public network choice for an empty
+// signer. It never contains a key, password, or signing authority.
+type WalletInitialization struct {
+	Version     int    `json:"version"`
+	OperationID string `json:"operationId"`
+	InstanceID  string `json:"instanceId"`
+	Network     string `json:"network"`
+}
+
+func (w WalletInitialization) Valid() bool {
+	decoded, err := base64.RawURLEncoding.DecodeString(w.InstanceID)
+	return w.Version == 1 && IDOK(w.OperationID) && err == nil && len(decoded) == 32 &&
+		base64.RawURLEncoding.EncodeToString(decoded) == w.InstanceID && (w.Network == "devnet" || w.Network == "mainnet-beta")
+}
+
 // MaintenanceRecord is the helper's single durable deployment/recovery journal.
 // Component identities and the financial installation hold remain independent.
 type MaintenanceRecord struct {
@@ -235,6 +255,7 @@ type MaintenanceRecord struct {
 	Bootstrap       bool                   `json:"bootstrap,omitempty"`
 	Application     *ApplicationCheckpoint `json:"applicationCheckpoint,omitempty"`
 	OwnerLease      string                 `json:"ownerLease,omitempty"`
+	Wallet          *WalletInitialization  `json:"walletInitialization,omitempty"`
 }
 
 type MaintenancePackage struct {
@@ -247,6 +268,53 @@ type MaintenancePackage struct {
 	Components       []Component    `json:"components"`
 	NativeDesktop    *Artifact      `json:"nativeDesktop,omitempty"`
 	NativePackage    *NativePackage `json:"nativePackage,omitempty"`
+	Bundle           *LinuxBundle   `json:"linuxBundle,omitempty"`
+}
+
+type LinuxBundle struct {
+	Archive         Artifact `json:"archive"`
+	ManifestSHA256  string   `json:"manifestSha256"`
+	InstallerSHA256 string   `json:"installerSha256"`
+}
+
+// InstallerDigest returns only the installer bound by the recorded release.
+func (p MaintenancePackage) InstallerDigest() string {
+	if p.NativePackage != nil && p.Bundle == nil {
+		return p.NativePackage.InstallerSHA256
+	}
+	if p.Bundle != nil && p.NativePackage == nil {
+		return p.Bundle.InstallerSHA256
+	}
+	return ""
+}
+
+// SameLinuxDistribution prevents an interrupted update from switching CPU
+// architecture or crossing between two native package-manager families.
+func SameLinuxDistribution(previous, target MaintenancePackage) bool {
+	if previous.Validate() != nil || target.Validate() != nil || previous.InstallerDigest() == "" || target.InstallerDigest() == "" {
+		return false
+	}
+	if previous.NativePackage != nil && target.NativePackage != nil && previous.NativePackage.Family != target.NativePackage.Family {
+		return false
+	}
+	arch := func(p MaintenancePackage) string {
+		var name string
+		if p.NativePackage != nil {
+			name = p.NativePackage.Artifact.File
+		} else {
+			name = p.Bundle.Archive.File
+		}
+		switch {
+		case strings.Contains(name, "-amd64."):
+			return "amd64"
+		case strings.Contains(name, "-arm64."):
+			return "arm64"
+		default:
+			return ""
+		}
+	}
+	a, b := arch(previous), arch(target)
+	return a != "" && a == b
 }
 
 type NativePackage struct {
@@ -258,7 +326,7 @@ type NativePackage struct {
 // RecoveryEligible recognizes only an already admitted operation. It never
 // authorizes acquisition or a new update and retains the original hold.
 func (r MaintenanceRecord) RecoveryEligible() bool {
-	if r.Version != 1 || r.Owner <= 0 || !IDOK(r.OperationID) || r.Package == nil || r.Package.Validate() != nil {
+	if r.Version != 1 || r.Owner <= 0 || !IDOK(r.OperationID) || r.Package == nil || r.Package.Validate() != nil || r.Wallet != nil {
 		return false
 	}
 	if r.OwnerLease != "" || r.Application != nil {
@@ -304,7 +372,7 @@ func (r MaintenanceRecord) RecoveryEligible() bool {
 // installed controller must independently verify both before replacement.
 func (r MaintenanceRecord) applicationRecoveryEligible() bool {
 	if r.OwnerLease != r.OperationID || r.PreviousPackage == nil || r.PreviousPackage.Validate() != nil || r.Package.Sequence <= r.PreviousPackage.Sequence ||
-		r.PreviousPackage.NativePackage == nil || r.Package.NativePackage == nil || r.PreviousPackage.NativePackage.Family != r.Package.NativePackage.Family ||
+		!SameLinuxDistribution(*r.PreviousPackage, *r.Package) ||
 		r.Approval != nil || r.Staged != nil || r.Recovery != nil || r.Installation != nil || r.Bootstrap {
 		return false
 	}
@@ -352,7 +420,7 @@ func applicationCheckpointReadable(p MaintenancePackage, state State) bool {
 func (r MaintenanceRecord) ValidateIdle() error {
 	if r.Version != 1 || r.Owner <= 0 || !IDOK(r.OperationID) || r.Phase != "idle" || r.Start != "base" ||
 		len(r.Base) == 0 || !bytes.Equal(r.Base, r.Target) || r.Package == nil || r.PreviousPackage != nil ||
-		r.Approval != nil || r.Staged != nil || r.Recovery != nil || r.Installation != nil || r.Bootstrap || r.Application != nil || r.OwnerLease != "" {
+		r.Approval != nil || r.Staged != nil || r.Recovery != nil || r.Installation != nil || r.Bootstrap || r.Application != nil || r.OwnerLease != "" || r.Wallet != nil {
 		return errors.New("invalid initial custody maintenance state")
 	}
 	return r.Package.Validate()
@@ -425,6 +493,17 @@ func (p MaintenancePackage) Validate() error {
 		for _, c := range p.Components {
 			if !slices.Contains(c.Contract.Features, NativePackageJournalFeature) {
 				return errors.New("both readers must understand the native package journal")
+			}
+		}
+	}
+	if p.Bundle != nil {
+		b := p.Bundle
+		if p.NativePackage != nil || (b.Archive.File != "fased-app-linux-amd64.tar.gz" && b.Archive.File != "fased-app-linux-arm64.tar.gz") || b.Archive.Size <= 0 || b.Archive.Size > 128<<20 || !hashOK(b.Archive.SHA256) || !hashOK(b.ManifestSHA256) || !hashOK(b.InstallerSHA256) {
+			return errors.New("invalid authenticated Linux bundle")
+		}
+		for _, c := range p.Components {
+			if !slices.Contains(c.Contract.Features, BundleJournalFeature) {
+				return errors.New("both readers must understand the Linux bundle journal")
 			}
 		}
 	}

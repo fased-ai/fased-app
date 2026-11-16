@@ -7,6 +7,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -25,10 +26,154 @@ import (
 
 const rpmPackageListingQuery = "%{NAME}\\t%{VERSION}\\t%{RELEASE}\\t%{ARCH}\\n[%{FILENAMES}\\t%{FILEMODES:octal}\\t%{FILEUSERNAME}\\t%{FILEGROUPNAME}\\t%{FILEDIGESTS}\\t%{FILELINKTOS}\\t%{FILECAPS}\\t%{FILEFLAGS}\\n]"
 
+// This immutable receipt identifies the once-installed system launcher. It is
+// not an instance update journal: no instance update may replace or advance it.
+type nativeBootstrap struct {
+	Version int                       `json:"version"`
+	Base    Manifest                  `json:"base"`
+	Package update.MaintenancePackage `json:"package"`
+}
+
+func (b nativeBootstrap) validate() error {
+	if b.Version != 1 || b.Base.validatePackage() != nil || b.Package.Validate() != nil ||
+		b.Package.InstallerDigest() == "" || !packagePairMatches(b.Package, b.Base) {
+		return errors.New("the original authenticated system bootstrap is required")
+	}
+	return nil
+}
+
+func retainedNativeBootstrap(f hostFile) (nativeBootstrap, error) {
+	var b nativeBootstrap
+	if f.UID != 0 || !f.Regular || f.Mode != 0644 || len(f.Data) > 256<<10 || strict(f.Data, &b) != nil || b.validate() != nil {
+		return b, errors.New("the retained system bootstrap is invalid; preserve it")
+	}
+	return b, nil
+}
+
+// Provisioning alone may install the system bootstrap. A second installation
+// reuses the first one's exact verified bytes, even when its own pair is newer.
+// The receipt is durable before invoking the package manager, so an interrupted
+// installation cannot be retried with a newly selected package.
+func provisionNativeBootstrap(ctx context.Context, m Manifest, p update.MaintenancePackage) (result error) {
+	lock, err := maintenance.PackageSystemLock(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { result = errors.Join(result, lock.Close()) }()
+	path := maintenance.StateRoot + "/images/system-package.json"
+	b := nativeBootstrap{Version: 1, Base: m, Package: p}
+	f, err := readRoot(path)
+	if errors.Is(err, os.ErrNotExist) {
+		if err = b.validate(); err != nil {
+			return err
+		}
+		if p.Bundle != nil {
+			if err = verifyRetainedInstanceRelease(ctx, m, p); err != nil {
+				return err
+			}
+			for _, name := range []string{"/usr/bin/fased", "/usr/lib/fased-app"} {
+				if _, e := os.Lstat(name); !errors.Is(e, os.ErrNotExist) {
+					return errors.New("an unclassified Fased launcher exists; preserve it")
+				}
+			}
+		} else {
+			if _, _, err = preflightNativePackage(ctx, m, nil, p, false); err != nil {
+				return err
+			}
+		}
+		data, err := json.Marshal(b)
+		if err != nil {
+			return err
+		}
+		if err = maintenance.PublishProtected(path, data, 0644); err != nil {
+			return err
+		}
+	} else {
+		if err != nil {
+			return err
+		}
+		b, err = retainedNativeBootstrap(f)
+		if err != nil {
+			return err
+		}
+	}
+	if b.Package.Bundle != nil {
+		return installBundleBootstrap(ctx, b)
+	}
+	return applyNativePackageLocked(ctx, b.Base, nil, b.Package, true)
+}
+
+// installBundleBootstrap publishes only the fixed launcher and command link.
+// The retained, root-owned bootstrap image is independent of instance updates.
+// Each step is idempotent after interruption and refuses foreign files.
+func installBundleBootstrap(ctx context.Context, b nativeBootstrap) error {
+	if err := b.validate(); err != nil || b.Package.Bundle == nil {
+		return errors.New("the original Linux bundle bootstrap is required")
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	imageDir := filepath.Join(maintenance.StateRoot, "images", b.Base.CoreHash)
+	if err := maintenance.EnsureProtectedDirectory(imageDir); err != nil {
+		return err
+	}
+	image := filepath.Join(imageDir, "fased-app")
+	var core update.Artifact
+	for _, c := range b.Package.Components {
+		if c.Contract.Component == "core" {
+			core = c.Artifact
+		}
+	}
+	if core.File != "fased-app" || core.SHA256 != b.Base.CoreHash || core.Size <= 0 {
+		return errors.New("the original launcher is unavailable")
+	}
+	if _, _, err := maintenance.ProtectedDigest(image, 0755, 128<<20); errors.Is(err, os.ErrNotExist) {
+		if err = maintenance.CopyProtectedBounded(filepath.Join(b.Base.Root, "fased-app"), image, 0755, core.SHA256, core.Size); err != nil {
+			return err
+		}
+	} else if err != nil {
+		return err
+	}
+	if hash, size, err := maintenance.ProtectedDigest(image, 0755, 128<<20); err != nil || hash != core.SHA256 || size != core.Size {
+		return errors.New("the retained system launcher differs; preserve it")
+	}
+	if err := maintenance.EnsureProtectedDirectory("/usr/lib/fased-app"); err != nil {
+		return err
+	}
+	if err := maintenance.CopyProtectedBounded(image, "/usr/lib/fased-app/fased-app", 0755, core.SHA256, core.Size); err != nil {
+		return err
+	}
+	if err := trustedParents("/usr/bin"); err != nil {
+		return err
+	}
+	const command = "/usr/bin/fased"
+	const destination = "../lib/fased-app/fased-app"
+	info, err := os.Lstat(command)
+	if errors.Is(err, os.ErrNotExist) {
+		if err = os.Symlink(destination, command); err != nil {
+			return errors.New("the Fased command conflicted; preserve it")
+		}
+		bin, err := os.Open("/usr/bin")
+		if err != nil {
+			return err
+		}
+		return errors.Join(bin.Sync(), bin.Close())
+	}
+	if err != nil || info.Mode()&os.ModeSymlink == 0 {
+		return errors.New("the existing Fased command is unclassified; preserve it")
+	}
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	want, readErr := os.Readlink(command)
+	if !ok || stat.Uid != 0 || readErr != nil || want != destination {
+		return errors.New("the existing Fased command differs; preserve it")
+	}
+	return nil
+}
+
 // nativePackageFiles is the whole package-owned surface. Instance state is
 // deliberately absent, so the OS package manager cannot replace user data.
 func nativePackageFiles(p update.MaintenancePackage) (map[string]string, error) {
-	if p.Validate() != nil || p.NativePackage == nil || p.NativeDesktop != nil {
+	if p.Validate() != nil || p.NativePackage == nil {
 		return nil, errors.New("one authenticated browser-first Linux package required")
 	}
 	files := map[string]string{
@@ -443,32 +588,68 @@ func installedNativePackage(ctx context.Context, family string) (version, status
 	return fields[1], fields[3], nil
 }
 
-// A stopped key-bearing instance may restart its predecessor only while the
-// complete system package is still the exact authenticated predecessor.
-func verifyInstalledNativePackage(ctx context.Context, m Manifest, p update.MaintenancePackage) error {
-	if p.NativePackage == nil {
-		return errors.New("the original native package is unavailable")
+// Instance updates authenticate retained packages but do not replace the shared
+// bootstrap. Different instances may safely remain on different releases.
+func verifyInstanceUpdatePackages(ctx context.Context, m Manifest, previous *update.MaintenancePackage, target update.MaintenancePackage) error {
+	if previous == nil || !update.SameLinuxDistribution(*previous, target) || !packagePairMatches(*previous, m) || target.Sequence <= previous.Sequence {
+		return errors.New("the original instance package transition is required")
 	}
-	_, files, err := verifyNativePackage(ctx, m, p)
+	if err := verifyRetainedInstanceRelease(ctx, m, *previous); err != nil {
+		return err
+	}
+	return verifyRetainedInstanceRelease(ctx, m, target)
+}
+
+func verifyRetainedInstanceRelease(ctx context.Context, m Manifest, p update.MaintenancePackage) error {
+	if p.Validate() != nil {
+		return errors.New("authenticated instance release required")
+	}
+	if p.NativePackage != nil {
+		_, _, err := verifyNativePackage(ctx, m, p)
+		return err
+	}
+	if p.Bundle == nil {
+		return errors.New("authenticated Linux bundle required")
+	}
+	arch, _, err := packageArch()
+	if err != nil || p.Bundle.Archive.File != "fased-app-linux-"+arch+".tar.gz" {
+		return errors.New("Linux bundle architecture differs")
+	}
+	root, err := update.PackageMaintenanceRoot(m.Owner, m.Location, m.ID)
 	if err != nil {
 		return err
 	}
-	version, status, err := installedNativePackage(ctx, p.NativePackage.Family)
-	if err != nil {
-		return errors.New("the original native package is not completely installed; preserve recovery")
+	archive := filepath.Join(root, "candidate", p.ReleaseSHA256, p.Bundle.Archive.File)
+	hash, size, err := maintenance.ProtectedDigest(archive, 0600, 128<<20)
+	if err != nil || hash != p.Bundle.Archive.SHA256 || size != p.Bundle.Archive.Size {
+		return errors.New("the original authenticated Linux bundle is unavailable")
 	}
-	return requireInstalledNativeBase(p.NativePackage.Family, p.Version, version, status, func() error {
-		return globalPackageState(nil, files, false, true)
-	})
+	return ctx.Err()
 }
 
-func requireInstalledNativeBase(family, expected, actual, status string, checkFiles func() error) error {
-	if expected == "" || actual != expected || checkFiles == nil ||
-		family == "apt" && status != "install ok installed" ||
-		family == "dnf" && status != "installed" || family != "apt" && family != "dnf" {
-		return errors.New("the original native package is not completely installed; preserve recovery")
+func verifyInstalledInstancePackage(m Manifest, p *update.MaintenancePackage, verify func(Manifest) error) error {
+	if m.validatePackage() != nil || p == nil || p.Validate() != nil || p.InstallerDigest() == "" || !packagePairMatches(*p, m) || verify == nil {
+		return errors.New("the original authenticated instance pair is required")
 	}
-	return checkFiles()
+	if err := verify(m); err != nil {
+		return err
+	}
+	if p.NativeDesktop != nil {
+		return verifyProtectedDesktop(m, p)
+	}
+	return nil
+}
+
+// The original target must be complete in this instance before its fence is
+// released. The OS package is a stable launcher, not this instance's version.
+func verifyPendingNativeTarget(ctx context.Context, m Manifest, p *update.MaintenancePackage) error {
+	if m.Layout != PackageLayout {
+		return nil
+	}
+	if p == nil || p.InstallerDigest() == "" {
+		return errors.New("the original target package is unavailable; preserve recovery")
+	}
+	return verifyInstalledInstancePackage(m, p, VerifyPackageInstance)
 }
 
 func nativePackagePresent(ctx context.Context, family string) (bool, error) {
@@ -620,19 +801,8 @@ func preflightNativePackage(ctx context.Context, m Manifest, previous *update.Ma
 	return packagePath, wanted, nil
 }
 
-// applyNativePackage executes only the already inspected exact package through
-// the host's fixed package manager. Scripts and unrelated triggers are barred.
-func applyNativePackage(ctx context.Context, m Manifest, previous *update.MaintenancePackage, target update.MaintenancePackage, interrupted bool) (result error) {
-	lock, err := maintenance.PackageSystemLock(ctx)
-	if err != nil {
-		return err
-	}
-	defer func() { result = errors.Join(result, lock.Close()) }()
-	return applyNativePackageLocked(ctx, m, previous, target, interrupted)
-}
-
-// The caller holds the shared package lock through its predecessor check and
-// replacement. This entry also lets the update keep that lock while stopping.
+// The provisioning caller holds the system bootstrap lock. Only the exact
+// recorded bootstrap may be installed or completed after interruption.
 func applyNativePackageLocked(ctx context.Context, m Manifest, previous *update.MaintenancePackage, target update.MaintenancePackage, interrupted bool) error {
 	packagePath, wanted, err := preflightNativePackage(ctx, m, previous, target, interrupted)
 	if err != nil {

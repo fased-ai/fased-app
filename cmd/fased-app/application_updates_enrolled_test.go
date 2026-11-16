@@ -209,6 +209,128 @@ func TestUpdateRecoveryUsesEnrolledHelperWhenCoreIsOffline(t *testing.T) {
 	}
 }
 
+func TestPackageUpdatesRecoverCLIReachesOriginalOfflineRecovery(t *testing.T) {
+	if runtime.GOOS != "linux" || os.Getuid() <= 0 {
+		t.Skip("ordinary Linux owner required")
+	}
+	dir := filepath.Join("/var/lib/fased-app-package", fmt.Sprint(os.Getuid()), "local", strings.Repeat("a", 32), "app-state")
+	oldClient, oldRecovery := applicationUpdatesPublicClient, enrolledOfflineRecovery
+	t.Cleanup(func() { applicationUpdatesPublicClient, enrolledOfflineRecovery = oldClient, oldRecovery })
+	applicationUpdatesPublicClient = func(context.Context, string) (*core.Client, bool, error) {
+		return nil, false, core.ErrCoreUnavailable
+	}
+	calls := 0
+	enrolledOfflineRecovery = func(_ context.Context, selected string, _, _ io.Writer) error {
+		calls++
+		if selected != dir {
+			t.Fatalf("recovery selected another package: %s", selected)
+		}
+		return nil
+	}
+	if err := run([]string{"updates", "recover", "--data-dir", dir}, nil, io.Discard, io.Discard); err != nil || calls != 1 {
+		t.Fatalf("updates recover did not reach the original package recovery: calls=%d err=%v", calls, err)
+	}
+	foreign := filepath.Join("/var/lib/fased-app-package", fmt.Sprint(os.Getuid()+1), "local", strings.Repeat("a", 32), "app-state")
+	if err := run([]string{"updates", "recover", "--data-dir", foreign}, nil, io.Discard, io.Discard); err == nil || calls != 1 {
+		t.Fatal("foreign package reached the original owner's recovery")
+	}
+	applicationUpdatesPublicClient = func(context.Context, string) (*core.Client, bool, error) {
+		transport := ownerSetupRoundTripper(func(*http.Request) (*http.Response, error) {
+			return &http.Response{StatusCode: http.StatusForbidden, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(""))}, nil
+		})
+		return &core.Client{Endpoint: core.Endpoint{URL: "http://127.0.0.1:7331", InstanceID: "instance"}, HTTP: &http.Client{Transport: transport}}, true, nil
+	}
+	if err := run([]string{"updates", "recover", "--data-dir", dir}, nil, io.Discard, io.Discard); err == nil || calls != 1 {
+		t.Fatal("an authorization refusal reached offline recovery")
+	}
+}
+
+func TestPackageUpdateRecoveryReachesItsOfflineEntryWhenCoreCannotOpen(t *testing.T) {
+	if runtime.GOOS != "linux" || os.Getuid() <= 0 {
+		t.Skip("ordinary Linux owner required")
+	}
+	dir := filepath.Join("/var/lib/fased-app-package", fmt.Sprint(os.Getuid()), "local", strings.Repeat("a", 32), "app-state")
+	oldClient, oldRecovery := applicationUpdatesPublicClient, enrolledOfflineRecovery
+	defer func() { applicationUpdatesPublicClient, enrolledOfflineRecovery = oldClient, oldRecovery }()
+	applicationUpdatesPublicClient = func(context.Context, string) (*core.Client, bool, error) {
+		return nil, false, errors.New("installed pair is unavailable during recovery")
+	}
+	called := 0
+	enrolledOfflineRecovery = func(_ context.Context, data string, _, _ io.Writer) error {
+		called++
+		if data != dir {
+			t.Fatal("recovery selected another package", data)
+		}
+		return nil
+	}
+	if err := ordinaryUpdateCommand([]string{"recover", "--data-dir", dir}, nil, io.Discard, io.Discard); err != nil || called != 1 {
+		t.Fatalf("package offline recovery was not reached: calls=%d err=%v", called, err)
+	}
+	if err := ordinaryUpdateCommand([]string{"recover", "--data-dir", dir, "--prefix", "/foreign"}, nil, io.Discard, io.Discard); err == nil || called != 1 {
+		t.Fatal("a caller-selected prefix reached package recovery", err)
+	}
+}
+
+func TestPackageUpdateRecoveryUsesOriginalWorkerWhenCoreDisconnects(t *testing.T) {
+	if runtime.GOOS != "linux" || os.Getuid() <= 0 {
+		t.Skip("ordinary Linux owner required")
+	}
+	dir := filepath.Join("/var/lib/fased-app-package", fmt.Sprint(os.Getuid()), "local", strings.Repeat("a", 32), "app-state")
+	oldClient, oldRecovery := applicationUpdatesPublicClient, enrolledOfflineRecovery
+	defer func() { applicationUpdatesPublicClient, enrolledOfflineRecovery = oldClient, oldRecovery }()
+	mode := "disconnect"
+	applicationUpdatesPublicClient = func(context.Context, string) (*core.Client, bool, error) {
+		transport := ownerSetupRoundTripper(func(r *http.Request) (*http.Response, error) {
+			if r.URL.Path == "/api/v1/auth/native-local" {
+				switch mode {
+				case "disconnect":
+					return nil, io.EOF
+				case "forbidden":
+					return &http.Response{StatusCode: http.StatusForbidden, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(""))}, nil
+				default:
+					return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{"sessionToken":"owner","csrfToken":"csrf"}`))}, nil
+				}
+			}
+			if r.URL.Path != "/api/v1/updates/application" {
+				t.Fatal("unexpected update request", r.URL.Path)
+			}
+			if mode == "disconnect-before-status" || r.Method == http.MethodPost {
+				return nil, io.EOF
+			}
+			body, _ := json.Marshal(core.ApplicationUpdateView{InstanceID: "instance", ControllerAvailable: true, Operation: core.ApplicationUpdateOperation{Phase: "recovery"}})
+			return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(bytes.NewReader(body))}, nil
+		})
+		return &core.Client{Endpoint: core.Endpoint{URL: "http://127.0.0.1:7331", InstanceID: "instance"}, HTTP: &http.Client{Transport: transport}}, true, nil
+	}
+	called := 0
+	enrolledOfflineRecovery = func(_ context.Context, data string, _, _ io.Writer) error {
+		called++
+		if data != dir {
+			t.Fatal("recovery selected another package", data)
+		}
+		return nil
+	}
+	if err := ordinaryUpdateCommand([]string{"recover", "--data-dir", dir}, nil, io.Discard, io.Discard); err != nil || called != 1 {
+		t.Fatalf("original recovery was not reached after disconnect: calls=%d err=%v", called, err)
+	}
+	for _, m := range []string{"disconnect-before-status", "disconnect-after-submit"} {
+		mode = m
+		if err := ordinaryUpdateCommand([]string{"recover", "--data-dir", dir}, nil, io.Discard, io.Discard); err != nil {
+			t.Fatalf("original recovery was not reached after %s: %v", mode, err)
+		}
+	}
+	if called != 3 {
+		t.Fatal("disconnects did not use the original recovery entry", called)
+	}
+	mode = "forbidden"
+	if err := ordinaryUpdateCommand([]string{"recover", "--data-dir", dir}, nil, io.Discard, io.Discard); err == nil || called != 3 {
+		t.Fatal("an owner authorization failure reached offline recovery", err)
+	}
+	if err := ordinaryUpdateCommand([]string{"recover", "--data-dir", dir, "--prefix", "/foreign"}, nil, io.Discard, io.Discard); err == nil || called != 3 {
+		t.Fatal("a caller-selected prefix reached package recovery", err)
+	}
+}
+
 func TestUpdateRecoveryRefusesSymlinkedDataButAllowsSymlinkedParent(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("Linux custody enrollment only")

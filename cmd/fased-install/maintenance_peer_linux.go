@@ -7,7 +7,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/fased-ai/fased-app/internal/connection"
 	"github.com/fased-ai/fased-app/internal/core"
+	"github.com/fased-ai/fased-app/internal/custodyinstall"
 	"github.com/fased-ai/fased-app/internal/maintenance"
 	"github.com/fased-ai/fased-app/internal/signer"
 	"github.com/fased-ai/fased-app/internal/update"
@@ -148,9 +150,29 @@ func maintenancePeerCommand(args []string, in io.Reader, out io.Writer, app bool
 	if err = signer.CheckApplication(root+"/identity.json", root, root+"/app-state"); err != nil {
 		return err
 	}
+	// Package maintenance must use the core instance originally committed by
+	// the installer, including when it reads an interrupted operation offline.
+	// The signer installation ID and the core instance ID are different IDs.
+	var committedInstance string
+	var packageManifest custodyinstall.Manifest
+	if location != "" {
+		m, err := custodyinstall.LoadPackageInstance(owner, root)
+		if err != nil {
+			return errors.New("the original package identity is unavailable")
+		}
+		commit, err := custodyinstall.ReadEnrollmentCommit(m)
+		if err != nil {
+			return errors.New("the original package owner record is unavailable")
+		}
+		committedInstance = commit.InstanceID
+		packageManifest = m
+	}
 	var q maintenance.AppMaintenanceRequest
 	if update.StrictJSON(b, &q) != nil {
 		return errors.New("invalid app maintenance request")
+	}
+	if q.Action != "private-access" && q.PrivateProof != nil || q.Action != "remote-claim" && q.RemotePeer != nil {
+		return errors.New("private setup input cannot authorize maintenance")
 	}
 	if successor != nil && (q.OperationID != successor.OperationID || q.Action != "operation" && q.Action != "pause" && q.Action != "reconcile") {
 		return errors.New("successor is limited to its held operation")
@@ -163,6 +185,9 @@ func maintenancePeerCommand(args []string, in io.Reader, out io.Writer, app bool
 		if err != nil {
 			return err
 		}
+		if err = verifyPackagePeerInstance(location, committedInstance, view.View.InstanceID); err != nil {
+			return err
+		}
 		return json.NewEncoder(out).Encode(view)
 	}
 	client, err := core.NewClient(ctx, root+"/app-state")
@@ -170,6 +195,39 @@ func maintenancePeerCommand(args []string, in io.Reader, out io.Writer, app bool
 		return err
 	}
 	defer client.Close()
+	if err = verifyPackagePeerInstance(location, committedInstance, client.Endpoint.InstanceID); err != nil {
+		return err
+	}
+	if q.Action == "remote-claim" {
+		if location != "remote" || q.RemotePeer == nil || q.RemotePeer.UserID <= 0 || q.RemotePeer.NodeID == "" || len(q.RemotePeer.NodeID) > 128 || q.RemotePeer.Login == "" || q.OperationID != "" || q.ProbeID != "" || q.Pause != nil {
+			return errors.New("one approved Remote device is required")
+		}
+		var result struct {
+			InstanceID string `json:"instanceId"`
+			Code       string `json:"code"`
+		}
+		input := struct {
+			Device any `json:"device"`
+		}{Device: q.RemotePeer}
+		if err = client.Do(ctx, http.MethodPost, "/api/v1/auth/remote-setup", input, &result); err != nil || result.InstanceID != committedInstance {
+			return errors.Join(err, errors.New("Remote setup belongs to another instance"))
+		}
+		link, err := connection.OwnerSetupURL(packageManifest.PublicOrigin, committedInstance, result.Code)
+		if err != nil {
+			return err
+		}
+		return json.NewEncoder(out).Encode(link)
+	}
+	if q.Action == "private-access" {
+		if location != "remote" || q.PrivateProof == nil || q.PrivateProof.Validate() != nil || q.OperationID != "" || q.ProbeID != "" || q.Pause != nil {
+			return errors.New("one Remote private device proof is required")
+		}
+		var proof core.PrivateAccessProof
+		if err = client.Do(ctx, http.MethodPost, "/api/v1/private-access/control", q.PrivateProof, &proof); err != nil || proof.InstanceID != committedInstance {
+			return errors.Join(err, errors.New("private proof belongs to another instance"))
+		}
+		return json.NewEncoder(out).Encode(proof)
+	}
 	if err = prepareMaintenanceClient(ctx, client, root+"/app-state"); err != nil {
 		return err
 	}
@@ -202,7 +260,7 @@ func maintenancePeerCommand(args []string, in io.Reader, out io.Writer, app bool
 		if err = client.Do(ctx, http.MethodPost, "/api/v1/updates/application/owner", command, &view); err != nil {
 			return err
 		}
-		if view.View.Operation.ID != q.OperationID || view.View.Operation.OwnerLease != record.OwnerLease {
+		if verifyPackagePeerInstance(location, committedInstance, view.View.InstanceID) != nil || view.View.Operation.ID != q.OperationID || view.View.Operation.OwnerLease != record.OwnerLease {
 			return errors.New("application operation or lease changed")
 		}
 		return json.NewEncoder(out).Encode(view)
@@ -221,6 +279,9 @@ func maintenancePeerCommand(args []string, in io.Reader, out io.Writer, app bool
 		}
 		var r core.ApplicationOwnerView
 		if err = client.Do(ctx, http.MethodPost, "/api/v1/updates/application/owner", core.ApplicationOwnerCommand{Action: "inspect", ID: q.OperationID}, &r); err != nil {
+			return err
+		}
+		if err = verifyPackagePeerInstance(location, committedInstance, r.View.InstanceID); err != nil {
 			return err
 		}
 		return json.NewEncoder(out).Encode(r)
@@ -259,6 +320,13 @@ func maintenancePeerCommand(args []string, in io.Reader, out io.Writer, app bool
 	default:
 		return errors.New("unsupported app maintenance metadata")
 	}
+}
+
+func verifyPackagePeerInstance(location, committed, actual string) error {
+	if location != "" && (committed == "" || actual != committed) {
+		return errors.New("application instance differs from the original package owner; preserve recovery")
+	}
+	return nil
 }
 
 // The app peer cannot turn the metadata channel into a general owner command.

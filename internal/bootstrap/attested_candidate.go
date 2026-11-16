@@ -86,8 +86,8 @@ func verifyAttestedCandidate(o Options, directory string) (Report, error) {
 	if m.Version != packet.ProductVersion || m.Source != packet.Source {
 		return report, errors.New("candidate inner source/version differs from provenance")
 	}
-	if err = verifyBundleProfile(seed, m); err != nil {
+	if err = verifyAttestedBundleProfile(seed, m, packet.Version); err != nil {
 		return report, err
 	}
-	return Report{Version: 4, Purpose: AttestedPurpose, ArchiveVerified: true, BundleVerified: true, ProvenanceVerified: true, LinuxPackageDigestsVerified: packet.Version == 3, SeedSHA256: o.SeedSHA256, ArchiveSHA256: packet.Archive.SHA256, BundleSHA256: packet.BundleSHA256, ProvenanceSHA256: decision.BundleSHA256, TrustPolicySHA256: decision.PolicySHA256}, nil
+	return Report{Version: 4, Purpose: AttestedPurpose, ArchiveVerified: true, BundleVerified: true, ProvenanceVerified: true, LinuxPackageDigestsVerified: packet.Version == 3, LinuxBundleVerified: packet.Version == 4, SeedSHA256: o.SeedSHA256, ArchiveSHA256: packet.Archive.SHA256, BundleSHA256: packet.BundleSHA256, ProvenanceSHA256: decision.BundleSHA256, TrustPolicySHA256: decision.PolicySHA256}, nil
 }

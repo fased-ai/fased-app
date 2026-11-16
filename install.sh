@@ -125,7 +125,7 @@ if [[ $(/usr/bin/id -u) == 0 && $profile != remote && -z ${SUDO_USER:-} && -z $o
   die 'Run Local/Connect from your ordinary computer account. For a VPS, choose Remote.'
 fi
 if [[ -n $candidate_dir || -n $candidate_packet ]]; then
-  [[ $candidate_dir == /* && $candidate_dir != *$'\n'* && $candidate_dir != *$'\r'* && $candidate_packet =~ ^[a-f0-9]{64}$ && $profile == local && $action == install && -z $operator && $(/usr/bin/id -u) != 0 && $development_only == 0 ]] || die 'Candidate acceptance requires one exact Local package and ordinary owner.'
+  [[ $candidate_dir == /* && $candidate_dir != *$'\n'* && $candidate_dir != *$'\r'* && $candidate_packet =~ ^[a-f0-9]{64}$ && ( $profile == local || $profile == remote ) && $action == install && -z $operator && $(/usr/bin/id -u) != 0 && $development_only == 0 ]] || die 'Candidate acceptance requires one exact package and ordinary owner.'
 fi
 
 owner_maintenance_setup() {
@@ -154,7 +154,7 @@ owner_maintenance_setup() {
   [[ $actual == "$installer_sha256" ]] || die 'Protected installer checksum differs.'
   /usr/bin/sudo -- /usr/bin/sync -f -- "$protected"
   if [[ -n $package_instance ]]; then
-    current=$(/usr/bin/sudo -- "$protected" maintenance-package-register --owner "$(/usr/bin/id -u)" --location local --instance "$package_instance")
+    current=$(/usr/bin/sudo -- "$protected" maintenance-package-register --owner "$(/usr/bin/id -u)" --location "$profile" --instance "$package_instance")
     [[ $current == "$protected" ]] || die 'Package maintenance identity differs.'
     FASED_PROTECTED_INSTALLER=$protected
     return
@@ -208,7 +208,7 @@ owner_install() {
     [[ -d $candidate_dir && ! -L $candidate_dir && $(/usr/bin/stat -c '%u:%a' "$candidate_dir") == "$(/usr/bin/id -u):700" ]] || die 'Candidate directory must be private and owned by you.'
     canonical_candidate=$(/usr/bin/realpath -e -- "$candidate_dir") || die 'Candidate directory is unavailable.'
     [[ $canonical_candidate == "$candidate_dir" ]] || die 'Use the original candidate directory, without links.'
-    verifier_args=(--install-candidate "$candidate_dir" --candidate-packet-sha256 "$candidate_packet" --profile local --listen "$listen")
+    verifier_args=(--install-candidate "$candidate_dir" --candidate-packet-sha256 "$candidate_packet" --profile "$profile" --listen "$listen")
   fi
   if [[ $action == wallets ]]; then verifier_args+=(--wallet-instance "$wallet_instance" --wallet-network "$wallet_network"); fi
   if [[ $development_only == 1 ]]; then
@@ -235,35 +235,41 @@ owner_install() {
   [[ $actual == "$installer_sha256" ]] || die 'Installer checksum differs; nothing was executed.'
   if [[ -n $candidate_dir ]]; then
     candidate_report=$("$installer" --verify-candidate "$candidate_dir") || die 'Candidate verification failed.'
-    if [[ $candidate_report == *'"linuxPackageDigestsVerified":true'* ]]; then
+    if [[ $candidate_report == *'"linuxPackageDigestsVerified":true'* || $candidate_report == *'"linuxBundleVerified":true'* ]]; then
       "$installer" --package-controller-ready || die 'Native package installation and recovery are not available yet.'
-      read -r identity _ < <(printf '%s\0%s\0local' "$(/usr/bin/id -u)" "$candidate_packet" | /usr/bin/sha256sum)
-      [[ $identity =~ ^[a-f0-9]{64}$ ]] || die 'Cannot determine the package instance.'
-      package_instance=${identity:0:32}
-      verifier_args+=(--package-location local --package-instance "$package_instance")
+      fixture_instance=$("$installer" --fixture-package-instance) || die 'The selected Local fixture is unavailable.'
+      if [[ -n $fixture_instance && $profile == local ]]; then
+        [[ $fixture_instance =~ ^[a-f0-9]{32}$ ]] || die 'The Local fixture identity is invalid.'
+        package_instance=$fixture_instance
+      else
+        read -r identity _ < <(printf '%s\0%s\0%s' "$(/usr/bin/id -u)" "$candidate_packet" "$profile" | /usr/bin/sha256sum)
+        [[ $identity =~ ^[a-f0-9]{64}$ ]] || die 'Cannot determine the package instance.'
+        package_instance=${identity:0:32}
+      fi
+      verifier_args+=(--package-location "$profile" --package-instance "$package_instance")
     fi
-  elif [[ $profile == local && $action == install && $development_only == 0 ]]; then
+  elif [[ ( $profile == local || $profile == remote ) && $action == install && $development_only == 0 ]]; then
     inspection=$("$installer" --inspect-public-package) || die 'Public release verification failed.'
     read -r kind public_packet public_version public_installer extra <<< "$inspection"
     if [[ $kind == native ]]; then
       [[ $public_packet =~ ^[a-f0-9]{64}$ && $public_version == "$entry_version" && $public_installer == "$installer_sha256" && -z ${extra:-} ]] || die 'Public release identity changed; restart installation.'
       "$installer" --package-controller-ready || die 'Native package installation and recovery are not available yet.'
       candidate_packet=$public_packet
-      read -r identity _ < <(printf '%s\0%s\0local' "$(/usr/bin/id -u)" "$candidate_packet" | /usr/bin/sha256sum)
+      read -r identity _ < <(printf '%s\0%s\0%s' "$(/usr/bin/id -u)" "$candidate_packet" "$profile" | /usr/bin/sha256sum)
       [[ $identity =~ ^[a-f0-9]{64}$ ]] || die 'Cannot determine the package instance.'
       package_instance=${identity:0:32}
-      verifier_args=(--install-public-package --candidate-packet-sha256 "$candidate_packet" --package-location local --package-instance "$package_instance" --profile local --listen "$listen")
+      verifier_args=(--install-public-package --candidate-packet-sha256 "$candidate_packet" --package-location "$profile" --package-instance "$package_instance" --profile "$profile" --listen "$listen")
     elif [[ $kind != legacy || -n ${public_packet:-} ]]; then
       die 'Public release verification returned an invalid result.'
     fi
   fi
   if [[ -n $package_instance ]]; then
-    package_parent="/var/lib/fased-app-package/$(/usr/bin/id -u)/local"
+    package_parent="/var/lib/fased-app-package/$(/usr/bin/id -u)/$profile"
     if [[ -e $package_parent || -L $package_parent ]]; then
       [[ -d $package_parent && ! -L $package_parent ]] || die 'Existing package state is unavailable; preserving it.'
       while IFS= read -r -d '' existing; do
         name=${existing##*/}
-        [[ $name == "$package_instance" || $name == ".$package_instance.pending" ]] || die 'An existing Local package requires its installed Update command.'
+        [[ $name == "$package_instance" || $name == ".$package_instance.pending" ]] || die 'An existing package requires its installed Update command.'
       done < <(/usr/bin/find "$package_parent" -mindepth 1 -maxdepth 1 -print0)
     fi
   fi
@@ -279,7 +285,7 @@ if [[ $(/usr/bin/id -u) != 0 ]]; then
   [[ -x /usr/bin/sudo ]] || die 'This account needs administrator preparation (sudo).'
   missing=()
   packages=(ca-certificates curl)
-  if [[ $profile == local && $action == install ]]; then
+  if [[ $profile != connect && $action == install ]]; then
     case "$package_family" in apt) packages+=(polkitd) ;; dnf) packages+=(polkit) ;; esac
   fi
   if [[ $profile == remote ]]; then packages+=(nftables openssh-server); fi
@@ -300,7 +306,7 @@ fi
 printf 'Preparing Linux for Fased…\n' >&2
 missing=()
 packages=(ca-certificates curl sudo util-linux)
-if [[ $profile == local && $action == install ]]; then
+if [[ $profile != connect && $action == install ]]; then
   case "$package_family" in apt) packages+=(polkitd) ;; dnf) packages+=(polkit) ;; esac
 fi
 if [[ $profile == remote ]]; then packages+=(nftables openssh-server); fi
@@ -371,13 +377,6 @@ if [[ -e $policy_receipt || -L $policy_receipt ]]; then
   mapfile -t receipt < "$policy_receipt"
   [[ ${#receipt[@]} == 1 && ${receipt[0]} =~ ^[a-f0-9]{64}$ ]] || die 'Malformed policy receipt; preserving it.'
 fi
-if [[ -e $policy || -L $policy ]]; then
-  [[ ! -L $policy && -f $policy_receipt ]] || die 'Foreign bootstrap authorization.'
-  read -r expected < "$policy_receipt"
-  read -r actual _ < <(/usr/bin/sha256sum "$policy")
-  [[ $expected == "$actual" && $(/usr/bin/stat -c '%u:%g:%a' "$policy") == 0:0:440 ]] || die 'Changed bootstrap authorization; preserving it.'
-  /usr/bin/rm -- "$policy"
-fi
 stage=$(/usr/bin/mktemp -d "$state/stage.XXXXXXXX")
 bootstrap_cleanup() {
   /usr/bin/rm -rf -- "$stage"
@@ -412,17 +411,42 @@ fi
 [[ -f $protected_installer && ! -L $protected_installer && $(/usr/bin/stat -c '%u:%g:%a:%h' "$protected_installer") == 0:0:555:1 ]] || die 'Foreign protected maintenance image.'
 read -r actual _ < <(/usr/bin/sha256sum "$protected_installer")
 [[ $actual == "$installer_sha256" ]] || die 'Protected maintenance checksum differs.'
-maintenance_image=$("$protected_installer" maintenance-register --owner "$owner_uid" --profile "$profile")
-recovered=0
-if [[ $action == update && $maintenance_image != "$protected_installer" ]]; then
-  maintenance_image=$("$protected_installer" maintenance-register --owner "$owner_uid" --profile "$profile" --resume)
-  [[ $maintenance_image != "$protected_installer" ]] || recovered=1
+root_package_instance=''
+if [[ $profile == remote && $action == install && $development_only == 0 ]]; then
+  # Inspect as the ordinary operator before registering the exact package.
+  inspection=$(/usr/sbin/runuser -u "$operator" -- /usr/bin/env -i HOME="$owner_home" USER="$operator" LOGNAME="$operator" PATH=/usr/sbin:/usr/bin:/sbin:/bin "$protected_installer" --inspect-public-package) || die 'Public release verification failed.'
+  read -r kind public_packet public_version public_installer extra <<< "$inspection"
+  if [[ $kind == native ]]; then
+    [[ $public_packet =~ ^[a-f0-9]{64}$ && $public_version == "$entry_version" && $public_installer == "$installer_sha256" && -z ${extra:-} ]] || die 'Public release identity changed; restart installation.'
+    read -r identity _ < <(printf '%s\0%s\0remote' "$owner_uid" "$public_packet" | /usr/bin/sha256sum)
+    [[ $identity =~ ^[a-f0-9]{64}$ ]] || die 'Cannot determine the package instance.'
+    root_package_instance=${identity:0:32}
+    maintenance_image=$("$protected_installer" maintenance-package-register --owner "$owner_uid" --location remote --instance "$root_package_instance")
+    [[ $maintenance_image == "$protected_installer" ]] || die 'Package maintenance identity differs.'
+  elif [[ $kind != legacy || -n ${public_packet:-} ]]; then
+    die 'Public release verification returned an invalid result.'
+  fi
 fi
-[[ $maintenance_image =~ ^/var/lib/fased-maintenance/images/[a-f0-9]{64}/fased-install$ ]] || die 'Invalid registered maintenance entry.'
-"$maintenance_image" maintenance-bootstrap --owner "$owner_uid"
-if [[ $recovered == 1 ]]; then
-  printf 'Update files were checked; app recovery and future updates are not yet verified.\n' >&2
-  exit 1
+if [[ -z $root_package_instance ]]; then
+  if [[ -e $policy || -L $policy ]]; then
+    [[ ! -L $policy && -f $policy_receipt ]] || die 'Foreign bootstrap authorization.'
+    read -r expected < "$policy_receipt"
+    read -r actual _ < <(/usr/bin/sha256sum "$policy")
+    [[ $expected == "$actual" && $(/usr/bin/stat -c '%u:%g:%a' "$policy") == 0:0:440 ]] || die 'Changed bootstrap authorization; preserving it.'
+    /usr/bin/rm -- "$policy"
+  fi
+  maintenance_image=$("$protected_installer" maintenance-register --owner "$owner_uid" --profile "$profile")
+  recovered=0
+  if [[ $action == update && $maintenance_image != "$protected_installer" ]]; then
+    maintenance_image=$("$protected_installer" maintenance-register --owner "$owner_uid" --profile "$profile" --resume)
+    [[ $maintenance_image != "$protected_installer" ]] || recovered=1
+  fi
+  [[ $maintenance_image =~ ^/var/lib/fased-maintenance/images/[a-f0-9]{64}/fased-install$ ]] || die 'Invalid registered maintenance entry.'
+  "$maintenance_image" maintenance-bootstrap --owner "$owner_uid"
+  if [[ $recovered == 1 ]]; then
+    printf 'Update files were checked; app recovery and future updates are not yet verified.\n' >&2
+    exit 1
+  fi
 fi
 # Keep the bootstrap lock through the ordinary installer; sanitize root's environment.
 if [[ $profile == local ]]; then
@@ -442,7 +466,7 @@ body="$(declare -f die owner_install); owner_install"
 # The root-owned command contains only fixed OS identity/drop operations. All
 # Fased/user-owned code starts AFTER runuser; updates still use the installed
 # unprivileged controller and do not redownload this entry.
-if [[ $profile == remote && ( $action == install || $action == update ) ]]; then
+if [[ $profile == remote && -z $root_package_instance && ( $action == install || $action == update ) ]]; then
   launcher=$(/usr/sbin/runuser -u "$operator" -- /usr/bin/env --ignore-environment --chdir="$owner_home" HOME="$owner_home" USER="$operator" LOGNAME="$operator" PATH=/usr/sbin:/usr/bin:/sbin:/bin "/var/lib/fased-app-vps-$owner_uid/fased-app" install-command --remote --path)
   [[ $launcher == "$owner_home/.local/bin/fased" || $launcher == "$owner_home/.local/bin/fased-app" ]] || die 'The installed command identity is missing; preserve state and repair.'
   [[ -f $launcher && ! -L $launcher && $(/usr/bin/stat -c '%u:%a' "$launcher") == "$owner_uid:700" ]] || die 'The installed command changed; preserve state and repair.'

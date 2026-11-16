@@ -52,6 +52,9 @@ func verifyOrdinaryBootstrap(b BootstrapBundle, trust []byte, now int64) (Bootst
 		if !slices.Contains(old.Contract.Features, NativePackageJournalFeature) {
 			c.Features = withoutFeature(c.Features, NativePackageJournalFeature)
 		}
+		if !slices.Contains(old.Contract.Features, BundleJournalFeature) {
+			c.Features = withoutFeature(c.Features, BundleJournalFeature)
+		}
 		c.RequiresPeer = old.Contract.RequiresPeer
 		if c.Component == "core" {
 			c.PeerProtocol = old.Contract.PeerProtocol

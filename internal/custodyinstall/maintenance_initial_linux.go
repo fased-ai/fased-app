@@ -54,10 +54,20 @@ func ValidateInitialMaintenanceRecord(r update.MaintenanceRecord) (Manifest, err
 // an initial record. Its caller must independently authenticate the package
 // and verify signer state; this check alone cannot create or clear a hold.
 func ValidateInitialPackageMaintenanceRecord(r update.MaintenanceRecord, owner int, location, instance string) (Manifest, error) {
+	m, err := ValidateIdlePackageMaintenanceRecord(r, owner, location, instance)
+	if err != nil || m.Network != "" {
+		return Manifest{}, errors.New("initial package installation must have an unconfigured signer")
+	}
+	return m, nil
+}
+
+// ValidateIdlePackageMaintenanceRecord also accepts an already configured
+// signer. Creating an initial journal still requires the empty-signer check.
+func ValidateIdlePackageMaintenanceRecord(r update.MaintenanceRecord, owner int, location, instance string) (Manifest, error) {
 	var base, target Manifest
 	if r.ValidateIdle() != nil || r.Owner != owner || r.OperationID != instance ||
 		strict(r.Base, &base) != nil || strict(r.Target, &target) != nil || base != target ||
-		base.validatePackage() != nil || base.Network != "" || base.Owner != owner || base.Location != location || base.ID != instance {
+		base.validatePackage() != nil || base.Owner != owner || base.Location != location || base.ID != instance {
 		return Manifest{}, errors.New("initial package installation identity differs")
 	}
 	if base.Provenance == signer.OwnerKeyProvenance && r.Package.DevelopmentOnly {
@@ -69,8 +79,8 @@ func ValidateInitialPackageMaintenanceRecord(r update.MaintenanceRecord, owner i
 			return Manifest{}, errors.New("initial package core or signer differs")
 		}
 	}
-	if r.Package.NativeDesktop != nil {
-		return Manifest{}, errors.New("browser-first package cannot own a desktop")
+	if r.Package.NativeDesktop != nil && base.Location != "local" {
+		return Manifest{}, errors.New("a Local wallet client cannot belong to a Remote package")
 	}
 	return base, nil
 }
@@ -98,6 +108,11 @@ func InitializeProtectedPackageJournal(ctx context.Context, owner int, location,
 	r := update.MaintenanceRecord{Version: 1, Owner: owner, OperationID: instance, Phase: "idle", Start: "base", Base: mustJSON(m), Target: mustJSON(m), Package: &p}
 	if _, err = ValidateInitialPackageMaintenanceRecord(r, owner, location, instance); err != nil {
 		return err
+	}
+	if p.NativeDesktop != nil {
+		if err = verifyProtectedDesktop(m, &p); err != nil {
+			return err
+		}
 	}
 	old, err := update.ReadPackageMaintenanceRecord(owner, location, instance)
 	if err == nil {
@@ -249,8 +264,11 @@ func verifyLoadedPackageServices(ctx context.Context, m Manifest) error {
 }
 
 func verifyProtectedDesktop(m Manifest, p *update.MaintenancePackage) error {
-	if !m.NativeOwnerAccess || p == nil || p.Validate() != nil || p.NativeDesktop == nil {
+	if !(m.NativeOwnerAccess || m.Layout == PackageLayout && m.Location == "local") || p == nil || p.Validate() != nil || p.NativeDesktop == nil {
 		return errors.New("protected Local desktop package required")
+	}
+	if m.Layout == PackageLayout && m.validatePackage() != nil {
+		return errors.New("exact protected Local package required")
 	}
 	hash, size, err := maintenance.ProtectedDigest(m.Root+"/fased-desktop", 0755, 64<<20)
 	if err != nil || hash != p.NativeDesktop.SHA256 || size != p.NativeDesktop.Size {
@@ -263,6 +281,64 @@ func verifyProtectedDesktop(m Manifest, p *update.MaintenancePackage) error {
 // release; it grants no start, update, or signing authority.
 func VerifyProtectedDesktop(m Manifest, p *update.MaintenancePackage) error {
 	return verifyProtectedDesktop(m, p)
+}
+
+// ProtectedPackageNativeRelease selects the owner client from this exact
+// package journal. No browser-provided path or account grants this authority.
+func ProtectedPackageNativeRelease(m Manifest, workspace string) (*update.MaintenancePackage, error) {
+	if m.validatePackage() != nil || m.Owner <= 0 || os.Getuid() != m.Owner || os.Geteuid() != m.Owner || m.Location != "local" || !m.Enrollment {
+		return nil, errors.New("original Local package owner required")
+	}
+	a, err := maintenance.ReadPackageAuthority(m.Owner, m.Location, m.ID)
+	if err != nil || maintenance.ValidateOwnerIdentity(a) != nil || maintenance.VerifyImage(a) != nil {
+		return nil, errors.New("verified package maintenance authority required")
+	}
+	helper, _, err := maintenance.ProtectedDigest(m.Root+"/fased-install", 0755, 128<<20)
+	if err != nil || helper != a.ImageSHA256 {
+		return nil, errors.New("package maintenance gate differs from its authority")
+	}
+	for _, name := range []string{"update-active.json", "update-start-blocked.json"} {
+		if _, e := os.Lstat(m.Root + "/" + name); !errors.Is(e, os.ErrNotExist) {
+			return nil, errors.New("finish the existing package update first")
+		}
+	}
+	r, err := update.ReadPackageMaintenanceRecord(m.Owner, m.Location, m.ID)
+	if err != nil {
+		return nil, err
+	}
+	var instance string
+	switch r.Phase {
+	case "idle", "completed":
+		selected, e := SelectProtectedPackageStart(r, m.Owner, m.Location, m.ID)
+		if e != nil || selected != m || VerifyPackageOwnerTarget(m) != nil {
+			return nil, errors.New("package owner differs from the completed installation")
+		}
+		commit, e := ReadEnrollmentCommit(m)
+		if e != nil {
+			return nil, e
+		}
+		instance = commit.InstanceID
+	case "wallet-initializing":
+		base, target, e := ValidatePackageWalletInitialization(r, m.Owner, m.Location, m.ID)
+		if e != nil || m != base && m != target {
+			return nil, errors.New("original package wallet recovery required")
+		}
+		_, pending, e := PendingPackageWallet(m.Owner, m.Location, m.ID)
+		if e != nil || pending == nil || *pending != *r.Wallet || inspectPackageWalletFiles(packageWalletFiles(base, target, pending.InstanceID), base.Root+"/wallet-configured.json", packageWalletMarker(target, pending.InstanceID), readRoot) != nil {
+			return nil, errors.New("package wallet recovery differs; preserve it")
+		}
+		instance = pending.InstanceID
+	default:
+		return nil, errors.New("finish the original package recovery before Wallets")
+	}
+	if workspace != "" && workspace != instance {
+		return nil, errors.New("wallet request belongs to another workspace")
+	}
+	p, err := r.InstalledPackage()
+	if err != nil || verifyProtectedDesktop(m, p) != nil {
+		return nil, errors.New("verified package wallet client required")
+	}
+	return p, nil
 }
 
 // ProtectedNativeRelease is the owner-side read-only view of the same durable

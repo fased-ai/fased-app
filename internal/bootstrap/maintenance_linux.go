@@ -100,20 +100,28 @@ func (p *Prepared) PackageIdentity() (PackageMaintenanceIdentity, error) {
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if p.closed || p.root == nil || p.options.protectedOwner <= 0 || !p.report.ProvenanceVerified || !p.report.LinuxPackageDigestsVerified || p.seed.Version != 4 {
+	if p.closed || p.root == nil || p.options.protectedOwner <= 0 || !p.report.ProvenanceVerified || (!p.report.LinuxPackageDigestsVerified && !p.report.LinuxBundleVerified) || p.seed.Version != 4 {
 		return identity, errors.New("protected native acquisition required")
 	}
 	if err := p.revalidateHeld(); err != nil {
 		return identity, err
 	}
 	var packet AttestedPacket
-	if update.StrictJSON(p.metadata[AttestedPacketFile], &packet) != nil || packet.Version != 3 || packet.Source != p.descriptor.Source || packet.ProductVersion != p.descriptor.ProductVersion || digest(p.metadata[AttestedPacketFile]) != p.report.DescriptorSHA256 {
+	if update.StrictJSON(p.metadata[AttestedPacketFile], &packet) != nil || (packet.Version != 3 && packet.Version != 4) || packet.Source != p.descriptor.Source || packet.ProductVersion != p.descriptor.ProductVersion || digest(p.metadata[AttestedPacketFile]) != p.report.DescriptorSHA256 {
 		return identity, errors.New("protected native package identity differs")
 	}
-	return PackageMaintenanceIdentity{
+	identity = PackageMaintenanceIdentity{
 		MaintenanceIdentity: MaintenanceIdentity{Version: p.descriptor.ProductVersion, Source: p.descriptor.Source, InstallerSHA256: p.descriptor.Release.InstallerSHA256, Core: p.engine},
 		Sequence:            p.descriptor.Sequence, ReleaseSHA256: p.report.DescriptorSHA256, ProvenanceSHA256: p.report.ProvenanceSHA256, Target: p.descriptor.Target, Deb: packet.Deb, RPM: packet.RPM,
-	}, nil
+	}
+	if packet.Version == 4 {
+		m, err := bundle.VerifyPinned(filepath.Join(p.options.Directory, "bundle"), packet.BundleSHA256)
+		if err != nil || m.Schema != 4 || m.Files["fased-signer"].Bytes <= 0 {
+			return PackageMaintenanceIdentity{}, errors.New("the matched signer is missing from the verified Linux bundle")
+		}
+		identity.Archive, identity.BundleSHA256, identity.Signer = packet.Archive, packet.BundleSHA256, m.Files["fased-signer"]
+	}
+	return identity, nil
 }
 
 // PrepareMaintenanceCandidate re-verifies one retained CI candidate inside
@@ -172,7 +180,7 @@ func (p *Prepared) acquireAttestedInstaller(ctx context.Context) (string, update
 		return "", artifact, errors.New("attested exact installer acquisition required")
 	}
 	verify := p.revalidate
-	if p.options.protectedOwner > 0 && p.report.LinuxPackageDigestsVerified {
+	if p.options.protectedOwner > 0 && (p.report.LinuxPackageDigestsVerified || p.report.LinuxBundleVerified) {
 		// The scoped helper may retain the installer from the already verified
 		// native candidate. This does not admit the legacy installer or updater.
 		verify = p.revalidateHeld
@@ -180,7 +188,7 @@ func (p *Prepared) acquireAttestedInstaller(ctx context.Context) (string, update
 	if err := verify(); err != nil {
 		return "", artifact, err
 	}
-	if p.candidate != nil || p.report.LinuxPackageDigestsVerified {
+	if p.candidate != nil || p.report.LinuxPackageDigestsVerified || p.report.LinuxBundleVerified {
 		var packet AttestedPacket
 		if update.StrictJSON(p.metadata[AttestedPacketFile], &packet) != nil {
 			return "", artifact, errors.New("attested candidate installer required")

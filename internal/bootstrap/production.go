@@ -105,3 +105,15 @@ func verifyBundleProfile(seed Seed, m bundle.Manifest) error {
 	}
 	return nil
 }
+
+// Packet version 4 authorizes the paired browser-first bundle. Older packet
+// formats must keep their original headless archive semantics.
+func verifyAttestedBundleProfile(seed Seed, m bundle.Manifest, packetVersion int) error {
+	if packetVersion == 4 {
+		if seed.Version != 4 || m.Schema != 4 || m.UnsignedEngineering || m.Desktop || m.Files["fased-signer"].Bytes <= 0 {
+			return errors.New("attested packet and Linux bundle profile differ")
+		}
+		return nil
+	}
+	return verifyBundleProfile(seed, m)
+}

@@ -3,6 +3,7 @@
 package main
 
 import (
+	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -21,4 +22,12 @@ func fixtureRealHostAllowed(parent string) bool {
 
 func fixtureRealHostRequired() bool { return true }
 
-func init() { compiledFixtureSourceAllowed = hostplatform.FixtureSourceAllowed }
+func fixturePackageCandidateAllowed(owner int, location, instance string) bool {
+	root, err := update.PackageInstanceRoot(owner, location, instance)
+	return err == nil && hostplatform.FixtureSourceLocationAllowed(owner, root, filepath.Join(root, "app-state"))
+}
+
+func init() {
+	compiledFixtureSourceAllowed = hostplatform.FixtureSourceAllowed
+	compiledFixturePackageInstance = hostplatform.FixturePackageInstance
+}

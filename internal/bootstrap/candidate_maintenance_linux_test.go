@@ -276,6 +276,54 @@ func TestNativeFreshPackageBindsItsExactProtectedInstance(t *testing.T) {
 	}
 }
 
+func TestNativeFreshRemoteCandidateBindsItsExactProtectedInstance(t *testing.T) {
+	f, options, payloads := attestedFixture(t, "native-running-installer")
+	candidate := filepath.Join(f.parent, "native-remote-package-candidate")
+	if err := os.Mkdir(candidate, 0700); err != nil {
+		t.Fatal(err)
+	}
+	for name, data := range payloads {
+		if err := os.WriteFile(filepath.Join(candidate, name), data, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	instance := strings.Repeat("a", 32)
+	root, err := update.PackageInstanceRoot(os.Getuid(), "remote", instance)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := CandidateAdmission{PacketSHA256: digest(payloads[AttestedPacketFile]), OperationID: strings.Repeat("1", 32), FreshProfile: "package-remote", FreshOwner: os.Getuid(), FreshRoot: root, FreshData: filepath.Join(root, "app-state"), ExpiresAt: f.now.Add(10 * time.Minute).Unix()}
+	for name, mutate := range map[string]func(*CandidateAdmission){
+		"other owner":    func(v *CandidateAdmission) { v.FreshOwner++ },
+		"other location": func(v *CandidateAdmission) { v.FreshRoot = strings.Replace(root, "/remote/", "/local/", 1) },
+		"other data":     func(v *CandidateAdmission) { v.FreshData = filepath.Join(root, "foreign") },
+		"other profile":  func(v *CandidateAdmission) { v.FreshProfile = "package-local" },
+	} {
+		bad := a
+		mutate(&bad)
+		if err = bad.validate(f.now); err == nil {
+			t.Fatal("foreign Remote admission accepted", name)
+		}
+	}
+	o := Options{Seed: options.Seed, SeedSHA256: options.SeedSHA256, Directory: filepath.Join(f.parent, "remote-package-held"), now: options.now}
+	p, err := PrepareAttestedCandidate(t.Context(), o, candidate, a)
+	if err != nil {
+		t.Fatal("fresh Remote package admission refused", err)
+	}
+	defer p.Close()
+	if err = p.VerifyFreshPackageCandidateInstaller("remote", instance); err != nil {
+		t.Fatal("matching Remote package refused", err)
+	}
+	for _, bad := range []struct{ location, instance string }{{"local", instance}, {"remote", strings.Repeat("b", 32)}, {"remote", "../other"}} {
+		if err = p.VerifyFreshPackageCandidateInstaller(bad.location, bad.instance); err == nil {
+			t.Fatal("foreign package instance was accepted", bad)
+		}
+	}
+	if err = p.Run(t.Context(), InstallOptions{Profile: "remote"}, nil, io.Discard, io.Discard); err == nil {
+		t.Fatal("Remote package admission reached the legacy installer")
+	}
+}
+
 func TestFreshCandidateRejectsLinkedTargetParent(t *testing.T) {
 	dir := t.TempDir()
 	link := filepath.Join(dir, "linked")

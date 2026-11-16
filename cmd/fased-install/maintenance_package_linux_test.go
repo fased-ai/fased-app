@@ -3,6 +3,7 @@
 package main
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -10,16 +11,84 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/fased-ai/fased-app/internal/bootstrap"
+	"github.com/fased-ai/fased-app/internal/bundle"
 	"github.com/fased-ai/fased-app/internal/core"
 	"github.com/fased-ai/fased-app/internal/custodyinstall"
 	"github.com/fased-ai/fased-app/internal/maintenance"
 	"github.com/fased-ai/fased-app/internal/signer"
 	"github.com/fased-ai/fased-app/internal/update"
 )
+
+func TestPairedBundleIsSelectedWithoutNativePackages(t *testing.T) {
+	id := bootstrap.PackageMaintenanceIdentity{
+		MaintenanceIdentity: bootstrap.MaintenanceIdentity{InstallerSHA256: strings.Repeat("a", 64)},
+		Target:              update.Target{OS: "linux", Arch: runtime.GOARCH},
+		Archive:             update.Artifact{File: "fased-app-linux-" + runtime.GOARCH + ".tar.gz", Size: 1, SHA256: strings.Repeat("b", 64)},
+		BundleSHA256:        strings.Repeat("c", 64),
+		Signer:              bundle.File{SHA256: strings.Repeat("d", 64), Bytes: 1},
+	}
+	native, paired, err := packageFormatsForHost(id)
+	if err != nil || native != nil || paired == nil || paired.Archive != id.Archive || paired.InstallerSHA256 != id.InstallerSHA256 {
+		t.Fatal("paired bundle was not selected", native, paired, err)
+	}
+	for _, mutate := range []func(*bootstrap.PackageMaintenanceIdentity){
+		func(v *bootstrap.PackageMaintenanceIdentity) { v.Target.Arch = "wrong" },
+		func(v *bootstrap.PackageMaintenanceIdentity) { v.Signer.SHA256 = "" },
+		func(v *bootstrap.PackageMaintenanceIdentity) { v.Deb.File = "foreign.deb" },
+	} {
+		bad := id
+		mutate(&bad)
+		if _, _, err := packageFormatsForHost(bad); err == nil {
+			t.Fatal("foreign or incomplete bundle accepted")
+		}
+	}
+}
+
+func TestPackageProvisionAllowsBrowserOnlyWithoutDesktop(t *testing.T) {
+	installerHash := strings.Repeat("a", 64)
+	a := maintenance.Authority{ImageSHA256: installerHash}
+	id := bootstrap.MaintenanceIdentity{Version: "0.1.12", Source: strings.Repeat("b", 40), InstallerSHA256: installerHash}
+	desktop, err := acquirePackageProvisionDesktop(context.Background(), &bootstrap.Prepared{}, a, t.TempDir(), id)
+	if err != nil || desktop != nil {
+		t.Fatal("a browser-only package required an unprovided desktop", desktop, err)
+	}
+	a.ImageSHA256 = strings.Repeat("c", 64)
+	if _, err := acquirePackageProvisionDesktop(context.Background(), &bootstrap.Prepared{}, a, t.TempDir(), id); err == nil {
+		t.Fatal("a different installer was treated as the authenticated browser-only helper")
+	}
+}
+
+func TestPackageCandidateTrustRequiresPinnedAttestation(t *testing.T) {
+	oldBinding, oldOptions := compiledFirstInstallBinding, compiledMaintenanceOptions
+	t.Cleanup(func() { compiledFirstInstallBinding, compiledMaintenanceOptions = oldBinding, oldOptions })
+	compiledMaintenanceOptions = nil
+	id := strings.Repeat("a", 32)
+	seed, err := json.Marshal(bootstrap.Seed{Binding: bootstrap.Binding{Version: 4, Purpose: bootstrap.AttestedPurpose, Repository: "fased-ai/fased-app", Channel: "stable"}, SigningProfile: bootstrap.GitHubAttestationProfile})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256(seed)
+	binding := &firstInstallBinding{Seed: seed, SHA256: hex.EncodeToString(sum[:])}
+	compiledFirstInstallBinding = binding
+	if got, err := packageCandidateTrust(1400, "local", id); err != nil || got != binding {
+		t.Fatal("the compiled native package trust was refused", err)
+	}
+	if _, err := packageCandidateTrust(1400, "local", "../foreign"); err == nil {
+		t.Fatal("a foreign package identity selected trust")
+	}
+	wrong := *binding
+	wrong.SHA256 = strings.Repeat("b", 64)
+	compiledFirstInstallBinding = &wrong
+	if _, err := packageCandidateTrust(1400, "local", id); err == nil {
+		t.Fatal("a substituted compiled seed was accepted")
+	}
+}
 
 func TestPackageMaintenanceEntryRejectsOtherArgumentsAndUnprivilegedCalls(t *testing.T) {
 	id := strings.Repeat("a", 32)
@@ -69,7 +138,7 @@ func TestPackageWorkerRequiresTheOriginalManualOperationAndCandidate(t *testing.
 	policy := core.UpdatePolicy{Mode: "manual"}
 	view := core.ApplicationOwnerView{View: core.ApplicationUpdateView{Policy: policy, Operation: core.ApplicationUpdateOperation{ID: operation, Phase: "applying", Release: &release, PolicySHA256: update.SnapshotDigest("application-update-policy", policy)}}}
 	candidate := maintenance.CandidateReceipt{Version: 1, Owner: manifest.Owner, Scope: "update", PacketSHA256: release.ManifestSHA256, InstallerSHA256: strings.Repeat("d", 64), EngineSHA256: release.EngineSHA256, ProductVersion: release.Version, Sequence: release.Sequence, ReleaseSHA256: release.ManifestSHA256, Target: release.Target, BaseSequence: installed.Sequence, BaseReleaseSHA256: installed.ReleaseSHA256, BaseInstallation: instance, BaseManifestSHA: update.SnapshotDigest("candidate-base-manifest:v1", manifest), ExpiresAt: 200}
-	if _, err := approvedPackageCandidate(view, operation, installed, manifest, candidate, time.Unix(100, 0)); err != nil {
+	if _, err := approvedPackageCandidate(view, operation, installed, manifest, candidate, nil, time.Unix(100, 0)); err != nil {
 		t.Fatal("the original manual update was refused", err)
 	}
 	for name, change := range map[string]func(*core.ApplicationOwnerView, *maintenance.CandidateReceipt){
@@ -91,10 +160,108 @@ func TestPackageWorkerRequiresTheOriginalManualOperationAndCandidate(t *testing.
 		t.Run(name, func(t *testing.T) {
 			v, c := view, candidate
 			change(&v, &c)
-			if _, err := approvedPackageCandidate(v, operation, installed, manifest, c, time.Unix(100, 0)); err == nil {
+			if _, err := approvedPackageCandidate(v, operation, installed, manifest, c, nil, time.Unix(100, 0)); err == nil {
 				t.Fatal("a different operation or candidate was admitted")
 			}
 		})
+	}
+}
+
+func TestPackageCandidateResumesOnlyTheOriginallyBoundOperationAfterExpiry(t *testing.T) {
+	instance, operation := strings.Repeat("1", 32), strings.Repeat("2", 32)
+	manifest := custodyinstall.Manifest{Owner: 1400, ID: instance, Location: "local"}
+	installed := update.MaintenancePackage{Sequence: 11, ReleaseSHA256: strings.Repeat("a", 64)}
+	release := core.ApplicationRelease{EngineSHA256: strings.Repeat("b", 64), Version: "0.1.12", Sequence: 12, ManifestSHA256: strings.Repeat("c", 64), Target: update.Target{OS: "linux", Arch: "amd64"}}
+	policy := core.UpdatePolicy{Mode: "manual"}
+	view := core.ApplicationOwnerView{View: core.ApplicationUpdateView{Policy: policy, Operation: core.ApplicationUpdateOperation{ID: operation, Phase: "applying", Release: &release, PolicySHA256: update.SnapshotDigest("application-update-policy", policy)}}}
+	candidate := maintenance.CandidateReceipt{Version: 1, Owner: manifest.Owner, Scope: "update", PacketSHA256: release.ManifestSHA256, InstallerSHA256: strings.Repeat("d", 64), EngineSHA256: release.EngineSHA256, ProductVersion: release.Version, Sequence: release.Sequence, ReleaseSHA256: release.ManifestSHA256, Target: release.Target, BaseSequence: installed.Sequence, BaseReleaseSHA256: installed.ReleaseSHA256, BaseInstallation: instance, BaseManifestSHA: update.SnapshotDigest("candidate-base-manifest:v1", manifest), ExpiresAt: 200}
+	request, err := approvedPackageCandidate(view, operation, installed, manifest, candidate, nil, time.Unix(199, 0))
+	if err != nil {
+		t.Fatalf("the original update was not admitted: %v", err)
+	}
+	bound := packageCandidateOperation(candidate, request)
+	if _, err := approvedPackageCandidate(view, operation, installed, manifest, candidate, &bound, time.Unix(201, 0)); err != nil {
+		t.Fatalf("the originally bound update could not resume after expiry: %v", err)
+	}
+	if _, err := approvedPackageCandidate(view, operation, installed, manifest, candidate, nil, time.Unix(201, 0)); err == nil {
+		t.Fatal("an expired candidate authorized a new operation")
+	}
+	// A new release check after the old admission expired can authorize a
+	// subsequent manual Apply of the same, independently verified candidate.
+	fresh := view
+	fresh.View.Operation.ID = strings.Repeat("9", 32)
+	fresh.View.Operation.CheckedAt = 201
+	var verified bootstrap.PackageMaintenanceIdentity
+	verified.Version, verified.InstallerSHA256 = candidate.ProductVersion, candidate.InstallerSHA256
+	verified.Core.SHA256, verified.Sequence = candidate.EngineSHA256, candidate.Sequence
+	verified.ReleaseSHA256, verified.Target = candidate.ReleaseSHA256, candidate.Target
+	admitted, err := readmitCheckedPackageCandidate(fresh, candidate, nil, &verified, time.Unix(202, 0))
+	if err != nil || candidate.ExpiresAt != 200 {
+		t.Fatal("the original candidate receipt was changed or could not be rechecked", err)
+	}
+	freshRequest, err := approvedPackageCandidate(fresh, fresh.View.Operation.ID, installed, manifest, admitted, nil, time.Unix(202, 0))
+	if err != nil {
+		t.Fatalf("a fresh manual check could not retry the retained candidate: %v", err)
+	}
+	automatic := fresh
+	automatic.View.Operation.Automatic = true
+	if _, err := approvedPackageCandidate(automatic, automatic.View.Operation.ID, installed, manifest, admitted, nil, time.Unix(202, 0)); err == nil {
+		t.Fatal("a rechecked candidate authorized an automatic update")
+	}
+	freshBound := packageCandidateOperation(candidate, freshRequest)
+	if _, err := approvedPackageCandidate(fresh, fresh.View.Operation.ID, installed, manifest, candidate, &freshBound, time.Unix(2000, 0)); err != nil {
+		t.Fatal("the original rechecked operation could not recover after expiry", err)
+	}
+	for name, check := range map[string]struct {
+		view     core.ApplicationOwnerView
+		verified *bootstrap.PackageMaintenanceIdentity
+		now      time.Time
+	}{
+		"missing proof": {fresh, nil, time.Unix(202, 0)},
+		"old check":     {view, &verified, time.Unix(202, 0)},
+		"future check":  {fresh, &verified, time.Unix(200, 0)},
+		"expired check": {fresh, &verified, time.Unix(1101, 0)},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := readmitCheckedPackageCandidate(check.view, candidate, nil, check.verified, check.now); err == nil {
+				t.Fatal("an unverified or stale check readmitted the expired candidate")
+			}
+		})
+	}
+	foreign := verified
+	foreign.Core.SHA256 = strings.Repeat("8", 64)
+	if _, err := readmitCheckedPackageCandidate(fresh, candidate, nil, &foreign, time.Unix(202, 0)); err == nil {
+		t.Fatal("a different verified release readmitted the candidate")
+	}
+	for name, change := range map[string]func(*maintenance.CandidateOperation){
+		"another operation": func(b *maintenance.CandidateOperation) { b.OperationID = strings.Repeat("3", 32) },
+		"another request":   func(b *maintenance.CandidateOperation) { b.RequestSHA256 = strings.Repeat("4", 64) },
+		"another candidate": func(b *maintenance.CandidateOperation) { b.PacketSHA256 = strings.Repeat("5", 64) },
+		"another owner":     func(b *maintenance.CandidateOperation) { b.Owner++ },
+	} {
+		t.Run(name, func(t *testing.T) {
+			changed := bound
+			change(&changed)
+			if _, err := approvedPackageCandidate(view, operation, installed, manifest, candidate, &changed, time.Unix(201, 0)); err == nil {
+				t.Fatal("a different binding reused the retained candidate")
+			}
+		})
+	}
+}
+
+func TestPackageCandidateOperationRefusesUnprotectedFile(t *testing.T) {
+	dir := t.TempDir()
+	operation := strings.Repeat("2", 32)
+	bound := maintenance.CandidateOperation{Version: 1, Owner: os.Getuid(), Scope: "update", PacketSHA256: strings.Repeat("a", 64), OperationID: operation, RequestSHA256: strings.Repeat("b", 64)}
+	body, err := json.Marshal(bound)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(filepath.Join(dir, "candidate-operation.json"), body, 0644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = readPackageCandidateOperation(dir, os.Getuid(), operation); err == nil {
+		t.Fatal("an owner-writable candidate binding was accepted")
 	}
 }
 
@@ -175,6 +342,17 @@ func TestFreshPackageCandidateRetirementRequiresOriginalIdlePair(t *testing.T) {
 	receipt := maintenance.CandidateReceipt{Version: 1, Owner: owner, Scope: "fresh", PacketSHA256: p.ReleaseSHA256, InstallerSHA256: a.ImageSHA256, EngineSHA256: m.CoreHash, ProductVersion: p.Version, Sequence: p.Sequence, ReleaseSHA256: p.ReleaseSHA256, Target: update.Target{OS: "linux", Arch: "amd64"}}
 	if err = freshPackageCandidateMatches(a, "local", id, receipt, r); err != nil {
 		t.Fatal("matching initial installation refused", err)
+	}
+	configured := m
+	configured.Network = "devnet"
+	configuredRaw, err := json.Marshal(configured)
+	if err != nil {
+		t.Fatal(err)
+	}
+	configuredRecord := r
+	configuredRecord.Base, configuredRecord.Target = configuredRaw, configuredRaw
+	if err = freshPackageCandidateMatches(a, "local", id, receipt, configuredRecord); err != nil {
+		t.Fatal("wallet setup must not strand the original public candidate", err)
 	}
 	for name, change := range map[string]func(*maintenance.Authority, *maintenance.CandidateReceipt, *update.MaintenanceRecord){
 		"different helper": func(a *maintenance.Authority, _ *maintenance.CandidateReceipt, _ *update.MaintenanceRecord) {

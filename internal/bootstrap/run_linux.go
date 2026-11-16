@@ -36,11 +36,11 @@ type InstallOptions struct {
 	upgrade                       *UpgradeOptions
 }
 
-// ValidateFreshPackageCandidate binds the verified inputs to the exact Local
+// ValidateFreshPackageCandidate binds the verified inputs to the exact
 // instance. The protected receiver still independently verifies the package.
 func (p *Prepared) ValidateFreshPackageCandidate(location, instance string) error {
-	if p == nil || location != "local" || os.Getuid() <= 0 || os.Geteuid() != os.Getuid() {
-		return errors.New("fresh Local package owner required")
+	if p == nil || (location != "local" && location != "remote") || os.Getuid() <= 0 || os.Geteuid() != os.Getuid() {
+		return errors.New("fresh package owner required")
 	}
 	root, err := update.PackageInstanceRoot(os.Getuid(), location, instance)
 	if err != nil {
@@ -48,15 +48,25 @@ func (p *Prepared) ValidateFreshPackageCandidate(location, instance string) erro
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	return p.validateFreshPackageCandidate(root)
+	return p.validateFreshPackageCandidate(location, root)
 }
 
-func (p *Prepared) validateFreshPackageCandidate(root string) error {
-	if p.closed || p.root == nil || p.invoked || !p.report.LinuxPackageDigestsVerified || !p.report.ProvenanceVerified ||
+func (p *Prepared) validateFreshPackageCandidate(location, root string) error {
+	if p.closed || p.root == nil || p.invoked || (!p.report.LinuxPackageDigestsVerified && !p.report.LinuxBundleVerified) || !p.report.ProvenanceVerified ||
 		p.seed.Version != 4 || p.options.Development || p.options.protectedOwner != 0 {
 		return errors.New("the original fresh package admission is required")
 	}
-	if p.candidate != nil && (p.candidate.FreshProfile != "package-local" || p.candidate.FreshOwner != os.Getuid() ||
+	// An unpublished candidate has its own explicit admission below. For a
+	// public Remote release, use the same release/owner-derived instance as the
+	// public installer; revalidateHeld still authenticates all held inputs.
+	if location == "remote" && p.candidate == nil {
+		identity := sha256.Sum256([]byte(fmt.Sprintf("%d\x00%s\x00remote", os.Getuid(), p.report.DescriptorSHA256)))
+		expected, err := update.PackageInstanceRoot(os.Getuid(), location, hex.EncodeToString(identity[:])[:32])
+		if err != nil || root != expected {
+			return errors.New("the original Remote package admission is required")
+		}
+	}
+	if p.candidate != nil && (p.candidate.FreshProfile != "package-"+location || p.candidate.FreshOwner != os.Getuid() ||
 		p.candidate.FreshRoot != root || p.candidate.FreshData != filepath.Join(root, "app-state") || p.candidate.validate(p.options.clock()) != nil) {
 		return errors.New("the original fresh package admission is required")
 	}
@@ -66,8 +76,8 @@ func (p *Prepared) validateFreshPackageCandidate(root string) error {
 // VerifyFreshPackageCandidateInstaller also requires the running installer to
 // be the exact executable authenticated by the held candidate.
 func (p *Prepared) VerifyFreshPackageCandidateInstaller(location, instance string) error {
-	if p == nil || location != "local" || os.Getuid() <= 0 || os.Geteuid() != os.Getuid() {
-		return errors.New("fresh Local package owner required")
+	if p == nil || (location != "local" && location != "remote") || os.Getuid() <= 0 || os.Geteuid() != os.Getuid() {
+		return errors.New("fresh package owner required")
 	}
 	root, err := update.PackageInstanceRoot(os.Getuid(), location, instance)
 	if err != nil {
@@ -75,7 +85,7 @@ func (p *Prepared) VerifyFreshPackageCandidateInstaller(location, instance strin
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if err = p.validateFreshPackageCandidate(root); err != nil {
+	if err = p.validateFreshPackageCandidate(location, root); err != nil {
 		return err
 	}
 	if err = verifyRunningInstaller(p.descriptor.Release.InstallerSHA256); err != nil {
@@ -99,7 +109,7 @@ func (p *Prepared) VerifyFreshCandidateInstaller(options InstallOptions) error {
 	// but this read-only admission must not grant the legacy archive installer
 	// authority to execute them. Run and the legacy updater still use revalidate.
 	verify := p.revalidate
-	if p.report.LinuxPackageDigestsVerified {
+	if p.report.LinuxPackageDigestsVerified || p.report.LinuxBundleVerified {
 		verify = p.revalidateHeld
 	}
 	if err := verify(); err != nil {

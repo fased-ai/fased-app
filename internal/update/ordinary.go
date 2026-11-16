@@ -4,6 +4,10 @@ import "slices"
 
 const OrdinaryMaintenanceFeature = "ordinary-custody-updates-v3"
 
+// OwnerKeyAdmissionFeature is advertised only by a signer that admits the
+// ordinary owner-key profile. It grants no trading or unattended authority.
+const OwnerKeyAdmissionFeature = "owner-key-admission-v1"
+
 func ordinaryStateProfile() (map[string]string, map[string][]string) {
 	return map[string]string{"core-db": "core", "vault": "signer", "operations": "signer"}, map[string][]string{
 		"core-db":    requiredStateFeatures["core-db"],

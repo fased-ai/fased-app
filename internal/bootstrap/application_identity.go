@@ -44,7 +44,7 @@ func applicationIdentity(d Descriptor, legacy string) string {
 }
 
 func (p *Prepared) matchesApplicationIdentity(identity string) bool {
-	if p.report.LinuxPackageDigestsVerified {
+	if p.report.LinuxPackageDigestsVerified || p.report.LinuxBundleVerified {
 		return false // Native packages cannot acquire a legacy archive identity.
 	}
 	return identity == p.report.DescriptorSHA256 || ApplicationDescriptorMatches(p.descriptor, identity)

@@ -10,6 +10,8 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/fased-ai/fased-app/internal/update"
 )
 
 func TestRealHostFixtureRequiresExactOwnerAndMachine(t *testing.T) {
@@ -35,6 +37,36 @@ func TestRealHostFixtureRequiresExactOwnerAndMachine(t *testing.T) {
 				t.Fatalf("allowed %t, want %t", got, tc.want)
 			}
 		})
+	}
+}
+
+func TestFixturePackageInstanceRequiresPinnedHostOwnerAndPath(t *testing.T) {
+	owner := os.Getuid()
+	machine, err := os.ReadFile("/etc/machine-id")
+	if err != nil || owner <= 0 {
+		t.Skip("ordinary Linux host identity unavailable")
+	}
+	oldOwner, oldMachine, oldRoot, oldData := FixtureOwnerUID, FixtureMachineSHA256, FixtureSourceRoot, FixtureSourceData
+	t.Cleanup(func() {
+		FixtureOwnerUID, FixtureMachineSHA256, FixtureSourceRoot, FixtureSourceData = oldOwner, oldMachine, oldRoot, oldData
+	})
+	sum := sha256.Sum256([]byte(strings.TrimSpace(string(machine))))
+	FixtureOwnerUID, FixtureMachineSHA256 = strconv.Itoa(owner), hex.EncodeToString(sum[:])
+	instance := strings.Repeat("a", 32)
+	FixtureSourceRoot, err = update.PackageInstanceRoot(owner, "local", instance)
+	if err != nil {
+		t.Fatal(err)
+	}
+	FixtureSourceData = filepath.Join(FixtureSourceRoot, "app-state")
+	if got, err := FixturePackageInstance(owner); err != nil || got != instance {
+		t.Fatal("the original Local fixture was not selected", err)
+	}
+	if _, err := FixturePackageInstance(owner + 1); err == nil {
+		t.Fatal("a foreign owner selected the Local fixture")
+	}
+	FixtureSourceData += "-other"
+	if _, err := FixturePackageInstance(owner); err == nil {
+		t.Fatal("different fixture data selected the original instance")
 	}
 }
 

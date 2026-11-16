@@ -3,8 +3,12 @@
 package main
 
 import (
+	"bytes"
+	"crypto/sha256"
 	"encoding/binary"
+	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -12,11 +16,52 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/fased-ai/fased-app/internal/bootstrap"
 	"github.com/fased-ai/fased-app/internal/bundle"
 	"github.com/fased-ai/fased-app/internal/core"
 	"github.com/fased-ai/fased-app/internal/signer"
 	"github.com/fased-ai/fased-app/internal/update"
 )
+
+func TestLinuxPackageBindsEmbeddedWalletClientWithoutGlobalDesktop(t *testing.T) {
+	oldVersion := core.Version
+	core.Version = "0.1.12"
+	t.Cleanup(func() { core.Version = oldVersion })
+	dir, source := t.TempDir(), strings.Repeat("a", 40)
+	writePayload := func(name, data string) bundle.File {
+		t.Helper()
+		h := sha256.Sum256([]byte(data))
+		hash := hex.EncodeToString(h[:])
+		var frame bytes.Buffer
+		if err := bootstrap.WriteWalletPayload(&frame, &bootstrap.WalletPayload{Data: []byte(data), SHA256: hash, Version: core.Version, Source: source}); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, name+".frame"), frame.Bytes(), 0600); err != nil {
+			t.Fatal(err)
+		}
+		return bundle.File{SHA256: hash, Bytes: int64(len(data))}
+	}
+	signerFile := writePayload("signer", "signer fixture")
+	desktop := writePayload("desktop", "wallet client fixture")
+	binding, _ := json.Marshal(bootstrap.NativeReleaseBinding{Version: 1, ProductVersion: core.Version, Source: source, SignerSHA256: signerFile.SHA256, DesktopSHA256: desktop.SHA256})
+	app := "#!/bin/sh\nprintf '%s\\n' '" + string(binding) + "'\n"
+	installer := fmt.Sprintf("#!/bin/sh\ncase \"$1\" in --emit-embedded-signer) cat '%s' ;; --emit-embedded-native) cat '%s' ;; *) exit 1 ;; esac\n", filepath.Join(dir, "signer.frame"), filepath.Join(dir, "desktop.frame"))
+	for name, script := range map[string]string{"fased-app": app, "fased-install": installer} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(script), 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	files := map[string]bundle.File{"fased-signer": signerFile}
+	if err := verifyLinuxPackageBinding(dir, source, files); err != nil {
+		t.Fatal("embedded matching client was refused", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "desktop.frame"), []byte("changed"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := verifyLinuxPackageBinding(dir, source, files); err == nil {
+		t.Fatal("changed embedded client was accepted")
+	}
+}
 
 func TestLinuxPackagePublicationIsCompleteAndNeverReplaces(t *testing.T) {
 	dir := t.TempDir()

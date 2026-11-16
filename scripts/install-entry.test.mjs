@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { renderEntry } from "./render-install-entry.mjs";
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { readFileSync, writeFileSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -9,6 +10,17 @@ const template = readFileSync(
   new URL("../install.sh", import.meta.url),
   "utf8",
 );
+function assertShellSyntax(script) {
+  const dir = mkdtempSync(join(tmpdir(), "fased-entry-syntax-"));
+  try {
+    const entry = join(dir, "install.sh");
+    writeFileSync(entry, script);
+    const parsed = spawnSync("bash", ["-n", entry]);
+    assert.equal(parsed.status, 0, parsed.stderr.toString());
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
 test("entry refuses missing trust and uncontrolled download roots", () => {
   assert.throws(() => renderEntry(template, {}));
   assert.throws(() =>
@@ -43,7 +55,7 @@ test("public entry pins exact GitHub verifier and public trust; no runtime bypas
     /https:\/\/github.com\/fased-ai\/fased-app\/releases\/download\/v1.0.0\/fased-install-linux-amd64/,
   );
   assert.ok(!script.includes("@INSTALLER_SHA256@"));
-  assert.equal(spawnSync("bash", ["-n"], { input: script }).status, 0);
+  assertShellSyntax(script);
   for (const flag of [
     "--url",
     "--insecure",
@@ -325,7 +337,7 @@ test("controlled fixture has explicit isolated trust", () => {
     ca: Buffer.from("disposable public CA"),
   };
   const script = renderEntry(template, fixture);
-  assert.equal(spawnSync("bash", ["-n"], { input: script }).status, 0);
+  assertShellSyntax(script);
   assert.throws(() =>
     renderEntry(template, {
       ...fixture,
@@ -422,7 +434,7 @@ test("one release selects authenticated amd64 and arm64 tuples with update/local
       'fedora:45:linux-arm64) die "No reviewed package for this OS and CPU."',
     ),
   );
-  assert.equal(spawnSync("bash", ["-n"], { input: script }).status, 0);
+  assertShellSyntax(script);
   assert.throws(() =>
     renderEntry(template, { version: "1.0.0", targets: [config, config] }),
   );
@@ -508,8 +520,7 @@ test("bootstrap uses one protected helper without general sudo grants", () => {
     script,
     /Hash the protected copy before any project executable receives root/,
   );
-  const parsed = spawnSync("bash", ["-n"], { input: script });
-  assert.equal(parsed.status, 0, parsed.stderr.toString());
+  assertShellSyntax(script);
 });
 
 test("resuming a held update stops at its result without starting another operation", () => {
@@ -541,6 +552,7 @@ test("resuming a held update stops at its result without starting another operat
   );
   const rootEntry = template
     .slice(rootStart, rootEnd)
+    .replace(/\nfi\s*$/, "\n")
     .replaceAll('"$protected_installer" maintenance-register', "fake_register")
     .replaceAll('"$maintenance_image" maintenance-bootstrap', "fake_bootstrap");
   const h1 =
@@ -617,7 +629,7 @@ test("protected helper publication is durable and never copies into the final im
 
 test("Wallets console consent keeps verified acquisition, owner drop and temporary cleanup", () => {
   const script = renderEntry(template, config);
-  assert.equal(spawnSync("bash", ["-n"], { input: script }).status, 0);
+  assertShellSyntax(script);
   for (const text of [
     "--wallets)",
     "--wallet-instance",
@@ -633,7 +645,7 @@ test("Wallets console consent keeps verified acquisition, owner drop and tempora
     assert.ok(script.includes(text), text);
   assert.ok(
     script.indexOf("Wallets setup requires Remote") <
-      script.indexOf("Preparing Ubuntu for Fased"),
+      script.indexOf("Preparing Linux for Fased"),
   );
   assert.match(
     script,
@@ -644,7 +656,7 @@ test("Wallets console consent keeps verified acquisition, owner drop and tempora
   assert.ok(!script.includes("--wallet-key"));
 });
 
-test("candidate Local entry verifies the pinned installer before protected setup", () => {
+test("candidate entry verifies the pinned installer before protected setup", () => {
   const script = renderEntry(template, config);
   const verify = script.indexOf(
     '"$installer" --verify-candidate "$candidate_dir"',
@@ -678,9 +690,10 @@ test("candidate Local entry verifies the pinned installer before protected setup
     ]);
   const digest = "a".repeat(64);
   assert.equal(run("/tmp/candidate", digest, "local", "install").status, 0);
+  assert.equal(run("/tmp/candidate", digest, "remote", "install").status, 0);
   for (const args of [
     ["relative", digest, "local", "install"],
-    ["/tmp/candidate", digest, "remote", "install"],
+    ["/tmp/candidate", digest, "connect", "install"],
     ["/tmp/candidate", digest, "local", "update"],
     ["/tmp/candidate", "bad", "local", "install"],
   ]) {
@@ -721,6 +734,9 @@ test("unsupported native candidates stop before protected setup", () => {
   const native = run('{"version":4,"linuxPackageDigestsVerified":true}');
   assert.equal(native.status, 23, native.stderr.toString());
   assert.doesNotMatch(native.stdout.toString(), /SETUP/);
+  const bundle = run('{"version":4,"linuxBundleVerified":true}');
+  assert.equal(bundle.status, 23, bundle.stderr.toString());
+  assert.doesNotMatch(bundle.stdout.toString(), /SETUP/);
   const invalid = run("", "1");
   assert.equal(invalid.status, 23);
   assert.doesNotMatch(invalid.stdout.toString(), /SETUP/);
@@ -729,7 +745,7 @@ test("unsupported native candidates stop before protected setup", () => {
   assert.match(legacy.stdout.toString(), /SETUP/);
 });
 
-test("public native release reaches only its verified Local package handoff", () => {
+test("controlled candidate uses only its compiled Local instance", () => {
   const script = renderEntry(template, config);
   const anchor = script.indexOf(
     "Installer checksum differs; nothing was executed.",
@@ -743,19 +759,91 @@ test("public native release reaches only its verified Local package handoff", ()
   const entry = script
     .slice(start, end)
     .replace(
-      '"/var/lib/fased-app-package/$(/usr/bin/id -u)/local"',
+      '"/var/lib/fased-app-package/$(/usr/bin/id -u)/$profile"',
+      '"$fixture_parent"',
+    );
+  const dir = mkdtempSync(join(tmpdir(), "fased-candidate-entry-"));
+  try {
+    const run = (
+      instance,
+      report = '{"version":4,"linuxPackageDigestsVerified":true}',
+    ) =>
+      spawnSync("bash", [
+        "-c",
+        `
+      set -u
+      candidate_dir=/candidate candidate_packet=$1 package_instance='' installer=verifier fixture_parent=$2 fixture=$3 report=$4 profile=local
+      verifier_args=(--install-candidate /candidate --candidate-packet-sha256 "$candidate_packet" --profile local)
+      verifier() {
+        case $1 in
+          --verify-candidate) printf '%s\\n' "$report" ;;
+          --package-controller-ready) return 0 ;;
+          --fixture-package-instance) printf '%s\\n' "$fixture" ;;
+          *) return 1 ;;
+        esac
+      }
+      owner_maintenance_setup() { printf 'SETUP %s\\n' "$package_instance"; }
+      die() { printf 'REFUSED: %s\\n' "$*"; exit 23; }
+      ${entry}
+      printf 'ARGS %s\\n' "\${verifier_args[@]}"
+      `,
+        "candidate",
+        "a".repeat(64),
+        dir,
+        instance,
+        report,
+      ]);
+    const pinned = "b".repeat(32);
+    const selected = run(pinned);
+    assert.equal(selected.status, 0, selected.stderr.toString());
+    assert.match(selected.stdout.toString(), new RegExp(`SETUP ${pinned}`));
+    assert.match(selected.stdout.toString(), new RegExp(`ARGS ${pinned}`));
+    const bundle = run(pinned, '{"version":4,"linuxBundleVerified":true}');
+    assert.equal(bundle.status, 0, bundle.stderr.toString());
+    assert.match(bundle.stdout.toString(), new RegExp(`SETUP ${pinned}`));
+    const ordinary = run("");
+    const ordinaryID = createHash("sha256")
+      .update(`${process.getuid()}\0${"a".repeat(64)}\0local`)
+      .digest("hex")
+      .slice(0, 32);
+    assert.equal(ordinary.status, 0, ordinary.stderr.toString());
+    assert.match(ordinary.stdout.toString(), new RegExp(`SETUP ${ordinaryID}`));
+    assert.match(ordinary.stdout.toString(), new RegExp(`ARGS ${ordinaryID}`));
+    const invalid = run("not-an-instance");
+    assert.equal(invalid.status, 23);
+    assert.doesNotMatch(invalid.stdout.toString(), /SETUP/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("public bundle reaches only its verified Local or Remote package handoff", () => {
+  const script = renderEntry(template, config);
+  const anchor = script.indexOf(
+    "Installer checksum differs; nothing was executed.",
+  );
+  const start = script.indexOf("\n  if [[ -n $candidate_dir ]]; then", anchor);
+  const end = script.indexOf(
+    '\n  "$installer" "${verifier_args[@]}" <&3',
+    start,
+  );
+  assert.ok(anchor > 0 && start > anchor && end > start);
+  const entry = script
+    .slice(start, end)
+    .replace(
+      '"/var/lib/fased-app-package/$(/usr/bin/id -u)/$profile"',
       '"$fixture_parent"',
     );
   const dir = mkdtempSync(join(tmpdir(), "fased-public-entry-"));
   try {
     const packet = "a".repeat(64);
     const installer = "b".repeat(64);
-    const run = (inspection, ready = 0) =>
+    const run = (inspection, ready = 0, targetProfile = "local") =>
       spawnSync("bash", [
         "-c",
         `
       set -u
-      candidate_dir='' candidate_packet='' package_instance='' profile=local action=install development_only=0 listen=127.0.0.1:7331
+      candidate_dir='' candidate_packet='' package_instance='' profile=$5 action=install development_only=0 listen=127.0.0.1:7331
       installer=verifier entry_version=1.0.0 installer_sha256=$1 fixture_parent=$2 inspection=$3 ready=$4
       verifier_args=()
       verifier() {
@@ -766,18 +854,27 @@ test("public native release reaches only its verified Local package handoff", ()
       owner_maintenance_setup() { printf 'SETUP %s\\n' "$package_instance"; }
       die() { printf 'REFUSED: %s\\n' "$*"; exit 23; }
       ${entry}
-      printf 'ARGS %s\\n' "$verifier_args"
+      printf 'ARGS %s\\n' "\${verifier_args[@]}"
       `,
         "public",
         installer,
         dir,
         inspection,
         String(ready),
+        targetProfile,
       ]);
     const accepted = run(`native ${packet} 1.0.0 ${installer}`);
     assert.equal(accepted.status, 0, accepted.stderr.toString());
     assert.match(accepted.stdout.toString(), /SETUP [a-f0-9]{32}/);
     assert.match(accepted.stdout.toString(), /ARGS --install-public-package/);
+    const remote = run(`native ${packet} 1.0.0 ${installer}`, 0, "remote");
+    const remoteID = createHash("sha256")
+      .update(`${process.getuid()}\0${packet}\0remote`)
+      .digest("hex")
+      .slice(0, 32);
+    assert.equal(remote.status, 0, remote.stderr.toString());
+    assert.match(remote.stdout.toString(), new RegExp(`SETUP ${remoteID}`));
+    assert.match(remote.stdout.toString(), /ARGS remote/);
     for (const result of [
       run(`native ${packet} 1.0.0 ${installer}`, 1),
       run(`native ${packet} 1.0.1 ${installer}`),

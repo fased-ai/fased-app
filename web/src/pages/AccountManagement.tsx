@@ -318,7 +318,9 @@ export function AccountManagement() {
   const protectedSetupHeld = !fixtureTools && !setupReference;
   const ownerWindowReady =
     !!view?.setup?.ownerSupported &&
-    ["empty", "not-installed"].includes(view.setup.state) &&
+    ["empty", "not-installed", "configuration-required"].includes(
+      view.setup.state,
+    ) &&
     walletNetwork(network) &&
     !!view.setup.source;
   async function openOwnerWindow(action: "setup" | "import") {
@@ -328,6 +330,7 @@ export function AccountManagement() {
       network,
       action,
       view.setup.source === "remote" ? location.origin : "",
+      view.setup.packageOwner,
     );
     if (!link) return;
     if (["wails", "wails.localhost"].includes(location.hostname)) {
@@ -603,7 +606,9 @@ export function AccountManagement() {
                         disabled={
                           busy ||
                           (mode !== "watch" &&
-                            protectedSetupHeld &&
+                            (protectedSetupHeld ||
+                              view?.setup?.state ===
+                                "configuration-required") &&
                             !ownerWindowReady)
                         }
                         title={
@@ -617,7 +622,9 @@ export function AccountManagement() {
                           updateDraft({ mode });
                           if (
                             mode !== "watch" &&
-                            protectedSetupHeld &&
+                            (protectedSetupHeld ||
+                              view?.setup?.state ===
+                                "configuration-required") &&
                             ownerWindowReady
                           )
                             void openOwnerWindow(
