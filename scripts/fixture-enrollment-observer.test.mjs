@@ -20,6 +20,21 @@ import {
 import { protectedPathMissing } from "./fixture-enrollment-helper.mjs";
 import { walletReadJourney } from "./fixture-wallet-read-journey.mjs";
 
+test("installed enrollment identity proof selects preserved password access", async () => {
+  const source = await readFile(
+    new URL("./check-enrollment-install.mjs", import.meta.url),
+    "utf8",
+  );
+  const proof = source
+    .split("async function browserProof(")[1]
+    ?.split("async function controlledInterruption(")[0];
+  assert.ok(proof, "installed browser identity proof must remain covered");
+  assert.match(
+    proof,
+    /await page\.goto\([^;]+;\s*await openPasswordSignIn\(page\);\s*await page\.getByLabel\("Owner password"/,
+  );
+});
+
 test("installed Wallets reader selects preserved password access before filling it", async (t) => {
   for (const optional of [false, true]) {
     await t.test(

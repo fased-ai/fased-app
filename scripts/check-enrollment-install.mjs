@@ -15,6 +15,7 @@ import {
 import { homedir } from "node:os";
 import { resolve, join } from "node:path";
 import net from "node:net";
+import { openPasswordSignIn } from "./fixture-owner-setup.mjs";
 import {
   enrollmentAPI,
   seedEnrollmentSource,
@@ -664,6 +665,7 @@ async function browserProof(url, profile, instance) {
     });
     const page = await ctx.newPage();
     await page.goto(url + "/#wallets/accounts");
+    await openPasswordSignIn(page);
     await page.getByLabel("Owner password", { exact: true }).fill(password);
     await page.getByRole("button", { name: "Sign in", exact: true }).click();
     await page.getByRole("heading", { name: "Wallets", exact: true }).waitFor();
