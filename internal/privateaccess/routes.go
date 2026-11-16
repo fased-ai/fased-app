@@ -53,7 +53,7 @@ func (m Manager) SelectIsolated(ctx context.Context, dir string, p Plan, protect
 	file := filepath.Join(dir, "private-setup.json")
 	if data, e := core.ReadPrivateFile(file); e == nil {
 		var saved preflightReceipt
-		if json.Unmarshal(data, &saved) != nil || saved.Version != 1 || saved.Plan.Mode != "tailscale" || !validTarget(saved.Plan.Target) || !strings.HasPrefix(saved.Plan.Target, "unix:/tmp/fased-private-") {
+		if json.Unmarshal(data, &saved) != nil || saved.Version != 1 || saved.Plan.Mode != "tailscale" || !preflightSocketTarget(saved.Plan.Target, dir) {
 			return p, errors.New("unknown private setup receipt; preserve it")
 		}
 		host, _, e := tailnet.Origin(saved.Plan.Origin)

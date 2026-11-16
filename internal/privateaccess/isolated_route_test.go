@@ -238,6 +238,32 @@ func TestSelectIsolatedResumesProtectedPreflightPort(t *testing.T) {
 	}
 }
 
+func TestSelectIsolatedResumesInstanceProtectedPreflight(t *testing.T) {
+	dir := fixture(t)
+	base := Plan{Mode: "tailscale", Origin: "https://node.owner.ts.net", Target: "http://127.0.0.1:7333"}
+	retained := base
+	retained.Origin = "https://node.owner.ts.net:8443"
+	retained.Target = "unix:" + filepath.Join(dir, "fased-private-retained", "tailscale.sock")
+	if err := core.WritePrivateJSON(filepath.Join(dir, "private-setup.json"), preflightReceipt{Version: 1, Plan: retained}); err != nil {
+		t.Fatal(err)
+	}
+	m := Manager{GetConfig: func(context.Context) ([]byte, string, error) {
+		t.Fatal("recovery must retain its original origin before looking for a new route")
+		return nil, "", nil
+	}}
+	got, err := m.SelectIsolated(t.Context(), dir, base, retained.Origin)
+	if err != nil || got.Origin != retained.Origin {
+		t.Fatal("the instance's protected setup could not resume", got, err)
+	}
+	retained.Target = "unix:" + filepath.Join(dir+"-foreign", "fased-private-retained", "tailscale.sock")
+	if err := core.WritePrivateJSON(filepath.Join(dir, "private-setup.json"), preflightReceipt{Version: 1, Plan: retained}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = m.SelectIsolated(t.Context(), dir, base, retained.Origin); err == nil {
+		t.Fatal("another instance's protected setup was accepted")
+	}
+}
+
 func TestIsolatedRouteRefusesCollisionAndFunnel(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("managed Tailscale Unix ingress targets Linux")
