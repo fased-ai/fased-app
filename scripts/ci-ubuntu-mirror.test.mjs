@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
-import { mainArchiveSources } from "./ci-ubuntu-mirror.mjs";
+import { archiveMirrorList, mainArchiveSources } from "./ci-ubuntu-mirror.mjs";
+
+const listPath = "/tmp/fased-ci-ubuntu-fixture/mirrors.txt";
+const mirrorURI = `mirror+file:${listPath}`;
 
 const source = `Types: deb
 URIs: http://azure.archive.ubuntu.com/ubuntu/
@@ -16,19 +19,23 @@ Components: main restricted universe multiverse
 Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg
 `;
 
-test("the independent Ubuntu mirror preserves suites and distribution signing", () => {
+test("fallback mirrors preserve suites and distribution signing", () => {
+  const mirrors = archiveMirrorList().trim().split("\n");
+  assert.ok(mirrors.length >= 2);
+  const hosts = mirrors.map((line) => {
+    const [uri, metadata] = line.split("\t");
+    assert.match(uri, /^https:\/\//);
+    assert.match(metadata, /^priority:\d+$/);
+    return new URL(uri).hostname;
+  });
+  assert.equal(new Set(hosts).size, hosts.length);
   assert.equal(
-    mainArchiveSources(source),
+    mainArchiveSources(source, listPath),
     source
-      .replace(
-        "http://azure.archive.ubuntu.com/ubuntu/",
-        "https://mirrors.edge.kernel.org/ubuntu/",
-      )
-      .replace(
-        "http://security.ubuntu.com/ubuntu/",
-        "https://mirrors.edge.kernel.org/ubuntu/",
-      ),
+      .replace("http://azure.archive.ubuntu.com/ubuntu/", mirrorURI)
+      .replace("http://security.ubuntu.com/ubuntu/", mirrorURI),
   );
+  assert.throws(() => mainArchiveSources(source, "/tmp/foreign/mirrors.txt"));
 });
 test("VM prerequisites use the same trusted archive without extending the job", () => {
   const workflow = readFileSync(
@@ -73,10 +80,16 @@ test("the official runner mirror-list source bypasses Azure without changing tru
     "http://azure.archive.ubuntu.com/ubuntu/",
     "mirror+file:/etc/apt/apt-mirrors.txt",
   );
-  assert.equal(mainArchiveSources(mirrorList), mainArchiveSources(source));
+  assert.equal(
+    mainArchiveSources(mirrorList, listPath),
+    mainArchiveSources(source, listPath),
+  );
   assert.throws(
     () =>
-      mainArchiveSources(mirrorList.replace("apt-mirrors.txt", "unknown.txt")),
+      mainArchiveSources(
+        mirrorList.replace("apt-mirrors.txt", "unknown.txt"),
+        listPath,
+      ),
     /Expected/,
   );
 });
@@ -87,16 +100,19 @@ test("runner changes and unsigned or trust-bypassing sources fail closed", () =>
         source
           .replaceAll("azure.archive.ubuntu.com", "other.example")
           .replaceAll("security.ubuntu.com", "other.example"),
+        listPath,
       ),
     /Expected/,
   );
   assert.throws(
-    () => mainArchiveSources(source.replaceAll("Signed-By:", "Other:")),
+    () =>
+      mainArchiveSources(source.replaceAll("Signed-By:", "Other:"), listPath),
     /signing key/,
   );
   assert.throws(() =>
     mainArchiveSources(
       source.replace("Types: deb", "Types: deb\nTrusted: yes"),
+      listPath,
     ),
   );
 });

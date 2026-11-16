@@ -1,10 +1,23 @@
 // CI runner configuration only; never used by the application or installer.
-// Keep Ubuntu's signing key while avoiding Canonical DNS outages on CI runners.
+// Keep Ubuntu's signing key while tolerating an unavailable CI archive mirror.
 import assert from "node:assert/strict";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { pathToFileURL } from "node:url";
 
-export function mainArchiveSources(source) {
+export function archiveMirrorList() {
+  return [
+    "https://mirrors.edge.kernel.org/ubuntu/\tpriority:1",
+    "https://archive.ubuntu.com/ubuntu/\tpriority:2",
+    "",
+  ].join("\n");
+}
+
+export function mainArchiveSources(source, mirrorListPath) {
+  assert.match(
+    mirrorListPath,
+    /^\/tmp\/fased-ci-ubuntu-[A-Za-z0-9]+\/mirrors\.txt$/,
+    "Expected the CI-owned mirror list",
+  );
   const ubuntuSource =
     /^URIs: (?:(?:http|https):\/\/(?:azure\.archive|archive|security)\.ubuntu\.com\/ubuntu\/?|mirror\+file:\/etc\/apt\/apt-mirrors\.txt)[ \t]*$/m;
   let replaced = 0;
@@ -35,7 +48,7 @@ export function mainArchiveSources(source) {
       replaced++;
       return stanza.replace(
         ubuntuSource,
-        "URIs: https://mirrors.edge.kernel.org/ubuntu/",
+        `URIs: mirror+file:${mirrorListPath}`,
       );
     })
     .join("");
@@ -67,7 +80,16 @@ if (
       .filter((line) => line.startsWith("URIs:"))
       .join("\n"),
   );
-  const result = mainArchiveSources(source);
+  // _apt must be able to traverse the private CI-created directory, while
+  // only the runner owner can alter the list. The hosted runner removes it.
+  const mirrorDir = await mkdtemp("/tmp/fased-ci-ubuntu-");
+  await chmod(mirrorDir, 0o755);
+  const mirrorListPath = `${mirrorDir}/mirrors.txt`;
+  await writeFile(mirrorListPath, archiveMirrorList(), {
+    flag: "wx",
+    mode: 0o644,
+  });
+  const result = mainArchiveSources(source, mirrorListPath);
   await mkdir(".evidence", { recursive: true });
   await writeFile(".evidence/ubuntu.sources", result, { mode: 0o644 });
 }
