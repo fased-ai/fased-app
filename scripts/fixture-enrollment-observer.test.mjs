@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import test from "node:test";
 import {
   mkdtemp,
@@ -16,12 +17,36 @@ import {
   readEnrollmentObservation,
   removeEnrollmentUnitLink,
 } from "./fixture-enrollment-observer.mjs";
+import { protectedPathMissing } from "./fixture-enrollment-helper.mjs";
 
 async function fixture(t) {
   const dir = await mkdtemp(join(tmpdir(), "fased-enrollment-observer-"));
   t.after(() => rm(dir, { recursive: true, force: true }));
   return dir;
 }
+
+test("protected setup preserves existing paths and treats sudo errors as errors", async (t) => {
+  const dir = await fixture(t),
+    path = join(dir, "state");
+  const osTool = (file, args) => execFileSync(file, args, { encoding: "utf8" });
+  assert.equal(protectedPathMissing(path, osTool), true);
+  await writeFile(path, "existing");
+  assert.equal(protectedPathMissing(path, osTool), false);
+  await unlink(path);
+  await symlink(join(dir, "absent"), path);
+  assert.equal(protectedPathMissing(path, osTool), false);
+  const denied = Object.assign(new Error("sudo refused"), {
+    status: 1,
+    stderr: "sudo: access denied",
+  });
+  assert.throws(
+    () =>
+      protectedPathMissing(path, () => {
+        throw denied;
+      }),
+    (err) => err === denied,
+  );
+});
 
 test("journal observation tolerates only initial missing/empty publication, then reads atomic data", async (t) => {
   const dir = await fixture(t),
