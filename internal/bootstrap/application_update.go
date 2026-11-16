@@ -124,8 +124,8 @@ func (d *LocalApplicationController) Apply(ctx context.Context, o core.Applicati
 	if e := p.revalidate(); e != nil {
 		return core.ApplicationUpdateReceipt{}, fmt.Errorf("%w: %v", core.ErrApplicationUpdateNotStarted, e)
 	}
-	engine, desktop := bundle.Names()
-	candidate := localinstall.ApplicationUpdate{ReaderBootstrap: d.callbacks.AfterStop != nil, ID: o.ID, Version: p.descriptor.ProductVersion, Sequence: p.report.Sequence, ReleaseSHA256: p.report.DescriptorSHA256, ExpectedManifestSHA256: d.expectedManifest, Engine: filepath.Join(p.report.BundleDirectory, engine), EngineSHA256: p.engine.SHA256}
+	_, desktop := bundle.Names()
+	candidate := d.applicationCandidate(o.ID)
 	m, e := localinstall.Load(d.paths)
 	if e != nil {
 		return core.ApplicationUpdateReceipt{}, e
@@ -191,6 +191,15 @@ func (d *LocalApplicationController) Apply(ctx context.Context, o core.Applicati
 	}
 	return d.status(o)
 }
+
+// applicationCandidate carries the reader classification into the existing
+// local recovery journal. Its caller holds the prepared release lock.
+func (d *LocalApplicationController) applicationCandidate(id string) localinstall.ApplicationUpdate {
+	p := d.prepared
+	engine, _ := bundle.Names()
+	return localinstall.ApplicationUpdate{ReaderBootstrap: d.callbacks.AfterStop != nil, ID: id, Version: p.descriptor.ProductVersion, Sequence: p.report.Sequence, ReleaseSHA256: p.report.DescriptorSHA256, ExpectedManifestSHA256: d.expectedManifest, Engine: filepath.Join(p.report.BundleDirectory, engine), EngineSHA256: p.engine.SHA256}
+}
+
 func (d *LocalApplicationController) Status(_ context.Context, o core.ApplicationUpdateOperation) (core.ApplicationUpdateReceipt, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()

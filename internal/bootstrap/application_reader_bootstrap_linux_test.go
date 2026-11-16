@@ -5,6 +5,8 @@ package bootstrap
 import (
 	"context"
 	"errors"
+	"os"
+	"strings"
 	"testing"
 
 	"github.com/fased-ai/fased-app/internal/core"
@@ -12,7 +14,7 @@ import (
 	"github.com/fased-ai/fased-app/internal/update"
 )
 
-func TestApplicationReaderDriverPersistsTrustedHookClassification(t *testing.T) {
+func TestApplicationReaderDriverClassifiesHookAndRefusesUnreadyService(t *testing.T) {
 	for _, reader := range []bool{false, true} {
 		t.Run(map[bool]string{false: "ordinary", true: "reader"}[reader], func(t *testing.T) {
 			f := newFirstFixture(t)
@@ -23,7 +25,9 @@ func TestApplicationReaderDriverPersistsTrustedHookClassification(t *testing.T) 
 			defer p.Close()
 			o := upgradeEntryFixture(t, f)
 			paths := localinstall.Paths{Root: o.Prefix, Data: o.DataDirectory}
+			fenceReached := false
 			h := localinstall.ApplicationUpdateCallbacks{BeforeStop: func(context.Context, localinstall.Manifest, localinstall.Manifest) error {
+				fenceReached = true
 				return errors.New("controlled fence before OS stop")
 			}, Health: func(context.Context, localinstall.Manifest) error { return nil }, RollbackAllowed: func(context.Context, localinstall.Manifest, localinstall.Manifest) error { return nil }, Complete: func(context.Context, localinstall.Manifest, localinstall.ApplicationUpdateStatus) error { return nil }}
 			if reader {
@@ -38,12 +42,15 @@ func TestApplicationReaderDriverPersistsTrustedHookClassification(t *testing.T) 
 				t.Fatal(r, e)
 			}
 			id := update.NewProbe()
-			if _, e = d.Apply(t.Context(), core.ApplicationUpdateOperation{ID: id, Release: r}); e == nil {
-				t.Fatal("fixture fence missing")
+			candidate := d.applicationCandidate(id)
+			if candidate.ID != id || candidate.ReaderBootstrap != reader {
+				t.Fatal("driver lost trusted hook classification", candidate)
 			}
-			s, e := localinstall.ApplicationUpdateState(paths)
-			if e != nil || s.ID != id || s.ReaderBootstrap != reader {
-				t.Fatal("driver lost trusted hook marker", s, e)
+			if _, e = d.Apply(t.Context(), core.ApplicationUpdateOperation{ID: id, Release: r}); e == nil || !strings.Contains(e.Error(), "Fased service is not ready to restart") {
+				t.Fatalf("unlinked fixture service was not refused: %v", e)
+			}
+			if _, e = localinstall.ApplicationUpdateState(paths); !errors.Is(e, os.ErrNotExist) || fenceReached {
+				t.Fatal("unready service must be refused before journaling or fencing", e)
 			}
 		})
 	}

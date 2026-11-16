@@ -34,8 +34,16 @@ func TestSealedCandidateInstallEntry(t *testing.T) {
 		}
 		root, data := os.Getenv("FASED_TEST_SEALED_ROOT"), os.Getenv("FASED_TEST_SEALED_DATA")
 		err = hostCommand([]string{"install", "--bundle", dir, "--bundle-sha256", pin, "--prefix", root, "--data-dir", data, "--start=false"}, io.Discard, io.Discard)
-		if err == nil || !strings.Contains(err.Error(), "installation directory contains unclassified files") {
-			t.Fatal("real installer did not preserve the existing target", err)
+		if err == nil {
+			t.Fatal("real installer accepted an existing target")
+		}
+		if !strings.Contains(err.Error(), "installation directory contains unclassified files") {
+			// A hosted Ubuntu runner can lack the required sandbox profile. It
+			// must then refuse before touching the target, rather than silently
+			// running the sealed installer without its host prerequisite.
+			if hostErr := localinstall.CheckHostRuntime(); hostErr == nil || err.Error() != hostErr.Error() {
+				t.Fatal("real installer refused for an unexpected reason", err, hostErr)
+			}
 		}
 		if b, e := os.ReadFile(filepath.Join(root, "keep")); e != nil || string(b) != "preserve" {
 			t.Fatal("existing target changed", e)
