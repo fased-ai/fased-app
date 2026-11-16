@@ -98,7 +98,9 @@ test("installer embeds a bounded source-bound signer and cleans only its own sta
     });
     assert.equal(headless.status, 0, headless.stderr);
     const headlessCall = await readFile(join(dir, "args"), "utf8");
-    assert.ok(headlessCall.includes("main.compiledNativeSource=" + "a".repeat(40)));
+    assert.ok(
+      headlessCall.includes("main.compiledNativeSource=" + "a".repeat(40)),
+    );
     assert.ok(
       headlessCall.includes(
         "main.compiledNativeSignerSHA256=" +

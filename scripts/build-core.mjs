@@ -29,9 +29,7 @@ if (version && !/^[0-9]+\.[0-9]+\.[0-9]+(?:-[A-Za-z0-9.-]+)?$/.test(version))
   throw Error("Invalid release version");
 if (
   (signer || desktop || source) &&
-  (!signer ||
-    !version ||
-    !/^[a-f0-9]{40}$/.test(source ?? ""))
+  (!signer || !version || !/^[a-f0-9]{40}$/.test(source ?? ""))
 )
   throw Error(
     "Wallet release binding needs a version, signer and exact source",

@@ -1,6 +1,6 @@
 # Installation and update contract
 
-The [user guide](guide/install.md) describes the customer flow. The shared plan owns the [packaged Linux architecture](/home/fc/fasedbot/docs/fased/plan.md#custody-update-architecture-revision), and [Current](/home/fc/fasedbot/docs/fased/execution.md#agent-usability-pass) records source, package, receiver, results and authority. B01's owning checklist is in the shared implementation plan.
+The [user guide](guide/install.md) describes the customer flow. The shared Fased plan defines the packaged Linux architecture, Current records its status, and the shared implementation plan owns B01's checklist.
 
 Recorded 0.1.11 installation/update and distribution evidence remains valid for its original package and environments. The new shared Linux bundle journey is OPEN. Its required path is a terminal installer for one verified prebuilt core/signer bundle, a browser-based wizard, fixed app/signer services and persistent data, and one UI/CLI Update/recovery operation. apt/dnf is used only for needed OS prerequisites; a desktop client is not required.
 
