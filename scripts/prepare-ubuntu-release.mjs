@@ -50,6 +50,42 @@ export function compatibilityConfig(c) {
     throw Error("Reviewed target above the compatibility fixture required");
   return { ...c, version: "0.1.4" };
 }
+
+// The owner's Fedora has no released predecessor. This source-identical,
+// non-publishable baseline is available only to the protected package-only
+// workflow and is never accepted as the configured 0.1.12 release.
+export function fedoraPredecessorConfig(c, env, command) {
+  if (
+    env.FASED_FEDORA_PREDECESSOR === undefined ||
+    env.FASED_FEDORA_PREDECESSOR === "false"
+  )
+    return c;
+  if (
+    !c ||
+    env.FASED_FEDORA_PREDECESSOR !== "true" ||
+    env.FASED_PACKAGE_ONLY !== "true" ||
+    env.GITHUB_EVENT_NAME !== "workflow_dispatch" ||
+    env.GITHUB_REF !== "refs/heads/main" ||
+    env.GITHUB_REPOSITORY !== c.repository ||
+    env.GITHUB_REPOSITORY_ID !== c.repositoryId ||
+    env.GITHUB_REPOSITORY_OWNER_ID !== c.ownerId ||
+    env.GITHUB_WORKFLOW_REF !==
+      `${c.repository}/${c.workflow}@refs/heads/main` ||
+    !commit.test(env.GITHUB_SHA ?? "") ||
+    env.FASED_RELEASE_SOURCE !== env.GITHUB_SHA ||
+    !number.test(env.GITHUB_RUN_ID ?? "") ||
+    !number.test(env.GITHUB_RUN_ATTEMPT ?? "") ||
+    env.RUNNER_OS !== "Linux" ||
+    env.RUNNER_ARCH !== "X64" ||
+    !["prepare", "inventory", "finish"].includes(command) ||
+    c.version !== "0.1.12" ||
+    validateConfig(c).length
+  )
+    throw Error(
+      "Fedora predecessor requires the reviewed package-only workflow",
+    );
+  return { ...c, version: "0.1.10" };
+}
 const sha = (b) => createHash("sha256").update(b).digest("hex");
 const hash = /^[a-f0-9]{64}$/;
 const commit = /^[a-f0-9]{40}$/;
@@ -296,6 +332,7 @@ function prepare(c) {
   write("build-inputs.json", {
     ...context,
     releaseAuthority: c.releaseAuthority,
+    ...(context.buildRef === "refs/heads/main" ? { linuxBundle: true } : {}),
     configSha256: sha(readFileSync("release/ubuntu.json")),
     seedSha256: c.seedSha256,
     custodyApprovalSha256: c.custodyApprovalSha256,
@@ -311,11 +348,14 @@ function prepare(c) {
     { flag: "a" },
   );
 }
-export function expectedProvenance(input, archive, installer) {
+export function expectedProvenance(input, archive, installer, packages) {
   return {
     ...(input.buildRef ? { buildRef: input.buildRef } : {}),
     ...(input.releaseAuthority === "github-attestation-v1"
       ? { installerSha256: installer.sha256 }
+      : {}),
+    ...(input.nativePackages === true
+      ? { debSha256: packages.deb.sha256, rpmSha256: packages.rpm.sha256 }
       : {}),
     archiveName: archive.file,
     archiveSha256: archive.sha256,
@@ -326,7 +366,7 @@ export function expectedProvenance(input, archive, installer) {
     runAttempt: input.runAttempt,
   };
 }
-export function candidateInventory(input, archive, installer, report) {
+export function candidateInventory(input, archive, installer, report, system) {
   for (const [identity, name] of [
     [archive, "fased-app-linux-amd64.tar.gz"],
     [installer, "fased-install-linux-amd64"],
@@ -341,7 +381,7 @@ export function candidateInventory(input, archive, installer, report) {
       throw Error("Exact candidate artifact identity required");
   if (
     report.publicRelease !== false ||
-    report.manifest?.schema !== 2 ||
+    report.manifest?.schema !== (input.linuxBundle === true ? 4 : 2) ||
     report.manifest.unsignedEngineering !== false ||
     report.manifest.desktop !== false ||
     report.manifest.version !== input.version ||
@@ -353,7 +393,103 @@ export function candidateInventory(input, archive, installer, report) {
     !hash.test(report.manifestIdentity?.sha256 ?? "")
   )
     throw Error("Producer/archive version or identity changed");
-  return { archive, installer, manifestSha256: report.manifestIdentity.sha256 };
+  if (input.linuxBundle === true) {
+    const signer = report.manifest.files?.["fased-signer"];
+    const core = report.manifest.files?.["fased-app"];
+    if (
+      input.nativePackages === true ||
+      input.buildRef !== "refs/heads/main" ||
+      input.releaseAuthority !== "github-attestation-v1" ||
+      !hash.test(signer?.sha256 ?? "") ||
+      !Number.isSafeInteger(signer?.bytes) ||
+      signer.bytes <= 0 ||
+      signer.bytes > 64 * 1024 * 1024 ||
+      !hash.test(core?.sha256 ?? "") ||
+      !Number.isSafeInteger(core?.bytes) ||
+      core.bytes <= 0 ||
+      core.bytes > 64 * 1024 * 1024
+    )
+      throw Error("The browser bundle requires one bounded core and signer");
+  } else if (input.linuxBundle !== undefined && input.linuxBundle !== false) {
+    throw Error("Unexpected Linux bundle input");
+  }
+  const result = {
+    archive,
+    installer,
+    manifestSha256: report.manifestIdentity.sha256,
+  };
+  if (input.nativePackages === true) {
+    if (
+      input.buildRef !== "refs/heads/main" ||
+      input.releaseAuthority !== "github-attestation-v1" ||
+      !system
+    )
+      throw Error("Native packages require an unpublished main candidate");
+    const { deb, rpm, receipt } = system;
+    const identities = [
+      [deb, "fased-app-linux-amd64.deb"],
+      [rpm, "fased-app-linux-amd64.rpm"],
+    ];
+    const equalFile = (a, b) =>
+      a && b && a.sha256 === b.sha256 && a.bytes === b.bytes;
+    if (
+      !receipt ||
+      receipt.version !== 1 ||
+      receipt.product !== input.version ||
+      receipt.source !== input.sourceCommit ||
+      receipt.architecture !== "amd64" ||
+      receipt.publicRelease !== false ||
+      !receipt.inputs ||
+      !receipt.packages ||
+      receipt.inputs["fased-desktop"] !== undefined ||
+      !equalFile(
+        receipt.inputs["fased-app"],
+        report.manifest.files?.["fased-app"],
+      ) ||
+      !equalFile(receipt.inputs["fased-install"], {
+        sha256: installer.sha256,
+        bytes: installer.size,
+      }) ||
+      !hash.test(receipt.inputs["fased-signer"]?.sha256 ?? "") ||
+      !Number.isSafeInteger(receipt.inputs["fased-signer"]?.bytes) ||
+      receipt.inputs["fased-signer"].bytes <= 0 ||
+      receipt.inputs["fased-signer"].bytes > 64 * 1024 * 1024 ||
+      Object.keys(receipt.packages).sort().join(",") !==
+        identities
+          .map(([, name]) => name)
+          .sort()
+          .join(",") ||
+      identities.some(
+        ([a, name]) =>
+          !a ||
+          a.file !== name ||
+          !hash.test(a.sha256 ?? "") ||
+          !Number.isSafeInteger(a.size) ||
+          a.size <= 0 ||
+          a.size > 128 * 1024 * 1024 ||
+          !equalFile(receipt.packages[name], {
+            sha256: a.sha256,
+            bytes: a.size,
+          }),
+      )
+    )
+      throw Error("Native package identities differ from the reviewed build");
+    result.deb = deb;
+    result.rpm = rpm;
+  } else if (
+    system !== undefined ||
+    (input.nativePackages !== undefined && input.nativePackages !== false)
+  ) {
+    throw Error("Unexpected native package inputs");
+  }
+  return result;
+}
+function nativePackageInputs() {
+  return {
+    deb: file("fased-app-linux-amd64.deb", 128 * 1024 * 1024).identity,
+    rpm: file("fased-app-linux-amd64.rpm", 128 * 1024 * 1024).identity,
+    receipt: read("fased-linux-system-amd64/packages.json"),
+  };
 }
 function inventory() {
   const input = read("build-inputs.json");
@@ -366,13 +502,17 @@ function inventory() {
     128 * 1024 * 1024,
   ).identity;
   const report = read("fased-app-linux-amd64.json");
-  write(
-    "artifact-inventory.json",
-    candidateInventory(input, archive, installer, report),
+  const objects = candidateInventory(
+    input,
+    archive,
+    installer,
+    report,
+    input.nativePackages === true ? nativePackageInputs() : undefined,
   );
+  write("artifact-inventory.json", objects);
   write(
     "expected-provenance.json",
-    expectedProvenance(input, archive, installer),
+    expectedProvenance(input, archive, installer, objects),
   );
 }
 export function verifiedCandidate(c, input, objects, decision, proof, policy) {
@@ -409,6 +549,56 @@ export function verifiedCandidate(c, input, objects, decision, proof, policy) {
   )
     throw Error("Actual offline-verified provenance required");
 }
+export function attestedCandidatePacket(input, objects, entry, proof) {
+  if (
+    input.linuxBundle === true &&
+    (input.nativePackages === true ||
+      input.buildRef !== "refs/heads/main" ||
+      input.tagObject !== "" ||
+      objects.deb ||
+      objects.rpm)
+  )
+    throw Error("Linux bundle requires one unpublished main candidate");
+  if (
+    input.nativePackages === true &&
+    (input.buildRef !== "refs/heads/main" ||
+      input.tagObject !== "" ||
+      !objects.deb ||
+      !objects.rpm)
+  )
+    throw Error("Native packages require an unpublished main candidate");
+  return {
+    version:
+      input.linuxBundle === true
+        ? 4
+        : input.nativePackages === true
+          ? 3
+          : input.buildRef
+            ? 2
+            : 1,
+    productVersion: input.version,
+    source: input.sourceCommit,
+    bundleSha256: objects.manifestSha256,
+    archive: objects.archive,
+    installer: objects.installer,
+    entry,
+    ...(input.nativePackages === true
+      ? { deb: objects.deb, rpm: objects.rpm }
+      : {}),
+    release: {
+      ...(input.buildRef ? { buildRef: input.buildRef } : {}),
+      installerSha256: objects.installer.sha256,
+      sourceTree: input.sourceTree,
+      tagObject: input.tagObject,
+      packageLockSha256: input.packageLockSha256,
+      goSumSha256: input.goSumSha256,
+      workflowCommit: input.workflowCommit,
+      runId: input.runId,
+      runAttempt: input.runAttempt,
+      provenance: proof,
+    },
+  };
+}
 function finish(c) {
   const input = read("build-inputs.json"),
     objects = read("artifact-inventory.json"),
@@ -416,7 +606,7 @@ function finish(c) {
   if (
     JSON.stringify(read("expected-provenance.json")) !==
     JSON.stringify(
-      expectedProvenance(input, objects.archive, objects.installer),
+      expectedProvenance(input, objects.archive, objects.installer, objects),
     )
   )
     throw Error("Verified artifact/source expectations changed");
@@ -429,6 +619,19 @@ function finish(c) {
         JSON.stringify(identity)
     )
       throw Error("Candidate artifact changed after verification");
+  if (input.nativePackages === true || input.linuxBundle === true) {
+    const current = candidateInventory(
+      input,
+      objects.archive,
+      objects.installer,
+      read("fased-app-linux-amd64.json"),
+      input.nativePackages === true ? nativePackageInputs() : undefined,
+    );
+    if (JSON.stringify(current) !== JSON.stringify(objects))
+      throw Error("Native packages changed after provenance verification");
+  } else if (objects.deb !== undefined || objects.rpm !== undefined) {
+    throw Error("Unexpected native package inventory");
+  }
   const proof = file(
     "fased-app-linux-amd64.provenance.sigstore.json",
     64 * 1024,
@@ -490,27 +693,15 @@ function finish(c) {
     activation: false,
   });
   if (c.releaseAuthority === "github-attestation-v1")
-    write("fased-release.json", {
-      version: input.buildRef ? 2 : 1,
-      productVersion: input.version,
-      source: input.sourceCommit,
-      bundleSha256: objects.manifestSha256,
-      archive: objects.archive,
-      installer: objects.installer,
-      entry: file("install.sh", 2 * 1024 * 1024).identity,
-      release: {
-        ...(input.buildRef ? { buildRef: input.buildRef } : {}),
-        installerSha256: objects.installer.sha256,
-        sourceTree: input.sourceTree,
-        tagObject: input.tagObject,
-        packageLockSha256: input.packageLockSha256,
-        goSumSha256: input.goSumSha256,
-        workflowCommit: input.workflowCommit,
-        runId: input.runId,
-        runAttempt: input.runAttempt,
-        provenance: proof,
-      },
-    });
+    write(
+      "fased-release.json",
+      attestedCandidatePacket(
+        input,
+        objects,
+        file("install.sh", 2 * 1024 * 1024).identity,
+        proof,
+      ),
+    );
 }
 // Renewed metadata gets a new retained operation automatically. Identical
 // approved bytes always reopen the same journal; no journal is reset/deleted.
@@ -992,6 +1183,7 @@ if (
       evidence = ".evidence/ubuntu-release-compatibility";
       c = compatibilityConfig(c);
     }
+    c = fedoraPredecessorConfig(c, process.env, command);
     const missing = validateConfig(c);
     switch (command) {
       case "replay": {

@@ -170,3 +170,20 @@ func TestCustodySourceProjectionRequiresMatchingOwnerManifest(t *testing.T) {
 		t.Fatal("legacy non-enrollment adopted", got, err)
 	}
 }
+
+func TestPackageSourceProjectionKeepsItsInstanceIdentity(t *testing.T) {
+	id := strings.Repeat("a", 32)
+	root, err := custodyinstall.PackageRoot(1000, "local", id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := signer.Config{OwnerUID: 1000, AppUID: 1001, SignerUID: 1002, SignerID: id}
+	m := custodyinstall.Manifest{Layout: custodyinstall.PackageLayout, Owner: c.OwnerUID, Root: root, ID: id, Enrollment: true, Location: "local", App: custodyinstall.Identity{UID: c.AppUID}, Signer: custodyinstall.Identity{UID: c.SignerUID}}
+	if got, err := custodySourceProjection(m, c, root, root+"/app-state", "local", ""); err != nil || got != "local" {
+		t.Fatal("package installation did not retain its own source", got, err)
+	}
+	other, _ := custodyinstall.PackageRoot(1000, "local", strings.Repeat("b", 32))
+	if _, err := custodySourceProjection(m, c, other, other+"/app-state", "local", ""); err == nil {
+		t.Fatal("another package instance was accepted")
+	}
+}

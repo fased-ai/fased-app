@@ -83,6 +83,58 @@ func releaseArchive(t *testing.T, old []byte, engineering bool, version ...strin
 	return out.Bytes(), digest(files[manifest])
 }
 
+func pairedReleaseArchive(t *testing.T, old []byte) ([]byte, string) {
+	t.Helper()
+	g, err := gzip.NewReader(bytes.NewReader(old))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer g.Close()
+	files := map[string][]byte{}
+	tr := tar.NewReader(g)
+	for {
+		h, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		files[h.Name], err = io.ReadAll(tr)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	const prefix = "fased-app-linux-amd64/"
+	var m bundle.Manifest
+	if json.Unmarshal(files[prefix+"bundle.json"], &m) != nil {
+		t.Fatal("fixture manifest")
+	}
+	signer := []byte("disposable signer")
+	m.Schema = 4
+	m.Files["fased-signer"] = bundle.File{SHA256: digest(signer), Bytes: int64(len(signer))}
+	files[prefix+"fased-signer"] = signer
+	files[prefix+"bundle.json"] = jsonBytes(t, m)
+	var out bytes.Buffer
+	zw := gzip.NewWriter(&out)
+	tw := tar.NewWriter(zw)
+	for name, data := range files {
+		if err := tw.WriteHeader(&tar.Header{Name: name, Size: int64(len(data)), Mode: 0700}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := tw.Write(data); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return out.Bytes(), digest(files[prefix+"bundle.json"])
+}
+
 func publishProduction(f *firstFixture, proof []byte, omit bool) {
 	db := jsonBytes(f.t, f.descriptor)
 	f.targets.Signed.Targets = map[string]*metadata.TargetFiles{}

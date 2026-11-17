@@ -22,6 +22,7 @@ import (
 	"github.com/fased-ai/fased-app/internal/connection"
 	"github.com/fased-ai/fased-app/internal/core"
 	"github.com/fased-ai/fased-app/internal/custodyinstall"
+	"github.com/fased-ai/fased-app/internal/maintenance"
 	"github.com/fased-ai/fased-app/internal/privateaccess"
 	"github.com/fased-ai/fased-app/internal/tailnet"
 	"github.com/fased-ai/fased-app/internal/vpsinstall"
@@ -90,6 +91,28 @@ func remoteAccessDirectory() (string, error) {
 	return dir, nil
 }
 
+func protectedPendingRemoteOrigin(ctx context.Context, diagnostics io.Writer) (string, error) {
+	if _, err := maintenance.ReadAuthority(os.Getuid()); errors.Is(err, os.ErrNotExist) {
+		return "", nil
+	} else if err != nil {
+		return "", err
+	}
+	b, err := maintenance.Call(ctx, maintenance.Request{Version: 1, Action: "remote-preflight-origin"}, diagnostics)
+	if err != nil {
+		return "", err
+	}
+	var response maintenance.Response
+	var origin string
+	if json.Unmarshal(b, &response) != nil || json.Unmarshal(response.Payload, &origin) != nil {
+		return "", errors.New("protected private setup origin is unavailable")
+	}
+	return origin, nil
+}
+
+func sameRemoteInstallerInput(m vpsinstall.Manifest, listen, origin string, sequence uint64, release, coreHash string) bool {
+	return m.Listen == listen && m.PublicOrigin == origin && m.ApplicationSequence == sequence && m.ApplicationReleaseSHA256 == release && m.CoreSHA256 == coreHash
+}
+
 func enableRemoteAccess(ctx context.Context, m vpsinstall.Manifest, system *custodyinstall.System, initial ...tailnet.Identity) (string, error) {
 	if len(initial) > 1 {
 		return "", errors.New("one initial Tailscale device required")
@@ -113,7 +136,11 @@ func enableRemoteAccess(ctx context.Context, m vpsinstall.Manifest, system *cust
 	if err != nil {
 		return "", err
 	}
-	plan.Target = tailnet.Target(m.Data)
+	ingressErr := vpsinstall.ProtectedIngressReady(ctx, m, status.InstanceID, system)
+	plan, err = remoteIngressPlan(plan, m, ingressErr == nil)
+	if err != nil {
+		return "", err
+	}
 	dir, err := remoteAccessDirectory()
 	if err != nil {
 		return "", err
@@ -127,9 +154,24 @@ func enableRemoteAccess(ctx context.Context, m vpsinstall.Manifest, system *cust
 	}
 	manager.InitialPeer = func() (tailnet.Identity, bool, error) { return loadRemoteSetupOwner(dir, m, status.InstanceID) }
 	if err = manager.Enable(ctx, dir, plan, status.InstanceID); err != nil {
-		return "", err
+		return "", errors.Join(err, ingressErr)
 	}
 	return plan.Origin, nil
+}
+
+// An unverified listener must never replace the established route. A ready
+// legacy route remains usable and removable until the protected helper proves
+// the same running instance through the root-owned socket.
+func remoteIngressPlan(plan privateaccess.Plan, m vpsinstall.Manifest, protected bool) (privateaccess.Plan, error) {
+	plan.Target = tailnet.Target(m.Data)
+	if protected {
+		path, err := tailnet.ProtectedSocket("vps", m.OwnerUID)
+		if err != nil {
+			return plan, err
+		}
+		plan.Target = "unix:" + path
+	}
+	return plan, nil
 }
 
 func remotePublicOrigin(plan privateaccess.Plan) string {
@@ -158,18 +200,35 @@ func managedRemoteInstall(ctx context.Context, corePath, hash, listen string, pl
 	if err != nil {
 		return err
 	}
-	gateCtx, cancel := context.WithTimeout(ctx, 5*time.Minute)
-	defer cancel()
-	owner, err := remotePrivateAccess(system).BeforeInstall(gateCtx, accessDir, plan, errOut)
+	var owner tailnet.Identity
+	_, authorityErr := maintenance.ReadAuthority(os.Getuid())
+	protected := authorityErr == nil
+	if authorityErr != nil && !errors.Is(authorityErr, os.ErrNotExist) {
+		return authorityErr
+	}
+	if !protected {
+		gateCtx, cancel := context.WithTimeout(ctx, 5*time.Minute)
+		defer cancel()
+		owner, err = remotePrivateAccess(system).BeforeInstall(gateCtx, accessDir, plan, errOut)
+		if err != nil {
+			return err
+		}
+		if err = saveInitialRemoteOwner(accessDir, remoteSetupOwner{Version: 1, Origin: plan.Origin, Listen: listen, EngineSHA256: hash, Owner: owner}); err != nil {
+			return err
+		}
+	}
+	options := vpsinstall.Options{ApplicationSequence: admitted.sequence, ApplicationReleaseSHA256: admitted.release, Core: corePath, CoreSHA256: hash, Listen: listen, PublicOrigin: remotePublicOrigin(plan), PrepareHost: prepare, Start: start}
+	if protected {
+		options.InitialOwner = &owner
+	}
+	m, err := vpsinstall.Install(ctx, options, system)
 	if err != nil {
 		return err
 	}
-	if err = core.WritePrivateJSON(filepath.Join(accessDir, "owner-handoff.json"), remoteSetupOwner{Version: 1, Origin: plan.Origin, Listen: listen, EngineSHA256: hash, Owner: owner}); err != nil {
-		return err
-	}
-	m, err := vpsinstall.Install(ctx, vpsinstall.Options{ApplicationSequence: admitted.sequence, ApplicationReleaseSHA256: admitted.release, Core: corePath, CoreSHA256: hash, Listen: listen, PublicOrigin: remotePublicOrigin(plan), PrepareHost: prepare, Start: start}, system)
-	if err != nil {
-		return err
+	if protected {
+		if err = saveInitialRemoteOwner(accessDir, remoteSetupOwner{Version: 1, Origin: plan.Origin, Listen: listen, EngineSHA256: hash, Owner: owner}); err != nil {
+			return err
+		}
 	}
 	if e := installCommand(m.Core, m.Root, m.Data, true, errOut); e != nil {
 		return e
@@ -556,7 +615,8 @@ func enableEnrolledRemoteAccess(ctx context.Context, source vpsinstall.Manifest,
 	if e != nil {
 		return "", e
 	}
-	plan, e = enrolledPrivateAccessPlan(plan, target)
+	ingressErr := enrolledProtectedIngressReady(ctx, target, commit.InstanceID)
+	plan, e = enrolledVerifiedIngressPlan(plan, target, ingressErr == nil)
 	if e != nil {
 		return "", e
 	}
@@ -570,9 +630,38 @@ func enableEnrolledRemoteAccess(ctx context.Context, source vpsinstall.Manifest,
 	}
 	manager.InitialPeer = func() (tailnet.Identity, bool, error) { return loadRemoteSetupOwner(dir, source, commit.InstanceID) }
 	if e = manager.Enable(ctx, dir, plan, commit.InstanceID); e != nil {
-		return "", e
+		return "", errors.Join(e, ingressErr)
 	}
 	return plan.Origin, nil
+}
+
+func enrolledProtectedIngressReady(ctx context.Context, target custodyinstall.Manifest, instance string) error {
+	if target.Owner != os.Getuid() || target.Location != "remote" || instance == "" {
+		return errors.New("original Remote custody owner required")
+	}
+	b, err := maintenance.Call(ctx, maintenance.Request{Version: 1, Action: "custody-ingress-ready"}, io.Discard)
+	if err != nil {
+		return err
+	}
+	var response maintenance.Response
+	var actual string
+	if json.Unmarshal(b, &response) != nil || json.Unmarshal(response.Payload, &actual) != nil || actual != instance {
+		return errors.New("protected custody listener belongs to another instance")
+	}
+	return nil
+}
+
+func enrolledVerifiedIngressPlan(plan privateaccess.Plan, target custodyinstall.Manifest, protected bool) (privateaccess.Plan, error) {
+	plan, err := enrolledPrivateAccessPlan(plan, target)
+	if err != nil || !protected {
+		return plan, err
+	}
+	path, err := tailnet.ProtectedSocket("custody", target.Owner)
+	if err != nil {
+		return plan, err
+	}
+	plan.Target = "unix:" + path
+	return plan, nil
 }
 
 func enrolledPrivateAccessPlan(plan privateaccess.Plan, target custodyinstall.Manifest) (privateaccess.Plan, error) {

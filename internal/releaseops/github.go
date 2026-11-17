@@ -1,7 +1,10 @@
 package releaseops
 
 import (
+	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
@@ -343,6 +346,24 @@ func (g *GitHubTransport) PublishedAsset(ctx context.Context, a GitHubAsset) ([]
 }
 
 func (g *GitHubTransport) asset(ctx context.Context, a GitHubAsset, discovered bool) ([]byte, error) {
+	var output bytes.Buffer
+	if err := g.writeAsset(ctx, a, discovered, &output); err != nil {
+		return nil, err
+	}
+	return output.Bytes(), nil
+}
+
+// WritePublishedAsset streams an immutable release asset with the same host,
+// membership, length and digest checks as PublishedAsset. Callers must discard
+// partial output when it returns an error.
+func (g *GitHubTransport) WritePublishedAsset(ctx context.Context, a GitHubAsset, out io.Writer) error {
+	return g.writeAsset(ctx, a, true, out)
+}
+
+func (g *GitHubTransport) writeAsset(ctx context.Context, a GitHubAsset, discovered bool, out io.Writer) error {
+	if out == nil {
+		return errors.New("GitHub asset output required")
+	}
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	check := a
@@ -350,65 +371,73 @@ func (g *GitHubTransport) asset(ctx context.Context, a GitHubAsset, discovered b
 		check.CDNPath = g.policy.CDNPathPrefix + "discovery"
 	}
 	if err := check.Validate(g.policy); err != nil {
-		return nil, err
+		return err
 	}
 	g.assets++
 	if g.assets > githubMaxAssets {
-		return nil, errors.New("GitHub asset budget exhausted")
+		return errors.New("GitHub asset budget exhausted")
 	}
 	ctx, cancel, err := g.context(ctx)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	defer cancel()
 	if err = g.bindAsset(ctx, a); err != nil {
-		return nil, err
+		return err
 	}
 	u := "https://" + g.policy.APIHost + "/repos/" + g.policy.Repository + "/releases/assets/" + a.AssetID
 	for hop := 0; hop < 2; hop++ {
 		r, err := g.request(ctx, u, "application/octet-stream")
 		if err != nil {
-			return nil, err
+			return err
 		}
 		if r.StatusCode == 301 || r.StatusCode == 302 || r.StatusCode == 303 || r.StatusCode == 307 || r.StatusCode == 308 {
 			location := r.Header.Get("Location")
 			r.Body.Close()
 			if hop != 0 || strings.Contains(location, "#") {
-				return nil, errors.New("GitHub redirect refused")
+				return errors.New("GitHub redirect refused")
 			}
 			if discovered && a.CDNPath == "" {
 				u, e := url.Parse(location)
 				if e != nil || !canonicalPath(u.Path) || !strings.HasPrefix(u.Path, g.policy.CDNPathPrefix) {
-					return nil, errors.New("GitHub discovered CDN path refused")
+					return errors.New("GitHub discovered CDN path refused")
 				}
 				a.CDNPath = u.Path
 			}
 			next, e := parsed(location, g.policy.CDNHost, a.CDNPath, true)
 			if e != nil {
-				return nil, errors.New("GitHub redirect refused")
+				return errors.New("GitHub redirect refused")
 			}
 			query, decodeErr := url.QueryUnescape(next.RawQuery)
 			if decodeErr != nil || next.ForceQuery || strings.ContainsAny(location, " \t\r\n\x00") {
-				return nil, errors.New("GitHub redirect refused")
+				return errors.New("GitHub redirect refused")
 			}
 			for _, c := range query {
 				if unicode.IsControl(c) {
-					return nil, errors.New("GitHub redirect refused")
+					return errors.New("GitHub redirect refused")
 				}
 			}
 			u = next.String()
 			continue
 		}
-		b, err := githubRead(r, a.Size, a.Size, false)
-		if err != nil {
-			return nil, err
+		if r.Body == nil {
+			return errors.New("GitHub response unavailable")
 		}
-		if sha(b) != a.SHA256 {
-			return nil, errors.New("GitHub artifact hash mismatch")
+		if r.StatusCode != http.StatusOK || r.Header.Get("Content-Encoding") != "" || r.Header.Get("Content-Range") != "" || r.ContentLength != a.Size {
+			r.Body.Close()
+			return errors.New("GitHub complete bounded unencoded200 response required")
 		}
-		return b, nil
+		h := sha256.New()
+		n, copyErr := io.CopyBuffer(io.MultiWriter(out, h), io.LimitReader(r.Body, a.Size+1), make([]byte, 32<<10))
+		if err = errors.Join(copyErr, r.Body.Close()); err != nil || n != a.Size {
+			return errors.New("GitHub response incomplete or oversized")
+		}
+		if hex.EncodeToString(h.Sum(nil)) != a.SHA256 {
+			return errors.New("GitHub artifact hash mismatch")
+		}
+		return nil
 	}
-	return nil, errors.New("GitHub redirect budget exhausted")
+	return errors.New("GitHub redirect budget exhausted")
 }
 
 // MetadataURL is a display-free policy helper; redirect query strings never

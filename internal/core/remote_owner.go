@@ -225,6 +225,55 @@ func (h *HTTPHandler) remoteOwnerAPI(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]any{"authenticated": true, "csrfToken": csrfToken(token), "sessionToken": token, "sessionMode": h.sessionMode(r)})
 }
 
+// Only the installed app-identity IPC may bind the previously verified
+// Tailscale device. The browser cannot choose a different initial owner.
+func (h *HTTPHandler) remotePackageSetupAPI(w http.ResponseWriter, r *http.Request) {
+	if r.Context().Value(privateIPCKey{}) != true || r.Context().Value(remoteIdentityKey{}) != nil || !h.remoteIngress || h.instanceLocation != "remote" ||
+		h.instanceOwnerKind != "custody" || h.instanceOwnerUID <= 0 || h.instanceOwnerUID != h.store.protectedOwnerUID {
+		writeError(w, 403, "protected Remote setup required")
+		return
+	}
+	if !h.mutation(w, r) {
+		return
+	}
+	var request struct {
+		Device tailnet.Identity `json:"device"`
+	}
+	if !decodeJSON(w, r, &request) {
+		return
+	}
+	device := request.Device
+	if device.UserID <= 0 || device.NodeID == "" || len(device.NodeID) > 128 || device.Login == "" || len(device.Login) > 256 {
+		writeError(w, 400, "approved Remote device required")
+		return
+	}
+	owner, err := h.store.remoteOwner(r.Context())
+	if err != nil {
+		writeError(w, 409, "Remote owner recovery required")
+		return
+	}
+	code := ""
+	if owner.UserID != 0 {
+		if !remoteDeviceAllowed(owner, device) {
+			writeError(w, 403, "the original Remote owner is required")
+			return
+		}
+	} else {
+		claimed, e := h.store.Claimed(r.Context())
+		if e != nil || claimed {
+			writeError(w, 409, "existing owner must be preserved")
+			return
+		}
+		claim, e := h.store.IssueRemoteClaim(r.Context(), device)
+		if e != nil {
+			writeError(w, 409, "the original Remote device is required")
+			return
+		}
+		code = claim.Code
+	}
+	writeJSON(w, 200, map[string]string{"instanceId": h.store.instanceID, "code": code})
+}
+
 // Only the separate root-peer Unix ingress may supply proxy identity. Loopback
 // HTTP, private maintenance IPC and caller-provided headers grant no such role.
 func (h *HTTPHandler) remoteProxy(resolve tailnet.Resolver) http.Handler {
@@ -395,20 +444,29 @@ func (s *Store) IssueRemoteClaim(ctx context.Context, id tailnet.Identity) (Clai
 	}
 	s.authMu.Lock()
 	defer s.authMu.Unlock()
+	var previous string
+	if err := s.db.QueryRowContext(ctx, "SELECT COALESCE(claim_hash,'') FROM instance WHERE id=1 AND password_hash IS NULL").Scan(&previous); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return ClaimCode{}, ErrClaimed
+		}
+		return ClaimCode{}, err
+	}
+	if strings.HasPrefix(previous, "remote-v1:") {
+		pending, err := s.PendingRemoteClaim(ctx)
+		if err != nil || pending.UserID != id.UserID || pending.NodeID != id.NodeID {
+			return ClaimCode{}, ErrUnauthorized
+		}
+	}
 	code, err := randomToken()
 	if err != nil {
 		return ClaimCode{}, err
 	}
 	result := ClaimCode{Code: code, ExpiresAt: s.now().Add(ClaimLifetime)}
-	query, err := s.db.ExecContext(ctx, "UPDATE instance SET claim_hash=?,claim_expires=? WHERE id=1 AND password_hash IS NULL", remoteClaimScope(id)+tokenHash(code), result.ExpiresAt.Unix())
+	updated, err := s.compareAndSetUnclaimedCode(ctx, previous, remoteClaimScope(id)+tokenHash(code), result.ExpiresAt.Unix())
 	if err != nil {
 		return ClaimCode{}, err
 	}
-	count, err := query.RowsAffected()
-	if err != nil {
-		return ClaimCode{}, err
-	}
-	if count != 1 {
+	if !updated {
 		return ClaimCode{}, ErrClaimed
 	}
 	if err = WritePrivateJSON(filepath.Join(s.dir, "claim-code.json"), result); err != nil {

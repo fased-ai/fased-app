@@ -11,6 +11,8 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+
+	"github.com/fased-ai/fased-app/internal/tailnet"
 )
 
 type Options struct {
@@ -18,7 +20,8 @@ type Options struct {
 	ApplicationReleaseSHA256               string
 	Core, CoreSHA256, Listen, PublicOrigin string
 	PrepareHost, Start                     bool
-	ProviderFixture                        bool // Explicit controlled installer input, not an ordinary UI preference.
+	ProviderFixture                        bool              // Explicit controlled installer input, not an ordinary UI preference.
+	InitialOwner                           *tailnet.Identity // Output of protected initial browser confirmation, if requested.
 }
 
 // Manifest is root-owned configuration. Only the authenticated app-only

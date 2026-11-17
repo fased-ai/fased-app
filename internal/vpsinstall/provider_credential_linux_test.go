@@ -9,7 +9,150 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/fased-ai/fased-app/internal/custodyinstall"
+	"github.com/fased-ai/fased-app/internal/tailnet"
 )
+
+func TestRemoteAcceptsOnlyExactProtectedIngressDropIn(t *testing.T) {
+	h, o, m, _ := credentialFixture(t)
+	m.PublicOrigin = "https://fixture.example.ts.net"
+	path, body, err := tailnet.ProtectedSocketDropIn("vps", m.OwnerUID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	name, socket, err := tailnet.ProtectedSocketUnit("vps", m.OwnerUID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.files[filepath.Dir(path)] = hostFile{UID: 0, GID: 0, Mode: os.ModeDir | 0755, Directory: true}
+	h.files[path] = hostFile{UID: 0, GID: 0, Mode: 0644, Regular: true, Data: body}
+	h.files["/etc/systemd/system/"+name] = hostFile{UID: 0, GID: 0, Mode: 0644, Regular: true, Data: socket}
+	if !validTaskCredentialDropIn(o, m, path) {
+		t.Fatal("exact protected ingress drop-in refused")
+	}
+	if validTaskCredentialDropIn(o, m, path+" "+path) || validTaskCredentialDropIn(o, m, path+" /etc/systemd/system/foreign.conf") {
+		t.Fatal("duplicate or foreign drop-in accepted")
+	}
+	delete(h.files, "/etc/systemd/system/"+name)
+	if validTaskCredentialDropIn(o, m, path) {
+		t.Fatal("drop-in accepted without its exact protected socket unit")
+	}
+}
+
+func TestLoadedProtectedIngressRequiresReloadedSystemd(t *testing.T) {
+	h, o, m, _ := credentialFixture(t)
+	m.PublicOrigin = "https://fixture.example.ts.net"
+	h.files[m.UnitPath] = hostFile{UID: 0, GID: 0, Mode: 0644, Regular: true, Data: unit(m)}
+	path, body, err := tailnet.ProtectedSocketDropIn("vps", m.OwnerUID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	name, socket, err := tailnet.ProtectedSocketUnit("vps", m.OwnerUID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.files[filepath.Dir(path)] = hostFile{UID: 0, GID: 0, Mode: os.ModeDir | 0755, Directory: true}
+	h.files[path] = hostFile{UID: 0, GID: 0, Mode: 0644, Regular: true, Data: body}
+	h.files["/etc/systemd/system/"+name] = hostFile{UID: 0, GID: 0, Mode: 0644, Regular: true, Data: socket}
+	command := o.command
+	stale := "no"
+	o.command = func(ctx context.Context, args ...string) ([]byte, error) {
+		b, e := command(ctx, args...)
+		b = bytes.Replace(b, []byte("DropInPaths=\n"), []byte("DropInPaths="+path+"\n"), 1)
+		return append(b, []byte("NeedDaemonReload="+stale+"\n")...), e
+	}
+	if err := loaded(t.Context(), o, m); err != nil {
+		t.Fatal(err)
+	}
+	stale = "yes"
+	if err := loaded(t.Context(), o, m); err == nil {
+		t.Fatal("unloaded ingress configuration accepted")
+	}
+}
+
+func TestProtectedIngressProvisionPreservesForeignAndRetries(t *testing.T) {
+	h, o, m, _ := credentialFixture(t)
+	m.PublicOrigin = "https://fixture.example.ts.net"
+	probeCalls := 0
+	o.ingressContract = func(_ context.Context, target Manifest) error {
+		probeCalls++
+		if target.Core != m.Core || target.AppUID != m.AppUID {
+			t.Fatal("foreign service probed")
+		}
+		return nil
+	}
+	o.protectedPublish = func(path string, data []byte, mode os.FileMode) error {
+		if previous, ok := h.files[path]; ok && !known(previous, data, mode) {
+			return os.ErrExist
+		}
+		h.files[path] = hostFile{UID: 0, GID: 0, Mode: mode, Regular: true, Data: bytes.Clone(data)}
+		return nil
+	}
+	path, body, _ := tailnet.ProtectedSocketDropIn("vps", m.OwnerUID)
+	name, unit, _ := tailnet.ProtectedSocketUnit("vps", m.OwnerUID)
+	for range 2 {
+		if err := prepareProtectedIngress(t.Context(), o, m); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if probeCalls != 2 || !known(h.files[path], body, 0644) || !known(h.files["/etc/systemd/system/"+name], unit, 0644) {
+		t.Fatal("matching socket files not retained")
+	}
+	foreign := []byte("foreign service policy")
+	h.files[path] = hostFile{UID: 0, GID: 0, Mode: 0644, Regular: true, Data: foreign}
+	if err := prepareProtectedIngress(t.Context(), o, m); err == nil || !bytes.Equal(h.files[path].Data, foreign) {
+		t.Fatal("foreign drop-in was overwritten")
+	}
+	delete(h.files, path)
+	o.ingressContract = nil
+	if err := prepareProtectedIngress(t.Context(), o, m); err == nil {
+		t.Fatal("unverified core accepted")
+	}
+}
+
+func TestProtectedRemoteInstallProvisionsIngressBeforeService(t *testing.T) {
+	h, o, options := fixtureHost()
+	options.PublicOrigin = "https://fixture.example.ts.net"
+	var published []string
+	o.protectedPublish = func(path string, data []byte, mode os.FileMode) error {
+		if previous, ok := h.files[path]; ok && !known(previous, data, mode) {
+			return os.ErrExist
+		}
+		published = append(published, path)
+		h.files[path] = hostFile{UID: 0, GID: 0, Mode: mode, Regular: true, Data: bytes.Clone(data)}
+		return nil
+	}
+	o.ingressContract = func(_ context.Context, m Manifest) error {
+		if f := h.files[m.Core]; !f.Regular || hash(f.Data) != m.CoreSHA256 {
+			t.Fatal("unverified installed core used")
+		}
+		return nil
+	}
+	command := o.command
+	o.command = func(ctx context.Context, args ...string) ([]byte, error) {
+		b, err := command(ctx, args...)
+		path, _, _ := tailnet.ProtectedSocketDropIn("vps", o.uid)
+		if _, ok := h.files[path]; ok {
+			b = bytes.Replace(b, []byte("DropInPaths=\n"), []byte("DropInPaths="+path+"\n"), 1)
+			b = append(b, []byte("NeedDaemonReload=no\n")...)
+		}
+		return b, err
+	}
+	m, err := install(t.Context(), options, o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	drop, _, _ := tailnet.ProtectedSocketDropIn("vps", m.OwnerUID)
+	name, _, _ := tailnet.ProtectedSocketUnit("vps", m.OwnerUID)
+	positions := map[string]int{}
+	for i, path := range published {
+		positions[path] = i + 1
+	}
+	if positions["/etc/systemd/system/"+name] == 0 || positions[drop] <= positions["/etc/systemd/system/"+name] || positions[m.UnitPath] <= positions[drop] {
+		t.Fatal("protected listener was not installed before the service", published)
+	}
+}
 
 func credentialFixture(t *testing.T) (*memoryHost, hostOps, Manifest, *int) {
 	t.Helper()
@@ -81,6 +224,19 @@ func TestProtectedProviderCredentialInstallRetryRemove(t *testing.T) {
 	if *count != 1 || !bytes.Equal(original, h.files[path].Data) {
 		t.Fatal("repair changed OS identity")
 	}
+}
+
+func TestProviderCredentialOverrideUsesBoundPrivilegedWrite(t *testing.T) {
+	h, o, m, _ := credentialFixture(t)
+	if err := prepareTaskCredentialDropIn(t.Context(), o, m); err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range h.calls {
+		if custodyinstall.AllowedBoundUnitWrite(o.uid, taskCredentialDropIn(m), args) {
+			return
+		}
+	}
+	t.Fatal("provider credential override did not use a content-bound privileged write")
 }
 
 func TestProtectedProviderCredentialOrdinaryReader(t *testing.T) {

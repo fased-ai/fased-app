@@ -1,5 +1,14 @@
 [
   {
+    "id": "fedora",
+    "version": "45",
+    "codename": "",
+    "gtk": "gtk3",
+    "architectures": ["amd64"],
+    "restrictedNamespaces": false,
+    "remote": false
+  },
+  {
     "id": "ubuntu",
     "version": "22.04",
     "codename": "jammy",

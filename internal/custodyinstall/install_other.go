@@ -18,9 +18,16 @@ type System struct {
 
 var unsupported = errors.New("installer-managed custody identities are supported only by the Ubuntu fixture; wallets remain disabled")
 
-func Install(context.Context, Options, *System) (Manifest, error)                { return Manifest{}, unsupported }
-func Load(int) (Manifest, error)                                                 { return Manifest{}, unsupported }
-func Verify(Manifest) error                                                      { return unsupported }
+func Install(context.Context, Options, *System) (Manifest, error)         { return Manifest{}, unsupported }
+func Load(int) (Manifest, error)                                          { return Manifest{}, unsupported }
+func LoadPackageInstance(int, string) (Manifest, error)                   { return Manifest{}, unsupported }
+func Verify(Manifest) error                                               { return unsupported }
+func VerifyPackageInstance(Manifest) error                                { return unsupported }
+func VerifyUnconfiguredPackageSigner(context.Context, Manifest) error     { return unsupported }
+func ProtectedNativeRelease(Manifest) (*update.MaintenancePackage, error) { return nil, unsupported }
+func ProtectedPackageNativeRelease(Manifest, string) (*update.MaintenancePackage, error) {
+	return nil, unsupported
+}
 func Runtime(Manifest) error                                                     { return unsupported }
 func Remove(context.Context, Manifest, *System) error                            { return unsupported }
 func Control(context.Context, Manifest, string, string, *System) error           { return unsupported }
@@ -34,7 +41,17 @@ func (*System) UpdatePreferences(context.Context, Manifest, bool, io.Writer) err
 	return unsupported
 }
 
-func OwnerLock() (io.Closer, error) { return nil, unsupported }
+func OwnerLock() (io.Closer, error)                            { return nil, unsupported }
+func PinnedMaintenanceRunner(int) (string, error)              { return "", unsupported }
+func ReusableMaintenanceSetupAvailable(Manifest) (bool, error) { return false, unsupported }
+func VerifyReusableSetupLauncher(Manifest) error               { return unsupported }
+func ReviewReusableMaintenanceSetup(Manifest, string, string) ([]byte, error) {
+	return nil, unsupported
+}
+func PrepareReusableMaintenance(context.Context, Manifest, string, string, *System) error {
+	return unsupported
+}
+func (*System) UseScopedMaintenance(int) error { return unsupported }
 
 func (*System) AccountsHelper(context.Context, Manifest, bool, bool, bool, io.Writer) error {
 	return unsupported

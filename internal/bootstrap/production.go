@@ -70,13 +70,29 @@ func validateProductionDescriptor(d Descriptor, target *metadata.TargetFiles) er
 }
 
 func productionProof(seed Seed, d Descriptor, proof []byte, now time.Time) (releaseprovenance.Decision, error) {
+	expected := d.provenanceExpected()
+	if d.Deb != (update.Artifact{}) || d.RPM != (update.Artifact{}) {
+		expected.DebSHA256, expected.RPMSHA256 = d.Deb.SHA256, d.RPM.SHA256
+	}
+	return productionProofExpected(seed, d, proof, now, expected)
+}
+
+func productionProofExpected(seed Seed, d Descriptor, proof []byte, now time.Time, expected releaseprovenance.Expected) (releaseprovenance.Decision, error) {
+	base := expected
+	base.DebSHA256, base.RPMSHA256 = "", ""
+	if base != d.provenanceExpected() {
+		return releaseprovenance.Decision{}, errors.New("provenance expectations differ from the release descriptor")
+	}
+	if (d.Deb != (update.Artifact{}) || d.RPM != (update.Artifact{})) && (expected.DebSHA256 != d.Deb.SHA256 || expected.RPMSHA256 != d.RPM.SHA256) {
+		return releaseprovenance.Decision{}, errors.New("provenance expectations differ from the native packages")
+	}
 	if seed.Version < 3 {
 		return releaseprovenance.Decision{}, nil
 	}
 	if seed.Provenance == nil || int64(len(proof)) != d.Release.Provenance.Size || digest(proof) != d.Release.Provenance.SHA256 {
 		return releaseprovenance.Decision{}, errors.New("production provenance bytes differ from authenticated target")
 	}
-	return releaseprovenance.Verify(*seed.Provenance, proof, d.provenanceExpected(), now)
+	return releaseprovenance.Verify(*seed.Provenance, proof, expected, now)
 }
 
 func verifyBundleProfile(seed Seed, m bundle.Manifest) error {
@@ -88,4 +104,16 @@ func verifyBundleProfile(seed Seed, m bundle.Manifest) error {
 		return errors.New("development bootstrap cannot acquire release-bundle authority")
 	}
 	return nil
+}
+
+// Packet version 4 authorizes the paired browser-first bundle. Older packet
+// formats must keep their original headless archive semantics.
+func verifyAttestedBundleProfile(seed Seed, m bundle.Manifest, packetVersion int) error {
+	if packetVersion == 4 {
+		if seed.Version != 4 || m.Schema != 4 || m.UnsignedEngineering || m.Desktop || m.Files["fased-signer"].Bytes <= 0 {
+			return errors.New("attested packet and Linux bundle profile differ")
+		}
+		return nil
+	}
+	return verifyBundleProfile(seed, m)
 }

@@ -7,8 +7,8 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"github.com/fased-ai/fased-app/internal/connection"
 	"github.com/fased-ai/fased-app/internal/core"
+	"github.com/fased-ai/fased-app/internal/desktop"
 	"io"
 	"os"
 	"path/filepath"
@@ -48,13 +48,14 @@ func updateWizard(call func(string, io.Writer) error, out, errOut io.Writer) err
 	return runUpdateWizard(call, out, errOut, func() { time.Sleep(time.Second) }, 900)
 }
 func runUpdateWizard(call func(string, io.Writer) error, out, errOut io.Writer, wait func(), limit int) error {
+	const pending = "update is still running; check its status in the same Fased instance before starting another update"
 	var view core.ApplicationUpdateView
 	deadline := time.Now().Add(15 * time.Minute)
 	var approved *core.ApplicationRelease
 	admittedID := ""
 	read := func(action string) error {
 		if time.Now().After(deadline) {
-			return errors.New("update is still running; use fased update status")
+			return errors.New(pending)
 		}
 		var b bytes.Buffer
 		if e := call(action, &b); e != nil {
@@ -130,7 +131,7 @@ func runUpdateWizard(call func(string, io.Writer) error, out, errOut io.Writer, 
 			return e
 		}
 	}
-	return errors.New("update is still running; use fased update status. Do not start another operation")
+	return errors.New(pending)
 }
 func ordinaryUpdateCommand(args []string, in *os.File, out, errOut io.Writer) error {
 	action := "wizard"
@@ -158,17 +159,16 @@ func ordinaryUpdateCommand(args []string, in *os.File, out, errOut io.Writer) er
 	if f.NArg() != 0 {
 		return errors.New("unexpected update arguments")
 	}
+	if !*remote {
+		explicit := false
+		f.Visit(func(option *flag.Flag) { explicit = explicit || option.Name == "data-dir" })
+		if *dir, e = defaultPackageLocalData(*dir, explicit); e != nil {
+			return e
+		}
+	}
 	if *remote {
-		data, err := core.ReadPrivateFile(filepath.Join(*dir, "remote-connection.json"))
-		if err != nil {
-			return errors.New("choose your Remote instance with fased connect --url https://your-instance.ts.net")
-		}
-		var profile connection.Result
-		if json.Unmarshal(data, &profile) != nil || profile.Location != "remote" || profile.Transport != "private-https" {
-			return errors.New("invalid Remote profile; preserve it and reconnect")
-		}
 		ctx := context.Background()
-		client, err := core.NewRemoteClient(ctx, profile.URL, profile.InstanceID)
+		client, err := connectedRemoteClient(ctx, *dir)
 		if err != nil {
 			return err
 		}
@@ -181,14 +181,75 @@ func ordinaryUpdateCommand(args []string, in *os.File, out, errOut io.Writer) er
 		}
 		return call(action, out)
 	}
-	call := func(action string, dest io.Writer) error {
-		return applicationUpdatesCommand([]string{action, "--data-dir", *dir}, in, dest, errOut)
-	}
 	if action == "recover" {
+		// Enrolled Local custody uses the same authenticated core recovery
+		// operation as Settings. Never fall back to predecessor recovery when
+		// the enrollment is unavailable or ambiguous.
+		ctx := context.Background()
+		client, enrolled, err := applicationUpdatesPublicClient(ctx, *dir)
+		if err == nil {
+			if enrolled {
+				defer client.Close()
+				if *prefix != "" {
+					return errors.New("enrolled recovery uses its original installation; omit --prefix")
+				}
+				if err = client.NativeLocalOwner(ctx); err == nil {
+					err = applicationUpdatesWithClient(ctx, client, "recover", in, out, errOut)
+				}
+				if errors.Is(err, core.ErrCoreUnavailable) {
+					abs, pathErr := filepath.Abs(*dir)
+					if pathErr != nil {
+						return errors.Join(err, pathErr)
+					}
+					_, packaged, pathErr := desktop.PackageLocalDataRoot(abs, os.Getuid())
+					if pathErr != nil {
+						return errors.Join(err, pathErr)
+					}
+					if packaged {
+						if recoveryErr := enrolledOfflineRecovery(ctx, *dir, out, errOut); recoveryErr != nil {
+							return errors.Join(err, recoveryErr)
+						}
+						return nil
+					}
+				}
+				return err
+			}
+			client.Close()
+		} else {
+			abs, pathErr := filepath.Abs(*dir)
+			if pathErr != nil {
+				return errors.Join(err, pathErr)
+			}
+			_, packaged, pathErr := desktop.PackageLocalDataRoot(abs, os.Getuid())
+			if pathErr != nil {
+				return errors.Join(err, pathErr)
+			}
+			if packaged || errors.Is(err, core.ErrCoreUnavailable) && !ordinaryUpdateRecoveryData(*dir) {
+				if *prefix != "" {
+					return errors.New("enrolled recovery uses its original installation; omit --prefix")
+				}
+				if recoveryErr := enrolledOfflineRecovery(ctx, *dir, out, errOut); recoveryErr != nil {
+					return errors.Join(err, recoveryErr)
+				}
+				return nil
+			}
+			if !errors.Is(err, core.ErrCoreUnavailable) {
+				return err
+			}
+		}
 		return recoverInstalledLocalUpdate(*prefix, *dir, in, out, errOut)
 	}
 	if action == "wizard" {
+		ctx := context.Background()
+		client, err := openApplicationUpdatesClient(ctx, *dir)
+		if err != nil {
+			return err
+		}
+		defer client.Close()
+		call := func(action string, dest io.Writer) error {
+			return applicationUpdatesWithClient(ctx, client, action, in, dest, errOut)
+		}
 		return updateWizard(call, out, errOut)
 	}
-	return call(action, out)
+	return applicationUpdatesCommand([]string{action, "--data-dir", *dir}, in, out, errOut)
 }

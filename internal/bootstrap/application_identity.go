@@ -3,6 +3,7 @@ package bootstrap
 import (
 	"encoding/json"
 	"github.com/fased-ai/fased-app/internal/releaseops"
+	"github.com/fased-ai/fased-app/internal/update"
 )
 
 // ApplicationDescriptorIdentity excludes delivery IDs only for the attested
@@ -22,7 +23,7 @@ func ApplicationDescriptorIdentity(d Descriptor) string {
 // legacy v2 serialization. It never compares only version or executable hash,
 // and never rewrites a recorded operation, lease, journal or installed floor.
 func ApplicationDescriptorMatches(d Descriptor, identity string) bool {
-	if d.Version != 4 || d.Release.BuildRef != "refs/heads/main" || d.Release.TagObject != "" {
+	if d.Deb != (update.Artifact{}) || d.RPM != (update.Artifact{}) || d.Version != 4 || d.Release.BuildRef != "refs/heads/main" || d.Release.TagObject != "" {
 		return false
 	}
 	if identity == ApplicationDescriptorIdentity(d) {
@@ -43,5 +44,8 @@ func applicationIdentity(d Descriptor, legacy string) string {
 }
 
 func (p *Prepared) matchesApplicationIdentity(identity string) bool {
+	if p.report.LinuxPackageDigestsVerified || p.report.LinuxBundleVerified {
+		return false // Native packages cannot acquire a legacy archive identity.
+	}
 	return identity == p.report.DescriptorSHA256 || ApplicationDescriptorMatches(p.descriptor, identity)
 }

@@ -9,19 +9,27 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
 	"time"
 
 	"github.com/fased-ai/fased-app/internal/core"
+	"github.com/fased-ai/fased-app/internal/hostplatform"
+	"github.com/fased-ai/fased-app/internal/maintenance"
 	"github.com/fased-ai/fased-app/internal/signer"
+	"github.com/fased-ai/fased-app/internal/tailnet"
+	"github.com/fased-ai/fased-app/internal/update"
+	"golang.org/x/sys/unix"
 )
 
 func strict(b []byte, v any) error {
@@ -39,6 +47,27 @@ func strict(b []byte, v any) error {
 	return nil
 }
 func source(path string) ([]byte, error) {
+	if path == "/proc/self/exe" || path == "/proc/self/fd/4" {
+		f, err := os.Open(path)
+		if err != nil {
+			return nil, err
+		}
+		defer f.Close()
+		info, err := f.Stat()
+		if err != nil || !info.Mode().IsRegular() || info.Size() <= 0 || info.Size() > 64*1024*1024 {
+			return nil, errors.New("sealed fixture executable must be a bounded regular file")
+		}
+		seals, err := unix.FcntlInt(f.Fd(), unix.F_GET_SEALS, 0)
+		required := unix.F_SEAL_WRITE | unix.F_SEAL_GROW | unix.F_SEAL_SHRINK | unix.F_SEAL_SEAL
+		if err != nil || seals&required != required {
+			return nil, errors.New("fixture executable handoff must be sealed")
+		}
+		b, err := io.ReadAll(io.LimitReader(f, info.Size()+1))
+		if err != nil || int64(len(b)) != info.Size() {
+			return nil, errors.New("sealed fixture executable changed while reading")
+		}
+		return b, nil
+	}
 	i, e := os.Lstat(path)
 	if e != nil {
 		return nil, e
@@ -88,6 +117,29 @@ func Load(uid int) (Manifest, error) {
 	return m, nil
 }
 
+// LoadPackageInstance reads only an exact, protected package installation.
+// It never falls back to the older owner-wide custody root.
+func LoadPackageInstance(uid int, root string) (Manifest, error) {
+	var m Manifest
+	prefix := fmt.Sprintf("/var/lib/fased-app-package/%d/", uid)
+	parts := strings.Split(strings.TrimPrefix(root, prefix), "/")
+	if uid <= 0 || !strings.HasPrefix(root, prefix) || len(parts) != 2 {
+		return m, errors.New("exact package installation root required")
+	}
+	want, err := PackageRoot(uid, parts[0], parts[1])
+	if err != nil || root != want {
+		return m, errors.New("exact package installation root required")
+	}
+	f, err := readRoot(filepath.Join(root, "install.json"))
+	if err != nil {
+		return m, err
+	}
+	if strict(f.Data, &m) != nil || m.validatePackage() != nil || m.Owner != uid || m.Root != root {
+		return Manifest{}, errors.New("protected package instance differs")
+	}
+	return m, nil
+}
+
 func directory(ctx context.Context, path string, uid, gid int, mode os.FileMode, s *System) error {
 	i, e := os.Lstat(path)
 	if e == nil {
@@ -104,12 +156,16 @@ func directory(ctx context.Context, path string, uid, gid int, mode os.FileMode,
 	return e
 }
 func account(ctx context.Context, name, id, role string, s *System) (Identity, error) {
+	return accountWithMarker(ctx, name, marker(id, role), s)
+}
+
+func accountWithMarker(ctx context.Context, name, comment string, s *System) (Identity, error) {
 	lookup := func() (Identity, error) {
 		b, e := exec.CommandContext(ctx, "/usr/bin/getent", "passwd", name).Output()
 		if e != nil {
 			return Identity{}, e
 		}
-		return parseAccount(string(b), name, marker(id, role))
+		return parseAccount(string(b), name, comment)
 	}
 	i, e := lookup()
 	if e == nil {
@@ -125,7 +181,7 @@ func account(ctx context.Context, name, id, role string, s *System) (Identity, e
 	} else if !errors.As(ge, &exit) || exit.ExitCode() != 2 {
 		return i, ge
 	}
-	if _, e = s.Run(ctx, nil, "/usr/sbin/useradd", "--system", "--user-group", "--no-create-home", "--home-dir", "/nonexistent", "--shell", "/usr/sbin/nologin", "--password", "!", "--comment", marker(id, role), name); e != nil {
+	if _, e = s.Run(ctx, nil, "/usr/sbin/useradd", "--system", "--user-group", "--no-create-home", "--home-dir", "/nonexistent", "--shell", "/usr/sbin/nologin", "--password", "!", "--comment", comment, name); e != nil {
 		return i, e
 	}
 	return lookup()
@@ -146,8 +202,164 @@ func InstallControlledOwnerCustody(ctx context.Context, o Options, s *System) (M
 	}
 	return install(ctx, o, s, true)
 }
+
+// InstallProtected prepares only the helper's independently authenticated pair.
+// No caller-selected executable path or OS identity reaches this entry.
+func InstallProtected(ctx context.Context, owner int, id string, o Options, controlled bool, out io.Writer) (Manifest, error) {
+	if _, err := maintenance.ValidateProcess(owner); err != nil {
+		return Manifest{}, err
+	}
+	dir := update.MaintenanceDirectory(owner, id)
+	if !update.IDOK(id) || o.Core != dir+"/fased-app" || o.Signer != dir+"/fased-signer" || !o.StageOnly || !o.Disposable || !o.PrepareHost || o.Mode != signer.OrdinaryCustodyMode || o.Profile != signer.OwnerCustodyProfile ||
+		controlled && o.Provenance != signer.ControlledCustodyProfile || !controlled && o.Provenance != signer.OwnerKeyProvenance {
+		return Manifest{}, errors.New("authenticated confined enrollment preparation required")
+	}
+	for _, path := range []string{o.Core, o.Signer} {
+		if _, _, err := maintenance.ProtectedDigest(path, 0755, 64<<20); err != nil {
+			return Manifest{}, err
+		}
+	}
+	return install(ctx, o, &System{Out: out, protectedOwner: owner, protectedID: id, protectedPurpose: "prepare"}, controlled)
+}
+
+// ReserveProtectedEnrollment binds the one active owner operation before the
+// helper retains any acquired pair. This is a reservation, not verification or
+// authority to run either binary; InstallProtected still performs those checks.
+func ReserveProtectedEnrollment(owner int, id, coreHash, signerHash string, o Options, controlled bool) error {
+	if _, err := maintenance.ValidateProcess(owner); err != nil {
+		return err
+	}
+	dir := update.MaintenanceDirectory(owner, id)
+	if !update.IDOK(id) || o.Core != dir+"/fased-app" || o.Signer != dir+"/fased-signer" || !o.StageOnly || !o.Disposable || !o.PrepareHost || o.Mode != signer.OrdinaryCustodyMode || o.Profile != signer.OwnerCustodyProfile ||
+		controlled && o.Provenance != signer.ControlledCustodyProfile || !controlled && o.Provenance != signer.OwnerKeyProvenance {
+		return errors.New("fixed protected enrollment reservation required")
+	}
+	j := journal{Version: 3, ID: id, Owner: owner, CoreHash: coreHash, SignerHash: signerHash, Listen: o.Listen, Network: o.Network, Enrollment: true, Location: o.Location, PublicOrigin: o.PublicOrigin, NativeOwnerAccess: o.NativeOwnerAccess, Mode: o.Mode, Profile: o.Profile, Provenance: o.Provenance}
+	if err := j.validate(owner); err != nil {
+		return err
+	}
+	s := &System{protectedOwner: owner, protectedID: id, protectedPurpose: "prepare"}
+	jdir, err := s.installJournal()
+	if err != nil {
+		return err
+	}
+	// The private installer directory may have just been created. Its parent
+	// must be durable before later protected assets rely on the reservation.
+	parent, err := os.Open(filepath.Dir(jdir))
+	if err != nil {
+		return err
+	}
+	if err = errors.Join(parent.Sync(), parent.Close()); err != nil {
+		return err
+	}
+	lock, err := core.LockInstance(jdir + "/install.lock")
+	if err != nil {
+		return err
+	}
+	defer lock.Close()
+	b, err := core.ReadPrivateFile(jdir + "/intent.json")
+	if err == nil {
+		var old journal
+		if strict(b, &old) != nil || old.validate(owner) != nil || old != j {
+			return errors.New("another enrollment operation is reserved; preserve it")
+		}
+		d, e := os.Open(jdir)
+		if e != nil {
+			return e
+		}
+		return errors.Join(d.Sync(), d.Close())
+	}
+	if !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	if _, err = os.Lstat(Root(owner)); err == nil || !errors.Is(err, os.ErrNotExist) {
+		return errors.New("unclassified installation root exists; preserve it")
+	}
+	return maintenance.PublishCustodyEnrollmentIntent(owner, mustJSON(j))
+}
+
+func (s *System) installJournal() (string, error) {
+	if s.protectedOwner == 0 {
+		return ownerJournal()
+	}
+	dir := filepath.Join(maintenance.OwnerRoot(s.protectedOwner), "custody-installer")
+	if err := core.EnsurePrivateDirectory(dir); err != nil {
+		return "", err
+	}
+	return dir, nil
+}
+
+func (s *System) installPublish(ctx context.Context, target, id string, data []byte, mode os.FileMode, verifiers ...approvedExecutableVerifier) error {
+	if s.protectedOwner > 0 {
+		return maintenance.PublishProtected(target, data, mode)
+	}
+	return publish(ctx, target, id, data, mode, readRoot, s.Run, verifiers...)
+}
+
+func (s *System) probeInstallSigner(ctx context.Context, path, probe string) ([]byte, error) {
+	if s.protectedOwner == 0 {
+		return probeSigner(ctx, path, probe)
+	}
+	a, err := maintenance.ReadAuthority(s.protectedOwner)
+	if err != nil || trustedUtility("/usr/bin/setpriv") != nil {
+		return nil, errors.New("protected non-root signer probe required")
+	}
+	args := []string{"--reuid", strconv.Itoa(a.Owner), "--regid", strconv.Itoa(a.Group), "--clear-groups", "--no-new-privs", "--inh-caps=-all", "--ambient-caps=-all", "--bounding-set=-all", "--", path, probe}
+	c := exec.CommandContext(ctx, "/usr/bin/setpriv", args...)
+	c.Dir = "/"
+	c.Env = []string{"PATH=/usr/bin:/bin", "HOME=/nonexistent", "LANG=C"}
+	return c.Output()
+}
+
+// RecordConfinedEnrollmentIntent is written only by the ordinary owner after
+// the helper returns its verified target; it never adopts a different intent.
+func RecordConfinedEnrollmentIntent(m Manifest) error {
+	if m.Owner != os.Getuid() || os.Geteuid() != os.Getuid() || !m.Enrollment || Verify(m) != nil {
+		return errors.New("verified ordinary enrollment owner required")
+	}
+	dir, err := ownerJournal()
+	if err != nil {
+		return err
+	}
+	lock, err := core.LockInstance(dir + "/install.lock")
+	if err != nil {
+		return err
+	}
+	defer lock.Close()
+	want := journal{NativeOwnerAccess: m.NativeOwnerAccess, Mode: m.Mode, Profile: m.Profile, Provenance: m.Provenance, Version: m.Version, Network: m.Network, Owner: m.Owner, CoreHash: m.CoreHash, SignerHash: m.SignerHash, Listen: m.Listen, Enrollment: m.Enrollment, Location: m.Location, PublicOrigin: m.PublicOrigin, ID: m.ID}
+	path := dir + "/intent.json"
+	if b, err := core.ReadPrivateFile(path); err == nil {
+		var old journal
+		if strict(b, &old) != nil || old != want {
+			return errors.New("existing enrollment intent differs; preserving it")
+		}
+		return nil
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	return core.WritePrivateJSON(path, want)
+}
+
+func verifyCustodyPlatform(release []byte, arch, location string) error {
+	if location == "remote" {
+		p, err := hostplatform.LookupRemote(string(release), arch)
+		if err != nil || p.ID != "ubuntu" || p.Version != "24.04" {
+			return errors.New("Remote custody currently requires the Ubuntu 24.04 profile")
+		}
+		return nil
+	}
+	if location != "" && location != "local" {
+		return errors.New("choose the original Local or Remote profile")
+	}
+	_, err := hostplatform.Lookup(string(release), arch)
+	return err
+}
+
 func install(ctx context.Context, o Options, s *System, controlled bool) (Manifest, error) {
 	var m Manifest
+	if s == nil {
+		return m, errors.New("installation system required")
+	}
 	if o.NativeOwnerAccess && (o.Mode != signer.OrdinaryCustodyMode || !o.StageOnly || o.Location != "local") {
 		return m, errors.New("native access requires Local ordinary enrollment")
 	}
@@ -160,12 +372,19 @@ func install(ctx context.Context, o Options, s *System, controlled bool) (Manife
 	if !o.Disposable || !o.PrepareHost {
 		return m, errors.New("explicit --disposable-fixture and --prepare-host consent are required before OS mutation")
 	}
-	if os.Getuid() <= 0 || os.Geteuid() != os.Getuid() {
+	uid := os.Getuid()
+	if s != nil && s.protectedOwner > 0 {
+		uid = s.protectedOwner
+	}
+	if uid <= 0 || s.protectedOwner == 0 && os.Geteuid() != os.Getuid() {
 		return m, errors.New("ordinary owner required")
 	}
 	osRelease, e := os.ReadFile("/etc/os-release")
-	if e != nil || !bytes.Contains(osRelease, []byte("ID=ubuntu\n")) || !bytes.Contains(osRelease, []byte("VERSION_ID=\"24.04\"")) {
-		return m, errors.New("managed fixture installation currently requires Ubuntu 24.04")
+	if e != nil {
+		return m, errors.New("custody setup requires readable OS release metadata")
+	}
+	if e = verifyCustodyPlatform(osRelease, runtime.GOARCH, o.Location); e != nil {
+		return m, e
 	}
 	versionNumber := 1
 	if o.Network != "" {
@@ -202,7 +421,7 @@ func install(ctx context.Context, o Options, s *System, controlled bool) (Manife
 	if versionNumber == 3 {
 		probe = "ordinary-custody-version"
 	}
-	version, e := exec.CommandContext(ctx, o.Signer, probe).Output()
+	version, e := s.probeInstallSigner(ctx, o.Signer, probe)
 	if e != nil {
 		return m, errors.New("signer fixture version probe failed")
 	}
@@ -217,7 +436,7 @@ func install(ctx context.Context, o Options, s *System, controlled bool) (Manife
 	if strict(version, &protocol) != nil || protocol.Protocol != versionNumber || protocol.OwnerFlow != 1 || protocol.Mode != mode || protocol.Profile != o.Profile || protocol.Provenance != o.Provenance || protocol.WalletSigner {
 		return m, errors.New("incompatible fixture signer")
 	}
-	jdir, e := ownerJournal()
+	jdir, e := s.installJournal()
 	if e != nil {
 		return m, e
 	}
@@ -226,7 +445,6 @@ func install(ctx context.Context, o Options, s *System, controlled bool) (Manife
 		return m, e
 	}
 	defer lock.Close()
-	uid := os.Getuid()
 	j := journal{Version: versionNumber, Network: o.Network, Owner: uid, CoreHash: sum(coreBytes), SignerHash: sum(signerBytes), Listen: o.Listen, Enrollment: o.StageOnly, Location: o.Location, PublicOrigin: o.PublicOrigin}
 	if versionNumber == 3 {
 		j.Mode = mode
@@ -267,11 +485,18 @@ func install(ctx context.Context, o Options, s *System, controlled bool) (Manife
 		m = existing
 	}
 	if j.ID == "" {
-		id := make([]byte, 16)
-		if _, e = rand.Read(id); e != nil {
-			return m, e
+		if s.protectedOwner > 0 {
+			j.ID = s.protectedID
+		} else {
+			id := make([]byte, 16)
+			if _, e = rand.Read(id); e != nil {
+				return m, e
+			}
+			j.ID = hex.EncodeToString(id)
 		}
-		j.ID = hex.EncodeToString(id)
+	}
+	if s.protectedOwner > 0 && j.ID != s.protectedID {
+		return m, errors.New("existing enrollment operation differs; preserving it")
 	}
 	if !haveIntent {
 		if e = core.WritePrivateJSON(jdir+"/intent.json", j); e != nil {
@@ -289,7 +514,7 @@ func install(ctx context.Context, o Options, s *System, controlled bool) (Manife
 			return m, e
 		}
 		intent, _ := json.Marshal(j)
-		if e = publish(ctx, stage+"/intent.json", j.ID, intent, 0644, readRoot, s.Run); e != nil {
+		if e = s.installPublish(ctx, stage+"/intent.json", j.ID, intent, 0644); e != nil {
 			return m, e
 		}
 		app, e := account(ctx, accountName(uid, "app"), j.ID, "app", s)
@@ -335,7 +560,7 @@ func install(ctx context.Context, o Options, s *System, controlled bool) (Manife
 			if name == "fased-app" || name == "fased-signer" {
 				mode = 0755
 			}
-			if e = publish(ctx, stage+"/"+name, j.ID, files[name], mode, readRoot, s.Run); e != nil {
+			if e = s.installPublish(ctx, stage+"/"+name, j.ID, files[name], mode, verifyApprovedExecutable); e != nil {
 				return m, e
 			}
 		}
@@ -369,7 +594,7 @@ func install(ctx context.Context, o Options, s *System, controlled bool) (Manife
 	}
 	for _, role := range []string{"signer", "app"} {
 		name := "fased-" + role + ".service"
-		if e = publish(ctx, "/etc/systemd/system/"+Unit(uid, role), j.ID, definitions(m)[name], 0644, readRoot, s.Run); e != nil {
+		if e = s.installPublish(ctx, "/etc/systemd/system/"+Unit(uid, role), j.ID, definitions(m)[name], 0644); e != nil {
 			return m, e
 		}
 	}
@@ -390,11 +615,27 @@ func install(ctx context.Context, o Options, s *System, controlled bool) (Manife
 		return m, e
 	}
 	ready, _ := json.Marshal(map[string]any{"schema": 1, "manifest": sum(mustJSON(m)), "fixtureOnly": true})
-	if e = publish(ctx, root+"/ready.json", j.ID, ready, 0644, readRoot, s.Run); e != nil {
+	if e = s.installPublish(ctx, root+"/ready.json", j.ID, ready, 0644); e != nil {
 		return m, e
 	}
 	return m, nil
 }
+
+func probeSigner(ctx context.Context, path, probe string) ([]byte, error) {
+	command := exec.CommandContext(ctx, path, probe)
+	if path == "/proc/self/fd/4" {
+		f, err := os.Open(path)
+		if err != nil {
+			return nil, err
+		}
+		defer f.Close()
+		command = exec.CommandContext(ctx, "/proc/self/fd/3", probe)
+		command.Args[0] = path
+		command.ExtraFiles = []*os.File{f}
+	}
+	return command.Output()
+}
+
 func mustJSON(v any) []byte { b, _ := json.Marshal(v); return b }
 
 func Verify(m Manifest) error {
@@ -408,10 +649,54 @@ func Verify(m Manifest) error {
 	}
 	return nil
 }
+
+// VerifyPackageInstance does not grant the legacy controller access to this
+// instance; it verifies the protected identity and executable pair for startup.
+func VerifyPackageInstance(m Manifest) error {
+	if err := m.validatePackage(); err != nil {
+		return err
+	}
+	if err := verifyValidatedTopology(m); err != nil {
+		return err
+	}
+	for _, pair := range []struct{ name, hash string }{{"fased-app", m.CoreHash}, {"fased-signer", m.SignerHash}} {
+		if err := verifyRootExecutable(m.Root+"/"+pair.name, pair.hash); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func verifyTopology(m Manifest) error {
 	if e := m.validate(); e != nil {
 		return e
 	}
+	return verifyValidatedTopology(m)
+}
+
+func verifyValidatedTopology(m Manifest) error {
+	if err := verifyManagedIdentities(m); err != nil {
+		return err
+	}
+	cfg, e := signer.LoadConfig(m.Root + "/identity.json")
+	if e != nil {
+		return e
+	}
+	if cfg != identityConfig(m) {
+		return errors.New("installed signer configuration changed")
+	}
+	for name, b := range definitions(m) {
+		f, e := readRoot(m.Root + "/" + name)
+		if e != nil || !known(f, b, 0644) {
+			return errors.New("stored unit definition changed")
+		}
+	}
+	return nil
+}
+
+// Identity and state directories can be checked while a journalled metadata
+// transition has temporarily left old and new configuration files side by side.
+func verifyManagedIdentities(m Manifest) error {
 	if e := verifyProbe(m.Root+"/app-readonly-probe", m.App); e != nil {
 		return e
 	}
@@ -423,7 +708,7 @@ func verifyTopology(m Manifest) error {
 		if e != nil {
 			return e
 		}
-		actual, e := parseAccount(string(b), pair.i.Name, marker(m.ID, pair.role))
+		actual, e := parseAccount(string(b), pair.i.Name, instanceMarker(m, pair.role))
 		if e != nil || actual != pair.i {
 			return errors.New("installed account identity changed; preserving state")
 		}
@@ -440,19 +725,6 @@ func verifyTopology(m Manifest) error {
 		st, ok := i.Sys().(*syscall.Stat_t)
 		if !ok || !i.IsDir() || i.Mode()&os.ModeSymlink != 0 || int(st.Uid) != d.i.UID || int(st.Gid) != d.i.GID || i.Mode().Perm() != d.mode {
 			return errors.New("managed state ownership changed; preserving it")
-		}
-	}
-	cfg, e := signer.LoadConfig(m.Root + "/identity.json")
-	if e != nil {
-		return e
-	}
-	if cfg != identityConfig(m) {
-		return errors.New("installed signer configuration changed")
-	}
-	for name, b := range definitions(m) {
-		f, e := readRoot(m.Root + "/" + name)
-		if e != nil || !known(f, b, 0644) {
-			return errors.New("stored unit definition changed")
 		}
 	}
 	return nil
@@ -520,59 +792,118 @@ func waitReady(ctx context.Context, m Manifest, system *System) error {
 	}
 }
 func Runtime(m Manifest) error {
+	_, err := inspectManagedRuntime(m, false)
+	return err
+}
+
+// UpdateSessionRuntime distinguishes a verified inactive service from a
+// foreign definition or process. It never starts or changes either service.
+func UpdateSessionRuntime(m Manifest) (bool, error) {
+	return inspectManagedRuntime(m, true)
+}
+
+func inspectManagedRuntime(m Manifest, allowInactive bool) (bool, error) {
+	ready := true
 	for _, role := range []string{"signer", "app"} {
 		if e := loadedUnit(m, role); e != nil {
-			return e
+			return false, e
 		}
-		b, e := exec.Command("/usr/bin/systemctl", "show", Unit(m.Owner, role), "--property=ActiveState,MainPID,FragmentPath").Output()
+		b, e := exec.Command("/usr/bin/systemctl", "show", instanceUnit(m, role), "--property=ActiveState,MainPID,FragmentPath").Output()
 		if e != nil {
-			return e
+			return false, e
 		}
-		fields := map[string]string{}
-		for _, l := range strings.Split(string(b), "\n") {
-			p := strings.SplitN(l, "=", 2)
-			if len(p) == 2 {
-				fields[p[0]] = p[1]
+		roleReady, e := managedRuntimeReady(m, role, b, os.ReadFile)
+		if e != nil {
+			return false, e
+		}
+		if !roleReady {
+			if !allowInactive {
+				return false, errors.New("managed service is inactive or belongs to another definition")
 			}
-		}
-		pid, e := strconv.Atoi(fields["MainPID"])
-		if e != nil || pid <= 0 || fields["ActiveState"] != "active" || fields["FragmentPath"] != "/etc/systemd/system/"+Unit(m.Owner, role) {
-			return errors.New("managed service is inactive or belongs to another definition")
-		}
-		i := m.App
-		if role == "signer" {
-			i = m.Signer
-		}
-		status, e := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/status")
-		if e != nil {
-			return e
-		}
-		uidLine := "Uid:\t" + strings.Repeat(strconv.Itoa(i.UID)+"\t", 3) + strconv.Itoa(i.UID)
-		if !bytes.Contains(status, []byte(uidLine+"\n")) || !bytes.Contains(status, []byte("NoNewPrivs:\t1\n")) {
-			return errors.New("managed process UID or NoNewPrivs was not enforced")
+			ready = false
 		}
 	}
-	return nil
+	return ready, nil
+}
+
+// A fresh package intentionally keeps its unconfigured signer stopped. This
+// observes only the service state; update admission must still independently
+// verify the signer directory and preserve any existing keys or holds.
+func managedRuntimeReady(m Manifest, role string, raw []byte, read func(string) ([]byte, error)) (bool, error) {
+	active, err := classifyManagedRuntime(m, role, raw, read)
+	if err != nil {
+		return false, err
+	}
+	if m.Layout == PackageLayout && m.Network == "" && role == "signer" {
+		if active || !slices.Contains(strings.Split(string(raw), "\n"), "ActiveState=inactive") {
+			return false, errors.New("unconfigured signer must remain stopped; preserve its state")
+		}
+		return true, nil
+	}
+	return active, nil
+}
+
+func classifyManagedRuntime(m Manifest, role string, raw []byte, read func(string) ([]byte, error)) (bool, error) {
+	if (role != "app" && role != "signer") || read == nil {
+		return false, errors.New("managed service identity required")
+	}
+	fields := map[string]string{}
+	for _, line := range strings.Split(string(raw), "\n") {
+		if line == "" {
+			continue
+		}
+		key, value, ok := strings.Cut(line, "=")
+		if !ok || key == "" {
+			return false, errors.New("invalid managed service state")
+		}
+		if _, exists := fields[key]; exists {
+			return false, errors.New("ambiguous managed service state")
+		}
+		fields[key] = value
+	}
+	pid, err := strconv.Atoi(fields["MainPID"])
+	if err != nil || fields["FragmentPath"] != "/etc/systemd/system/"+instanceUnit(m, role) {
+		return false, errors.New("managed service is inactive or belongs to another definition")
+	}
+	if (fields["ActiveState"] == "inactive" || fields["ActiveState"] == "failed") && pid == 0 {
+		return false, nil
+	}
+	if fields["ActiveState"] != "active" || pid <= 0 {
+		return false, errors.New("managed service state is unavailable; preserve recovery")
+	}
+	i := m.App
+	if role == "signer" {
+		i = m.Signer
+	}
+	status, err := read("/proc/" + strconv.Itoa(pid) + "/status")
+	if err != nil {
+		return false, err
+	}
+	uidLine := "Uid:\t" + strings.Repeat(strconv.Itoa(i.UID)+"\t", 3) + strconv.Itoa(i.UID)
+	if !bytes.Contains(status, []byte(uidLine+"\n")) || !bytes.Contains(status, []byte("NoNewPrivs:\t1\n")) {
+		return false, errors.New("managed process UID or NoNewPrivs was not enforced")
+	}
+	return true, nil
 }
 
 func loadedUnit(m Manifest, role string) error {
 	return loadedUnitPolicy(m, role, definitions(m)["fased-"+role+".service"], m.Root+"/fased-"+role)
 }
 func loadedUnitPolicy(m Manifest, role string, wanted []byte, image string) error {
-	f, e := readRoot("/etc/systemd/system/" + Unit(m.Owner, role))
+	_, err := loadedUnitPolicyFields(m, role, wanted, image)
+	return err
+}
+func loadedUnitPolicyFields(m Manifest, role string, wanted []byte, image string) (map[string]string, error) {
+	f, e := readRoot("/etc/systemd/system/" + instanceUnit(m, role))
 	if e != nil {
-		return e
+		return nil, e
 	}
 	if !known(f, wanted, 0644) {
-		return errors.New("installed system unit changed; preserving it")
+		return nil, errors.New("installed system unit changed; preserving it")
 	}
-	b, e := exec.Command("/usr/bin/systemctl", "show", Unit(m.Owner, role), "--property=FragmentPath,DropInPaths,User,Group,NoNewPrivileges,ProtectSystem,ExecStart").Output()
+	b, e := exec.Command("/usr/bin/systemctl", "show", instanceUnit(m, role), "--property=FragmentPath,DropInPaths,User,Group,NoNewPrivileges,ProtectSystem,ExecStart,NeedDaemonReload,LimitCORE,Requires,After").Output()
 	if e != nil {
-		return e
-	}
-	i := m.App
-	if role == "signer" {
-		i = m.Signer
+		return nil, e
 	}
 	fields := map[string]string{}
 	for _, line := range strings.Split(string(b), "\n") {
@@ -581,8 +912,89 @@ func loadedUnitPolicy(m Manifest, role string, wanted []byte, image string) erro
 			fields[p[0]] = p[1]
 		}
 	}
-	if fields["FragmentPath"] != "/etc/systemd/system/"+Unit(m.Owner, role) || fields["DropInPaths"] != "" || fields["User"] != strconv.Itoa(i.UID) || fields["Group"] != strconv.Itoa(i.GID) || fields["NoNewPrivileges"] != "yes" || fields["ProtectSystem"] != "strict" || !strings.Contains(fields["ExecStart"], "path="+image+" ;") {
+	if err := validateLoadedUnitFields(m, role, image, fields, readRoot, scopedMigrationEnabled); err != nil {
+		return nil, err
+	}
+	return fields, nil
+}
+
+func validateLoadedUnitFields(m Manifest, role, image string, fields map[string]string, read readHost, scope func(int) (bool, error)) error {
+	if role != "app" && role != "signer" {
+		return errors.New("unknown managed service")
+	}
+	i := m.App
+	if role == "signer" {
+		i = m.Signer
+	}
+	if instanceUnit(m, role) == "" || fields["FragmentPath"] != "/etc/systemd/system/"+instanceUnit(m, role) || fields["User"] != strconv.Itoa(i.UID) || fields["Group"] != strconv.Itoa(i.GID) || fields["NoNewPrivileges"] != "yes" || fields["ProtectSystem"] != "strict" || fields["NeedDaemonReload"] != "no" || !strings.Contains(fields["ExecStart"], "path="+image+" ;") {
 		return errors.New("unexpected systemd identity/override; refusing project code under a different policy")
+	}
+	dropIns := strings.Fields(fields["DropInPaths"])
+	if m.Layout == PackageLayout {
+		recovery := packageRecoveryUnit(m)
+		if fields["LimitCORE"] != "0" || !allowedPackageDropIns(fields["DropInPaths"], read) {
+			return errors.New("unverified package-instance override; preserving it")
+		}
+		if !slices.Contains(strings.Fields(fields["Requires"]), recovery) || !slices.Contains(strings.Fields(fields["After"]), recovery) {
+			return errors.New("package service does not require its recovery; preserving it")
+		}
+		if m.Location == "remote" && role == "app" {
+			name, socket, err := tailnet.ProtectedSocketUnit("package-"+m.ID, m.Owner)
+			if err != nil || read == nil {
+				return errors.New("protected package ingress is unavailable")
+			}
+			f, err := read("/etc/systemd/system/" + name)
+			if err != nil || !known(f, socket, 0644) || !slices.Contains(strings.Fields(fields["Requires"]), name) || !slices.Contains(strings.Fields(fields["After"]), name) {
+				return errors.New("protected package ingress differs; preserving it")
+			}
+		}
+		return nil
+	}
+	ingress, ingressBody, err := tailnet.ProtectedSocketDropIn("custody", m.Owner)
+	if err != nil {
+		return err
+	}
+	var remaining []string
+	seenIngress := false
+	for _, path := range dropIns {
+		if path != ingress {
+			remaining = append(remaining, path)
+			continue
+		}
+		if seenIngress || role != "app" || m.Location != "remote" || m.PublicOrigin == "" {
+			return errors.New("unexpected protected private ingress")
+		}
+		seenIngress = true
+		f, err := read(path)
+		unit, body, unitErr := tailnet.ProtectedSocketUnit("custody", m.Owner)
+		u, readErr := read("/etc/systemd/system/" + unit)
+		if err != nil || unitErr != nil || readErr != nil || !known(f, ingressBody, 0644) || !known(u, body, 0644) {
+			return errors.New("protected private ingress changed; preserving it")
+		}
+	}
+	guards := strings.Join(remaining, " ")
+	if guards != "" {
+		if guards == protectedGuardPath(m.Owner, role) {
+			a, err := maintenance.ReadAuthority(m.Owner)
+			if err != nil {
+				return err
+			}
+			f, err := read(protectedGuardPath(m.Owner, role))
+			if err != nil || !known(f, protectedGuard(a, role), 0644) {
+				return errors.New("protected maintenance start gate changed")
+			}
+			return nil
+		}
+		guard := "/etc/systemd/system/" + Unit(m.Owner, role) + ".d/20-fased-update-guard.conf"
+		enabled, err := scope(m.Owner)
+		if err != nil || !enabled || guards != guard {
+			return errors.New("foreign or unscoped systemd override; preserving it")
+		}
+		f, err := read(guard)
+		want := []byte("[Unit]\nAssertPathExists=!" + m.Root + "/update-start-blocked.json\n")
+		if err != nil || !known(f, want, 0644) {
+			return errors.New("managed restart guard is unavailable or changed")
+		}
 	}
 	return nil
 }

@@ -18,8 +18,10 @@ import (
 
 // Runs only as the data-owning OS user (or the verified Remote UID helper).
 // No browser endpoint issues a proof; opening a claimed workspace never resets it.
+var ownerSetupClient = newApplicationUpdatesClient
+
 func ownerSetupLink(ctx context.Context, dir, origin string, out io.Writer) error {
-	client, err := core.NewClient(ctx, dir)
+	client, enrolled, err := ownerSetupClient(ctx, dir)
 	if err != nil {
 		return err
 	}
@@ -34,8 +36,17 @@ func ownerSetupLink(ctx context.Context, dir, origin string, out io.Writer) erro
 	if err = client.Do(ctx, "GET", "/api/v1/health", nil, &health); err != nil {
 		return err
 	}
-	if origin == client.Endpoint.URL && health.Connection != nil && health.Connection.Location == "local" && health.Connection.OwnerUID == 0 {
-		proof, e := client.LocalLaunch(ctx)
+	if health.InstanceID != client.Endpoint.InstanceID {
+		return errors.New("Local owner instance changed; reopen Fased")
+	}
+	if origin == client.Endpoint.URL && health.Connection != nil && health.Connection.Location == "local" && health.Connection.Transport == "loopback" && (health.Connection.OwnerUID == 0 && !enrolled || enrolled && os.Getuid() > 0 && health.Connection.OwnerUID == os.Getuid()) {
+		var proof string
+		var e error
+		if enrolled {
+			proof, e = client.NativeLocalLaunch(ctx)
+		} else {
+			proof, e = client.LocalLaunch(ctx)
+		}
 		if e != nil {
 			return e
 		}
@@ -46,6 +57,14 @@ func ownerSetupLink(ctx context.Context, dir, origin string, out io.Writer) erro
 		_, e = fmt.Fprintln(out, strings.Replace(address, "#setup=", "#local=", 1))
 		return e
 	}
+	if enrolled {
+		return errors.New("protected Local owner instance or browser origin differs")
+	}
+	setupLock, err := core.LockOwnerSetup(dir)
+	if err != nil {
+		return err
+	}
+	defer setupLock.Close()
 	store, err := core.OpenStore(dir)
 	if err != nil {
 		return err
@@ -92,6 +111,11 @@ func remoteOwnerSetupLink(args []string, in *os.File, out io.Writer) error {
 	if e != nil {
 		return e
 	}
+	setupLock, e := core.LockOwnerSetup(m.Data)
+	if e != nil {
+		return e
+	}
+	defer setupLock.Close()
 	store, e := core.OpenStore(m.Data)
 	if e != nil {
 		return e

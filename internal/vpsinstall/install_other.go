@@ -26,6 +26,9 @@ func Claim(context.Context, Manifest, *custodyinstall.System, bool, io.Writer) e
 func Status(context.Context, Manifest, *custodyinstall.System) (ServiceStatus, error) {
 	return ServiceStatus{}, unsupported
 }
+func ProtectedIngressReady(context.Context, Manifest, string, *custodyinstall.System) error {
+	return unsupported
+}
 func CheckApplication(string, string, string, string, string, ...bool) error { return unsupported }
 
 func PrivateAccessProof(context.Context, Manifest, *custodyinstall.System, core.PrivateAccessProofRequest) (core.PrivateAccessProof, error) {

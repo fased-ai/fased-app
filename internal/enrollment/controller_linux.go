@@ -38,6 +38,9 @@ func instanceID(s string) bool {
 	return err == nil && len(b) == 32 && base64.RawURLEncoding.EncodeToString(b) == s
 }
 func sourceValid(s sourceRecord) bool {
+	if (s.ApplicationSequence == 0) != (s.ApplicationReleaseSHA256 == "") || s.ApplicationReleaseSHA256 != "" && !hexID(s.ApplicationReleaseSHA256, 32) {
+		return false
+	}
 	if s.UID <= 0 || s.GID <= 0 || !filepath.IsAbs(s.Data) || filepath.Clean(s.Data) != s.Data || s.Data == "/" || filepath.Dir(s.Data) == "/" || strings.ContainsAny(s.Data, "\x00\r\n") || !instanceID(s.ExpectedInstanceID) || s.Profile != "local" && s.Profile != "remote" {
 		return false
 	}
@@ -51,6 +54,17 @@ func sourceValid(s sourceRecord) bool {
 	}
 	u, err := url.Parse(s.PublicOrigin)
 	return s.Profile == "remote" && err == nil && u.Scheme == "https" && u.Host != "" && u.User == nil && u.Path == "" && u.RawQuery == "" && u.Fragment == "" && !u.ForceQuery && u.String() == s.PublicOrigin && !strings.ContainsAny(s.PublicOrigin, "\r\n\t %$\\\"")
+}
+
+func sourceMatches(s Source, saved sourceRecord) bool {
+	want := record(s)
+	want.Running, want.Autostart = saved.Running, saved.Autostart
+	// Old journals lack release identity. Preserve their original binding;
+	// never relax the comparison when an identity was actually recorded.
+	if saved.ApplicationSequence == 0 && saved.ApplicationReleaseSHA256 == "" {
+		want.ApplicationSequence, want.ApplicationReleaseSHA256 = 0, ""
+	}
+	return want == saved
 }
 
 func (j journal) valid(owner int) bool {
@@ -75,6 +89,27 @@ func (j journal) valid(owner int) bool {
 	return rank(j.Phase) < rank("suspending") || j.Target.ID != ""
 }
 
+// RemoteJournalFence gives the Remote status/recovery reader the canonical
+// projection of the real owner journal, including optional versioned fields.
+// It does not grant activation or read private wallet material.
+func RemoteJournalFence(raw []byte, owner int) ([]byte, string, error) {
+	var j journal
+	if len(raw) == 0 || len(raw) > 16384 || update.StrictJSON(raw, &j) != nil {
+		return nil, "", errState
+	}
+	// A lost lease is a held state, not permission to continue cutover. Its
+	// read-only projection still needs the full fencing identity for recovery.
+	checked := j
+	if checked.Phase == "source-lock-lost" {
+		checked.Phase = "fencing"
+	}
+	if !checked.valid(owner) || j.Source.Profile != "remote" || j.Target.ID == "" {
+		return nil, "", errState
+	}
+	b, err := json.Marshal(fenceFor(j))
+	return b, j.Phase, err
+}
+
 type imageLease struct {
 	image   core.EnrollmentImage
 	release func() error
@@ -93,11 +128,13 @@ type operations struct {
 	node            func(string) (node, error)
 	targetExists    func() bool
 	prepare         func(context.Context, journal, Options) (custodyinstall.Manifest, error)
+	checkPending    func(journal, *custodyinstall.Manifest, string) error
 	target          func(custodyinstall.Manifest) error
 	emptySigner     func(context.Context, custodyinstall.Manifest) error
 	export          func(context.Context, custodyinstall.Manifest, sourceRecord) (*imageLease, error)
 	importImage     func(context.Context, journal, core.EnrollmentImage) error
 	fence           func(context.Context, journal) error
+	protectedFence  func(context.Context, journal) error // Reacquires and holds the original source lease in the privileged boundary.
 	publish         func(context.Context, journal) error
 	verifyTarget    func(context.Context, journal) error
 	activate        func(context.Context, journal) error
@@ -139,8 +176,7 @@ func run(ctx context.Context, s Source, o Options, coreHash, signerHash string, 
 	} else if err != nil {
 		return empty, err
 	}
-	want, saved := record(s), j.Source
-	want.Running, want.Autostart = saved.Running, saved.Autostart
+	saved := j.Source
 	if o.RecoverSuspended && j.CoreHash == coreHash && j.CoreRecovery == nil {
 		return empty, errState
 	}
@@ -150,7 +186,7 @@ func run(ctx context.Context, s Source, o Options, coreHash, signerHash string, 
 			return empty, err
 		}
 	}
-	if !j.valid(op.owner) || want != saved || j.NativeOwnerAccess != o.NativeOwnerAccess || j.CoreHash != coreHash || j.SignerHash != signerHash || j.Network != o.Network || j.Mode != o.Mode || j.Profile != o.Profile || j.Provenance != o.Provenance {
+	if !j.valid(op.owner) || !sourceMatches(s, saved) || j.NativeOwnerAccess != o.NativeOwnerAccess || j.CoreHash != coreHash || j.SignerHash != signerHash || j.Network != o.Network || j.Mode != o.Mode || j.Profile != o.Profile || j.Provenance != o.Provenance {
 		return empty, errState
 	}
 	if o.RecoverSuspended && j.CoreRecovery != nil {
@@ -162,10 +198,17 @@ func run(ctx context.Context, s Source, o Options, coreHash, signerHash string, 
 	}
 	set := func(phase string) error { j.Phase = phase; return op.save(j) }
 	if j.Target.ID == "" {
-		j.Target, err = op.prepare(ctx, j, o)
+		target, e := op.prepare(ctx, j, o)
+		err = e
 		if err != nil {
 			return empty, err
 		}
+		if op.checkPending != nil {
+			if err = op.checkPending(j, &target, ""); err != nil {
+				return empty, err
+			}
+		}
+		j.Target = target
 		if !j.valid(op.owner) || op.target(j.Target) != nil {
 			return empty, errState
 		}
@@ -237,6 +280,11 @@ func run(ctx context.Context, s Source, o Options, coreHash, signerHash string, 
 		if j.Digest != "" && j.Digest != digest {
 			return j.Target, errors.New("source changed after an interrupted import; preserve both copies")
 		}
+		if op.checkPending != nil {
+			if err = op.checkPending(j, nil, digest); err != nil {
+				return j.Target, err
+			}
+		}
 		j.Digest = digest
 		if rank(j.Phase) < rank("importing") {
 			if err = set("importing"); err != nil {
@@ -283,7 +331,19 @@ func run(ctx context.Context, s Source, o Options, coreHash, signerHash string, 
 				return j.Target, err
 			}
 		}
-		if err = op.fence(ctx, j); err != nil {
+		if j.Target.Version == 3 && op.protectedFence != nil {
+			// The fixed helper must own its source lease. Release the owner's
+			// exporter first; the helper re-exports and refuses a changed digest.
+			if lease != nil {
+				if err = lease.release(); err != nil {
+					return j.Target, err
+				}
+				lease = nil
+			}
+			if err = op.protectedFence(ctx, j); err != nil {
+				return j.Target, err
+			}
+		} else if err = op.fence(ctx, j); err != nil {
 			return j.Target, err
 		}
 		if lease != nil {
@@ -338,9 +398,7 @@ func run(ctx context.Context, s Source, o Options, coreHash, signerHash string, 
 }
 
 func recoverSuspendedCore(ctx context.Context, s Source, o Options, j journal, coreHash, signerHash string, op operations) (journal, error) {
-	want := record(s)
-	want.Running, want.Autostart = j.Source.Running, j.Source.Autostart
-	if !j.valid(op.owner) || j.Source != want || j.Phase != "suspended" || j.Digest != "" || j.Source.Profile != "remote" || j.NativeOwnerAccess || j.Mode != signer.OrdinaryCustodyMode || j.Mode != o.Mode || j.Profile != o.Profile || j.Provenance != o.Provenance || o.NativeOwnerAccess || !o.Disposable || !o.PrepareHost || j.SignerHash != signerHash || !hexID(coreHash, 32) || coreHash == j.CoreHash || op.archiveRecovery == nil || op.recoverCore == nil {
+	if !j.valid(op.owner) || !sourceMatches(s, j.Source) || j.Phase != "suspended" || j.Digest != "" || j.Source.Profile != "remote" || j.NativeOwnerAccess || j.Mode != signer.OrdinaryCustodyMode || j.Mode != o.Mode || j.Profile != o.Profile || j.Provenance != o.Provenance || o.NativeOwnerAccess || !o.Disposable || !o.PrepareHost || j.SignerHash != signerHash || !hexID(coreHash, 32) || coreHash == j.CoreHash || op.archiveRecovery == nil || op.recoverCore == nil {
 		return j, errState
 	}
 	if err := s.Validate(ctx); err != nil {

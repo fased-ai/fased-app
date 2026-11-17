@@ -36,6 +36,7 @@ type Client struct {
 	Intent                 signer.OwnerIntent
 	Peer                   Peer
 	host, user, knownHosts string
+	packageOwner           string
 	run                    command
 }
 
@@ -50,7 +51,17 @@ func Open(ctx context.Context, intent signer.OwnerIntent, origin, user string) (
 	if err != nil {
 		return nil, err
 	}
-	return open(ctx, intent, origin, user, filepath.Join(home, ".ssh", "known_hosts"), os.Getuid(), run)
+	c, err := locate(ctx, intent, origin, user, filepath.Join(home, ".ssh", "known_hosts"), os.Getuid(), run)
+	if err != nil {
+		return nil, err
+	}
+	if c.host == "" {
+		c.packageOwner, err = localPackageOwnerTarget(c.Peer.OwnerUID, intent.InstanceID)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return openLocated(ctx, c)
 }
 
 func open(ctx context.Context, intent signer.OwnerIntent, origin, user, pins string, uid int, execute command) (*Client, error) {
@@ -58,8 +69,15 @@ func open(ctx context.Context, intent signer.OwnerIntent, origin, user, pins str
 	if err != nil {
 		return nil, err
 	}
-	if err = c.inspect(ctx); err != nil {
+	return openLocated(ctx, c)
+}
+
+func openLocated(ctx context.Context, c *Client) (*Client, error) {
+	if err := c.inspect(ctx); err != nil {
 		if errors.Is(err, ErrEnrollmentRequired) {
+			return nil, err
+		}
+		if c.packageOwner != "" {
 			return nil, err
 		}
 		_, missing := c.invoke(ctx, "/usr/bin/test", []string{"-e", "/var/lib/fased-app-custody-" + strconv.Itoa(c.Peer.OwnerUID) + "/install.json"}, nil)
@@ -69,8 +87,8 @@ func open(ctx context.Context, intent signer.OwnerIntent, origin, user, pins str
 		}
 		return nil, err
 	}
-	if intent.Version == 2 {
-		p, err := intent.TradeProposal()
+	if c.Intent.Version == 2 {
+		p, err := c.Intent.TradeProposal()
 		if err != nil || p.Account.SignerID != c.Peer.SignerID {
 			return nil, errors.New("trade belongs to another enrolled signer")
 		}
@@ -105,8 +123,7 @@ func locate(ctx context.Context, intent signer.OwnerIntent, origin, user, pins s
 
 func (c *Client) inspect(ctx context.Context) error {
 	uid := c.Peer.OwnerUID
-	root := "/var/lib/fased-app-custody-" + strconv.Itoa(uid)
-	b, err := c.invoke(ctx, root+"/fased-app", append(c.arguments(), "--inspect"), nil)
+	b, err := c.invoke(ctx, c.ownerExecutable(), append(c.arguments(), "--inspect"), nil)
 	if err != nil {
 		return errors.New("protected wallet enrollment is required for this instance and network")
 	}
@@ -119,6 +136,13 @@ func (c *Client) inspect(ctx context.Context) error {
 		return ErrEnrollmentRequired
 	}
 	return nil
+}
+
+func (c *Client) ownerExecutable() string {
+	if c.packageOwner != "" {
+		return c.packageOwner
+	}
+	return "/var/lib/fased-app-custody-" + strconv.Itoa(c.Peer.OwnerUID) + "/fased-app"
 }
 
 func (c *Client) arguments() []string {
@@ -155,7 +179,7 @@ func (c *Client) Exchange(ctx context.Context, input signer.OwnerInput) (signer.
 		return result, errors.New("invalid protected input")
 	}
 	defer clear(b)
-	response, err := c.invoke(ctx, "/var/lib/fased-app-custody-"+strconv.Itoa(c.Peer.OwnerUID)+"/fased-app", c.arguments(), b)
+	response, err := c.invoke(ctx, c.ownerExecutable(), c.arguments(), b)
 	defer clear(response)
 	if err != nil {
 		return result, errors.New("wallet owner operation interrupted; resume this operation")

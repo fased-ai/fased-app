@@ -89,16 +89,8 @@ func loadRemoteAppUpdateSession(ctx context.Context, c *core.Client, data string
 		return e
 	}
 	c.Token = token
-	var auth struct {
-		Authenticated bool   `json:"authenticated"`
-		CSRF          string `json:"csrfToken"`
-	}
-	if e = c.Do(ctx, http.MethodGet, "/api/v1/auth/state", nil, &auth); e != nil {
+	if e = c.RefreshCSRF(ctx); e != nil {
 		return e
 	}
-	if !auth.Authenticated || auth.CSRF == "" {
-		return core.ErrUnauthorized
-	}
-	c.CSRF = auth.CSRF
 	return c.SaveSession(data)
 }

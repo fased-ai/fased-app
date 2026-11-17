@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -15,35 +16,118 @@ import (
 	"time"
 
 	"github.com/fased-ai/fased-app/internal/core"
+	"github.com/fased-ai/fased-app/internal/hostplatform"
+	"golang.org/x/sys/unix"
 )
 
 const maintenanceTemplateName = "fased-app-maintenance-system@.service"
 const maintenanceProperties = "--property=LoadState,FragmentPath,DropInPaths,ExecStart,ActiveState,SubState,UnitFileState,Result"
 
 type maintenanceImage struct {
-	Version int    `json:"version"`
-	Root    string `json:"root"`
-	Data    string `json:"data"`
-	SHA256  string `json:"sha256"`
+	Version          int                        `json:"version"`
+	Root             string                     `json:"root"`
+	Data             string                     `json:"data"`
+	SHA256           string                     `json:"sha256"`
+	FedoraUserDropIn *maintenanceDropInIdentity `json:"fedoraUserDropIn,omitempty"`
 }
+
+type maintenanceDropInIdentity struct {
+	Device uint64 `json:"device"`
+	Inode  uint64 `json:"inode"`
+}
+
+const fedoraUserDropIn = "/usr/lib/systemd/user/service.d/10-timeout-abort.conf"
+const fedoraUserDropInSHA256 = "65ada61f9dc2af8c0cf87c3c71fe0eea50a664c07d451cb478238aed64f1cf41"
+const fedoraSystemDropIn = "/usr/lib/systemd/system/service.d/10-timeout-abort.conf"
+const fedoraSystemDropInSHA256 = "ae6b234f92bc22f1201a7572b59b454c9809f33c80d13f361b9674e1801acc37"
 
 func maintenanceExecutable(m Manifest) string {
 	return filepath.Join(applicationUpdateDirectory(Paths{Root: m.Root, Data: m.Data}), "fased-app-maintenance-system")
 }
-func checkMaintenanceImage(m Manifest) error {
+func readMaintenanceImage(m Manifest) (maintenanceImage, error) {
+	var image maintenanceImage
 	b, e := core.ReadPrivateFile(maintenanceExecutable(m) + ".json")
 	if e != nil {
-		return e
+		return image, e
 	}
-	var image maintenanceImage
 	if len(b) > 4096 || json.Unmarshal(b, &image) != nil || image.Version != 1 || image.Root != m.Root || image.Data != m.Data || !validExpectedDigest(image.SHA256) {
-		return errors.New("owner maintenance executable identity changed")
+		return image, errors.New("owner maintenance executable identity changed")
 	}
 	got, e := updateFileDigest(maintenanceExecutable(m))
 	if e != nil || got != image.SHA256 {
-		return errors.New("owner maintenance executable changed; preserve it")
+		return image, errors.New("owner maintenance executable changed; preserve it")
 	}
-	return nil
+	return image, nil
+}
+func checkMaintenanceImage(m Manifest) error {
+	_, e := readMaintenanceImage(m)
+	return e
+}
+
+// Fedora's own root-protected drop-in sets only TimeoutStopFailureMode=abort.
+// The owner records its device/inode before the core enters a user namespace,
+// where unmapped host-root ownership appears as nobody. A changed file or any
+// additional override is refused; the application never writes this OS file.
+func inspectedFedoraDropIn(path, digest string, mapped bool) (maintenanceDropInIdentity, error) {
+	var zero maintenanceDropInIdentity
+	trusted := func(i os.FileInfo) bool {
+		st, ok := i.Sys().(*syscall.Stat_t)
+		return ok && (st.Uid == 0 || mapped && st.Uid == 65534) && i.Mode().Perm()&0022 == 0 && i.Mode()&os.ModeSymlink == 0
+	}
+	for parent := filepath.Dir(path); ; parent = filepath.Dir(parent) {
+		i, e := os.Lstat(parent)
+		if e != nil || !i.IsDir() || !trusted(i) {
+			return zero, errors.New("systemd drop-in parent is not protected")
+		}
+		if parent == "/" {
+			break
+		}
+	}
+	i, e := os.Lstat(path)
+	if e != nil || !i.Mode().IsRegular() || !trusted(i) || i.Size() > 16*1024 {
+		return zero, errors.New("systemd drop-in is not protected")
+	}
+	f, e := os.OpenFile(path, os.O_RDONLY|unix.O_NOFOLLOW, 0)
+	if e != nil {
+		return zero, e
+	}
+	defer f.Close()
+	opened, e := f.Stat()
+	if e != nil || !os.SameFile(i, opened) {
+		return zero, errors.New("systemd drop-in changed during inspection")
+	}
+	b, e := io.ReadAll(io.LimitReader(f, 16*1024+1))
+	if e != nil || len(b) > 16*1024 || bytesDigest(b) != digest {
+		return zero, errors.New("systemd drop-in content differs")
+	}
+	st := opened.Sys().(*syscall.Stat_t)
+	return maintenanceDropInIdentity{Device: uint64(st.Dev), Inode: st.Ino}, nil
+}
+
+func allowedUserMaintenanceDropIns(m Manifest, value string) bool {
+	if value == "" {
+		return true
+	}
+	if value != fedoraUserDropIn {
+		return false
+	}
+	image, e := readMaintenanceImage(m)
+	if e != nil || image.FedoraUserDropIn == nil {
+		return false
+	}
+	got, e := inspectedFedoraDropIn(fedoraUserDropIn, fedoraUserDropInSHA256, maintenanceSandbox(m))
+	return e == nil && got == *image.FedoraUserDropIn
+}
+
+func allowedSystemMaintenanceDropIns(paths []string) bool {
+	if len(paths) == 0 {
+		return true
+	}
+	if len(paths) != 1 || paths[0] != fedoraSystemDropIn {
+		return false
+	}
+	_, e := inspectedFedoraDropIn(fedoraSystemDropIn, fedoraSystemDropInSHA256, false)
+	return e == nil
 }
 func installMaintenanceImage(m Manifest) error {
 	if _, e := os.Lstat(maintenanceExecutable(m) + ".json"); e == nil {
@@ -51,10 +135,22 @@ func installMaintenanceImage(m Manifest) error {
 	} else if !errors.Is(e, os.ErrNotExist) {
 		return e
 	}
+	image := maintenanceImage{Version: 1, Root: m.Root, Data: m.Data, SHA256: m.Files[engineName]}
+	if platform, e := hostplatform.Current(); e == nil && platform.ID == "fedora" {
+		if _, e := os.Lstat(fedoraUserDropIn); e == nil {
+			binding, e := inspectedFedoraDropIn(fedoraUserDropIn, fedoraUserDropInSHA256, false)
+			if e != nil {
+				return e
+			}
+			image.FedoraUserDropIn = &binding
+		} else if !errors.Is(e, os.ErrNotExist) {
+			return e
+		}
+	}
 	if e := copyUpdateFile(filepath.Join(m.Root, engineName), maintenanceExecutable(m), m.Files[engineName]); e != nil {
 		return e
 	}
-	return core.WritePrivateJSON(maintenanceExecutable(m)+".json", maintenanceImage{Version: 1, Root: m.Root, Data: m.Data, SHA256: m.Files[engineName]})
+	return core.WritePrivateJSON(maintenanceExecutable(m)+".json", image)
 }
 
 type maintenanceRequest struct {
@@ -130,7 +226,7 @@ func maintenanceManager(ctx context.Context, run MaintenanceRunner, unit string)
 }
 func checkMaintenanceTemplate(m Manifest, p map[string]string) error {
 	fragment, fragmentErr := filepath.EvalSymlinks(p["FragmentPath"])
-	if p["LoadState"] != "loaded" || fragmentErr != nil || fragment != maintenanceTemplatePath(m) || p["DropInPaths"] != "" {
+	if p["LoadState"] != "loaded" || fragmentErr != nil || fragment != maintenanceTemplatePath(m) || !allowedUserMaintenanceDropIns(m, p["DropInPaths"]) {
 		return errors.New("owner maintenance template is missing or foreign; preserve it and use the installer owner's setup")
 	}
 	b, e := core.ReadPrivateFile(maintenanceTemplatePath(m))

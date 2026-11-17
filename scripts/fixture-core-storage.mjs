@@ -157,6 +157,7 @@ export async function currentStorageFixture(archivedRoot) {
     ),
     "update_preferences.go",
     "backup_linux.go",
+    "inspection_fixture.go",
     ...(await readdir("internal/core")).filter(
       (name) =>
         name.startsWith("application_") &&
@@ -480,6 +481,23 @@ func ValidManagedAccountRef(r AccountRef) bool {
     await writeFile(target, b);
     storage["update/" + file] = sha(Buffer.from(b));
   }
+  // The current storage projection refers to the checkpoint wire type, but
+  // the archived reader predates it. Copy only that data declaration: the
+  // historical reader does not acquire a package maintenance controller.
+  const maintenance = await readFile("internal/update/maintenance.go", "utf8");
+  const checkpoint = maintenance.match(
+    /^type ApplicationCheckpoint struct \{\n(?:[^\n]*\n)*?\}/m,
+  );
+  assert.ok(checkpoint, "current checkpoint declaration required");
+  const checkpointPath = path.join(
+    archivedRoot,
+    "internal/update/checkpoint_fixture.go",
+  );
+  const checkpointSource = Buffer.from(
+    "package update\n\n" + checkpoint[0] + "\n",
+  );
+  await writeFile(checkpointPath, checkpointSource);
+  storage["update/checkpoint_fixture.go"] = sha(checkpointSource);
   const updateManifest = path.join(archivedRoot, "internal/update/manifest.go");
   let updateSource = await readFile(updateManifest, "utf8");
   if (!updateSource.includes("func strictJSONBounded(")) {
@@ -535,7 +553,7 @@ func ValidManagedAccountRef(r AccountRef) bool {
       )
       .replace(
         "type Store struct {",
-        "type Store struct {\n\ttaskSecrets providersecrets.Source\n\tpersistentTaskAccessAvailable bool\n\tproviderVaultFault func() error\n\tappUpdates applicationUpdates\n\tvenueCredentials venueCredentials\n\trpcAdmission bool\n\twalletReadFixture walletReader\n\twalletReadMu sync.Mutex\n\trpcCheckFixture func(context.Context, RPCCheckRequest) (RPCCheckResult, error)\n\tcustodyNetwork string\n\tonchain *onchainRuntime\n\tproviderFixture bool\n\tproviderOnlyFixture bool\n\tchatEpoch atomic.Uint64\n\tprogressMu sync.Mutex\n\taiProgress map[string]string\n\tsessionFixture bool\n\taiMu sync.Mutex\n\tnewsMu sync.Mutex\n\tprovider providerState\n\tpilot openAIPilotState\n\tresearchRead func(context.Context, researchFactResult) (json.RawMessage, error)",
+        "type Store struct {\n\tunconfiguredProtectedSigner bool\n\ttaskSecrets providersecrets.Source\n\tpersistentTaskAccessAvailable bool\n\tproviderVaultFault func() error\n\tappUpdates applicationUpdates\n\tvenueCredentials venueCredentials\n\trpcAdmission bool\n\twalletReadFixture walletReader\n\twalletReadMu sync.Mutex\n\trpcCheckFixture func(context.Context, RPCCheckRequest) (RPCCheckResult, error)\n\tcustodyNetwork string\n\tonchain *onchainRuntime\n\tproviderFixture bool\n\tproviderOnlyFixture bool\n\tchatEpoch atomic.Uint64\n\tprogressMu sync.Mutex\n\taiProgress map[string]string\n\tsessionFixture bool\n\taiMu sync.Mutex\n\tnewsMu sync.Mutex\n\tprovider providerState\n\tpilot openAIPilotState\n\tresearchRead func(context.Context, researchFactResult) (json.RawMessage, error)",
       )
       .replace(
         marker,

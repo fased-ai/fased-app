@@ -41,6 +41,7 @@ import (
 	"github.com/fased-ai/fased-app/internal/core"
 	"github.com/fased-ai/fased-app/internal/custodyinstall"
 	"github.com/fased-ai/fased-app/internal/localinstall"
+	"github.com/fased-ai/fased-app/internal/signer"
 	"github.com/fased-ai/fased-app/internal/update"
 	"github.com/fased-ai/fased-app/internal/vpsinstall"
 	"github.com/sigstore/sigstore/pkg/signature"
@@ -75,11 +76,12 @@ type applicationVMTrust struct {
 	ProvenanceSHA256 string `json:"provenanceSha256,omitempty"`
 	PlanSHA256       string `json:"planSha256,omitempty"`
 
-	Connected    bool   `json:"connected,omitempty"`
-	SeedSHA256   string `json:"seedSha256"`
-	CASHA256     string `json:"caSha256"`
-	SourceSHA256 string `json:"sourceSha256"`
-	TargetSHA256 string `json:"targetSha256"`
+	Connected          bool   `json:"connected,omitempty"`
+	SeedSHA256         string `json:"seedSha256"`
+	CASHA256           string `json:"caSha256"`
+	SourceSHA256       string `json:"sourceSha256"`
+	TargetSHA256       string `json:"targetSha256"`
+	TargetSignerSHA256 string `json:"targetSignerSha256,omitempty"`
 }
 type applicationVMBefore struct {
 	InstallationID       string                          `json:"installationId"`
@@ -373,8 +375,89 @@ func applicationVMOptions(directory string) (bootstrap.Options, error) {
 
 // This mode exercises the product channel factories without the separate older
 // reboot barrier. The owner, image and root-published inputs remain fixed.
+func fixtureCustodyServe(args []string, uid int, m custodyinstall.Manifest) (bool, error) {
+	if len(args) == 0 || args[0] != "serve" {
+		return false, nil
+	}
+	values := make(map[string]string)
+	for i := 1; i < len(args); i++ {
+		name, value, joined := strings.Cut(args[i], "=")
+		if name != "--custody-config" && name != "--data-dir" && name != "--installation-root" {
+			continue
+		}
+		if _, duplicate := values[name]; duplicate {
+			return false, errors.New("duplicate fixture custody argument")
+		}
+		if !joined {
+			i++
+			if i >= len(args) {
+				return false, errors.New("missing fixture custody argument")
+			}
+			value = args[i]
+		}
+		values[name] = value
+	}
+	if values["--custody-config"] == "" {
+		return false, nil
+	}
+	if m.Owner != 1100 || m.Root != custodyinstall.Root(1100) || (m.Location != "local" && m.Location != "remote") || m.Mode != signer.OrdinaryCustodyMode || m.Provenance != signer.ControlledCustodyProfile || uid != m.App.UID || uid <= 0 || uid == m.Owner || values["--custody-config"] != m.Root+"/identity.json" || values["--data-dir"] != m.Root+"/app-state" || values["--installation-root"] != m.Root {
+		return false, errors.New("fixed controlled custody identity required")
+	}
+	return true, nil
+}
+
+func TestFixtureCustodyChannelRequiresExactInstalledIdentity(t *testing.T) {
+	m := custodyinstall.Manifest{Owner: 1100, Root: custodyinstall.Root(1100), Location: "local", Mode: "ordinary-custody:v1", Provenance: "controlled-disposable:v1", App: custodyinstall.Identity{UID: 1101}}
+	args := []string{"serve", "--custody-config", m.Root + "/identity.json", "--data-dir", m.Root + "/app-state", "--installation-root", m.Root}
+	if ok, err := fixtureCustodyServe(args, m.App.UID, m); err != nil || !ok {
+		t.Fatal("exact installed custody identity rejected", err)
+	}
+	if ok, _ := fixtureCustodyServe(args, 1102, m); ok {
+		t.Fatal("foreign app UID accepted")
+	}
+	if ok, _ := fixtureCustodyServe(append(args, "--custody-config", "/foreign"), m.App.UID, m); ok {
+		t.Fatal("duplicate custody identity accepted")
+	}
+	m.Location = "remote"
+	if ok, err := fixtureCustodyServe(args, m.App.UID, m); err != nil || !ok {
+		t.Fatal("exact disposable Remote custody identity rejected", err)
+	}
+	m.Location = "unknown"
+	if ok, _ := fixtureCustodyServe(args, m.App.UID, m); ok {
+		t.Fatal("unknown custody location accepted")
+	}
+	m.Location = "local"
+	m.Provenance = "owner-input:v1"
+	if ok, _ := fixtureCustodyServe(args, m.App.UID, m); ok {
+		t.Fatal("real custody admitted to fixture channel")
+	}
+}
+
 func applicationConnectedRuntime(args []string) (bool, error) {
 	if len(args) == 0 || args[0] != "serve" && args[0] != "maintain-update" && args[0] != "maintenance-recover" {
+		return false, nil
+	}
+	for _, arg := range args[1:] {
+		if arg != "--custody-config" && !strings.HasPrefix(arg, "--custody-config=") {
+			continue
+		}
+		m, err := custodyinstall.Load(1100)
+		if err != nil {
+			return false, err
+		}
+		ok, err := fixtureCustodyServe(args, os.Getuid(), m)
+		if err != nil || !ok {
+			return false, errors.New("controlled custody fixture binding refused")
+		}
+		r, err := update.ReadMaintenanceRecord(m.Owner)
+		if err != nil {
+			return false, err
+		}
+		installed, err := r.InstalledPackage()
+		if err != nil || !installed.DevelopmentOnly {
+			return false, errors.New("controlled custody release required")
+		}
+		compiledApplicationUpdateCheck = custodyChannelCheck(m.Owner, applicationVMOptions, filepath.Join(m.Root, "app-state", "update-channel"), true)
 		return false, nil
 	}
 	remote := false

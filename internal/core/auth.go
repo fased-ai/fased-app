@@ -27,6 +27,16 @@ func passwordHash(password string, salt []byte) []byte {
 func validPassword(password string) bool {
 	return utf8.RuneCountInString(password) >= 12 && len(password) <= 1024
 }
+
+func (s *Store) compareAndSetUnclaimedCode(ctx context.Context, previous, next string, expires int64) (bool, error) {
+	result, err := s.db.ExecContext(ctx, "UPDATE instance SET claim_hash=?,claim_expires=? WHERE id=1 AND password_hash IS NULL AND COALESCE(claim_hash,'')=?", next, expires, previous)
+	if err != nil {
+		return false, err
+	}
+	count, err := result.RowsAffected()
+	return count == 1, err
+}
+
 func (s *Store) IssueClaimCode(ctx context.Context) (ClaimCode, error) {
 	s.authMu.Lock()
 	defer s.authMu.Unlock()
@@ -35,29 +45,34 @@ func (s *Store) IssueClaimCode(ctx context.Context) (ClaimCode, error) {
 		return ClaimCode{}, err
 	}
 	result := ClaimCode{Code: code, ExpiresAt: s.now().Add(ClaimLifetime)}
-	var previous string
-	if err = s.db.QueryRowContext(ctx, "SELECT COALESCE(claim_hash,'') FROM instance WHERE id=1").Scan(&previous); err != nil {
-		return ClaimCode{}, err
-	}
-	prefix := ""
-	if strings.HasPrefix(previous, "remote-v1:") {
-		parts := strings.Split(previous, ":")
-		if len(parts) != 4 {
-			return ClaimCode{}, ErrUnauthorized
+	updated := false
+	for attempt := 0; attempt < 3; attempt++ {
+		var previous string
+		var claimed bool
+		if err = s.db.QueryRowContext(ctx, "SELECT COALESCE(claim_hash,''),password_hash IS NOT NULL FROM instance WHERE id=1").Scan(&previous, &claimed); err != nil {
+			return ClaimCode{}, err
 		}
-		prefix = strings.Join(parts[:3], ":") + ":"
+		if claimed {
+			return ClaimCode{}, ErrClaimed
+		}
+		prefix := ""
+		if strings.HasPrefix(previous, "remote-v1:") {
+			parts := strings.Split(previous, ":")
+			if len(parts) != 4 {
+				return ClaimCode{}, ErrUnauthorized
+			}
+			prefix = strings.Join(parts[:3], ":") + ":"
+		}
+		updated, err = s.compareAndSetUnclaimedCode(ctx, previous, prefix+tokenHash(code), result.ExpiresAt.Unix())
+		if err != nil {
+			return ClaimCode{}, err
+		}
+		if updated {
+			break
+		}
 	}
-
-	updated, err := s.db.ExecContext(ctx, "UPDATE instance SET claim_hash=?,claim_expires=? WHERE id=1 AND password_hash IS NULL", prefix+tokenHash(code), result.ExpiresAt.Unix())
-	if err != nil {
-		return ClaimCode{}, err
-	}
-	count, err := updated.RowsAffected()
-	if err != nil {
-		return ClaimCode{}, err
-	}
-	if count != 1 {
-		return ClaimCode{}, ErrClaimed
+	if !updated {
+		return ClaimCode{}, ErrConflict
 	}
 	if err = WritePrivateJSON(filepath.Join(s.dir, "claim-code.json"), result); err != nil {
 		return ClaimCode{}, err

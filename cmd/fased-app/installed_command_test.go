@@ -27,6 +27,91 @@ func TestInstalledLocalCommandRoutesAccounts(t *testing.T) {
 	}
 }
 
+func TestLocalEnrollmentRebindsOnlyKnownCommand(t *testing.T) {
+	home := t.TempDir()
+	root, data := filepath.Join(home, "original"), filepath.Join(home, "data")
+	oldCore, newCore := filepath.Join(root, "fased-app"), filepath.Join(home, "protected", "fased-app")
+	if err := os.MkdirAll(filepath.Dir(oldCore), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(newCore), 0700); err != nil {
+		t.Fatal(err)
+	}
+	for _, image := range []string{oldCore, newCore} {
+		if err := os.WriteFile(image, []byte("#!/bin/sh\nprintf '%s\\n' \"$0\" \"$@\"\n"), 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	path, err := installCommandAt(home, oldCore, root, data, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = rebindLocalInstalledCommand(home, oldCore, newCore, root, data); err != nil {
+		t.Fatal(err)
+	}
+	if err = rebindLocalInstalledCommand(home, oldCore, newCore, root, data); err != nil {
+		t.Fatal("rebind must be idempotent", err)
+	}
+	got, err := exec.Command(path, "update", "status").CombinedOutput()
+	if err != nil || string(got) != newCore+"\nupdate\nstatus\n--data-dir\n"+data+"\n" {
+		t.Fatal("updated command did not use the enrolled executable", string(got), err)
+	}
+	foreign := []byte("#!/bin/sh\nexit 77\n")
+	if err = os.WriteFile(path, foreign, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err = rebindLocalInstalledCommand(home, oldCore, newCore, root, data); err == nil {
+		t.Fatal("foreign command accepted")
+	}
+	if b, _ := os.ReadFile(path); string(b) != string(foreign) {
+		t.Fatal("foreign command overwritten")
+	}
+}
+
+func TestLocalEnrollmentRebindsPrimaryWhenSecondaryAlreadyCurrent(t *testing.T) {
+	home := t.TempDir()
+	root, data := filepath.Join(home, "original"), filepath.Join(home, "data")
+	oldCore, newCore := filepath.Join(root, "fased-app"), filepath.Join(home, "protected", "fased-app")
+	path, err := installCommandAt(home, oldCore, root, data, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondary := filepath.Join(home, ".local", "bin", "fased-app")
+	if err = os.WriteFile(secondary, launcherBody(newCore, root, data, false), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err = rebindLocalInstalledCommand(home, oldCore, newCore, root, data); err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil || string(got) != string(launcherBody(newCore, root, data, false)) {
+		t.Fatal("primary command still points at the predecessor", err)
+	}
+}
+
+func TestLocalEnrollmentRebindsBothKnownAliases(t *testing.T) {
+	home := t.TempDir()
+	root, data := filepath.Join(home, "original"), filepath.Join(home, "data")
+	oldCore, newCore := filepath.Join(root, "fased-app"), filepath.Join(home, "protected", "fased-app")
+	primary, err := installCommandAt(home, oldCore, root, data, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondary := filepath.Join(home, ".local", "bin", "fased-app")
+	if err = os.WriteFile(secondary, launcherBody(oldCore, root, data, false), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err = rebindLocalInstalledCommand(home, oldCore, newCore, root, data); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{primary, secondary} {
+		got, err := os.ReadFile(name)
+		if err != nil || string(got) != string(launcherBody(newCore, root, data, false)) {
+			t.Fatal("command still points at the predecessor", name, err)
+		}
+	}
+}
+
 func TestInstalledCommandPreservesForeignFilesAndRoutesUpdate(t *testing.T) {
 	home := t.TempDir()
 	root := filepath.Join(home, "app 'quoted")

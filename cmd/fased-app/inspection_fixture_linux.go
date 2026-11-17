@@ -24,6 +24,15 @@ func inspectionFixtureCommand(args []string, in *os.File, out, errOut io.Writer)
 	if len(args) == 1 && args[0] == "fixture-inspection-compatibility" {
 		return json.NewEncoder(out).Encode(update.FixtureInspectionContract())
 	}
+	if len(args) == 2 && args[0] == "fixture-update-pause-guard" && args[1] == "--recovery-capability" {
+		return nil
+	}
+	if len(args) == 2 && args[0] == "fixture-update-pause-guard" && args[1] == "--staged-recovery-capability" {
+		return nil
+	}
+	if len(args) == 2 && args[0] == "fixture-update-pause-guard" && args[1] == "--sentinel-staged-recovery-capability" {
+		return nil
+	}
 	if len(args) == 0 {
 		return errors.New("explicit fixture action required")
 	}
@@ -38,11 +47,22 @@ func inspectionFixtureCommand(args []string, in *os.File, out, errOut io.Writer)
 	txpath := f.String("transaction", "", "public disposable bootstrap capsule")
 	inputs := f.String("input-dir", "", "public sealed fixture inputs")
 	artifacts := f.String("artifact-dir", "", "exact fixture readers")
+	guardIntent := f.String("intent-id", "", "exact protected update intent")
+	guardPause := f.String("pause-id", "", "exact protected core pause")
+	guardRequest := f.String("request-digest", "", "protected pause request digest")
+	guardInstance := f.String("instance-digest", "", "protected core instance digest")
+	guardPhase := f.String("phase", "", "expected core pause state")
+	guardRecovery := f.Bool("verify-recovery", false, "verify the original stopped-service backup")
+	guardStaged := f.Bool("verify-staged-recovery", false, "verify the protected staged recovery backup")
+	guardDigest := f.String("recovery-digest", "", "exact held installation digest")
 	if e := f.Parse(args[1:]); e != nil {
 		return e
 	}
 	if f.NArg() != 0 || !*fixture || *owner <= 0 {
 		return errors.New("explicit disposable fixture and owner required")
+	}
+	if op != "fixture-update-pause-guard" && (*guardIntent != "" || *guardPause != "" || *guardRequest != "" || *guardInstance != "" || *guardPhase != "" || *guardRecovery || *guardStaged || *guardDigest != "") {
+		return errors.New("pause guard options require the protected pause guard")
 	}
 	root := custodyinstall.Root(*owner)
 	ctx := context.Background()
@@ -72,6 +92,59 @@ func inspectionFixtureCommand(args []string, in *os.File, out, errOut io.Writer)
 			return e
 		}
 		return json.NewEncoder(out).Encode(v)
+	case "fixture-update-pause-guard":
+		if *history || *prepare || *id != "" || *txpath != "" || *inputs != "" || *artifacts != "" {
+			return errors.New("pause guard accepts only its bound state")
+		}
+		cfg, e := signer.LoadConfig(root + "/identity.json")
+		if e != nil {
+			return e
+		}
+		if cfg.Version == 3 && cfg.Provenance != signer.ControlledCustodyProfile {
+			return errors.New("pause guard requires controlled disposable custody")
+		}
+		if os.Getuid() != cfg.AppUID || os.Geteuid() != cfg.AppUID || cfg.OwnerUID != *owner || cfg.StateDir != root+"/signer-state" || cfg.SocketDir != root+"/signer-ipc" {
+			return errors.New("cold pause guard requires the exact app UID")
+		}
+		if e = signer.VerifyExecutable(); e != nil {
+			return e
+		}
+		if *guardStaged {
+			if *guardRecovery || *guardDigest != "" || *guardIntent != "" || *guardPause != "" || *guardRequest != "" || *guardInstance != "" || *guardPhase != "" {
+				return errors.New("staged backup guard accepts no caller-selected transaction")
+			}
+			t, err := custodyinstall.LoadCanonicalStagedController(*owner)
+			if err != nil {
+				return err
+			}
+			base := t.Base
+			want := signer.Config{Version: base.Version, Profile: base.Profile, Provenance: base.Provenance, Mode: base.Mode, Network: base.Network, SignerID: base.ID, OwnerUID: base.Owner, AppUID: base.App.UID, SignerUID: base.Signer.UID, StateDir: base.Root + "/signer-state", SocketDir: base.Root + "/signer-ipc"}
+			if cfg != want || os.Getgid() != base.App.GID || os.Getegid() != base.App.GID {
+				return errors.New("staged backup guard differs from the protected installation")
+			}
+			return core.VerifyFixtureColdRecovery(ctx, root+"/app-state", t.Binding.Index)
+		}
+		if *guardRecovery {
+			t, err := custodyinstall.LoadCanonicalController(*owner, *guardIntent)
+			if err != nil {
+				return err
+			}
+			base := t.Base
+			want := signer.Config{Version: base.Version, Profile: base.Profile, Provenance: base.Provenance, Mode: base.Mode, Network: base.Network, SignerID: base.ID, OwnerUID: base.Owner, AppUID: base.App.UID, SignerUID: base.Signer.UID, StateDir: base.Root + "/signer-state", SocketDir: base.Root + "/signer-ipc"}
+			p := t.Binding.Index.Binding.Pause
+			if cfg != want || os.Getgid() != base.App.GID || os.Getegid() != base.App.GID || *guardPhase != "paused" || *guardDigest != update.InstallDigest(t.Binding) || p.Request == nil || p.PauseID != *guardPause || p.Request.IntentID != *guardIntent || update.SnapshotDigest("pause-request", *p.Request) != *guardRequest || update.SnapshotDigest("atomic-instance:v1", p.Core.InstanceID) != *guardInstance {
+				return errors.New("cold recovery guard differs from the protected transaction")
+			}
+			return core.VerifyFixtureColdRecovery(ctx, root+"/app-state", t.Binding.Index)
+		}
+		if *guardDigest != "" {
+			return errors.New("recovery digest requires backup verification")
+		}
+		v, e := core.InspectFixtureColdMetadata(ctx, root+"/app-state", update.NewProbe())
+		if e != nil {
+			return e
+		}
+		return core.ValidateFixturePauseGuard(v, *guardPhase, *guardIntent, *guardPause, *guardRequest, *guardInstance)
 	case "fixture-inspection-empty":
 		cfg, e := signer.LoadConfig(root + "/identity.json")
 		if e != nil {

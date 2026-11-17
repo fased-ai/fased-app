@@ -75,7 +75,7 @@ func (g *GitHubTransport) LatestPublished(ctx context.Context, ownerID string) (
 	}
 	result.Source = object.SHA
 	var assets []json.RawMessage
-	if json.Unmarshal(release["assets"], &assets) != nil || len(assets) != 5 {
+	if json.Unmarshal(release["assets"], &assets) != nil || (len(assets) != 5 && len(assets) != 7) {
 		return result, errors.New("complete attested release inventory required")
 	}
 	result.Assets = map[string]GitHubAsset{}

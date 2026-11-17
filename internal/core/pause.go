@@ -51,6 +51,12 @@ func readPause(ctx context.Context, tx snapshotReader) (string, pauseRecord, err
 // commit precedes acknowledgement. The same SQL triggers protect other Store
 // connections, credential recovery and restart; no in-memory lease can expire.
 func (s *Store) UpdatePause(ctx context.Context, c update.CorePauseCommand) (update.CorePauseReceipt, error) {
+	return s.updatePause(ctx, c, false)
+}
+
+// Only the root-approved, instance-locked cold maintenance session can admit a
+// new process nonce for unchanged metadata. Live API checks remain unchanged.
+func (s *Store) updatePause(ctx context.Context, c update.CorePauseCommand, maintenance bool) (update.CorePauseReceipt, error) {
 	if !update.IDOK(c.ProbeID) {
 		return update.CorePauseReceipt{}, errors.New("one pause challenge required")
 	}
@@ -82,7 +88,7 @@ func (s *Store) UpdatePause(ctx context.Context, c update.CorePauseCommand) (upd
 			if phase == "released" && want.Sequence <= r.Request.Sequence {
 				return update.CorePauseReceipt{}, errors.New("released pause sequence cannot replay")
 			}
-			if current.BootID != want.Expected.BootID || !update.SameCoreMetadata(current, want.Expected) {
+			if !maintenance && current.BootID != want.Expected.BootID || !update.SameCoreMetadata(current, want.Expected) {
 				return update.CorePauseReceipt{}, errors.New("core metadata or boot changed before pause")
 			}
 			r = pauseRecord{PauseID: update.NewProbe(), Request: want}

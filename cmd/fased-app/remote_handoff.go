@@ -24,6 +24,22 @@ type remoteSetupOwner struct {
 	Owner          tailnet.Identity `json:"owner"`
 }
 
+func saveInitialRemoteOwner(dir string, expected remoteSetupOwner) error {
+	file := filepath.Join(dir, "owner-handoff.json")
+	data, err := core.ReadPrivateFile(file)
+	if errors.Is(err, os.ErrNotExist) {
+		return core.WritePrivateJSON(file, expected)
+	}
+	if err != nil {
+		return err
+	}
+	var prior remoteSetupOwner
+	if json.Unmarshal(data, &prior) != nil || prior.Version != expected.Version || prior.Origin != expected.Origin || prior.Listen != expected.Listen || prior.EngineSHA256 != expected.EngineSHA256 || prior.Owner != expected.Owner {
+		return errors.New("initial Remote handoff differs; preserve it and inspect setup")
+	}
+	return nil
+}
+
 func loadRemoteSetupOwner(dir string, m vpsinstall.Manifest, instance string) (tailnet.Identity, bool, error) {
 	file := filepath.Join(dir, "owner-handoff.json")
 	data, err := core.ReadPrivateFile(file)

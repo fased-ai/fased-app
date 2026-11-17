@@ -6,11 +6,13 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"path/filepath"
 	"time"
 	"unicode"
 	"unicode/utf8"
 
 	"github.com/fased-ai/fased-app/internal/signer"
+	"github.com/fased-ai/fased-app/internal/update"
 )
 
 // App-owned public records are preferences, never signer authority. No balance,
@@ -93,8 +95,21 @@ func (s *Store) configureSigner(path string) error {
 	if e != nil {
 		return e
 	}
-	if os.Geteuid() != c.AppUID {
-		return errors.New("fixture view requires the configured app identity")
+	return s.configureVerifiedSigner(c)
+}
+
+// configureSigner obtains this configuration from the protected OS path. The
+// Local owner transport is distinct from permission to use the wallet.
+func (s *Store) configureVerifiedSigner(c signer.Config) error {
+	if c.Validate() != nil || os.Getuid() != c.AppUID || os.Geteuid() != c.AppUID {
+		return errors.New("protected signer requires its configured app identity")
+	}
+	if s.fixture != nil {
+		return errors.New("signer identity is already configured")
+	}
+	s.unconfiguredProtectedSigner = c.Version == 3 && c.Mode == signer.OrdinaryCustodyMode && c.Profile == signer.OwnerCustodyProfile && (c.Provenance == signer.OwnerKeyProvenance || c.Provenance == signer.ControlledCustodyProfile) && c.Network == ""
+	if root, err := update.PackageInstanceRoot(c.OwnerUID, "local", c.SignerID); err == nil {
+		s.custodyPackageLocal = c.StateDir == filepath.Join(root, "signer-state") && c.SocketDir == filepath.Join(root, "signer-ipc")
 	}
 	s.fixture = func(ctx context.Context, r signer.Request) (signer.Response, error) {
 		// This bridge is read-only even if a future caller constructs another action.
@@ -109,10 +124,13 @@ func (s *Store) configureSigner(path string) error {
 		s.custodyNetwork = c.Network
 		s.custodyOwnerSupported = c.Version == 3 && c.Profile == signer.OwnerCustodyProfile && c.Provenance == signer.ControlledCustodyProfile
 	}
+	if c.Version == 3 && c.Profile == signer.OwnerCustodyProfile {
+		s.protectedOwnerUID = c.OwnerUID
+	}
 	return nil
 }
 func (s *Store) fixtureView(ctx context.Context) FixtureView {
-	if s.fixture == nil {
+	if s.fixture == nil || s.unconfiguredProtectedSigner {
 		return FixtureView{}
 	}
 	r, e := s.fixture(ctx, signer.Request{Action: "status"})

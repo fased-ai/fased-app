@@ -1,7 +1,13 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
-import { mainArchiveSources } from "./ci-ubuntu-mirror.mjs";
+import {
+  mainArchiveSources,
+  selectArchiveMirror,
+} from "./ci-ubuntu-mirror.mjs";
+
+const archive = "https://archive.ubuntu.com/ubuntu/";
+const kernel = "https://mirrors.edge.kernel.org/ubuntu/";
 
 const source = `Types: deb
 URIs: http://azure.archive.ubuntu.com/ubuntu/
@@ -16,18 +22,27 @@ Components: main restricted universe multiverse
 Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg
 `;
 
-test("the independent Ubuntu mirror preserves suites and distribution signing", () => {
+test("a reachable mirror preserves suites and distribution signing", () => {
   assert.equal(
-    mainArchiveSources(source),
+    mainArchiveSources(source, archive),
     source
-      .replace(
-        "http://azure.archive.ubuntu.com/ubuntu/",
-        "https://mirrors.edge.kernel.org/ubuntu/",
-      )
-      .replace(
-        "http://security.ubuntu.com/ubuntu/",
-        "https://mirrors.edge.kernel.org/ubuntu/",
-      ),
+      .replace("http://azure.archive.ubuntu.com/ubuntu/", archive)
+      .replace("http://security.ubuntu.com/ubuntu/", archive),
+  );
+  assert.throws(() => mainArchiveSources(source, "https://foreign.example/"));
+});
+test("CI probes mirrors once and refuses when none responds", async () => {
+  const probes = [];
+  const selected = await selectArchiveMirror(async (url) => {
+    probes.push(url);
+    return url.startsWith(kernel);
+  });
+  assert.equal(selected, kernel);
+  assert.deepEqual(new Set(probes), new Set([archive, kernel]));
+  assert.equal(await selectArchiveMirror(async () => true), archive);
+  await assert.rejects(
+    selectArchiveMirror(async () => false),
+    /reachable/,
   );
 });
 test("VM prerequisites use the same trusted archive without extending the job", () => {
@@ -73,10 +88,16 @@ test("the official runner mirror-list source bypasses Azure without changing tru
     "http://azure.archive.ubuntu.com/ubuntu/",
     "mirror+file:/etc/apt/apt-mirrors.txt",
   );
-  assert.equal(mainArchiveSources(mirrorList), mainArchiveSources(source));
+  assert.equal(
+    mainArchiveSources(mirrorList, archive),
+    mainArchiveSources(source, archive),
+  );
   assert.throws(
     () =>
-      mainArchiveSources(mirrorList.replace("apt-mirrors.txt", "unknown.txt")),
+      mainArchiveSources(
+        mirrorList.replace("apt-mirrors.txt", "unknown.txt"),
+        archive,
+      ),
     /Expected/,
   );
 });
@@ -87,22 +108,25 @@ test("runner changes and unsigned or trust-bypassing sources fail closed", () =>
         source
           .replaceAll("azure.archive.ubuntu.com", "other.example")
           .replaceAll("security.ubuntu.com", "other.example"),
+        archive,
       ),
     /Expected/,
   );
   assert.throws(
-    () => mainArchiveSources(source.replaceAll("Signed-By:", "Other:")),
+    () =>
+      mainArchiveSources(source.replaceAll("Signed-By:", "Other:"), archive),
     /signing key/,
   );
   assert.throws(() =>
     mainArchiveSources(
       source.replace("Types: deb", "Types: deb\nTrusted: yes"),
+      archive,
     ),
   );
 });
-test("workflow prepares sources without root project execution or timeout expansion", () => {
+test("optional native compatibility prepares sources without root project execution or timeout expansion", () => {
   const workflow = readFileSync(
-    new URL("../.github/workflows/checks.yml", import.meta.url),
+    new URL("../.github/workflows/desktop-compatibility.yml", import.meta.url),
     "utf8",
   );
   const desktop = workflow

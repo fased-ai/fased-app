@@ -20,6 +20,10 @@ import (
 	"golang.org/x/term"
 )
 
+// Only a separately tagged disposable build may bind these functions.
+var compiledFixtureHost func(int) bool
+var compiledFixtureServe func(context.Context, signer.Config) (*signer.Server, error)
+
 func main() {
 	if err := run(os.Args[1:], os.Stdin, os.Stdout, os.Stderr); err != nil {
 		fmt.Fprintln(os.Stderr, "fased-signer:", err)
@@ -28,6 +32,36 @@ func main() {
 }
 
 func run(args []string, input *os.File, out, errOut io.Writer) error {
+	if compiledFixtureHost != nil && !compiledFixtureHost(0) {
+		return signer.ErrUnavailable
+	}
+	if len(args) > 0 && (args[0] == "custody-maintenance" || args[0] == "custody-maintenance-inventory" || args[0] == "custody-maintenance-status") {
+		return signerMaintenanceCommand(args, input, out)
+	}
+	if len(args) == 2 && args[0] == "fixture-install-guard" && args[1] == "--predecessor-capability" {
+		return nil
+	}
+	if len(args) > 0 && args[0] == "fixture-validate-reusable-setup" {
+		return validateReusableSetupCommand(args[1:], input, out, errOut)
+	}
+	if len(args) > 0 && args[0] == "fixture-validate-stage-recovery" {
+		return validateStageRecoveryCommand(args[1:], errOut)
+	}
+	if len(args) > 0 && args[0] == "fixture-validate-preparation-start" {
+		return validatePreparationStartCommand(args[1:], errOut)
+	}
+	if len(args) > 0 && args[0] == "fixture-validate-preparation-fence" {
+		return validatePreparationFenceCommand(args[1:], errOut)
+	}
+	if len(args) > 0 && args[0] == "fixture-preparation-hold" {
+		return preparationHoldCommand(args[1:], out, errOut)
+	}
+	if len(args) > 0 && args[0] == "fixture-validate-atomic-worker" {
+		return validateAtomicWorkerCommand(args[1:], out, errOut)
+	}
+	if len(args) > 0 && args[0] == "fixture-validate-atomic-provision" {
+		return validateAtomicProvisionCommand(args[1:], out, errOut)
+	}
 	if len(args) > 0 && (args[0] == "fixture-portable-export" || args[0] == "fixture-portable-recover") {
 		return portableCommand(args, input, out, errOut)
 	}
@@ -44,7 +78,11 @@ func run(args []string, input *os.File, out, errOut io.Writer) error {
 		return json.NewEncoder(out).Encode(signer.UpdateContract())
 	}
 	if len(args) == 1 && args[0] == "ordinary-custody-version" {
-		return json.NewEncoder(out).Encode(map[string]any{"protocol": 3, "ownerFlow": 1, "mode": signer.OrdinaryCustodyMode, "profile": signer.OwnerCustodyProfile, "provenance": signer.OwnerKeyProvenance, "walletSigner": false})
+		provenance := signer.OwnerKeyProvenance
+		if compiledFixtureHost != nil {
+			provenance = signer.ControlledCustodyProfile
+		}
+		return json.NewEncoder(out).Encode(map[string]any{"protocol": 3, "ownerFlow": 1, "mode": signer.OrdinaryCustodyMode, "profile": signer.OwnerCustodyProfile, "provenance": provenance, "walletSigner": false})
 	}
 	if len(args) == 1 && args[0] == "custody-version" {
 		return json.NewEncoder(out).Encode(map[string]any{"protocol": 2, "ownerFlow": 1, "mode": signer.ManagedFixtureMode, "walletSigner": false})
@@ -70,12 +108,20 @@ func run(args []string, input *os.File, out, errOut io.Writer) error {
 	lifetime := flags.Duration("unlock-for", 15*time.Minute, "manual unlock lifetime, at most one hour")
 	requestStdin := flags.Bool("request-stdin", false, "public typed fixture policy/intent JSON from stdin; no credentials")
 	intentID := flags.String("intent-id", "", "exact disposable installation intent for cold inspection")
+	guardDigest := flags.String("guard-digest", "", "installation binding digest for a fixed replacement")
+	guardDirection := flags.String("guard-direction", "", "fixed replacement direction")
+	guardComponent := flags.String("guard-component", "", "fixed replacement component")
+	guardSource := flags.String("guard-source-sha256", "", "fixed replacement source digest")
+	guardStage := flags.String("guard-stage", "", "pair verification before or after replacement")
 	windowInstance := flags.String("window-instance", "", "exact enrolled instance for the isolated owner window")
 	if err := flags.Parse(args[1:]); err != nil {
 		return err
 	}
 	if flags.NArg() != 0 || (*fixture == *ordinary) || *configPath == "" {
 		return errors.New("select one custody mode and an identity configuration")
+	}
+	if args[0] != "fixture-install-guard" && args[0] != "fixture-install-guard-status" && args[0] != "fixture-install-start-guard" && (*guardDigest != "" || *guardDirection != "" || *guardComponent != "" || *guardSource != "" || *guardStage != "") {
+		return errors.New("replacement guard options require the fixture guard")
 	}
 	if *snapshotPin != "" && args[0] != "recover" && !(args[0] == "owner" && *action == "restore") {
 		return errors.New("snapshot fingerprint requires owner recovery")
@@ -89,6 +135,18 @@ func run(args []string, input *os.File, out, errOut io.Writer) error {
 	c, err := signer.LoadConfig(*configPath)
 	if err != nil {
 		return err
+	}
+	if c.Version == 3 && c.Network == "" {
+		return signer.ErrUnavailable
+	}
+	if compiledFixtureHost != nil && c.Version == 3 && !compiledFixtureHost(c.OwnerUID) {
+		return signer.ErrUnavailable
+	}
+	if args[0] == "fixture-install-start-guard" {
+		if !*fixture || *ordinary || *passwordStdin || *requestStdin || *approvalStdin || *documentPath != "" || *seedPath != "" || *rpcOrigin != "" || *windowInstance != "" || *guardComponent != "" || *guardSource != "" || *guardStage != "" || *configPath != fmt.Sprintf("/var/lib/fased-app-custody-%d/identity.json", c.OwnerUID) {
+			return errors.New("start guard accepts only the fixed disposable installation identity")
+		}
+		return signer.VerifyInstallationStartGuard(context.Background(), c, *intentID, *guardDigest, *guardDirection)
 	}
 	if c.Version == 3 && *fixture && (c.Profile != signer.OwnerCustodyProfile || c.Provenance != signer.ControlledCustodyProfile) {
 		return signer.ErrUnavailable
@@ -106,9 +164,15 @@ func run(args []string, input *os.File, out, errOut io.Writer) error {
 		}
 		return json.NewEncoder(out).Encode(r)
 	}
-	if args[0] == "fixture-install-inspect" || args[0] == "fixture-update-inspect" {
+	if args[0] == "fixture-install-inspect" || args[0] == "fixture-update-inspect" || args[0] == "fixture-install-guard" || args[0] == "fixture-install-guard-status" {
 		if *passwordStdin || *requestStdin || *approvalStdin || *documentPath != "" {
 			return errors.New("cold inspection accepts no credentials or documents")
+		}
+		if (args[0] == "fixture-install-guard" || args[0] == "fixture-install-guard-status") && (!*fixture || *ordinary || *seedPath != "" || *rpcOrigin != "" || *windowInstance != "") {
+			return errors.New("replacement guard requires disposable fixture custody")
+		}
+		if args[0] == "fixture-install-guard-status" && (*guardDirection != "" || *guardComponent != "" || *guardSource != "" || *guardStage != "") {
+			return errors.New("guard status accepts only the exact installation digest")
 		}
 		if args[0] == "fixture-update-inspect" {
 			r, e := signer.InspectUpdate(c, *intentID)
@@ -117,16 +181,44 @@ func run(args []string, input *os.File, out, errOut io.Writer) error {
 			}
 			return json.NewEncoder(out).Encode(r)
 		}
-		i, e := signer.InspectInstallation(c, *intentID)
+		inspect := signer.InspectInstallation
+		if args[0] == "fixture-install-guard" || args[0] == "fixture-install-guard-status" {
+			if err := signer.VerifyInstallationGuardBoundary(c, *intentID, *guardDigest); err != nil {
+				return err
+			}
+			inspect = signer.InspectInstallationReadOnly
+		}
+		i, e := inspect(c, *intentID)
 		if e != nil {
 			return e
+		}
+		if args[0] == "fixture-install-guard" {
+			if err = signer.ValidateInstallationReplacement(i, *intentID, *guardDigest, *guardDirection, *guardComponent, *guardSource); err != nil {
+				return err
+			}
+			if err = signer.VerifyInstallationGuardInventory(c, i, *intentID, *guardDirection, *guardStage); err != nil {
+				return err
+			}
+			return signer.VerifyInstallationGuardBoundary(c, *intentID, *guardDigest)
+		}
+		if args[0] == "fixture-install-guard-status" {
+			if i == nil || !update.ValidInstallation(*i) || i.Digest != *guardDigest {
+				return errors.New("guarded signer installation differs")
+			}
+			if err = signer.VerifyInstallationGuardBoundary(c, *intentID, *guardDigest); err != nil {
+				return err
+			}
 		}
 		return json.NewEncoder(out).Encode(i)
 	}
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 	if args[0] == "serve" {
-		server, err := signer.Serve(ctx, c)
+		serve := signer.Serve
+		if *fixture && c.Version == 3 && compiledFixtureServe != nil {
+			serve = compiledFixtureServe
+		}
+		server, err := serve(ctx, c)
 		if err != nil {
 			return err
 		}

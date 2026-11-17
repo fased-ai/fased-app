@@ -1,0 +1,645 @@
+//go:build linux
+
+package main
+
+import (
+	"bytes"
+	"context"
+	"errors"
+	"fmt"
+	"github.com/fased-ai/fased-app/internal/bootstrap"
+	"github.com/fased-ai/fased-app/internal/core"
+	"github.com/fased-ai/fased-app/internal/custodyinstall"
+	"github.com/fased-ai/fased-app/internal/maintenance"
+	"github.com/fased-ai/fased-app/internal/update"
+	"io"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"syscall"
+	"time"
+)
+
+// UI and CLI keep the ordinary Update records and policy. Custody completion
+// consumes the root-bound signer receipt, never the app-only checkpoint.
+type custodyMaintenanceController struct {
+	owner         int
+	manualOnly    bool
+	check         func(context.Context) (*core.ApplicationRelease, error)
+	readRecord    func(int) (update.MaintenanceRecord, error)
+	readCandidate func(int) (maintenance.CandidateReceipt, error)
+	startWorker   func(context.Context, string) error
+	workerState   func(context.Context, string) (custodyWorkerState, error)
+	pauseStatus   func(context.Context) (update.CorePauseReceipt, error)
+	verifyTarget  func(custodyinstall.Manifest) error
+	verifyNative  func(custodyinstall.Manifest, *update.MaintenancePackage) error
+	validateIdle  func(update.MaintenanceRecord) error
+}
+
+// An explicitly compiled controlled build may provide its own fixed channel.
+// Ordinary product builds leave this unset.
+var compiledCustodyUpdateCheck func(int, string) (func(context.Context) (*core.ApplicationRelease, error), error)
+
+func (c *custodyMaintenanceController) completionReady(ctx context.Context, r update.MaintenanceRecord, root string) (bool, error) {
+	if c.pauseStatus == nil || r.Installation == nil && r.Application == nil {
+		return false, errors.New("original core pause status required")
+	}
+	actual, err := c.pauseStatus(ctx)
+	if err != nil {
+		return false, err
+	}
+	var bound update.CorePauseReceipt
+	if r.Application != nil {
+		bound = r.Application.Pause
+	} else {
+		bound = r.Installation.Binding.Index.Binding.Pause
+	}
+	if !update.SameReleasedPause(r.OperationID, bound, actual) {
+		return false, errors.New("original core pause is not released; preserve the fence")
+	}
+	marker := filepath.Join(root, "update-active.json")
+	info, err := os.Lstat(marker)
+	if errors.Is(err, os.ErrNotExist) {
+		return true, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if !info.Mode().IsRegular() {
+		return false, errors.New("foreign custody fence; preserve it")
+	}
+	fd, err := syscall.Open(marker, syscall.O_RDONLY|syscall.O_NONBLOCK|syscall.O_NOFOLLOW|syscall.O_CLOEXEC, 0)
+	if err != nil {
+		return false, errors.New("cannot inspect the original fence; preserve it")
+	}
+	f := os.NewFile(uintptr(fd), "custody-update-fence")
+	defer f.Close()
+	opened, err := f.Stat()
+	if err != nil || !opened.Mode().IsRegular() || !os.SameFile(info, opened) {
+		return false, errors.New("foreign custody fence; preserve it")
+	}
+	contents, err := io.ReadAll(io.LimitReader(f, 8193))
+	if err != nil || !bytes.Equal(contents, update.MaintenanceFence(r.OperationID)) {
+		return false, errors.New("foreign custody fence; preserve it")
+	}
+	return false, nil
+}
+
+type custodyWorkerState struct {
+	load, active, job string
+}
+
+func (c *custodyMaintenanceController) Check(ctx context.Context) (*core.ApplicationRelease, error) {
+	readRecord := c.readRecord
+	if readRecord == nil {
+		readRecord = update.ReadMaintenanceRecord
+	}
+	before, err := readRecord(c.owner)
+	if err != nil {
+		return nil, err
+	}
+	previous, err := custodyInstalledPackage(before)
+	if err != nil {
+		return nil, err
+	}
+	release, err := c.check(ctx)
+	if err != nil {
+		return nil, err
+	}
+	r, err := readRecord(c.owner)
+	if err != nil {
+		return nil, err
+	}
+	installed, err := custodyInstalledPackage(r)
+	if err != nil {
+		return nil, err
+	}
+	if err = c.verifyInstalledDesktop(r, installed); err != nil {
+		return nil, err
+	}
+	if previous.Sequence != installed.Sequence || previous.ReleaseSHA256 != installed.ReleaseSHA256 {
+		return nil, errors.New("installed release changed during check; check again")
+	}
+	if release == nil || release.Sequence < installed.Sequence {
+		return nil, nil
+	}
+	if release.Sequence == installed.Sequence {
+		if release.ManifestSHA256 != installed.ReleaseSHA256 {
+			return nil, errors.New("release identity change refused")
+		}
+		return nil, nil
+	}
+	return release, nil
+}
+
+func (c *custodyMaintenanceController) verifyInstalledDesktop(r update.MaintenanceRecord, p *update.MaintenancePackage) error {
+	raw := r.Base
+	if r.Phase == "completed" && r.Start == "target" {
+		raw = r.Target
+	}
+	var m custodyinstall.Manifest
+	if p == nil {
+		return errors.New("protected installed release is unavailable")
+	}
+	if p.NativeDesktop == nil {
+		if update.StrictJSON(raw, &m) == nil && m.NativeOwnerAccess {
+			return errors.New("the Local wallet window needs a compatible installation before it can be reported current")
+		}
+		return nil // Headless and pre-enrollment releases need no native window.
+	}
+	if update.StrictJSON(raw, &m) != nil || m.Owner != c.owner {
+		return errors.New("native installation identity differs from the protected record")
+	}
+	verify := c.verifyNative
+	if verify == nil {
+		verify = custodyinstall.VerifyProtectedDesktop
+	}
+	return verify(m, p)
+}
+
+func custodyInstalledPackage(r update.MaintenanceRecord) (*update.MaintenancePackage, error) {
+	if r.Phase != "idle" && r.PreviousPackage == nil && (r.Phase != "completed" || r.Start != "target") {
+		return nil, errors.New("original installed release is unavailable during recovery")
+	}
+	return r.InstalledPackage()
+}
+func (c *custodyMaintenanceController) launch(ctx context.Context, id string) error {
+	if !update.IDOK(id) {
+		return errors.New("fixed custody update required")
+	}
+	if c.startWorker != nil {
+		return c.startWorker(ctx, id)
+	}
+	cmd := exec.CommandContext(ctx, "/usr/bin/systemctl", "start", "--no-block", "--", "fased-maintenance-"+strconv.Itoa(c.owner)+"@"+id+".service")
+	cmd.Env = []string{"PATH=/usr/bin:/bin", "LANG=C"}
+	cmd.Dir = "/"
+	return cmd.Run()
+}
+func (c *custodyMaintenanceController) Apply(ctx context.Context, o core.ApplicationUpdateOperation) (core.ApplicationUpdateReceipt, error) {
+	if o.Release == nil {
+		return core.ApplicationUpdateReceipt{}, errors.New("reviewed custody release required")
+	}
+	if o.Automatic && c.manualOnly {
+		return core.ApplicationUpdateReceipt{}, fmt.Errorf("%w: automatic updates are disabled", core.ErrApplicationUpdateNotStarted)
+	}
+	if o.Automatic {
+		readCandidate := c.readCandidate
+		if readCandidate == nil {
+			readCandidate = maintenance.ReadCandidateReceipt
+		}
+		candidate, err := readCandidate(c.owner)
+		if err != nil && !errors.Is(err, os.ErrNotExist) {
+			return core.ApplicationUpdateReceipt{}, fmt.Errorf("%w: candidate status is unavailable", core.ErrApplicationUpdateNotStarted)
+		}
+		if err == nil && candidate.Scope == "update" && candidate.Sequence == o.Release.Sequence && candidate.ReleaseSHA256 == o.Release.ManifestSHA256 && time.Now().Unix() < candidate.ExpiresAt {
+			return core.ApplicationUpdateReceipt{}, fmt.Errorf("%w: candidate requires a manual update", core.ErrApplicationUpdateNotStarted)
+		}
+	}
+	if err := c.launch(ctx, o.ID); err != nil {
+		return core.ApplicationUpdateReceipt{}, err
+	}
+	return core.ApplicationUpdateReceipt{ID: o.ID, Sequence: o.Release.Sequence, ManifestSHA256: o.Release.ManifestSHA256, Phase: "applying"}, nil
+}
+
+// Recover is called only after an explicit owner recovery command is durably
+// recorded. The root worker independently validates the original operation,
+// approval, target and signer hold under its existing lock.
+func (c *custodyMaintenanceController) Recover(ctx context.Context, o core.ApplicationUpdateOperation) error {
+	if o.Release == nil || !update.IDOK(o.ID) || o.Phase != "applying" {
+		return errors.New("original custody recovery operation required")
+	}
+	readRecord := c.readRecord
+	if readRecord == nil {
+		readRecord = update.ReadMaintenanceRecord
+	}
+	r, err := readRecord(c.owner)
+	if err != nil {
+		return err
+	}
+	proof := core.ApplicationUpdateReceipt{ID: o.ID, Sequence: o.Release.Sequence, ManifestSHA256: o.Release.ManifestSHA256, EngineSHA256: o.Release.EngineSHA256, Phase: "applying"}
+	proof, done, err := c.custodyRecordStatus(ctx, r, o, proof)
+	if err != nil {
+		return err
+	}
+	if done && proof.Phase == "completed" {
+		return nil
+	}
+	return c.resumeWorker(ctx, o.ID)
+}
+
+// Both the running core and an offline owner command resume the same fixed
+// systemd worker. Observation never starts a second worker while one is active.
+func (c *custodyMaintenanceController) resumeWorker(ctx context.Context, id string) error {
+	if c.owner <= 0 || !update.IDOK(id) {
+		return errors.New("original custody worker required")
+	}
+	inspect := c.workerState
+	if inspect == nil {
+		inspect = c.inspectWorker
+	}
+	state, err := inspect(ctx, id)
+	if err != nil {
+		return err
+	}
+	if state.load != "loaded" {
+		return errors.New("custody recovery worker is unavailable; preserve its state")
+	}
+	if state.active == "active" || state.active == "activating" || state.active == "reloading" || state.job != "" && state.job != "0" {
+		return nil
+	}
+	if state.active != "failed" && state.active != "inactive" {
+		return errors.New("custody worker state is uncertain; preserve it")
+	}
+	return c.launch(ctx, id)
+}
+
+func (c *custodyMaintenanceController) Status(ctx context.Context, o core.ApplicationUpdateOperation) (core.ApplicationUpdateReceipt, error) {
+	readRecord := c.readRecord
+	if readRecord == nil {
+		readRecord = update.ReadMaintenanceRecord
+	}
+	r, err := readRecord(c.owner)
+	if err != nil {
+		return core.ApplicationUpdateReceipt{}, err
+	}
+	if o.Release == nil {
+		return core.ApplicationUpdateReceipt{}, errors.New("reviewed custody release required")
+	}
+	proof := core.ApplicationUpdateReceipt{ID: o.ID, Sequence: o.Release.Sequence, ManifestSHA256: o.Release.ManifestSHA256, EngineSHA256: o.Release.EngineSHA256, Phase: "applying"}
+	proof, done, err := c.custodyRecordStatus(ctx, r, o, proof)
+	if err != nil || done {
+		return proof, err
+	}
+	inspect := c.workerState
+	if inspect == nil {
+		inspect = c.inspectWorker
+	}
+	state, err := inspect(ctx, o.ID)
+	if err != nil {
+		return proof, err
+	}
+	if state.load == "loaded" && (state.active == "active" || state.active == "activating" || state.active == "reloading" || state.job != "" && state.job != "0") {
+		return proof, nil
+	}
+	// The worker can finish between the first journal read and systemd's
+	// observation. Re-read before deciding the original operation needs recovery.
+	r, err = readRecord(c.owner)
+	if err != nil {
+		return proof, err
+	}
+	proof, done, err = c.custodyRecordStatus(ctx, r, o, proof)
+	if err != nil || done {
+		return proof, err
+	}
+	proof.Phase = "recovery"
+	return proof, nil
+}
+
+func (c *custodyMaintenanceController) custodyRecordStatus(ctx context.Context, r update.MaintenanceRecord, o core.ApplicationUpdateOperation, proof core.ApplicationUpdateReceipt) (core.ApplicationUpdateReceipt, bool, error) {
+	if r.OperationID != o.ID {
+		if r.Phase == "idle" {
+			if c.validateIdle != nil {
+				if err := c.validateIdle(r); err != nil {
+					return proof, true, err
+				}
+			} else if _, err := custodyinstall.ValidateInitialMaintenanceRecord(r); err != nil {
+				return proof, true, err
+			}
+			if o.Release.Sequence <= r.Package.Sequence {
+				return proof, true, errors.New("custody update must advance the installed release")
+			}
+			return proof, false, nil
+		}
+		if r.Phase == "refused" && r.Start == "base" {
+			installed, err := custodyInstalledPackage(r)
+			if err != nil || o.Release.Sequence <= installed.Sequence {
+				return proof, true, errors.New("custody update must advance the preserved base")
+			}
+			// This only observes the new worker. The protected worker still
+			// checks the old signer, core pause and fences before staging.
+			return proof, false, nil
+		}
+		if r.Phase != "completed" {
+			return proof, true, errors.New("another custody transaction owns recovery")
+		}
+		return proof, false, nil
+	}
+	if r.Package == nil || r.Package.Sequence != o.Release.Sequence || r.Package.ReleaseSHA256 != o.Release.ManifestSHA256 {
+		return proof, true, errors.New("protected custody target differs from the operation")
+	}
+	if r.Phase == "completed" {
+		appOnly := r.Application != nil && r.RecoveryEligible()
+		if !appOnly && (r.Installation == nil || r.Installation.Phase != "completed" || !update.ValidInstallation(*r.Installation)) {
+			return proof, true, errors.New("actual signer completion required")
+		}
+		var target custodyinstall.Manifest
+		verifyTarget := c.verifyTarget
+		if verifyTarget == nil {
+			verifyTarget = custodyinstall.Verify
+		}
+		if update.StrictJSON(r.Target, &target) != nil || target.CoreHash != o.Release.EngineSHA256 || verifyTarget(target) != nil {
+			return proof, true, errors.New("installed target differs from the completed custody record")
+		}
+		if err := c.verifyInstalledDesktop(r, r.Package); err != nil {
+			return proof, true, err
+		}
+		ready, err := c.completionReady(ctx, r, target.Root)
+		if err != nil || !ready {
+			return proof, false, err
+		}
+		proof.Phase = "completed"
+		return proof, true, nil
+	}
+	if r.Phase == "base-recovery" {
+		proof.Phase = "recovery"
+		return proof, true, nil
+	}
+	return proof, false, nil
+}
+
+func (c *custodyMaintenanceController) inspectWorker(ctx context.Context, id string) (custodyWorkerState, error) {
+	if c.owner <= 0 || !update.IDOK(id) {
+		return custodyWorkerState{}, errors.New("fixed custody worker required")
+	}
+	unit := "fased-maintenance-" + strconv.Itoa(c.owner) + "@" + id + ".service"
+	return inspectCustodyWorker(ctx, unit)
+}
+
+func inspectCustodyWorker(ctx context.Context, unit string) (custodyWorkerState, error) {
+	cmd := exec.CommandContext(ctx, "/usr/bin/systemctl", "show", "--all", "--property=LoadState,ActiveState,Job", "--", unit)
+	cmd.Env = []string{"PATH=/usr/bin:/bin", "LANG=C"}
+	cmd.Dir = "/"
+	out, err := cmd.Output()
+	if err != nil || len(out) > 4096 {
+		return custodyWorkerState{}, errors.New("cannot inspect custody worker")
+	}
+	return parseCustodyWorkerState(out)
+}
+
+func parseCustodyWorkerState(out []byte) (custodyWorkerState, error) {
+	fields := make(map[string]string)
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		key, value, ok := strings.Cut(line, "=")
+		if !ok || key == "" {
+			return custodyWorkerState{}, errors.New("invalid custody worker status")
+		}
+		if _, duplicate := fields[key]; duplicate {
+			return custodyWorkerState{}, errors.New("ambiguous custody worker status")
+		}
+		fields[key] = value
+	}
+	_, jobPresent := fields["Job"]
+	if fields["LoadState"] == "" || fields["ActiveState"] == "" || !jobPresent {
+		return custodyWorkerState{}, errors.New("incomplete custody worker status")
+	}
+	return custodyWorkerState{load: fields["LoadState"], active: fields["ActiveState"], job: fields["Job"]}, nil
+}
+
+func bindCompiledCustodyMaintenance(store *core.Store, owner int, dir string) error {
+	return bindCustodyMaintenance(store, owner, dir, maintenance.ReadAuthority)
+}
+
+func bindCustodyMaintenance(store *core.Store, owner int, dir string, readAuthority func(int) (maintenance.Authority, error)) error {
+	// Legacy Local fixture custody has no ordinary maintenance owner. Its
+	// service must remain usable without acquiring an updater or OS authority.
+	if owner == 0 {
+		return nil
+	}
+	if owner < 0 {
+		return errors.New("invalid custody maintenance owner")
+	}
+	// The old authority is keyed by owner, not instance. Package instances need
+	// their own controller and must never inherit this legacy worker.
+	if dir != filepath.Join(custodyinstall.Root(owner), "app-state") {
+		if strings.HasPrefix(dir, fmt.Sprintf("/var/lib/fased-app-package/%d/", owner)) {
+			return bindPackageMaintenance(store, owner, dir)
+		}
+		return nil
+	}
+	a, err := readAuthority(owner)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if err = maintenance.VerifyImage(a); err != nil {
+		return err
+	}
+	r, err := update.ReadMaintenanceRecord(owner)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if r.Phase == "idle" {
+		if _, err = custodyinstall.ValidateInitialMaintenanceRecord(r); err != nil {
+			return err
+		}
+	}
+	if _, err = r.InstalledPackage(); err != nil {
+		return err
+	}
+	check := compiledApplicationUpdateCheck
+	if check == nil && compiledCustodyUpdateCheck != nil {
+		check, err = compiledCustodyUpdateCheck(owner, dir)
+		if err != nil {
+			return err
+		}
+	}
+	if check == nil && compiledApplicationChannel != nil {
+		factory := func(path string) (bootstrap.Options, error) { return channelOptions(compiledApplicationChannel, path) }
+		check = custodyChannelCheck(owner, factory, filepath.Join(dir, "update-channel"), false)
+	}
+	if check == nil {
+		return nil
+	}
+	pauseStatus := func(ctx context.Context) (update.CorePauseReceipt, error) {
+		return store.UpdatePause(ctx, update.CorePauseCommand{Action: "status", ProbeID: update.NewProbe()})
+	}
+	return store.BindApplicationUpdateController(&custodyMaintenanceController{owner: owner, check: check, pauseStatus: pauseStatus}, true)
+}
+
+func bindPackageMaintenance(store *core.Store, owner int, dir string) error {
+	if !custodyinstall.NativePackageUpdateAvailable() {
+		return nil
+	}
+	root := filepath.Dir(dir)
+	m, err := custodyinstall.LoadPackageInstance(owner, root)
+	if err != nil || dir != filepath.Join(m.Root, "app-state") || custodyinstall.VerifyPackageInstance(m) != nil {
+		return errors.New("the original package instance is required")
+	}
+	a, err := maintenance.ReadPackageAuthority(owner, m.Location, m.ID)
+	if err != nil || maintenance.VerifyImage(a) != nil {
+		return errors.New("the package maintenance authority is unavailable")
+	}
+	readRecord := func(uid int) (update.MaintenanceRecord, error) {
+		if uid != owner {
+			return update.MaintenanceRecord{}, errors.New("another package owner is not allowed")
+		}
+		return update.ReadPackageMaintenanceRecord(owner, m.Location, m.ID)
+	}
+	readCandidate := func(uid int) (maintenance.CandidateReceipt, error) {
+		if uid != owner {
+			return maintenance.CandidateReceipt{}, errors.New("another package owner is not allowed")
+		}
+		return maintenance.ReadPackageCandidateReceipt(owner, m.Location, m.ID)
+	}
+	r, err := readRecord(owner)
+	if err != nil {
+		return err
+	}
+	selected, err := custodyinstall.SelectProtectedPackageStart(r, owner, m.Location, m.ID)
+	if err != nil || selected != m {
+		return errors.New("the installed package differs from its recovery record")
+	}
+	c := packageMaintenanceWorker(owner, m.Location, m.ID)
+	c.manualOnly, c.readRecord, c.readCandidate = true, readRecord, readCandidate
+	c.verifyTarget = custodyinstall.VerifyPackageInstance
+	c.validateIdle = func(r update.MaintenanceRecord) error {
+		_, err := custodyinstall.ValidateIdlePackageMaintenanceRecord(r, owner, m.Location, m.ID)
+		return err
+	}
+	c.pauseStatus = func(ctx context.Context) (update.CorePauseReceipt, error) {
+		return store.UpdatePause(ctx, update.CorePauseCommand{Action: "status", ProbeID: update.NewProbe()})
+	}
+	c.check = packageChannelCheck(owner, m.Location, m.ID, dir, readRecord, readCandidate)
+	return store.BindApplicationUpdateController(c, true)
+}
+
+// Both the live core and offline CLI address the same fixed instance worker.
+func packageMaintenanceWorker(owner int, location, instance string) *custodyMaintenanceController {
+	unit := func(id string) (string, error) {
+		return custodyinstall.PackageWorkerUnit(owner, location, instance, id)
+	}
+	return &custodyMaintenanceController{
+		owner: owner,
+		startWorker: func(ctx context.Context, id string) error {
+			name, err := unit(id)
+			if err != nil {
+				return err
+			}
+			cmd := exec.CommandContext(ctx, "/usr/bin/systemctl", "start", "--no-block", "--", name)
+			cmd.Env, cmd.Dir = []string{"PATH=/usr/bin:/bin", "LANG=C"}, "/"
+			return cmd.Run()
+		},
+		workerState: func(ctx context.Context, id string) (custodyWorkerState, error) {
+			name, err := unit(id)
+			if err != nil {
+				return custodyWorkerState{}, err
+			}
+			return inspectCustodyWorker(ctx, name)
+		},
+	}
+}
+
+func packageChannelCheck(owner int, location, instance, data string, readRecord func(int) (update.MaintenanceRecord, error), readCandidate func(int) (maintenance.CandidateReceipt, error)) func(context.Context) (*core.ApplicationRelease, error) {
+	return func(ctx context.Context) (*core.ApplicationRelease, error) {
+		r, err := readRecord(owner)
+		if err != nil {
+			return nil, err
+		}
+		installed, err := r.InstalledPackage()
+		if err != nil {
+			return nil, err
+		}
+		root, err := custodyinstall.PackageRoot(owner, location, instance)
+		if err != nil {
+			return nil, err
+		}
+		manifest, err := custodyinstall.LoadPackageInstance(owner, root)
+		if err != nil || custodyinstall.VerifyPackageInstance(manifest) != nil {
+			return nil, errors.New("the installed package identity changed")
+		}
+		candidate, candidateErr := readCandidate(owner)
+		if candidateErr != nil && !errors.Is(candidateErr, os.ErrNotExist) {
+			return nil, candidateErr
+		}
+		if candidateErr == nil {
+			if release := candidateCustodyRelease(candidate, owner, *installed, manifest, time.Now()); release != nil {
+				return release, nil
+			}
+		}
+		if compiledApplicationUpdateCheck != nil {
+			return compiledApplicationUpdateCheck(ctx)
+		}
+		if compiledApplicationChannel == nil {
+			return nil, errors.New("trusted package update channel is unavailable")
+		}
+		parent := filepath.Join(data, "update-channel")
+		if err = core.EnsurePrivateDirectory(parent); err != nil {
+			return nil, err
+		}
+		directory := filepath.Join(parent, "check-"+update.NewProbe())
+		o, err := channelOptions(compiledApplicationChannel, directory)
+		if err != nil {
+			return nil, err
+		}
+		descriptor, digest, err := bootstrap.Inspect(ctx, o)
+		if err != nil {
+			return nil, err
+		}
+		current, err := channelReleaseCurrent(descriptor, digest, installed.Sequence, installed.ReleaseSHA256)
+		if err != nil || current {
+			return nil, err
+		}
+		p, err := bootstrap.PrepareNative(ctx, o)
+		if err != nil {
+			return nil, err
+		}
+		owned, statErr := os.Lstat(directory)
+		defer func() {
+			_ = p.Close()
+			if current, e := os.Lstat(directory); statErr == nil && e == nil && os.SameFile(owned, current) {
+				_ = os.RemoveAll(directory)
+			}
+		}()
+		release, _, err := p.PackageApplicationRelease()
+		if err != nil || release == nil || release.ManifestSHA256 != digest || release.Sequence != descriptor.Sequence {
+			return nil, errors.New("the package release changed during the update check")
+		}
+		return release, nil
+	}
+}
+
+// The target can start before its protected transaction is marked complete.
+// Read the installed floor at each check, not only when that process starts.
+func custodyChannelCheck(owner int, factory channelOptionsFactory, parent string, developmentOnly bool) func(context.Context) (*core.ApplicationRelease, error) {
+	return func(ctx context.Context) (*core.ApplicationRelease, error) {
+		r, err := update.ReadMaintenanceRecord(owner)
+		if err != nil {
+			return nil, err
+		}
+		installed, err := custodyInstalledPackage(r)
+		if err != nil {
+			return nil, err
+		}
+		if developmentOnly && !installed.DevelopmentOnly {
+			return nil, errors.New("controlled custody release required")
+		}
+		candidate, candidateErr := maintenance.ReadCandidateReceipt(owner)
+		if candidateErr != nil && !errors.Is(candidateErr, os.ErrNotExist) {
+			return nil, candidateErr
+		}
+		if candidateErr == nil && !developmentOnly && candidate.Scope == "update" && candidate.BaseSequence == installed.Sequence && candidate.BaseReleaseSHA256 == installed.ReleaseSHA256 && time.Now().Unix() < candidate.ExpiresAt {
+			manifest, err := custodyinstall.Load(owner)
+			if err != nil {
+				return nil, err
+			}
+			if release := candidateCustodyRelease(candidate, owner, *installed, manifest, time.Now()); release != nil {
+				return release, nil
+			}
+		}
+		return channelCheck(factory, parent, installed.Sequence, installed.ReleaseSHA256)(ctx)
+	}
+}
+
+func candidateCustodyRelease(candidate maintenance.CandidateReceipt, owner int, installed update.MaintenancePackage, manifest custodyinstall.Manifest, now time.Time) *core.ApplicationRelease {
+	if now.Unix() >= candidate.ExpiresAt || !candidate.MatchesBase(owner, installed.Sequence, installed.ReleaseSHA256, manifest.ID, update.SnapshotDigest("candidate-base-manifest:v1", manifest)) {
+		return nil
+	}
+	return &core.ApplicationRelease{EngineSHA256: candidate.EngineSHA256, Version: candidate.ProductVersion, Sequence: candidate.Sequence, ManifestSHA256: candidate.ReleaseSHA256, Target: candidate.Target}
+}

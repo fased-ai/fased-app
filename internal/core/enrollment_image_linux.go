@@ -31,18 +31,37 @@ type enrollmentEntry struct {
 }
 
 type enrollmentSourceLock struct {
-	root *os.File
-	file *os.File
-	host *os.File
-	once sync.Once
-	err  error
+	root  *os.File
+	file  *os.File
+	host  *os.File
+	store *os.File
+	once  sync.Once
+	err   error
+}
+
+func (l *enrollmentSourceLock) Verify() error {
+	check := func(name string, f *os.File, max int64) error {
+		var entry, held unix.Stat_t
+		err := unix.Fstatat(int(l.root.Fd()), name, &entry, unix.AT_SYMLINK_NOFOLLOW)
+		if f == nil && errors.Is(err, unix.ENOENT) {
+			return nil
+		}
+		if f == nil || err != nil || unix.Fstat(int(f.Fd()), &held) != nil || !enrollmentRegular(entry, max) || !enrollmentRegular(held, max) || entry.Dev != held.Dev || entry.Ino != held.Ino {
+			return errors.New("enrollment source lock changed; preserve the source")
+		}
+		return nil
+	}
+	return errors.Join(check("instance.lock", l.file, 0), check("host-preparation.lock", l.host, 0), check("core.sqlite", l.store, MaxEnrollmentFileBytes))
 }
 
 func (l *enrollmentSourceLock) Close() error {
 	l.once.Do(func() {
 		var hostErr error
+		if l.store != nil {
+			hostErr = errors.Join(unix.Flock(int(l.store.Fd()), unix.LOCK_UN), l.store.Close())
+		}
 		if l.host != nil {
-			hostErr = errors.Join(unix.Flock(int(l.host.Fd()), unix.LOCK_UN), l.host.Close())
+			hostErr = errors.Join(hostErr, unix.Flock(int(l.host.Fd()), unix.LOCK_UN), l.host.Close())
 		}
 		l.err = errors.Join(hostErr, unix.Flock(int(l.file.Fd()), unix.LOCK_UN), l.file.Close(), l.root.Close())
 	})
@@ -102,6 +121,20 @@ func enrollmentSource(dir string) (*enrollmentSourceLock, error) {
 	} else if !errors.Is(e, unix.ENOENT) {
 		lease.Close()
 		return nil, errEnrollmentImage
+	}
+	// Standalone owner setup helpers can write while the server is stopped.
+	// They take the same advisory database lock without blocking the running
+	// server's existing instance lock.
+	storeFD, e := unix.Openat(int(r.Fd()), "core.sqlite", unix.O_RDWR|unix.O_NOFOLLOW|unix.O_CLOEXEC|unix.O_NONBLOCK, 0)
+	if e != nil {
+		lease.Close()
+		return nil, errors.New("enrollment source database unavailable")
+	}
+	lease.store = os.NewFile(uintptr(storeFD), "core.sqlite")
+	var storeStat unix.Stat_t
+	if unix.Fstat(storeFD, &storeStat) != nil || !enrollmentRegular(storeStat, MaxEnrollmentFileBytes) || unix.Flock(storeFD, unix.LOCK_EX|unix.LOCK_NB) != nil {
+		lease.Close()
+		return nil, errors.New("finish owner setup before enrollment")
 	}
 	return lease, nil
 }

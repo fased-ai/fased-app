@@ -151,6 +151,22 @@ func TestExecutableVerificationMetadataAndReplacement(t *testing.T) {
 	}
 }
 
+func TestExecutableVerificationRejectsSpecialModeAndForeignGroup(t *testing.T) {
+	good := executableMetadata{mode: 0755, size: 123, stat: syscall.Stat_t{Uid: 0, Gid: 0}}
+	for _, mode := range []os.FileMode{0755 | os.ModeSetuid, 0755 | os.ModeSetgid, 0755 | os.ModeSticky} {
+		bad := good
+		bad.mode = mode
+		if executableInfo(bad) == nil {
+			t.Fatal("special executable mode accepted", mode)
+		}
+	}
+	bad := good
+	bad.stat.Gid = 1000
+	if executableInfo(bad) == nil {
+		t.Fatal("foreign executable group accepted")
+	}
+}
+
 func TestExecutableVerificationRefusesUntrustedPath(t *testing.T) {
 	p := filepath.Join(t.TempDir(), "fased-app")
 	data := []byte("not a root installation")

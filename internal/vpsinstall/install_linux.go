@@ -25,6 +25,7 @@ import (
 
 	"github.com/fased-ai/fased-app/internal/core"
 	"github.com/fased-ai/fased-app/internal/custodyinstall"
+	"github.com/fased-ai/fased-app/internal/maintenance"
 )
 
 type hostFile struct {
@@ -35,6 +36,7 @@ type hostFile struct {
 	Link               string
 }
 type hostOps struct {
+	protectedPublish    func(string, []byte, os.FileMode) error // In-process registered helper only.
 	uid, euid, gid      int
 	read                func(string) (hostFile, error)
 	content             func(string, func(hostFile, int64, io.Reader) error) error
@@ -44,6 +46,7 @@ type hostOps struct {
 	readinessRun        func(context.Context, []byte, ...string) ([]byte, error)
 	command             func(context.Context, ...string) ([]byte, error)
 	applicationContract func(context.Context, Manifest) ([]byte, error) // Fixed unprivileged version metadata, never arbitrary argv.
+	ingressContract     func(context.Context, Manifest) error           // Fixed capability probe under the installed app identity.
 	helper              func(context.Context, []string, io.Writer) error
 	readJournal         func(string) ([]byte, error)
 	writeJournal        func(string, any) error
@@ -429,6 +432,9 @@ func directory(ctx context.Context, o hostOps, path string, uid, gid int, mode o
 
 // Exclusive publication only replaces its exact intent-bound staging filename.
 func publish(ctx context.Context, o hostOps, target, id string, b []byte, mode os.FileMode) error {
+	if o.protectedPublish != nil {
+		return o.protectedPublish(target, b, mode)
+	}
 	stage := filepath.Join(filepath.Dir(target), "."+filepath.Base(target)+"-"+id+".pending")
 	f, e := rootFile(o, target)
 	ready := e == nil
@@ -446,7 +452,33 @@ func publish(ctx context.Context, o hostOps, target, id string, b []byte, mode o
 		return se
 	}
 	if !ready {
-		if _, e = o.run(ctx, b, "/usr/bin/install", "-m", strconv.FormatUint(uint64(mode), 8), "-o", "root", "-g", "root", "--", "/dev/stdin", stage); e != nil {
+		args := []string{"/usr/bin/install", "-m", strconv.FormatUint(uint64(mode), 8), "-o", "root", "-g", "root", "--", "/dev/stdin", stage}
+		input := b
+		if mode == 0644 && (filepath.Base(target) == unitName(o.uid) || target == "/etc/systemd/system/"+unitName(o.uid)+".d/30-fased-provider-credentials.conf") {
+			args, e = custodyinstall.BoundUnitWriteArgs(o.uid, stage, b)
+			if e != nil {
+				return e
+			}
+		} else if mode == 0755 && target == fmt.Sprintf("/var/lib/.fased-app-vps-%d-%s.pending/fased-app", o.uid, id) {
+			source := custodyinstall.ApprovedExecutablePath(o.uid, b)
+			approved, size, digest, err := rootFileDigest(o, source)
+			if err == nil {
+				if approved.Mode.Perm() != 0444 || size != int64(len(b)) || digest != filepath.Base(source) {
+					return errors.New("approved executable source changed; preserving it")
+				}
+				args[len(args)-2] = source
+				input = nil
+			} else if errors.Is(err, os.ErrNotExist) {
+				if _, dirErr := o.read(filepath.Dir(source)); dirErr == nil {
+					return errors.New("approved executable is missing; preserving scoped setup")
+				} else if !errors.Is(dirErr, os.ErrNotExist) {
+					return dirErr
+				}
+			} else {
+				return err
+			}
+		}
+		if _, e = o.run(ctx, input, args...); e != nil {
 			return e
 		}
 		st, e = rootFile(o, stage)
@@ -613,7 +645,7 @@ func fields(b []byte) map[string]string {
 	return m
 }
 func unitFields(ctx context.Context, o hostOps, m Manifest) (map[string]string, error) {
-	b, e := o.command(ctx, "/usr/bin/systemctl", "show", m.Unit, "--property=LoadState,ActiveState,MainPID,FragmentPath,DropInPaths,User,Group,NoNewPrivileges,ProtectSystem,ProtectHome,PrivateTmp,ReadWritePaths,CapabilityBoundingSet,AmbientCapabilities,ExecStart")
+	b, e := o.command(ctx, "/usr/bin/systemctl", "show", m.Unit, "--property=LoadState,ActiveState,MainPID,FragmentPath,DropInPaths,NeedDaemonReload,User,Group,NoNewPrivileges,ProtectSystem,ProtectHome,PrivateTmp,ReadWritePaths,CapabilityBoundingSet,AmbientCapabilities,ExecStart")
 	return fields(b), e
 }
 func noUnit(ctx context.Context, o hostOps, m Manifest) error {
@@ -637,6 +669,15 @@ func loaded(ctx context.Context, o hostOps, m Manifest) error {
 	p, e := unitFields(ctx, o, m)
 	if e != nil {
 		return e
+	}
+	ingress, _, e := tailnet.ProtectedSocketDropIn("vps", m.OwnerUID)
+	if e != nil {
+		return e
+	}
+	for _, path := range strings.Fields(p["DropInPaths"]) {
+		if path == ingress && p["NeedDaemonReload"] != "no" {
+			return errors.New("protected private ingress requires a reloaded service definition")
+		}
 	}
 	if p["LoadState"] != "loaded" || p["FragmentPath"] != m.UnitPath || !validTaskCredentialDropIn(o, m, p["DropInPaths"]) || p["User"] != strconv.Itoa(m.AppUID) || p["Group"] != strconv.Itoa(m.AppGID) || p["NoNewPrivileges"] != "yes" || p["ProtectSystem"] != "strict" || p["ProtectHome"] != "yes" || p["PrivateTmp"] != "yes" || p["ReadWritePaths"] != m.Data || p["CapabilityBoundingSet"] != "" || p["AmbientCapabilities"] != "" || !strings.Contains(p["ExecStart"], "path="+m.Core+" ;") || !strings.Contains(p["ExecStart"], m.Core+" serve ") || !strings.Contains(p["ExecStart"], "--remote-config "+m.Config) {
 		return errors.New("unexpected loaded Remote service identity or override")
@@ -665,6 +706,45 @@ func record(o hostOps, m Manifest, phase string) error {
 	return o.writeJournal("lifecycle.json", lifecycle{Version: 1, ID: m.ID, ManifestSHA256: hash(encoded(m)), Phase: phase})
 }
 func Install(ctx context.Context, options Options, s *custodyinstall.System) (Manifest, error) {
+	if s == nil {
+		return Manifest{}, errors.New("owner OS authorization required")
+	}
+	if _, err := maintenance.ReadAuthority(os.Getuid()); err == nil {
+		response, err := maintenance.Call(ctx, maintenance.Request{Version: 1, Action: "remote-install", Remote: &maintenance.RemoteInstallRequest{Listen: options.Listen, Origin: options.PublicOrigin, Sequence: options.ApplicationSequence, ReleaseSHA256: options.ApplicationReleaseSHA256, Start: options.Start}}, s.Out)
+		if err != nil {
+			return Manifest{}, err
+		}
+		if options.InitialOwner != nil {
+			var result maintenance.Response
+			var device tailnet.Identity
+			if strict(response, &result) != nil || strict(result.Payload, &device) != nil || device.UserID <= 0 || device.NodeID == "" || device.Login == "" {
+				return Manifest{}, errors.New("protected initial browser identity is unavailable")
+			}
+			*options.InitialOwner = device
+		}
+		m, err := Load(os.Getuid())
+		if err != nil {
+			return m, err
+		}
+		if m.Listen != options.Listen || m.PublicOrigin != options.PublicOrigin || m.CoreSHA256 != options.CoreSHA256 || m.ApplicationSequence != options.ApplicationSequence || m.ApplicationReleaseSHA256 != options.ApplicationReleaseSHA256 {
+			return m, errors.New("protected installation differs from verified wizard input")
+		}
+		o := liveOps(nil)
+		if old, err := o.readJournal("intent.json"); err == nil {
+			var prior intent
+			if strict(old, &prior) != nil || prior != intentFor(m) {
+				return m, errors.New("owner installation record differs; preserve it")
+			}
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return m, err
+		}
+		if err = o.writeJournal("intent.json", intentFor(m)); err != nil {
+			return m, err
+		}
+		return m, record(o, m, "installed")
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return Manifest{}, err
+	}
 	if s == nil {
 		return Manifest{}, errors.New("owner OS authorization is required")
 	}
@@ -841,6 +921,11 @@ func install(ctx context.Context, opt Options, o hostOps) (Manifest, error) {
 	if e = verify(ctx, o, m); e != nil {
 		return m, e
 	}
+	if m.PublicOrigin != "" && o.protectedPublish != nil {
+		if e = prepareProtectedIngress(ctx, o, m); e != nil {
+			return m, e
+		}
+	}
 	if e = prepareTaskCredential(ctx, o, m); e != nil {
 		return m, e
 	}
@@ -862,6 +947,15 @@ func install(ctx context.Context, opt Options, o hostOps) (Manifest, error) {
 	return m, e
 }
 func Start(ctx context.Context, m Manifest, s *custodyinstall.System) error {
+	if s == nil {
+		return errors.New("owner OS authorization required")
+	}
+	if handled, err := protectedRemoteCall(ctx, m, "remote-start", s.Out, nil); handled {
+		if err != nil {
+			return err
+		}
+		return record(liveOps(nil), m, "ready")
+	}
 	if s == nil {
 		return errors.New("owner OS authorization required")
 	}
@@ -922,6 +1016,12 @@ func start(ctx context.Context, o hostOps, m Manifest) error {
 	}
 }
 func Stop(ctx context.Context, m Manifest, s *custodyinstall.System) error {
+	if s == nil {
+		return errors.New("owner OS authorization required")
+	}
+	if handled, err := protectedRemoteCall(ctx, m, "remote-stop", s.Out, nil); handled {
+		return err
+	}
 	if s == nil {
 		return errors.New("owner OS authorization required")
 	}
@@ -1001,6 +1101,9 @@ func SetupLink(ctx context.Context, m Manifest, s *custodyinstall.System, out io
 	if len(owner) > 1 {
 		return errors.New("one verified Remote owner required")
 	}
+	if handled, err := protectedRemoteCall(ctx, m, "remote-setup-link", s.Out, out, owner...); handled {
+		return err
+	}
 	if len(owner) == 1 {
 		copy := *s
 		data, e := json.Marshal(owner[0])
@@ -1058,6 +1161,21 @@ func claim(ctx context.Context, o hostOps, m Manifest, recover bool, out io.Writ
 	return o.helper(ctx, helperArgs(m, action), out)
 }
 func Status(ctx context.Context, m Manifest, s *custodyinstall.System) (ServiceStatus, error) {
+	if _, err := maintenance.ReadAuthority(os.Getuid()); err == nil {
+		b, err := maintenance.Call(ctx, maintenance.Request{Version: 1, Action: "remote-status"}, nil)
+		var r maintenance.Response
+		var status protectedRemoteStatus
+		if err != nil {
+			return status.Status, err
+		}
+		if json.Unmarshal(b, &r) != nil || strict(r.Payload, &status) != nil {
+			return status.Status, errors.New("protected Remote status invalid")
+		}
+		status.Status.RemoteReady = status.RemoteReady
+		return status.Status, nil
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return ServiceStatus{}, err
+	}
 	if s == nil {
 		return ServiceStatus{}, errors.New("owner OS authorization required")
 	}

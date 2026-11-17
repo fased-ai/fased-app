@@ -45,6 +45,18 @@ it("opens only a public native wallet intent", () => {
     ),
   ).toBe("");
   expect(walletOwnerLink("bad", "devnet", "setup")).toBe("");
+  expect(walletOwnerLink(instance, "devnet", "setup", "", true)).toBe(
+    `fased-wallet://wallet-owner?action=setup&instance=${instance}&network=devnet`,
+  );
+  expect(
+    walletOwnerLink(
+      instance,
+      "devnet",
+      "setup",
+      "https://my-server.ts.net",
+      true,
+    ),
+  ).toBe("");
 });
 it("uses a signer address only for a current disposable account", () => {
   const a: Account = {
@@ -201,6 +213,7 @@ it("allows public attachment of locked/recovery keys without changing their hold
 it("refuses unavailable, held, legacy or mismatched signer identities", () => {
   for (const state of [
     "not-installed",
+    "configuration-required",
     "unavailable",
     "empty",
     "update-held",

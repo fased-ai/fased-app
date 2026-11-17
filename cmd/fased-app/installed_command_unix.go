@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"syscall"
@@ -43,6 +44,26 @@ esac
 `)
 }
 func installCommandAt(home, corePath, root, data string, remote bool) (string, error) {
+	return installCommandAtWithPredecessor(home, corePath, root, data, remote, "", "")
+}
+
+// Rebind only the exact command installed for the same Local workspace. The
+// caller must first verify the protected enrolled target and instance.
+func rebindLocalInstalledCommand(home, oldCore, newCore, root, data string) error {
+	for n := 0; n < 2; n++ {
+		oldPath, err := verifiedInstalledCommand(home, oldCore, root, data, false)
+		if err != nil {
+			_, newErr := verifiedInstalledCommand(home, newCore, root, data, false)
+			return newErr
+		}
+		if _, err = installCommandAtWithPredecessor(home, newCore, root, data, false, oldCore, oldPath); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func installCommandAtWithPredecessor(home, corePath, root, data string, remote bool, predecessor, expectedPath string) (string, error) {
 	if os.Getuid() <= 0 || os.Getuid() != os.Geteuid() {
 		return "", errors.New("installed command requires an ordinary owner")
 	}
@@ -64,23 +85,33 @@ func installCommandAt(home, corePath, root, data string, remote bool) (string, e
 	body := launcherBody(corePath, root, data, remote)
 	for _, name := range []string{"fased", "fased-app"} {
 		path := filepath.Join(directory, name)
-		f, e := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0700)
-		if e == nil {
-			_, we := f.Write(body)
-			se := f.Sync()
-			ce := f.Close()
-			if we != nil {
-				return "", we
-			}
-			if se != nil {
-				return "", se
-			}
-			return path, ce
+		if expectedPath != "" && path != expectedPath {
+			continue
 		}
-		if !errors.Is(e, os.ErrExist) {
-			return "", e
+		var e error
+		if predecessor == "" {
+			var f *os.File
+			f, e = os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0700)
+			if e == nil {
+				_, we := f.Write(body)
+				se := f.Sync()
+				ce := f.Close()
+				if we != nil {
+					return "", we
+				}
+				if se != nil {
+					return "", se
+				}
+				return path, ce
+			}
+			if !errors.Is(e, os.ErrExist) {
+				return "", e
+			}
 		}
 		i, se := os.Lstat(path)
+		if errors.Is(se, os.ErrNotExist) && predecessor != "" {
+			continue
+		}
 		if se != nil {
 			return "", se
 		}
@@ -90,7 +121,8 @@ func installCommandAt(home, corePath, root, data string, remote bool) (string, e
 			if re == nil && bytes.Equal(prior, body) {
 				return path, nil
 			}
-			if re == nil && (bytes.Equal(prior, priorLauncherBody(corePath, root, data, remote)) || bytes.Equal(prior, preWalletLauncherBody(corePath, root, data, remote))) {
+			knownPredecessor := predecessor != "" && (bytes.Equal(prior, launcherBody(predecessor, root, data, remote)) || bytes.Equal(prior, priorLauncherBody(predecessor, root, data, remote)) || bytes.Equal(prior, preWalletLauncherBody(predecessor, root, data, remote)))
+			if re == nil && (knownPredecessor || bytes.Equal(prior, priorLauncherBody(corePath, root, data, remote)) || bytes.Equal(prior, preWalletLauncherBody(corePath, root, data, remote))) {
 				temp, e := os.CreateTemp(directory, ".fased-command-")
 				if e != nil {
 					return "", e
@@ -138,12 +170,25 @@ func installCommand(corePath, root, data string, remote bool, out io.Writer) err
 	if e != nil {
 		return e
 	}
-	path, e := installCommandAt(home, corePath, root, data, remote)
-	if e != nil {
-		return e
+	for _, name := range []string{"fased", "fased-app"} {
+		path := filepath.Join(home, ".local", "bin", name)
+		found, lookupErr := exec.LookPath(name)
+		if lookupErr == nil {
+			found, lookupErr = filepath.Abs(found)
+			if lookupErr != nil || filepath.Clean(found) != path {
+				continue
+			}
+		} else if !errors.Is(lookupErr, exec.ErrNotFound) {
+			continue
+		}
+		installed, err := installCommandAtWithPredecessor(home, corePath, root, data, remote, "", path)
+		if err != nil {
+			continue
+		}
+		fmt.Fprintln(out, "Command:", installed, "— open, status, update")
+		return nil
 	}
-	fmt.Fprintln(out, "Command:", path, "— open, status, update")
-	return nil
+	return errors.New("existing commands preserved; choose an unused command path before installing")
 }
 
 func removeCommand(corePath, root, data string, remote bool) error {

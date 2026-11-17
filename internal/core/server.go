@@ -21,6 +21,7 @@ type Server struct {
 	IPC          net.Listener
 	IPCServer    *http.Server
 	Remote       net.Listener
+	RemoteLegacy net.Listener
 	RemoteHTTP   *http.Server
 	Lock         *InstanceLock
 	URL          string
@@ -111,14 +112,22 @@ func startModesWithTaskSecrets(ctx context.Context, dir, listen, publicOrigin st
 			return nil, err
 		}
 	}
-	claimed, err := store.Claimed(ctx)
-	if err != nil {
-		return nil, err
-	}
-	if !claimed {
-		if _, err = store.IssueClaimCode(ctx); err != nil {
-			return nil, err
+	if err = func() error {
+		setupLock, err := LockOwnerSetup(dir)
+		if err != nil {
+			return err
 		}
+		defer setupLock.Close()
+		claimed, err := store.Claimed(ctx)
+		if err != nil {
+			return err
+		}
+		if !claimed {
+			_, err = store.IssueClaimCode(ctx)
+		}
+		return err
+	}(); err != nil {
+		return nil, err
 	}
 	listener, err := net.Listen("tcp", listen)
 	if err != nil {
@@ -209,11 +218,14 @@ func (s *Server) startAgentTasks() {
 	}()
 }
 func (s *Server) Serve() error {
-	errorsC := make(chan error, 3)
+	errorsC := make(chan error, 4)
 	go func() { errorsC <- s.HTTP.Serve(s.Listener) }()
 	go func() { errorsC <- s.IPCServer.Serve(s.IPC) }()
 	if s.RemoteHTTP != nil {
 		go func() { errorsC <- s.RemoteHTTP.Serve(s.Remote) }()
+		if s.RemoteLegacy != nil {
+			go func() { errorsC <- s.RemoteHTTP.Serve(s.RemoteLegacy) }()
+		}
 	}
 	err := <-errorsC
 	if errors.Is(err, http.ErrServerClosed) {
@@ -230,6 +242,9 @@ func (s *Server) Close(ctx context.Context) error {
 	if s.RemoteHTTP != nil {
 		err = errors.Join(err, s.RemoteHTTP.Shutdown(ctx))
 		_ = s.RemoteHTTP.Close()
+		if s.RemoteLegacy != nil {
+			_ = s.RemoteLegacy.Close()
+		}
 	}
 	if err != nil {
 		_ = s.HTTP.Close()
@@ -256,7 +271,11 @@ func (s *Server) ConfigureConnection(location string, owner ...int) error {
 	if len(owner) == 1 {
 		uid = owner[0]
 	}
-	managedLocal := location == "local" && s.Store != nil && s.Store.fixture != nil && s.Store.custodyNetwork != ""
+	if s.Store != nil && s.Store.unconfiguredProtectedSigner && uid != s.Store.protectedOwnerUID {
+		return errors.New("verified pre-wallet owner identity required")
+	}
+	managedCustody := s.Store != nil && s.Store.fixture != nil && (s.Store.custodyNetwork != "" || s.Store.unconfiguredProtectedSigner)
+	managedLocal := location == "local" && managedCustody
 	if uid < 0 || int64(uid) > 4294967294 || (uid > 0 && location != "remote" && !managedLocal) {
 		return errors.New("dedicated owner identity requires a verified managed profile and a valid UID")
 	}
@@ -265,9 +284,27 @@ func (s *Server) ConfigureConnection(location string, owner ...int) error {
 		if s.RemoteHTTP != nil {
 			return errors.New("Remote ingress is already configured")
 		}
-		listener, err := tailnet.Listen(s.dir)
+		listener, activated, err := tailnet.ActivatedListener(s.dir, uid)
+		if err == nil && !activated {
+			if tailnet.ProtectedDataSocketReady(s.dir, uid) {
+				return errors.New("protected private listener was not passed by the service manager")
+			}
+			listener, err = tailnet.Listen(s.dir)
+		}
 		if err != nil {
 			return err
+		}
+		if activated && !tailnet.ProtectedPackageData(s.dir, uid) {
+			// Keep the original root-peer-only listener alive during the
+			// conditional Serve handoff. It remains available if the route
+			// change fails; no existing route is reset or silently adopted.
+			// New package instances have no older route to hand off and must not
+			// expose an app-writable replacement for their protected socket.
+			s.RemoteLegacy, err = tailnet.Listen(s.dir)
+			if err != nil {
+				listener.Close()
+				return err
+			}
 		}
 		s.Remote = listener
 		h.remoteIngress = true
@@ -275,7 +312,7 @@ func (s *Server) ConfigureConnection(location string, owner ...int) error {
 	}
 	h.instanceLocation, h.instanceOwnerUID = location, uid
 	h.instanceOwnerKind = ""
-	if uid > 0 && s.Store != nil && s.Store.fixture != nil && s.Store.custodyNetwork != "" {
+	if uid > 0 && managedCustody {
 		h.instanceOwnerKind = "custody"
 	}
 	return nil

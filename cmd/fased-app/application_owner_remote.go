@@ -181,15 +181,9 @@ func maintainSameReaderRemoteUpdate(ctx context.Context, m vpsinstall.Manifest, 
 			return applicationOwnerMayStage(o, fresh.View.Operation)
 		},
 		BeforeStop: func(ctx context.Context, _, _ vpsinstall.Manifest) error {
-			_, e := actor.call(ctx, "prepare", nil)
-			if e == nil {
-				return nil
-			}
-			offline, oe := actor.call(ctx, "offline", nil)
-			if oe == nil && offline.Checkpoint != nil && offline.View.Schema == state.View.Schema {
-				return nil
-			}
-			return e
+			return prepareApplicationCheckpoint(ctx, state, o,
+				func(ctx context.Context) error { _, e := actor.call(ctx, "prepare", nil); return e },
+				func(ctx context.Context) (core.ApplicationOwnerView, error) { return actor.call(ctx, "offline", nil) })
 		},
 		Health: func(ctx context.Context, target vpsinstall.Manifest) error {
 			actor.m = target
@@ -210,7 +204,7 @@ func maintainSameReaderRemoteUpdate(ctx context.Context, m vpsinstall.Manifest, 
 			if offline.View.Schema != state.View.Schema {
 				return errors.New("Remote old reader cannot restore migrated metadata")
 			}
-			return nil
+			return matchApplicationCheckpoint(state, o, offline)
 		},
 		Complete: func(ctx context.Context, target vpsinstall.Manifest, s vpsinstall.ApplicationUpdateStatus) error {
 			actor.m = target

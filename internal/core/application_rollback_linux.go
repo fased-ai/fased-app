@@ -102,7 +102,7 @@ func ReadApplicationOwnerOffline(ctx context.Context, directory, id string) (App
 		if o.Phase != "applying" {
 			return out, errors.New("unfenced state is not an active original dispatch")
 		}
-	} else if held.Request.IntentID != id || held.Request.Expected.State.Version != schema || held.Request.ManifestSHA256 != o.Release.ManifestSHA256 {
+	} else if held.Request.IntentID != id || held.Request.Expected.State.Version != schema || held.Request.ManifestSHA256 != o.Release.ManifestSHA256 || held.Request.Sequence != o.Release.Sequence {
 		return out, errors.New("exact unchanged metadata hold required")
 	}
 	if phase == "released" && (!oneOf(o.Phase, "completed", "rolled-back") || o.Receipt == nil) {
@@ -130,7 +130,8 @@ func ReadApplicationOwnerOffline(ctx context.Context, directory, id string) (App
 		return out, e
 	}
 	var checkpoint ApplicationCheckpoint
-	if update.StrictJSON(raw, &checkpoint) != nil || checkpoint.OperationID != id || checkpoint.ManifestSHA256 != o.Release.ManifestSHA256 || checkpoint.Pause.PauseID != held.PauseID || checkpoint.Snapshot.File != "application-"+checkpoint.Snapshot.SHA256+".sqlite" {
+	pause := update.CorePauseReceipt{Version: 1, State: "paused", PauseID: held.PauseID, Request: &held.Request, Core: held.Request.Expected}
+	if update.StrictJSON(raw, &checkpoint) != nil || !applicationCheckpointMatches(checkpoint, pause) {
 		return out, errors.New("offline checkpoint binding mismatch")
 	}
 	reader := &Store{bootID: checkpoint.Pause.Core.BootID}
@@ -147,7 +148,7 @@ func openApplicationMetadataDirectory(directory string) (*os.File, error) {
 		return nil, e
 	}
 	d := os.NewFile(uintptr(fd), directory)
-	db, e := unix.Openat(fd, "core.sqlite", unix.O_RDONLY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
+	db, e := unix.Openat(fd, "core.sqlite", unix.O_RDONLY|unix.O_NOFOLLOW|unix.O_CLOEXEC|unix.O_NONBLOCK, 0)
 	if e != nil {
 		d.Close()
 		return nil, e

@@ -1,0 +1,529 @@
+package update
+
+import (
+	"bytes"
+	"encoding/base64"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"slices"
+	"strings"
+)
+
+// JournalBasePackageFeature declares that both installed roles understand the
+// optional preserved-release field while a custody update is recovering.
+const JournalBasePackageFeature = "custody-journal-base-package-v1"
+
+// NativeDesktopJournalFeature means the reader understands the optional
+// protected desktop artifact in the existing custody update journal.
+const NativeDesktopJournalFeature = "custody-journal-native-desktop-v1"
+
+// NativePackageJournalFeature binds OS package identity to the same protected
+// pair transaction. Both installed readers must refuse unknown journal fields.
+const NativePackageJournalFeature = "linux-package-journal-v1"
+
+// BundleJournalFeature declares that both readers understand the authenticated
+// paired Linux bundle in an instance maintenance record.
+const BundleJournalFeature = "linux-bundle-journal-v1"
+
+const MaintenanceRoot = "/var/lib/fased-maintenance"
+const PackageInstanceLayout = "linux-package-v1"
+
+// PackageInstanceRoot and PackageInstanceUnit define one installed instance.
+// Both the installer and signer use these canonical identities at OS boundaries.
+func PackageInstanceRoot(owner int, location, id string) (string, error) {
+	if owner <= 0 || uint64(owner) > (1<<32)-2 || (location != "local" && location != "remote") || !IDOK(id) {
+		return "", errors.New("invalid package instance identity")
+	}
+	return fmt.Sprintf("/var/lib/fased-app-package/%d/%s/%s", owner, location, id), nil
+}
+
+func PackageInstanceUnit(owner int, location, id, role string) (string, error) {
+	if _, err := PackageInstanceRoot(owner, location, id); err != nil || (role != "app" && role != "signer") {
+		return "", errors.New("invalid package service identity")
+	}
+	return fmt.Sprintf("fased-package-%d-%s-%s-%s.service", owner, location, id, role), nil
+}
+
+// PackageMaintenanceRoot confines the existing maintenance journal and
+// approvals to one installed package instance.
+func PackageMaintenanceRoot(owner int, location, instance string) (string, error) {
+	if _, err := PackageInstanceRoot(owner, location, instance); err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("%s/instances/%d/%s/%s", MaintenanceRoot, owner, location, instance), nil
+}
+
+func PackageMaintenanceDirectory(owner int, location, instance, operation string) (string, error) {
+	root, err := PackageMaintenanceRoot(owner, location, instance)
+	if err != nil || !IDOK(operation) {
+		return "", errors.New("exact package maintenance operation required")
+	}
+	return root + "/updates/" + operation, nil
+}
+
+// PackageManifestIdentity is the public identity needed to bind a protected
+// journal to its signer. It carries no credentials or execution authority.
+type PackageManifestIdentity struct {
+	Layout            string `json:"layout"`
+	Mode              string `json:"mode"`
+	Profile           string `json:"profile"`
+	Provenance        string `json:"provenance"`
+	Network           string `json:"network"`
+	ID                string `json:"id"`
+	Root              string `json:"root"`
+	Location          string `json:"location"`
+	SignerHash        string `json:"signerHash"`
+	InspectionBridge  string `json:"inspectionBridge"`
+	Enrollment        bool   `json:"enrollment"`
+	NativeOwnerAccess bool   `json:"nativeOwnerAccess"`
+	Version           int    `json:"version"`
+	Owner             int    `json:"owner"`
+	App               struct {
+		UID int `json:"uid"`
+	} `json:"app"`
+	Signer struct {
+		UID int `json:"uid"`
+	} `json:"signer"`
+}
+
+// SamePackageManifestIdentity allows the executable hash to change while the
+// owner, app, signer and installed instance remain exactly the same.
+func SamePackageManifestIdentity(a, b PackageManifestIdentity) bool {
+	a.SignerHash, b.SignerHash = "", ""
+	return a == b
+}
+
+func PackageMaintenanceRecordMatchesIdentity(r MaintenanceRecord, expected PackageManifestIdentity) bool {
+	if r.Owner != expected.Owner || expected.Layout != PackageInstanceLayout {
+		return false
+	}
+	base, err := PackageManifestIdentityFromJSON(r.Base)
+	if err != nil || !SamePackageManifestIdentity(base, expected) {
+		return false
+	}
+	if len(r.Target) == 0 {
+		return false
+	}
+	target, err := PackageManifestIdentityFromJSON(r.Target)
+	return err == nil && SamePackageManifestIdentity(target, expected)
+}
+
+func PackageManifestIdentityFromJSON(raw []byte) (PackageManifestIdentity, error) {
+	var m PackageManifestIdentity
+	var obj map[string]json.RawMessage
+	if StrictJSON(raw, &obj) != nil || obj == nil || rejectPackageAliases(obj, "layout", "mode", "profile", "provenance", "network", "id", "root", "location", "coreHash", "signerHash", "inspectionBridge", "enrollment", "nativeOwnerAccess", "version", "owner", "app", "signer") {
+		return m, errors.New("invalid package manifest identity")
+	}
+	var app, signer map[string]json.RawMessage
+	if StrictJSON(obj["app"], &app) != nil || app == nil || rejectPackageAliases(app, "uid") || StrictJSON(obj["signer"], &signer) != nil || signer == nil || rejectPackageAliases(signer, "uid") || json.Unmarshal(raw, &m) != nil || !m.Enrollment || m.NativeOwnerAccess || m.InspectionBridge != "" || m.App.UID <= 0 || m.Signer.UID <= 0 || m.App.UID == m.Signer.UID || m.Owner == m.App.UID || m.Owner == m.Signer.UID {
+		return PackageManifestIdentity{}, errors.New("invalid package signer identity")
+	}
+	return m, nil
+}
+
+func rejectPackageAliases(obj map[string]json.RawMessage, names ...string) bool {
+	for key := range obj {
+		for _, name := range names {
+			if key != name && strings.EqualFold(key, name) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+type MaintenanceAuthority struct {
+	Version     int    `json:"version"`
+	Owner       int    `json:"owner"`
+	Group       int    `json:"group"`
+	Home        string `json:"home"`
+	Profile     string `json:"profile"`
+	ImageSHA256 string `json:"imageSha256"`
+}
+
+func MaintenanceOwnerRoot(owner int) string {
+	return fmt.Sprintf("%s/owners/%d", MaintenanceRoot, owner)
+}
+func MaintenanceImagePath(hash string) string {
+	return MaintenanceRoot + "/images/" + hash + "/fased-install"
+}
+func MaintenanceDirectory(owner int, id string) string {
+	return MaintenanceOwnerRoot(owner) + "/updates/" + id
+}
+
+// MaintenanceApproval is published only by the installed, trusted OS helper
+// after independent release/provenance and exact core/signer verification. It
+// admits deployment bookkeeping; it never unlocks keys or permits a trade.
+// This is distinct from the disposable development signature format.
+type MaintenanceApproval struct {
+	Version          int          `json:"version"`
+	Owner            int          `json:"owner"`
+	InstallationID   string       `json:"installationId"`
+	OperationID      string       `json:"operationId"`
+	HelperSHA256     string       `json:"helperSha256"`
+	Source           string       `json:"source"`
+	ProductVersion   string       `json:"productVersion"`
+	ReleaseSHA256    string       `json:"releaseSha256"`
+	ProvenanceSHA256 string       `json:"provenanceSha256"`
+	DevelopmentOnly  bool         `json:"developmentOnly"`
+	PreviousCore     string       `json:"previousCore"`
+	PreviousSigner   string       `json:"previousSigner"`
+	PreviousManifest string       `json:"previousManifest"`
+	Core             CoreSnapshot `json:"core"`
+	Plan             Manifest     `json:"plan"`
+}
+
+func (a MaintenanceApproval) Validate() error {
+	src, err := hex.DecodeString(a.Source)
+	if err != nil || len(src) != 20 || hex.EncodeToString(src) != a.Source || a.Version != 1 || a.Owner <= 0 || !IDOK(a.InstallationID) || !IDOK(a.OperationID) || !hashOK(a.HelperSHA256) || !hashOK(a.ReleaseSHA256) || !a.DevelopmentOnly && !hashOK(a.ProvenanceSHA256) || !hashOK(a.PreviousCore) || !hashOK(a.PreviousSigner) || !hashOK(a.PreviousManifest) {
+		return errors.New("invalid protected maintenance approval")
+	}
+	m := a.Plan
+	if m.Version != 1 || m.Product != "fased-app-maintenance" || m.Channel != "protected-installer" || m.BootstrapFrom != "" || m.Sequence == 0 || m.IssuedAt <= 0 || m.ExpiresAt <= m.IssuedAt || m.Target.OS != "linux" || (m.Target.Arch != "amd64" && m.Target.Arch != "arm64") || validateComponents(m.Components) != nil {
+		return errors.New("invalid protected release contract")
+	}
+	if a.Core.Version != 1 || !IDOK(a.Core.BootID) || !IDOK(a.Core.ProbeID) || !tokenOK(a.Core.InstanceID) || a.Core.State.Name != "core-db" || !hashOK(a.Core.State.Anchor) {
+		return errors.New("original maintenance metadata required")
+	}
+	for _, c := range m.Components {
+		if c.Version != a.ProductVersion || c.Artifact.Size <= 0 || c.Artifact.Size > 64<<20 || c.Contract.Component == "core" && c.Artifact.File != "fased-app" || c.Contract.Component == "signer" && c.Artifact.File != "fased-signer" {
+			return errors.New("maintenance requires an exact verified pair")
+		}
+	}
+	return nil
+}
+
+func (a MaintenanceApproval) Digest() string {
+	return SnapshotDigest("protected-maintenance-approval:v1", a)
+}
+
+type MaintenanceCommand struct {
+	Action      string            `json:"action"`
+	Phase       string            `json:"phase,omitempty"`
+	OperationID string            `json:"operationId"`
+	ProbeID     string            `json:"probeId,omitempty"`
+	Core        *CoreSnapshot     `json:"core,omitempty"`
+	Pause       *CorePauseReceipt `json:"pause,omitempty"`
+	Preflight   *Preflight        `json:"preflight,omitempty"`
+	Binding     *InstallBinding   `json:"binding,omitempty"`
+}
+
+// ApplicationCheckpoint describes the actual app-owned metadata backup. It
+// contains no signer state and cannot create or clear a wallet recovery hold.
+type ApplicationCheckpoint struct {
+	PreviousEngineSHA256 string           `json:"previousEngineSha256"`
+	Version              int              `json:"version"`
+	OperationID          string           `json:"operationId"`
+	ManifestSHA256       string           `json:"manifestSha256"`
+	Pause                CorePauseReceipt `json:"pause"`
+	Snapshot             MetadataSnapshot `json:"snapshot"`
+}
+
+// WalletInitialization records only a public network choice for an empty
+// signer. It never contains a key, password, or signing authority.
+type WalletInitialization struct {
+	Version     int    `json:"version"`
+	OperationID string `json:"operationId"`
+	InstanceID  string `json:"instanceId"`
+	Network     string `json:"network"`
+}
+
+func (w WalletInitialization) Valid() bool {
+	decoded, err := base64.RawURLEncoding.DecodeString(w.InstanceID)
+	return w.Version == 1 && IDOK(w.OperationID) && err == nil && len(decoded) == 32 &&
+		base64.RawURLEncoding.EncodeToString(decoded) == w.InstanceID && (w.Network == "devnet" || w.Network == "mainnet-beta")
+}
+
+// MaintenanceRecord is the helper's single durable deployment/recovery journal.
+// Component identities and the financial installation hold remain independent.
+type MaintenanceRecord struct {
+	Version         int                    `json:"version"`
+	Owner           int                    `json:"owner"`
+	OperationID     string                 `json:"operationId"`
+	Phase           string                 `json:"phase"`
+	Start           string                 `json:"start"`
+	Base            json.RawMessage        `json:"base"`
+	Target          json.RawMessage        `json:"target,omitempty"`
+	Approval        *MaintenanceApproval   `json:"approval,omitempty"`
+	Staged          *Intent                `json:"staged,omitempty"`
+	Recovery        *RecoveryIndex         `json:"recovery,omitempty"`
+	Installation    *Installation          `json:"installation,omitempty"`
+	Package         *MaintenancePackage    `json:"package,omitempty"`
+	PreviousPackage *MaintenancePackage    `json:"previousPackage,omitempty"`
+	Bootstrap       bool                   `json:"bootstrap,omitempty"`
+	Application     *ApplicationCheckpoint `json:"applicationCheckpoint,omitempty"`
+	OwnerLease      string                 `json:"ownerLease,omitempty"`
+	Wallet          *WalletInitialization  `json:"walletInitialization,omitempty"`
+}
+
+type MaintenancePackage struct {
+	Version          string         `json:"version"`
+	Source           string         `json:"source"`
+	Sequence         uint64         `json:"sequence,string"`
+	ReleaseSHA256    string         `json:"releaseSha256"`
+	ProvenanceSHA256 string         `json:"provenanceSha256"`
+	DevelopmentOnly  bool           `json:"developmentOnly"`
+	Components       []Component    `json:"components"`
+	NativeDesktop    *Artifact      `json:"nativeDesktop,omitempty"`
+	NativePackage    *NativePackage `json:"nativePackage,omitempty"`
+	Bundle           *LinuxBundle   `json:"linuxBundle,omitempty"`
+}
+
+type LinuxBundle struct {
+	Archive         Artifact `json:"archive"`
+	ManifestSHA256  string   `json:"manifestSha256"`
+	InstallerSHA256 string   `json:"installerSha256"`
+}
+
+// InstallerDigest returns only the installer bound by the recorded release.
+func (p MaintenancePackage) InstallerDigest() string {
+	if p.NativePackage != nil && p.Bundle == nil {
+		return p.NativePackage.InstallerSHA256
+	}
+	if p.Bundle != nil && p.NativePackage == nil {
+		return p.Bundle.InstallerSHA256
+	}
+	return ""
+}
+
+// SameLinuxDistribution prevents an interrupted update from switching CPU
+// architecture or crossing between two native package-manager families.
+func SameLinuxDistribution(previous, target MaintenancePackage) bool {
+	if previous.Validate() != nil || target.Validate() != nil || previous.InstallerDigest() == "" || target.InstallerDigest() == "" {
+		return false
+	}
+	if previous.NativePackage != nil && target.NativePackage != nil && previous.NativePackage.Family != target.NativePackage.Family {
+		return false
+	}
+	arch := func(p MaintenancePackage) string {
+		var name string
+		if p.NativePackage != nil {
+			name = p.NativePackage.Artifact.File
+		} else {
+			name = p.Bundle.Archive.File
+		}
+		switch {
+		case strings.Contains(name, "-amd64."):
+			return "amd64"
+		case strings.Contains(name, "-arm64."):
+			return "arm64"
+		default:
+			return ""
+		}
+	}
+	a, b := arch(previous), arch(target)
+	return a != "" && a == b
+}
+
+type NativePackage struct {
+	Family          string   `json:"family"`
+	Artifact        Artifact `json:"artifact"`
+	InstallerSHA256 string   `json:"installerSha256"`
+}
+
+// RecoveryEligible recognizes only an already admitted operation. It never
+// authorizes acquisition or a new update and retains the original hold.
+func (r MaintenanceRecord) RecoveryEligible() bool {
+	if r.Version != 1 || r.Owner <= 0 || !IDOK(r.OperationID) || r.Package == nil || r.Package.Validate() != nil || r.Wallet != nil {
+		return false
+	}
+	if r.OwnerLease != "" || r.Application != nil {
+		return r.applicationRecoveryEligible()
+	}
+	requiresHold := false
+	switch r.Phase {
+	case "prepared", "base-recovery":
+		if r.Start != "base" {
+			return false
+		}
+	case "quiescing", "staged":
+		if r.Start != "" {
+			return false
+		}
+	case "held", "replacing":
+		if r.Start != "" {
+			return false
+		}
+		requiresHold = true
+	case "ready", "signer-healthy-held", "signer-committed-held", "signer-completed", "completed":
+		if r.Start != "target" {
+			return false
+		}
+		requiresHold = true
+	default:
+		return false
+	}
+	if requiresHold && r.Installation == nil {
+		return false
+	}
+	if r.Installation != nil {
+		p := r.Installation.Binding.Index.Binding.Pause.Request
+		if !ValidInstallation(*r.Installation) || p == nil || p.IntentID != r.OperationID {
+			return false
+		}
+	}
+	return true
+}
+
+// applicationRecoveryEligible recognizes an app-only checkpoint; it does not
+// prove the real signer is empty or the saved database image is intact. The
+// installed controller must independently verify both before replacement.
+func (r MaintenanceRecord) applicationRecoveryEligible() bool {
+	if r.OwnerLease != r.OperationID || r.PreviousPackage == nil || r.PreviousPackage.Validate() != nil || r.Package.Sequence <= r.PreviousPackage.Sequence ||
+		!SameLinuxDistribution(*r.PreviousPackage, *r.Package) ||
+		r.Approval != nil || r.Staged != nil || r.Recovery != nil || r.Installation != nil || r.Bootstrap {
+		return false
+	}
+	if r.Application == nil {
+		return r.Phase == "prepared" && r.Start == "base"
+	}
+	c := r.Application
+	p := c.Pause
+	if c.Version != 1 || c.OperationID != r.OperationID || c.ManifestSHA256 != r.Package.ReleaseSHA256 || !hashOK(c.PreviousEngineSHA256) ||
+		p.Version != 1 || p.State != "paused" || !IDOK(p.PauseID) || p.Request == nil || !ValidPauseRequest(*p.Request) ||
+		p.Request.IntentID != r.OperationID || p.Request.Sequence != r.Package.Sequence || p.Request.ManifestSHA256 != r.Package.ReleaseSHA256 ||
+		!IDOK(p.Core.BootID) || !IDOK(p.Core.ProbeID) || !SameCoreMetadata(p.Core, p.Request.Expected) ||
+		!hashOK(c.Snapshot.SHA256) || c.Snapshot.File != "application-"+c.Snapshot.SHA256+".sqlite" || c.Snapshot.Size <= 0 || c.Snapshot.Size > MaxMetadataBackup {
+		return false
+	}
+	if !applicationCheckpointReadable(*r.Package, p.Core.State) {
+		return false
+	}
+	switch r.Phase {
+	case "held", "replacing":
+		return r.Start == ""
+	case "ready", "completed":
+		return r.Start == "target"
+	default:
+		return false
+	}
+}
+
+func applicationCheckpointReadable(p MaintenancePackage, state State) bool {
+	for _, component := range p.Components {
+		if component.Contract.Component != "core" {
+			continue
+		}
+		for _, support := range component.Contract.State {
+			if support.Name == "core-db" {
+				return state.Name == "core-db" && hashOK(state.Anchor) && stateFeaturesOK(state.Features) && support.Versions.has(state.Version) && containsAll(support.Features, state.Features)
+			}
+		}
+	}
+	return false
+}
+
+// ValidateIdle checks only the shape of a protected initial journal. Its
+// caller must also bind the deployment and authenticate the package.
+func (r MaintenanceRecord) ValidateIdle() error {
+	if r.Version != 1 || r.Owner <= 0 || !IDOK(r.OperationID) || r.Phase != "idle" || r.Start != "base" ||
+		len(r.Base) == 0 || !bytes.Equal(r.Base, r.Target) || r.Package == nil || r.PreviousPackage != nil ||
+		r.Approval != nil || r.Staged != nil || r.Recovery != nil || r.Installation != nil || r.Bootstrap || r.Application != nil || r.OwnerLease != "" || r.Wallet != nil {
+		return errors.New("invalid initial custody maintenance state")
+	}
+	return r.Package.Validate()
+}
+
+// InstalledPackage keeps the authenticated base release through an unfinished
+// transaction or base recovery. Existing journals retain their old behavior.
+func (r MaintenanceRecord) InstalledPackage() (*MaintenancePackage, error) {
+	if r.Package == nil {
+		return nil, errors.New("protected custody release is unavailable")
+	}
+	if r.Phase == "idle" {
+		if err := r.ValidateIdle(); err != nil {
+			return nil, err
+		}
+		return r.Package, nil
+	}
+	if r.PreviousPackage == nil {
+		return r.Package, nil
+	}
+	if r.PreviousPackage.Validate() != nil || r.Package.Validate() != nil || r.Package.Sequence <= r.PreviousPackage.Sequence {
+		return nil, errors.New("invalid protected custody release transition")
+	}
+	if r.Phase == "completed" && r.Start == "target" {
+		return r.Package, nil
+	}
+	return r.PreviousPackage, nil
+}
+
+// Validate requires a complete, internally consistent core/signer package.
+// It does not itself authenticate the release; the protected installer must do
+// that before publishing a maintenance record.
+func (p MaintenancePackage) Validate() error {
+	source, err := hex.DecodeString(p.Source)
+	if err != nil || len(source) != 20 || hex.EncodeToString(source) != p.Source ||
+		!tokenOK(p.Version) || p.Sequence == 0 || !hashOK(p.ReleaseSHA256) ||
+		(!p.DevelopmentOnly && !hashOK(p.ProvenanceSHA256)) ||
+		(p.DevelopmentOnly && p.ProvenanceSHA256 != "" && !hashOK(p.ProvenanceSHA256)) ||
+		validateComponents(p.Components) != nil {
+		return errors.New("invalid protected maintenance package")
+	}
+	contracts := make([]Contract, 0, len(p.Components))
+	for _, c := range p.Components {
+		if c.Version != p.Version || !slices.Contains(c.Contract.Features, JournalBasePackageFeature) || c.Contract.Component == "core" && c.Artifact.File != "fased-app" ||
+			c.Contract.Component == "signer" && c.Artifact.File != "fased-signer" {
+			return errors.New("protected maintenance package components differ")
+		}
+		contracts = append(contracts, c.Contract)
+	}
+	if !OrdinaryContracts(contracts) {
+		return errors.New("ordinary custody package contracts required")
+	}
+	if p.NativeDesktop != nil && (p.NativeDesktop.File != "fased-desktop" || p.NativeDesktop.Size <= 0 || p.NativeDesktop.Size > 64<<20 || !hashOK(p.NativeDesktop.SHA256)) {
+		return errors.New("invalid protected desktop artifact")
+	}
+	if p.NativeDesktop != nil {
+		for _, c := range p.Components {
+			if !slices.Contains(c.Contract.Features, NativeDesktopJournalFeature) {
+				return errors.New("both installed readers must understand the protected desktop journal")
+			}
+		}
+	}
+	if p.NativePackage != nil {
+		n := p.NativePackage
+		if (n.Family != "apt" && n.Family != "dnf") || n.Artifact.Size <= 0 || n.Artifact.Size > 128<<20 || !hashOK(n.Artifact.SHA256) || !hashOK(n.InstallerSHA256) ||
+			(n.Family == "apt" && n.Artifact.File != "fased-app-linux-amd64.deb" && n.Artifact.File != "fased-app-linux-arm64.deb" ||
+				n.Family == "dnf" && n.Artifact.File != "fased-app-linux-amd64.rpm" && n.Artifact.File != "fased-app-linux-arm64.rpm") {
+			return errors.New("invalid authenticated Linux package")
+		}
+		for _, c := range p.Components {
+			if !slices.Contains(c.Contract.Features, NativePackageJournalFeature) {
+				return errors.New("both readers must understand the native package journal")
+			}
+		}
+	}
+	if p.Bundle != nil {
+		b := p.Bundle
+		if p.NativePackage != nil || (b.Archive.File != "fased-app-linux-amd64.tar.gz" && b.Archive.File != "fased-app-linux-arm64.tar.gz") || b.Archive.Size <= 0 || b.Archive.Size > 128<<20 || !hashOK(b.Archive.SHA256) || !hashOK(b.ManifestSHA256) || !hashOK(b.InstallerSHA256) {
+			return errors.New("invalid authenticated Linux bundle")
+		}
+		for _, c := range p.Components {
+			if !slices.Contains(c.Contract.Features, BundleJournalFeature) {
+				return errors.New("both readers must understand the Linux bundle journal")
+			}
+		}
+	}
+	return nil
+}
+
+// Older signers treat this exact non-ID phase as a denial fence. Successors
+// recognize it only alongside the matching protected maintenance journal.
+func MaintenanceFence(id string) []byte {
+	b, _ := json.Marshal(struct {
+		Version int    `json:"version"`
+		Digest  string `json:"digest"`
+		Phase   string `json:"phase"`
+	}{1, SnapshotDigest("protected-maintenance-fence:v1", id), "protected-maintenance"})
+	return b
+}
+
+type MetadataMaintenanceReply struct {
+	Snapshot *CoreSnapshot     `json:"snapshot,omitempty"`
+	Pause    *CorePauseReceipt `json:"pause,omitempty"`
+	Recovery *RecoveryIndex    `json:"recovery,omitempty"`
+	Error    string            `json:"error,omitempty"`
+}

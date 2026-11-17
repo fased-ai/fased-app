@@ -270,11 +270,21 @@ function useCoreState() {
     setError("");
     changePending(epoch, 1);
     try {
-      await inspect();
       const nativeLocal =
         local &&
         code === undefined &&
         ["wails", "wails.localhost"].includes(location.hostname);
+      // The protected native handler independently checks the current instance
+      // on this empty owner request. Reuse only a previously verified Local
+      // connection here; every other sign-in still performs its own inspection.
+      if (
+        !nativeLocal ||
+        !connection ||
+        connection.instanceId !== connectedID.current ||
+        connection.location !== "local" ||
+        connection.transport !== "loopback"
+      )
+        await inspect();
       const session = await request<{
         csrfToken: string;
         sessionToken: string;

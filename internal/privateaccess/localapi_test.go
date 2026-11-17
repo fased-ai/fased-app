@@ -9,8 +9,10 @@ import (
 	"fmt"
 	"github.com/fased-ai/fased-app/internal/core"
 	"io"
+	"net"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -94,6 +96,85 @@ func TestServeOSRequestIsFixedBoundedAndConditional(t *testing.T) {
 	emptyArgs, err := serveCommand([]byte("{}"), tag)
 	if err != nil || !AllowedServeCommand([]byte("{}"), emptyArgs) {
 		t.Fatal("owned preflight cleanup refused", err)
+	}
+}
+
+func TestServeOSRequestBindsBodyToPrivilegedArguments(t *testing.T) {
+	first := []byte(`{"TCP":{"443":{"HTTPS":true}},"Web":{"node.owner.ts.net:443":{"Handlers":{"/":{"Proxy":"unix:/var/lib/fased-app-vps-1000/app-state/tailscale.sock"}}}}}`)
+	second := []byte(`{"TCP":{"8443":{"HTTPS":true}},"Web":{"node.owner.ts.net:8443":{"Handlers":{"/":{"Proxy":"unix:/var/lib/fased-app-vps-1000/app-state/tailscale.sock"}}}}}`)
+	tag := strings.Repeat("a", 64)
+	a, err := serveRawCommand(first, tag)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := serveRawCommand(second, tag)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(a, "\x00") == strings.Join(b, "\x00") {
+		t.Fatal("different Serve requests yield identical privileged commands")
+	}
+	if !strings.Contains(strings.Join(a, "\x00"), string(first)) {
+		t.Fatal("privileged command does not contain its exact approved request")
+	}
+	unsafe := []byte(`{"TCP":{"443":{"HTTPS":true}},"Web":{"node.owner.ts.net:443":{"Handlers":{"/":{"Proxy":"http://user:secret@127.0.0.1:1234"}}}}}`)
+	if _, err := serveRawCommand(unsafe, tag); err == nil {
+		t.Fatal("potential credentials would be exposed in privileged command arguments")
+	}
+	if _, err := serveRawCommand([]byte("{ \"TCP\":{} }"), tag); err == nil {
+		t.Fatal("whitespace permits ambiguous sudo argument boundaries")
+	}
+	changedTag, err := serveRawCommand(first, strings.Repeat("b", 64))
+	if err != nil || strings.Join(a, "\x00") == strings.Join(changedTag, "\x00") {
+		t.Fatal("privileged command does not bind the prior configuration identity", err)
+	}
+}
+
+func TestServeOSRequestTransmitsBoundBody(t *testing.T) {
+	if _, err := exec.LookPath("curl"); err != nil {
+		t.Skip("curl unavailable")
+	}
+	dir, err := os.MkdirTemp("", "fased-serve-curl-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(dir)
+	socket := filepath.Join(dir, "daemon.sock")
+	listener, err := net.Listen("unix", socket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := []byte(`{"TCP":{"443":{"HTTPS":true}},"Web":{"node.owner.ts.net:443":{"Handlers":{"/":{"Proxy":"unix:/var/lib/fased-app-vps-1000/app-state/tailscale.sock"}}}}}`)
+	tag := strings.Repeat("a", 64)
+	seen := make(chan error, 1)
+	server := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got, err := io.ReadAll(r.Body)
+		if err == nil && (r.Method != http.MethodPost || r.URL.Path != "/localapi/v0/serve-config" || r.Header.Get("If-Match") != tag || !bytes.Equal(got, body)) {
+			err = errors.New("conditional Serve request changed")
+		}
+		seen <- err
+		w.WriteHeader(http.StatusOK)
+	})}
+	go server.Serve(listener)
+	defer server.Close()
+	previous := serveCurlPrefix
+	serveCurlPrefix = append([]string(nil), previous...)
+	defer func() { serveCurlPrefix = previous }()
+	for i := range serveCurlPrefix {
+		if serveCurlPrefix[i] == "/var/run/tailscale/tailscaled.sock" {
+			serveCurlPrefix[i] = socket
+		}
+	}
+	err = SetServeWithOS(t.Context(), body, tag, func(ctx context.Context, input []byte, args ...string) ([]byte, error) {
+		cmd := exec.CommandContext(ctx, args[0], args[1:]...)
+		cmd.Stdin = bytes.NewReader(input)
+		return cmd.Output()
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := <-seen; err != nil {
+		t.Fatal(err)
 	}
 }
 

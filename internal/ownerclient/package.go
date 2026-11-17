@@ -18,6 +18,12 @@ type Package struct {
 	LocalPaths                             localinstall.Paths
 }
 
+// LocalPackageOwnerTarget selects the installed owner entry by its committed
+// public workspace identity, never by a path supplied by the browser.
+func LocalPackageOwnerTarget(instance string) (string, error) {
+	return localPackageOwnerTarget(os.Getuid(), instance)
+}
+
 func NativePackage(executable string) (Package, error) {
 	var p Package
 	if runtime.GOOS != "linux" {
@@ -26,6 +32,9 @@ func NativePackage(executable string) (Package, error) {
 	root := filepath.Dir(executable)
 	if filepath.Base(executable) != localinstall.DesktopName() {
 		return p, errors.New("open Wallets from the installed Fased native client")
+	}
+	if protected, selected, err := protectedNativePackage(executable); selected {
+		return protected, err
 	}
 	if m, err := bundle.Verify(root); err == nil && m.Desktop && m.Version == core.Version && m.Files["fased-signer"].SHA256 != "" {
 		p = Package{Core: filepath.Join(root, localinstall.EngineName()), Signer: filepath.Join(root, "fased-signer"), CoreSHA256: m.Files[localinstall.EngineName()].SHA256, SignerSHA256: m.Files["fased-signer"].SHA256}

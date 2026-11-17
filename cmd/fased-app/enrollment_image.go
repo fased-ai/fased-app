@@ -137,13 +137,17 @@ func enrollmentImageCommand(ctx context.Context, args []string, in io.Reader, ou
 			}
 			switch line {
 			case "CHECK " + core.EnrollmentImageDigest(image) + "\n":
+				if e = core.VerifyEnrollmentImageLease(lock); e != nil {
+					answer <- e
+					return
+				}
 				_, e = io.WriteString(out, "LOCKED "+core.EnrollmentImageDigest(image)+"\n")
 				if e != nil {
 					answer <- e
 					return
 				}
 			case "RELEASE " + core.EnrollmentImageDigest(image) + "\n":
-				answer <- nil
+				answer <- core.VerifyEnrollmentImageLease(lock)
 				return
 			default:
 				answer <- errors.New("source fence acknowledgement changed")

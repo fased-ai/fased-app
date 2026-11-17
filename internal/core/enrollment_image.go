@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
+	"errors"
 	"io"
 
 	"github.com/fased-ai/fased-app/internal/update"
@@ -61,6 +62,16 @@ func DecodeEnrollmentImage(raw []byte) (EnrollmentImage, error) {
 
 func ExportEnrollmentImage(ctx context.Context, dir string) (EnrollmentImage, io.Closer, error) {
 	return exportEnrollmentImage(ctx, dir)
+}
+
+// VerifyEnrollmentImageLease checks that the lock names still refer to the
+// descriptors held by the exporting process. It does not extend the lease.
+func VerifyEnrollmentImageLease(lease io.Closer) error {
+	v, ok := lease.(interface{ Verify() error })
+	if !ok {
+		return errors.New("enrollment source lease unavailable")
+	}
+	return v.Verify()
 }
 
 func ValidateEnrollmentImage(image EnrollmentImage) error { return validateEnrollmentImage(image) }

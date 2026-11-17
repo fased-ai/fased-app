@@ -227,19 +227,32 @@ test("complete admission includes terminal, private access, authentication, rebo
 });
 test("acceptance comes from exact authenticated attempt artifact, not local JSON", async () => {
   let raw = zipped(receipt()),
-    changed = false;
+    changed = false,
+    skipped = false;
   const api = async (method, url) => {
     assert.equal(method, "GET");
     if (url.endsWith("/jobs"))
       return {
         jobs: [
           {
-            name: "installed-acceptance",
+            name: "ubuntu-amd64",
             status: "completed",
             conclusion: "success",
+            steps: [
+              {
+                name: "Verify original provenance offline and stage public signing inputs",
+                conclusion: "success",
+              },
+            ],
+          },
+          {
+            name: "installed-acceptance",
+            status: "completed",
+            conclusion: skipped ? "skipped" : "success",
           },
         ],
       };
+    if (url.includes("/actions/artifacts?")) return { artifacts: [] };
     if (url.endsWith("/artifacts"))
       return {
         artifacts: [
@@ -270,6 +283,12 @@ test("acceptance comes from exact authenticated attempt artifact, not local JSON
       .runAttempt,
     "2",
   );
+  skipped = true;
+  await assert.rejects(
+    verifyInstalledAcceptance(packet, inventory, api, options),
+    /One retained same-artifact acceptance replay required/,
+  );
+  skipped = false;
   const foreignRemote = receipt();
   foreignRemote.installedAgent.profile = "remote";
   raw = zipped(foreignRemote);
@@ -1333,6 +1352,11 @@ test("authenticated replay proof keeps original package identity and rejects rep
       },
     ],
   };
+  const originalAcceptance = {
+    name: "installed-acceptance",
+    status: "completed",
+    conclusion: "failure",
+  };
   const skipped = { name: "ubuntu-amd64", conclusion: "skipped" };
   const artifact = {
     id: 29,
@@ -1342,19 +1366,13 @@ test("authenticated replay proof keeps original package identity and rejects rep
     workflow_run: { id: 456, head_sha: replay.head_sha },
   };
   let duplicates = false,
-    stale = false;
+    stale = false,
+    noReplay = false;
   const fixtureAPI = async (method, url) => {
     assert.equal(method, "GET");
     if (url.endsWith("/123/attempts/2/jobs"))
       return {
-        jobs: [
-          producer,
-          {
-            name: "installed-acceptance",
-            status: "completed",
-            conclusion: "failure",
-          },
-        ],
+        jobs: [producer, originalAcceptance],
       };
     if (url.endsWith("/456/attempts/1/jobs"))
       return {
@@ -1369,18 +1387,20 @@ test("authenticated replay proof keeps original package identity and rejects rep
       };
     if (url.includes("/actions/artifacts?"))
       return {
-        artifacts: duplicates
-          ? [artifact, artifact]
-          : stale
-            ? [
-                {
-                  ...artifact,
-                  id: 30,
-                  workflow_run: { ...artifact.workflow_run, id: 888 },
-                },
-                artifact,
-              ]
-            : [artifact],
+        artifacts: noReplay
+          ? []
+          : duplicates
+            ? [artifact, artifact]
+            : stale
+              ? [
+                  {
+                    ...artifact,
+                    id: 30,
+                    workflow_run: { ...artifact.workflow_run, id: 888 },
+                  },
+                  artifact,
+                ]
+              : [artifact],
       };
     if (url.endsWith("/456/artifacts")) return { artifacts: [artifact] };
     if (url.endsWith("/456")) return replay;
@@ -1414,6 +1434,29 @@ test("authenticated replay proof keeps original package identity and rejects rep
   assert.equal(result.runId, "123");
   assert.equal(result.runAttempt, "2");
   assert.equal(result.artifactId, "29");
+  // A package-only build succeeds with its acceptance job skipped. It may
+  // reuse one independently authenticated acceptance of those same bytes.
+  original.conclusion = "success";
+  originalAcceptance.conclusion = "skipped";
+  assert.equal(
+    (await verifyInstalledAcceptance(packet, inventory, api, options))
+      .artifactId,
+    "29",
+  );
+  noReplay = true;
+  await assert.rejects(
+    verifyInstalledAcceptance(packet, inventory, api, options),
+    /One retained same-artifact acceptance replay required/,
+  );
+  noReplay = false;
+  producer.conclusion = "failure";
+  await assert.rejects(
+    verifyInstalledAcceptance(packet, inventory, api, options),
+    /attested build must have succeeded/,
+  );
+  producer.conclusion = "success";
+  original.conclusion = "failure";
+  originalAcceptance.conclusion = "failure";
   stale = true;
   assert.equal(
     (await verifyInstalledAcceptance(packet, inventory, api, options))
@@ -1486,6 +1529,7 @@ test("workflow input preflight fails partial replay modes before either job", ()
     FASED_INPUT_SOURCE: "a".repeat(40),
     FASED_REPLAY_RUN_ID: "",
     FASED_REPLAY_RUN_ATTEMPT: "",
+    FASED_PACKAGE_ONLY: "false",
   };
   const run = (change) =>
     execFileSync("bash", ["-c", script], {
@@ -1494,11 +1538,17 @@ test("workflow input preflight fails partial replay modes before either job", ()
       timeout: 5000,
     });
   assert.doesNotThrow(() => run({}));
+  assert.doesNotThrow(() => run({ FASED_PACKAGE_ONLY: "true" }));
   assert.doesNotThrow(() =>
     run({ FASED_REPLAY_RUN_ID: "123", FASED_REPLAY_RUN_ATTEMPT: "2" }),
   );
   for (const change of [
     { FASED_REPLAY_RUN_ID: "123" },
+    {
+      FASED_PACKAGE_ONLY: "true",
+      FASED_REPLAY_RUN_ID: "123",
+      FASED_REPLAY_RUN_ATTEMPT: "2",
+    },
     { FASED_REPLAY_RUN_ATTEMPT: "2" },
     { FASED_REPLAY_RUN_ID: "0123", FASED_REPLAY_RUN_ATTEMPT: "2" },
     { FASED_REPLAY_RUN_ID: "123", FASED_REPLAY_RUN_ATTEMPT: "0" },

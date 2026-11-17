@@ -6,12 +6,14 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"io"
 	"net/http"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -35,23 +37,24 @@ func nativeAppClient(args []string, in io.Reader, out io.Writer) error {
 	if err != nil {
 		return err
 	}
-	m, err := custodyinstall.Load(cfg.OwnerUID)
-	if err != nil || !m.NativeOwnerAccess || m.Location != "local" || !m.Enrollment || m.App.UID != os.Getuid() || custodyinstall.Verify(m) != nil || signer.CheckApplication(*config, m.Root, *data) != nil {
-		return errors.New("protected Local owner helper required")
+	root := filepath.Dir(*config)
+	var m custodyinstall.Manifest
+	if root == custodyinstall.Root(cfg.OwnerUID) {
+		m, err = custodyinstall.Load(cfg.OwnerUID)
+		if err == nil && (!m.NativeOwnerAccess || custodyinstall.Verify(m) != nil) {
+			err = errors.New("protected native owner required")
+		}
+	} else {
+		m, err = custodyinstall.LoadPackageInstance(cfg.OwnerUID, root)
+		if err == nil {
+			err = custodyinstall.VerifyPackageOwnerTarget(m)
+		}
+		if err == nil {
+			err = packageRunningImageMatches(filepath.Join(m.Root, "fased-app"))
+		}
 	}
-	commit, err := custodyinstall.ReadEnrollmentCommit(m)
-	if err != nil {
-		return err
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
-	defer cancel()
-	client, err := core.NewClient(ctx, *data)
-	if err != nil {
-		return err
-	}
-	defer client.Close()
-	if client.Endpoint.InstanceID != commit.InstanceID {
-		return errors.New("native owner instance changed")
+	if err != nil || (m.Location != "local" && m.Location != "remote") || !m.Enrollment || m.App.UID != os.Getuid() || m.App.UID != os.Geteuid() || signer.CheckApplication(*config, m.Root, *data) != nil {
+		return errors.New("protected package owner helper required")
 	}
 	r, err := http.ReadRequest(bufio.NewReader(io.LimitReader(in, 64*1024)))
 	if err != nil {
@@ -60,6 +63,28 @@ func nativeAppClient(args []string, in io.Reader, out io.Writer) error {
 	defer r.Body.Close()
 	if r.ContentLength > 16*1024 || !nativeClientRequestAllowed(r) {
 		return errors.New("native route unavailable")
+	}
+	// Remote bootstrap may observe health only. It must never obtain a Local
+	// owner session or treat the app UID as a Tailscale device identity.
+	if m.Location == "remote" && !packageOwnerBootstrapProbe(r) {
+		return errors.New("Remote package bootstrap permits only anonymous health")
+	}
+	commit, err := custodyinstall.ReadEnrollmentCommit(m)
+	if err != nil {
+		_, statErr := os.Lstat(filepath.Join(m.Root, "enrollment-ready.json"))
+		if m.Layout != custodyinstall.PackageLayout || !errors.Is(statErr, os.ErrNotExist) || !packageOwnerBootstrapProbe(r) {
+			return err
+		}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	client, err := core.NewClient(ctx, *data)
+	if err != nil {
+		return err
+	}
+	defer client.Close()
+	if commit.InstanceID != "" && client.Endpoint.InstanceID != commit.InstanceID {
+		return errors.New("native owner instance changed")
 	}
 	// Every request goes through the existing protected IPC, never a loopback
 	// TCP destination which another local process could impersonate.
@@ -84,8 +109,53 @@ func nativeAppClient(args []string, in io.Reader, out io.Writer) error {
 		return err
 	}
 	defer response.Body.Close()
+	if commit.InstanceID == "" {
+		if err = verifyPackageBootstrapHealth(response, client.Endpoint.InstanceID, m.Owner, m.Location); err != nil {
+			return err
+		}
+	}
 	response.Close = true
 	return response.Write(out)
+}
+
+// VerifyPackageOwnerTarget authenticates the installed image. Confirm the
+// running process is that image too, even if a concurrent update replaced it.
+func packageRunningImageMatches(installed string) error {
+	running, err := os.Stat("/proc/self/exe")
+	if err != nil {
+		return err
+	}
+	current, err := os.Stat(installed)
+	if err != nil || !running.Mode().IsRegular() || !current.Mode().IsRegular() || !os.SameFile(running, current) {
+		return errors.New("running package client differs from the protected image")
+	}
+	return nil
+}
+
+// The first protected owner record must use the same IPC endpoint identity
+// that NewClient just verified, not a different subsequent health response.
+func verifyPackageBootstrapHealth(response *http.Response, instance string, owner int, location string) error {
+	if response == nil || response.Body == nil || response.StatusCode != http.StatusOK || !strings.HasPrefix(response.Header.Get("Content-Type"), "application/json") {
+		return errors.New("Local package health is unavailable")
+	}
+	data, err := io.ReadAll(io.LimitReader(response.Body, 32*1024+1))
+	var health core.Health
+	if err != nil || len(data) > 32*1024 || json.Unmarshal(data, &health) != nil || health.Status != "ok" || health.APIVersion != core.APIVersion ||
+		health.InstanceID != instance || instance == "" || health.Connection == nil || (location != "local" && location != "remote") || health.Connection.Location != location ||
+		health.Connection.Transport != "loopback" || health.Connection.OwnerUID != owner {
+		return errors.New("Local package health differs from its verified endpoint")
+	}
+	response.Body = io.NopCloser(bytes.NewReader(data))
+	response.ContentLength = int64(len(data))
+	response.TransferEncoding = nil
+	return nil
+}
+
+// Before the helper records a fresh package's core identity, only its fixed
+// read-only health probe may reach the private app socket.
+func packageOwnerBootstrapProbe(r *http.Request) bool {
+	return r != nil && r.URL != nil && r.Method == http.MethodGet && r.URL.Path == "/api/v1/health" && r.URL.RawQuery == "" &&
+		r.ContentLength == 0 && len(r.TransferEncoding) == 0 && r.Header.Get("Authorization") == "" && r.Header.Get("Cookie") == ""
 }
 
 func nativeClientRequestAllowed(r *http.Request) bool {

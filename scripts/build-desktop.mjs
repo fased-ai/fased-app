@@ -13,6 +13,9 @@ const tags =
       ? "production,wv2runtime.embed"
       : "production";
 const environment = { ...process.env, CGO_ENABLED: windows ? "0" : "1" };
+const version = process.env.FASED_RELEASE_VERSION;
+if (version && !/^[0-9]+\.[0-9]+\.[0-9]+(?:-[A-Za-z0-9.-]+)?$/.test(version))
+  throw Error("Invalid native release version");
 // A direct Go build must declare the framework normally supplied by native
 // packaging. Wails' macOS frontend references UTType on current Apple SDKs.
 if (process.platform === "darwin")
@@ -37,7 +40,23 @@ await writeFile(
 );
 execFileSync(
   "go",
-  ["-C", "desktop", "build", "-trimpath", "-tags", tags, "-o", output, "."],
+  [
+    "-C",
+    "desktop",
+    "build",
+    "-trimpath",
+    "-tags",
+    tags,
+    ...(version
+      ? [
+          "-ldflags",
+          `-X github.com/fased-ai/fased-app/internal/core.Version=${version}`,
+        ]
+      : []),
+    "-o",
+    output,
+    ".",
+  ],
   {
     stdio: "inherit",
     env: environment,

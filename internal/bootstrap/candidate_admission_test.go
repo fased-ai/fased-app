@@ -1,6 +1,7 @@
 package bootstrap
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"io"
@@ -25,6 +26,9 @@ func TestAttestedContentIdentityKeepsTransportAndLegacySeparate(t *testing.T) {
 		t.Fatal("publication transport changed signed-content identity")
 	}
 	legacy, _ := json.Marshal(d)
+	if bytes.Contains(legacy, []byte(`"deb":`)) || bytes.Contains(legacy, []byte(`"rpm":`)) {
+		t.Fatal("legacy descriptor serialization gained native package fields")
+	}
 	if !ApplicationDescriptorMatches(d, digest(legacy)) || !ApplicationDescriptorMatches(d, staged) {
 		t.Fatal("exact verified legacy/canonical identity not recognized")
 	}

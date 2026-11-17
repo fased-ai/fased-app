@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"github.com/fased-ai/fased-app/internal/core"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -25,6 +26,12 @@ import (
 // Fased payload, database, service or wallet exists at this stage. The temporary
 // owned endpoint is removed conditionally; foreign Serve policy is never reset.
 func (m Manager) BeforeInstall(ctx context.Context, dir string, p Plan, out io.Writer) (result tailnet.Identity, resultErr error) {
+	return m.beforeInstall(ctx, dir, p, out, "/tmp")
+}
+
+// The protected helper supplies its persistent root-owned directory as the
+// socket parent. A route surviving reboot must never point into a cleared /tmp.
+func (m Manager) beforeInstall(ctx context.Context, dir string, p Plan, out io.Writer, probeParent string) (result tailnet.Identity, resultErr error) {
 	var empty tailnet.Identity
 	if _, _, err := routeParts(p); err != nil {
 		return empty, errors.New("Remote requires Tailscale before installation")
@@ -40,14 +47,34 @@ func (m Manager) BeforeInstall(ctx context.Context, dir string, p Plan, out io.W
 	if err != nil || state != "absent" {
 		return empty, errors.New("this private endpoint is already owned; refusing to replace it")
 	}
-	probeDir, err := os.MkdirTemp("/tmp", "fased-private-")
+	probeDir, err := os.MkdirTemp(probeParent, "fased-private-")
 	if err != nil {
 		return empty, err
 	}
-	defer os.Remove(probeDir)
+	created, err := os.Lstat(probeDir)
+	if err != nil {
+		return empty, err
+	}
+	receiptPersisted := false
+	defer func() {
+		if receiptPersisted {
+			return // The saved route must be reconciled before removing its target.
+		}
+		if current, err := os.Lstat(probeDir); err == nil && os.SameFile(created, current) {
+			if held, err := openPreflightDirectory(probeDir); err == nil && held != nil {
+				_ = removePreflightDirectory(held, probeDir)
+				_ = held.Close()
+			}
+		}
+	}()
 	listener, err := tailnet.Listen(probeDir)
 	if err != nil {
 		return empty, err
+	}
+	// Cleanup validates the held directory and its socket. Closing a listener
+	// must not unlink a file in a path substituted after it was opened.
+	if unixListener, ok := listener.(*net.UnixListener); ok {
+		unixListener.SetUnlinkOnClose(false)
 	}
 	defer listener.Close()
 	nonce := make([]byte, 32)
@@ -70,11 +97,25 @@ func (m Manager) BeforeInstall(ctx context.Context, dir string, p Plan, out io.W
 	if err = core.WritePrivateJSON(filepath.Join(dir, "private-setup.json"), receipt); err != nil {
 		return empty, err
 	}
+	receiptPersisted = true
 	defer func() {
+		// UnixListener.Close unlinks its original socket path. Close it while the
+		// private directory still exists, before removing that directory below.
+		_ = server.Close()
+		_ = listener.Close()
 		cleanup, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		resultErr = errors.Join(resultErr, m.finishPreflight(cleanup, dir, p.Origin))
 	}()
+	// The route may survive a power cut. Persist its ownership record before
+	// issuing the conditional Serve mutation so recovery can identify it.
+	directory, err := os.Open(dir)
+	if err != nil {
+		return empty, err
+	}
+	if err = errors.Join(directory.Sync(), directory.Close()); err != nil {
+		return empty, err
+	}
 	data, _ := json.Marshal(owned)
 	if err = m.SetConfig(ctx, data, etag); err != nil {
 		return empty, err
@@ -159,6 +200,15 @@ type preflightReceipt struct {
 	Plan    Plan `json:"plan"`
 }
 
+func preflightSocketTarget(value, dir string) bool {
+	if !validTarget(value) || !strings.HasPrefix(value, "unix:") {
+		return false
+	}
+	probeDir := filepath.Dir(strings.TrimPrefix(value, "unix:"))
+	parent := filepath.Dir(probeDir)
+	return strings.HasPrefix(filepath.Base(probeDir), "fased-private-") && (parent == "/tmp" || parent == dir && filepath.IsAbs(dir))
+}
+
 func (m Manager) finishPreflight(ctx context.Context, dir, origin string) error {
 	file := filepath.Join(dir, "private-setup.json")
 	data, err := core.ReadPrivateFile(file)
@@ -174,7 +224,7 @@ func (m Manager) finishPreflight(ctx context.Context, dir, origin string) error 
 	}
 	socket := strings.TrimPrefix(r.Plan.Target, "unix:")
 	probeDir := filepath.Dir(socket)
-	if !validTarget(r.Plan.Target) || filepath.Dir(probeDir) != "/tmp" || !strings.HasPrefix(filepath.Base(probeDir), "fased-private-") {
+	if !preflightSocketTarget(r.Plan.Target, dir) {
 		return errors.New("foreign private setup path; preserve it")
 	}
 	cfg, etag, err := m.config(ctx)
@@ -200,18 +250,19 @@ func (m Manager) finishPreflight(ctx context.Context, dir, origin string) error 
 			return errors.New("private setup cleanup not confirmed; no deployment allowed")
 		}
 	}
-	if info, e := os.Lstat(socket); e == nil {
-		if info.Mode()&os.ModeSocket == 0 {
-			return errors.New("private setup socket changed; preserve it")
-		}
-		if e = os.Remove(socket); e != nil {
-			return e
-		}
-	} else if !os.IsNotExist(e) {
-		return e
-	}
-	if err = os.Remove(probeDir); err != nil && !os.IsNotExist(err) {
+	// First remove the exact saved route. Even a substituted old /tmp
+	// directory must not leave Tailscale serving an attacker-controlled path.
+	probe, err := openPreflightDirectory(probeDir)
+	if err != nil {
 		return err
+	}
+	if probe != nil {
+		defer probe.Close()
+	}
+	if probe != nil {
+		if err = removePreflightDirectory(probe, probeDir); err != nil {
+			return err
+		}
 	}
 	return os.Remove(file)
 }

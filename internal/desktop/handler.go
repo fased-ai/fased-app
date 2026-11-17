@@ -25,6 +25,7 @@ type Handler struct {
 	openWalletOwner func(string) error
 	dir             string
 	assets          http.Handler
+	newClient       func(context.Context, string) (*core.Client, bool, json.RawMessage, error)
 	mu              sync.Mutex
 	instance        string
 }
@@ -34,7 +35,7 @@ type Handler struct {
 func (h *Handler) SetWalletOwnerOpener(open func(string) error) { h.openWalletOwner = open }
 
 func NewHandler(dir string, assets fs.FS) *Handler {
-	return &Handler{dir: dir, assets: http.FileServer(http.FS(assets)), openBrowser: func(url, id string) error { return connection.OpenBrowser(url, id) }}
+	return &Handler{dir: dir, assets: http.FileServer(http.FS(assets)), newClient: newPublicClient, openBrowser: func(url, id string) error { return connection.OpenBrowser(url, id) }}
 }
 
 // Wails v2 uses these fixed local origins on its supported platforms. No network
@@ -134,7 +135,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(result)
 		return
 	}
-	client, enrolled, err := NewPublicClient(r.Context(), h.dir)
+	client, enrolled, health, err := h.newClient(r.Context(), h.dir)
 	if err != nil {
 		fail(w, 503, "Fased is unavailable. Reopen the app.")
 		return
@@ -148,6 +149,11 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	h.mu.Unlock()
 	if !match {
 		fail(w, 409, "instance identity changed; close the window and select the instance again")
+		return
+	}
+	if r.Method == http.MethodGet && r.URL.Path == "/api/v1/health" && health != nil {
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		_, _ = w.Write(health)
 		return
 	}
 	if r.URL.Path == "/api/v1/installation/local-owner" {
@@ -179,13 +185,20 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		data, e := core.ReadPrivateFile(filepath.Join(h.dir, "claim-code.json"))
 		var code core.ClaimCode
 		if e != nil || len(data) > 4096 || json.Unmarshal(data, &code) != nil || time.Now().After(code.ExpiresAt) {
+			setupLock, lockErr := core.LockOwnerSetup(h.dir)
+			if lockErr != nil {
+				fail(w, 409, "Reopen Fased to finish setup.")
+				return
+			}
 			store, openErr := core.OpenStore(h.dir)
 			if openErr != nil {
+				setupLock.Close()
 				fail(w, 409, "Reopen Fased to finish setup.")
 				return
 			}
 			code, e = store.IssueClaimCode(r.Context())
 			store.Close()
+			setupLock.Close()
 			if e != nil {
 				fail(w, 409, "Reopen Fased to finish setup.")
 				return
@@ -227,6 +240,8 @@ func allowed(method, route string) bool {
 	case "/api/v1/installation/connect", "/api/v1/installation/local-owner", "/api/v1/installation/wallet-owner":
 		return method == "POST"
 	case "/api/v1/agents":
+		return method == "GET" || method == "POST"
+	case "/api/v1/updates/application":
 		return method == "GET" || method == "POST"
 	case "/api/v1/ai/connection":
 		return method == "GET" || method == "POST"

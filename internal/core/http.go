@@ -130,6 +130,9 @@ func (h *HTTPHandler) api(w http.ResponseWriter, r *http.Request) {
 	case "/api/v1/auth/remote":
 		h.remoteOwnerAPI(w, r)
 		return
+	case "/api/v1/auth/remote-setup":
+		h.remotePackageSetupAPI(w, r)
+		return
 	case "/api/v1/auth/local":
 		h.localOwnerAPI(w, r)
 		return
@@ -176,7 +179,7 @@ func (h *HTTPHandler) api(w http.ResponseWriter, r *http.Request) {
 				result["csrfToken"] = csrfToken(token)
 			}
 		}
-		if h.localOwnerAllowed() {
+		if h.localOwnerAllowed() || h.protectedLocalOwnerAllowed() {
 			result["localAccess"] = true
 			var salt []byte
 			if err := h.store.db.QueryRowContext(r.Context(), "SELECT password_salt FROM instance WHERE id=1").Scan(&salt); err != nil {

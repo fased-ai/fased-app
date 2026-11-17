@@ -64,7 +64,7 @@ func (s *Store) prepareApplicationCheckpoint(ctx context.Context, id, previousEn
 		return out, errors.New("metadata fence changed before backup")
 	}
 	if raw, err := recoveryRead(d, "application.json", 16384); err == nil {
-		if update.StrictJSON(raw, &out) != nil || out.Version != 1 || out.OperationID != id || out.Pause.PauseID != pause.PauseID || out.ManifestSHA256 != pause.Request.ManifestSHA256 || out.Snapshot.File != "application-"+out.Snapshot.SHA256+".sqlite" || out.Snapshot.Size <= 0 || out.Snapshot.Size > update.MaxMetadataBackup || !update.SameCoreMetadata(out.Pause.Core, pause.Core) {
+		if update.StrictJSON(raw, &out) != nil || !applicationCheckpointMatches(out, pause) {
 			return out, errors.New("conflicting application checkpoint")
 		}
 		if previousEngine != "" && out.PreviousEngineSHA256 != previousEngine {
@@ -131,7 +131,9 @@ func (s *Store) CompleteApplicationCheckpoint(ctx context.Context, id string, pr
 		defer tx.Rollback()
 		phase, p, err := readPause(ctx, tx)
 		o, _, oe := readApplicationUpdate(ctx, tx)
-		if err == nil && oe == nil && phase == "released" && p.Request.IntentID == id && o.ID == id {
+		if err == nil && oe == nil && phase == "released" && p.Request.IntentID == id &&
+			p.Request.Sequence == proof.Sequence && p.Request.ManifestSHA256 == proof.ManifestSHA256 &&
+			o.ID == id && o.Phase == proof.Phase && o.Receipt != nil && *o.Receipt == proof {
 			return nil
 		}
 		return e

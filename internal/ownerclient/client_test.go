@@ -82,6 +82,29 @@ func TestPrivateWalletLinkRetainsIsolatedHTTPSPort(t *testing.T) {
 	}
 }
 
+func TestLocalPackageWalletLinkPreservesLegacyHandler(t *testing.T) {
+	i := intent()
+	legacy, err := Link(i.InstanceID, i.Network, i.Action, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	packageLink := strings.Replace(legacy, "fased://", "fased-wallet://", 1)
+	parsed, origin, err := ParseLink(packageLink)
+	if err != nil || origin != "" || parsed.InstanceID != i.InstanceID || parsed.Network != i.Network || parsed.Action != i.Action {
+		t.Fatal("package link did not retain the original Local request", err)
+	}
+	remote, err := Link(i.InstanceID, i.Network, i.Action, "https://owner.example.ts.net")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err = ParseLink(strings.Replace(remote, "fased://", "fased-wallet://", 1)); err == nil {
+		t.Fatal("Local package link accepted a Remote origin")
+	}
+	if _, _, err = ParseLink(legacy); err != nil {
+		t.Fatal("the existing wallet link changed", err)
+	}
+}
+
 func TestOwnerTargetMismatchRefusedBeforeSecrets(t *testing.T) {
 	i := intent()
 	for _, change := range []func(*Peer){func(p *Peer) { p.InstanceID = "foreign" }, func(p *Peer) { p.Network = "mainnet-beta" }, func(p *Peer) { p.OwnerUID = 1001 }, func(p *Peer) { p.SignerID = "bad" }} {
@@ -91,6 +114,22 @@ func TestOwnerTargetMismatchRefusedBeforeSecrets(t *testing.T) {
 		if err == nil {
 			t.Fatal("different enrollment admitted")
 		}
+	}
+}
+
+func TestPackageOwnerDoesNotFallBackToLegacy(t *testing.T) {
+	i := intent()
+	packageOwner := "/var/lib/fased-app-package/1000/local/" + strings.Repeat("b", 32) + "/fased-app"
+	calls := 0
+	c := &Client{Intent: i, Peer: Peer{OwnerUID: 1000}, packageOwner: packageOwner, run: func(_ context.Context, path string, _ []string, input []byte) ([]byte, error) {
+		calls++
+		if path != packageOwner || len(input) != 0 {
+			t.Fatal("failed package inspection fell back or sent private input")
+		}
+		return nil, errors.New("package temporarily unavailable")
+	}}
+	if _, err := openLocated(t.Context(), c); err == nil || calls != 1 {
+		t.Fatal("an unavailable package was replaced by another owner", calls, err)
 	}
 }
 

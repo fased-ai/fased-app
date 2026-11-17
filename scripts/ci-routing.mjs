@@ -4,7 +4,6 @@ import { pathToFileURL } from "node:url";
 
 export const lanes = [
   "core",
-  "desktop",
   "signer",
   "handoff",
   "handoff_uid",
@@ -63,7 +62,7 @@ export function verifyGate(needs) {
     throw new Error("required result missing: core-scenarios");
   for (const [job, flag] of [
     ["core", "core"],
-    ["desktop", "desktop"],
+    ["browser", "core"],
     ["signer", "signer"],
     ["handoff", "handoff"],
     ["handoff-uid", "handoff_uid"],

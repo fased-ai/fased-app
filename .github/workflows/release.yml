@@ -16,6 +16,16 @@ on:
         required: false
         default: ""
         type: string
+      package_only:
+        description: Build the unpublished browser package for real-host acceptance
+        required: false
+        default: true
+        type: boolean
+      fedora_predecessor:
+        description: Build the explicitly test-only Fedora predecessor
+        required: false
+        default: false
+        type: boolean
 permissions:
   contents: read
 concurrency:
@@ -30,9 +40,19 @@ jobs:
           FASED_INPUT_SOURCE: ${{ inputs.source }}
           FASED_REPLAY_RUN_ID: ${{ inputs.candidate_run }}
           FASED_REPLAY_RUN_ATTEMPT: ${{ inputs.candidate_attempt }}
+          FASED_PACKAGE_ONLY: ${{ inputs.package_only }}
+          FASED_FEDORA_PREDECESSOR: ${{ inputs.fedora_predecessor }}
         run: |
           if [[ "$GITHUB_REF" != refs/heads/main || "$FASED_INPUT_SOURCE" != "$GITHUB_SHA" ]]; then
             echo 'Reviewed main source is required.' >&2
+            exit 1
+          fi
+          if [[ "$FASED_PACKAGE_ONLY" == true && ( -n "$FASED_REPLAY_RUN_ID" || -n "$FASED_REPLAY_RUN_ATTEMPT" ) ]]; then
+            echo 'Package-only cannot be combined with acceptance replay.' >&2
+            exit 1
+          fi
+          if [[ "$FASED_FEDORA_PREDECESSOR" == true && ( "$FASED_PACKAGE_ONLY" != true || -n "$FASED_REPLAY_RUN_ID" || -n "$FASED_REPLAY_RUN_ATTEMPT" ) ]]; then
+            echo 'The Fedora test predecessor requires a package-only build.' >&2
             exit 1
           fi
           if [[ -z "$FASED_REPLAY_RUN_ID" && -z "$FASED_REPLAY_RUN_ATTEMPT" ]]; then exit 0; fi
@@ -53,6 +73,8 @@ jobs:
       GOTOOLCHAIN: local
       GOFLAGS: -mod=readonly
       FASED_RELEASE_SOURCE: ${{ inputs.source }}
+      FASED_PACKAGE_ONLY: ${{ inputs.package_only }}
+      FASED_FEDORA_PREDECESSOR: ${{ inputs.fedora_predecessor }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -79,13 +101,14 @@ jobs:
           GOFLAGS: -mod=readonly -overlay=${{ steps.prepare.outputs.overlay }}
         run: |
           go mod verify
-          node scripts/build-core.mjs --version="$FASED_RELEASE_VERSION"
+          export CGO_ENABLED=0
           go build -trimpath -o .evidence/bin/fased-signer ./cmd/fased-signer
+          node scripts/build-core.mjs --version="$FASED_RELEASE_VERSION" --wallet-signer=.evidence/bin/fased-signer --source="$GITHUB_SHA"
           node scripts/build-core.mjs --installer --version="$FASED_RELEASE_VERSION" --wallet-signer=.evidence/bin/fased-signer --source="$GITHUB_SHA"
-          go run -ldflags "-X github.com/fased-ai/fased-app/internal/core.Version=$FASED_RELEASE_VERSION" ./cmd/fased-package --engine .evidence/bin/fased-app --source "$GITHUB_SHA" --out .evidence/ubuntu-release --ubuntu-release-format
+          go run -ldflags "-X github.com/fased-ai/fased-app/internal/core.Version=$FASED_RELEASE_VERSION" ./cmd/fased-package --engine .evidence/bin/fased-app --signer .evidence/bin/fased-signer --source "$GITHUB_SHA" --out .evidence/ubuntu-release --linux-bundle-format
           cp .evidence/bin/fased-install .evidence/ubuntu-release/fased-install-linux-amd64
           node scripts/prepare-ubuntu-release.mjs inventory
-      - name: Attest the actual archive from this main-dispatch run
+      - name: Attest the browser-first Linux bundle
         id: provenance
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
         with:
@@ -102,12 +125,13 @@ jobs:
           go run ./cmd/fased-release-candidate verify-provenance --policy-file .evidence/ubuntu-release/provenance-policy.json --expected-file .evidence/ubuntu-release/expected-provenance.json --bundle-file .evidence/ubuntu-release/fased-app-linux-amd64.provenance.sigstore.json > .evidence/ubuntu-release/verified-provenance.json
           node scripts/prepare-ubuntu-release.mjs finish
       - name: Preserve verified staged artifact modes
-        run: chmod 600 .evidence/ubuntu-release/fased-app-linux-amd64.tar.gz .evidence/ubuntu-release/fased-install-linux-amd64 .evidence/ubuntu-release/fased-app-linux-amd64.provenance.sigstore.json .evidence/ubuntu-release/install.sh .evidence/ubuntu-release/fased-release.json .evidence/ubuntu-release/first-install-seed.json
+        run: |
+          chmod 600 .evidence/ubuntu-release/fased-app-linux-amd64.tar.gz .evidence/ubuntu-release/fased-install-linux-amd64 .evidence/ubuntu-release/fased-app-linux-amd64.provenance.sigstore.json .evidence/ubuntu-release/install.sh .evidence/ubuntu-release/fased-release.json .evidence/ubuntu-release/first-install-seed.json
       - name: Retain original verified release artifacts
         if: ${{ always() && steps.prepare.outcome == 'success' }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: ubuntu-amd64-release-candidate-${{ github.run_attempt }}
+          name: ubuntu-amd64-${{ inputs.fedora_predecessor && 'fedora-test-predecessor' || 'release-candidate' }}-${{ github.run_attempt }}
           include-hidden-files: true
           retention-days: 7
           if-no-files-found: error
@@ -125,9 +149,10 @@ jobs:
             .evidence/ubuntu-release/artifact-inventory.json
             .evidence/ubuntu-release/signing-inputs.json
             .evidence/ubuntu-release/fased-release.json
+  # Retained replay for older accepted artifacts. New bundles use real-host acceptance.
   installed-acceptance:
     needs: [candidate-inputs, ubuntu-amd64]
-    if: always() && needs.candidate-inputs.result == 'success' && github.ref == 'refs/heads/main' && github.sha == inputs.source && github.repository == 'fased-ai/fased-app' && github.repository_id == '1426211857' && github.repository_owner_id == '279582504' && (needs.ubuntu-amd64.result == 'success' || (needs.ubuntu-amd64.result == 'skipped' && inputs.candidate_run != '' && inputs.candidate_attempt != '' && github.run_attempt == 1))
+    if: always() && !inputs.package_only && inputs.candidate_run != '' && needs.candidate-inputs.result == 'success' && github.ref == 'refs/heads/main' && github.sha == inputs.source && github.repository == 'fased-ai/fased-app' && github.repository_id == '1426211857' && github.repository_owner_id == '279582504' && (needs.ubuntu-amd64.result == 'success' || (needs.ubuntu-amd64.result == 'skipped' && inputs.candidate_run != '' && inputs.candidate_attempt != '' && github.run_attempt == 1))
     runs-on: ubuntu-24.04
     timeout-minutes: 35
     permissions:

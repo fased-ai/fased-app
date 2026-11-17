@@ -20,6 +20,7 @@ import (
 	"github.com/fased-ai/fased-app/internal/bundle"
 	"github.com/fased-ai/fased-app/internal/core"
 	"github.com/fased-ai/fased-app/internal/custodyinstall"
+	desktopclient "github.com/fased-ai/fased-app/internal/desktop"
 	"github.com/fased-ai/fased-app/internal/hostprep"
 	"github.com/fased-ai/fased-app/internal/localinstall"
 	"github.com/fased-ai/fased-app/internal/ownerclient"
@@ -63,6 +64,8 @@ func hostCommand(args []string, out, errOut io.Writer) error {
 	bootstrapSequence := f.String("bootstrap-sequence", "", "verified bootstrap release sequence; no version inference")
 	bootstrapRelease := f.String("bootstrap-release-sha256", "", "verified bootstrap descriptor identity")
 	packageSHA256 := f.String("bundle-sha256", "", "independently obtained SHA-256 of exact bundle.json bytes")
+	nativeBundle := f.String("native-bundle", "", "verified installer native companion")
+	nativeBundleSHA256 := f.String("native-bundle-sha256", "", "exact native companion inventory digest")
 	installRuntime := f.Bool("install-runtime", false, "authorize Ubuntu 24.04's OS package manager to install missing desktop runtime libraries")
 	prepareHost := f.Bool("prepare-host", false, "authorize Ubuntu OS prerequisites and the verified restrictive sandbox policy")
 	if err = f.Parse(remaining); err != nil {
@@ -77,8 +80,30 @@ func hostCommand(args []string, out, errOut io.Writer) error {
 	} else if f.NArg() != 0 {
 		return errors.New("unexpected positional arguments")
 	}
+	if command == "open" {
+		explicit := false
+		f.Visit(func(option *flag.Flag) { explicit = explicit || option.Name == "data-dir" })
+		if strings.HasPrefix(ownerLink, "fased-wallet://") && !explicit {
+			intent, privateOrigin, _ := ownerclient.ParseLink(ownerLink)
+			if privateOrigin == "" {
+				image, e := ownerclient.LocalPackageOwnerTarget(intent.InstanceID)
+				if e != nil {
+					return e
+				}
+				if image != "" {
+					*data, explicit = filepath.Join(filepath.Dir(image), "app-state"), true
+				}
+			}
+		}
+		if *data, err = defaultPackageLocalData(*data, explicit); err != nil {
+			return err
+		}
+	}
 	if *packageSHA256 != "" && (command != "install" || *packageDir == "") {
 		return errors.New("--bundle-sha256 requires install --bundle")
+	}
+	if (*nativeBundle == "") != (*nativeBundleSHA256 == "") || *nativeBundle != "" && (command != "install" || *packageDir == "" || *verificationOutput == "" || *bootstrapSequence == "" || *bootstrapRelease == "" || *desktop != "") {
+		return errors.New("native companion requires one verified installer and bundle")
 	}
 	if command != "install" && (*bootstrapSequence != "" || *bootstrapRelease != "") {
 		return errors.New("bootstrap release metadata is an installation option")
@@ -103,6 +128,71 @@ func hostCommand(args []string, out, errOut io.Writer) error {
 	ctx, cancel := context.WithTimeout(context.Background(), budget)
 	defer cancel()
 	if command == "service" || command == "open" || command == "uninstall" || command == "install" {
+		abs, pathErr := filepath.Abs(paths.Data)
+		if pathErr != nil {
+			return pathErr
+		}
+		if real, e := filepath.EvalSymlinks(abs); e == nil && real != abs {
+			if _, packaged, _ := desktopclient.PackageLocalDataRoot(real, os.Getuid()); packaged {
+				return errors.New("use the original package data directory, not a symbolic link")
+			}
+		}
+		_, packaged, packageErr := desktopclient.PackageLocalDataRoot(abs, os.Getuid())
+		if packageErr != nil {
+			return packageErr
+		}
+		if packaged {
+			if command != "open" || *origin != "" {
+				return errors.New("this Local package operation is unavailable; preserve its instance")
+			}
+			if ownerLink != "" {
+				intent, privateOrigin, e := ownerclient.ParseLink(ownerLink)
+				if e != nil || privateOrigin != "" || *printOnly {
+					return errors.New("the original Local wallet request is required")
+				}
+				root := filepath.Dir(abs)
+				m, e := custodyinstall.LoadPackageInstance(os.Getuid(), root)
+				if e != nil {
+					return errors.New("the original Local package is unavailable")
+				}
+				if _, e = custodyinstall.ProtectedPackageNativeRelease(m, intent.InstanceID); e != nil {
+					return e
+				}
+				desktop := filepath.Join(root, localinstall.DesktopName())
+				if e = checkDesktopRuntime(desktop); e != nil {
+					return e
+				}
+				process := exec.Command(desktop, "--wallet-owner", ownerLink)
+				if e = process.Start(); e != nil {
+					return errors.New("cannot open the protected Fased window")
+				}
+				return process.Process.Release()
+			}
+			address, e := preparePackageBrowser(ctx, errOut, func(ctx context.Context) (string, error) {
+				return localOwnerSetupLink(ctx, abs, "")
+			}, func(ctx context.Context) error {
+				m, err := custodyinstall.LoadPackageInstance(os.Getuid(), filepath.Dir(abs))
+				if err != nil {
+					return err
+				}
+				if _, err = custodyinstall.ProtectedPackageNativeRelease(m, ""); err != nil {
+					return err
+				}
+				return registerPackageWalletShortcut(ctx)
+			})
+			if e != nil {
+				return e
+			}
+			if *printOnly {
+				_, e = fmt.Fprintln(out, address)
+				return e
+			}
+			process := exec.Command("xdg-open", address)
+			if e = process.Start(); e != nil {
+				return errors.New("cannot open the browser; use open --print for the private URL")
+			}
+			return process.Process.Release()
+		}
 		target, found, e := enrolledTarget(paths.Data)
 		if e != nil {
 			return e
@@ -118,7 +208,38 @@ func hostCommand(args []string, out, errOut io.Writer) error {
 			if command == "uninstall" {
 				operation = "remove"
 			}
-			return enrolledLifecycle(ctx, target, operation, *prepareHost, *printOnly, out, enrolledSystem(&custodyinstall.System{In: os.Stdin, Out: errOut}))
+			ops := enrolledSystem(&custodyinstall.System{In: os.Stdin, Out: errOut})
+			if command == "open" && ownerLink == "" && target.NativeOwnerAccess && target.Location == "local" {
+				ops.ownerLink = func(ctx context.Context, origin string) (string, error) {
+					return localOwnerSetupLink(ctx, paths.Data, origin)
+				}
+				ops.open = func(url, _ string) error {
+					process := exec.Command("xdg-open", url)
+					if err := process.Start(); err != nil {
+						return errors.New("cannot open the browser; use open --print for the private URL")
+					}
+					return process.Process.Release()
+				}
+			}
+			if command == "open" && ownerLink != "" {
+				if !target.NativeOwnerAccess {
+					return errors.New("install the protected Local native client to open Wallets")
+				}
+				if _, nativeErr := custodyinstall.ProtectedNativeRelease(target); nativeErr != nil {
+					return errors.New("install the protected Local native client to open Wallets")
+				}
+				if err = checkDesktopRuntime(filepath.Join(target.Root, localinstall.DesktopName())); err != nil {
+					return err
+				}
+				ops.open = func(_, _ string) error {
+					process := exec.Command(filepath.Join(target.Root, localinstall.DesktopName()), "--wallet-owner", ownerLink)
+					if err := process.Start(); err != nil {
+						return errors.New("cannot open the protected Fased window")
+					}
+					return process.Process.Release()
+				}
+			}
+			return enrolledLifecycle(ctx, target, operation, *prepareHost, *printOnly, out, ops)
 		}
 	}
 	switch command {
@@ -195,6 +316,7 @@ func hostCommand(args []string, out, errOut io.Writer) error {
 		if err != nil {
 			return err
 		}
+		runningEngine := engine
 		var inventory bundle.Manifest
 		if *packageDir != "" {
 			var canonical string
@@ -203,6 +325,7 @@ func hostCommand(args []string, out, errOut io.Writer) error {
 				return err
 			}
 			*packageDir = canonical
+			engine = filepath.Join(canonical, localinstall.EngineName())
 			if inventory.Desktop {
 				*desktop = filepath.Join(canonical, localinstall.DesktopName())
 			}
@@ -213,6 +336,16 @@ func hostCommand(args []string, out, errOut io.Writer) error {
 		}
 		if *managedRemote && inventory.Desktop {
 			return errors.New("managed Remote requires a verified headless bundle")
+		}
+		if *nativeBundle != "" && !*vps {
+			native, canonical, err := verifiedNativeInstallation(*nativeBundle, *verificationOutput, *nativeBundleSHA256, runningEngine, inventory, selectedPaths)
+			if err != nil {
+				return err
+			}
+			inventory = native
+			*packageDir = canonical
+			engine = filepath.Join(canonical, localinstall.EngineName())
+			*desktop = filepath.Join(canonical, localinstall.DesktopName())
 		}
 		if *vps {
 			if *access != "tailscale" {
@@ -238,7 +371,26 @@ func hostCommand(args []string, out, errOut io.Writer) error {
 			if e != nil {
 				return e
 			}
-			plan, e = privateaccess.System().SelectIsolated(ctx, dir, plan)
+			pending, e := protectedPendingRemoteOrigin(ctx, errOut)
+			if e != nil {
+				return e
+			}
+			resumed := false
+			if pending != "" {
+				existing, loadErr := vpsinstall.Load(os.Getuid())
+				if loadErr == nil {
+					if !sameRemoteInstallerInput(existing, *listen, pending, sequence, release, inventory.Files[localinstall.EngineName()].SHA256) {
+						return errors.New("existing Remote installation differs; preserve it")
+					}
+					plan, e = privateaccess.BindOrigin(plan, pending)
+					resumed = true
+				} else if !errors.Is(loadErr, os.ErrNotExist) {
+					return loadErr
+				}
+			}
+			if !resumed {
+				plan, e = privateaccess.System().SelectIsolated(ctx, dir, plan, pending)
+			}
 			if e != nil {
 				return e
 			}
@@ -257,8 +409,12 @@ func hostCommand(args []string, out, errOut io.Writer) error {
 		if err = localinstall.Validate(paths, localinstall.Options{Listen: *listen, PublicOrigin: *origin}); err != nil {
 			return err
 		}
-		if *interactive && !*prepareHost && (needsHostPreparation(*desktop) || *managedRemote) {
-			prompt := "Authorize required Ubuntu preparation with sudo? [y/N]: "
+		runtimeDesktop := ""
+		if *installRuntime {
+			runtimeDesktop = *desktop
+		}
+		if *interactive && !*prepareHost && (needsHostPreparation(runtimeDesktop) || *managedRemote) {
+			prompt := "Authorize required OS preparation with sudo? [y/N]: "
 			if *managedRemote {
 				prompt = "Authorize Ubuntu preparation, isolated service and bounded update maintenance with sudo? [y/N]: "
 			}
@@ -269,7 +425,7 @@ func hostCommand(args []string, out, errOut io.Writer) error {
 		if *managedRemote {
 			return managedRemoteInstall(ctx, engine, inventory.Files[localinstall.EngineName()].SHA256, *listen, plan, *prepareHost, *start, out, errOut, wizard, installationAdmission{sequence: sequence, release: release, prepareUpdates: *interactive && *prepareHost})
 		}
-		if err = desktopRuntime(ctx, *desktop, *packageDir, *data, *installRuntime, *prepareHost, os.Stdin, errOut); err != nil {
+		if err = desktopRuntime(ctx, runtimeDesktop, *packageDir, *data, *installRuntime, *prepareHost, os.Stdin, errOut); err != nil {
 			return err
 		}
 		signerPath := ""
@@ -378,6 +534,9 @@ func hostCommand(args []string, out, errOut io.Writer) error {
 			if err != nil || m.Files[localinstall.DesktopName()] == "" {
 				return errors.New("install the Fased native client to open protected wallets")
 			}
+			if err = checkDesktopRuntime(filepath.Join(m.Root, localinstall.DesktopName())); err != nil {
+				return err
+			}
 			process := exec.Command(filepath.Join(m.Root, localinstall.DesktopName()), "--wallet-owner", ownerLink)
 			if err = process.Start(); err != nil {
 				return err
@@ -399,33 +558,39 @@ func hostCommand(args []string, out, errOut io.Writer) error {
 			fmt.Fprintln(out, url)
 			return nil
 		}
-		m, err := localinstall.Load(paths)
-		if err != nil {
+		if _, err = localinstall.Load(paths); err != nil {
 			return err
 		}
 		var process *exec.Cmd
-		if m.Files[localinstall.DesktopName()] != "" {
-			process = exec.Command(filepath.Join(m.Root, localinstall.DesktopName()), "--data-dir", m.Data)
-		} else {
-			switch runtime.GOOS {
-			case "linux":
-				process = exec.Command("xdg-open", url)
-			case "darwin":
-				process = exec.Command("open", url)
-			case "windows":
-				process = exec.Command("rundll32.exe", "url.dll,FileProtocolHandler", url)
-			default:
-				return errors.New("no browser opener on this platform")
-			}
+		switch runtime.GOOS {
+		case "linux":
+			process = exec.Command("xdg-open", url)
+		case "darwin":
+			process = exec.Command("open", url)
+		case "windows":
+			process = exec.Command("rundll32.exe", "url.dll,FileProtocolHandler", url)
+		default:
+			return errors.New("no browser opener on this platform")
 		}
 		if err = process.Start(); err != nil {
-			return errors.New("cannot open the window; use open --print for the private URL")
+			return errors.New("cannot open the browser; use open --print for the private URL")
 		}
 		_ = process.Process.Release()
 		fmt.Fprintln(out, url)
 		return nil
 	}
 	return errors.New("unknown installation command")
+}
+
+func preparePackageBrowser(ctx context.Context, diagnostics io.Writer, ownerLink func(context.Context) (string, error), register func(context.Context) error) (string, error) {
+	address, err := ownerLink(ctx)
+	if err != nil {
+		return "", err
+	}
+	if err := register(ctx); err != nil {
+		fmt.Fprintln(diagnostics, "Wallets browser connection is unavailable:", err)
+	}
+	return address, nil
 }
 
 // Bind installation to the running core and the exact verified inventory.
@@ -448,12 +613,13 @@ func verifiedInstallationBundle(directory, engine, desktop, pin string) (bundle.
 		return empty, "", errors.New("bundle version differs from the running core")
 	}
 	actual, err := filepath.EvalSymlinks(engine)
-	if err != nil {
-		return empty, "", err
+	if err == nil {
+		actual, err = filepath.Abs(actual)
 	}
-	actual, err = filepath.Abs(actual)
 	if err != nil || actual != filepath.Join(directory, localinstall.EngineName()) {
-		return empty, "", errors.New("run the core from the selected verified package")
+		if !sealedInstallationEngine(engine, m.Files[localinstall.EngineName()]) {
+			return empty, "", errors.New("run the core from the selected verified package")
+		}
 	}
 	if desktop != "" {
 		actual, err = filepath.EvalSymlinks(desktop)
@@ -465,6 +631,52 @@ func verifiedInstallationBundle(directory, engine, desktop, pin string) (bundle.
 		}
 	}
 	return m, directory, nil
+}
+
+// The native companion is assembled only beside the held verifier output. Its
+// core, source and version must match the original authenticated headless
+// bundle; its own inventory binds the client and signer copied by install.
+func verifiedNativeInstallation(directory, output, pin, engine string, original bundle.Manifest, paths localinstall.Paths) (bundle.Manifest, string, error) {
+	var empty bundle.Manifest
+	base, err := filepath.Abs(output)
+	if err != nil || pin == "" || directory != filepath.Join(base, "native-bundle") {
+		return empty, "", errors.New("native companion must belong to the verified acquisition")
+	}
+	info, err := os.Lstat(directory)
+	if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+		return empty, "", errors.New("native companion directory changed")
+	}
+	m, canonical, err := verifiedInstallationBundle(directory, engine, "", pin)
+	if err != nil {
+		return empty, "", err
+	}
+	engineName := localinstall.EngineName()
+	formatOK := original.Schema == 2 && !original.UnsignedEngineering && m.Schema == 3 && !m.UnsignedEngineering
+	if !formatOK && original.Schema == 1 && original.UnsignedEngineering && m.Schema == 1 && m.UnsignedEngineering && compiledNativeFixtureAllowed != nil {
+		formatOK = compiledNativeFixtureAllowed(paths.Root, paths.Data)
+	}
+	if !formatOK || original.Desktop || !m.Desktop || m.Files["fased-signer"].SHA256 == "" || m.Source != original.Source || m.Version != original.Version || len(m.Files) != len(original.Files)+2 || m.Files[engineName] != original.Files[engineName] {
+		return empty, "", errors.New("native companion differs from the verified release")
+	}
+	for name, file := range original.Files {
+		if m.Files[name] != file {
+			return empty, "", errors.New("native companion changed the verified release inventory")
+		}
+	}
+	if compiledNativeSource != original.Source || !releaseNativeDigest(compiledNativeDesktopSHA256) || !releaseNativeDigest(compiledNativeSignerSHA256) || m.Files[localinstall.DesktopName()].SHA256 != compiledNativeDesktopSHA256 || m.Files["fased-signer"].SHA256 != compiledNativeSignerSHA256 {
+		return empty, "", errors.New("native companion differs from the authenticated core's release binding")
+	}
+	return m, canonical, nil
+}
+
+// The attested core carries the hashes of its paired installer payloads. An
+// owner-supplied companion inventory or hash is not release authentication.
+var compiledNativeSource, compiledNativeDesktopSHA256, compiledNativeSignerSHA256 string
+var compiledNativeFixtureAllowed func(root, data string) bool
+
+func releaseNativeDigest(value string) bool {
+	b, err := hex.DecodeString(value)
+	return err == nil && len(b) == 32 && hex.EncodeToString(b) == value
 }
 
 // Keep the terminal handoff on the installed engine and its existing state.

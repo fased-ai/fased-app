@@ -223,11 +223,11 @@ func maintainLocalUpdate(ctx context.Context, m localinstall.Manifest, id string
 			return applicationOwnerMayStage(o, fresh.View.Operation)
 		},
 		BeforeStop: func(ctx context.Context, _, _ localinstall.Manifest) error {
-			_, e := ipc.call(ctx, "prepare", nil)
-			if e != nil && state.Checkpoint != nil {
-				return core.CheckApplicationRollbackMetadata(ctx, m.Data, id, state.View.Schema)
-			}
-			return e
+			return prepareApplicationCheckpoint(ctx, state, o,
+				func(ctx context.Context) error { _, e := ipc.call(ctx, "prepare", nil); return e },
+				func(ctx context.Context) (core.ApplicationOwnerView, error) {
+					return core.ReadApplicationOwnerOffline(ctx, m.Data, id)
+				})
 		},
 		Health: func(ctx context.Context, target localinstall.Manifest) error {
 			fresh, e := waitApplicationOwnerHealth(ctx, func(ctx context.Context) (core.ApplicationOwnerView, error) { return ipc.call(ctx, "inspect", nil) })
@@ -243,7 +243,11 @@ func maintainLocalUpdate(ctx context.Context, m localinstall.Manifest, id string
 			return nil
 		},
 		RollbackAllowed: func(ctx context.Context, _, _ localinstall.Manifest) error {
-			return core.CheckApplicationRollbackMetadata(ctx, m.Data, id, state.View.Schema)
+			offline, err := core.ReadApplicationOwnerOffline(ctx, m.Data, id)
+			if err != nil {
+				return err
+			}
+			return matchApplicationCheckpoint(state, o, offline)
 		},
 		Complete: func(ctx context.Context, target localinstall.Manifest, s localinstall.ApplicationUpdateStatus) error {
 			phase := s.Phase
@@ -374,6 +378,44 @@ func maintainLocalUpdate(ctx context.Context, m localinstall.Manifest, id string
 	}
 	fmt.Fprintf(out, "%s\n", final.View.Operation.Phase)
 	return localinstall.CompleteApplicationMaintenance(ctx, m, id, final.View.Operation.Phase, localinstall.ApplicationMaintenanceRunner(m))
+}
+
+// A lost prepare reply can be retried only by re-reading the actual retained
+// checkpoint. Both Local and Remote use the same instance, lease and release.
+func prepareApplicationCheckpoint(ctx context.Context, state core.ApplicationOwnerView, operation core.ApplicationUpdateOperation, prepare func(context.Context) error, offline func(context.Context) (core.ApplicationOwnerView, error)) error {
+	if prepare == nil || offline == nil {
+		return errors.New("original owner checkpoint entry required")
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := prepare(ctx); err != nil {
+		if ctx.Err() != nil {
+			return errors.Join(err, ctx.Err())
+		}
+		current, readErr := offline(ctx)
+		if readErr != nil {
+			return errors.Join(err, readErr)
+		}
+		if matchErr := matchApplicationCheckpoint(state, operation, current); matchErr != nil {
+			return errors.Join(err, matchErr)
+		}
+	}
+	return ctx.Err()
+}
+
+func matchApplicationCheckpoint(state core.ApplicationOwnerView, operation core.ApplicationUpdateOperation, current core.ApplicationOwnerView) error {
+	other := current.View.Operation
+	checkpoint := current.Checkpoint
+	if state.View.InstanceID == "" || state.View.Schema <= 0 || !update.IDOK(operation.ID) || !update.IDOK(operation.OwnerLease) || operation.Release == nil ||
+		current.View.InstanceID != state.View.InstanceID || current.View.Schema != state.View.Schema || other.ID != operation.ID || other.OwnerLease != operation.OwnerLease || other.Automatic != operation.Automatic || other.PolicySHA256 != operation.PolicySHA256 ||
+		(other.Phase != "applying" && other.Phase != "recovery") || other.Release == nil ||
+		update.SnapshotDigest("application-release", other.Release) != update.SnapshotDigest("application-release", operation.Release) ||
+		checkpoint == nil || checkpoint.OperationID != operation.ID || checkpoint.ManifestSHA256 != operation.Release.ManifestSHA256 ||
+		(state.Checkpoint != nil && update.SnapshotDigest("application-checkpoint", state.Checkpoint) != update.SnapshotDigest("application-checkpoint", checkpoint)) {
+		return errors.New("original update checkpoint changed; preserve recovery")
+	}
+	return nil
 }
 
 type ownerStagingAction int

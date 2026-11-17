@@ -23,7 +23,7 @@ func ApplicationUpdateNeedsSource(paths Paths, id string) (bool, error) {
 		return false, nil
 	}
 	missing := false
-	for name, want := range map[string]string{engineName: j.Status.EngineSHA256, desktopName: j.Status.DesktopSHA256} {
+	for name, want := range map[string]string{engineName: j.Status.EngineSHA256, desktopName: j.Status.DesktopSHA256, "fased-signer": j.Status.SignerSHA256} {
 		if want == "" {
 			continue
 		}
@@ -84,7 +84,7 @@ func ResumeApplication(ctx context.Context, paths Paths, id string, h Applicatio
 	if runtime.GOOS != "linux" {
 		return Manifest{}, errors.New("application recovery supports Linux Local only")
 	}
-	return resumeRetainedApplication(ctx, paths, id, h, applicationServices{stop: stop, start: start}, false)
+	return resumeRetainedApplication(ctx, paths, id, h, applicationServices{preflight: updateServicePreflight, stop: stop, start: start}, false)
 }
 func resumeRetainedApplication(ctx context.Context, paths Paths, id string, h ApplicationUpdateCallbacks, services applicationServices, rollback bool) (Manifest, error) {
 	if !applicationUpdateID(id) {
@@ -106,6 +106,10 @@ func resumeRetainedApplication(ctx context.Context, paths Paths, id string, h Ap
 	if j.Status.DesktopSHA256 != "" {
 		c.Desktop = filepath.Join(dir, "next-"+desktopName)
 		c.DesktopSHA256 = j.Status.DesktopSHA256
+	}
+	if j.Status.SignerSHA256 != "" {
+		c.Signer = filepath.Join(dir, "next-fased-signer")
+		c.SignerSHA256 = j.Status.SignerSHA256
 	}
 	return replaceApplication(ctx, p, c, h, services, nil, rollback)
 }

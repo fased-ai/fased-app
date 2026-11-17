@@ -23,7 +23,12 @@ func (t InstallTransaction) dir() string {
 	return t.Base.Root + "/updates/" + t.Binding.Index.Binding.Pause.Request.IntentID
 }
 func (t InstallTransaction) valid() bool {
-	if t.Version != 1 || !((t.Base.Version == 1) || (t.Base.Version == 2 && t.Binding.Index.Binding.Signer.Version == 2 && update.ManagedContracts(t.Binding.Contracts)) || (t.Base.Version == 3 && t.Binding.Index.Binding.Signer.Version == 3 && update.OrdinaryContracts(t.Binding.Contracts))) || t.Base.validate() != nil || t.Target.validate() != nil || update.ValidateInstallBinding(t.Binding) != nil || t.Binding.Index.Binding.Pause.Request == nil {
+	if t.Base.Layout == PackageLayout && t.Base.Network == "" {
+		// No signer exists yet to issue an installation hold. A pre-wallet
+		// update must use the app checkpoint rather than inventing a receipt.
+		return false
+	}
+	if t.Version != 1 || !((t.Base.Version == 1) || (t.Base.Version == 2 && t.Binding.Index.Binding.Signer.Version == 2 && update.ManagedContracts(t.Binding.Contracts)) || (t.Base.Version == 3 && t.Binding.Index.Binding.Signer.Version == 3 && update.OrdinaryContracts(t.Binding.Contracts))) || t.Base.validateMaintenanceIdentity() != nil || t.Target.validateMaintenanceIdentity() != nil || update.ValidateInstallBinding(t.Binding) != nil || t.Binding.Index.Binding.Pause.Request == nil {
 		return false
 	}
 	b := t.Target
@@ -33,8 +38,10 @@ func (t InstallTransaction) valid() bool {
 }
 
 type installOps struct {
+	atomic       func(context.Context, string) error
 	recoveryDirs func(Manifest) ([]string, error)
 	read         readHost
+	verify       approvedExecutableVerifier
 	run          runHost
 	topology     func(Manifest) error
 	health       func(context.Context, Manifest) error
@@ -71,7 +78,7 @@ func runTransaction(ctx context.Context, t InstallTransaction, rollback bool, o 
 	}
 	mark := func(name string) error {
 		b := mustJSON(phaseRecord{1, digest, name})
-		if e := publish(ctx, d+"/"+name+".json", t.Base.ID, b, 0644, o.read, o.run); e != nil {
+		if e := publish(ctx, d+"/"+name+".json", t.Base.ID, b, 0644, o.read, o.run, o.verify); e != nil {
 			return e
 		}
 		if o.checkpoint != nil {
@@ -116,7 +123,7 @@ func runTransaction(ctx context.Context, t InstallTransaction, rollback bool, o 
 			return nil, errors.New("signer did not acquire the exact durable installation hold")
 		}
 		held = *p
-		if e = publish(ctx, d+"/held.json", t.Base.ID, mustJSON(held), 0644, o.read, o.run); e != nil {
+		if e = publish(ctx, d+"/held.json", t.Base.ID, mustJSON(held), 0644, o.read, o.run, o.verify); e != nil {
 			return nil, e
 		}
 		if o.checkpoint != nil {
@@ -142,7 +149,7 @@ func runTransaction(ctx context.Context, t InstallTransaction, rollback bool, o 
 		return nil, errors.New("rollback completion lacks its durable host decision")
 	}
 	active := t.Base.Root + "/update-active.json"
-	if e = publish(ctx, active, t.Base.ID, mustJSON(phaseRecord{1, digest, t.Binding.Index.Binding.Pause.Request.IntentID}), 0644, o.read, o.run); e != nil {
+	if e = publish(ctx, active, t.Base.ID, mustJSON(phaseRecord{1, digest, t.Binding.Index.Binding.Pause.Request.IntentID}), 0644, o.read, o.run, o.verify); e != nil {
 		return nil, e
 	}
 	if rollback && !decision {
@@ -282,7 +289,11 @@ func clearActive(ctx context.Context, t InstallTransaction, o installOps) error 
 }
 func servicesStopped(ctx context.Context, m Manifest, run runHost) error {
 	for _, role := range []string{"app", "signer"} {
-		b, e := run(ctx, nil, "/usr/bin/systemctl", "show", Unit(m.Owner, role), "--property=ActiveState,MainPID")
+		unit := instanceUnit(m, role)
+		if unit == "" {
+			return errors.New("exact managed service required")
+		}
+		b, e := run(ctx, nil, "/usr/bin/systemctl", "show", unit, "--property=ActiveState,MainPID")
 		if e != nil {
 			return e
 		}
@@ -346,7 +357,7 @@ func replaceRecord(ctx context.Context, path, id string, data []byte, o installO
 		return nil
 	}
 	stage := filepath.Dir(path) + "/.replace-" + id + "-" + filepath.Base(path) + "-" + sum(data)
-	if e = publish(ctx, stage, id, data, mode, o.read, o.run); e != nil {
+	if e = publish(ctx, stage, id, data, mode, o.read, o.run, o.verify); e != nil {
 		return e
 	}
 	if _, e = o.run(ctx, nil, "/usr/bin/mv", "--no-target-directory", "--", stage, path); e != nil {

@@ -17,40 +17,44 @@ import (
 	"time"
 
 	"github.com/fased-ai/fased-app/internal/bundle"
+	"github.com/fased-ai/fased-app/internal/maintenance"
 	"github.com/fased-ai/fased-app/internal/releaseops"
 	"github.com/fased-ai/fased-app/internal/update"
 )
 
 type Options struct {
-	Development   bool
-	Seed          []byte
-	SeedSHA256    string
-	Directory     string                                                             // Absent child of a real private current-user directory.
-	TLSCA         []byte                                                             // Explicit development fixture CA, never disabled TLS.
-	now           func() time.Time                                                   // Test-only clock; no CLI or production override.
-	githubFixture func(releaseops.GitHubPolicy) (*releaseops.GitHubTransport, error) // Go-only controlled fixture, never CLI/JSON.
+	protectedOwner int // Only the validated installed root-helper constructor.
+	Development    bool
+	Seed           []byte
+	SeedSHA256     string
+	Directory      string                                                             // Absent child of a real private current-user directory.
+	TLSCA          []byte                                                             // Explicit development fixture CA, never disabled TLS.
+	now            func() time.Time                                                   // Test-only clock; no CLI or production override.
+	githubFixture  func(releaseops.GitHubPolicy) (*releaseops.GitHubTransport, error) // Go-only controlled fixture, never CLI/JSON.
 }
 
 type Report struct {
-	Version            int           `json:"version"`
-	DevelopmentOnly    bool          `json:"developmentOnly"`
-	Purpose            string        `json:"purpose"`
-	MetadataVerified   bool          `json:"metadataVerified"`
-	ArchiveVerified    bool          `json:"archiveVerified"`
-	BundleVerified     bool          `json:"bundleVerified"`
-	InstallerInvoked   bool          `json:"installerInvoked"`
-	Sequence           uint64        `json:"sequence,string"`
-	Target             update.Target `json:"target"`
-	SeedSHA256         string        `json:"seedSha256"`
-	DescriptorSHA256   string        `json:"descriptorSha256"`
-	ArchiveSHA256      string        `json:"archiveSha256"`
-	BundleSHA256       string        `json:"bundleSha256"`
-	BundleDirectory    string        `json:"bundleDirectory"`
-	PublicActivation   bool          `json:"publicActivation"`
-	GitHubTransport    bool          `json:"githubTransport,omitzero"`
-	ProvenanceVerified bool          `json:"provenanceVerified,omitzero"`
-	ProvenanceSHA256   string        `json:"provenanceSha256,omitzero"`
-	TrustPolicySHA256  string        `json:"trustPolicySha256,omitzero"`
+	Version                     int           `json:"version"`
+	DevelopmentOnly             bool          `json:"developmentOnly"`
+	Purpose                     string        `json:"purpose"`
+	MetadataVerified            bool          `json:"metadataVerified"`
+	ArchiveVerified             bool          `json:"archiveVerified"`
+	BundleVerified              bool          `json:"bundleVerified"`
+	InstallerInvoked            bool          `json:"installerInvoked"`
+	Sequence                    uint64        `json:"sequence,string"`
+	Target                      update.Target `json:"target"`
+	SeedSHA256                  string        `json:"seedSha256"`
+	DescriptorSHA256            string        `json:"descriptorSha256"`
+	ArchiveSHA256               string        `json:"archiveSha256"`
+	BundleSHA256                string        `json:"bundleSha256"`
+	BundleDirectory             string        `json:"bundleDirectory"`
+	PublicActivation            bool          `json:"publicActivation"`
+	GitHubTransport             bool          `json:"githubTransport,omitzero"`
+	ProvenanceVerified          bool          `json:"provenanceVerified,omitzero"`
+	LinuxPackageDigestsVerified bool          `json:"linuxPackageDigestsVerified,omitzero"`
+	LinuxBundleVerified         bool          `json:"linuxBundleVerified,omitzero"`
+	ProvenanceSHA256            string        `json:"provenanceSha256,omitzero"`
+	TrustPolicySHA256           string        `json:"trustPolicySha256,omitzero"`
 }
 
 // Prepared is deliberately not a JSON-install permit. Run revalidates its
@@ -114,6 +118,18 @@ func (p *Prepared) Close() error {
 		if cleanupErr == nil {
 			cleanupErr = p.root.Remove("download.tar.gz")
 		}
+		if cleanupErr == nil && (p.candidate != nil || p.report.LinuxPackageDigestsVerified || p.report.LinuxBundleVerified) {
+			cleanupErr = p.root.Remove("candidate-installer")
+		}
+		if cleanupErr == nil && (p.candidate != nil || p.report.LinuxPackageDigestsVerified || p.report.LinuxBundleVerified) {
+			cleanupErr = p.root.Remove("candidate-entry")
+		}
+		if cleanupErr == nil && p.report.LinuxPackageDigestsVerified {
+			cleanupErr = p.root.Remove("candidate-deb")
+		}
+		if cleanupErr == nil && p.report.LinuxPackageDigestsVerified {
+			cleanupErr = p.root.Remove("candidate-rpm")
+		}
 	}
 	return errors.Join(cleanupErr, p.root.Close())
 }
@@ -129,8 +145,41 @@ func writeNew(root *os.Root, name string, b []byte) error {
 	if err != nil {
 		return err
 	}
-	_, err = f.Write(b)
+	// This inode was created exclusively in the held private directory.
+	// Normalize its owner-only mode without inheriting a restrictive umask.
+	if err = f.Chmod(0600); err == nil {
+		_, err = f.Write(b)
+	}
 	return errors.Join(err, f.Sync(), f.Close())
+}
+
+// A completion marker is visible only after its complete contents are synced.
+// The exclusive hard link never replaces a foreign target.
+func writeBootstrapCompletion(root *os.Root, b []byte) error {
+	const stage = ".bootstrap.json.pending"
+	if err := writeNew(root, stage, b); err != nil {
+		return err
+	}
+	d, err := root.Open(".")
+	if err != nil {
+		return err
+	}
+	defer d.Close()
+	// Persist the previously written metadata and seed before the marker can
+	// claim that the acquisition is complete.
+	if err = d.Sync(); err != nil {
+		return err
+	}
+	if err = root.Link(stage, "bootstrap.json"); err != nil {
+		return err
+	}
+	if err = d.Sync(); err != nil {
+		return err
+	}
+	if err = root.Remove(stage); err != nil {
+		return err
+	}
+	return d.Sync()
 }
 
 func fetch(ctx context.Context, client *http.Client, url string, limit int64) ([]byte, error) {
@@ -156,19 +205,52 @@ func privateDirectory(path string) (os.FileInfo, error) {
 
 // Prepare has no defaults for trust, endpoint or output. It neither reads app
 // state nor installs/executes anything. Old update/rehearsal seeds are refused.
-func Prepare(ctx context.Context, o Options) (*Prepared, error) { return prepare(ctx, o, false) }
+func Prepare(ctx context.Context, o Options) (*Prepared, error) { return prepare(ctx, o, false, false) }
+
+// PrepareNative acquires only an attested native Linux package release. It
+// never grants the legacy archive installer or updater authority over it.
+func PrepareNative(ctx context.Context, o Options) (*Prepared, error) {
+	return prepare(ctx, o, false, true)
+}
+
+// PrepareMaintenance authenticates public release bytes for the installed OS
+// helper. It permits no execution, owner path or caller-selected trust source.
+func PrepareMaintenance(ctx context.Context, owner int, o Options) (*Prepared, error) {
+	if _, err := maintenance.ValidateProcess(owner); err != nil {
+		return nil, err
+	}
+	parent := filepath.Join(maintenance.OwnerRoot(owner), "fased-app", "install")
+	if filepath.Dir(o.Directory) != parent {
+		return nil, errors.New("maintenance acquisition must use its protected private directory")
+	}
+	o.protectedOwner = owner
+	return prepare(ctx, o, false, false)
+}
+
+// InspectMaintenance verifies only metadata under the same fixed helper trust
+// as PrepareMaintenance, without downloading an archive or creating output.
+func InspectMaintenance(ctx context.Context, owner int, o Options) (Descriptor, string, error) {
+	if _, err := maintenance.ValidateProcess(owner); err != nil {
+		return Descriptor{}, "", err
+	}
+	if filepath.Dir(o.Directory) != filepath.Join(maintenance.OwnerRoot(owner), "fased-app", "install") {
+		return Descriptor{}, "", errors.New("maintenance acquisition must use its protected private directory")
+	}
+	o.protectedOwner = owner
+	return Inspect(ctx, o)
+}
 
 // Inspect authenticates only metadata/provenance. It creates no output, downloads
 // no archive and supplies no executable/installation authority.
 func Inspect(ctx context.Context, o Options) (Descriptor, string, error) {
-	p, e := prepare(ctx, o, true)
+	p, e := prepare(ctx, o, true, false)
 	if e != nil {
 		return Descriptor{}, "", e
 	}
 	return p.descriptor, p.report.DescriptorSHA256, nil
 }
-func prepare(ctx context.Context, o Options, metadataOnly bool) (prepared *Prepared, err error) {
-	if runtime.GOOS != "linux" || (runtime.GOARCH != "amd64" && runtime.GOARCH != "arm64") || os.Geteuid() == 0 {
+func prepare(ctx context.Context, o Options, metadataOnly, nativeOnly bool) (prepared *Prepared, err error) {
+	if runtime.GOOS != "linux" || (runtime.GOARCH != "amd64" && runtime.GOARCH != "arm64") || os.Geteuid() == 0 && o.protectedOwner <= 0 {
 		return nil, errors.New("ordinary-user supported Linux first-install bootstrap required")
 	}
 	o.Seed, o.TLSCA = append([]byte(nil), o.Seed...), append([]byte(nil), o.TLSCA...)
@@ -273,13 +355,32 @@ func prepare(ctx context.Context, o Options, metadataOnly bool) (prepared *Prepa
 	if err != nil {
 		return nil, err
 	}
+	pairedBundle := false
+	if seed.Version == 4 {
+		var packet AttestedPacket
+		if update.StrictJSON(docs[AttestedPacketFile], &packet) != nil {
+			return nil, errors.New("attested release packet invalid")
+		}
+		pairedBundle = packet.Version == 4
+	}
 	if metadataOnly {
 		if seed.Version != 4 {
 			if _, e := initialChain(seed, docs["timestamp.json"], docs["snapshot.json"], docs["targets.json"], o.clock()); e != nil {
 				return nil, e
 			}
 		}
-		return &Prepared{descriptor: descriptor, report: Report{MetadataVerified: true, DescriptorSHA256: applicationIdentity(descriptor, digest(docs["descriptor.json"]))}}, nil
+		identity := applicationIdentity(descriptor, digest(docs["descriptor.json"]))
+		if descriptor.Deb != (update.Artifact{}) || pairedBundle {
+			identity = digest(docs[AttestedPacketFile])
+		}
+		return &Prepared{descriptor: descriptor, report: Report{MetadataVerified: true, DescriptorSHA256: identity}}, nil
+	}
+	nativePackages := descriptor.Deb != (update.Artifact{}) || descriptor.RPM != (update.Artifact{})
+	if (nativePackages || pairedBundle) && !nativeOnly {
+		return nil, errors.New("native packages require the package-aware installation controller")
+	}
+	if nativeOnly && !nativePackages && !pairedBundle {
+		return nil, errors.New("an authenticated native Linux package release is required")
 	}
 	if seed.Version == 4 {
 		if err = checkReaderRelease(descriptor.Sequence); err != nil {
@@ -312,20 +413,82 @@ func prepare(ctx context.Context, o Options, metadataOnly bool) (prepared *Prepa
 	if err != nil {
 		return nil, err
 	}
+	// Normalize only the just-created, pinned directory. A restrictive owner
+	// umask can otherwise remove write permission before acquisition begins.
+	opened, err := root.Stat(".")
+	if err != nil || !os.SameFile(created, opened) {
+		root.Close()
+		return nil, errors.New("bootstrap output identity changed")
+	}
+	if err = root.Chmod(".", 0700); err != nil {
+		root.Close()
+		return nil, err
+	}
 	prepared = &Prepared{options: o, seed: seed, descriptor: descriptor, directoryInfo: created, root: root, metadata: docs, startedAt: start}
-	body, err := source.archive(ctx, descriptor)
-	if err != nil {
-		return prepared, err
+	if nativePackages || pairedBundle {
+		if seed.Version != 4 || source.asset == nil {
+			return prepared, errors.New("authenticated public native packages required")
+		}
+		var packet AttestedPacket
+		var release releaseops.PublishedRelease
+		if update.StrictJSON(docs[AttestedPacketFile], &packet) != nil || (packet.Version != 3 && packet.Version != 4) || update.StrictJSON(docs["github-release.json"], &release) != nil {
+			return prepared, errors.New("authenticated public package inventory required")
+		}
+		items := []struct {
+			artifact update.Artifact
+			held     string
+		}{{packet.Installer, "candidate-installer"}, {packet.Entry, "candidate-entry"}}
+		if nativePackages {
+			items = append(items, struct {
+				artifact update.Artifact
+				held     string
+			}{packet.Deb, "candidate-deb"}, struct {
+				artifact update.Artifact
+				held     string
+			}{packet.RPM, "candidate-rpm"})
+		}
+		for _, item := range items {
+			asset, ok := release.Assets[item.artifact.File]
+			if !ok || asset.SHA256 != item.artifact.SHA256 || asset.Size != item.artifact.Size {
+				return prepared, errors.New("native release asset identity changed")
+			}
+			file, e := root.OpenFile(item.held, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
+			if e != nil {
+				return prepared, e
+			}
+			if e = file.Chmod(0600); e == nil {
+				e = source.asset(ctx, asset, file)
+			}
+			if e = errors.Join(e, file.Sync(), file.Close()); e != nil {
+				return prepared, errors.New("native release asset acquisition failed")
+			}
+		}
 	}
 	f, err := root.OpenFile("download.tar.gz", os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
 	if err != nil {
-		body.Close()
 		return prepared, err
 	}
-	h := sha256.New()
-	n, copyErr := io.Copy(io.MultiWriter(f, h), io.LimitReader(body, descriptor.Archive.Size+1))
-	err = errors.Join(copyErr, body.Close(), f.Sync(), f.Close())
-	if err != nil || n != descriptor.Archive.Size || hex.EncodeToString(h.Sum(nil)) != descriptor.Archive.SHA256 {
+	if err = f.Chmod(0600); err != nil {
+		f.Close()
+		return prepared, err
+	}
+	if nativePackages || pairedBundle {
+		err = source.asset(ctx, descriptor.GitHub, f)
+	} else {
+		var body io.ReadCloser
+		body, err = source.archive(ctx, descriptor)
+		if err == nil {
+			h := sha256.New()
+			var n int64
+			n, err = io.Copy(io.MultiWriter(f, h), io.LimitReader(body, descriptor.Archive.Size+1))
+			err = errors.Join(err, body.Close())
+			if n != descriptor.Archive.Size || hex.EncodeToString(h.Sum(nil)) != descriptor.Archive.SHA256 {
+				err = errors.New("bootstrap archive incomplete or mismatched")
+			}
+		}
+	}
+	err = errors.Join(err, f.Sync(), f.Close())
+	if err != nil {
 		return prepared, errors.New("bootstrap archive incomplete or mismatched")
 	}
 	m, err := bundle.ExtractVerifiedArchive(filepath.Join(o.Directory, "download.tar.gz"), filepath.Join(o.Directory, "bundle"), bundle.File{SHA256: descriptor.Archive.SHA256, Bytes: descriptor.Archive.Size}, descriptor.BundleSHA256)
@@ -335,7 +498,16 @@ func prepare(ctx context.Context, o Options, metadataOnly bool) (prepared *Prepa
 	if m.Version != descriptor.ProductVersion || m.Source != descriptor.Source {
 		return prepared, errors.New("inner bundle version/source differs from signed descriptor")
 	}
-	if err = verifyBundleProfile(seed, m); err != nil {
+	if seed.Version == 4 {
+		var packet AttestedPacket
+		if update.StrictJSON(docs[AttestedPacketFile], &packet) != nil {
+			return prepared, errors.New("attested bundle packet invalid")
+		}
+		err = verifyAttestedBundleProfile(seed, m, packet.Version)
+	} else {
+		err = verifyBundleProfile(seed, m)
+	}
+	if err != nil {
 		return prepared, err
 	}
 	engine, _ := bundle.Names()
@@ -355,17 +527,34 @@ func prepare(ctx context.Context, o Options, metadataOnly bool) (prepared *Prepa
 		return prepared, err
 	}
 	prepared.report = Report{Version: seed.Version, DevelopmentOnly: seed.DevelopmentOnly, Purpose: seed.Purpose, MetadataVerified: true, ArchiveVerified: true, BundleVerified: true, Sequence: descriptor.Sequence, Target: descriptor.Target, SeedSHA256: o.SeedSHA256, DescriptorSHA256: applicationIdentity(descriptor, digest(docs["descriptor.json"])), ArchiveSHA256: descriptor.Archive.SHA256, BundleSHA256: descriptor.BundleSHA256, BundleDirectory: filepath.Join(o.Directory, "bundle"), GitHubTransport: seed.Version >= 2, ProvenanceVerified: seed.Version >= 3, ProvenanceSHA256: decision.BundleSHA256, TrustPolicySHA256: decision.PolicySHA256}
+	if nativePackages || pairedBundle {
+		prepared.report.LinuxPackageDigestsVerified = nativePackages
+		prepared.report.LinuxBundleVerified = pairedBundle
+		prepared.report.DescriptorSHA256 = digest(docs[AttestedPacketFile])
+		if err = prepared.revalidateHeld(); err != nil {
+			return prepared, err
+		}
+	}
 	b, err := json.Marshal(prepared.report)
 	if err != nil {
 		return prepared, err
 	}
-	if err = writeNew(root, "bootstrap.json", b); err != nil {
+	if err = writeBootstrapCompletion(root, b); err != nil {
 		return prepared, err
 	}
 	return prepared, nil
 }
 
 func (p *Prepared) revalidate() error {
+	if p.report.LinuxPackageDigestsVerified || p.report.LinuxBundleVerified {
+		return errors.New("native packages require the package-aware installation controller")
+	}
+	return p.revalidateHeld()
+}
+
+// revalidateHeld verifies the original acquisition without granting the legacy
+// archive installer authority over a native package candidate.
+func (p *Prepared) revalidateHeld() error {
 	now := p.options.clock()
 	if now.Before(p.startedAt) {
 		return errors.New("bootstrap clock moved backwards")
@@ -392,6 +581,11 @@ func (p *Prepared) revalidate() error {
 		if err = revalidateAttested(seed, p.metadata, d, now); err != nil {
 			return err
 		}
+		if p.report.LinuxPackageDigestsVerified || p.report.LinuxBundleVerified {
+			if err = p.revalidatePublicPackages(); err != nil {
+				return err
+			}
+		}
 	} else {
 		chain, err := initialChain(seed, p.metadata["timestamp.json"], p.metadata["snapshot.json"], p.metadata["targets.json"], now)
 		if err != nil {
@@ -416,6 +610,13 @@ func (p *Prepared) revalidate() error {
 	}
 	if m.Version != d.ProductVersion || m.Source != d.Source {
 		return fmt.Errorf("bootstrap source/version changed")
+	}
+	if seed.Version == 4 {
+		var packet AttestedPacket
+		if update.StrictJSON(p.metadata[AttestedPacketFile], &packet) != nil {
+			return errors.New("attested bundle packet is unavailable")
+		}
+		return verifyAttestedBundleProfile(seed, m, packet.Version)
 	}
 	return verifyBundleProfile(seed, m)
 }

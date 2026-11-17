@@ -37,6 +37,10 @@ func TestTradeResumeExpiredOriginalAndSeparateKeyDraft(t *testing.T) {
 	i := tradeIntent(t)
 	p, _ := i.TradeProposal()
 	link, e := TradeLink(p, "")
+	packageLink := strings.Replace(link, "fased://", "fased-wallet://", 1)
+	if got, origin, err := ParseLink(packageLink); err != nil || got != i || origin != "" {
+		t.Fatal("package trade request differs from its original intent", err)
+	}
 	if e != nil {
 		t.Fatal(e)
 	}

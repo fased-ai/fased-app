@@ -33,7 +33,14 @@ func routeParts(p Plan) (string, string, error) {
 // SelectIsolated chooses an unused private HTTPS port before deployment. A
 // retained setup receipt fixes the port on retry; an existing installation is
 // never adopted as a new one.
-func (m Manager) SelectIsolated(ctx context.Context, dir string, p Plan) (Plan, error) {
+func (m Manager) SelectIsolated(ctx context.Context, dir string, p Plan, protectedOrigin ...string) (Plan, error) {
+	if len(protectedOrigin) > 1 {
+		return p, errors.New("one protected private setup origin required")
+	}
+	protected := ""
+	if len(protectedOrigin) == 1 {
+		protected = protectedOrigin[0]
+	}
 	base, _, err := tailnet.Origin(p.Origin)
 	if err != nil || p.Mode != "tailscale" || !validTarget(p.Target) {
 		return p, errors.New("valid private setup required")
@@ -46,16 +53,22 @@ func (m Manager) SelectIsolated(ctx context.Context, dir string, p Plan) (Plan, 
 	file := filepath.Join(dir, "private-setup.json")
 	if data, e := core.ReadPrivateFile(file); e == nil {
 		var saved preflightReceipt
-		if json.Unmarshal(data, &saved) != nil || saved.Version != 1 || saved.Plan.Mode != "tailscale" || !validTarget(saved.Plan.Target) || !strings.HasPrefix(saved.Plan.Target, "unix:/tmp/fased-private-") {
+		if json.Unmarshal(data, &saved) != nil || saved.Version != 1 || saved.Plan.Mode != "tailscale" || !preflightSocketTarget(saved.Plan.Target, dir) {
 			return p, errors.New("unknown private setup receipt; preserve it")
 		}
 		host, _, e := tailnet.Origin(saved.Plan.Origin)
 		if e != nil || host != base {
 			return p, errors.New("private setup device changed; preserve its receipt")
 		}
+		if protected != "" && protected != saved.Plan.Origin {
+			return p, errors.New("private setup origin differs from protected operation")
+		}
 		return BindOrigin(p, saved.Plan.Origin)
 	} else if !os.IsNotExist(e) {
 		return p, e
+	}
+	if protected != "" {
+		return BindOrigin(p, protected)
 	}
 	cfg, _, err := m.config(ctx)
 	if err != nil {
@@ -219,14 +232,14 @@ func routeChange(cfg map[string]any, p Plan, add bool) (map[string]any, error) {
 
 // routeDeltaAllowed proves that the complete new inventory differs from the
 // old one only by one receipt-owned route or its recorded in-place handoff.
-func routeDeltaAllowed(before, after map[string]any, plans []Plan, owns func(Plan) bool) bool {
+func routeDeltaAllowed(before, after map[string]any, plans []Plan, owns, mayAdd func(Plan) bool) bool {
 	for _, p := range plans {
 		if !owns(p) {
 			continue
 		}
 		oldState, oldErr := routeState(before, p)
 		newState, newErr := routeState(after, p)
-		if oldErr == nil && newErr == nil && oldState != newState {
+		if oldErr == nil && newErr == nil && oldState != newState && (oldState != "absent" || mayAdd(p)) {
 			next, err := routeChange(before, p, oldState == "absent")
 			if err == nil && reflect.DeepEqual(next, after) {
 				return true
@@ -236,7 +249,7 @@ func routeDeltaAllowed(before, after map[string]any, plans []Plan, owns func(Pla
 			continue
 		}
 		for _, q := range plans {
-			if q.Origin != p.Origin || q.Target == p.Target || !owns(q) {
+			if q.Origin != p.Origin || q.Target == p.Target || !owns(q) || !mayAdd(q) {
 				continue
 			}
 			state, err := routeState(after, q)

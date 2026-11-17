@@ -3,6 +3,8 @@ package signer
 import (
 	"context"
 	"errors"
+	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/fased-ai/fased-app/internal/onchain"
@@ -26,13 +28,23 @@ type Config struct {
 }
 
 func (c Config) Validate() error {
-	modeOK := c.Version == 1 && c.Mode == FixtureNetwork && c.Network == "" || c.Version == 2 && c.Mode == ManagedFixtureMode && managedNetwork(c.Network) || c.Version == 3 && c.Mode == OrdinaryCustodyMode && managedNetwork(c.Network)
+	if c.Version == 3 && c.Provenance == ControlledCustodyProfile && controlledPackageFixtureRequired(c) && !controlledPackageFixturePreWallet(c) {
+		return ErrUnavailable
+	}
+	preWallet := c.Version == 3 && c.Mode == OrdinaryCustodyMode && c.Network == "" && c.Profile == OwnerCustodyProfile && (c.Provenance == OwnerKeyProvenance || c.Provenance == ControlledCustodyProfile && controlledPackageFixturePreWallet(c))
+	modeOK := c.Version == 1 && c.Mode == FixtureNetwork && c.Network == "" || c.Version == 2 && c.Mode == ManagedFixtureMode && managedNetwork(c.Network) || c.Version == 3 && c.Mode == OrdinaryCustodyMode && managedNetwork(c.Network) || preWallet
 	contextOK := c.Version != 3 && c.Profile == "" && c.Provenance == "" || c.Version == 3 && c.Profile == OwnerCustodyProfile && (c.Provenance == ControlledCustodyProfile || c.Provenance == OwnerKeyProvenance)
 	if !modeOK || !contextOK || !validID(c.SignerID) || c.OwnerUID <= 0 || c.AppUID <= 0 || c.SignerUID <= 0 ||
 		c.OwnerUID == c.AppUID || c.OwnerUID == c.SignerUID || c.AppUID == c.SignerUID || c.StateDir == c.SocketDir {
 		return errors.New("fixture requires a versioned identity and three distinct non-root UIDs")
 	}
 	return nil
+}
+
+func packageFixturePath(path string) bool {
+	const root = "/var/lib/fased-app-package"
+	clean := filepath.Clean(path)
+	return clean == root || strings.HasPrefix(clean, root+"/")
 }
 
 // Request is a closed set of owner and fixture operations. No real sign/submit.

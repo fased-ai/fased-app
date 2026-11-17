@@ -6,6 +6,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -40,25 +41,167 @@ func delegateInstallation(args []string, in *os.File, out, errOut io.Writer) err
 	if !update.IDOK(id) {
 		return errors.New("exact installation intent required")
 	}
-	runner, e := custodyinstall.ControllerRunner(os.Getuid(), id)
+	tx, e := custodyinstall.LoadController(os.Getuid(), id)
+	published := e == nil
+	var runner string
 	if errors.Is(e, os.ErrNotExist) {
-		m, le := custodyinstall.Load(os.Getuid())
-		if le != nil {
-			return le
+		runner, e = custodyinstall.InitialMigrationRunner(os.Getuid(), id)
+		if e != nil && !errors.Is(e, os.ErrNotExist) {
+			return e
 		}
-		if le = custodyinstall.Verify(m); le != nil {
-			return le
+		if errors.Is(e, os.ErrNotExist) {
+			m, loadErr := custodyinstall.Load(os.Getuid())
+			if loadErr != nil {
+				return loadErr
+			}
+			if loadErr = custodyinstall.Verify(m); loadErr != nil {
+				return loadErr
+			}
+			runner = m.Root + "/fased-app"
 		}
-		runner = m.Root + "/fased-app"
 	} else if e != nil {
 		return e
+	} else {
+		runner, e = custodyinstall.ControllerRunner(os.Getuid(), id)
+		if e != nil {
+			return e
+		}
 	}
+	// Prepare the app-owned session before the child acquires OwnerLock. The
+	// same ordering is needed whether the predecessor transaction is already
+	// published or this is the initial pinned installation.
+	if runner == custodyinstall.Root(os.Getuid())+"/maintenance/runner" {
+		m, loadErr := custodyinstall.Load(os.Getuid())
+		if loadErr != nil {
+			return loadErr
+		}
+		if !needsPinnedInitialSession(m, runner) {
+			return invokeOwnerInstallation(runner, args, in, out, errOut)
+		}
+		system := &custodyinstall.System{In: in, Out: errOut}
+		if e = system.UseScopedMaintenance(m.Owner); e != nil {
+			return e
+		}
+		digest := ""
+		if published {
+			digest = update.InstallDigest(tx.Binding)
+		}
+		e = preparePinnedInstallationSession(m, runner, published, func() (bool, error) {
+			return custodyinstall.UpdateFencePresent(m, id, digest)
+		}, func() (bool, error) {
+			return custodyinstall.UpdateSessionRuntime(m)
+		}, func() error {
+			return system.PrepareNativeUpdateSession(context.Background(), m, runner)
+		})
+		if e != nil {
+			return e
+		}
+	}
+	return invokeOwnerInstallation(runner, args, in, out, errOut)
+}
+
+func preparePinnedInstallationSession(m custodyinstall.Manifest, runner string, published bool, check func() (bool, error), runtime func() (bool, error), prepare func() error) error {
+	if !needsPinnedInitialSession(m, runner) {
+		return nil
+	}
+	if check == nil || runtime == nil || prepare == nil {
+		return errors.New("pinned installation session checks required")
+	}
+	fenced, err := check()
+	if err != nil {
+		return err
+	}
+	if fenced {
+		return nil // The locked controller owns all fence recovery.
+	}
+	if published {
+		ready, runtimeErr := runtime()
+		if runtimeErr != nil {
+			return runtimeErr
+		}
+		if !ready {
+			// Let the locked controller inspect a verified inactive pair; a
+			// live-session helper cannot run while either service is down.
+			return nil
+		}
+	}
+	return prepare()
+}
+
+func invokeOwnerInstallation(runner string, args []string, in *os.File, out, errOut io.Writer) error {
 	command := append([]string{"owner-updates", "--action", args[0], "--config", custodyinstall.Root(os.Getuid()) + "/identity.json"}, args[1:]...)
 	c := exec.Command(runner, command...)
 	c.Stdin = in
 	c.Stdout = out
 	c.Stderr = errOut
 	return c.Run()
+}
+
+func verifyOwnerInstallationHold(ctx context.Context, id string, expected *update.Installation, call updateRPC) error {
+	r, err := call(ctx, signer.Request{Action: "fixture-install-controller", Install: &update.InstallRequest{Action: "status", IntentID: id}})
+	if expected == nil && r.Installation == nil && errors.Is(err, signer.ErrNoInstallationHold) {
+		return nil
+	}
+	if expected == nil || err != nil || r.Installation == nil || !update.ValidInstallation(*r.Installation) || r.Installation.Phase != "active" || r.Installation.Digest != expected.Digest {
+		return errors.New("installation hold changed; preserve the original update")
+	}
+	return nil
+}
+
+// Reuse a signer-owned hold's original recovery index after an interrupted
+// preparation. A new backup after the hold would bind a different journal head.
+func installationRecoveryIndex(ctx context.Context, id string, m custodyinstall.Manifest, control coreControl, backup coreBackup, call updateRPC, fresh func(context.Context, custodyinstall.Manifest, *update.RecoveryIndex) (update.Preflight, error)) (update.RecoveryIndex, *update.Installation, error) {
+	var zero update.RecoveryIndex
+	status := signer.Request{Action: "fixture-install-controller", Install: &update.InstallRequest{Action: "status", IntentID: id}}
+	r, err := call(ctx, status)
+	if errors.Is(err, signer.ErrNoInstallationHold) {
+		if r.Installation != nil {
+			return zero, nil, errors.New("ambiguous installation status; preserve the original update")
+		}
+		var b bytes.Buffer
+		if err = conductBackup(ctx, id, control, backup, call, &b); err != nil {
+			return zero, nil, err
+		}
+		if err = update.StrictJSON(b.Bytes(), &zero); err != nil {
+			return zero, nil, err
+		}
+		return zero, nil, nil
+	}
+	if err != nil {
+		return zero, nil, err
+	}
+	hold := r.Installation
+	previous := sha256.Sum256(mustJSON(m))
+	if hold == nil || !update.ValidInstallation(*hold) || hold.Phase != "active" || hold.InstalledSequenceCommitted || hold.Binding.Index.Binding.Pause.Request == nil || hold.Binding.Index.Binding.Pause.Request.IntentID != id || hold.Binding.InstallationID != m.ID || hold.Binding.PreviousCore != m.CoreHash || hold.Binding.PreviousSigner != m.SignerHash || hold.Binding.PreviousManifest != fmt.Sprintf("%x", previous) {
+		return zero, nil, errors.New("existing installation hold differs from this predecessor; preserve it")
+	}
+	if _, err = fresh(ctx, m, &hold.Binding.Index); err != nil {
+		return zero, nil, err
+	}
+	if err = verifyOwnerInstallationHold(ctx, id, hold, call); err != nil {
+		return zero, nil, errors.New("installation hold changed during recovery verification; preserve it")
+	}
+	return hold.Binding.Index, hold, nil
+}
+
+// The same owner operation is used for the initial hold and later phases. A
+// lost response leaves the signer journal authoritative for the next retry.
+func ownerInstallationPhase(ctx context.Context, id, phase string, m custodyinstall.Manifest, b update.InstallBinding, fresh func(context.Context, custodyinstall.Manifest, *update.RecoveryIndex) (update.Preflight, error), call updateRPC) (*update.Installation, error) {
+	if !update.IDOK(id) || b.Index.Binding.Pause.Request == nil || b.Index.Binding.Pause.Request.IntentID != id || update.ValidateInstallBinding(b) != nil || fresh == nil || call == nil {
+		return nil, errors.New("exact installation binding required")
+	}
+	p, err := fresh(ctx, m, &b.Index)
+	if err != nil {
+		return nil, err
+	}
+	r, err := call(ctx, signer.Request{Action: "fixture-install-controller", Install: &update.InstallRequest{Action: phase, IntentID: id, Binding: &b, Preflight: &update.PreflightRequest{IntentID: id, Sequence: p.Sequence, ManifestSHA256: p.ManifestSHA256, ProbeID: p.Pause.Core.ProbeID, Pause: p.Pause, ExpectedSigner: p.Signer}}})
+	if err != nil {
+		return nil, err
+	}
+	if r.Installation == nil || !update.ValidInstallation(*r.Installation) || r.Installation.Digest != update.InstallDigest(b) || (r.Installation.Phase != phase && !(phase == "active" && r.Installation.Phase == "healthy-held")) {
+		return nil, errors.New("unbound signer installation receipt")
+	}
+	return r.Installation, nil
 }
 
 func ownerInstallation(action, id, config, artifacts string, automation bool, in *os.File, out, errOut io.Writer) error {
@@ -81,6 +224,9 @@ func ownerInstallation(action, id, config, artifacts string, automation bool, in
 	}
 	defer lock.Close()
 	system := &custodyinstall.System{In: in, Out: errOut}
+	if e = system.UseScopedMaintenance(os.Getuid()); e != nil {
+		return e
+	}
 	ctx := context.Background()
 	t, loadErr := custodyinstall.LoadController(os.Getuid(), id)
 	if loadErr != nil && !errors.Is(loadErr, os.ErrNotExist) {
@@ -102,7 +248,7 @@ func ownerInstallation(action, id, config, artifacts string, automation bool, in
 	}
 	fresh := func(ctx context.Context, m custodyinstall.Manifest, index *update.RecoveryIndex) (update.Preflight, error) {
 		var b bytes.Buffer
-		if e := conductPreflight(ctx, id, controlFor(m), call, &b); e != nil {
+		if e := conductPreflight(ctx, id, controlFor(m), call, true, &b); e != nil {
 			return update.Preflight{}, e
 		}
 		var p update.Preflight
@@ -124,6 +270,25 @@ func ownerInstallation(action, id, config, artifacts string, automation bool, in
 		}
 		return p, nil
 	}
+	hold := func(ctx context.Context, phase string, b update.InstallBinding) (*update.Installation, error) {
+		m, e := custodyinstall.Load(os.Getuid())
+		if e != nil {
+			return nil, e
+		}
+		if phase == "active" {
+			cold, coldErr := custodyinstall.PreparationHold(ctx, m, id, update.InstallDigest(b), system)
+			if coldErr == nil {
+				if cold.Digest != update.InstallDigest(b) {
+					return nil, errors.New("cold preparation hold differs; preserve it")
+				}
+				return cold, nil
+			}
+			if !errors.Is(coldErr, os.ErrNotExist) && !errors.Is(coldErr, custodyinstall.ErrTransactionRecoveryFence) {
+				return nil, coldErr
+			}
+		}
+		return ownerInstallationPhase(ctx, id, phase, m, b, fresh, call)
+	}
 	if loadErr != nil {
 		if action != "install" {
 			return errors.New("no installation transaction; begin with reviewed install")
@@ -135,7 +300,6 @@ func ownerInstallation(action, id, config, artifacts string, automation bool, in
 		if e = custodyinstall.Verify(m); e != nil {
 			return e
 		}
-		var b bytes.Buffer
 		backup := func(ctx context.Context, p update.Preflight) (update.RecoveryIndex, error) {
 			var buf bytes.Buffer
 			if e := system.UpdateBackup(ctx, m, p, &buf); e != nil {
@@ -145,12 +309,19 @@ func ownerInstallation(action, id, config, artifacts string, automation bool, in
 			e := update.StrictJSON(buf.Bytes(), &i)
 			return i, e
 		}
-		if e = conductBackup(ctx, id, controlFor(m), backup, call, &b); e != nil {
-			return e
-		}
 		var index update.RecoveryIndex
-		if e = update.StrictJSON(b.Bytes(), &index); e != nil {
-			return e
+		held, coldErr := custodyinstall.PreparationHold(ctx, m, id, "", system)
+		cold := coldErr == nil
+		if cold {
+			index = held.Binding.Index
+		} else {
+			if !errors.Is(coldErr, os.ErrNotExist) {
+				return coldErr
+			}
+			index, held, e = installationRecoveryIndex(ctx, id, m, controlFor(m), backup, call, fresh)
+			if e != nil {
+				return e
+			}
 		}
 		// The previous PREPARE review explicitly authorized no installation.
 		// A separate complete digest-bound owner review authorizes this trial.
@@ -169,19 +340,48 @@ func ownerInstallation(action, id, config, artifacts string, automation bool, in
 		if e != nil || line != "INSTALL "+digest+"\n" {
 			return errors.New("installation review cancelled")
 		}
-		if _, e = fresh(ctx, m, &index); e != nil {
-			return e
+		var contracts []update.Contract
+		if cold {
+			contracts = held.Binding.Contracts
+		} else {
+			if _, e = fresh(ctx, m, &index); e != nil {
+				return e
+			}
+			r, statusErr := call(ctx, signer.Request{Action: "fixture-update-status", IntentID: id})
+			if statusErr != nil {
+				return statusErr
+			}
+			if r.UpdateIntent == nil || r.UpdateIntent.State != "staged" || r.UpdateIntent.ManifestSHA256 != index.Binding.Pause.Request.ManifestSHA256 {
+				return errors.New("signed staged contracts unavailable")
+			}
+			if held != nil && update.SnapshotDigest("contracts", r.UpdateIntent.Contracts) != update.SnapshotDigest("contracts", held.Binding.Contracts) {
+				return errors.New("signed contracts differ from the held installation; preserve it")
+			}
+			if e = verifyOwnerInstallationHold(ctx, id, held, call); e != nil {
+				return e
+			}
+			contracts = r.UpdateIntent.Contracts
 		}
-		r, e := call(ctx, signer.Request{Action: "fixture-update-status", IntentID: id})
+		t, e = custodyinstall.PrepareController(ctx, m, index, contracts, artifacts, system, hold)
 		if e != nil {
 			return e
 		}
-		if r.UpdateIntent == nil || r.UpdateIntent.State != "staged" || r.UpdateIntent.ManifestSHA256 != index.Binding.Pause.Request.ManifestSHA256 {
-			return errors.New("signed staged contracts unavailable")
-		}
-		t, e = custodyinstall.PrepareController(ctx, m, index, r.UpdateIntent.Contracts, artifacts, system)
-		if e != nil {
-			return e
+	}
+	if loadErr == nil && action == "install" {
+		cold, coldErr := custodyinstall.PreparationHold(ctx, t.Base, id, update.InstallDigest(t.Binding), system)
+		if coldErr == nil {
+			if cold.Digest != update.InstallDigest(t.Binding) {
+				return errors.New("published transaction differs from the cold hold; preserve it")
+			}
+			resumed, resumeErr := custodyinstall.PrepareController(ctx, t.Base, cold.Binding.Index, cold.Binding.Contracts, artifacts, system, hold)
+			if resumeErr != nil {
+				return resumeErr
+			}
+			if !bytes.Equal(mustJSON(resumed), mustJSON(t)) {
+				return errors.New("resumed preparation changed the original transaction")
+			}
+		} else if !errors.Is(coldErr, os.ErrNotExist) && !errors.Is(coldErr, custodyinstall.ErrTransactionRecoveryFence) {
+			return coldErr
 		}
 	}
 	callbacks := custodyinstall.InstallationCallbacks{
@@ -206,24 +406,7 @@ func ownerInstallation(action, id, config, artifacts string, automation bool, in
 			_, e := fresh(ctx, m, &b.Index)
 			return e
 		},
-		Hold: func(ctx context.Context, phase string, b update.InstallBinding) (*update.Installation, error) {
-			m, e := custodyinstall.Load(os.Getuid())
-			if e != nil {
-				return nil, e
-			}
-			p, e := fresh(ctx, m, &b.Index)
-			if e != nil {
-				return nil, e
-			}
-			r, e := call(ctx, signer.Request{Action: "fixture-install-controller", Install: &update.InstallRequest{Action: phase, IntentID: id, Binding: &b, Preflight: &update.PreflightRequest{IntentID: id, Sequence: p.Sequence, ManifestSHA256: p.ManifestSHA256, ProbeID: p.Pause.Core.ProbeID, Pause: p.Pause, ExpectedSigner: p.Signer}}})
-			if e != nil {
-				return nil, e
-			}
-			if r.Installation == nil || !update.ValidInstallation(*r.Installation) || r.Installation.Digest != update.InstallDigest(b) {
-				return nil, errors.New("unbound signer installation receipt")
-			}
-			return r.Installation, nil
-		},
+		Hold: hold,
 	}
 	if action == "complete" {
 		state, e := custodyinstall.CompletionState(ctx, t, system, callbacks.State)

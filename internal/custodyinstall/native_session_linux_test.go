@@ -13,6 +13,71 @@ import (
 	"testing"
 )
 
+func TestPinnedNativeUpdateSessionRequiresExactApplicationIdentity(t *testing.T) {
+	for _, remote := range []bool{false, true} {
+		tx, _, _, _ := ordinaryBootstrapModel(t, remote)
+		m := tx.Base
+		pin := &reusableMaintenanceAuthority{Version: 1, Owner: m.Owner, InstallationID: m.ID, RunnerSHA256: strings.Repeat("c", 64), GuardSHA256: strings.Repeat("d", 64)}
+		image, record := reusableMaintenancePath(m, "runner"), reusableMaintenancePath(m, "authority.json")
+		check := func(current Manifest, uid, euid, gid int, gotImage, gotRecord string, p *reusableMaintenanceAuthority) error {
+			return validatePinnedNativeUpdateSession(current, p, uid, euid, gid, gotImage, gotRecord)
+		}
+		if err := check(m, m.App.UID, m.App.UID, m.App.GID, image, record, pin); err != nil {
+			t.Fatal("exact pinned session refused", err)
+		}
+		updated := m
+		updated.CoreHash, updated.SignerHash = strings.Repeat("e", 64), strings.Repeat("f", 64)
+		if err := check(updated, updated.App.UID, updated.App.UID, updated.App.GID, image, record, pin); err != nil {
+			t.Fatal("unchanged installation identity did not survive update", err)
+		}
+		for _, bad := range []struct {
+			uid, euid, gid int
+			image, record  string
+			pin            *reusableMaintenanceAuthority
+		}{
+			{m.Owner, m.Owner, m.App.GID, image, record, pin},
+			{m.App.UID, 0, m.App.GID, image, record, pin},
+			{m.App.UID, m.App.UID, m.App.GID + 1, image, record, pin},
+			{m.App.UID, m.App.UID, m.App.GID, m.Root + "/fased-app", record, pin},
+			{m.App.UID, m.App.UID, m.App.GID, image, "/tmp/foreign", pin},
+			{m.App.UID, m.App.UID, m.App.GID, image, record, nil},
+		} {
+			if err := check(m, bad.uid, bad.euid, bad.gid, bad.image, bad.record, bad.pin); err == nil {
+				t.Fatal("foreign pinned session was accepted")
+			}
+		}
+		policy, err := reusableAtomicPolicy(m, "fased_owner")
+		if err != nil || !strings.Contains(string(policy), reusableMaintenancePath(m, "runner")+" reader-session-client --custody-owner "+strconv.Itoa(m.Owner)+" --binding "+record) {
+			t.Fatal("fixed application-identity session command missing", err)
+		}
+	}
+}
+
+func TestNativeUpdateSessionRefusesAnyRecoveryFence(t *testing.T) {
+	m := fixtureManifest()
+	for _, tc := range []struct {
+		name    string
+		err     error
+		wantErr bool
+	}{
+		{"absent", os.ErrNotExist, false},
+		{"present", nil, true},
+		{"unreadable", errors.New("unreadable"), true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := requireUnfencedUpdateSession(m, func(path string) (hostFile, error) {
+				if path != m.Root+"/update-start-blocked.json" {
+					t.Fatalf("unexpected path %s", path)
+				}
+				return hostFile{}, tc.err
+			})
+			if (got != nil) != tc.wantErr {
+				t.Fatalf("fence check: %v", got)
+			}
+		})
+	}
+}
+
 func TestNativeUpdateSessionBindingAndGeneration(t *testing.T) {
 	tx, _, _, _ := ordinaryBootstrapModel(t)
 	m := tx.Base

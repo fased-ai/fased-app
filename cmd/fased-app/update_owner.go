@@ -103,7 +103,7 @@ func mustJSON(v any) []byte {
 
 type ownerUpdateOptions struct {
 	Action, Config, ID, Manifest, Trust, Artifacts string
-	Disposable, Prepare, Approval                  bool
+	Disposable, Prepare, Approval, ReviewHost      bool
 }
 
 func parseOwnerUpdateOptions(args []string, errOut io.Writer) (ownerUpdateOptions, error) {
@@ -115,6 +115,7 @@ func parseOwnerUpdateOptions(args []string, errOut io.Writer) (ownerUpdateOption
 	f.BoolVar(&o.Disposable, "disposable-fixture", false, "test-only custody")
 	f.BoolVar(&o.Prepare, "prepare-host", false, "fixed OS identity switch")
 	f.BoolVar(&o.Approval, "approval-stdin", false, "disposable fixture automation")
+	f.BoolVar(&o.ReviewHost, "review-maintenance-policy", false, "read-only fixture OS policy review")
 	f.StringVar(&o.ID, "intent-id", "", "immutable update identity")
 	f.StringVar(&o.Manifest, "manifest", "", "signed development manifest")
 	f.StringVar(&o.Trust, "trust-file", "", "public development trust")
@@ -124,6 +125,9 @@ func parseOwnerUpdateOptions(args []string, errOut io.Writer) (ownerUpdateOption
 	}
 	if f.NArg() != 0 || !o.Disposable || !o.Prepare {
 		return o, errors.New("explicit disposable fixture and OS helper consent required")
+	}
+	if o.ReviewHost && o.Action != "prepare" {
+		return o, errors.New("maintenance policy review requires update preparation")
 	}
 	switch o.Action {
 	case "inventory", "prepare", "stage", "preflight", "backup", "abort", "install", "install-status", "rollback", "complete":
@@ -137,6 +141,9 @@ func ownerUpdatesCommand(args []string, in *os.File, out, errOut io.Writer) erro
 	options, err := parseOwnerUpdateOptions(args, errOut)
 	if err != nil {
 		return err
+	}
+	if options.ReviewHost {
+		return errors.New("maintenance policy review requires the custody update entry")
 	}
 	action, config, approvalStdin, id, mp, tp, dir := &options.Action, &options.Config, &options.Approval, &options.ID, &options.Manifest, &options.Trust, &options.Artifacts
 
@@ -166,6 +173,9 @@ func ownerUpdatesCommand(args []string, in *os.File, out, errOut io.Writer) erro
 		return e
 	}
 	system := &custodyinstall.System{In: in, Out: errOut}
+	if e = system.UseScopedMaintenance(m.Owner); e != nil {
+		return e
+	}
 	ctx := context.Background()
 	probe := func(ctx context.Context, p string) (update.CoreSnapshot, error) {
 		var b bytes.Buffer
@@ -236,7 +246,7 @@ func ownerUpdatesCommand(args []string, in *os.File, out, errOut io.Writer) erro
 	case "stage":
 		return conductStage(ctx, *id, *dir, probe, call, out)
 	case "preflight":
-		return conductPreflight(ctx, *id, control, call, out)
+		return conductPreflight(ctx, *id, control, call, false, out)
 	case "backup":
 		backup := func(ctx context.Context, p update.Preflight) (update.RecoveryIndex, error) {
 			var b bytes.Buffer
@@ -289,22 +299,157 @@ func custodyUpdatesCommand(args []string, in *os.File, out, errOut io.Writer) er
 	if e = custodyinstall.Verify(m); e != nil {
 		return e
 	}
+	if args[0] == "prepare" {
+		options, parseErr := parseOwnerUpdateOptions(command[1:], errOut)
+		if parseErr != nil {
+			return parseErr
+		}
+		if options.ReviewHost {
+			return reviewApprovedMaintenanceForUpdate(m, options, out)
+		}
+		if e = prepareApprovedMaintenanceForUpdate(m, command, in, errOut); e != nil {
+			return e
+		}
+	}
+	runner, pinned, e := custodyUpdateRunner(m, command, custodyinstall.PinnedMaintenanceRunner)
+	if e != nil {
+		return e
+	}
 	if (m.NativeOwnerAccess && m.Location == "local") || (m.Version == 3 && m.Enrollment && m.Location == "remote" && args[0] != "status" && args[0] != "preferences") {
 		image, e := os.Executable()
 		if e != nil {
 			return e
+		}
+		if pinned != "" {
+			image = pinned
 		}
 		system := &custodyinstall.System{In: in, Out: errOut}
 		if e = system.PrepareNativeUpdateSession(context.Background(), m, image); e != nil {
 			return e
 		}
 	}
-	child := exec.Command(filepath.Join(m.Root, "fased-app"), command...)
+	child := exec.Command(runner, command...)
 	child.Stdin = in
 	child.Stdout = out
 	child.Stderr = errOut
 	return child.Run()
 }
+
+func reviewApprovedMaintenanceForUpdate(m custodyinstall.Manifest, options ownerUpdateOptions, out io.Writer) error {
+	if !options.ReviewHost || options.Action != "prepare" || !update.IDOK(options.ID) {
+		return errors.New("exact reviewed update preparation required")
+	}
+	if err := custodyinstall.VerifyReusableSetupLauncher(m); err != nil {
+		return err
+	}
+	coreHash, signerHash, err := signedMaintenanceTargets(options, time.Now().Unix())
+	if err != nil {
+		return err
+	}
+	policy, err := custodyinstall.ReviewReusableMaintenanceSetup(m, coreHash, signerHash)
+	if err != nil {
+		return err
+	}
+	_, err = out.Write(policy)
+	return err
+}
+
+// The root-approved setup is optional for unchanged predecessors. When it is
+// present, the normal prepare entry authenticates the approved running reader
+// and signed target before installing the authority and continuing the update.
+func prepareApprovedMaintenanceForUpdate(m custodyinstall.Manifest, command []string, in *os.File, errOut io.Writer) error {
+	available, err := custodyinstall.ReusableMaintenanceSetupAvailable(m)
+	if err != nil || !available {
+		return err
+	}
+	if _, err = custodyinstall.PinnedMaintenanceRunner(m.Owner); err == nil {
+		return nil
+	}
+	if len(command) == 0 || command[0] != "owner-updates" {
+		return errors.New("fixed owner update entry required")
+	}
+	options, err := parseOwnerUpdateOptions(command[1:], errOut)
+	if err != nil || options.Action != "prepare" || !update.IDOK(options.ID) {
+		return errors.New("exact reviewed update preparation required")
+	}
+	if err = custodyinstall.VerifyReusableSetupLauncher(m); err != nil {
+		return err
+	}
+	coreHash, signerHash, err := signedMaintenanceTargets(options, time.Now().Unix())
+	if err != nil {
+		return err
+	}
+	system := &custodyinstall.System{In: in, Out: errOut}
+	return custodyinstall.PrepareReusableMaintenance(context.Background(), m, coreHash, signerHash, system)
+}
+
+func signedMaintenanceTargets(o ownerUpdateOptions, now int64) (string, string, error) {
+	manifest, err := update.ReadDocument(o.Manifest)
+	if err != nil {
+		return "", "", err
+	}
+	trustBytes, err := update.ReadDocument(o.Trust)
+	if err != nil {
+		return "", "", err
+	}
+	trust, err := update.ParseTrust(trustBytes, now)
+	if err != nil {
+		return "", "", err
+	}
+	target, _, err := update.Authenticate(manifest, trust, now)
+	if err != nil || target.BootstrapFrom != "" || target.Target != (update.Target{OS: runtime.GOOS, Arch: runtime.GOARCH}) {
+		return "", "", errors.New("exact signed update for this host required")
+	}
+	var coreArtifact update.Artifact
+	var signerHash string
+	for _, component := range target.Components {
+		if component.Artifact.Size <= 0 || component.Artifact.Size > 64<<20 {
+			return "", "", errors.New("candidate exceeds the bounded installed image limit")
+		}
+		if err = update.StreamArtifact(o.Artifacts, component.Artifact, func(int64, []byte) error { return nil }); err != nil {
+			return "", "", err
+		}
+		switch component.Contract.Component {
+		case "core":
+			coreArtifact = component.Artifact
+		case "signer":
+			signerHash = component.Artifact.SHA256
+		}
+	}
+	if coreArtifact.SHA256 == "" || signerHash == "" {
+		return "", "", errors.New("complete signed candidate pair required")
+	}
+	return coreArtifact.SHA256, signerHash, nil
+}
+
+func custodyUpdateRunner(m custodyinstall.Manifest, command []string, selectPinned func(int) (string, error)) (string, string, error) {
+	if m.Owner <= 0 || len(command) == 0 || selectPinned == nil {
+		return "", "", errors.New("managed custody update entry required")
+	}
+	installed := filepath.Join(m.Root, "fased-app")
+	pinned, err := selectPinned(m.Owner)
+	if errors.Is(err, os.ErrNotExist) {
+		return installed, "", nil
+	}
+	if err != nil {
+		return "", "", err
+	}
+	if pinned != filepath.Join(m.Root, "maintenance", "runner") {
+		return "", "", errors.New("foreign maintenance runner")
+	}
+	if command[0] == "owner-updates" {
+		return pinned, pinned, nil
+	}
+	return installed, pinned, nil
+}
+
+func needsPinnedInitialSession(m custodyinstall.Manifest, runner string) bool {
+	if runner != filepath.Join(m.Root, "maintenance", "runner") || m.Version != 3 || !m.Enrollment {
+		return false
+	}
+	return m.Location == "local" && m.NativeOwnerAccess || m.Location == "remote" && !m.NativeOwnerAccess && m.PublicOrigin != ""
+}
+
 func custodyUpdateChildArgs(args []string, owner int, errOut io.Writer) ([]string, error) {
 	if len(args) == 0 || owner <= 0 {
 		return nil, errors.New("one custody update action required")

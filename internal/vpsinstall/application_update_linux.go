@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/fased-ai/fased-app/internal/custodyinstall"
+	"github.com/fased-ai/fased-app/internal/enrollment"
 	"github.com/fased-ai/fased-app/internal/update"
 )
 
@@ -125,8 +126,9 @@ func checkUpdateRoot(ctx context.Context, o hostOps, j applicationJournal) error
 	if o.enrollmentJournal != nil {
 		b, err := o.enrollmentJournal()
 		if err == nil {
-			var r enrollmentJournalBinding
-			if strict(b, &r) != nil {
+			projection, _, projectionErr := enrollment.RemoteJournalFence(b, m.OwnerUID)
+			var r enrollmentFenceBinding
+			if projectionErr != nil || strict(projection, &r) != nil {
 				return errors.New("unknown enrollment journal; app-only update refused")
 			}
 			if r.Source.Data == m.Data {

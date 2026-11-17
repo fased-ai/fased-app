@@ -3,10 +3,14 @@
 package custodyinstall
 
 import (
+	"bufio"
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"net"
+	"net/http"
 	"os"
 	"os/exec"
 	"strconv"
@@ -14,6 +18,11 @@ import (
 	"sync"
 	"syscall"
 	"time"
+
+	"github.com/fased-ai/fased-app/internal/core"
+	"github.com/fased-ai/fased-app/internal/maintenance"
+	"github.com/fased-ai/fased-app/internal/privateaccess"
+	"github.com/fased-ai/fased-app/internal/update"
 )
 
 func nativeArgs(m Manifest) []string {
@@ -27,6 +36,14 @@ func nativePolicy(m Manifest) []byte {
 }
 
 func (s *System) EnsureNativeRunning(ctx context.Context, m Manifest) error {
+	if m.Layout == PackageLayout {
+		if m.Owner != os.Getuid() || os.Geteuid() != os.Getuid() || VerifyPackageOwnerTarget(m) != nil {
+			return errors.New("protected Local package owner required")
+		}
+		// Package services are started by their installed systemd units; the
+		// owner channel never grants direct systemctl or sudo tool access.
+		return nil
+	}
 	if !m.NativeOwnerAccess || m.Owner != os.Getuid() || Verify(m) != nil {
 		return errors.New("protected native owner enrollment required")
 	}
@@ -56,6 +73,9 @@ func (s *System) EnsureNativeRunning(ctx context.Context, m Manifest) error {
 func installNativePolicy(ctx context.Context, m Manifest, s *System) error {
 	if !m.NativeOwnerAccess {
 		return nil
+	}
+	if s.protectedOwner > 0 {
+		return installProtectedSudoPolicy(ctx, nativePolicyPath(m), nativePolicy(m))
 	}
 	path := nativePolicyPath(m)
 	if info, err := os.Lstat(path); err == nil {
@@ -93,8 +113,25 @@ func installNativePolicy(ctx context.Context, m Manifest, s *System) error {
 		return errors.New("native owner policy validation failed")
 	}
 	pending := path + "-" + m.ID + ".pending"
-	if _, err = s.Run(ctx, nil, "/usr/bin/install", "--owner=0", "--group=0", "--mode=0440", "--", f.Name(), pending); err != nil {
+	policy := nativePolicy(m)
+	args, err := BoundPolicyWriteArgs(m.Owner, pending, policy)
+	if err != nil {
 		return err
+	}
+	if _, err = s.Run(ctx, policy, args...); err != nil {
+		return err
+	}
+	info, err := os.Lstat(pending)
+	if err != nil {
+		return err
+	}
+	st, ok := info.Sys().(*syscall.Stat_t)
+	if !ok || st.Uid != 0 || !info.Mode().IsRegular() || info.Mode().Perm() != 0440 {
+		return errors.New("native policy staging identity changed; preserving it")
+	}
+	bound, err := s.Run(ctx, nil, "/usr/bin/cat", "--", pending)
+	if err != nil || string(bound) != string(policy) {
+		return errors.New("native policy staging content changed; preserving it")
 	}
 	if _, err = s.Run(ctx, nil, "/usr/bin/ln", "--no-target-directory", "--", pending, path); err != nil {
 		return err
@@ -104,6 +141,20 @@ func installNativePolicy(ctx context.Context, m Manifest, s *System) error {
 	}
 	_, err = s.Run(ctx, nil, "/usr/bin/sync", "-f", path)
 	return err
+}
+
+// Only fixed policy bytes generated from the verified manifest reach here.
+func installProtectedSudoPolicy(ctx context.Context, path string, policy []byte) error {
+	if os.Getuid() != 0 || os.Geteuid() != 0 || trustedUtility("/usr/sbin/visudo") != nil {
+		return errors.New("protected policy publication required")
+	}
+	c := exec.CommandContext(ctx, "/usr/sbin/visudo", "-c", "-f", "-")
+	c.Env = []string{"PATH=/usr/sbin:/usr/bin:/sbin:/bin", "LANG=C"}
+	c.Stdin = bytes.NewReader(policy)
+	if err := c.Run(); err != nil {
+		return errors.New("fixed enrollment policy is invalid")
+	}
+	return maintenance.PublishProtected(path, policy, 0440)
 }
 
 // Inventory may verify existing OS consent but cannot create/repair it before
@@ -127,18 +178,173 @@ func verifyNativePolicy(ctx context.Context, m Manifest, s *System) error {
 	return nil
 }
 
+// VerifyPackageOwnerTarget binds owner access to the running instance and its
+// existing protected update direction. It never selects a legacy owner root.
+func VerifyPackageOwnerTarget(m Manifest) error {
+	if m.validatePackage() != nil || (m.Location != "local" && m.Location != "remote") || !m.Enrollment {
+		return errors.New("exact protected package required")
+	}
+	r, err := update.ReadPackageMaintenanceRecord(m.Owner, m.Location, m.ID)
+	if err != nil {
+		return err
+	}
+	selected, err := SelectProtectedPackageStart(r, m.Owner, m.Location, m.ID)
+	if err != nil || selected != m || VerifyPackageInstance(m) != nil {
+		return errors.New("package owner target differs from its protected recovery state")
+	}
+	if err = verifyPackageWalletMarker(m); err != nil {
+		return err
+	}
+	return verifyPackageStartFences(m, r, readRoot)
+}
+
+// PackageOwnerChannel is reached only through the instance's fixed root
+// helper and its already-held instance lock. The app itself runs as AppUID.
+func PackageOwnerChannel(ctx context.Context, owner int, location, instance string, lock *os.File, in io.Reader, out io.Writer) error {
+	if in == nil || out == nil || lock == nil || (location != "local" && location != "remote") {
+		return errors.New("one protected package owner request required")
+	}
+	if _, err := maintenance.ValidatePackageProcess(owner, location, instance); err != nil {
+		return err
+	}
+	root, err := PackageRoot(owner, location, instance)
+	if err != nil {
+		return err
+	}
+	m, err := LoadPackageInstance(owner, root)
+	if err != nil || VerifyPackageOwnerTarget(m) != nil || loadedUnit(m, "app") != nil {
+		return errors.New("original protected package required")
+	}
+	var approval privateaccess.ProtectedInitialApproval
+	if location == "remote" {
+		approval, err = privateaccess.ReadProtectedPackageInitialApproval(owner, instance)
+		if err != nil || !approval.MatchesPackage(owner, instance, m.PublicOrigin, m.Listen, approval.Sequence, approval.ReleaseSHA256, approval.CoreSHA256) {
+			return errors.New("the original private device approval is required")
+		}
+	}
+	request, err := http.ReadRequest(bufio.NewReader(io.LimitReader(in, 64*1024+1)))
+	if err != nil || request.ContentLength < 0 || request.ContentLength > 16*1024 || len(request.TransferEncoding) != 0 {
+		return errors.New("bounded Local owner request required")
+	}
+	defer request.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(request.Body, 16*1024+1))
+	if err != nil || len(body) > 16*1024 || int64(len(body)) != request.ContentLength {
+		return errors.New("bounded Local owner request required")
+	}
+	defer clear(body)
+	request.Body = io.NopCloser(bytes.NewReader(body))
+	request.ContentLength = int64(len(body))
+	request.Close = true
+	var wire bytes.Buffer
+	if err = request.Write(&wire); err != nil || wire.Len() > 64*1024 {
+		return errors.New("bounded Local owner request required")
+	}
+	defer clear(wire.Bytes())
+	commitPath := m.Root + "/enrollment-ready.json"
+	if _, err = os.Lstat(commitPath); errors.Is(err, os.ErrNotExist) {
+		r, readErr := update.ReadPackageMaintenanceRecord(owner, location, instance)
+		if readErr != nil || r.Phase != "idle" || m.Network != "" || VerifyUnconfiguredPackageSigner(ctx, m) != nil {
+			return errors.New("only the original empty installation can establish its owner")
+		}
+		if location == "remote" && (r.Package == nil || !approval.MatchesPackage(owner, instance, m.PublicOrigin, m.Listen, r.Package.Sequence, r.Package.ReleaseSHA256, m.CoreHash)) {
+			return errors.New("private device approval differs from the installed package")
+		}
+		var response bytes.Buffer
+		probe := []byte("GET /api/v1/health HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n")
+		if err = packageOwnerExchange(ctx, m, probe, &response, 64*1024); err != nil {
+			return err
+		}
+		res, parseErr := http.ReadResponse(bufio.NewReader(&response), nil)
+		if parseErr != nil || res.StatusCode != http.StatusOK || !strings.HasPrefix(res.Header.Get("Content-Type"), "application/json") {
+			return errors.New("running Local package health is unavailable")
+		}
+		data, readErr := io.ReadAll(io.LimitReader(res.Body, 32*1024+1))
+		closeErr := res.Body.Close()
+		var health core.Health
+		if readErr != nil || closeErr != nil || len(data) > 32*1024 || json.Unmarshal(data, &health) != nil {
+			return errors.New("running Local package health is invalid")
+		}
+		commit, commitErr := packageOwnerCommit(m, health)
+		if commitErr != nil {
+			return commitErr
+		}
+		if err = maintenance.PublishProtected(commitPath, mustJSON(commit), 0644); err != nil {
+			return err
+		}
+	} else if err != nil {
+		return err
+	}
+	if _, err = ReadEnrollmentCommit(m); err != nil {
+		return err
+	}
+	// The app's Apply handler can start the package worker before the HTTP
+	// response returns. Release the instance lock first so that worker does not
+	// fail on its own owner's request. The app-UID client revalidates the
+	// protected manifest, journal, fence and endpoint after this release.
+	return packageOwnerAfterUnlock(lock, func() error {
+		return packageOwnerExchange(ctx, m, wire.Bytes(), out, 8<<20)
+	})
+}
+
+func packageOwnerAfterUnlock(lock *os.File, request func() error) error {
+	if lock == nil || request == nil {
+		return errors.New("original package lock required")
+	}
+	if err := lock.Close(); err != nil {
+		return err
+	}
+	return request()
+}
+
+func packageOwnerExchange(ctx context.Context, m Manifest, request []byte, out io.Writer, limit int64) error {
+	child, err := startMaintenanceChild(ctx, m, "app", m.Root+"/fased-app", "native-client", "--data-dir", m.Root+"/app-state", "--owner-config", m.Root+"/identity.json")
+	if err != nil {
+		return err
+	}
+	_, writeErr := child.in.Write(request)
+	writeErr = errors.Join(writeErr, child.in.Close())
+	n, readErr := io.Copy(out, io.LimitReader(child.out, limit+1))
+	if n > limit {
+		readErr = errors.Join(readErr, errors.New("Local owner response exceeds its bound"))
+	}
+	if writeErr != nil || readErr != nil {
+		// The bounded reader may have stopped before the child finished writing.
+		// End only that app-UID transport process before waiting for it.
+		_ = child.cmd.Process.Kill()
+	}
+	return errors.Join(writeErr, readErr, child.close())
+}
+
 // NativeChannel is one exact existing app-identity client. The rule installed
 // at initial OS consent grants only the OS owner this fixed command, without a
 // later sudo/app/signing password. AppUID receives no sudo permission.
 func (s *System) NativeChannel(ctx context.Context, m Manifest) (net.Conn, error) {
-	if !m.NativeOwnerAccess || !m.Enrollment || m.Location != "local" || m.Owner != os.Getuid() || Verify(m) != nil {
+	if !m.Enrollment || m.Location != "local" || m.Owner != os.Getuid() || os.Geteuid() != os.Getuid() {
+		return nil, errors.New("protected native owner enrollment required")
+	}
+	if m.Layout == PackageLayout {
+		if VerifyPackageOwnerTarget(m) != nil {
+			return nil, errors.New("protected Local package owner required")
+		}
+	} else if !m.NativeOwnerAccess || Verify(m) != nil {
 		return nil, errors.New("protected native owner enrollment required")
 	}
 	if err := loadedUnit(m, "app"); err != nil {
 		return nil, err
 	}
 	child, cancel := context.WithCancel(ctx)
-	cmd := exec.CommandContext(child, "/usr/bin/sudo", append([]string{"-n", "--"}, nativeArgs(m)...)...)
+	var cmd *exec.Cmd
+	var frame []byte
+	var err error
+	if m.Layout == PackageLayout {
+		cmd, frame, err = maintenance.PackageOwnerStreamCommand(child, m.Location, m.ID, io.Discard)
+		if err != nil {
+			cancel()
+			return nil, err
+		}
+	} else {
+		cmd = exec.CommandContext(child, "/usr/bin/sudo", append([]string{"-n", "--"}, nativeArgs(m)...)...)
+	}
 	in, err := cmd.StdinPipe()
 	if err != nil {
 		cancel()
@@ -156,6 +362,15 @@ func (s *System) NativeChannel(ctx context.Context, m Manifest) (net.Conn, error
 		out.Close()
 		cancel()
 		return nil, err
+	}
+	if len(frame) != 0 {
+		if _, err = in.Write(frame); err != nil {
+			cancel()
+			in.Close()
+			out.Close()
+			_ = cmd.Wait()
+			return nil, err
+		}
 	}
 	c := &nativeConn{in: in, out: out, cancel: cancel, cmd: cmd}
 	return c, nil

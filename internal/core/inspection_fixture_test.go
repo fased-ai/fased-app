@@ -78,3 +78,48 @@ func TestInspectionColdRefusesForeignWAL(t *testing.T) {
 		t.Fatal("symlink WAL admitted")
 	}
 }
+
+func TestColdPauseGuardRequiresOriginalDurableFence(t *testing.T) {
+	s := fixtureStore(t)
+	command := pauseCommand(t, s, 1)
+	receipt, err := s.UpdatePause(t.Context(), command)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := s.dir
+	if err = s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	cold, err := InspectFixtureColdMetadata(t.Context(), dir, update.NewProbe())
+	if err != nil {
+		t.Fatal(err)
+	}
+	requestDigest := update.SnapshotDigest("pause-request", *command.Request)
+	instanceDigest := update.SnapshotDigest("atomic-instance:v1", cold.Core.InstanceID)
+	if err := ValidateFixturePauseGuard(cold, "paused", command.Request.IntentID, receipt.PauseID, requestDigest, instanceDigest); err != nil {
+		t.Fatal(err)
+	}
+	if err := ValidateFixturePauseGuard(cold, "released", command.Request.IntentID, receipt.PauseID, requestDigest, instanceDigest); err == nil {
+		t.Fatal("paused core admitted as released")
+	}
+	if err := ValidateFixturePauseGuard(cold, "paused", update.NewProbe(), receipt.PauseID, requestDigest, instanceDigest); err == nil {
+		t.Fatal("foreign intent accepted")
+	}
+	s, err = OpenStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.UpdatePause(t.Context(), update.CorePauseCommand{Action: "release", ProbeID: command.ProbeID, Aborted: aborted(command)}); err != nil {
+		t.Fatal(err)
+	}
+	if err = s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	cold, err = InspectFixtureColdMetadata(t.Context(), dir, update.NewProbe())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ValidateFixturePauseGuard(cold, "released", command.Request.IntentID, receipt.PauseID, requestDigest, instanceDigest); err != nil {
+		t.Fatal(err)
+	}
+}

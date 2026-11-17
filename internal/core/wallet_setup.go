@@ -23,6 +23,7 @@ type WalletSetup struct {
 	FixtureOnly         bool   `json:"fixtureOnly"`
 	NetworkWatchEnabled bool   `json:"networkWatchEnabled"`
 	OwnerSupported      bool   `json:"ownerSupported"`
+	PackageOwner        bool   `json:"packageOwner,omitempty"`
 }
 
 type AccountSetupCommand struct {
@@ -37,11 +38,22 @@ type AccountSetupCommand struct {
 func (s *Store) walletSetup(live FixtureView) WalletSetup {
 	v := WalletSetup{Version: 1, Network: s.custodyNetwork, State: "not-installed", FixtureOnly: true, NetworkWatchEnabled: s.rpcAdmission, OwnerSupported: runtime.GOOS == "linux"}
 	v.InstanceID = s.instanceID
+	v.PackageOwner = s.custodyPackageLocal
 	switch s.installationSource.Load() {
 	case 1:
 		v.Source = "local"
 	case 2:
 		v.Source = "remote"
+	}
+	if s.unconfiguredProtectedSigner {
+		v.State = "unavailable"
+		v.OwnerSupported = v.OwnerSupported && s.custodyOwnerSupported && s.custodyPackageLocal && v.Source == "local"
+		if v.OwnerSupported {
+			// The signer is deliberately not contacted before network selection.
+			// The protected helper checks that its real state is empty and stopped.
+			v.State, v.AdmissionHeld = "configuration-required", true
+		}
+		return v
 	}
 	if s.fixture == nil && s.custodyNetwork == "" {
 		return v

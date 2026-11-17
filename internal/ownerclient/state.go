@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/fased-ai/fased-app/internal/connection"
 	"github.com/fased-ai/fased-app/internal/core"
@@ -40,7 +41,7 @@ func Link(instance, network, action, origin string) (string, error) {
 func ParseLink(value string) (signer.OwnerIntent, string, error) {
 	var intent signer.OwnerIntent
 	u, err := url.Parse(value)
-	if err != nil || len(value) > 16*1024 || u.Scheme != "fased" || u.Host != "wallet-owner" || u.Path != "" || u.User != nil || u.Fragment != "" || u.Opaque != "" {
+	if err != nil || len(value) > 16*1024 || u.Scheme != "fased" && u.Scheme != "fased-wallet" || u.Host != "wallet-owner" || u.Path != "" || u.User != nil || u.Fragment != "" || u.Opaque != "" {
 		return intent, "", errors.New("invalid wallet link")
 	}
 	q, err := url.ParseQuery(u.RawQuery)
@@ -51,6 +52,9 @@ func ParseLink(value string) (signer.OwnerIntent, string, error) {
 		if len(values) != 1 || (key != "instance" && key != "network" && key != "action" && key != "origin" && key != "proposal") {
 			return intent, "", errors.New("invalid wallet link field")
 		}
+	}
+	if u.Scheme == "fased-wallet" && q.Get("origin") != "" {
+		return intent, "", errors.New("package wallet link must be Local")
 	}
 	if q.Get("action") == "approve-swap" {
 		i := signer.OwnerIntent{Version: 2, InstanceID: q.Get("instance"), Network: q.Get("network"), Action: "approve-swap", Proposal: q.Get("proposal")}
@@ -64,6 +68,9 @@ func ParseLink(value string) (signer.OwnerIntent, string, error) {
 		}
 		i.OperationID = p.Quote.ID
 		canonical, e := TradeLink(p, q.Get("origin"))
+		if u.Scheme == "fased-wallet" {
+			canonical = strings.Replace(canonical, "fased://", "fased-wallet://", 1)
+		}
 		if e != nil || canonical != value || i.Validate() != nil {
 			return intent, "", errors.New("noncanonical trade link")
 		}
@@ -73,6 +80,9 @@ func ParseLink(value string) (signer.OwnerIntent, string, error) {
 		return intent, "", errors.New("unexpected trade link field")
 	}
 	canonical, err := Link(q.Get("instance"), q.Get("network"), q.Get("action"), q.Get("origin"))
+	if u.Scheme == "fased-wallet" {
+		canonical = strings.Replace(canonical, "fased://", "fased-wallet://", 1)
+	}
 	if err != nil || canonical != value {
 		return intent, "", errors.New("noncanonical wallet link")
 	}

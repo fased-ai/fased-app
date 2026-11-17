@@ -28,6 +28,8 @@ type Policy struct {
 type Expected struct {
 	BuildRef        string `json:"buildRef,omitempty"`
 	InstallerSHA256 string `json:"installerSha256,omitempty"`
+	DebSHA256       string `json:"debSha256,omitempty"`
+	RPMSHA256       string `json:"rpmSha256,omitempty"`
 	ArchiveName     string `json:"archiveName"`
 	ArchiveSHA256   string `json:"archiveSha256"`
 	SourceCommit    string `json:"sourceCommit"`

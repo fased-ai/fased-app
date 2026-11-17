@@ -26,6 +26,12 @@ type ApplicationUpdateController interface {
 	Apply(context.Context, ApplicationUpdateOperation) (ApplicationUpdateReceipt, error)
 	Status(context.Context, ApplicationUpdateOperation) (ApplicationUpdateReceipt, error)
 }
+
+// An optional controller may resume the same protected operation after the
+// owner explicitly asks for recovery. Status must remain observation only.
+type ApplicationUpdateRecoveryController interface {
+	Recover(context.Context, ApplicationUpdateOperation) error
+}
 type ApplicationRelease struct {
 	EngineSHA256   string        `json:"engineSha256"`
 	Version        string        `json:"version"`
@@ -205,11 +211,61 @@ func (s *Store) ApplicationUpdates(ctx context.Context) (ApplicationUpdateView, 
 	}
 	return ApplicationUpdateView{InstanceID: s.instanceID, Schema: schema, Version: 1, Revision: r, InstalledVersion: Version, ControllerAvailable: configured, ActivationEnabled: configured && p.Mode == "automatic", Operation: o, Policy: p, PolicyRevision: setup.Revision, Notice: applicationUpdateNotice(o, p)}, nil
 }
+
+// The owner IPC retains its durable core receipt while the user view waits for
+// the protected worker's separate journal and fence to reach the same outcome.
+func (s *Store) applicationUpdatesForUser(ctx context.Context) (ApplicationUpdateView, error) {
+	s.appUpdates.mu.Lock()
+	defer s.appUpdates.mu.Unlock()
+	v, err := s.ApplicationUpdates(ctx)
+	if err != nil {
+		return v, err
+	}
+	if v.Operation.Phase == "completed" && v.Operation.OwnerLease != "" {
+		phase, _ := s.applicationOwnerCompletionState(ctx, v.Operation)
+		if phase != "completed" {
+			v.Operation.Phase = phase
+			v.Operation.Receipt = nil
+			v.Operation.FinishedAt = 0
+			v.Operation.Failure = ""
+			if phase == "recovery" {
+				v.Operation.Failure = "Update requires protected recovery."
+			}
+			v.Notice = applicationUpdateNotice(v.Operation, v.Policy)
+		}
+	}
+	return v, nil
+}
+
 func (s *Store) CommandApplicationUpdate(ctx context.Context, c ApplicationUpdateCommand) (ApplicationUpdateView, error) {
 	s.appUpdates.mu.Lock()
 	defer s.appUpdates.mu.Unlock()
 	if !s.appUpdates.configured.Load() && c.Action != "acknowledge" {
 		return ApplicationUpdateView{}, errors.New("trusted release channel and installation controller are not configured; activation remains disabled")
+	}
+	resumeFinished := false
+	visiblePhase := ""
+	if c.Action == "check" || c.Action == "recover" || c.Action == "acknowledge" {
+		previous, revision, err := readApplicationUpdate(ctx, s.db)
+		if err != nil {
+			return ApplicationUpdateView{}, err
+		}
+		if revision != c.Revision {
+			return ApplicationUpdateView{}, ErrConflict
+		}
+		if c.Action == "check" && !s.applicationOwnerCompletionSettled(ctx, previous) {
+			return ApplicationUpdateView{}, errors.New("the original update is still finishing; preserve its recovery")
+		}
+		if c.Action == "recover" && previous.Phase == "completed" && previous.OwnerLease != "" {
+			phase, statusErr := s.applicationOwnerCompletionState(ctx, previous)
+			if statusErr != nil || phase != "recovery" {
+				return ApplicationUpdateView{}, errors.New("the original protected recovery is not ready")
+			}
+			resumeFinished = true
+		}
+		if c.Action == "acknowledge" && previous.Phase == "completed" && previous.OwnerLease != "" {
+			visiblePhase, _ = s.applicationOwnerCompletionState(ctx, previous)
+		}
 	}
 	tx, e := s.db.BeginTx(ctx, nil)
 	if e != nil {
@@ -236,11 +292,37 @@ func (s *Store) CommandApplicationUpdate(ctx context.Context, c ApplicationUpdat
 	}
 	switch c.Action {
 	case "acknowledge":
-		if c.ManifestSHA256 != "" || applicationUpdateNotice(o, p) == nil {
+		visible := o
+		if visiblePhase != "" {
+			visible.Phase = visiblePhase
+		}
+		if c.ManifestSHA256 != "" || applicationUpdateNotice(visible, p) == nil {
 			return ApplicationUpdateView{}, errors.New("no update notice")
 		}
-		o.NoticeReadPhase = o.Phase
+		o.NoticeReadPhase = visible.Phase
 	case "recover":
+		if resumeFinished {
+			if c.ManifestSHA256 != "" || o.Phase != "completed" || o.OwnerLease == "" {
+				return ApplicationUpdateView{}, errors.New("an existing recovery transaction is required")
+			}
+			recovery, ok := s.appUpdates.controller.(ApplicationUpdateRecoveryController)
+			if !ok {
+				return ApplicationUpdateView{}, errors.New("the original protected recovery is unavailable")
+			}
+			if e = tx.Commit(); e != nil {
+				return ApplicationUpdateView{}, e
+			}
+			// Keep the original terminal receipt durable for the already-installed
+			// helper. Recover starts only its exact existing worker, never Apply.
+			o.Phase = "applying"
+			recoveryCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+			e = recovery.Recover(recoveryCtx, o)
+			cancel()
+			if e != nil {
+				return ApplicationUpdateView{}, errors.New("protected recovery could not start; the existing update was preserved")
+			}
+			return s.ApplicationUpdates(ctx)
+		}
 		if o.Phase != "recovery" || c.ManifestSHA256 != "" {
 			return ApplicationUpdateView{}, errors.New("an existing recovery transaction is required")
 		}
@@ -272,8 +354,55 @@ func (s *Store) CommandApplicationUpdate(ctx context.Context, c ApplicationUpdat
 	if e = tx.Commit(); e != nil {
 		return ApplicationUpdateView{}, e
 	}
+	if c.Action == "recover" {
+		if recovery, ok := s.appUpdates.controller.(ApplicationUpdateRecoveryController); ok {
+			recoveryCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+			e = recovery.Recover(recoveryCtx, o)
+			cancel()
+			if e != nil {
+				// The durable applying record precedes the start. If the start
+				// is refused or uncertain, retain the same recovery operation.
+				recordCtx, done := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+				recordErr := s.finishApplicationUpdate(recordCtx, o, r+1, ApplicationUpdateReceipt{}, e)
+				done()
+				if recordErr != nil {
+					return ApplicationUpdateView{}, errors.Join(errors.New("protected recovery could not be recorded"), recordErr)
+				}
+				return ApplicationUpdateView{}, errors.New("protected recovery could not start; the existing update was preserved")
+			}
+		}
+	}
 	return s.ApplicationUpdates(ctx)
 }
+
+// The core receipt may precede the protected worker's durable journal and
+// fence cleanup. Keep that exact owner operation until the same controller
+// independently reports its matching terminal receipt.
+func (s *Store) applicationOwnerCompletionSettled(ctx context.Context, o ApplicationUpdateOperation) bool {
+	phase, err := s.applicationOwnerCompletionState(ctx, o)
+	return err == nil && phase == "completed"
+}
+
+func (s *Store) applicationOwnerCompletionState(ctx context.Context, o ApplicationUpdateOperation) (string, error) {
+	if o.Phase != "completed" || o.OwnerLease == "" {
+		return "completed", nil
+	}
+	if o.Release == nil || o.Receipt == nil || o.Receipt.Phase != "completed" || o.Receipt.EngineSHA256 != o.Release.EngineSHA256 || s.appUpdates.controller == nil {
+		return "recovery", errors.New("protected completion is unavailable")
+	}
+	actual, err := s.appUpdates.controller.Status(ctx, o)
+	if err != nil {
+		return "recovery", err
+	}
+	if actual == *o.Receipt {
+		return "completed", nil
+	}
+	if actual.ID != o.ID || actual.Sequence != o.Release.Sequence || actual.ManifestSHA256 != o.Release.ManifestSHA256 || actual.EngineSHA256 != o.Release.EngineSHA256 || !oneOf(actual.Phase, "applying", "recovery") {
+		return "recovery", errors.New("protected completion differs from the original update")
+	}
+	return actual.Phase, nil
+}
+
 func updatePinMatches(p UpdatePolicy, r ApplicationRelease) bool {
 	return p.Pin == nil || (p.Pin.Sequence == uintSequence(r.Sequence) && p.Pin.ManifestSHA256 == r.ManifestSHA256)
 }
@@ -301,6 +430,9 @@ func (s *Store) runApplicationUpdates(ctx context.Context) error {
 		return nil
 	}
 	if p.Mode == "automatic" && !oneOf(o.Phase, "queued", "applying", "check-queued", "checking", "available") && (o.CheckedAt == 0 || now-o.CheckedAt >= 3600) {
+		if !s.applicationOwnerCompletionSettled(ctx, o) {
+			return nil
+		}
 		o = ApplicationUpdateOperation{ID: update.NewProbe(), Phase: "check-queued"}
 	}
 	if o.Phase == "checking" && o.BootID != s.bootID {
@@ -418,7 +550,8 @@ func (s *Store) finishApplicationUpdate(ctx context.Context, o ApplicationUpdate
 		o.Failure = "Release is no longer eligible. Check for updates again."
 		return s.publishApplicationUpdate(ctx, o, revision)
 	}
-	if err != nil || r.ID != o.ID || o.Release == nil || r.Sequence != o.Release.Sequence || r.ManifestSHA256 != o.Release.ManifestSHA256 || !oneOf(r.Phase, "applying", "completed", "rolled-back", "recovery") {
+	if err != nil || r.ID != o.ID || o.Release == nil || r.Sequence != o.Release.Sequence || r.ManifestSHA256 != o.Release.ManifestSHA256 || !oneOf(r.Phase, "applying", "completed", "rolled-back", "recovery") ||
+		(r.Phase == "completed" && r.EngineSHA256 != o.Release.EngineSHA256) || (r.Phase == "rolled-back" && !hexValue(r.EngineSHA256, 32)) {
 		o.Phase = "recovery"
 		o.Failure = "Update outcome is uncertain. Inspect recovery before retrying."
 	} else if r.Phase == "applying" {

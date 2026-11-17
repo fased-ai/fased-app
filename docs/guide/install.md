@@ -17,7 +17,7 @@ Installation needs no Go compiler, Node, Git, AI provider, wallet or RPC.
 
 ## Local
 
-Run the official installer or supported native package. The wizard prepares required components and opens Fased for your existing OS user. Local needs no Tailscale, SSH tunnel, new Linux user or separate Fased password by default. Your OS may request its normal administrator approval during initial system setup.
+Run the official installer in a terminal. The intended Linux setup downloads one verified prebuilt bundle, uses apt or dnf only for missing operating-system prerequisites, and opens Fased in your browser. It does not require a desktop client. Local access uses your existing OS identity. Your OS may request its normal administrator approval during initial system setup. This revised flow is not yet accepted; platform availability is listed in [Availability](/reference/status).
 
 The local listener stays on loopback. The browser session is authorized by the local launcher; being able to reach a localhost port alone does not grant ownership. Background work follows the selected OS service/autostart setting; a sleeping or powered-off computer cannot run it.
 
@@ -38,7 +38,7 @@ Tailscale is separate OS software on the VPS and your accessing device. Fased gu
 
 Local reuses your existing OS user. Remote reuses an existing administrator when possible. A root-only VPS needs a verified key-based recovery administrator before root SSH is disabled. The installer uses only the approved public key; your private key stays on your computer. No new Linux password is required: the approved SSH key authenticates the recovery administrator, and password login stays disabled. Blank-password login is forbidden. An existing administrator's credentials are preserved.
 
-Local runs the app as your ordinary OS user inside its supported sandbox/service. Remote uses a dedicated locked app account. The signer has a separate protected identity when wallet setup is selected. Service identities are not customer logins; you never manage their passwords. Neither app nor signer gets general sudo access. Root is confined to initial OS setup and restricted maintenance/recovery operations.
+Installation creates isolated app and signer service identities for both Local and Remote. Your existing Local OS account or approved Remote identity controls the instance. Wallet setup initializes the reserved protected storage while keeping the same installation and update controls. The app and signer run unprivileged. OS administration is confined to initial setup and restricted maintenance/recovery operations.
 
 After replacement access is proved, root/password SSH is disabled and public SSH, web and raw Fased/RPC access is closed on IPv4 and IPv6. Private HTTPS is available only through Tailscale. Private key-only administrator SSH may remain for recovery; ordinary Fased usage and updates never depend on it. Essential network traffic and outbound provider/RPC/download access continue to work.
 

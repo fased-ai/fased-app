@@ -15,6 +15,7 @@ import {
 import { homedir } from "node:os";
 import { resolve, join } from "node:path";
 import net from "node:net";
+import { openPasswordSignIn } from "./fixture-owner-setup.mjs";
 import {
   enrollmentAPI,
   seedEnrollmentSource,
@@ -28,6 +29,12 @@ import {
   walletReadJourney,
   refusedWalletRead,
 } from "./fixture-wallet-read-journey.mjs";
+import {
+  buildEnrollmentHelper,
+  protectedPathMissing,
+  startFixtureServer,
+  verifyEmbeddedSigner,
+} from "./fixture-enrollment-helper.mjs";
 
 assert.equal(
   process.env.FASED_ENROLLMENT_ACCEPTANCE,
@@ -49,6 +56,9 @@ assert.ok(
   args.length === 0 || (args.length === 1 && args[0] === "--ordinary-custody"),
 );
 const ordinary = args[0] === "--ordinary-custody";
+// The ordinary CI helper is bound to a Local owner. Its authority cannot
+// enroll a Remote device. Real Tailscale acceptance uses the recorded VPS.
+const profiles = ordinary ? ["local"] : ["local", "remote"];
 const evidence = resolve(
   ordinary
     ? ".evidence/b05-ordinary-installed"
@@ -57,17 +67,6 @@ const evidence = resolve(
 await mkdir(evidence, { mode: 0o700 });
 let compiledEngine = resolve(".evidence/bin/fased-app");
 let signer = resolve(".evidence/bin/fased-signer");
-if (ordinary) {
-  compiledEngine = join(evidence, "fased-app-tests");
-  signer = join(evidence, "fased-signer-tests");
-  for (const [output, pkg] of [
-    [compiledEngine, "./cmd/fased-app"],
-    [signer, "./cmd/fased-signer"],
-  ])
-    execFileSync("go", ["test", "-c", "-buildvcs=false", "-o", output, pkg], {
-      stdio: "inherit",
-    });
-}
 let engine = compiledEngine;
 
 const config = process.env.XDG_CONFIG_HOME || join(homedir(), ".config");
@@ -106,8 +105,11 @@ const scrub = (value) =>
 const sha = (bytes) => createHash("sha256").update(bytes).digest("hex");
 const report = {
   result: "FAIL",
-  class:
-    "actual disposable Ubuntu Local/Remote same-instance enrollment; not owner/VPS/native/live acceptance",
+  class: ordinary
+    ? "actual disposable Ubuntu Local same-instance enrollment"
+    : "controlled Ubuntu Local/Remote same-instance enrollment",
+  testedProfiles: profiles,
+  privateRemoteAcceptance: false,
   fixtureOnly: true,
   ordinaryCustody: ordinary,
   mining: false,
@@ -116,9 +118,9 @@ const report = {
   profiles: {},
   inputs: {},
 };
-for (const p of [engine, signer]) report.inputs[p] = sha(await readFile(p));
 let log = "",
   child = null,
+  fixtureServer = null,
   browser = null,
   owns = false,
   changedLinger = false,
@@ -153,6 +155,82 @@ const check = (name, value) => {
   report.checks[name] = true;
 };
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+
+async function registerFixtureHelper(fixture) {
+  const state = "/var/lib/fased-maintenance";
+  const trust = "/var/lib/fased-update-fixture";
+  const image = join(state, "images", fixture.helperSHA256);
+  for (const path of [state, trust, `/etc/sudoers.d/fased-maintenance-${uid}`])
+    assert.equal(
+      protectedPathMissing(path, osTool),
+      true,
+      `existing protected fixture state: ${path}`,
+    );
+  osTool("/usr/bin/install", [
+    "-d",
+    "-m",
+    "0755",
+    "--",
+    state,
+    `${state}/images`,
+    image,
+    trust,
+  ]);
+  for (const [name, expected] of [
+    ["seed.json", fixture.seed],
+    ["ca.pem", fixture.ca],
+  ]) {
+    osTool("/usr/bin/install", [
+      "-m",
+      "0644",
+      "--",
+      join(fixture.work, name),
+      join(trust, name),
+    ]);
+    const input = await lstat(join(trust, name));
+    assert.ok(
+      input.isFile() &&
+        input.uid === 0 &&
+        input.gid === 0 &&
+        (input.mode & 0o777) === 0o644 &&
+        input.nlink === 1,
+    );
+    assert.equal(sha(await readFile(join(trust, name))), expected);
+  }
+  const protectedHelper = join(image, "fased-install");
+  osTool("/usr/bin/install", [
+    "-m",
+    "0555",
+    "--",
+    fixture.helper,
+    protectedHelper,
+  ]);
+  const info = await lstat(protectedHelper);
+  assert.ok(
+    info.isFile() &&
+      info.uid === 0 &&
+      info.gid === 0 &&
+      (info.mode & 0o777) === 0o555 &&
+      info.nlink === 1,
+  );
+  assert.equal(sha(await readFile(protectedHelper)), fixture.helperSHA256);
+  await verifyEmbeddedSigner(
+    protectedHelper,
+    process.env.GITHUB_SHA,
+    fixture.artifacts["fased-signer"],
+  );
+  assert.equal(
+    osTool(protectedHelper, [
+      "maintenance-register",
+      "--owner",
+      String(uid),
+      "--profile",
+      "local",
+    ]).trim(),
+    protectedHelper,
+  );
+  return protectedHelper;
+}
 const as = (identity, file, args, input) =>
   osTool(
     "/usr/bin/setpriv",
@@ -587,6 +665,7 @@ async function browserProof(url, profile, instance) {
     });
     const page = await ctx.newPage();
     await page.goto(url + "/#wallets/accounts");
+    await openPasswordSignIn(page);
     await page.getByLabel("Owner password", { exact: true }).fill(password);
     await page.getByRole("button", { name: "Sign in", exact: true }).click();
     await page.getByRole("heading", { name: "Wallets", exact: true }).waitFor();
@@ -865,11 +944,48 @@ try {
       "absent-user:" + name,
       failed(() => execute("/usr/bin/getent", ["passwd", name])),
     );
+  if (ordinary) {
+    // Register before the legacy source is created: the real helper refuses
+    // to adopt an existing installation without its original authority.
+    for (const path of [
+      "/var/lib/fased-maintenance",
+      "/var/lib/fased-update-fixture",
+      `/etc/sudoers.d/fased-maintenance-${uid}`,
+    ])
+      check("absent:" + path, protectedPathMissing(path, osTool));
+    const fixture = await buildEnrollmentHelper({
+      evidence,
+      source: process.env.GITHUB_SHA,
+      sourceRoot: join(evidence, "local", "app"),
+      sourceData: join(evidence, "local", "data"),
+    });
+    compiledEngine = join(fixture.work, "fased-app-tests");
+    signer = join(fixture.work, "fased-signer");
+    engine = compiledEngine;
+    fixtureServer = await startFixtureServer(fixture.work, env, (b) => {
+      log += scrub(b);
+    });
+    const helper = await registerFixtureHelper(fixture);
+    report.protectedHelper = {
+      path: helper,
+      sha256: fixture.helperSHA256,
+      seed: fixture.seed,
+      ca: fixture.ca,
+      fixtureOnly: true,
+    };
+  }
+  for (const p of [engine, signer]) report.inputs[p] = sha(await readFile(p));
   const packageDir = join(evidence, "bundle");
   assert.match(process.env.GITHUB_SHA, /^[0-9a-f]{40}$/);
   const archive = execute("go", [
     "run",
     "-mod=readonly",
+    ...(ordinary
+      ? [
+          "-ldflags",
+          "-X github.com/fased-ai/fased-app/internal/core.Version=0.1.11",
+        ]
+      : []),
     "./cmd/fased-package",
     "--engine",
     compiledEngine,
@@ -935,7 +1051,7 @@ try {
     startedManager = true;
   }
   browser = await chromium.launch({ headless: true });
-  for (const mode of ["local", "remote"]) {
+  for (const mode of profiles) {
     const listen = await freeListen(),
       url = "http://" + listen;
     const base = join(evidence, mode);
@@ -1199,6 +1315,7 @@ try {
   throw e;
 } finally {
   const cleanup = [];
+  if (fixtureServer) fixtureServer.kill("SIGTERM");
   if (child) {
     child.kill("SIGCONT");
     child.kill("SIGKILL");
@@ -1254,7 +1371,9 @@ try {
     }
   report.cleanup = cleanup.length
     ? cleanup
-    : "PASS: exact declared fixture installations, accounts and state removed";
+    : ordinary
+      ? "PASS: declared fixture installation and accounts removed; protected test helper remains on the disposable hosted runner"
+      : "PASS: exact declared fixture installations, accounts and state removed";
   if (cleanup.length) report.result = "FAIL";
   await writeFile(
     join(evidence, "enrollment-installed.json"),

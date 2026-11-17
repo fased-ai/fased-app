@@ -311,7 +311,7 @@ func RunInspectionBridge(ctx context.Context, t InspectionBridge, s *System, c B
 			return out, errors.New("sealed input changed; held")
 		}
 	}
-	o := installOps{read: readRoot, run: s.Run}
+	o := installOps{read: readRoot, run: s.Run, verify: verifyApprovedExecutable}
 	base := t.Base.Root + "/fixture-inspection-v1"
 	boundary := func(phase string) error {
 		fmt.Fprintln(s.Out, "Inspection bridge boundary:", phase)
@@ -602,7 +602,7 @@ func RollbackInspectionBridge(ctx context.Context, t InspectionBridge, s *System
 	if e = allowedInstallation(InstallTransaction{Base: t.Base, Target: t.Base}, readRoot); e != nil {
 		return out, e
 	}
-	o := installOps{read: readRoot, run: s.Run}
+	o := installOps{read: readRoot, run: s.Run, verify: verifyApprovedExecutable}
 	old := definitions(t.Base)
 	guard := fixtureUnits(t.Target, true)
 	for _, role := range []string{"app", "signer"} {

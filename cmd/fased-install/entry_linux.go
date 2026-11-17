@@ -8,6 +8,8 @@ import (
 	"errors"
 	"fmt"
 	"github.com/fased-ai/fased-app/internal/custodyinstall"
+	"github.com/fased-ai/fased-app/internal/maintenance"
+	"github.com/fased-ai/fased-app/internal/update"
 	"github.com/fased-ai/fased-app/internal/vpsinstall"
 	"io"
 	"os"
@@ -33,10 +35,16 @@ func installedEntry(ctx context.Context, profile, action string, in io.Reader, o
 		return false, nil
 	}
 	if profile == "local" {
+		if handled, err := installedCustodyEntry(ctx, profile, action, errOut); handled || err != nil {
+			return handled, err
+		}
 		return installedLocalEntry(ctx, action, in, out, errOut)
 	}
 	if profile != "remote" {
 		return true, errors.New("choose Local or Remote")
+	}
+	if handled, err := installedCustodyEntry(ctx, profile, action, errOut); handled || err != nil {
+		return handled, err
 	}
 	budget := 2 * time.Minute
 	if action == "update" || action == "setup" {
@@ -98,4 +106,27 @@ func installedEntry(ctx context.Context, profile, action string, in io.Reader, o
 	command := exec.CommandContext(ctx, m.Core, args...)
 	command.Stdin, command.Stdout, command.Stderr = in, out, errOut
 	return true, command.Run()
+}
+
+func installedCustodyEntry(ctx context.Context, profile, action string, diagnostic io.Writer) (bool, error) {
+	m, err := custodyinstall.Load(os.Getuid())
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if m.Location != profile {
+		return false, errors.New("retain the installed custody profile")
+	}
+	if action != "update" && action != "install" {
+		return true, errors.New("use the installed custody client for this action")
+	}
+	if r, e := update.ReadMaintenanceRecord(m.Owner); e == nil && r.Phase != "completed" && r.Package != nil {
+		_, e = maintenance.Call(ctx, maintenance.Request{Version: 1, Action: "custody-update", Custody: &maintenance.CustodyUpdateRequest{OperationID: r.OperationID, Sequence: r.Package.Sequence, ReleaseSHA256: r.Package.ReleaseSHA256, Bootstrap: r.Bootstrap}}, diagnostic)
+		return true, e
+	} else if e != nil && !errors.Is(e, os.ErrNotExist) {
+		return false, e
+	}
+	return false, errEntryUpgradeRequired
 }

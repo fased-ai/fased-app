@@ -10,13 +10,211 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
 	"github.com/fased-ai/fased-app/internal/custodyinstall"
 	"github.com/fased-ai/fased-app/internal/enrollment"
+	"github.com/fased-ai/fased-app/internal/maintenance"
 	"github.com/fased-ai/fased-app/internal/update"
 )
+
+// Only the existing root-managed helper calls this while its operation lock is
+// held. Earlier named Remote acquisition directories may remain; no custody work may be
+// adopted from an unclassified directory.
+func verifyFreshRemoteEnrollmentInventory(o hostOps, owner int) error {
+	if owner <= 0 || o.uid != owner || o.euid != owner {
+		return errors.New("original Remote owner required")
+	}
+	protectedDir := func(path string, mode os.FileMode) error {
+		f, err := o.read(path)
+		permissionsOK := f.Mode.Perm() == mode
+		if mode == 0700 {
+			permissionsOK = f.Mode.Perm()&0077 == 0
+		}
+		if err != nil || !f.Directory || f.UID != 0 || f.GID != 0 || !permissionsOK ||
+			f.Mode&(os.ModeSymlink|os.ModeSetuid|os.ModeSetgid|os.ModeSticky) != 0 {
+			return errors.New("protected Remote directory changed")
+		}
+		return nil
+	}
+	root := maintenance.OwnerRoot(owner)
+	if err := protectedDir(root, 0755); err != nil {
+		return err
+	}
+	if _, err := o.read(custodyinstall.Root(owner)); !errors.Is(err, os.ErrNotExist) {
+		return errors.New("existing custody target must be preserved")
+	}
+	names, err := o.list(root)
+	if err != nil || len(names) > 16 {
+		return errors.New("protected Remote inventory unavailable")
+	}
+	seenAuthority, seenRemote, seenLock := false, false, false
+	for _, name := range names {
+		switch name {
+		case "authority.json":
+			f, e := o.read(filepath.Join(root, name))
+			if e != nil || !f.Regular || f.UID != 0 || f.GID != 0 || f.Mode.Perm() != 0644 || f.Mode&(os.ModeSymlink|os.ModeSetuid|os.ModeSetgid|os.ModeSticky) != 0 {
+				return errors.New("protected authority changed")
+			}
+			seenAuthority = true
+		case "operation.lock":
+			f, e := o.read(filepath.Join(root, name))
+			if e != nil || !f.Regular || f.UID != 0 || f.GID != 0 || f.Mode.Perm() != 0600 || f.Mode&(os.ModeSymlink|os.ModeSetuid|os.ModeSetgid|os.ModeSticky) != 0 {
+				return errors.New("protected operation lock changed")
+			}
+			seenLock = true
+		case "remote":
+			if err := protectedDir(filepath.Join(root, name), 0700); err != nil {
+				return err
+			}
+			seenRemote = true
+		case "tailscale":
+			// Bootstrap retains its own protected Tailscale preparation record.
+			// It is unrelated to custody acquisition; leave it entirely intact.
+			if err := protectedDir(filepath.Join(root, name), 0700); err != nil {
+				return err
+			}
+		case "fased-app":
+			app := filepath.Join(root, name)
+			if err := protectedDir(app, 0700); err != nil {
+				return err
+			}
+			children, e := o.list(app)
+			if e != nil || len(children) != 1 || children[0] != "install" {
+				return errors.New("unclassified protected acquisition must be preserved")
+			}
+			install := filepath.Join(app, "install")
+			if err := protectedDir(install, 0700); err != nil {
+				return err
+			}
+			acquisitions, e := o.list(install)
+			if e != nil || len(acquisitions) > 1024 {
+				return errors.New("protected acquisition inventory unavailable")
+			}
+			for _, acquisition := range acquisitions {
+				if !strings.HasPrefix(acquisition, "verified-") || !update.IDOK(strings.TrimPrefix(acquisition, "verified-")) ||
+					protectedDir(filepath.Join(install, acquisition), 0700) != nil {
+					return errors.New("unclassified protected acquisition must be preserved")
+				}
+			}
+		default:
+			return errors.New("unclassified protected maintenance must be preserved")
+		}
+	}
+	if !seenAuthority || !seenRemote || !seenLock {
+		return errors.New("protected Remote authority is incomplete")
+	}
+	return nil
+}
+
+// The caller already holds this journal domain's install lock. A completed
+// record is retained, but an interrupted or unclassified write remains held.
+func verifyFreshRemoteJournals(o hostOps, m Manifest, dir, instance string, uid int) error {
+	f, err := o.read(dir)
+	if err != nil || !f.Directory || f.UID != uid || f.Mode.Perm()&0077 != 0 ||
+		f.Mode&(os.ModeSymlink|os.ModeSetuid|os.ModeSetgid|os.ModeSticky) != 0 {
+		return errors.New("Remote journal directory changed; preserve it")
+	}
+	names, err := o.list(dir)
+	if err != nil || len(names) > 1024 {
+		return errors.New("Remote journal inventory unavailable")
+	}
+	for _, name := range names {
+		if strings.HasPrefix(name, ".pending-") {
+			return errors.New("interrupted Remote journal must be preserved")
+		}
+	}
+	if err := accessIdle(o, m); err != nil {
+		return err
+	}
+	if err := maintenanceIdle(o, m); err != nil {
+		return err
+	}
+	var access *accessJournal
+	if b, e := o.readJournal(accessJournalName); e == nil {
+		var value accessJournal
+		if strict(b, &value) != nil || !accessJournalValid(value) || value.InstanceID != instance {
+			return errors.New("Remote access identity changed; preserve it")
+		}
+		terminal := value.Next
+		if value.Phase == "rolled-back" {
+			terminal = value.Previous
+		}
+		terminal.CoreSHA256 = m.CoreSHA256
+		terminal.ApplicationSequence = m.ApplicationSequence
+		terminal.ApplicationReleaseSHA256 = m.ApplicationReleaseSHA256
+		if terminal != m {
+			return errors.New("Remote access result differs; preserve it")
+		}
+		access = &value
+	} else if !errors.Is(e, os.ErrNotExist) {
+		return e
+	}
+	var application *applicationJournal
+	if value, e := readApplicationJournal(o); e == nil {
+		if value.Status.Phase != "completed" && value.Status.Phase != "rolled-back" {
+			return errors.New("finish Remote update recovery first")
+		}
+		terminal := value.Target
+		if value.Status.Phase == "rolled-back" {
+			terminal = value.Previous
+		}
+		previousOrigin := terminal.PublicOrigin
+		terminal.PublicOrigin = m.PublicOrigin
+		if terminal != m || previousOrigin != m.PublicOrigin && (access == nil ||
+			access.Previous.PublicOrigin != previousOrigin && access.Next.PublicOrigin != previousOrigin) {
+			return errors.New("Remote update result differs; preserve it")
+		}
+		application = &value
+	} else if !errors.Is(e, os.ErrNotExist) {
+		return e
+	}
+	if b, e := o.readJournal("application-maintenance.json"); e == nil {
+		var request applicationMaintenanceRequest
+		if strict(b, &request) != nil || request.Version != 1 || !update.IDOK(request.ID) || request.InstallationID != m.ID ||
+			!canonicalHex(request.PreviousManifestSHA256, 32) {
+			return errors.New("unknown Remote maintenance; preserve it")
+		}
+		switch request.Finished {
+		case "completed", "rolled-back":
+			if application == nil || application.Status.ID != request.ID || application.Status.Phase != request.Finished || application.Status.PreviousManifestSHA256 != request.PreviousManifestSHA256 {
+				return errors.New("Remote maintenance outcome differs; preserve it")
+			}
+		case "deferred":
+			original := request.PreviousManifestSHA256 == ManifestSHA256(m)
+			if access != nil {
+				original = original || request.PreviousManifestSHA256 == ManifestSHA256(access.Previous) || request.PreviousManifestSHA256 == ManifestSHA256(access.Next)
+			}
+			if application != nil {
+				original = original || request.PreviousManifestSHA256 == ManifestSHA256(application.Previous)
+			}
+			if !original || application != nil && application.Status.ID == request.ID {
+				return errors.New("deferred Remote maintenance differs; preserve it")
+			}
+		default:
+			return errors.New("unfinished Remote maintenance; preserve it")
+		}
+	} else if !errors.Is(e, os.ErrNotExist) {
+		return e
+	}
+	return nil
+}
+
+// Called by the ordinary Remote owner while its existing installation lease is
+// held; it does not acquire that lease again or alter the owner's records.
+func VerifyPreparedEnrollmentOwner(m Manifest, instance string) error {
+	o := liveOps(nil)
+	if err := ownedBy(o, m); err != nil {
+		return err
+	}
+	dir, err := os.UserConfigDir()
+	if err != nil {
+		return err
+	}
+	return verifyFreshRemoteJournals(o, m, filepath.Join(dir, "fased-app-vps-installer"), instance, o.uid)
+}
 
 // The lease remains held through fencing; callbacks do not recursively acquire
 // it. Manifest/code/unit identity can still be inspected after data is fenced.
@@ -25,6 +223,22 @@ func EnrollmentLease(ctx context.Context, m Manifest, s *custodyinstall.System) 
 		return nil, errors.New("owner OS authorization required")
 	}
 	o := liveOps(s)
+	if _, err := maintenance.ReadAuthority(m.OwnerUID); err == nil {
+		if err = ownedBy(o, m); err != nil {
+			return nil, err
+		}
+		l, err := o.lock()
+		if err != nil {
+			return nil, err
+		}
+		if _, err = protectedEnrollmentCall(ctx, m, "remote-enrollment-validate"); err != nil {
+			_ = l.Close()
+			return nil, err
+		}
+		return l, nil
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return nil, err
+	}
 	return enrollmentLease(ctx, o, m)
 }
 
@@ -32,7 +246,35 @@ func EnrollmentStatus(ctx context.Context, m Manifest, s *custodyinstall.System)
 	if s == nil {
 		return ServiceStatus{}, errors.New("owner OS authorization required")
 	}
+	if _, err := maintenance.ReadAuthority(m.OwnerUID); err == nil {
+		return protectedEnrollmentCall(ctx, m, "remote-enrollment-status")
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return ServiceStatus{}, err
+	}
 	return enrollmentStatus(ctx, liveOps(s), m)
+}
+
+func protectedEnrollmentCall(ctx context.Context, m Manifest, action string) (ServiceStatus, error) {
+	var status ServiceStatus
+	if m.OwnerUID != os.Getuid() || os.Getuid() != os.Geteuid() {
+		return status, errors.New("Remote installation owner required")
+	}
+	actual, err := Load(m.OwnerUID)
+	if err != nil || actual != m {
+		return status, errors.New("Remote enrollment source changed; preserving it")
+	}
+	b, err := maintenance.Call(ctx, maintenance.Request{Version: 1, Action: action}, nil)
+	if err != nil {
+		return status, err
+	}
+	var response maintenance.Response
+	if update.StrictJSON(b, &response) != nil || response.Version != 1 || response.Action != action || !response.Complete {
+		return status, errors.New("protected Remote enrollment response invalid")
+	}
+	if action == "remote-enrollment-status" && update.StrictJSON(response.Payload, &status) != nil {
+		return status, errors.New("protected Remote enrollment status invalid")
+	}
+	return status, nil
 }
 func enrollmentStatus(ctx context.Context, o hostOps, m Manifest) (ServiceStatus, error) {
 	if err := verifyFiles(o, m); err == nil {
@@ -86,6 +328,12 @@ func ValidateEnrollment(ctx context.Context, m Manifest, s *custodyinstall.Syste
 	if s == nil {
 		return errors.New("owner OS authorization required")
 	}
+	if _, err := maintenance.ReadAuthority(m.OwnerUID); err == nil {
+		_, err = protectedEnrollmentCall(ctx, m, "remote-enrollment-validate")
+		return err
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
 	o := liveOps(s)
 	if e := verify(ctx, o, m); e != nil {
 		return e
@@ -97,15 +345,17 @@ func ValidateEnrollment(ctx context.Context, m Manifest, s *custodyinstall.Syste
 }
 
 type enrollmentSourceBinding struct {
-	Profile            string `json:"profile"`
-	Data               string `json:"data"`
-	Listen             string `json:"listen"`
-	PublicOrigin       string `json:"publicOrigin,omitempty"`
-	ExpectedInstanceID string `json:"expectedInstanceId"`
-	UID                int    `json:"uid"`
-	GID                int    `json:"gid"`
-	Running            bool   `json:"running"`
-	Autostart          bool   `json:"autostart"`
+	Profile                  string `json:"profile"`
+	Data                     string `json:"data"`
+	Listen                   string `json:"listen"`
+	PublicOrigin             string `json:"publicOrigin,omitempty"`
+	ExpectedInstanceID       string `json:"expectedInstanceId"`
+	UID                      int    `json:"uid"`
+	GID                      int    `json:"gid"`
+	Running                  bool   `json:"running"`
+	Autostart                bool   `json:"autostart"`
+	ApplicationSequence      uint64 `json:"applicationSequence,omitempty"`
+	ApplicationReleaseSHA256 string `json:"applicationReleaseSha256,omitempty"`
 }
 type enrollmentNodeBinding struct {
 	Device uint64 `json:"device"`
@@ -122,13 +372,6 @@ type enrollmentFenceBinding struct {
 	Node    enrollmentNodeBinding   `json:"node"`
 	Digest  string                  `json:"digest"`
 	Target  custodyinstall.Manifest `json:"target"`
-}
-type enrollmentJournalBinding struct {
-	enrollmentFenceBinding
-	Phase      string `json:"phase"`
-	CoreHash   string `json:"coreHash"`
-	SignerHash string `json:"signerHash"`
-	Network    string `json:"network"`
 }
 
 func bindEnrollmentOps(o *hostOps) {
@@ -165,7 +408,10 @@ func enrollmentInstanceID(id string) bool {
 
 func boundEnrollment(f enrollmentFenceBinding, m Manifest) bool {
 	s, t := f.Source, f.Target
-	return f.Version == 1 && canonicalHex(f.ID, 16) && f.Owner == m.OwnerUID && canonicalHex(f.Digest, 32) && s.Profile == "remote" && s.Data == m.Data && s.Listen == m.Listen && s.PublicOrigin == m.PublicOrigin && s.UID == m.AppUID && s.GID == m.AppGID && enrollmentInstanceID(s.ExpectedInstanceID) && f.Node.Inode > 0 && f.Node.UID == m.AppUID && f.Node.GID == m.AppGID && f.Node.Mode == 0700 && t.Enrollment && t.Owner == m.OwnerUID && t.Location == "remote" && t.Listen == m.Listen && t.PublicOrigin == m.PublicOrigin && t.App.UID != m.AppUID && t.Signer.UID != m.AppUID
+	// Zero fields are the already-shipped marker form. A marker carrying a
+	// release identity must match the original protected Remote manifest.
+	releaseMatches := s.ApplicationSequence == 0 && s.ApplicationReleaseSHA256 == "" || s.ApplicationSequence == m.ApplicationSequence && s.ApplicationSequence != 0 && s.ApplicationReleaseSHA256 == m.ApplicationReleaseSHA256 && canonicalHex(s.ApplicationReleaseSHA256, 32)
+	return releaseMatches && f.Version == 1 && canonicalHex(f.ID, 16) && f.Owner == m.OwnerUID && canonicalHex(f.Digest, 32) && s.Profile == "remote" && s.Data == m.Data && s.Listen == m.Listen && s.PublicOrigin == m.PublicOrigin && s.UID == m.AppUID && s.GID == m.AppGID && enrollmentInstanceID(s.ExpectedInstanceID) && f.Node.Inode > 0 && f.Node.UID == m.AppUID && f.Node.GID == m.AppGID && f.Node.Mode == 0700 && t.Enrollment && t.Owner == m.OwnerUID && t.Location == "remote" && t.Listen == m.Listen && t.PublicOrigin == m.PublicOrigin && t.App.UID != m.AppUID && t.Signer.UID != m.AppUID
 }
 
 func committedEnrollment(o hostOps, m Manifest) (enrollmentFenceBinding, error) {
@@ -188,24 +434,28 @@ func committedEnrollment(o hostOps, m Manifest) (enrollmentFenceBinding, error) 
 }
 
 func pendingEnrollment(o hostOps, m Manifest) (enrollmentFenceBinding, string, error) {
-	var j enrollmentJournalBinding
+	var f enrollmentFenceBinding
 	if o.enrollmentJournal == nil || o.custodyTarget == nil {
-		return j.enrollmentFenceBinding, "", errors.New("no pending enrollment binding")
+		return f, "", errors.New("no pending enrollment binding")
 	}
 	b, err := o.enrollmentJournal()
-	if err != nil || len(b) > 16384 || update.StrictJSON(b, &j) != nil || !boundEnrollment(j.enrollmentFenceBinding, m) || j.CoreHash != j.Target.CoreHash || j.SignerHash != j.Target.SignerHash || j.Network != j.Target.Network {
+	if err != nil {
+		return f, "", errors.New("pending enrollment journal unavailable")
+	}
+	projection, phase, err := enrollment.RemoteJournalFence(b, m.OwnerUID)
+	if err != nil || update.StrictJSON(projection, &f) != nil || !boundEnrollment(f, m) {
 		return enrollmentFenceBinding{}, "", errors.New("pending enrollment journal differs from this Remote installation")
 	}
-	switch j.Phase {
+	switch phase {
 	case "fencing", "fenced", "publishing", "committed", "activation-requested", "complete", "source-lock-lost":
 	default:
 		return enrollmentFenceBinding{}, "", errors.New("enrollment has not begun source fencing")
 	}
 	target, err := o.custodyTarget(m.OwnerUID)
-	if err != nil || custodyinstall.EnrollmentIdentity(target) != custodyinstall.EnrollmentIdentity(j.Target) {
+	if err != nil || custodyinstall.EnrollmentIdentity(target) != custodyinstall.EnrollmentIdentity(f.Target) {
 		return enrollmentFenceBinding{}, "", errors.New("pending enrollment target changed")
 	}
-	sibling := ".enrollment-" + j.ID
+	sibling := ".enrollment-" + f.ID
 	_, se := o.read(m.Root + "/" + sibling)
 	data, de := o.read(m.Data)
 	if de == nil && data.Directory && data.UID == 0 && data.GID == 0 && data.Mode.Perm() == 0755 && data.Mode&os.ModeSymlink == 0 {
@@ -215,12 +465,12 @@ func pendingEnrollment(o hostOps, m Manifest) (enrollmentFenceBinding, string, e
 		if _, re := o.read(m.Data + "/ready.json"); !errors.Is(re, os.ErrNotExist) {
 			return enrollmentFenceBinding{}, "", errors.New("completed enrollment must pass its public target binding")
 		}
-		if err = verifyEnrollmentFence(o, m.Data, j.enrollmentFenceBinding, true); err != nil {
+		if err = verifyEnrollmentFence(o, m.Data, f, true); err != nil {
 			return enrollmentFenceBinding{}, "", err
 		}
-		return j.enrollmentFenceBinding, "", nil
+		return f, "", nil
 	}
-	if j.Phase != "fencing" || se != nil {
+	if phase != "fencing" || se != nil {
 		return enrollmentFenceBinding{}, "", errors.New("source fence is absent or foreign")
 	}
 	if de != nil && !errors.Is(de, os.ErrNotExist) {
@@ -229,15 +479,17 @@ func pendingEnrollment(o hostOps, m Manifest) (enrollmentFenceBinding, string, e
 	if de == nil && (checkDirectory(o, m.Data, m.AppUID, m.AppGID, 0700) != nil) {
 		return enrollmentFenceBinding{}, "", errors.New("source data ownership changed")
 	}
-	if err = verifyEnrollmentFence(o, m.Root+"/"+sibling, j.enrollmentFenceBinding, false); err != nil {
+	if err = verifyEnrollmentFence(o, m.Root+"/"+sibling, f, false); err != nil {
 		return enrollmentFenceBinding{}, "", err
 	}
-	return j.enrollmentFenceBinding, sibling, nil
+	return f, sibling, nil
 }
 
 func verifyEnrollmentFence(o hostOps, path string, f enrollmentFenceBinding, published bool) error {
 	if err := checkDirectory(o, path, 0, 0, 0755); err != nil {
-		return err
+		if published || checkDirectory(o, path, 0, 0, 0700) != nil {
+			return err
+		}
 	}
 	names, err := o.list(path)
 	if err != nil || len(names) > 5 {
@@ -254,7 +506,7 @@ func verifyEnrollmentFence(o hostOps, path string, f enrollmentFenceBinding, pub
 			original = true
 		case "enrollment.json", ".enrollment.json-" + f.ID + ".pending":
 			b, e := rootFile(o, path+"/"+name)
-			if e != nil || b.Mode.Perm() != 0644 || !bytes.HasPrefix(expected, b.Data) || name == "enrollment.json" && !bytes.Equal(expected, b.Data) {
+			if e != nil || name == "enrollment.json" && b.Mode.Perm() != 0644 || name != "enrollment.json" && b.Mode.Perm()&^0644 != 0 || !bytes.HasPrefix(expected, b.Data) || name == "enrollment.json" && !bytes.Equal(expected, b.Data) {
 				return errors.New("source fence binding changed")
 			}
 			marker = marker || name == "enrollment.json"
@@ -330,6 +582,15 @@ func EnrollmentAutostart(m Manifest) (bool, error) {
 	return e == nil, e
 }
 func SuspendEnrollment(ctx context.Context, m Manifest, s *custodyinstall.System) error {
+	if s == nil {
+		return errors.New("owner OS authorization required")
+	}
+	if _, err := maintenance.ReadAuthority(m.OwnerUID); err == nil {
+		_, err = protectedEnrollmentCall(ctx, m, "remote-enrollment-suspend")
+		return err
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
 	if e := ValidateEnrollment(ctx, m, s); e != nil {
 		return e
 	}
@@ -337,6 +598,16 @@ func SuspendEnrollment(ctx context.Context, m Manifest, s *custodyinstall.System
 	return e
 }
 func RestoreEnrollment(ctx context.Context, m Manifest, running, autostart bool, s *custodyinstall.System) error {
+	if s == nil {
+		return errors.New("owner OS authorization required")
+	}
+	if _, err := maintenance.ReadAuthority(m.OwnerUID); err == nil {
+		// The helper independently reads the original journal's saved intent.
+		_, err = protectedEnrollmentCall(ctx, m, "remote-enrollment-restore")
+		return err
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
 	if e := ValidateEnrollment(ctx, m, s); e != nil {
 		return e
 	}

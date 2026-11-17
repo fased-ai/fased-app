@@ -73,7 +73,7 @@ func (s *Store) ApplicationOwnerCommand(ctx context.Context, c ApplicationOwnerC
 		}
 		return out, nil
 	case "claim":
-		if !update.IDOK(c.Lease) || c.Receipt != nil || o.Phase != "applying" {
+		if !update.IDOK(c.Lease) || c.Receipt != nil || !oneOf(o.Phase, "applying", "recovery") {
 			return out, errors.New("one dispatched owner lease required")
 		}
 		if o.OwnerLease != "" {

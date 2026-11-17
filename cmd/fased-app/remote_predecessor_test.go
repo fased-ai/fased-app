@@ -124,6 +124,32 @@ func testRemoteMaintenancePredecessor(t *testing.T, custody bool) {
 	if err != nil {
 		t.Fatal("password-free predecessor session", err)
 	}
+	// Exercise the immutable command actually selected by the Remote helper
+	// policy. Its output is the application-update view, not update-status.
+	beforeSession, err := os.ReadFile(filepath.Join(dir, "cli-session.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	statusOutput, err := exec.CommandContext(ctx, image, "updates", "status", "--data-dir", dir).Output()
+	if err != nil {
+		t.Fatal("actual predecessor update status", err)
+	}
+	var status core.ApplicationUpdateView
+	if json.Unmarshal(statusOutput, &status) != nil || status.Version != 1 || status.Schema != beforeVersion || status.InstanceID != c.Endpoint.InstanceID {
+		t.Fatal("actual predecessor update status did not bind the expected instance and schema")
+	}
+	healthOutput, err := exec.CommandContext(ctx, image, "status", "--data-dir", dir).Output()
+	if err != nil {
+		t.Fatal("actual predecessor health status", err)
+	}
+	var health core.Health
+	if json.Unmarshal(healthOutput, &health) != nil || health.Status != "ok" || health.APIVersion != core.APIVersion || health.InstanceID != status.InstanceID {
+		t.Fatal("actual predecessor status responses disagree")
+	}
+	afterSession, err := os.ReadFile(filepath.Join(dir, "cli-session.json"))
+	if err != nil || !bytes.Equal(beforeSession, afterSession) {
+		t.Fatal("read-only status changed the saved predecessor session")
+	}
 	probe := update.NewProbe()
 	result, err := exec.CommandContext(ctx, image, "update-inventory", "--data-dir", dir, "--probe-id", probe).CombinedOutput()
 	if err != nil {

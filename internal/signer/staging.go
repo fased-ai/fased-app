@@ -19,6 +19,13 @@ func (v *Vault) stageIntent(r update.StageRequest) (update.Intent, error) {
 // StageUpdate is owner-only. Chunks are inert private data, never executables.
 // A receipt is journaled only after full rehash and fresh service bindings.
 func (v *Vault) StageUpdate(action string, r update.StageRequest) (*update.StageStatus, error) {
+	return v.stageUpdate(action, r, false)
+}
+
+// Cold maintenance may cross a process restart only after the protected helper
+// rechecks the unchanged metadata under its stopped-service/instance fence.
+// Ordinary owner staging retains the full live boot/snapshot comparison.
+func (v *Vault) stageUpdate(action string, r update.StageRequest, maintenance bool) (*update.StageStatus, error) {
 	v.mu.Lock()
 	defer v.mu.Unlock()
 	i, e := v.stageIntent(r)
@@ -50,7 +57,7 @@ func (v *Vault) StageUpdate(action string, r update.StageRequest) (*update.Stage
 		return nil, e
 	}
 	if action == "fixture-update-stage-finish" {
-		if r.Core == nil || update.SnapshotDigest("core", *r.Core) != update.SnapshotDigest("core", i.Core) {
+		if r.Core == nil || !maintenance && update.SnapshotDigest("core", *r.Core) != update.SnapshotDigest("core", i.Core) || maintenance && !update.SameCoreMetadata(*r.Core, i.Core) {
 			return nil, errors.New("core metadata/boot changed; abort and review a fresh intent")
 		}
 		if _, e = v.heldSnapshot(i, i.Signer.ProbeID); e != nil {

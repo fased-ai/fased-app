@@ -2,11 +2,14 @@ package bootstrap
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -16,36 +19,74 @@ import (
 )
 
 // CandidateAdmission is a maintainer's bounded acceptance request, not a
-// customer update channel or a transferable execution permit. The compiled
-// trust still independently verifies the packet/proof. Installation authority
-// comes only from the existing protected owner protocol and controller.
+// customer update channel or a transferable execution permit. An update binds
+// its original baseline; a fresh install has no existing baseline and is
+// explicitly marked. The compiled trust independently verifies packet/proof.
 type CandidateAdmission struct {
 	PacketSHA256   string `json:"packetSha256"`
 	OperationID    string `json:"operationId"`
 	BaselineSHA256 string `json:"baselineSha256"`
 	ExpiresAt      int64  `json:"expiresAt"`
+	FreshProfile   string `json:"freshProfile,omitempty"`
+	FreshOwner     int    `json:"freshOwner,omitempty"`
+	FreshRoot      string `json:"freshRoot,omitempty"`
+	FreshData      string `json:"freshData,omitempty"`
 }
 
 func (a CandidateAdmission) validate(now time.Time) error {
-	if !hashOK(a.PacketSHA256) || !hashOK(a.BaselineSHA256) || !update.IDOK(a.OperationID) || a.ExpiresAt <= now.Unix() || a.ExpiresAt > now.Add(15*time.Minute).Unix() {
-		return errors.New("exact candidate, operation, installation baseline and at most15-minute admission required")
+	updateScope := a.FreshProfile == "" && a.FreshOwner == 0 && a.FreshRoot == "" && a.FreshData == "" && hashOK(a.BaselineSHA256)
+	freshScope := a.FreshProfile == "local" && a.FreshOwner > 0 && a.BaselineSHA256 == "" && freshCandidatePath(a.FreshRoot) && freshCandidatePath(a.FreshData)
+	if freshScope {
+		for _, pair := range [][2]string{{a.FreshRoot, a.FreshData}, {a.FreshData, a.FreshRoot}} {
+			rel, err := filepath.Rel(pair[0], pair[1])
+			if err != nil || rel == "." || rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+				freshScope = false
+			}
+		}
+	}
+	scope := updateScope || freshScope
+	packageScope := false
+	location, packageProfile := strings.CutPrefix(a.FreshProfile, "package-")
+	if packageProfile && (location == "local" || location == "remote") && a.FreshOwner > 0 && a.BaselineSHA256 == "" {
+		prefix := "/var/lib/fased-app-package/" + strconv.Itoa(a.FreshOwner) + "/" + location + "/"
+		if strings.HasPrefix(a.FreshRoot, prefix) {
+			instance := strings.TrimPrefix(a.FreshRoot, prefix)
+			root, err := update.PackageInstanceRoot(a.FreshOwner, location, instance)
+			packageScope = err == nil && root == a.FreshRoot && a.FreshData == filepath.Join(root, "app-state")
+		}
+	}
+	if !hashOK(a.PacketSHA256) || !(scope || packageScope) || !update.IDOK(a.OperationID) || a.ExpiresAt <= now.Unix() || a.ExpiresAt > now.Add(15*time.Minute).Unix() {
+		return errors.New("exact candidate, installation scope and at most 15-minute admission required")
 	}
 	return nil
 }
 
-// PrepareAttestedCandidate admits authenticated CI bytes only to the existing
-// installed controller. It never fetches a substitute endpoint, fabricates a
-// published release, changes trust, starts a service or writes instance state.
-// Ordinary Prepare/Inspect and the retail installer cannot select this path.
+func freshCandidatePath(path string) bool {
+	return filepath.IsAbs(path) && filepath.Clean(path) == path && path != string(filepath.Separator) && !strings.ContainsAny(path, "\x00\r\n")
+}
+
+// PrepareAttestedCandidate admits authenticated CI bytes for one explicit
+// fresh Local install or the existing installed controller. It never fetches a
+// substitute endpoint, fabricates a release, starts a service or writes state.
 func PrepareAttestedCandidate(ctx context.Context, o Options, directory string, admission CandidateAdmission) (p *Prepared, err error) {
+	if os.Geteuid() == 0 || o.protectedOwner != 0 {
+		return nil, errors.New("ordinary maintainer and pinned production trust required")
+	}
+	return prepareAttestedCandidate(ctx, o, directory, admission)
+}
+
+func prepareAttestedCandidate(ctx context.Context, o Options, directory string, admission CandidateAdmission) (p *Prepared, err error) {
 	if err = ctx.Err(); err != nil {
 		return nil, err
 	}
-	if os.Geteuid() == 0 || o.Development || len(o.TLSCA) != 0 || o.githubFixture != nil {
+	if o.Development || len(o.TLSCA) != 0 || o.githubFixture != nil {
 		return nil, errors.New("ordinary maintainer and pinned production trust required")
 	}
 	if err = admission.validate(o.clock()); err != nil {
 		return nil, err
+	}
+	if admission.FreshProfile != "" && (o.protectedOwner > 0 && admission.FreshOwner != o.protectedOwner || o.protectedOwner == 0 && (os.Getuid() != admission.FreshOwner || os.Geteuid() != admission.FreshOwner)) {
+		return nil, errors.New("fresh candidate belongs to another OS owner")
 	}
 	if _, err = privateDirectory(directory); err != nil || !filepath.IsAbs(directory) || filepath.Clean(directory) != directory {
 		return nil, errors.New("private absolute candidate directory required")
@@ -55,7 +96,7 @@ func PrepareAttestedCandidate(ctx context.Context, o Options, directory string, 
 	}
 	// Reuse the shipped preflight, including every artifact, original proof and
 	// inner bundle profile. Copying/rechecking below binds the held output too.
-	if _, err = VerifyAttestedCandidate(o, directory); err != nil {
+	if _, err = verifyAttestedCandidate(o, directory); err != nil {
 		return nil, err
 	}
 	o.Seed = append([]byte(nil), o.Seed...)
@@ -68,7 +109,7 @@ func PrepareAttestedCandidate(ctx context.Context, o Options, directory string, 
 		return nil, errors.New("candidate differs from the reviewed packet")
 	}
 	var packet AttestedPacket
-	if update.StrictJSON(raw, &packet) != nil || packet.Version != 2 || !attestedBuildIdentity(packet, "") {
+	if update.StrictJSON(raw, &packet) != nil || (packet.Version != 2 && packet.Version != 3 && packet.Version != 4) || !attestedBuildIdentity(packet, "") {
 		return nil, errors.New("only protected main-dispatch candidates admit installed acceptance")
 	}
 	sequence, err := releaseSequence(packet.ProductVersion)
@@ -78,12 +119,16 @@ func PrepareAttestedCandidate(ctx context.Context, o Options, directory string, 
 	if err = checkReaderRelease(sequence); err != nil {
 		return nil, err
 	}
-	d := Descriptor{Binding: seed.Binding, Sequence: sequence, ProductVersion: packet.ProductVersion, Source: packet.Source, BundleSHA256: packet.BundleSHA256, Archive: packet.Archive, Release: packet.Release}
+	d := Descriptor{Binding: seed.Binding, Sequence: sequence, ProductVersion: packet.ProductVersion, Source: packet.Source, BundleSHA256: packet.BundleSHA256, Archive: packet.Archive, LinuxBundle: packet.Version == 4, Release: packet.Release}
 	proof, err := update.ReadDocument(filepath.Join(directory, provenanceFile))
 	if err != nil {
 		return nil, err
 	}
-	decision, err := productionProof(seed, d, proof, o.clock())
+	expected := d.provenanceExpected()
+	if packet.Version == 3 {
+		expected.DebSHA256, expected.RPMSHA256 = packet.Deb.SHA256, packet.RPM.SHA256
+	}
+	decision, err := productionProofExpected(seed, d, proof, o.clock(), expected)
 	if err != nil {
 		return nil, err
 	}
@@ -131,32 +176,40 @@ func PrepareAttestedCandidate(ctx context.Context, o Options, directory string, 
 		return p, err
 	}
 	defer sourceRoot.Close()
-	in, err := sourceRoot.Open(packet.Archive.File)
-	if err != nil {
-		return p, err
+	artifacts := []struct {
+		artifact update.Artifact
+		held     string
+	}{{packet.Archive, "download.tar.gz"}, {packet.Installer, "candidate-installer"}, {packet.Entry, "candidate-entry"}}
+	if packet.Version == 3 {
+		artifacts = append(artifacts, struct {
+			artifact update.Artifact
+			held     string
+		}{packet.Deb, "candidate-deb"}, struct {
+			artifact update.Artifact
+			held     string
+		}{packet.RPM, "candidate-rpm"})
 	}
-	defer in.Close()
-	out, err := root.OpenFile("download.tar.gz", os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
-	if err != nil {
-		return p, err
-	}
-	n, copyErr := io.Copy(out, io.LimitReader(in, packet.Archive.Size+1))
-	if err = errors.Join(copyErr, out.Sync(), out.Close(), ctx.Err()); err != nil {
-		return p, err
-	}
-	if n != packet.Archive.Size {
-		return p, errors.New("candidate archive copy incomplete")
+	for _, item := range artifacts {
+		if err = copyHeldCandidate(ctx, sourceRoot, root, item.artifact, item.held); err != nil {
+			return p, err
+		}
 	}
 	m, err := bundle.ExtractVerifiedArchive(filepath.Join(o.Directory, "download.tar.gz"), filepath.Join(o.Directory, "bundle"), bundle.File{SHA256: packet.Archive.SHA256, Bytes: packet.Archive.Size}, packet.BundleSHA256)
 	if err != nil || m.Version != packet.ProductVersion || m.Source != packet.Source {
 		return p, errors.New("candidate held bundle differs from reviewed source")
 	}
-	if err = verifyBundleProfile(seed, m); err != nil {
+	if err = verifyAttestedBundleProfile(seed, m, packet.Version); err != nil {
 		return p, err
 	}
 	engine, _ := bundle.Names()
 	p.engine = m.Files[engine]
-	p.report = Report{Version: 4, Purpose: "fased-app-installed-candidate-acceptance:v1", MetadataVerified: true, ArchiveVerified: true, BundleVerified: true, Sequence: sequence, Target: d.Target, SeedSHA256: o.SeedSHA256, DescriptorSHA256: ApplicationDescriptorIdentity(d), ArchiveSHA256: d.Archive.SHA256, BundleSHA256: d.BundleSHA256, BundleDirectory: filepath.Join(o.Directory, "bundle"), ProvenanceVerified: true, ProvenanceSHA256: decision.BundleSHA256, TrustPolicySHA256: decision.PolicySHA256}
+	identity := ApplicationDescriptorIdentity(d)
+	if packet.Version == 3 || packet.Version == 4 {
+		// The packet digest includes both package identities; the legacy
+		// archive-only descriptor does not.
+		identity = admission.PacketSHA256
+	}
+	p.report = Report{Version: 4, Purpose: "fased-app-installed-candidate-acceptance:v1", MetadataVerified: true, ArchiveVerified: true, BundleVerified: true, Sequence: sequence, Target: d.Target, SeedSHA256: o.SeedSHA256, DescriptorSHA256: identity, ArchiveSHA256: d.Archive.SHA256, BundleSHA256: d.BundleSHA256, BundleDirectory: filepath.Join(o.Directory, "bundle"), ProvenanceVerified: true, LinuxPackageDigestsVerified: packet.Version == 3, LinuxBundleVerified: packet.Version == 4, ProvenanceSHA256: decision.BundleSHA256, TrustPolicySHA256: decision.PolicySHA256}
 	for name, data := range p.metadata {
 		if err = writeNew(root, name, data); err != nil {
 			return p, err
@@ -165,7 +218,36 @@ func PrepareAttestedCandidate(ctx context.Context, o Options, directory string, 
 	if err = writeNew(root, "seed.json", o.Seed); err != nil {
 		return p, err
 	}
-	return p, p.revalidate()
+	return p, p.revalidateHeld()
+}
+
+func copyHeldCandidate(ctx context.Context, source, target *os.Root, artifact update.Artifact, name string) error {
+	entry, err := source.Lstat(artifact.File)
+	if err != nil || !entry.Mode().IsRegular() || entry.Size() != artifact.Size {
+		return errors.New("candidate artifact is not a bounded regular file")
+	}
+	in, err := source.Open(artifact.File)
+	if err != nil {
+		return err
+	}
+	opened, err := in.Stat()
+	if err != nil || !opened.Mode().IsRegular() || !os.SameFile(entry, opened) || opened.Size() != artifact.Size {
+		return errors.Join(errors.New("candidate artifact changed during acquisition"), in.Close())
+	}
+	out, err := target.OpenFile(name, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
+	if err != nil {
+		return errors.Join(err, in.Close())
+	}
+	h := sha256.New()
+	var n int64
+	if err = out.Chmod(0600); err == nil {
+		n, err = io.CopyBuffer(io.MultiWriter(out, h), io.LimitReader(in, artifact.Size+1), make([]byte, 32<<10))
+	}
+	err = errors.Join(err, in.Close(), out.Sync(), out.Close(), ctx.Err())
+	if err != nil || n != artifact.Size || hex.EncodeToString(h.Sum(nil)) != artifact.SHA256 {
+		return errors.New("candidate copy differs from the attested artifact")
+	}
+	return nil
 }
 
 func (p *Prepared) revalidateCandidate(seed Seed, now time.Time) error {
@@ -176,20 +258,44 @@ func (p *Prepared) revalidateCandidate(seed Seed, now time.Time) error {
 		return errors.New("reviewed candidate identity changed")
 	}
 	var packet AttestedPacket
-	if update.StrictJSON(p.metadata[AttestedPacketFile], &packet) != nil || packet.Version != 2 || !attestedBuildIdentity(packet, "") {
+	if update.StrictJSON(p.metadata[AttestedPacketFile], &packet) != nil || (packet.Version != 2 && packet.Version != 3 && packet.Version != 4) || !attestedBuildIdentity(packet, "") || (packet.Version == 3) != p.report.LinuxPackageDigestsVerified || (packet.Version == 4) != p.report.LinuxBundleVerified {
 		return errors.New("candidate packet changed")
 	}
-	d := Descriptor{Binding: seed.Binding, Sequence: p.descriptor.Sequence, ProductVersion: packet.ProductVersion, Source: packet.Source, BundleSHA256: packet.BundleSHA256, Archive: packet.Archive, Release: packet.Release}
+	d := Descriptor{Binding: seed.Binding, Sequence: p.descriptor.Sequence, ProductVersion: packet.ProductVersion, Source: packet.Source, BundleSHA256: packet.BundleSHA256, Archive: packet.Archive, LinuxBundle: packet.Version == 4, Release: packet.Release}
 	if d != p.descriptor {
 		return errors.New("candidate descriptor changed")
 	}
-	_, err := productionProof(seed, d, p.metadata["provenance.sigstore.json"], now)
+	installer, err := bundle.Inspect(filepath.Join(p.options.Directory, "candidate-installer"))
+	if err != nil || installer.SHA256 != packet.Installer.SHA256 || installer.Bytes != packet.Installer.Size {
+		return errors.New("candidate installer changed after verification")
+	}
+	entry, err := bundle.Inspect(filepath.Join(p.options.Directory, "candidate-entry"))
+	if err != nil || entry.SHA256 != packet.Entry.SHA256 || entry.Bytes != packet.Entry.Size {
+		return errors.New("candidate entry changed after verification")
+	}
+	expected := d.provenanceExpected()
+	if packet.Version == 3 {
+		for _, item := range []struct {
+			artifact update.Artifact
+			held     string
+		}{{packet.Deb, "candidate-deb"}, {packet.RPM, "candidate-rpm"}} {
+			identity, e := bundle.Inspect(filepath.Join(p.options.Directory, item.held))
+			if e != nil || identity.SHA256 != item.artifact.SHA256 || identity.Bytes != item.artifact.Size {
+				return errors.New("native candidate package changed after verification")
+			}
+		}
+		expected.DebSHA256, expected.RPMSHA256 = packet.Deb.SHA256, packet.RPM.SHA256
+	}
+	_, err = productionProofExpected(seed, d, p.metadata["provenance.sigstore.json"], now, expected)
 	return err
 }
 
 func (p *Prepared) candidateInstallation(baseline, root, data string, completed localinstall.ApplicationUpdateStatus) error {
 	if p.candidate == nil {
 		return nil
+	}
+	if p.candidate.FreshProfile != "" {
+		return errors.New("fresh candidate admission cannot authorize an existing installation update")
 	}
 	exactOperation := completed.ID == p.candidate.OperationID && completed.PreviousManifestSHA256 == p.candidate.BaselineSHA256 && completed.Sequence == p.report.Sequence && p.matchesApplicationIdentity(completed.ReleaseSHA256)
 	if completed.ID == p.candidate.OperationID && completed.Phase == "rolled-back" {

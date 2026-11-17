@@ -193,12 +193,19 @@ func (w *WalletOwner) Enable(selectedOrigin, user string) error {
 		}
 		return err
 	}
-	// Human OS consent starts only after image, target and transfer preflight.
+	// Existing packages use their fixed helper without a terminal handoff.
+	// Legacy enrollment still obtains OS consent after its preflight.
 	approval, cancel := context.WithTimeout(w.ctx, 5*time.Minute)
 	defer cancel()
-	path, args := plan.Terminal()
-	if err = w.terminal(approval, path, args); err != nil {
+	packageSetup, err := plan.RunPackage(approval)
+	if err != nil {
 		return err
+	}
+	if !packageSetup {
+		path, args := plan.Terminal()
+		if err = w.terminal(approval, path, args); err != nil {
+			return err
+		}
 	}
 	client, err := plan.Wait(approval)
 	if err != nil {

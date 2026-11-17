@@ -16,6 +16,13 @@ func VerifyAttestedCandidate(o Options, directory string) (Report, error) {
 	if os.Geteuid() == 0 || !filepath.IsAbs(directory) {
 		return report, errors.New("ordinary-owner absolute candidate directory required")
 	}
+	return verifyAttestedCandidate(o, directory)
+}
+
+// verifyAttestedCandidate is also used by the fixed installed maintenance
+// helper after its caller and protected input directory have been validated.
+func verifyAttestedCandidate(o Options, directory string) (Report, error) {
+	var report Report
 	seed, err := parseSeed(o.Seed, o.SeedSHA256, o.clock())
 	if err != nil || seed.Version != 4 {
 		return report, errors.New("compiled attested release trust required")
@@ -36,7 +43,18 @@ func VerifyAttestedCandidate(o Options, directory string) (Report, error) {
 		return report, errors.New("attested candidate installer digest required")
 	}
 	d := Descriptor{Binding: seed.Binding, ProductVersion: packet.ProductVersion, Source: packet.Source, BundleSHA256: packet.BundleSHA256, Archive: packet.Archive, Release: packet.Release}
-	for _, a := range []update.Artifact{packet.Archive, packet.Installer, packet.Entry, packet.Release.Provenance} {
+	artifacts := []update.Artifact{packet.Archive, packet.Installer, packet.Entry, packet.Release.Provenance}
+	expected := d.provenanceExpected()
+	if packet.Version == 3 {
+		if packet.Deb.File != "fased-app-linux-amd64.deb" || packet.RPM.File != "fased-app-linux-amd64.rpm" {
+			return report, errors.New("both fixed Linux package targets are required")
+		}
+		artifacts = append(artifacts, packet.Deb, packet.RPM)
+		expected.DebSHA256, expected.RPMSHA256 = packet.Deb.SHA256, packet.RPM.SHA256
+	} else if packet.Deb != (update.Artifact{}) || packet.RPM != (update.Artifact{}) {
+		return report, errors.New("legacy candidate cannot carry unverified Linux packages")
+	}
+	for _, a := range artifacts {
 		if filepath.Base(a.File) != a.File || a.Size <= 0 || a.Size > maxArchiveBytes || !hashOK(a.SHA256) {
 			return report, errors.New("candidate artifact bound invalid")
 		}
@@ -52,7 +70,7 @@ func VerifyAttestedCandidate(o Options, directory string) (Report, error) {
 	if err != nil {
 		return report, err
 	}
-	decision, err := productionProof(seed, d, proof, o.clock())
+	decision, err := productionProofExpected(seed, d, proof, o.clock(), expected)
 	if err != nil {
 		return report, err
 	}
@@ -68,8 +86,8 @@ func VerifyAttestedCandidate(o Options, directory string) (Report, error) {
 	if m.Version != packet.ProductVersion || m.Source != packet.Source {
 		return report, errors.New("candidate inner source/version differs from provenance")
 	}
-	if err = verifyBundleProfile(seed, m); err != nil {
+	if err = verifyAttestedBundleProfile(seed, m, packet.Version); err != nil {
 		return report, err
 	}
-	return Report{Version: 4, Purpose: AttestedPurpose, ArchiveVerified: true, BundleVerified: true, ProvenanceVerified: true, SeedSHA256: o.SeedSHA256, ArchiveSHA256: packet.Archive.SHA256, BundleSHA256: packet.BundleSHA256, ProvenanceSHA256: decision.BundleSHA256, TrustPolicySHA256: decision.PolicySHA256}, nil
+	return Report{Version: 4, Purpose: AttestedPurpose, ArchiveVerified: true, BundleVerified: true, ProvenanceVerified: true, LinuxPackageDigestsVerified: packet.Version == 3, LinuxBundleVerified: packet.Version == 4, SeedSHA256: o.SeedSHA256, ArchiveSHA256: packet.Archive.SHA256, BundleSHA256: packet.BundleSHA256, ProvenanceSHA256: decision.BundleSHA256, TrustPolicySHA256: decision.PolicySHA256}, nil
 }

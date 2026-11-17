@@ -1,6 +1,7 @@
 package core
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -113,6 +114,101 @@ func TestRemoteOwnerEnrollmentPreservationAndReplay(t *testing.T) {
 				t.Fatal("device revocation missing from snapshot", err)
 			}
 		})
+	}
+}
+
+func TestRemotePackageSetupUsesPrivateIPCAndOriginalDevice(t *testing.T) {
+	s, err := OpenStore(filepath.Join(t.TempDir(), "fased"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	h, err := NewHTTPHandler(s, "http://127.0.0.1:7331", "https://node.tail-test.ts.net", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.instanceLocation, h.instanceOwnerUID, h.instanceOwnerKind, h.remoteIngress = "remote", 1000, "custody", true
+	s.protectedOwnerUID = 1000
+	request := func(peer tailnet.Identity, ipc bool) *httptest.ResponseRecorder {
+		body, _ := json.Marshal(map[string]any{"device": peer})
+		r := httptest.NewRequest(http.MethodPost, "http://127.0.0.1:7331/api/v1/auth/remote-setup", bytes.NewReader(body))
+		r.Header.Set("Origin", "http://127.0.0.1:7331")
+		r.Header.Set("Content-Type", "application/json")
+		if ipc {
+			r = r.WithContext(context.WithValue(r.Context(), privateIPCKey{}, true))
+		}
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, r)
+		return w
+	}
+	owner := tailnet.Identity{UserID: 7, NodeID: "approved-device", Login: "owner@example.test"}
+	if w := request(owner, false); w.Code != http.StatusForbidden {
+		t.Fatalf("ordinary HTTP gained Remote setup: %d", w.Code)
+	}
+	w := request(owner, true)
+	var result struct{ InstanceID, Code string }
+	if w.Code != http.StatusOK || json.Unmarshal(w.Body.Bytes(), &result) != nil || result.InstanceID != s.Health().InstanceID || len(result.Code) != 43 {
+		t.Fatalf("approved setup did not reach the existing instance: HTTP %d", w.Code)
+	}
+	other := owner
+	other.NodeID = "different-device"
+	if w = request(other, true); w.Code == http.StatusOK {
+		t.Fatal("a different device replaced the pending owner")
+	}
+	if w = request(owner, true); w.Code != http.StatusOK {
+		t.Fatalf("the original device could not retry: %d", w.Code)
+	}
+}
+
+func TestRemoteClaimRetryCannotReplacePendingDevice(t *testing.T) {
+	s := fixtureStore(t)
+	first := tailnet.Identity{UserID: 7, NodeID: "first", Login: "owner@example.test"}
+	other := first
+	other.NodeID = "other"
+	if _, err := s.IssueRemoteClaim(t.Context(), first); err != nil {
+		t.Fatal(err)
+	}
+	var before string
+	if err := s.db.QueryRow("SELECT claim_hash FROM instance WHERE id=1").Scan(&before); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.IssueRemoteClaim(t.Context(), other); err == nil {
+		t.Fatal("different device replaced pending claimant")
+	}
+	var after string
+	if err := s.db.QueryRow("SELECT claim_hash FROM instance WHERE id=1").Scan(&after); err != nil || before != after {
+		t.Fatal("pending claim changed", err)
+	}
+	if _, err := s.IssueRemoteClaim(t.Context(), first); err != nil {
+		t.Fatal("original device retry refused", err)
+	}
+}
+
+func TestStaleClaimWriterCannotRemoveRemoteBinding(t *testing.T) {
+	first := fixtureStore(t)
+	second, err := OpenStore(first.dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer second.Close()
+	var old string
+	if err = first.db.QueryRow("SELECT COALESCE(claim_hash,'') FROM instance WHERE id=1").Scan(&old); err != nil {
+		t.Fatal(err)
+	}
+	device := tailnet.Identity{UserID: 7, NodeID: "device", Login: "owner@example.test"}
+	if _, err = second.IssueRemoteClaim(t.Context(), device); err != nil {
+		t.Fatal(err)
+	}
+	updated, err := first.compareAndSetUnclaimedCode(t.Context(), old, "stale-unscoped-code", 1)
+	if err != nil || updated {
+		t.Fatal("stale writer replaced protected claim", err)
+	}
+	if _, err = first.IssueClaimCode(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	got, err := second.PendingRemoteClaim(t.Context())
+	if err != nil || got.UserID != device.UserID || got.NodeID != device.NodeID {
+		t.Fatal("claim rotation lost device binding", err)
 	}
 }
 func TestRemoteHeadersNeverGrantLocalOrProxyAuthority(t *testing.T) {

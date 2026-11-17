@@ -29,6 +29,19 @@ func TestEnrolledPrivateAccessPlanUsesCustodySocket(t *testing.T) {
 	}
 }
 
+func TestEnrolledProtectedIngressRequiresInstanceProof(t *testing.T) {
+	m := custodyinstall.Manifest{Owner: 1000, Root: "/var/lib/fased-app-custody-1000", PublicOrigin: "https://owner.example.ts.net"}
+	plan := privateaccess.Plan{Mode: "tailscale", Origin: m.PublicOrigin}
+	legacy, err := enrolledVerifiedIngressPlan(plan, m, false)
+	if err != nil || legacy.Target != "unix:/var/lib/fased-app-custody-1000/app-state/tailscale.sock" {
+		t.Fatal("unproved route changed", legacy, err)
+	}
+	protected, err := enrolledVerifiedIngressPlan(plan, m, true)
+	if err != nil || protected.Target != "unix:/run/fased-custody-1000/tailscale.sock" {
+		t.Fatal("verified listener not selected", protected, err)
+	}
+}
+
 func TestEnrolledNativeStartUsesExistingOwnerAuthority(t *testing.T) {
 	for _, prepare := range []bool{false, true} {
 		m := custodyinstall.Manifest{Owner: os.Getuid(), Enrollment: true, NativeOwnerAccess: true, Location: "local", Listen: "127.0.0.1:19090"}
@@ -70,6 +83,50 @@ func TestEnrolledNativeStartUsesExistingOwnerAuthority(t *testing.T) {
 		if enrolledLifecycle(t.Context(), m, "start", false, false, &bytes.Buffer{}, o) == nil {
 			t.Fatal("native local startup widened Remote authority")
 		}
+	}
+}
+
+func TestEnrolledLocalOpenUsesOwnerLaunch(t *testing.T) {
+	id := strings.Repeat("a", 43)
+	link := "http://127.0.0.1:19090/?instance=" + id + "#local=" + strings.Repeat("b", 43)
+	m := custodyinstall.Manifest{Owner: os.Getuid(), Enrollment: true, NativeOwnerAccess: true, Location: "local", Listen: "127.0.0.1:19090"}
+	opened, issued := 0, 0
+	o := enrolledOps{
+		commit: func(custodyinstall.Manifest) (custodyinstall.EnrollmentCommit, error) {
+			return custodyinstall.EnrollmentCommit{InstanceID: id}, nil
+		},
+		runtime: func(custodyinstall.Manifest) error { return nil },
+		probe: func(_ context.Context, url, expected string) (connection.Result, error) {
+			return connection.Result{URL: url, InstanceID: expected, Location: "local"}, nil
+		},
+		ownerLink: func(_ context.Context, origin string) (string, error) {
+			if origin != "http://"+m.Listen {
+				t.Fatal("wrong Local origin")
+			}
+			issued++
+			return link, nil
+		},
+		open: func(url, _ string) error {
+			if url != link {
+				t.Fatal("browser did not receive the one-use owner link")
+			}
+			opened++
+			return nil
+		},
+	}
+	for _, printOnly := range []bool{false, true} {
+		var out bytes.Buffer
+		if err := enrolledLifecycle(t.Context(), m, "open", false, printOnly, &out, o); err != nil || strings.TrimSpace(out.String()) != link {
+			t.Fatalf("Local owner open failed: %v", err)
+		}
+	}
+	if issued != 2 || opened != 1 {
+		t.Fatalf("wrong handoff/open count: issued=%d opened=%d", issued, opened)
+	}
+	o.ownerLink = func(context.Context, string) (string, error) { return "", errors.New("owner link unavailable") }
+	var out bytes.Buffer
+	if enrolledLifecycle(t.Context(), m, "open", false, false, &out, o) == nil || opened != 1 || out.Len() != 0 {
+		t.Fatal("failed owner handoff opened or advertised the instance")
 	}
 }
 

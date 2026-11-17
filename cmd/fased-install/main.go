@@ -4,6 +4,8 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -12,8 +14,10 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/fased-ai/fased-app/internal/bootstrap"
+	"github.com/fased-ai/fased-app/internal/maintenance"
 	"github.com/fased-ai/fased-app/internal/update"
 )
 
@@ -33,6 +37,13 @@ type firstInstallBinding struct {
 // Publisher review supplies this Go binding, never a customer form or API key.
 var compiledFirstInstallBinding *firstInstallBinding
 
+// Tests can substitute a nonprivileged receiver; production keeps the fixed
+// installed maintenance entry and has no runtime override.
+var candidateMaintenanceStage = stageAttestedCandidate
+var packageCandidateUpdateBaseline = candidatePackageUpdateBaseline
+var packageCandidateMaintenanceStage = stageAttestedPackageCandidate
+var compiledFixturePackageInstance func(int) (string, error)
+
 func retailInstallerOptions(binding *firstInstallBinding, cache string) (bootstrap.Options, error) {
 	if binding == nil || len(binding.Seed) == 0 {
 		return bootstrap.Options{}, errors.New("No trusted installer release is published. Check the official Fased downloads.")
@@ -44,6 +55,87 @@ func retailInstallerOptions(binding *firstInstallBinding, cache string) (bootstr
 	return bootstrap.Options{Seed: append([]byte(nil), binding.Seed...), SeedSHA256: binding.SHA256, Directory: filepath.Join(parent, "verified-"+update.NewProbe())}, nil
 }
 func run(args []string, in io.Reader, out, errOut io.Writer) error {
+	if len(args) == 1 && args[0] == "--fixture-package-instance" {
+		if os.Getuid() <= 0 || os.Geteuid() != os.Getuid() {
+			return errors.New("ordinary Local fixture owner required")
+		}
+		if compiledFixturePackageInstance == nil {
+			return nil
+		}
+		instance, err := compiledFixturePackageInstance(os.Getuid())
+		if err != nil || !update.IDOK(instance) {
+			return errors.New("the compiled Local package fixture is unavailable")
+		}
+		_, err = fmt.Fprintln(out, instance)
+		return err
+	}
+	if len(args) == 1 && args[0] == "--package-controller-ready" {
+		return packageControllerReady()
+	}
+	if len(args) == 1 && args[0] == "--inspect-public-package" {
+		cache, err := os.UserCacheDir()
+		if err != nil {
+			return err
+		}
+		options, err := retailInstallerOptions(compiledFirstInstallBinding, cache)
+		if err != nil {
+			return err
+		}
+		descriptor, packet, err := bootstrap.Inspect(context.Background(), options)
+		if err != nil {
+			return err
+		}
+		if descriptor.Deb == (update.Artifact{}) && descriptor.RPM == (update.Artifact{}) && !descriptor.LinuxBundle {
+			_, err = fmt.Fprintln(out, "legacy")
+		} else {
+			_, err = fmt.Fprintln(out, "native", packet, descriptor.ProductVersion, descriptor.Release.InstallerSHA256)
+		}
+		return err
+	}
+	if len(args) > 0 {
+		switch args[0] {
+		case "maintenance-successor":
+			return maintenanceSuccessorCommand(args[1:])
+		case "maintenance-transition-status":
+			return maintenanceTransitionStatusCommand(args[1:], out)
+		case "maintenance-worker", "maintenance-recover", "maintenance-gate", "maintenance-owner-record":
+			return maintenanceCustodyCommand(args[0], args[1:], out)
+		case "maintenance-peer", "maintenance-app":
+			return maintenancePeerCommand(args[1:], in, out, args[0] == "maintenance-app")
+		case "maintenance-package-worker", "maintenance-package-recover":
+			return maintenancePackageWorkerCommand(args[0], args[1:])
+		}
+	}
+	if len(args) > 0 && args[0] == "maintenance-register" {
+		return maintenanceRegisterCommand(args[1:], out)
+	}
+	if len(args) > 0 && args[0] == "maintenance-package-register" {
+		return maintenancePackageRegisterCommand(args[1:], out)
+	}
+	if len(args) > 0 && args[0] == "maintenance-package-request" {
+		return maintenancePackageRequestCommand(args[1:], in, out)
+	}
+	if len(args) > 0 && args[0] == "maintenance-package-gate" {
+		return maintenancePackageGateCommand(args[1:])
+	}
+	if len(args) > 0 && args[0] == "maintenance-bootstrap" {
+		return maintenanceBootstrapCommand(args[1:], errOut)
+	}
+	if len(args) > 0 && args[0] == "maintenance-request" {
+		return maintenanceRequestCommand(args[1:], in, out)
+	}
+	if len(args) == 1 && args[0] == "--emit-embedded-signer" {
+		if os.Getuid() <= 0 || os.Geteuid() != os.Getuid() {
+			return errors.New("embedded signer extraction requires an unprivileged process")
+		}
+		return bootstrap.WriteWalletPayload(out, walletPayload())
+	}
+	if len(args) == 1 && args[0] == "--emit-embedded-native" {
+		if os.Getuid() <= 0 || os.Geteuid() != os.Getuid() {
+			return errors.New("embedded native extraction requires an unprivileged process")
+		}
+		return bootstrap.WriteWalletPayload(out, walletDesktopPayload())
+	}
 	f := flag.NewFlagSet("fased-install", flag.ContinueOnError)
 	f.SetOutput(errOut)
 	development := f.Bool("development", false, "explicit disposable-trust development bootstrap")
@@ -64,11 +156,236 @@ func run(args []string, in io.Reader, out, errOut io.Writer) error {
 	walletNetwork := f.String("wallet-network", "", "network for optional protected Wallets enrollment")
 	entryAction := f.String("entry-action", "", "fixed installed-instance action for the entry launcher")
 	verifyCandidate := f.String("verify-candidate", "", "verify a retained release candidate without installation")
+	installCandidate := f.String("install-candidate", "", "install one independently attested Local candidate")
+	installPublicPackage := f.Bool("install-public-package", false, "install the authenticated public Linux package")
+	stageCandidate := f.String("stage-candidate", "", "admit one independently attested manual update candidate")
+	candidatePacket := f.String("candidate-packet-sha256", "", "exact reviewed candidate packet digest")
+	packageLocation := f.String("package-location", "", "installed package profile for candidate acceptance")
+	packageInstance := f.String("package-instance", "", "exact installed package instance for candidate acceptance")
 	if err := f.Parse(args); err != nil {
 		return err
 	}
 	if f.NArg() != 0 {
 		return errors.New("unexpected installer arguments")
+	}
+	packageFlags := false
+	f.Visit(func(flag *flag.Flag) {
+		if flag.Name == "package-location" || flag.Name == "package-instance" {
+			packageFlags = true
+		}
+	})
+	if *installPublicPackage {
+		mixed := false
+		f.Visit(func(flag *flag.Flag) {
+			switch flag.Name {
+			case "install-public-package", "candidate-packet-sha256", "package-location", "package-instance", "profile", "listen":
+			default:
+				mixed = true
+			}
+		})
+		root, pathErr := update.PackageInstanceRoot(os.Getuid(), *packageLocation, *packageInstance)
+		digest, digestErr := hex.DecodeString(*candidatePacket)
+		instanceHash := sha256.Sum256([]byte(fmt.Sprintf("%d\x00%s\x00%s", os.Getuid(), *candidatePacket, *packageLocation)))
+		if mixed || pathErr != nil || (*packageLocation != "local" && *packageLocation != "remote") || *profile != *packageLocation || os.Getuid() <= 0 || os.Getuid() != os.Geteuid() ||
+			digestErr != nil || len(digest) != 32 || hex.EncodeToString(digest) != *candidatePacket ||
+			*packageInstance != hex.EncodeToString(instanceHash[:])[:32] || compiledFirstInstallBinding == nil {
+			return errors.New("fresh package requires its exact public release, profile and owner")
+		}
+		if err := packageControllerReady(); err != nil {
+			return err
+		}
+		if *listen == "" {
+			*listen = "127.0.0.1:7331"
+		}
+		request, _ := json.Marshal(maintenance.PackageRequest{Version: 1, Action: "provision", Listen: *listen})
+		if _, err := maintenance.DecodePackageRequest(request); err != nil {
+			return err
+		}
+		entries, err := os.ReadDir(filepath.Dir(root))
+		if err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+		for _, entry := range entries {
+			if entry.Name() != *packageInstance && entry.Name() != "."+*packageInstance+".pending" {
+				return errors.New("an existing package requires its installed Update command")
+			}
+		}
+		cache, err := os.UserCacheDir()
+		if err != nil {
+			return err
+		}
+		options, err := retailInstallerOptions(compiledFirstInstallBinding, cache)
+		if err != nil {
+			return err
+		}
+		p, err := bootstrap.PrepareNative(context.Background(), options)
+		if err != nil {
+			return err
+		}
+		defer p.Close()
+		release, _, err := p.PackageApplicationRelease()
+		if err != nil || release == nil || release.ManifestSHA256 != *candidatePacket {
+			return errors.New("the public release changed; restart installation")
+		}
+		if err = installFreshPackageCandidate(context.Background(), p, *candidatePacket, *packageLocation, *packageInstance, *listen, errOut); err != nil {
+			return err
+		}
+		p.RetainAcquisitionEvidence()
+		if *packageLocation == "remote" {
+			_, err = fmt.Fprintln(out, "Fased Remote is installed.")
+		} else {
+			_, err = fmt.Fprintln(out, "Fased is installed. Run /usr/bin/fased open to continue.")
+		}
+		return err
+	}
+	if *stageCandidate != "" {
+		mixed := false
+		f.Visit(func(flag *flag.Flag) {
+			if flag.Name != "stage-candidate" && flag.Name != "candidate-packet-sha256" && flag.Name != "package-location" && flag.Name != "package-instance" {
+				mixed = true
+			}
+		})
+		digest, e := hex.DecodeString(*candidatePacket)
+		if packageFlags {
+			if _, err := update.PackageInstanceRoot(os.Getuid(), *packageLocation, *packageInstance); err != nil {
+				mixed = true
+			}
+		}
+		if mixed || !filepath.IsAbs(*stageCandidate) || filepath.Clean(*stageCandidate) != *stageCandidate || len(digest) != 32 || hex.EncodeToString(digest) != *candidatePacket || e != nil || compiledFirstInstallBinding == nil {
+			return errors.New("manual candidate update requires its exact packet and compiled installer trust")
+		}
+		var baseline string
+		if packageFlags {
+			baseline, e = packageCandidateUpdateBaseline(*packageLocation, *packageInstance)
+		} else {
+			baseline, e = candidateUpdateBaseline()
+		}
+		if e != nil {
+			return e
+		}
+		cache, e := os.UserCacheDir()
+		if e != nil {
+			return e
+		}
+		options, e := retailInstallerOptions(compiledFirstInstallBinding, cache)
+		if e != nil {
+			return e
+		}
+		admission := bootstrap.CandidateAdmission{PacketSHA256: *candidatePacket, OperationID: update.NewProbe(), BaselineSHA256: baseline, ExpiresAt: time.Now().Add(15 * time.Minute).Unix()}
+		p, e := bootstrap.PrepareAttestedCandidate(context.Background(), options, *stageCandidate, admission)
+		if e != nil {
+			return e
+		}
+		defer p.Close()
+		if packageFlags {
+			e = packageCandidateMaintenanceStage(context.Background(), p, *candidatePacket, *packageLocation, *packageInstance, baseline, errOut)
+		} else {
+			e = candidateMaintenanceStage(context.Background(), p, *candidatePacket, "update", errOut)
+		}
+		if e != nil {
+			return e
+		}
+		p.RetainAcquisitionEvidence()
+		if packageFlags {
+			_, e = fmt.Fprintln(out, "Candidate staged for the selected installation.")
+		} else {
+			_, e = fmt.Fprintln(out, "Candidate ready for manual Update.")
+		}
+		return e
+	}
+	if packageFlags && *installCandidate != "" {
+		mixed := false
+		f.Visit(func(flag *flag.Flag) {
+			switch flag.Name {
+			case "install-candidate", "candidate-packet-sha256", "package-location", "package-instance", "profile", "listen":
+			default:
+				mixed = true
+			}
+		})
+		root, pathErr := update.PackageInstanceRoot(os.Getuid(), *packageLocation, *packageInstance)
+		digest, digestErr := hex.DecodeString(*candidatePacket)
+		if mixed || pathErr != nil || *profile != *packageLocation || !filepath.IsAbs(*installCandidate) || filepath.Clean(*installCandidate) != *installCandidate ||
+			digestErr != nil || len(digest) != 32 || hex.EncodeToString(digest) != *candidatePacket || compiledFirstInstallBinding == nil {
+			return errors.New("fresh package requires its exact candidate, profile and instance")
+		}
+		if err := packageControllerReady(); err != nil {
+			return err
+		}
+		if *listen == "" {
+			*listen = "127.0.0.1:7331"
+		}
+		request, _ := json.Marshal(maintenance.PackageRequest{Version: 1, Action: "provision", Listen: *listen})
+		if _, err := maintenance.DecodePackageRequest(request); err != nil {
+			return err
+		}
+		cache, err := os.UserCacheDir()
+		if err != nil {
+			return err
+		}
+		options, err := retailInstallerOptions(compiledFirstInstallBinding, cache)
+		if err != nil {
+			return err
+		}
+		admission := bootstrap.CandidateAdmission{PacketSHA256: *candidatePacket, OperationID: update.NewProbe(), FreshProfile: "package-" + *packageLocation, FreshOwner: os.Getuid(), FreshRoot: root, FreshData: filepath.Join(root, "app-state"), ExpiresAt: time.Now().Add(15 * time.Minute).Unix()}
+		p, err := bootstrap.PrepareAttestedCandidate(context.Background(), options, *installCandidate, admission)
+		if err != nil {
+			return err
+		}
+		defer p.Close()
+		if err = installFreshPackageCandidate(context.Background(), p, *candidatePacket, *packageLocation, *packageInstance, *listen, errOut); err != nil {
+			return err
+		}
+		p.RetainAcquisitionEvidence()
+		if *packageLocation == "remote" {
+			_, err = fmt.Fprintln(out, "Fased Remote is installed.")
+		} else {
+			_, err = fmt.Fprintln(out, "Fased is installed. Run /usr/bin/fased open to continue.")
+		}
+		return err
+	}
+	if packageFlags {
+		return errors.New("package candidate identity requires a matching install or update")
+	}
+	if *installCandidate != "" || *candidatePacket != "" {
+		mixed := false
+		f.Visit(func(flag *flag.Flag) {
+			switch flag.Name {
+			case "install-candidate", "candidate-packet-sha256", "profile", "prefix", "data-dir", "start", "listen":
+			default:
+				mixed = true
+			}
+		})
+		digest, e := hex.DecodeString(*candidatePacket)
+		if mixed || !filepath.IsAbs(*installCandidate) || filepath.Clean(*installCandidate) != *installCandidate || len(digest) != 32 || hex.EncodeToString(digest) != *candidatePacket || e != nil || *profile != "local" || compiledFirstInstallBinding == nil {
+			return errors.New("fresh Local candidate requires its exact packet and compiled installer trust")
+		}
+		installOptions := bootstrap.InstallOptions{WalletSigner: walletPayload(), WalletDesktop: walletDesktopPayload(), Prefix: *prefix, DataDirectory: *data, Start: *start, Profile: "local", Listen: *listen}
+		paths, e := bootstrap.FreshCandidatePaths(installOptions)
+		if e != nil {
+			return e
+		}
+		cache, e := os.UserCacheDir()
+		if e != nil {
+			return e
+		}
+		options, e := retailInstallerOptions(compiledFirstInstallBinding, cache)
+		if e != nil {
+			return e
+		}
+		admission := bootstrap.CandidateAdmission{PacketSHA256: *candidatePacket, OperationID: update.NewProbe(), FreshProfile: "local", FreshOwner: os.Getuid(), FreshRoot: paths.Root, FreshData: paths.Data, ExpiresAt: time.Now().Add(15 * time.Minute).Unix()}
+		p, e := bootstrap.PrepareAttestedCandidate(context.Background(), options, *installCandidate, admission)
+		if e != nil {
+			return e
+		}
+		defer p.Close()
+		if e = p.VerifyFreshCandidateInstaller(installOptions); e != nil {
+			return e
+		}
+		if e = candidateMaintenanceStage(context.Background(), p, *candidatePacket, "fresh", errOut); e != nil {
+			return e
+		}
+		p.RetainAcquisitionEvidence()
+		return p.Run(context.Background(), installOptions, in, out, errOut)
 	}
 	if *verifyCandidate != "" {
 		mixed := false
@@ -183,7 +500,7 @@ func run(args []string, in io.Reader, out, errOut io.Writer) error {
 	}
 
 	if *install {
-		if err = p.Run(context.Background(), bootstrap.InstallOptions{WalletSigner: walletPayload(), WalletInstance: *walletInstance, WalletNetwork: *walletNetwork, Prefix: *prefix, DataDirectory: *data, Start: *start, Profile: *profile, Listen: *listen}, in, out, errOut); err != nil {
+		if err = p.Run(context.Background(), bootstrap.InstallOptions{WalletSigner: walletPayload(), WalletDesktop: walletDesktopPayload(), WalletInstance: *walletInstance, WalletNetwork: *walletNetwork, Prefix: *prefix, DataDirectory: *data, Start: *start, Profile: *profile, Listen: *listen}, in, out, errOut); err != nil {
 			return err
 		}
 	}

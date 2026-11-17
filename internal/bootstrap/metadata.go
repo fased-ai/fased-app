@@ -72,6 +72,9 @@ type Descriptor struct {
 	Source         string                 `json:"source"`
 	BundleSHA256   string                 `json:"bundleSha256"`
 	Archive        update.Artifact        `json:"archive"`
+	Deb            update.Artifact        `json:"deb,omitzero"`
+	RPM            update.Artifact        `json:"rpm,omitzero"`
+	LinuxBundle    bool                   `json:"linuxBundle,omitzero"`
 	GitHub         releaseops.GitHubAsset `json:"github,omitzero"`
 	Release        ProductionRelease      `json:"release,omitzero"`
 }
@@ -274,6 +277,15 @@ func verifyDescriptor(b []byte, seed Seed, chain *trustedmetadata.TrustedMetadat
 	}
 	if update.StrictJSON(b, &d) != nil || d.Binding != seed.Binding || d.Sequence < seed.MinimumSequence || d.ProductVersion == "" || len(d.ProductVersion) > 80 || d.Source == "" || len(d.Source) > 160 || strings.ContainsAny(d.ProductVersion+d.Source, "\r\n\x00") || !hashOK(d.BundleSHA256) || d.Archive.File != archiveTarget || d.Archive.Size != targets[archiveName].Length || d.Archive.SHA256 != hex.EncodeToString(targets[archiveName].Hashes["sha256"]) {
 		return d, errors.New("first-install descriptor differs from pinned policy or signed targets")
+	}
+	var fields map[string]json.RawMessage
+	if json.Unmarshal(b, &fields) != nil {
+		return d, errors.New("invalid legacy descriptor")
+	}
+	_, debPresent := fields["deb"]
+	_, rpmPresent := fields["rpm"]
+	if debPresent || rpmPresent {
+		return d, errors.New("legacy metadata cannot authorize native packages")
 	}
 	if seed.Version == 1 && d.GitHub != (releaseops.GitHubAsset{}) {
 		return d, errors.New("version1 descriptor cannot acquire GitHub authority")

@@ -7,4 +7,8 @@ func TestOrdinaryCustodyConfigContract(t *testing.T) {
 	if err := c.Validate(); err != nil {
 		t.Fatalf("ordinary custody contract refused: %v", err)
 	}
+	c.Network, c.Provenance = "", ControlledCustodyProfile
+	if c.Validate() == nil {
+		t.Fatal("an unbound controlled pre-wallet signer was accepted")
+	}
 }

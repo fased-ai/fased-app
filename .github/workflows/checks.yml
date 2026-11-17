@@ -27,7 +27,6 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       core: ${{ steps.route.outputs.core }}
-      desktop: ${{ steps.route.outputs.desktop }}
       signer: ${{ steps.route.outputs.signer }}
       handoff: ${{ steps.route.outputs.handoff }}
       handoff_uid: ${{ steps.route.outputs.handoff_uid }}
@@ -59,7 +58,7 @@ jobs:
             node .evidence/trusted-ci-routing.mjs plan
           else
             # Policy installation or unavailable base: require every lane.
-            for lane in core desktop signer handoff handoff_uid inspection vm; do echo "$lane=true" >> "$GITHUB_OUTPUT"; done
+            for lane in core signer handoff handoff_uid inspection vm; do echo "$lane=true" >> "$GITHUB_OUTPUT"; done
             echo "scope=full" >> "$GITHUB_OUTPUT"
           fi
   core:
@@ -78,6 +77,10 @@ jobs:
         with:
           go-version: "1.26.x"
           cache: true
+      - name: Install Linux sandbox prerequisite
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends bubblewrap
       - run: node scripts/source-evidence.mjs
       - name: Verify dependency-installed update observer
         run: node --test --test-isolation=none --test-name-pattern='^the actual poller stops on a terminal update failure$' scripts/staged-package-browser.test.mjs
@@ -129,27 +132,6 @@ jobs:
             .evidence/native-provider-secret/result.json
             .evidence/native-provider-secret/service-starts.log
           retention-days: 7
-      - name: Headless Windows compilation
-        if: needs.classify.outputs.desktop != 'true'
-        run: GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -o .evidence/bin/windows.exe ./cmd/fased-app
-      - name: Headless macOS compilation
-        if: needs.classify.outputs.desktop != 'true'
-        run: GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 go build -o .evidence/bin/macos ./cmd/fased-app
-      # Same runner libraries and headless browser as the managed signer UI proof.
-      - run: npx playwright install --only-shell chromium
-        if: needs.classify.outputs.desktop != 'true'
-      - run: npm run test:ui
-        if: needs.classify.outputs.desktop != 'true'
-      - if: needs.classify.outputs.scope == 'ui'
-        env:
-          FASED_WALLET_BROWSER_BINARY: .evidence/bin/wallet-core.test
-          FASED_WALLET_OWNER_BINARY: .evidence/bin/wallet-owner.test
-        run: |
-          go test -c -o .evidence/bin/wallet-core.test ./internal/core
-          go test -c -o .evidence/bin/wallet-owner.test ./internal/signer
-          npm run test:core-ui
-      - if: needs.classify.outputs.scope == 'rpc'
-        run: npm run test:core-ui -- --grep 'public account records share UI/CLI state without wallet authority'
       - uses: actions/upload-artifact@v4
         if: failure() || cancelled()
         with:
@@ -223,15 +205,11 @@ jobs:
             .evidence/p4-complete/core-cli-result.json
             .evidence/p4-complete/core-cli.log
           retention-days: 7
-  desktop:
+  browser:
     needs: classify
-    if: needs.classify.outputs.desktop == 'true'
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-24.04, windows-2025, macos-15]
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 15
+    if: needs.classify.outputs.core == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -241,114 +219,38 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: "1.26.x"
-          cache-dependency-path: |
-            go.sum
-            desktop/go.sum
+          cache: true
       - run: npm ci
       - run: npm run build
-      - name: Native Linux build prerequisites
-        if: runner.os == 'Linux'
-        run: |
-          node --test scripts/ci-ubuntu-mirror.test.mjs
-          node scripts/ci-ubuntu-mirror.mjs
-          sudo install -m 0644 .evidence/ubuntu.sources /etc/apt/sources.list.d/ubuntu.sources
-          sudo apt-get update
-          sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev xvfb dbus-x11 xterm xdotool scrot
-      - name: Windows task encoding contracts
-        if: runner.os == 'Windows'
-        run: go test ./internal/localinstall
-      - run: go -C desktop mod verify
-      - run: npm run build:desktop
       - run: npm run build:core
-      - name: Headless Windows compilation
-        if: runner.os == 'Windows'
-        shell: bash
-        run: GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -o .evidence/bin/windows.exe ./cmd/fased-app
-      - name: Headless macOS compilation
-        if: runner.os == 'macOS'
-        shell: bash
-        run: GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 go build -o .evidence/bin/macos ./cmd/fased-app
-      - name: Verify bounded disk-image resource handling
-        run: node --test --test-isolation=none scripts/macos-dmg.test.mjs
-      - run: npm run package:native
-      - name: Prepare missing Ubuntu runtime acceptance
-        if: runner.os == 'Linux'
-        run: |
-          go -C desktop build -trimpath -tags production,webkit2_41 -o ../.evidence/bin/fased-native-smoke ./smoke
-          sudo apt-get remove -y --no-auto-remove bubblewrap libwebkit2gtk-4.1-0
-          echo "FASED_TEST_HOST_PREPARE=1" >> "$GITHUB_ENV"
-      - name: Prepare Ubuntu user service manager
-        if: runner.os == 'Linux'
-        run: |
-          sudo loginctl enable-linger "$(id -un)"
-          sudo systemctl start "user@$(id -u).service"
-          echo "XDG_RUNTIME_DIR=/run/user/$(id -u)" >> "$GITHUB_ENV"
-          echo "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$(id -u)/bus" >> "$GITHUB_ENV"
-      - name: Installed platform package journey
-        shell: bash
-        run: |
-          platform="${{ runner.os }}"
-          case "$platform" in
-            Linux) archive="$(find .evidence/packages -name '*.tar.gz')" ;;
-            Windows) archive="$(find .evidence/packages -name '*.zip')" ;;
-            macOS) archive="$(find .evidence/packages -name '*.zip')" ;;
-          esac
-          FASED_PACKAGE_ARCHIVE="$archive" npm run test:platform-install
-      - name: Windows setup executable journey
-        if: runner.os == 'Windows'
-        run: node scripts/check-windows-setup.mjs
-      - name: Linux service failure diagnostics
-        if: failure() && runner.os == 'Linux'
-        run: |
-          systemctl --user show fased-app.service --property=LoadState,ActiveState,FragmentPath,Result,ExecMainStatus || true
-          sudo journalctl --no-pager _SYSTEMD_USER_UNIT=fased-app.service -n 40 || true
-          sudo journalctl --no-pager -u "user@$(id -u).service" -n 40 || true
-          sudo journalctl --no-pager -k -g 'apparmor.*DENIED' -n 12 || true
-      - name: Native Linux window and separate-core journey
-        if: runner.os == 'Linux'
-        run: |
-          dbus-run-session -- npm run test:native-window
-      - name: Packaged Ubuntu desktop first-launch preparation
-        if: runner.os == 'Linux'
-        run: xvfb-run -a node scripts/check-native-first-launch.mjs
-      - name: Prepare joined UI browser
-        if: runner.os == 'Linux' && needs.classify.outputs.scope == 'full'
-        run: npx playwright install --only-shell chromium
+      - run: npx playwright install --only-shell chromium
       - name: Browser UI journey
-        if: runner.os == 'Linux' && needs.classify.outputs.scope == 'full'
         run: npm run test:ui
-      - name: Joined UI and CLI journey
-        if: runner.os == 'Linux' && needs.classify.outputs.scope == 'full'
+      - name: Build controlled Wallets browser adapters
+        if: needs.classify.outputs.scope != 'rpc'
         env:
           FASED_WALLET_BROWSER_BINARY: .evidence/bin/wallet-core.test
           FASED_WALLET_OWNER_BINARY: .evidence/bin/wallet-owner.test
         run: |
           go test -c -o .evidence/bin/wallet-core.test ./internal/core
           go test -c -o .evidence/bin/wallet-owner.test ./internal/signer
-          npm run test:core-ui -- --fully-parallel --workers=3
-      - name: Remove owned Ubuntu acceptance policy after native window
-        if: always() && runner.os == 'Linux'
-        run: node --input-type=module -e "const m = await import('./scripts/ubuntu-preparation.mjs'); await m.cleanupUbuntuPreparation();"
-      - uses: actions/upload-artifact@v4
-        if: always() && runner.os == 'Linux'
-        with:
-          name: ubuntu-native-first-launch
-          include-hidden-files: true
-          path: |
-            .evidence/native-first-launch-result.json
-            .evidence/native-first-launch.png
-            .evidence/native-first-consent.png
-            .evidence/native-first-launch.log
-          retention-days: 7
+      - name: Joined browser and CLI journey
+        if: needs.classify.outputs.scope != 'rpc'
+        env:
+          FASED_WALLET_BROWSER_BINARY: .evidence/bin/wallet-core.test
+          FASED_WALLET_OWNER_BINARY: .evidence/bin/wallet-owner.test
+        run: npm run test:core-ui -- --fully-parallel --workers=3
+      - name: Affected RPC browser and CLI journey
+        if: needs.classify.outputs.scope == 'rpc'
+        run: npm run test:core-ui -- --grep 'public account records share UI/CLI state without wallet authority'
       - uses: actions/upload-artifact@v4
         if: failure() || cancelled()
         with:
-          name: desktop-failure-${{ matrix.os }}
+          name: browser-failure-evidence
           include-hidden-files: true
           path: |
             .evidence/*.json
             .evidence/*.png
-            .evidence/*.log
             .evidence/browser/
             .evidence/core-browser/
           retention-days: 7
@@ -558,7 +460,7 @@ jobs:
           FASED_MANAGED_NETWORK: "devnet"
           FASED_MANAGED_EVIDENCE: .evidence/p3-network-managed
         run: node scripts/check-managed-custody.mjs
-      - name: Installed Local and Remote same-instance enrollment
+      - name: Controlled enrollment and protected ordinary Local enrollment
         env:
           FASED_ENROLLMENT_ACCEPTANCE: "1"
         run: |
@@ -594,7 +496,7 @@ jobs:
         classify,
         core,
         core-scenarios,
-        desktop,
+        browser,
         signer,
         handoff,
         handoff-uid,

@@ -69,6 +69,140 @@ func TestOwnedUnixIngressHandoff(t *testing.T) {
 	}
 }
 
+func TestRemovePreservesInterruptedIngressSwitch(t *testing.T) {
+	for _, routePresent := range []bool{false, true} {
+		t.Run(fmt.Sprintf("new-route-present=%t", routePresent), func(t *testing.T) {
+			root := fixture(t)
+			old := Plan{Mode: "tailscale", Origin: "https://node.owner.ts.net", Target: "http://127.0.0.1:7331"}
+			next := old
+			next.Target = "unix:/var/lib/fased/app-state/tailscale.sock"
+			if err := core.WritePrivateJSON(filepath.Join(root, "private-access.json"), receipt{Schema: 1, Phase: "switching", Plan: old, Next: &next}); err != nil {
+				t.Fatal(err)
+			}
+			cfg := []byte(`{}`)
+			if routePresent {
+				cfg, _ = json.Marshal(expected(next))
+			}
+			writes := 0
+			m := Manager{
+				GetConfig: func(context.Context) ([]byte, string, error) { return cfg, "etag", nil },
+				SetConfig: func(_ context.Context, data []byte, _ string) error {
+					writes++
+					cfg = append([]byte(nil), data...)
+					return nil
+				},
+				Client: &http.Client{Transport: roundTrip(func(*http.Request) (*http.Response, error) {
+					return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(`{"status":"ok","apiVersion":"1","instanceId":"fixture-instance","connection":{"location":"remote","transport":"private-https"}}`))}, nil
+				})},
+			}
+			if err := m.Remove(t.Context(), root); err == nil {
+				t.Fatal("removed the recovery receipt while a route switch was unfinished")
+			}
+			if r, err := load(root); err != nil || r.Phase != "switching" || r.Next == nil || r.Next.Target != next.Target || writes != 0 {
+				t.Fatal("interrupted switch or route was not preserved", r, err, writes)
+			}
+			// The exact recorded target can be reconciled once it is visible again.
+			cfg, _ = json.Marshal(expected(next))
+			if err := m.Enable(t.Context(), root, next, "fixture-instance"); err != nil {
+				t.Fatal("original route transition could not resume", err)
+			}
+			if err := m.Remove(t.Context(), root); err != nil || writes != 1 {
+				t.Fatal("completed route could not be removed", err, writes)
+			}
+		})
+	}
+}
+
+func TestIngressSwitchRequiresDurableReceiptBeforeRecovery(t *testing.T) {
+	for _, routePresent := range []string{"old", "next"} {
+		t.Run(routePresent, func(t *testing.T) {
+			root := fixture(t)
+			old := Plan{Mode: "tailscale", Origin: "https://node.owner.ts.net", Target: "http://127.0.0.1:7331"}
+			next := old
+			next.Target = "unix:/var/lib/fased/app-state/tailscale.sock"
+			if err := core.WritePrivateJSON(filepath.Join(root, "private-access.json"), receipt{Schema: 1, Phase: "switching", Plan: old, Next: &next}); err != nil {
+				t.Fatal(err)
+			}
+			selected := old
+			if routePresent == "next" {
+				selected = next
+			}
+			cfg, _ := json.Marshal(expected(selected))
+			writes, requests := 0, 0
+			m := Manager{
+				GetConfig: func(context.Context) ([]byte, string, error) { return cfg, "etag", nil },
+				SetConfig: func(context.Context, []byte, string) error { writes++; return nil },
+				Client: &http.Client{Transport: roundTrip(func(*http.Request) (*http.Response, error) {
+					requests++
+					return nil, errors.New("unexpected endpoint request")
+				})},
+			}
+			// Traversal and file writes still work; opening the directory for
+			// fsync does not. This exercises the real receipt path as a user.
+			if err := os.Chmod(root, 0300); err != nil {
+				t.Fatal(err)
+			}
+			defer os.Chmod(root, 0700)
+			if err := m.Enable(t.Context(), root, next, "fixture-instance"); err == nil || writes != 0 || requests != 0 {
+				t.Fatal("continued without a durable receipt", err, writes, requests)
+			}
+		})
+	}
+}
+
+func TestRemoveLocksBeforeReadingReceipt(t *testing.T) {
+	root := fixture(t)
+	if err := os.WriteFile(filepath.Join(root, "private-access.json"), []byte("unfinished"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	lock, err := core.LockInstance(filepath.Join(root, "access.lock"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lock.Close()
+	m := Manager{GetConfig: func(context.Context) ([]byte, string, error) {
+		t.Fatal("read daemon configuration while another transition owns the lock")
+		return nil, "", nil
+	}}
+	if err := m.Remove(t.Context(), root); err == nil || !strings.Contains(err.Error(), "already owns") {
+		t.Fatal("receipt was read without first owning the transition lock", err)
+	}
+}
+
+func TestRemoveRetriesReceiptDirectorySync(t *testing.T) {
+	root := fixture(t)
+	plan := Plan{Mode: "tailscale", Origin: "https://node.owner.ts.net", Target: "http://127.0.0.1:7331"}
+	if err := core.WritePrivateJSON(filepath.Join(root, "private-access.json"), receipt{Schema: 1, Phase: "ready", Plan: plan}); err != nil {
+		t.Fatal(err)
+	}
+	cfg, _ := json.Marshal(expected(plan))
+	writes := 0
+	m := Manager{
+		GetConfig: func(context.Context) ([]byte, string, error) { return cfg, "etag", nil },
+		SetConfig: func(_ context.Context, data []byte, _ string) error {
+			writes++
+			cfg = append([]byte(nil), data...)
+			return nil
+		},
+	}
+	if err := os.Chmod(root, 0300); err != nil {
+		t.Fatal(err)
+	}
+	defer os.Chmod(root, 0700)
+	if err := m.Remove(t.Context(), root); err == nil || writes != 1 {
+		t.Fatal("receipt removal did not report directory-sync failure", err, writes)
+	}
+	if err := m.Remove(t.Context(), root); err == nil || writes != 1 {
+		t.Fatal("retry accepted an unsynced removal or repeated the Serve write", err, writes)
+	}
+	if err := os.Chmod(root, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Remove(t.Context(), root); err != nil || writes != 1 {
+		t.Fatal("durable removal did not recover", err, writes)
+	}
+}
+
 func (f roundTrip) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
 func fixture(t *testing.T) string {
 	t.Helper()

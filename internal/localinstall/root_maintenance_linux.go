@@ -11,6 +11,7 @@ import (
 	"io"
 	"net"
 	"os"
+	"os/exec"
 	"os/user"
 	"path/filepath"
 	"regexp"
@@ -21,6 +22,7 @@ import (
 
 	"github.com/fased-ai/fased-app/internal/core"
 	"github.com/fased-ai/fased-app/internal/custodyinstall"
+	"github.com/fased-ai/fased-app/internal/hostplatform"
 	"github.com/godbus/dbus/v5"
 )
 
@@ -89,8 +91,21 @@ func PrepareApplicationMaintenanceHost(ctx context.Context, m Manifest, run func
 	if e != nil || !regexp.MustCompile(`^[a-z_][a-z0-9_-]*\$?$`).MatchString(u.Username) {
 		return errors.New("fixed ordinary owner account required")
 	}
-	if _, e = run(ctx, nil, "/usr/bin/apt-get", "install", "--yes", "--no-install-recommends", "polkitd"); e != nil {
+	platform, e := hostplatform.Current()
+	if e != nil {
 		return e
+	}
+	manager, e := platform.PackageManager()
+	if e != nil {
+		return e
+	}
+	query := append(append([]string(nil), manager.Query[1:]...), manager.PolicyKit)
+	installed, queryErr := exec.CommandContext(ctx, manager.Query[0], query...).Output()
+	if queryErr != nil || manager.InstalledOutput != "" && string(installed) != manager.InstalledOutput {
+		packages := append(append([]string(nil), manager.MaintenanceInstall...), manager.PolicyKit)
+		if _, e = run(ctx, nil, packages...); e != nil {
+			return e
+		}
 	}
 	for _, p := range []struct {
 		path string
@@ -355,7 +370,7 @@ func validateRootMaintenanceRuntime(m Manifest, id, attempt string, p, s map[str
 		return errors.New("Local maintenance writable paths changed")
 	}
 	drops, ok := p["DropInPaths"].Value().([]string)
-	if !ok || len(drops) != 0 {
+	if !ok || !allowedSystemMaintenanceDropIns(drops) {
 		return errors.New("Local maintenance overrides refused")
 	}
 	c, e := decodeMaintenanceBusExec(s["ExecStart"].Value())

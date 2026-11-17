@@ -19,7 +19,7 @@ func checkDesktopRuntime(binary string) error {
 	}
 	b, e := exec.Command("/usr/bin/ldd", binary).CombinedOutput()
 	if e != nil || strings.Contains(string(b), "not found") {
-		return errors.New("desktop runtime is missing; rerun the verified package installer with --prepare-host on a supported Ubuntu release, or use the headless package")
+		return errors.New("the Wallets window needs the GTK and WebKit runtime libraries for this operating system")
 	}
 	return nil
 }
@@ -27,6 +27,11 @@ func needsHostPreparation(binary string) bool {
 	return localinstall.CheckHostRuntime() != nil || checkDesktopRuntime(binary) != nil
 }
 func desktopRuntime(ctx context.Context, binary, bundleDir, data string, install, prepare bool, in io.Reader, out io.Writer) error {
+	// The browser and core do not need the separate Wallets window. Only an
+	// explicit runtime-install request should prepare its additional libraries.
+	if !install {
+		binary = ""
+	}
 	check := func() error {
 		if e := localinstall.CheckHostRuntime(); e != nil {
 			return e
@@ -55,12 +60,17 @@ func desktopRuntime(ctx context.Context, binary, bundleDir, data string, install
 	system := &hostprep.System{In: in, Out: out}
 	if needsHostPreparation(binary) {
 		// Privileged execution is restricted to OS tools, never project code.
-		packages := []string{"install", "-y", "--no-remove", "--no-install-recommends"}
-		packages = append(packages, platform.Packages(binary != "")...)
-		if _, e := system.Run(ctx, nil, "/usr/bin/apt-get", "update"); e != nil {
-			return errors.New("OS package index refresh failed; repair and rerun the same install")
+		manager, e := platform.PackageManager()
+		if e != nil {
+			return e
 		}
-		if _, e := system.Run(ctx, nil, append([]string{"/usr/bin/apt-get"}, packages...)...); e != nil {
+		if len(manager.Refresh) != 0 {
+			if _, e := system.Run(ctx, nil, manager.Refresh...); e != nil {
+				return errors.New("OS package index refresh failed; repair and rerun the same install")
+			}
+		}
+		packages := append(append([]string(nil), manager.Install...), platform.Packages(binary != "")...)
+		if _, e := system.Run(ctx, nil, packages...); e != nil {
 			return errors.New("OS runtime installation failed; repair and rerun the same install")
 		}
 	}

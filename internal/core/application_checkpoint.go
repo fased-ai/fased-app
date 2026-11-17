@@ -6,19 +6,30 @@ import (
 	"github.com/fased-ai/fased-app/internal/update"
 )
 
-// ApplicationCheckpoint is app metadata only, never signer or financial restore.
-// Its private SQLite image stays in the existing app-owned recovery directory.
-type ApplicationCheckpoint struct {
-	PreviousEngineSHA256 string                  `json:"previousEngineSha256"`
-	Version              int                     `json:"version"`
-	OperationID          string                  `json:"operationId"`
-	ManifestSHA256       string                  `json:"manifestSha256"`
-	Pause                update.CorePauseReceipt `json:"pause"`
-	Snapshot             update.MetadataSnapshot `json:"snapshot"`
+// ApplicationCheckpoint remains an alias for the existing app-only recovery
+// record; sharing its type lets the protected package journal retain the same
+// checkpoint without inventing a signer hold.
+type ApplicationCheckpoint = update.ApplicationCheckpoint
+
+// The live and offline owner entries must interpret the same durable
+// checkpoint and original pause before either can use it for recovery.
+func applicationCheckpointMatches(c ApplicationCheckpoint, pause update.CorePauseReceipt) bool {
+	if pause.Version != 1 || pause.State != "paused" || !update.IDOK(pause.PauseID) || pause.Request == nil || !update.ValidPauseRequest(*pause.Request) ||
+		c.Version != 1 || !hexValue(c.PreviousEngineSHA256, 32) || c.OperationID != pause.Request.IntentID || c.ManifestSHA256 != pause.Request.ManifestSHA256 ||
+		c.Pause.Version != 1 || c.Pause.State != "paused" || c.Pause.PauseID != pause.PauseID || c.Pause.Request == nil || !update.ValidPauseRequest(*c.Pause.Request) ||
+		update.SnapshotDigest("pause-request", *c.Pause.Request) != update.SnapshotDigest("pause-request", *pause.Request) ||
+		!update.IDOK(c.Pause.Core.BootID) || !update.IDOK(c.Pause.Core.ProbeID) || !update.SameCoreMetadata(c.Pause.Core, pause.Request.Expected) || !update.SameCoreMetadata(c.Pause.Core, pause.Core) ||
+		!hexValue(c.Snapshot.SHA256, 32) || c.Snapshot.File != "application-"+c.Snapshot.SHA256+".sqlite" || c.Snapshot.Size <= 0 || c.Snapshot.Size > update.MaxMetadataBackup {
+		return false
+	}
+	return true
 }
 
 func (s *Store) applicationUpdatePause(ctx context.Context, id string) (update.CorePauseReceipt, error) {
-	if s.fixture != nil || s.custodyNetwork != "" {
+	// This configuration has no wallet network. The OS controller must still
+	// prove that the signer is stopped and its directory is empty; this metadata
+	// checkpoint never makes either assertion or clears any hold.
+	if s.custodyNetwork != "" || s.fixture != nil && !s.unconfiguredProtectedSigner {
 		return update.CorePauseReceipt{}, errors.New("installed custody requires the existing paired update controller")
 	}
 	if !s.aiMu.TryLock() {

@@ -104,6 +104,35 @@ func TestApplicationOwnerLaunchLeasePrivateIPCAndOutcome(t *testing.T) {
 	}
 }
 
+func TestApplicationOwnerClaimsOriginalUnsentRecovery(t *testing.T) {
+	s := fixtureStore(t)
+	d := &recoverableUpdateFixture{updateControllerFixture: fixtureUpdateController()}
+	if err := s.BindApplicationUpdateController(d); err != nil {
+		t.Fatal(err)
+	}
+	updateCommandFixture(t, s, "check")
+	updateTickFixture(t, s)
+	updateCommandFixture(t, s, "apply")
+	d.uncertain = true
+	updateTickFixture(t, s)
+	view, err := s.ApplicationUpdates(t.Context())
+	if err != nil || view.Operation.Phase != "recovery" || view.Operation.OwnerLease != "" {
+		t.Fatal("expected the original unclaimed uncertain operation", view, err)
+	}
+	id := view.Operation.ID
+	if _, err = s.ApplicationOwnerCommand(t.Context(), ApplicationOwnerCommand{Action: "claim", ID: update.NewProbe(), Lease: id}); err == nil {
+		t.Fatal("another operation was claimed")
+	}
+	claimed, err := s.ApplicationOwnerCommand(t.Context(), ApplicationOwnerCommand{Action: "claim", ID: id, Lease: id})
+	if err != nil || !claimed.MayApply || claimed.View.Operation.OwnerLease != id {
+		t.Fatal("the original recovery could not be claimed", claimed, err)
+	}
+	again, err := s.ApplicationOwnerCommand(t.Context(), ApplicationOwnerCommand{Action: "claim", ID: id, Lease: update.NewProbe()})
+	if err != nil || again.MayApply || again.View.Operation.OwnerLease != id {
+		t.Fatal("another lease could duplicate recovery", again, err)
+	}
+}
+
 func TestApplicationOwnerReleaseAndOutcomeCommitAtomically(t *testing.T) {
 	s := fixtureStore(t)
 	fixture := fixtureUpdateController()

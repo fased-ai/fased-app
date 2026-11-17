@@ -74,6 +74,113 @@ func applicationFixtureFor(t *testing.T) *applicationFixture {
 	return f
 }
 
+func TestApplicationUpdateChecksServiceBeforeFencing(t *testing.T) {
+	f := applicationFixtureFor(t)
+	blocked := true
+	f.callbacks.BeforeStage = func(context.Context) error {
+		f.calls = append(f.calls, "stage")
+		return nil
+	}
+	f.services.preflight = func(context.Context, Manifest) error {
+		f.calls = append(f.calls, "preflight")
+		if blocked {
+			return errors.New("service cannot restart")
+		}
+		return nil
+	}
+	if _, err := f.apply(t, nil, false); err == nil || !strings.Contains(err.Error(), "service cannot restart") {
+		t.Fatalf("blocked service admitted: %v", err)
+	}
+	if len(f.calls) != 1 || f.calls[0] != "preflight" {
+		t.Fatalf("update fenced or stopped the service before preflight: %v", f.calls)
+	}
+	if _, err := readApplicationJournal(f.paths); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("blocked update created a transaction: %v", err)
+	}
+	if hash, err := updateFileDigest(filepath.Join(f.paths.Root, engineName)); err != nil || hash != f.old.Files[engineName] {
+		t.Fatalf("blocked update changed the installed executable: %v", err)
+	}
+	f.preserved(t)
+	blocked = false
+	if _, err := f.apply(t, nil, false); err != nil {
+		t.Fatalf("same update did not resume after service repair: %v", err)
+	}
+}
+
+func TestApplicationUpdateRechecksServiceAfterStaging(t *testing.T) {
+	f := applicationFixtureFor(t)
+	checks := 0
+	f.services.preflight = func(context.Context, Manifest) error {
+		checks++
+		if checks == 2 {
+			return errors.New("service changed during staging")
+		}
+		return nil
+	}
+	if _, err := f.apply(t, nil, false); err == nil || !strings.Contains(err.Error(), "service changed during staging") {
+		t.Fatalf("changed service admitted: %v", err)
+	}
+	if len(f.calls) != 0 {
+		t.Fatalf("update fenced or stopped after the service changed: %v", f.calls)
+	}
+	state, err := ApplicationUpdateState(f.paths)
+	if err != nil || state.Phase != "prepared" || state.ID != f.candidate.ID {
+		t.Fatalf("original staged transaction was not retained: %+v %v", state, err)
+	}
+	f.preserved(t)
+	if _, err = f.apply(t, nil, false); err != nil {
+		t.Fatalf("same staged update did not resume: %v", err)
+	}
+}
+
+func TestApplicationUpdateRecoveryDoesNotReenterPreflight(t *testing.T) {
+	f := applicationFixtureFor(t)
+	checks := 0
+	f.services.preflight = func(context.Context, Manifest) error {
+		checks++
+		if checks > 2 {
+			return errors.New("service state became unavailable")
+		}
+		return nil
+	}
+	interrupted := errors.New("interrupted")
+	if _, err := f.apply(t, func(point string) error {
+		if point == "replaced-"+engineName {
+			return interrupted
+		}
+		return nil
+	}, false); !errors.Is(err, interrupted) {
+		t.Fatalf("replacement was not interrupted: %v", err)
+	}
+	if _, err := resumeRetainedApplication(t.Context(), f.paths, f.candidate.ID, f.callbacks, f.services, false); err != nil {
+		t.Fatalf("existing operation could not recover: %v", err)
+	}
+	if checks != 2 {
+		t.Fatalf("recovery repeated admission checks: %d", checks)
+	}
+	f.preserved(t)
+}
+
+func TestUpdateServiceAllowsManualStartupAndRefusesUnsafeState(t *testing.T) {
+	valid := map[string]string{"LoadState": "loaded", "UnitFileState": "disabled", "CanStart": "yes", "RefuseManualStart": "no", "NeedDaemonReload": "no"}
+	if err := validateUpdateService(valid); err != nil {
+		t.Fatalf("ordinary manual-start service refused: %v", err)
+	}
+	for _, tc := range []struct{ key, value string }{
+		{"LoadState", "not-found"}, {"UnitFileState", "masked"}, {"UnitFileState", "masked-runtime"},
+		{"CanStart", "no"}, {"CanStart", ""}, {"RefuseManualStart", "yes"}, {"NeedDaemonReload", "yes"}, {"RefuseManualStart", ""},
+	} {
+		p := map[string]string{}
+		for key, value := range valid {
+			p[key] = value
+		}
+		p[tc.key] = tc.value
+		if err := validateUpdateService(p); err == nil {
+			t.Fatalf("unsafe service accepted: %s=%s", tc.key, tc.value)
+		}
+	}
+}
+
 func TestApplicationUpdatePreservesVerifiedNativeSignerInventory(t *testing.T) {
 	f := applicationFixtureFor(t)
 	for _, name := range []string{desktopName, "fased-signer"} {
@@ -108,6 +215,87 @@ func TestApplicationUpdatePreservesVerifiedNativeSignerInventory(t *testing.T) {
 	got, err := digest(filepath.Join(m.Root, "fased-signer"))
 	if err != nil || got != before {
 		t.Fatal("verified native signer changed", err)
+	}
+}
+
+// The owner-side signer is an executable used for later enrollment, not the
+// separately protected custody vault. It must follow the native client and
+// core through the same app-only update journal and recovery entrypoint.
+func TestNativeApplicationPairRecoversInterruptedUpdate(t *testing.T) {
+	for _, cut := range []string{"replaced-" + engineName, "replaced-" + desktopName, "replaced-fased-signer", "manifest", "health-failure"} {
+		t.Run(cut, func(t *testing.T) {
+			f := applicationFixtureFor(t)
+			for _, name := range []string{desktopName, "fased-signer"} {
+				oldPath := filepath.Join(f.paths.Root, name)
+				if err := os.WriteFile(oldPath, []byte("previous "+name), 0700); err != nil {
+					t.Fatal(err)
+				}
+				hash, err := digest(oldPath)
+				if err != nil {
+					t.Fatal(err)
+				}
+				f.old.Files[name] = hash
+			}
+			if err := core.WritePrivateJSON(filepath.Join(f.paths.Root, "install.json"), f.old); err != nil {
+				t.Fatal(err)
+			}
+			f.candidate.ExpectedManifestSHA256 = ManifestSHA256(f.old)
+			f.candidate.Desktop = filepath.Join(filepath.Dir(f.paths.Root), "next-native")
+			f.candidate.Signer = filepath.Join(filepath.Dir(f.paths.Root), "next-signer")
+			for path, content := range map[string]string{f.candidate.Desktop: "next native", f.candidate.Signer: "next signer"} {
+				if err := os.WriteFile(path, []byte(content), 0700); err != nil {
+					t.Fatal(err)
+				}
+			}
+			var err error
+			f.candidate.DesktopSHA256, err = updateFileDigest(f.candidate.Desktop)
+			if err != nil {
+				t.Fatal(err)
+			}
+			f.candidate.SignerSHA256, err = updateFileDigest(f.candidate.Signer)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if cut == "health-failure" {
+				f.badHealth = true
+				if _, err = f.apply(t, nil, false); err == nil {
+					t.Fatal("failed target health was accepted")
+				}
+				m, err := Load(f.paths)
+				if err != nil || ManifestSHA256(m) != ManifestSHA256(f.old) {
+					t.Fatal("previous native package was not restored", err)
+				}
+				for _, name := range []string{engineName, desktopName, "fased-signer"} {
+					got, err := updateFileDigest(filepath.Join(m.Root, name))
+					if err != nil || got != f.old.Files[name] {
+						t.Fatal("rollback did not restore a component", name, err)
+					}
+				}
+				f.preserved(t)
+				return
+			}
+			interrupted := errors.New("interrupted")
+			_, err = f.apply(t, func(point string) error {
+				if point == cut {
+					return interrupted
+				}
+				return nil
+			}, false)
+			if !errors.Is(err, interrupted) {
+				t.Fatal("requested interruption not reached", err)
+			}
+			m, err := resumeRetainedApplication(t.Context(), f.paths, f.candidate.ID, f.callbacks, f.services, false)
+			if err != nil {
+				t.Fatal("original operation could not resume", err)
+			}
+			for name, want := range map[string]string{engineName: f.candidate.EngineSHA256, desktopName: f.candidate.DesktopSHA256, "fased-signer": f.candidate.SignerSHA256} {
+				got, err := updateFileDigest(filepath.Join(m.Root, name))
+				if err != nil || got != want || m.Files[name] != want {
+					t.Fatal("updated native package differs", name, got, err)
+				}
+			}
+			f.preserved(t)
+		})
 	}
 }
 func (f *applicationFixture) apply(t *testing.T, fault func(string) error, rollback bool) (Manifest, error) {

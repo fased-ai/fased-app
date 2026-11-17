@@ -33,19 +33,34 @@ func runArgs(args []string) error {
 	engine := packageFlags.String("engine", ".evidence/bin/fased-app", "native core binary")
 	desktop := packageFlags.String("desktop", "", "optional matching native desktop binary")
 	signer := packageFlags.String("signer", "", "matching Linux signer carried by the native owner client")
+	installer := packageFlags.String("installer", "", "matching verified Linux installation and maintenance binary")
 	out := packageFlags.String("out", ".evidence/packages", "generated package output directory")
 	source := packageFlags.String("source", "working-tree", "source revision identity")
 	releaseFormat := packageFlags.Bool("ubuntu-release-format", false, "headless Ubuntu schema2 format only; no publisher authentication or publication")
+	linuxBundle := packageFlags.Bool("linux-bundle-format", false, "browser-first Linux core and signer bundle; no publisher authentication or publication")
+	linuxPackages := packageFlags.Bool("linux-system-packages", false, "build matching Debian and RPM packages without publication")
 	if err := packageFlags.Parse(args); err != nil {
 		return err
 	}
 	if packageFlags.NArg() != 0 {
 		return fmt.Errorf("unexpected packaging argument")
 	}
-	if *signer != "" && (runtime.GOOS != "linux" || *desktop == "" || *releaseFormat) {
+	if *linuxPackages {
+		if *releaseFormat || *linuxBundle || runtime.GOOS != "linux" || *signer == "" || *installer == "" {
+			return fmt.Errorf("Linux system packages require an aligned core, signer and installer")
+		}
+		return packageLinuxSystem(*engine, *signer, *installer, *desktop, *out, *source)
+	}
+	if *installer != "" {
+		return fmt.Errorf("the installer input requires Linux system packages")
+	}
+	if *signer != "" && (runtime.GOOS != "linux" || *releaseFormat || *desktop == "" && !*linuxBundle) {
 		return fmt.Errorf("signer payload requires a Linux native package")
 	}
-	if *releaseFormat {
+	if *linuxBundle && (*releaseFormat || *signer == "" || *desktop != "") {
+		return fmt.Errorf("the Linux bundle requires a signer and no desktop client")
+	}
+	if *releaseFormat || *linuxBundle {
 		commit, err := hex.DecodeString(*source)
 		if runtime.GOOS != "linux" || (runtime.GOARCH != "amd64" && runtime.GOARCH != "arm64") || *desktop != "" || err != nil || len(commit) != 20 || hex.EncodeToString(commit) != *source {
 			return fmt.Errorf("release format requires headless supported Linux architecture and an explicit canonical source commit")
@@ -90,6 +105,8 @@ func runArgs(args []string) error {
 	m := bundle.Manifest{Schema: 1, Platform: runtime.GOOS, Arch: runtime.GOARCH, Version: core.Version, Source: *source, Desktop: *desktop != "", UnsignedEngineering: true, Files: map[string]bundle.File{}}
 	if *releaseFormat {
 		m.Schema, m.UnsignedEngineering = 2, false
+	} else if *linuxBundle {
+		m.Schema, m.UnsignedEngineering = 4, false
 	}
 	for n, p := range files {
 		src, e := os.Open(p)
@@ -119,6 +136,9 @@ func runArgs(args []string) error {
 	guide := []byte("Unsigned engineering package; not a public signed release.\nTerminal: ./" + en + " install --bundle . --interactive\nRemote: ./" + en + " install --bundle . --vps --autostart --access ssh\nOptional: --bundle-sha256 <independently obtained bundle.json SHA-256>.\nDesktop: open the bundled Fased desktop client; approve installation for this OS user.\nNo Git, Go, npm, RPC, AI or wallet account is needed at runtime.\nSee https://github.com/fased-ai/fased-app for supported-host and release status.\n")
 	if *releaseFormat {
 		guide = []byte("Ubuntu release-format package; this format establishes no publisher authentication or publication.\nVerify the production descriptor, provenance and exact archive through an independently trusted fased-install before execution.\nStable version/source eligibility and release approval are separate admission requirements.\nNo signer, wallet, update service or permission is installed by packaging.\n")
+	}
+	if *linuxBundle {
+		guide = []byte("Linux browser-first bundle; this format alone does not authenticate the publisher.\nVerify the release and provenance with the trusted Fased installer.\nThe core and signer are installed separately from user data and keys.\n")
 	}
 	if e := os.WriteFile(filepath.Join(payload, "INSTALL.txt"), guide, 0600); e != nil {
 		return e

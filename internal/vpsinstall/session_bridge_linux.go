@@ -6,14 +6,57 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/fased-ai/fased-app/internal/bundle"
+	"github.com/fased-ai/fased-app/internal/core"
 	"github.com/fased-ai/fased-app/internal/custodyinstall"
+	"golang.org/x/sys/unix"
 )
+
+// openSealedSourceSession accepts only this process's sealed upgrade image.
+// The open descriptor stays alive while the fixed OS copy reads its proc path.
+func openSealedSourceSession(image string) (*os.File, string, string, error) {
+	executable, err := os.Executable()
+	if err != nil || image != executable || strings.TrimSuffix(image, " (deleted)") != "/memfd:fased-verified-upgrade" {
+		return nil, "", "", errors.New("sealed running upgrade executable required")
+	}
+	f, err := os.Open("/proc/self/exe")
+	if err != nil {
+		return nil, "", "", err
+	}
+	keep := false
+	defer func() {
+		if !keep {
+			f.Close()
+		}
+	}()
+	info, err := f.Stat()
+	if err != nil || !info.Mode().IsRegular() || info.Size() <= 0 || info.Size() > 64<<20 {
+		return nil, "", "", errors.New("bounded sealed executable required")
+	}
+	required := unix.F_SEAL_WRITE | unix.F_SEAL_GROW | unix.F_SEAL_SHRINK | unix.F_SEAL_SEAL
+	seals, err := unix.FcntlInt(f.Fd(), unix.F_GET_SEALS, 0)
+	if err != nil || seals&required != required {
+		return nil, "", "", errors.New("running upgrade executable is not sealed")
+	}
+	h := sha256.New()
+	n, err := io.CopyBuffer(h, io.LimitReader(f, info.Size()+1), make([]byte, 32*1024))
+	if err != nil || n != info.Size() {
+		return nil, "", "", errors.New("sealed executable could not be read completely")
+	}
+	if _, err = f.Seek(0, io.SeekStart); err != nil {
+		return nil, "", "", err
+	}
+	keep = true
+	return f, fmt.Sprintf("/proc/%d/fd/%d", os.Getpid(), f.Fd()), hex.EncodeToString(h.Sum(nil)), nil
+}
 
 // PrepareSourceSession is used by the already-verified current bootstrap BEFORE
 // invoking an older reader's inventory/status. Only the existing OS owner can
@@ -25,6 +68,14 @@ func PrepareSourceSession(ctx context.Context, m Manifest, image string, s *cust
 	} // Current installed commands already refresh through protected IPC.
 	if s == nil || os.Getuid() != m.OwnerUID || os.Geteuid() != os.Getuid() {
 		return errors.New("existing Remote OS owner required")
+	}
+	if strings.HasPrefix(image, "/memfd:") {
+		file, path, digest, err := openSealedSourceSession(image)
+		if err != nil {
+			return err
+		}
+		defer file.Close()
+		return prepareSourceSession(ctx, m, path, digest, liveOps(s))
 	}
 	info, err := os.Lstat(image)
 	if err != nil || !info.Mode().IsRegular() {
@@ -47,6 +98,39 @@ func prepareSourceSession(ctx context.Context, m Manifest, image, digest string,
 		}
 		if err := loaded(ctx, o, m); err != nil {
 			return err
+		}
+		// Supported installed readers can renew their own AppUID session. This
+		// exact command is already in the Remote maintenance policy, so no
+		// additional privileged source copy or executable grant is necessary.
+		if o.helper != nil {
+			args := applicationOwnerHelperArgs(m, m.Core)
+			args = append(args[:len(args)-3], "updates", "status", "--data-dir", m.Data)
+			var output applicationOwnerResponse
+			helperErr := o.helper(ctx, args, &output)
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			// `updates status` is the application updater view. The separate
+			// `update-status` command returns core.UpdateStatus but is not the
+			// command admitted by the installed maintenance policy.
+			var status core.ApplicationUpdateView
+			if helperErr == nil && json.Unmarshal(output.Bytes(), &status) == nil && status.Version == 1 && status.InstanceID != "" && status.Schema > 0 {
+				// The installed `status` entry validates its own endpoint against
+				// core health. Bind the update view to that same live instance;
+				// the installer manifest ID is a different identity.
+				args = applicationOwnerHelperArgs(m, m.Core)
+				args = append(args[:len(args)-3], "status", "--data-dir", m.Data)
+				var healthOutput applicationOwnerResponse
+				healthErr := o.helper(ctx, args, &healthOutput)
+				if err := ctx.Err(); err != nil {
+					return err
+				}
+				var health core.Health
+				if healthErr != nil || json.Unmarshal(healthOutput.Bytes(), &health) != nil || health.Status != "ok" || health.APIVersion != core.APIVersion || health.InstanceID != status.InstanceID || health.Connection == nil || health.Connection.Location != "remote" || health.Connection.OwnerUID != m.OwnerUID || health.Connection.OwnerKind != "" {
+					return errors.New("installed update session does not match the live Remote instance; preserve it")
+				}
+				return nil
+			}
 		}
 		dir := m.Root + "-session-" + digest[:24]
 		if err := directory(ctx, o, dir, 0, 0, 0755); err != nil {

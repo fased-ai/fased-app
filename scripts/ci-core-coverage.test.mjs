@@ -84,37 +84,26 @@ test("full race groups retain every package and require parallel scenarios and d
   );
   const scenarios = workflow.slice(
     workflow.indexOf("  core-scenarios:\n"),
-    workflow.indexOf("  desktop:\n"),
+    workflow.indexOf("  browser:\n"),
   );
   const handoff = workflow.slice(
     workflow.indexOf("  handoff:\n"),
     workflow.indexOf("  handoff-uid:\n"),
   );
-  const desktop = workflow.slice(
-    workflow.indexOf("  desktop:\n"),
-    workflow.indexOf("  signer:\n"),
+  const retainedNative = await readFile(
+    new URL("../.github/workflows/desktop-compatibility.yml", import.meta.url),
+    "utf8",
   );
-  for (const [name, goos, arch, runner] of [
-    ["Headless Windows compilation", "windows", "amd64", "Windows"],
-    ["Headless macOS compilation", "darwin", "arm64", "macOS"],
-  ]) {
-    const output = goos === "windows" ? "windows.exe" : "macos";
-    const command = `run: GOOS=${goos} GOARCH=${arch} CGO_ENABLED=0 go build -o .evidence/bin/${output} ./cmd/fased-app`;
+  assert.doesNotMatch(core, /GOOS=(?:windows|darwin)/);
+  for (const [goos, arch] of [
+    ["windows", "amd64"],
+    ["darwin", "arm64"],
+  ])
     assert.ok(
-      core.includes(
-        `- name: ${name}\n        if: needs.classify.outputs.desktop != 'true'\n        ${command}`,
+      retainedNative.includes(
+        `GOOS=${goos} GOARCH=${arch} CGO_ENABLED=0 go build`,
       ),
-      "leaf routes retain both headless compilation targets",
     );
-    assert.ok(
-      desktop.includes(
-        `- name: ${name}\n        if: runner.os == '${runner}'\n        shell: bash\n        ${command}`,
-      ),
-      "selected platform jobs own the same headless compilation targets",
-    );
-  }
-  assert.equal(classify(["web/src/core.tsx"]).desktop, false);
-  assert.equal(classify(["internal/core/rpc_check.go"]).desktop, false);
   assert.match(
     core,
     /go list \.\/internal\/\.\.\. \.\/cmd\/fased-app \.\/cmd\/fased-signer \.\/cmd\/fased-install \.\/cmd\/fased-package/,
@@ -177,7 +166,7 @@ test("full race groups retain every package and require parallel scenarios and d
     documentation: 3,
     core: 20,
     "core-scenarios": 10,
-    desktop: 15,
+    browser: 10,
     signer: 5,
     handoff: 5,
     "handoff-uid": 5,
@@ -212,7 +201,7 @@ test("full race groups retain every package and require parallel scenarios and d
     for (const name of [
       "core",
       "core-scenarios",
-      "desktop",
+      "browser",
       "signer",
       "handoff",
       "handoff-uid",
@@ -232,7 +221,7 @@ test("ordinary admission checks run once in parallel without consuming the manag
   );
   const scenarios = workflow.slice(
     workflow.indexOf("  core-scenarios:\n"),
-    workflow.indexOf("  desktop:\n"),
+    workflow.indexOf("  browser:\n"),
   );
   const signer = workflow.slice(
     workflow.indexOf("  signer:\n"),
@@ -331,47 +320,24 @@ test("ordinary admission checks run once in parallel without consuming the manag
   assert.match(signer, /timeout-minutes: 5/);
 });
 
-test("full browser UI coverage runs once in the Ubuntu UI job, with leaf coverage retained", async () => {
+test("browser coverage runs once for every selected core path", async () => {
   const workflow = await readFile(
     new URL("../.github/workflows/checks.yml", import.meta.url),
     "utf8",
   );
-  const core = workflow.slice(
-    workflow.indexOf("  core:\n"),
-    workflow.indexOf("  core-scenarios:\n"),
-  );
-  const desktop = workflow.slice(
-    workflow.indexOf("  desktop:\n"),
-    workflow.indexOf("  signer:\n"),
-  );
-  assert.match(
-    core,
-    /- run: npm run test:ui\n        if: needs\.classify\.outputs\.desktop != 'true'/,
-  );
-  assert.match(
-    desktop,
-    /- name: Browser UI journey\n        if: runner\.os == 'Linux' && needs\.classify\.outputs\.scope == 'full'\n        run: npm run test:ui/,
-  );
-  assert.equal(workflow.match(/run: npm run test:ui(?:\n|$)/g)?.length, 2);
+  const browser = workflow.split("\n  browser:\n")[1].split("\n  signer:\n")[0];
+  assert.equal(workflow.match(/run: npm run test:ui(?:\n|$)/g)?.length, 1);
+  assert.match(browser, /needs.classify.outputs.core == 'true'/);
   assert.ok(
-    desktop.indexOf("- name: Prepare joined UI browser") <
-      desktop.indexOf("- name: Browser UI journey"),
+    browser.indexOf("npx playwright install") <
+      browser.indexOf("- name: Browser UI journey"),
   );
   for (const paths of [
     ["internal/core/onchain.go"],
     ["web/src/core.tsx"],
     ["internal/core/rpc_check.go"],
-    ["web/src/core.tsx", "internal/core/rpc_check.go"],
-  ]) {
-    const plan = classify(paths);
-    const coreOwner = plan.core && !plan.desktop;
-    const desktopOwner = plan.desktop && plan.scope === "full";
-    assert.equal(Number(coreOwner) + Number(desktopOwner), 1, paths.join(", "));
-  }
-  assert.match(core, /timeout-minutes: 20/);
-  assert.match(desktop, /timeout-minutes: 15/);
-  assert.ok(
-    desktop.includes("            .evidence/browser/\n"),
-    "retain browser failure artifacts with the owning job",
-  );
+  ])
+    assert.equal(classify(paths).core, true);
+  assert.match(browser, /timeout-minutes: 10/);
+  assert.ok(browser.includes("            .evidence/browser/\n"));
 });
