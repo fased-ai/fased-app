@@ -11,6 +11,15 @@ const idle = () => ({
   operation: { id: "", phase: "idle" },
 });
 describe("application update admission", () => {
+  it("binds update status to the connected instance when requested", () => {
+    const v = { ...idle(), instanceId: "local-instance-12345678" };
+    expect(readApplicationUpdates(v, v.instanceId)).toEqual(v);
+    expect(() =>
+      readApplicationUpdates(v, "other-instance-12345678"),
+    ).toThrow();
+    expect(() => readApplicationUpdates(v, "")).toThrow();
+    expect(() => readApplicationUpdates(idle(), v.instanceId)).toThrow();
+  });
   it("accepts explicit Automatic mode backed by the installed controller", () => {
     const value = {
       ...idle(),

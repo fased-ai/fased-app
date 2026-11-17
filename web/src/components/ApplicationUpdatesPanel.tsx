@@ -20,7 +20,10 @@ export function ApplicationUpdatesPanel() {
   const refresh = useCallback(async () => {
     const n = ++epoch.current;
     try {
-      const v = readApplicationUpdates(await request("updates/application"));
+      const v = readApplicationUpdates(
+        await request("updates/application"),
+        core.instanceId,
+      );
       if (n === epoch.current) {
         setView(v);
         setError("");
@@ -31,7 +34,7 @@ export function ApplicationUpdatesPanel() {
         setError("Update status unavailable. Refresh and try again.");
       }
     }
-  }, [request]);
+  }, [request, core.instanceId]);
   useEffect(() => {
     if (core.mode === "ready") void refresh();
     else setView(null);
@@ -53,15 +56,38 @@ export function ApplicationUpdatesPanel() {
     setBusy(true);
     setError("");
     try {
+      // A CLI or another tab may have checked since this panel was opened.
+      // Refresh only this metadata action; never retry Apply or recovery.
+      let current = reviewed;
+      if (name === "check") {
+        current = readApplicationUpdates(
+          await request("updates/application"),
+          core.instanceId,
+        );
+        if (
+          !current.controllerAvailable ||
+          [
+            "check-queued",
+            "checking",
+            "queued",
+            "applying",
+            "recovery",
+          ].includes(current.operation.phase)
+        ) {
+          setView(current);
+          setReview(null);
+          return;
+        }
+      }
       const value = await request("updates/application", "POST", {
         action: name,
-        revision: reviewed.revision,
-        policyRevision: reviewed.policyRevision,
+        revision: current.revision,
+        policyRevision: current.policyRevision,
         ...(name === "apply"
           ? { manifestSha256: reviewed.operation.release?.manifestSha256 }
           : {}),
       });
-      setView(readApplicationUpdates(value));
+      setView(readApplicationUpdates(value, core.instanceId));
       setReview(null);
     } catch (e) {
       const message =
