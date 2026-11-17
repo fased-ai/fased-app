@@ -8,6 +8,7 @@ export type ApplicationRelease = {
 };
 export type ApplicationUpdateView = {
   notice?: { id: string; title: string; read: boolean };
+  instanceId?: string;
   version: 1;
   revision: number;
   policyRevision: number;
@@ -38,7 +39,10 @@ const phases = [
   "rolled-back",
   "recovery",
 ];
-export function readApplicationUpdates(value: unknown): ApplicationUpdateView {
+export function readApplicationUpdates(
+  value: unknown,
+  expectedInstanceId?: string,
+): ApplicationUpdateView {
   const v = value as ApplicationUpdateView | null;
   if (
     !v ||
@@ -58,6 +62,11 @@ export function readApplicationUpdates(value: unknown): ApplicationUpdateView {
     !["manual", "automatic", undefined].includes(v.policy.mode)
   )
     throw new Error("Update status unavailable. Refresh and try again.");
+  if (
+    expectedInstanceId !== undefined &&
+    (!expectedInstanceId || v.instanceId !== expectedInstanceId)
+  )
+    throw new Error("Update status belongs to another instance. Reopen Fased.");
   if (
     v.activationEnabled &&
     (!v.controllerAvailable || v.policy.mode !== "automatic")

@@ -29,6 +29,124 @@ base(
 );
 
 test.use({ colorScheme: "dark" });
+base("Local update check uses the latest CLI revision", async ({ page }) => {
+  const instanceId = "fixture-instance-12345678";
+  let revision = 1;
+  let updateInstance = instanceId;
+  let phase = "current";
+  let releaseHash = "a".repeat(64);
+  const checks: number[] = [];
+  const applies: { revision: number; manifestSha256: string }[] = [];
+  await page.route("**/api/v1/**", async (route) => {
+    const path = new URL(route.request().url()).pathname;
+    if (path === "/api/v1/health") {
+      await route.fulfill({
+        json: {
+          status: "ok",
+          apiVersion: "1",
+          version: "0.1.12",
+          instanceId,
+          connection: { location: "local", transport: "loopback" },
+        },
+      });
+    } else if (path === "/api/v1/auth/state") {
+      await route.fulfill({
+        json: { claimed: true, authenticated: true, csrfToken: "fixture-csrf" },
+      });
+    } else if (path === "/api/v1/setup") {
+      await route.fulfill({
+        json: {
+          revision: 1,
+          settings: { ...initialState().setup, complete: true },
+        },
+      });
+    } else if (path === "/api/v1/updates/application") {
+      if (route.request().method() === "POST") {
+        const command = route.request().postDataJSON();
+        if (command.action === "check") checks.push(command.revision);
+        if (command.action === "apply") applies.push(command);
+        if (command.action !== "check" || command.revision !== revision) {
+          await route.fulfill({
+            status: 409,
+            json: {
+              error:
+                "settings changed in another client; reload and review before retrying",
+            },
+          });
+          return;
+        }
+        revision++;
+      }
+      await route.fulfill({
+        json: {
+          version: 1,
+          instanceId: updateInstance,
+          revision,
+          policyRevision: 1,
+          installedVersion: "0.1.12",
+          controllerAvailable: true,
+          activationEnabled: false,
+          policy: { mode: "manual", notify: true },
+          operation: {
+            id: "1".repeat(32),
+            phase,
+            ...(phase === "applying" || phase === "available"
+              ? {
+                  release: {
+                    version: "0.1.13",
+                    sequence: "13",
+                    manifestSha256: releaseHash,
+                    engineSha256: "b".repeat(64),
+                    target: { os: "linux", arch: "amd64" },
+                  },
+                }
+              : {}),
+          },
+        },
+      });
+    } else {
+      await route.fulfill({
+        status: 404,
+        json: { error: "fixture unavailable" },
+      });
+    }
+  });
+  await page.goto("/#settings");
+  const panel = page.getByRole("region", { name: "Updates", exact: true });
+  await expect(panel.getByText("Up to date")).toBeVisible();
+  revision++; // The CLI checked the same installation while Settings was open.
+  await panel.getByRole("button", { name: "Check", exact: true }).click();
+  await expect.poll(() => checks).toEqual([2]);
+  await expect(panel.getByRole("alert")).toHaveCount(0);
+  await expect(panel.getByText("Up to date")).toBeVisible();
+
+  updateInstance = "different-instance-123456";
+  await panel.getByRole("button", { name: "Check", exact: true }).click();
+  await expect(panel.getByRole("alert")).toContainText("another instance");
+  expect(checks).toEqual([2]);
+
+  updateInstance = instanceId;
+  await panel.getByRole("button", { name: "Refresh", exact: true }).click();
+  await expect(panel.getByText("Up to date")).toBeVisible();
+  phase = "applying";
+  revision++;
+  await panel.getByRole("button", { name: "Check", exact: true }).click();
+  await expect(panel.getByText("Updating…")).toBeVisible();
+  expect(checks).toEqual([2]);
+
+  phase = "available";
+  revision++;
+  await panel.getByRole("button", { name: "Refresh", exact: true }).click();
+  await panel.getByRole("button", { name: "Update", exact: true }).click();
+  const review = panel.getByRole("region", { name: "Review update" });
+  await expect(review).toBeVisible();
+  revision++;
+  releaseHash = "c".repeat(64);
+  await review.getByRole("button", { name: "Update now" }).click();
+  await expect(panel.getByRole("alert")).toContainText("another client");
+  expect(applies).toHaveLength(1);
+  expect(applies[0].manifestSha256).toBe("a".repeat(64));
+});
 test("native local owner reuses verified connection without an extra health read", async ({
   page,
 }) => {
