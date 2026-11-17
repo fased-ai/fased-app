@@ -208,6 +208,7 @@ func TestPortableSnapshotInvalidInputs(t *testing.T) {
 				switch name {
 				case "production":
 					d.header.FixtureOnly = false
+					d.header.Purpose = ownerPortablePurpose
 				case "header-counter":
 					d.header.History.Spent = 0
 				case "header-floor":

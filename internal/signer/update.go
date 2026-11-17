@@ -48,6 +48,9 @@ func OrdinaryUpdateContract() update.Contract {
 		c.Features = append(c.Features, fixture)
 	}
 	c.RequiresPeer = []string{update.OrdinaryMaintenanceFeature}
+	if OrdinaryOwnerAdmissionEnabled() {
+		c.State[0].Features = append(c.State[0].Features, update.OwnerKeyAdmissionFeature, ownerHistoryRecoveryFeature)
+	}
 	c.State[1].Features = append(c.State[1].Features, "ordinary-maintenance-v1", "install-completion-v1", ordinaryTradeFeature)
 	return c
 }

@@ -24,6 +24,10 @@ func installationFixture(t *testing.T, v *Vault) (update.Intent, update.InstallB
 }
 
 func installationFixtureAtSequence(t *testing.T, v *Vault, sequence uint64) (update.Intent, update.InstallBinding) {
+	return installationFixtureWithContract(t, v, sequence, nil)
+}
+
+func installationFixtureWithContract(t *testing.T, v *Vault, sequence uint64, adjust func(*update.Manifest)) (update.Intent, update.InstallBinding) {
 	t.Helper()
 	r := intentFixture(t, v, sequence)
 	var env update.Envelope
@@ -37,6 +41,9 @@ func installationFixtureAtSequence(t *testing.T, v *Vault, sequence uint64) (upd
 			name = "fased-signer"
 		}
 		m.Components[n].Artifact = update.Artifact{File: name, Size: int64(len(data)), SHA256: metadataFixtureHash(data)}
+	}
+	if adjust != nil {
+		adjust(&m)
 	}
 	pub, key, e := ed25519.GenerateKey(rand.Reader)
 	if e != nil {

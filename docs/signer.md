@@ -502,6 +502,13 @@ Those P3/P6 dependencies keep public P4-15 BLOCKED. No mock absence proof, archi
 receipt, filesystem restore or copied counter is permitted to clear that gate.
 The existing key-only backup/recovery and live signer formats are unchanged.
 
+The source also recognizes a separate encrypted owner-history format; it does
+not label owner keys as disposable fixtures. Recovered owner history retains its
+lock and recovery hold, and a later update requires a signer that explicitly
+supports that history and owner-key admission. Ordinary owner-key admission and
+the browser owner-input path remain disabled; this source support is not an
+installed or live-wallet acceptance.
+
 `node scripts/check-portable-recovery.mjs` runs the local/Ubuntu race-enabled
 archive, tamper, prefix, conflict and coupled-history checks. The installed Ubuntu
 journey additionally exercises the immutable executable, real signer/app/owner
