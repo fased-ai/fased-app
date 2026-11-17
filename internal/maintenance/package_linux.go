@@ -161,6 +161,9 @@ func RegisterPackage(owner int, location, instance string) (Authority, error) {
 			return Authority{}, err
 		}
 	}
+	if err = configurePackageSELinux(a, location, instance); err != nil {
+		return Authority{}, err
+	}
 	if err = publishResumableFixed(policyPath, policy, 0440); err != nil {
 		return Authority{}, err
 	}

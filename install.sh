@@ -288,6 +288,7 @@ if [[ $(/usr/bin/id -u) != 0 ]]; then
   if [[ $profile != connect && $action == install ]]; then
     case "$package_family" in apt) packages+=(polkitd) ;; dnf) packages+=(polkit) ;; esac
   fi
+  if [[ $profile != connect && -e /sys/fs/selinux/enforce ]]; then packages+=(policycoreutils-python-utils); fi
   if [[ $profile == remote ]]; then packages+=(nftables openssh-server); fi
   for package in "${packages[@]}"; do
     package_installed "$package" || missing+=("$package")
@@ -309,6 +310,7 @@ packages=(ca-certificates curl sudo util-linux)
 if [[ $profile != connect && $action == install ]]; then
   case "$package_family" in apt) packages+=(polkitd) ;; dnf) packages+=(polkit) ;; esac
 fi
+if [[ $profile != connect && -e /sys/fs/selinux/enforce ]]; then packages+=(policycoreutils-python-utils); fi
 if [[ $profile == remote ]]; then packages+=(nftables openssh-server); fi
 for package in "${packages[@]}"; do
   package_installed "$package" || missing+=("$package")

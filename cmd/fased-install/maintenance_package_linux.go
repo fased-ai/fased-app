@@ -125,6 +125,9 @@ func maintenancePackageWorkerCommand(action string, args []string) error {
 		if _, e = maintenance.ValidatePackageProcess(owner, location, instance); e != nil {
 			return errors.Join(e, lock.Close())
 		}
+		if e = maintenance.RestorePackageServiceExecutables(owner, location, instance); e != nil {
+			return errors.Join(e, lock.Close())
+		}
 		r, readErr := update.ReadPackageMaintenanceRecord(owner, location, instance)
 		if readErr == nil && r.Phase == "wallet-initializing" {
 			e = custodyinstall.RecoverProtectedPackageWallet(ctx, owner, location, instance)
@@ -171,6 +174,9 @@ func maintenancePackageWorkerCommand(action string, args []string) error {
 			return e
 		}
 		if _, e = maintenance.ValidatePackageProcess(owner, location, instance); e == nil {
+			e = maintenance.RestorePackageServiceExecutables(owner, location, instance)
+		}
+		if e == nil {
 			var record update.MaintenanceRecord
 			record, e = update.ReadPackageMaintenanceRecord(owner, location, instance)
 			if e == nil && record.OperationID != id {

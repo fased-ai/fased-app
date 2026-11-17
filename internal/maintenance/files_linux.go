@@ -129,7 +129,7 @@ func copyProtectedModes(source, target string, sourceMode, mode os.FileMode, has
 	defer in.Close()
 	actual, _, err := ProtectedDigest(target, mode, 128<<20)
 	if err == nil && actual == hash {
-		return syncDirectory(filepath.Dir(target))
+		return errors.Join(restorePackageExecutable(target, mode), syncDirectory(filepath.Dir(target)))
 	}
 	if err == nil && actual != previous {
 		return errors.New("copy target is unclassified; preserving it")
@@ -159,7 +159,10 @@ func copyProtectedModes(source, target string, sourceMode, mode os.FileMode, has
 	}
 	if previous == "" {
 		// The directory is root-owned, but another authorized setup may race.
-		return publishCopiedExclusive(f.Name(), target)
+		if err = publishCopiedExclusive(f.Name(), target); err != nil {
+			return err
+		}
+		return restorePackageExecutable(target, mode)
 	}
 	actual, _, err = ProtectedDigest(target, mode, 128<<20)
 	if err != nil || actual != previous {
@@ -168,7 +171,7 @@ func copyProtectedModes(source, target string, sourceMode, mode os.FileMode, has
 	if err = os.Rename(f.Name(), target); err != nil {
 		return err
 	}
-	return syncDirectory(filepath.Dir(target))
+	return errors.Join(restorePackageExecutable(target, mode), syncDirectory(filepath.Dir(target)))
 }
 
 // CopyEnrollmentAsset copies only the fixed pair owned by this enrollment
@@ -236,7 +239,7 @@ func CopyProtectedBounded(source, target string, mode os.FileMode, expected stri
 		if actual != expected || n != size {
 			return errors.New("protected copy target differs; preserve it")
 		}
-		return syncDirectory(filepath.Dir(target))
+		return errors.Join(restorePackageExecutable(target, mode), syncDirectory(filepath.Dir(target)))
 	} else if !errors.Is(e, os.ErrNotExist) {
 		return e
 	}
@@ -245,7 +248,10 @@ func CopyProtectedBounded(source, target string, mode os.FileMode, expected stri
 		return err
 	}
 	defer dir.Close()
-	return resumeProtectedCopy(in, dir, name, "."+name+"-"+expected+".pending", expected, size, mode, 0, 0)
+	if err = resumeProtectedCopy(in, dir, name, "."+name+"-"+expected+".pending", expected, size, mode, 0, 0); err != nil {
+		return err
+	}
+	return restorePackageExecutable(target, mode)
 }
 
 // PublishProtectedSigner bounds retention of the signer's embedded public
