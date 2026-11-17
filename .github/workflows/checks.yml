@@ -209,7 +209,9 @@ jobs:
     needs: classify
     if: needs.classify.outputs.core == 'true'
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    # The joined browser/CLI suite reached the ten-minute limit while tests
+    # were still completing; retain the full suite and allow normal teardown.
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
