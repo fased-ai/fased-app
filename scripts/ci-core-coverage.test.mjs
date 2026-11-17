@@ -166,7 +166,7 @@ test("full race groups retain every package and require parallel scenarios and d
     documentation: 3,
     core: 20,
     "core-scenarios": 10,
-    browser: 10,
+    browser: 15,
     signer: 5,
     handoff: 5,
     "handoff-uid": 5,
@@ -338,6 +338,6 @@ test("browser coverage runs once for every selected core path", async () => {
     ["internal/core/rpc_check.go"],
   ])
     assert.equal(classify(paths).core, true);
-  assert.match(browser, /timeout-minutes: 10/);
+  assert.match(browser, /timeout-minutes: 15/);
   assert.ok(browser.includes("            .evidence/browser/\n"));
 });
