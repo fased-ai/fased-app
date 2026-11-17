@@ -2,14 +2,16 @@ package update_test
 
 import (
 	"encoding/json"
+	"slices"
+	"testing"
+
 	"github.com/fased-ai/fased-app/internal/core"
 	"github.com/fased-ai/fased-app/internal/signer"
 	"github.com/fased-ai/fased-app/internal/update"
-	"testing"
 )
 
 func TestOrdinaryBootstrapSignedFiniteReaderDelta(t *testing.T) {
-	for _, bad := range []string{"", "new-reader-support", "omit-maintenance-reader", "omit-completion-reader", "peer", "schema", "provenance", "financial-feature", "unknown-reader-feature", "wrong-source", "unsigned", "normal-slot"} {
+	for _, bad := range []string{"", "new-reader-support", "omit-maintenance-reader", "omit-completion-reader", "peer", "schema", "provenance", "financial-feature", "unknown-reader-feature", "owner-admission", "owner-history", "current-signer", "wrong-source", "unsigned", "normal-slot"} {
 		t.Run(bad, func(t *testing.T) {
 			base, _, trust, key := fixture(t)
 			base.Components = nil
@@ -25,6 +27,13 @@ func TestOrdinaryBootstrapSignedFiniteReaderDelta(t *testing.T) {
 				file := "fased-app"
 				if c.Component == "signer" {
 					file = "fased-signer"
+					// This handoff is a maintenance-only historical reader, not the
+					// current owner-admitting signer. Keep the real signer as a
+					// separate refusal case below.
+					if bad != "current-signer" {
+						c.Features = slices.DeleteFunc(c.Features, func(f string) bool { return f == update.OwnerKeyAdmissionFeature })
+						c.State[0].Features = slices.DeleteFunc(c.State[0].Features, func(f string) bool { return f == update.OwnerKeyAdmissionFeature || f == "owner-history-recovery-v1" })
+					}
 				}
 				next.Components = append(next.Components, update.Component{Version: "0.0.0-test", Contract: c, Artifact: update.Artifact{File: file, Size: 4, SHA256: sha([]byte("next" + file))}})
 			}
@@ -52,6 +61,10 @@ func TestOrdinaryBootstrapSignedFiniteReaderDelta(t *testing.T) {
 				next.Components[1].Contract.State[1].Features = append(next.Components[1].Contract.State[1].Features, "unreviewed-trade-reader")
 			case "financial-feature":
 				next.Components[1].Contract.Features = append(next.Components[1].Contract.Features, "trade-authority")
+			case "owner-admission":
+				next.Components[1].Contract.Features = append(next.Components[1].Contract.Features, update.OwnerKeyAdmissionFeature)
+			case "owner-history":
+				next.Components[1].Contract.State[0].Features = append(next.Components[1].Contract.State[0].Features, "owner-history-recovery-v1")
 			}
 			next.BootstrapFrom = sha(j(base))
 			if bad == "wrong-source" {

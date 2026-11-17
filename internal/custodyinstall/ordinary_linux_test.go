@@ -43,7 +43,7 @@ func TestOrdinaryInstalledContextAndLegacyRefusal(t *testing.T) {
 	if (InstallTransaction{Version: 1, Base: m}).valid() {
 		t.Fatal("legacy maintenance adopted ordinary custody")
 	}
-	o := Options{Mode: signer.OrdinaryCustodyMode, Profile: signer.OwnerCustodyProfile, Provenance: signer.OwnerKeyProvenance, StageOnly: true, Disposable: true, PrepareHost: true}
+	o := Options{Mode: signer.OrdinaryCustodyMode, Profile: signer.OwnerCustodyProfile, Provenance: signer.OwnerKeyProvenance, Network: "devnet", Location: "local", Listen: "127.0.0.1:7332", Core: "/nonexistent/core", Signer: "/nonexistent/signer", StageOnly: true, Disposable: true, PrepareHost: true}
 	if _, err := Install(t.Context(), o, &System{}); !errors.Is(err, signer.ErrUnavailable) {
 		t.Fatal("normal admission crossed the host boundary", err)
 	}
