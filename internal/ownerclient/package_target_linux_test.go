@@ -10,8 +10,43 @@ import (
 	"testing"
 
 	"github.com/fased-ai/fased-app/internal/custodyinstall"
+	"github.com/fased-ai/fased-app/internal/signer"
 	"github.com/fased-ai/fased-app/internal/update"
 )
+
+func TestPendingWalletJournalPreservesUndispatchedOwnerDraft(t *testing.T) {
+	root := t.TempDir()
+	if err := os.Chmod(root, 0700); err != nil {
+		t.Fatal(err)
+	}
+	i := intent()
+	link, err := Link(i.InstanceID, i.Network, "setup", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	original, _, err := Resume(root, link)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pending := &update.WalletInitialization{Version: 1, OperationID: original.OperationID, InstanceID: original.InstanceID, Network: original.Network}
+	guard := func(request signer.OwnerIntent, saved *draft) error {
+		return checkPendingOwnerDraft(request, saved, pending)
+	}
+	other, err := Link(i.InstanceID, i.Network, "import", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err = resume(root, other, guard); err == nil {
+		t.Fatal("a pending operation was replaced")
+	}
+	resumed, _, err := resume(root, link, guard)
+	if err != nil || resumed != original {
+		t.Fatal("the original operation was not preserved", err)
+	}
+	if err = checkPendingOwnerDraft(original, nil, pending); err == nil {
+		t.Fatal("a pending operation without its owner draft was guessed")
+	}
+}
 
 func TestLocalPackageOwnerUsesCommittedWorkspace(t *testing.T) {
 	const owner = 1400

@@ -7,6 +7,6 @@ import (
 	"errors"
 )
 
-func registerPackageWalletShortcut(context.Context) error {
+func registerPackageWalletShortcut(context.Context, string) error {
 	return errors.New("Local package Wallets requires Linux")
 }

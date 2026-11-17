@@ -37,6 +37,9 @@ type AccountSetupCommand struct {
 
 func (s *Store) walletSetup(live FixtureView) WalletSetup {
 	v := WalletSetup{Version: 1, Network: s.custodyNetwork, State: "not-installed", FixtureOnly: true, NetworkWatchEnabled: s.rpcAdmission, OwnerSupported: runtime.GOOS == "linux"}
+	if s.custodyOwnerKey {
+		v.FixtureOnly = false
+	}
 	v.InstanceID = s.instanceID
 	v.PackageOwner = s.custodyPackageLocal
 	switch s.installationSource.Load() {
@@ -73,7 +76,7 @@ func (s *Store) walletSetup(live FixtureView) WalletSetup {
 		v.FixtureOnly = status.FixtureOnly
 		v.CustodyClass = status.Custody.Class
 		v.AdmissionHeld = true
-		v.OwnerSupported = v.OwnerSupported && s.custodyOwnerSupported && status.Custody.Profile == signer.OwnerCustodyProfile && status.Custody.Provenance == signer.ControlledCustodyProfile
+		v.OwnerSupported = v.OwnerSupported && s.custodyOwnerSupported && status.Custody.Profile == signer.OwnerCustodyProfile && (status.Custody.Provenance == signer.ControlledCustodyProfile || s.custodyOwnerKey && status.Custody.Provenance == signer.OwnerKeyProvenance)
 		if status.Account != nil && !ordinaryStatus(status) {
 			return v
 		}

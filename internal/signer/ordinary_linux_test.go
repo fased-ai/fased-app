@@ -268,13 +268,12 @@ func TestOrdinaryOwnerProfileLifecycleAndNoProvenancePromotion(t *testing.T) {
 			if restored.Status().Account.Epoch == s.Account.Epoch || !restored.Status().RecoveryRequired || restored.Status().Custody.Profile != OwnerCustodyProfile {
 				t.Fatal("unsafe owner recovery")
 			}
-			// The live constructor stays closed before I/O. Even bypassing only that
-			// outer gate cannot adopt controlled state under the owner-input namespace.
+			// Owner admission must not adopt the controlled fixture namespace.
+			v.Close()
 			if x, err := OpenOrdinaryCustody(dir, s.Account.SignerID, "devnet"); err == nil {
 				x.Close()
-				t.Fatal("normal admission activated")
+				t.Fatal("controlled provenance promoted by owner admission")
 			}
-			v.Close()
 			if x, err := openVaultNetwork(dir, s.Account.SignerID, false, ordinaryOwnerNamespace+"devnet"); err == nil {
 				x.Close()
 				t.Fatal("controlled provenance promoted by startup binding")

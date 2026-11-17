@@ -100,6 +100,10 @@ type draft struct {
 }
 
 func Resume(root, link string) (signer.OwnerIntent, string, error) {
+	return resume(root, link, nil)
+}
+
+func resume(root, link string, check func(signer.OwnerIntent, *draft) error) (signer.OwnerIntent, string, error) {
 	intent, origin, err := ParseLink(link)
 	if err != nil {
 		return intent, origin, err
@@ -114,19 +118,27 @@ func Resume(root, link string) (signer.OwnerIntent, string, error) {
 	defer lock.Close()
 	path := draftPath(root, intent)
 	b, err := core.ReadPrivateFile(path)
+	var saved *draft
 	if err == nil {
-		var saved draft
-		if decode(b, &saved) != nil || saved.Intent.Validate() != nil || saved.Intent.InstanceID != intent.InstanceID {
+		saved = new(draft)
+		if decode(b, saved) != nil || saved.Intent.Validate() != nil || saved.Intent.InstanceID != intent.InstanceID {
 			return intent, origin, errors.New("invalid saved owner operation")
 		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return intent, origin, err
+	}
+	if check != nil {
+		if err = check(intent, saved); err != nil {
+			return intent, origin, err
+		}
+	}
+	if saved != nil {
 		if saved.Intent.Action == intent.Action && saved.Intent.Network == intent.Network && saved.Origin == origin && saved.Intent.Proposal == intent.Proposal {
 			return saved.Intent, origin, nil
 		}
 		if saved.Dispatched && !saved.Completed {
 			return intent, origin, errors.New("resume the saved wallet operation for this instance")
 		}
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return intent, origin, err
 	}
 	var id [16]byte
 	if _, err = rand.Read(id[:]); err != nil {

@@ -323,7 +323,7 @@ export function AccountManagement() {
     ) &&
     walletNetwork(network) &&
     !!view.setup.source;
-  async function openOwnerWindow(action: "setup" | "import") {
+  async function openOwnerWindow(action: "setup" | "import" | "recover") {
     if (!view?.setup || !ownerWindowReady) return;
     const link = walletOwnerLink(
       core.instanceId,
@@ -643,6 +643,16 @@ export function AccountManagement() {
                         )}
                       </button>
                     ))}
+                  {view?.setup?.packageOwner && ownerWindowReady && (
+                    <button
+                      type="button"
+                      className="secondary"
+                      disabled={busy}
+                      onClick={() => void openOwnerWindow("recover")}
+                    >
+                      {uiText("Recover")}
+                    </button>
+                  )}
                 </div>
                 {protectedSetupHeld && !ownerWindowReady && (
                   <p className="subtle" role="status">

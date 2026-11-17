@@ -11,8 +11,8 @@ import (
 	"github.com/fased-ai/fased-app/internal/localinstall"
 )
 
-// Package is selected from the native executable's own verified image, never
-// from a browser request or a caller-supplied signer path.
+// Package identifies a verified owner client and signer pair, never a path
+// supplied in a browser request.
 type Package struct {
 	Core, Signer, CoreSHA256, SignerSHA256 string
 	LocalPaths                             localinstall.Paths
@@ -57,13 +57,13 @@ func NativePackage(executable string) (Package, error) {
 
 func (p Package) verify() error {
 	if p.Core == p.Signer || !filepath.IsAbs(p.Core) || !filepath.IsAbs(p.Signer) {
-		return errors.New("distinct native core and signer images are required")
+		return errors.New("distinct core and signer images are required")
 	}
 	for path, want := range map[string]string{p.Core: p.CoreSHA256, p.Signer: p.SignerSHA256} {
 		info, err := os.Lstat(path)
 		got, e := bundle.Inspect(path)
 		if err != nil || !info.Mode().IsRegular() || e != nil || want == "" || got.SHA256 != want {
-			return errors.New("native enrollment payload changed; preserve the original package")
+			return errors.New("enrollment payload changed; preserve the original package")
 		}
 	}
 	return nil

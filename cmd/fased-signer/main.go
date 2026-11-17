@@ -96,7 +96,7 @@ func run(args []string, input *os.File, out, errOut io.Writer) error {
 	flags := flag.NewFlagSet(args[0], flag.ContinueOnError)
 	flags.SetOutput(errOut)
 	configPath := flags.String("config", "", "root-owned immutable signer identity configuration")
-	ordinary := flags.Bool("ordinary-custody", false, "owner-authorized custody; normal admission remains held")
+	ordinary := flags.Bool("ordinary-custody", false, "owner-authorized custody")
 	fixture := flags.Bool("disposable-fixture", false, "confirm these are unfunded disposable test keys")
 	rpcOrigin := flags.String("rpc-origin", "", "canonical read-only receipt RPC origin; key is entered privately")
 	action := flags.String("action", "status", "owner administration or bounded fixture operation; app: status and fixture operations only")
@@ -132,6 +132,9 @@ func run(args []string, input *os.File, out, errOut io.Writer) error {
 	if *ordinary && !signer.OrdinaryOwnerAdmissionEnabled() {
 		return signer.ErrUnavailable
 	}
+	if *ordinary && *passwordStdin {
+		return errors.New("scripted fixture passwords cannot operate on an owner wallet")
+	}
 	c, err := signer.LoadConfig(*configPath)
 	if err != nil {
 		return err
@@ -151,7 +154,7 @@ func run(args []string, input *os.File, out, errOut io.Writer) error {
 	if c.Version == 3 && *fixture && (c.Profile != signer.OwnerCustodyProfile || c.Provenance != signer.ControlledCustodyProfile) {
 		return signer.ErrUnavailable
 	}
-	if *ordinary && (c.Version != 3 || c.Mode != signer.OrdinaryCustodyMode) {
+	if *ordinary && (c.Version != 3 || c.Mode != signer.OrdinaryCustodyMode || c.Profile != signer.OwnerCustodyProfile || c.Provenance != signer.OwnerKeyProvenance) {
 		return signer.ErrUnavailable
 	}
 	if args[0] == "ordinary-reader-handoff" {
@@ -223,7 +226,11 @@ func run(args []string, input *os.File, out, errOut io.Writer) error {
 			return err
 		}
 		defer server.Close()
-		fmt.Fprintf(out, "Disposable signer ready; pid=%d uid=%d; real wallets and signing unavailable.\n", os.Getpid(), os.Geteuid())
+		if *ordinary {
+			fmt.Fprintf(out, "Protected signer ready; pid=%d uid=%d.\n", os.Getpid(), os.Geteuid())
+		} else {
+			fmt.Fprintf(out, "Disposable signer ready; pid=%d uid=%d; real wallets and signing unavailable.\n", os.Getpid(), os.Geteuid())
+		}
 		<-ctx.Done()
 		return nil
 	}

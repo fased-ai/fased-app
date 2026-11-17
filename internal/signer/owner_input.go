@@ -33,9 +33,9 @@ func (i OwnerIntent) Validate() error {
 	return nil
 }
 
-// OwnerInput travels only between the isolated native owner window and the
-// immutable owner helper over a private pipe/verified SSH channel. It must never
-// be sent to the core, stored as a request, or written to diagnostics.
+// OwnerInput travels from the isolated owner client to the immutable owner
+// helper over a private pipe/verified SSH channel. It must never be sent to the
+// core, stored as a request, or written to diagnostics.
 type OwnerInput struct {
 	Intent         OwnerIntent `json:"intent"`
 	Confirmation   string      `json:"confirmation,omitempty"`

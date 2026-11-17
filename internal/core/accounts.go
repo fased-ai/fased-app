@@ -122,7 +122,8 @@ func (s *Store) configureVerifiedSigner(c signer.Config) error {
 	}
 	if c.Version == 2 || c.Version == 3 {
 		s.custodyNetwork = c.Network
-		s.custodyOwnerSupported = c.Version == 3 && c.Profile == signer.OwnerCustodyProfile && c.Provenance == signer.ControlledCustodyProfile
+		s.custodyOwnerKey = c.Version == 3 && c.Profile == signer.OwnerCustodyProfile && c.Provenance == signer.OwnerKeyProvenance && signer.OrdinaryOwnerAdmissionEnabled() && s.custodyPackageLocal
+		s.custodyOwnerSupported = c.Version == 3 && c.Profile == signer.OwnerCustodyProfile && (c.Provenance == signer.ControlledCustodyProfile || s.custodyOwnerKey)
 	}
 	if c.Version == 3 && c.Profile == signer.OwnerCustodyProfile {
 		s.protectedOwnerUID = c.OwnerUID

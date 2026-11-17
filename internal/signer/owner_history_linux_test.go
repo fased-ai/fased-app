@@ -15,14 +15,13 @@ import (
 	"github.com/fased-ai/fased-app/internal/update"
 )
 
-// This exercises the owner-provenance storage format with disposable keys only;
-// it does not enable the public owner-admission gate or start a service.
+// Exercise owner-provenance storage and recovery with disposable keys only.
 func TestOwnerHistoryBackupAndRecoveryPreservesProvenance(t *testing.T) {
 	const sourceID = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 	const targetID = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 	open := func(t *testing.T, dir, id string) *Vault {
 		t.Helper()
-		v, err := openVaultNetwork(dir, id, false, ordinaryOwnerNamespace+"devnet")
+		v, err := OpenOrdinaryCustody(dir, id, "devnet")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -111,8 +110,8 @@ func TestOwnerHistoryBackupAndRecoveryPreservesProvenance(t *testing.T) {
 	if err != nil || len(inventory.States) == 0 || !slices.Contains(inventory.States[0].Features, "owner-history-recovery-v1") || !slices.Contains(inventory.States[0].Features, update.OwnerKeyAdmissionFeature) {
 		t.Fatal("update compatibility must require a reader for owner recovery history", err)
 	}
-	if OrdinaryOwnerAdmissionEnabled() || slices.Contains(OrdinaryUpdateContract().State[0].Features, "owner-history-recovery-v1") || slices.Contains(OrdinaryUpdateContract().State[0].Features, update.OwnerKeyAdmissionFeature) {
-		t.Fatal("the disabled production owner path claimed owner-history support")
+	if !OrdinaryOwnerAdmissionEnabled() || !slices.Contains(OrdinaryUpdateContract().State[0].Features, "owner-history-recovery-v1") || !slices.Contains(OrdinaryUpdateContract().State[0].Features, update.OwnerKeyAdmissionFeature) {
+		t.Fatal("owner admission must advertise compatible owner-history recovery")
 	}
 	request := intentFixture(t, target, 1)
 	var signed update.Envelope
@@ -123,6 +122,13 @@ func TestOwnerHistoryBackupAndRecoveryPreservesProvenance(t *testing.T) {
 	joined, err := update.JoinSnapshots(request.Core, request.Signer, manifest.Target)
 	if err != nil {
 		t.Fatal(err)
+	}
+	// Model an older signer that lacks the newly enabled owner reader.
+	for i := range manifest.Components {
+		contract := &manifest.Components[i].Contract
+		if contract.Component == "signer" {
+			contract.State[0].Features = slices.DeleteFunc(contract.State[0].Features, func(f string) bool { return f == "owner-history-recovery-v1" || f == update.OwnerKeyAdmissionFeature })
+		}
 	}
 	if _, err = update.Compatible(manifest, update.SnapshotDigest("test", 1), joined); err == nil {
 		t.Fatal("a signer without the owner-history reader was accepted")
@@ -158,15 +164,8 @@ func TestOwnerHistoryBackupAndRecoveryPreservesProvenance(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// The installed admission gate is still closed. This signed-in-test manifest
-	// models the future reader so the signer transaction can be exercised now.
-	intent, binding := installationFixtureWithContract(t, target, 1, func(m *update.Manifest) {
-		for i := range m.Components {
-			if m.Components[i].Contract.Component == "signer" {
-				m.Components[i].Contract.State[0].Features = append(m.Components[i].Contract.State[0].Features, "owner-history-recovery-v1", update.OwnerKeyAdmissionFeature)
-			}
-		}
-	})
+	// The signed test manifest uses the owner's declared reader contract.
+	intent, binding := installationFixtureWithContract(t, target, 1, nil)
 	for _, phase := range []string{"active", "healthy-held", "committed-held", "completed"} {
 		if _, err = target.Installation(installCommand(t, target, intent, binding, phase)); err != nil {
 			t.Fatal("controlled owner update failed", phase, err)

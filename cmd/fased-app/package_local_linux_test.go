@@ -10,7 +10,38 @@ import (
 	"testing"
 
 	"github.com/fased-ai/fased-app/internal/custodyinstall"
+	"github.com/fased-ai/fased-app/internal/signer"
+	"github.com/fased-ai/fased-app/internal/update"
 )
+
+func TestPackageWalletEntryResumesOnlyOriginalPendingInitialization(t *testing.T) {
+	const instance = "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE"
+	base := custodyinstall.Manifest{Layout: custodyinstall.PackageLayout, Owner: 1000, Location: "local", ID: strings.Repeat("a", 32), Root: "/var/lib/fased-app-package/1000/local/" + strings.Repeat("a", 32)}
+	wallet := &update.WalletInitialization{Version: 1, OperationID: strings.Repeat("b", 32), InstanceID: instance, Network: "devnet"}
+	intent := &signer.OwnerIntent{Version: 1, InstanceID: instance, OperationID: strings.Repeat("0", 32), Network: "devnet", Action: "setup"}
+	verify := func(custodyinstall.Manifest) error { return errors.New("identity is partially published") }
+	pending := func(int, string, string) (custodyinstall.Manifest, *update.WalletInitialization, error) {
+		return base, wallet, nil
+	}
+	for _, m := range []custodyinstall.Manifest{base, func() custodyinstall.Manifest { v := base; v.Network = "devnet"; return v }()} {
+		if err := verifyPackageWalletEntry(m, intent, verify, pending); err != nil {
+			t.Fatal("the original wallet recovery was blocked", err)
+		}
+	}
+	other := *intent
+	other.Network = "mainnet-beta"
+	if err := verifyPackageWalletEntry(base, &other, verify, pending); err == nil {
+		t.Fatal("a different network entered recovery")
+	}
+	foreign := base
+	foreign.CoreHash = strings.Repeat("f", 64)
+	if err := verifyPackageWalletEntry(foreign, intent, verify, pending); err == nil {
+		t.Fatal("a foreign package entered recovery")
+	}
+	if err := verifyPackageWalletEntry(base, nil, verify, pending); err == nil {
+		t.Fatal("an ordinary command bypassed package verification")
+	}
+}
 
 func TestPackageCommandKeepsOfflineRecoveryInBootstrap(t *testing.T) {
 	for _, args := range [][]string{{"update", "recover"}, {"updates", "recover", "--data-dir", "/preserved"}, {"update", "--remote"}, {"update", "status", "--remote=true"}, {"update", "-remote=1"}, {"version", "--entry-json"}, {"native-release-binding"}, {"compatibility"}} {

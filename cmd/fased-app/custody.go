@@ -113,6 +113,9 @@ func custodyCommand(args []string, in *os.File, out, errOut io.Writer) (result e
 	if e != nil {
 		return e
 	}
+	if m.Version == 3 && m.Provenance != signer.ControlledCustodyProfile {
+		return errors.New("the disposable command cannot operate on an owner wallet")
+	}
 	if e = custodyinstall.Verify(m); e != nil {
 		return e
 	}

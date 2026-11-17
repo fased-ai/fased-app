@@ -47,8 +47,8 @@ func prepareEnrollment(ctx context.Context, c *Client, pair Package) (*Enrollmen
 	if err := pair.verify(); err != nil {
 		return nil, err
 	}
-	// The controlled compile-time admission has no runtime switch. A normal
-	// held binary cannot be turned into an owner signer by clicking Enable.
+	// Admission is a property of the verified installed executable, never a
+	// browser-supplied switch.
 	b, err := c.run(ctx, pair.Core, []string{"custody", "enrollment-capability"}, nil)
 	var capability struct {
 		Version      int  `json:"version"`
@@ -209,7 +209,7 @@ func (e *Enrollment) Wait(ctx context.Context) (*Client, error) {
 		return nil, errors.New("wallet setup is unfinished; resume the same enrollment")
 	}
 	if e.client.Peer.CoreSHA256 != e.pair.CoreSHA256 || e.client.Peer.SignerSHA256 != e.pair.SignerSHA256 {
-		return nil, errors.New("enrolled images differ from the approved native package")
+		return nil, errors.New("enrolled images differ from the approved package")
 	}
 	return e.client, nil
 }

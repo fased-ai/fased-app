@@ -51,7 +51,9 @@ func enrollmentCommand(args []string, in io.Reader, out, errOut io.Writer) error
 	if e = f.Parse(args); e != nil {
 		return e
 	}
-	if *ordinary && compiledOrdinaryEnrollment == nil && !signer.OrdinaryOwnerAdmissionEnabled() {
+	// This old entry explicitly promises disposable input. Production owner
+	// admission is reached through the package owner entry instead.
+	if *ordinary && compiledOrdinaryEnrollment == nil {
 		return signer.ErrUnavailable
 	}
 	if f.NArg() != 0 || !*prepare || !*disposable || os.Getuid() <= 0 || os.Getuid() != os.Geteuid() || (*mode != "local" && *mode != "remote") || *expected == "" || (*network != "devnet" && *network != "mainnet-beta") || *signerBinary == "" {
