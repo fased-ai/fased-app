@@ -129,6 +129,15 @@ func TestPackageSELinuxRegistrationFailsClosed(t *testing.T) {
 	}); !errors.Is(err, inspectionErr) || added != 0 {
 		t.Fatalf("inspection failure changed policy: err=%v calls=%d", err, added)
 	}
+	rules[0].examples = append(rules[0].examples, "/fixed/fased-signer")
+	if err := applyPackageSELinuxRules(rules, func(path string) (bool, error) {
+		if strings.HasSuffix(path, "signer") {
+			return false, inspectionErr
+		}
+		return false, nil
+	}, func(string) error { added++; return nil }); !errors.Is(err, inspectionErr) || added != 0 {
+		t.Fatalf("later policy conflict changed policy: err=%v calls=%d", err, added)
+	}
 	conflict := errors.New("existing rule differs")
 	if err := applyPackageSELinuxRules(rules, func(string) (bool, error) { return false, nil }, func(string) error { return conflict }); !errors.Is(err, conflict) {
 		t.Fatalf("conflicting policy was not preserved: %v", err)
@@ -142,5 +151,23 @@ func TestPackageSELinuxRegistrationFailsClosed(t *testing.T) {
 		return nil
 	}); err != nil || !installed {
 		t.Fatalf("exact rule was not registered: %v", err)
+	}
+}
+
+func TestPackageSELinuxPolicyPreservesCustomTypes(t *testing.T) {
+	for _, tc := range []struct {
+		context string
+		match   bool
+		refuse  bool
+	}{
+		{"system_u:object_r:bin_t:s0", true, false},
+		{"system_u:object_r:var_lib_t:s0", false, false},
+		{"system_u:object_r:custom_exec_t:s0", false, true},
+		{"invalid", false, true},
+	} {
+		got, err := packageSELinuxPolicyContext(tc.context)
+		if got != tc.match || (err != nil) != tc.refuse {
+			t.Fatalf("%q: match=%v error=%v", tc.context, got, err)
+		}
 	}
 }

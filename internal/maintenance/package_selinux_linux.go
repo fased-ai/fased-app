@@ -71,6 +71,21 @@ func selinuxBinContext(value string) bool {
 	return len(parts) >= 4 && parts[2] == "bin_t"
 }
 
+func packageSELinuxPolicyContext(value string) (bool, error) {
+	parts := strings.Split(strings.TrimSpace(value), ":")
+	if len(parts) < 4 {
+		return false, errors.New("cannot inspect SELinux executable policy")
+	}
+	switch parts[2] {
+	case "bin_t":
+		return true, nil
+	case "var_lib_t":
+		return false, nil
+	default:
+		return false, errors.New("existing custom SELinux executable policy must be preserved")
+	}
+}
+
 // Register the exact Fased files with the standard executable type. The rules
 // persist across filesystem relabelling and do not grant an operator OS tools.
 func configurePackageSELinux(a Authority, location, instance string) error {
@@ -87,7 +102,7 @@ func configurePackageSELinux(a Authority, location, instance string) error {
 		if e != nil {
 			return false, errors.New("cannot inspect SELinux executable policy")
 		}
-		return selinuxBinContext(string(context)), nil
+		return packageSELinuxPolicyContext(string(context))
 	}
 	add := func(pattern string) error {
 		// Only file-context mappings change; do not reload the host's kernel
@@ -107,13 +122,15 @@ func applyPackageSELinuxRules(rules []packageSELinuxRule, query func(string) (bo
 	}
 	for _, rule := range rules {
 		matches := func() (bool, error) {
+			all := true
 			for _, example := range rule.examples {
 				match, e := query(example)
-				if e != nil || !match {
+				if e != nil {
 					return false, e
 				}
+				all = all && match
 			}
-			return true, nil
+			return all, nil
 		}
 		matched, err := matches()
 		if err != nil {
@@ -153,6 +170,10 @@ func restorePackageExecutable(path string, mode os.FileMode) error {
 		return err
 	}
 	defer f.Close()
+	context, err := selinuxCommand("/usr/sbin/matchpathcon", "-n", "-m", "file", path)
+	if err != nil || !selinuxBinContext(string(context)) {
+		return errors.New("Fased SELinux executable policy changed; preserve it")
+	}
 	// Fedora's restricted systemd domain cannot execute restorecon with
 	// NoNewPrivileges. chcon is an ordinary bin_t executable and changes only
 	// the type of this already-verified root-owned file. The matching fcontext
