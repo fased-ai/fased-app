@@ -99,8 +99,8 @@ export type AccountsView = {
 export const fixtureNetwork = "disposable-fixture:v1";
 export const publicID = () => crypto.randomUUID().replaceAll("-", "");
 
-// Public intent only. The isolated native window independently selects/verifies
-// the OS owner and signer before it accepts any secret.
+// Public intent only. The Local owner entry verifies the instance and signer
+// before opening the separate protected browser session.
 export function walletOwnerLink(
   instance: string,
   network: string,

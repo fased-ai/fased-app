@@ -31,6 +31,11 @@ func TestUnconfiguredPackageWalletOnlyOffersControlledOwnerSetup(t *testing.T) {
 	if v.State != "configuration-required" || !v.OwnerSupported || !v.FixtureOnly || !v.AdmissionHeld {
 		t.Fatal("the controlled package cannot open its owner setup", v)
 	}
+	s.custodyOwnerKey = true
+	v = s.walletSetup(s.fixtureView(t.Context()))
+	if v.State != "configuration-required" || !v.OwnerSupported || v.FixtureOnly || !v.AdmissionHeld {
+		t.Fatal("owner package setup must retain the owner provenance", v)
+	}
 	s.installationSource.Store(2)
 	v = s.walletSetup(s.fixtureView(t.Context()))
 	if v.State != "unavailable" || v.OwnerSupported {

@@ -133,6 +133,28 @@ func TestPackageOwnerDoesNotFallBackToLegacy(t *testing.T) {
 	}
 }
 
+func TestLocalPackageOwnerUsesInspectedCustodyMode(t *testing.T) {
+	i := intent()
+	peer := Peer{Version: 1, InstanceID: i.InstanceID, SignerID: strings.Repeat("b", 32), Network: i.Network, OwnerUID: 1000, Provenance: signer.OwnerKeyProvenance}
+	c := &Client{Intent: i, Peer: Peer{OwnerUID: 1000}, packageOwner: "/protected/fased-app"}
+	c.run = func(_ context.Context, path string, args []string, input []byte) ([]byte, error) {
+		if path != c.packageOwner || len(input) != 0 || strings.Contains(strings.Join(args, " "), "--disposable-fixture") || !strings.HasSuffix(strings.Join(args, " "), "--inspect") {
+			t.Fatal("inspection selected a mode or sent private input", args)
+		}
+		return json.Marshal(peer)
+	}
+	if err := c.inspect(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if got := c.arguments(); got[len(got)-1] != "--ordinary-custody" {
+		t.Fatal("owner custody was treated as a fixture", got)
+	}
+	peer.Provenance = "unrecognized"
+	if err := c.inspect(t.Context()); err == nil {
+		t.Fatal("unknown custody provenance was accepted")
+	}
+}
+
 func TestOwnerResumeAndDurableBackup(t *testing.T) {
 	root := t.TempDir()
 	if err := os.Chmod(root, 0700); err != nil {
@@ -206,6 +228,29 @@ func TestOwnerExchangeRejectsUnboundAndUnsafeReply(t *testing.T) {
 	c.run = func(context.Context, string, []string, []byte) ([]byte, error) { called = true; return nil, nil }
 	if _, err := c.Exchange(t.Context(), in); err == nil || called {
 		t.Fatal("changed intent dispatched")
+	}
+}
+
+func TestOwnerExchangeRejectsFixtureOrChangedPublicIdentity(t *testing.T) {
+	i := intent()
+	p := Peer{Version: 1, InstanceID: i.InstanceID, SignerID: strings.Repeat("b", 32), Network: i.Network, OwnerUID: 1000, Provenance: signer.OwnerKeyProvenance}
+	ref := signer.AccountRef{Version: 3, SignerID: p.SignerID, WalletID: strings.Repeat("c", 32), Epoch: strings.Repeat("d", 32), Network: i.Network, PublicKey: strings.Repeat("11", 32)}
+	status := signer.Status{Account: &ref, Locked: true, RecoveryRequired: true, AdmissionHeld: true, Custody: &signer.CustodyAdmission{Version: 1, Class: signer.OrdinaryCustodyMode, Profile: signer.OwnerCustodyProfile, Provenance: signer.OwnerKeyProvenance, Origin: "generated"}}
+	result := signer.OwnerResult{Intent: i, SignerID: p.SignerID, Status: status.PublicView(), Backup: []byte("encrypted")}
+	result.Fingerprint = signer.BackupFingerprint(result.Backup)
+	c := &Client{Intent: i, Peer: p, run: func(context.Context, string, []string, []byte) ([]byte, error) { return json.Marshal(result) }}
+	in := signer.OwnerInput{Intent: i, SignerID: p.SignerID, Phase: "prepare", Unlock: []byte(strings.Repeat("x", 16)), BackupPassword: []byte(strings.Repeat("y", 16))}
+	if _, err := c.Exchange(t.Context(), in); err != nil {
+		t.Fatal("the bound owner result was refused", err)
+	}
+	result.Status.FixtureOnly = true
+	if _, err := c.Exchange(t.Context(), in); err == nil {
+		t.Fatal("fixture response entered owner custody")
+	}
+	result.Status.FixtureOnly = false
+	result.Status.PublicIdentity.Address = "different"
+	if _, err := c.Exchange(t.Context(), in); err == nil {
+		t.Fatal("unbound wallet address was accepted")
 	}
 }
 

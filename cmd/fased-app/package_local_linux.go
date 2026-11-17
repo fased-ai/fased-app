@@ -11,6 +11,7 @@ import (
 	"syscall"
 
 	"github.com/fased-ai/fased-app/internal/custodyinstall"
+	"github.com/fased-ai/fased-app/internal/ownerclient"
 	"github.com/fased-ai/fased-app/internal/signer"
 	"github.com/fased-ai/fased-app/internal/update"
 )
@@ -30,8 +31,24 @@ func dispatchPackageInstance(args []string) error {
 	if os.Getuid() <= 0 || os.Getuid() != os.Geteuid() || signer.VerifyExecutablePath(image) != nil {
 		return errors.New("the package command requires its ordinary OS owner")
 	}
+	var walletIntent *signer.OwnerIntent
 	if !explicit {
-		data, err = defaultPackageLocalData("", false)
+		// A wallet link identifies a workspace, which can differ from the
+		// default package. Select its committed owner target before exec.
+		if args[0] == "open" && len(args) == 2 && strings.HasPrefix(args[1], "fased-wallet://") {
+			intent, origin, e := ownerclient.ParseLink(args[1])
+			if e != nil || origin != "" {
+				return errors.New("the original Local wallet request is required")
+			}
+			walletIntent = &intent
+			image, e := ownerclient.LocalPackageOwnerTarget(intent.InstanceID)
+			if e != nil || image == "" {
+				return errors.New("the original Local wallet is unavailable")
+			}
+			data = filepath.Join(filepath.Dir(image), "app-state")
+		} else {
+			data, err = defaultPackageLocalData("", false)
+		}
 		if err != nil {
 			return err
 		}
@@ -45,11 +62,48 @@ func dispatchPackageInstance(args []string) error {
 	if err != nil || m.Layout != custodyinstall.PackageLayout || m.Owner != os.Getuid() || m.Root != root || data != filepath.Join(root, "app-state") {
 		return errors.New("select the original package instance with --data-dir")
 	}
-	if err := custodyinstall.VerifyPackageInstance(m); err != nil {
+	if err := verifyPackageWalletEntry(m, walletIntent, custodyinstall.VerifyPackageInstance, custodyinstall.PendingPackageWallet); err != nil {
 		return errors.New("the installed pair is incomplete; use fased update recover with the same --data-dir")
 	}
 	executable := filepath.Join(root, "fased-app")
 	return syscall.Exec(executable, append([]string{executable}, args...), os.Environ())
+}
+
+func redirectLocalPackageWallet(instance, link, data string) error {
+	image, err := ownerclient.LocalPackageOwnerTarget(instance)
+	if err != nil || image == "" || data != filepath.Join(filepath.Dir(image), "app-state") {
+		return errors.New("the original Local wallet is unavailable")
+	}
+	self, err := os.Executable()
+	if err != nil {
+		return err
+	}
+	if self == image {
+		return nil
+	}
+	return syscall.Exec(image, []string{image, "open", link}, os.Environ())
+}
+
+// During wallet initialization the protected journal may contain an exact
+// mix of base and target metadata. Only its original public wallet entry may
+// execute the already verified pair to resume that same operation.
+func verifyPackageWalletEntry(m custodyinstall.Manifest, intent *signer.OwnerIntent, verify func(custodyinstall.Manifest) error, pending func(int, string, string) (custodyinstall.Manifest, *update.WalletInitialization, error)) error {
+	if err := verify(m); err == nil {
+		return nil
+	}
+	if intent == nil || intent.Version != 1 || intent.Validate() != nil || m.Location != "local" {
+		return errors.New("the original wallet request is required")
+	}
+	base, operation, err := pending(m.Owner, m.Location, m.ID)
+	if err != nil || operation == nil || !operation.Valid() || operation.InstanceID != intent.InstanceID || operation.Network != intent.Network || base.Owner != m.Owner || base.ID != m.ID || base.Root != m.Root || base.Location != m.Location || base.Network != "" {
+		return errors.New("the original pending wallet is unavailable")
+	}
+	target := base
+	target.Network = operation.Network
+	if m != base && m != target {
+		return errors.New("the pending wallet package differs")
+	}
+	return nil
 }
 
 func packageCommandTarget(args []string) (data string, explicit, delegate bool, err error) {

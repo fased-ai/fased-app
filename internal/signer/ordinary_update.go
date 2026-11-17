@@ -44,6 +44,9 @@ func (v *Vault) ordinaryUpdateSnapshot(probe string) (update.SignerSnapshot, err
 	vaultFeatures := []string{"ordinary-custody-admission-v1", "key-only-recovery-hold-v1"}
 	if disk.RecoveredHistorySHA256 != "" {
 		vaultFeatures = append(vaultFeatures, historyRecoveryFeature)
+		if admission.Provenance == OwnerKeyProvenance {
+			vaultFeatures = append(vaultFeatures, ownerHistoryRecoveryFeature)
+		}
 	}
 	if admission.Profile == OwnerCustodyProfile {
 		vaultFeatures = append(vaultFeatures, "owner-profile-v1")
@@ -51,7 +54,7 @@ func (v *Vault) ordinaryUpdateSnapshot(probe string) (update.SignerSnapshot, err
 	if admission.Provenance == ControlledCustodyProfile {
 		vaultFeatures = append(vaultFeatures, "controlled-provenance-v1")
 	} else {
-		vaultFeatures = append(vaultFeatures, "owner-input-provenance-v1")
+		vaultFeatures = append(vaultFeatures, "owner-input-provenance-v1", update.OwnerKeyAdmissionFeature)
 	}
 	return update.SignerSnapshot{Version: 3, ProbeID: probe, BootID: v.bootID, AuthoritySHA256: update.SnapshotDigest("ordinary-authority", struct {
 		Refs      []AccountRef

@@ -72,8 +72,8 @@ func TestOrdinaryEnrollmentOwnerBoundary(t *testing.T) {
 	if _, err := custodyOwnerFlag(m, "approve-swap"); err == nil {
 		t.Fatal("real trade approval enabled")
 	}
-	if _, err := custodyOwnerFlag(m, "import"); !errors.Is(err, signer.ErrUnavailable) {
-		t.Fatal("real key admission enabled")
+	if flag, err := custodyOwnerFlag(m, "import"); err != nil || flag != "--ordinary-custody" {
+		t.Fatal("owner key admission did not use its own provenance", err)
 	}
 }
 

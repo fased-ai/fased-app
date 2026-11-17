@@ -363,7 +363,10 @@ func install(ctx context.Context, o Options, s *System, controlled bool) (Manife
 	if o.NativeOwnerAccess && (o.Mode != signer.OrdinaryCustodyMode || !o.StageOnly || o.Location != "local") {
 		return m, errors.New("native access requires Local ordinary enrollment")
 	}
-	if o.Mode == signer.OrdinaryCustodyMode && (!o.StageOnly || !controlled && (!signer.OrdinaryOwnerAdmissionEnabled() || o.Provenance != signer.OwnerKeyProvenance)) {
+	// Owner admission is available only through the authenticated helper. The
+	// legacy fixture installer cannot turn caller-selected inputs into an owner
+	// custody installation merely because the signer supports owner keys.
+	if o.Mode == signer.OrdinaryCustodyMode && (!o.StageOnly || !controlled && (s.protectedOwner <= 0 || !signer.OrdinaryOwnerAdmissionEnabled() || o.Provenance != signer.OwnerKeyProvenance)) {
 		return m, signer.ErrUnavailable
 	}
 	if controlled && (o.Profile != signer.OwnerCustodyProfile || o.Provenance != signer.ControlledCustodyProfile) {

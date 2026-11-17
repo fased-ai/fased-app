@@ -13,6 +13,7 @@ import (
 	"github.com/fased-ai/fased-app/internal/update"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"syscall"
 	"testing"
@@ -52,6 +53,10 @@ func ordinaryBootstrapModel(t *testing.T, remote ...bool) (BootstrapTransaction,
 		file, data := "fased-app", "next-core"
 		if c.Component == "signer" {
 			file, data = "fased-signer", "next-signer"
+			// This model exercises the historical maintenance-only reader;
+			// owner admission is a different, deliberately refused handoff.
+			c.Features = slices.DeleteFunc(c.Features, func(f string) bool { return f == update.OwnerKeyAdmissionFeature })
+			c.State[0].Features = slices.DeleteFunc(c.State[0].Features, func(f string) bool { return f == update.OwnerKeyAdmissionFeature || f == "owner-history-recovery-v1" })
 		}
 		target.Components = append(target.Components, update.Component{Version: "0.0.0-fixture", Contract: c, Artifact: update.Artifact{File: file, Size: int64(len(data)), SHA256: sum([]byte(data))}})
 	}

@@ -1,5 +1,5 @@
-// Package ownerclient is a short-lived OS-owner input client. It is never linked
-// into an HTTP owner route and never authenticates with a core/browser session.
+// Package ownerclient is a short-lived OS-owner input client. It never sends
+// owner input through the app core or authenticates with a core session.
 package ownerclient
 
 import (
@@ -21,6 +21,7 @@ import (
 )
 
 type Peer struct {
+	Provenance   string `json:"provenance,omitempty"`
 	Ready        *bool  `json:"ready,omitempty"`
 	Version      int    `json:"version"`
 	InstanceID   string `json:"instanceId"`
@@ -123,12 +124,18 @@ func locate(ctx context.Context, intent signer.OwnerIntent, origin, user, pins s
 
 func (c *Client) inspect(ctx context.Context) error {
 	uid := c.Peer.OwnerUID
-	b, err := c.invoke(ctx, c.ownerExecutable(), append(c.arguments(), "--inspect"), nil)
+	args := c.arguments()
+	if c.packageOwner != "" {
+		// The protected Local entry returns its public custody provenance before
+		// any mode or secret input is selected.
+		args = args[:len(args)-1]
+	}
+	b, err := c.invoke(ctx, c.ownerExecutable(), append(args, "--inspect"), nil)
 	if err != nil {
 		return errors.New("protected wallet enrollment is required for this instance and network")
 	}
 	var peer Peer
-	if decode(b, &peer) != nil || peer.Version != 1 || peer.InstanceID != c.Intent.InstanceID || peer.Network != c.Intent.Network || peer.OwnerUID != uid || !regexp.MustCompile(`^[0-9a-f]{32}$`).MatchString(peer.SignerID) {
+	if decode(b, &peer) != nil || peer.Version != 1 || peer.InstanceID != c.Intent.InstanceID || peer.Network != c.Intent.Network || peer.OwnerUID != uid || !regexp.MustCompile(`^[0-9a-f]{32}$`).MatchString(peer.SignerID) || peer.Provenance != "" && (c.packageOwner == "" || peer.Provenance != signer.OwnerKeyProvenance) {
 		return errors.New("owner connection returned a different wallet identity")
 	}
 	c.Peer = peer
@@ -146,7 +153,11 @@ func (c *Client) ownerExecutable() string {
 }
 
 func (c *Client) arguments() []string {
-	return []string{"custody", "window", "--expected-instance", c.Intent.InstanceID, "--network", c.Intent.Network, "--disposable-fixture"}
+	mode := "--disposable-fixture"
+	if c.packageOwner != "" && c.Peer.Provenance == signer.OwnerKeyProvenance {
+		mode = "--ordinary-custody"
+	}
+	return []string{"custody", "window", "--expected-instance", c.Intent.InstanceID, "--network", c.Intent.Network, mode}
 }
 
 func (c *Client) invoke(ctx context.Context, path string, args []string, input []byte) ([]byte, error) {
@@ -192,6 +203,16 @@ func (c *Client) Exchange(ctx context.Context, input signer.OwnerInput) (signer.
 	}
 	if !signer.ValidManagedAccountRef(*result.Status.Account) && !signer.ValidOrdinaryAccountRef(*result.Status.Account) {
 		return signer.OwnerResult{}, errors.New("wallet owner returned an invalid account")
+	}
+	if c.Peer.Provenance == signer.OwnerKeyProvenance {
+		status := result.Status
+		identity := status.Account.PublicIdentity()
+		if identity != nil {
+			identity.FixtureOnly = false
+		}
+		if status.FixtureOnly || status.UpdateHeld || !status.AdmissionHeld || status.Custody == nil || !status.Custody.Valid() || status.Custody.Profile != signer.OwnerCustodyProfile || status.Custody.Provenance != signer.OwnerKeyProvenance || identity == nil || status.PublicIdentity == nil || *identity != *status.PublicIdentity {
+			return signer.OwnerResult{}, errors.New("wallet owner returned a different custody identity")
+		}
 	}
 	return result, nil
 }

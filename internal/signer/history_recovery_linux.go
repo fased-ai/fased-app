@@ -22,10 +22,11 @@ func (v *Vault) BackupHistory(password []byte) ([]byte, error) {
 	if v.closed || v.store.failedState() || v.record == nil || v.ledger == nil || !v.unlocked() {
 		return nil, ErrLocked
 	}
-	if v.ordinary && v.record.Admission.Provenance != ControlledCustodyProfile {
-		return nil, ErrUnavailable
-	}
 	e, err := sealAdmissionHistory(v.seed, password, v.record.Ref, "vault", v.record.RecoveryRequired, v.record.FreshManaged, v.record.Admission, v.record.RecoveredHistorySHA256)
+	if err != nil {
+		return nil, err
+	}
+	fixtureOnly, err := portableFixtureOnly(e)
 	if err != nil {
 		return nil, err
 	}
@@ -41,7 +42,8 @@ func (v *Vault) BackupHistory(password []byte) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	d.header = portableHeader{Version: 1, Purpose: portablePurpose, FixtureOnly: true, CapturedAt: v.now().Unix(), ContractSHA256: portableContract(v.record.Ref)}
+	_, purpose := portableProfile(fixtureOnly)
+	d.header = portableHeader{Version: 1, Purpose: purpose, FixtureOnly: fixtureOnly, CapturedAt: v.now().Unix(), ContractSHA256: portableContract(v.record.Ref)}
 	d.header.History, err = historyForLocked(v, d.files)
 	if err != nil {
 		return nil, err
@@ -188,7 +190,9 @@ func (s *storage) ensureRecoveredHistory(e envelope) error {
 			return err
 		}
 	}
-	if receipt.Version != 1 || receipt.Purpose != portablePurpose || !receipt.FixtureOnly {
+	fixtureOnly, err := portableFixtureOnly(e)
+	_, purpose := portableProfile(fixtureOnly)
+	if err != nil || receipt.Version != 1 || receipt.Purpose != purpose || receipt.FixtureOnly != fixtureOnly {
 		return ErrUnavailable
 	}
 	if err = validatePortable(d, s.path); err != nil {

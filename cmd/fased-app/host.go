@@ -125,6 +125,9 @@ func hostCommand(args []string, out, errOut io.Writer) error {
 	if command == "install" {
 		budget = 15 * time.Minute
 	}
+	if ownerLink != "" {
+		budget = 10 * time.Minute
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), budget)
 	defer cancel()
 	if command == "service" || command == "open" || command == "uninstall" || command == "install" {
@@ -150,23 +153,10 @@ func hostCommand(args []string, out, errOut io.Writer) error {
 				if e != nil || privateOrigin != "" || *printOnly {
 					return errors.New("the original Local wallet request is required")
 				}
-				root := filepath.Dir(abs)
-				m, e := custodyinstall.LoadPackageInstance(os.Getuid(), root)
-				if e != nil {
-					return errors.New("the original Local package is unavailable")
-				}
-				if _, e = custodyinstall.ProtectedPackageNativeRelease(m, intent.InstanceID); e != nil {
+				if e = redirectLocalPackageWallet(intent.InstanceID, ownerLink, abs); e != nil {
 					return e
 				}
-				desktop := filepath.Join(root, localinstall.DesktopName())
-				if e = checkDesktopRuntime(desktop); e != nil {
-					return e
-				}
-				process := exec.Command(desktop, "--wallet-owner", ownerLink)
-				if e = process.Start(); e != nil {
-					return errors.New("cannot open the protected Fased window")
-				}
-				return process.Process.Release()
+				return ownerclient.OpenLocalBrowser(ctx, ownerLink)
 			}
 			address, e := preparePackageBrowser(ctx, errOut, func(ctx context.Context) (string, error) {
 				return localOwnerSetupLink(ctx, abs, "")
@@ -175,10 +165,10 @@ func hostCommand(args []string, out, errOut io.Writer) error {
 				if err != nil {
 					return err
 				}
-				if _, err = custodyinstall.ProtectedPackageNativeRelease(m, ""); err != nil {
+				if err = custodyinstall.VerifyPackageOwnerTarget(m); err != nil {
 					return err
 				}
-				return registerPackageWalletShortcut(ctx)
+				return registerPackageWalletShortcut(ctx, filepath.Join(m.Root, "fased-app"))
 			})
 			if e != nil {
 				return e

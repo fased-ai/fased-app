@@ -75,7 +75,7 @@ type portableData struct {
 var portableNames = [3]string{"vault.json.snapshot", "operations.log.snapshot", "mock-receipts.log.snapshot"}
 
 func portableReceipt(d portableData, archive []byte) PortableReceipt {
-	return PortableReceipt{Version: 1, Purpose: portablePurpose, FixtureOnly: true, CapturedAt: d.header.CapturedAt, ArchiveSHA256: portableHash(archive), History: d.header.History, Historical: true, ReadOnly: true, Locked: true, RecoveryRequired: true}
+	return PortableReceipt{Version: 1, Purpose: d.header.Purpose, FixtureOnly: d.header.FixtureOnly, CapturedAt: d.header.CapturedAt, ArchiveSHA256: portableHash(archive), History: d.header.History, Historical: true, ReadOnly: true, Locked: true, RecoveryRequired: true}
 }
 func portableJournal(s *storage, name string) ([]byte, error) {
 	fd, e := unix.Openat(s.dir, name, unix.O_RDONLY|unix.O_NOFOLLOW|unix.O_NONBLOCK|unix.O_CLOEXEC, 0)
@@ -180,6 +180,10 @@ func portableCipher(password, salt []byte) (cipher.AEAD, error) {
 	return cipher.NewGCM(b)
 }
 func sealPortable(d portableData, password []byte) ([]byte, error) {
+	magic, purpose := portableProfile(d.header.FixtureOnly)
+	if d.header.Purpose != purpose {
+		return nil, errors.New("recovery format does not match its custody profile")
+	}
 	h, e := json.Marshal(d.header)
 	if e != nil || len(h) > maxDocument {
 		return nil, errors.New("invalid bounded snapshot header")
@@ -192,8 +196,8 @@ func sealPortable(d portableData, password []byte) ([]byte, error) {
 		p.Write(b)
 	}
 	defer wipe(p.Bytes())
-	header := append([]byte(portableMagic), randomBytes(28)...)
-	a, e := portableCipher(password, header[len(portableMagic):len(portableMagic)+16])
+	header := append([]byte(magic), randomBytes(28)...)
+	a, e := portableCipher(password, header[len(magic):len(magic)+16])
 	if e != nil {
 		return nil, e
 	}
@@ -201,11 +205,17 @@ func sealPortable(d portableData, password []byte) ([]byte, error) {
 }
 func unsealPortable(document, password []byte, expected string) (portableData, error) {
 	var d portableData
-	n := len(portableMagic) + 28
-	if len(document) < n+16 || len(document) > MaxPortableSnapshot || !bytes.HasPrefix(document, []byte(portableMagic)) || len(expected) != 64 || portableHash(document) != expected {
+	magic, purpose := portableProfile(true)
+	fixtureOnly := true
+	if bytes.HasPrefix(document, []byte(ownerPortableMagic)) {
+		fixtureOnly = false
+		magic, purpose = portableProfile(false)
+	}
+	n := len(magic) + 28
+	if len(document) < n+16 || len(document) > MaxPortableSnapshot || !bytes.HasPrefix(document, []byte(magic)) || len(expected) != 64 || portableHash(document) != expected {
 		return d, errors.New("independently retained exact snapshot fingerprint required")
 	}
-	a, e := portableCipher(password, document[len(portableMagic):len(portableMagic)+16])
+	a, e := portableCipher(password, document[len(magic):len(magic)+16])
 	if e != nil {
 		return d, e
 	}
@@ -232,7 +242,7 @@ func unsealPortable(document, password []byte, expected string) (portableData, e
 			d.files[i-1] = b
 		}
 	}
-	if r.Len() != 0 || d.header.Version != 1 || d.header.Purpose != portablePurpose || !d.header.FixtureOnly || d.header.CapturedAt <= 0 || !portableRef(d.header.History.Account) || d.header.ContractSHA256 != portableContract(d.header.History.Account) {
+	if r.Len() != 0 || d.header.Version != 1 || d.header.Purpose != purpose || d.header.FixtureOnly != fixtureOnly || (!d.header.FixtureOnly && d.header.History.Account.Version != 3) || d.header.CapturedAt <= 0 || !portableRef(d.header.History.Account) || d.header.ContractSHA256 != portableContract(d.header.History.Account) {
 		return d, errors.New("unsupported recovery profile or reader")
 	}
 	return d, nil
@@ -271,6 +281,14 @@ func privatePortableParent(dir string) (*os.Root, string, error) {
 // disposable validation directory. Only copied encrypted key/history are used;
 // no live installation, journal append, history repair or grant rebind is called.
 func validatePortable(d portableData, parent string) error {
+	var vault envelope
+	if decode(d.files[0], &vault) != nil {
+		return ErrUnavailable
+	}
+	fixtureOnly, err := portableFixtureOnly(vault)
+	if err != nil || fixtureOnly != d.header.FixtureOnly {
+		return errors.New("recovery profile differs from the authenticated wallet provenance")
+	}
 	dir, e := os.MkdirTemp(parent, ".portable-validation-")
 	if e != nil {
 		return e
@@ -327,6 +345,25 @@ func portableContract(ref AccountRef) string {
 	}
 	return update.SnapshotDigest("portable-reader-contract", c)
 }
+
+// The custody profile is part of the encrypted vault identity. A portable
+// archive must retain it; relabelling an owner key as a fixture is refused.
+func portableFixtureOnly(e envelope) (bool, error) {
+	if e.validate("vault") != nil {
+		return false, ErrUnavailable
+	}
+	if e.Ref.Version != 3 {
+		return true, nil
+	}
+	if e.Admission.Provenance == ControlledCustodyProfile {
+		return true, nil
+	}
+	if e.Admission.Profile == OwnerCustodyProfile && e.Admission.Provenance == OwnerKeyProvenance {
+		return false, nil
+	}
+	return false, ErrUnavailable
+}
+
 func portableNetwork(document []byte) (string, error) {
 	var e envelope
 	if decode(document, &e) != nil || e.validate("vault") != nil {
@@ -337,6 +374,9 @@ func portableNetwork(document []byte) (string, error) {
 	}
 	if e.Ref.Version == 2 {
 		return e.Ref.Network, nil
+	}
+	if e.Admission.Profile == OwnerCustodyProfile && e.Admission.Provenance == OwnerKeyProvenance {
+		return ordinaryOwnerNamespace + e.Ref.Network, nil
 	}
 	if e.Admission.Provenance != ControlledCustodyProfile {
 		return "", ErrUnavailable

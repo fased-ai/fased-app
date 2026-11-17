@@ -9,6 +9,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"syscall"
 	"testing"
@@ -551,10 +552,15 @@ func TestBundleJournalKeepsTheOriginalPairAndRecoveryIdentity(t *testing.T) {
 }
 
 func TestPackageWalletAdmissionPreservesIdleJournalWhenOwnerSignerHeld(t *testing.T) {
-	if signer.OrdinaryOwnerAdmissionEnabled() {
-		t.Skip("owner signer admission is enabled in this build")
-	}
 	r, m := packageGateInitialRecord(t)
+	old := *r.Package
+	old.Components = append([]update.Component(nil), old.Components...)
+	for i := range old.Components {
+		if old.Components[i].Contract.Component == "signer" {
+			old.Components[i].Contract.Features = slices.DeleteFunc(slices.Clone(old.Components[i].Contract.Features), func(f string) bool { return f == update.OwnerKeyAdmissionFeature })
+		}
+	}
+	r.Package = &old
 	before := mustJSON(r)
 	if err := CheckPackageWalletSigner(m, r.Package); !errors.Is(err, signer.ErrUnavailable) {
 		t.Fatal("the disabled owner signer was offered wallet initialization", err)
@@ -573,7 +579,8 @@ func TestPackageWalletAdmissionBindsSignerContract(t *testing.T) {
 	p.Components = append([]update.Component(nil), p.Components...)
 	for i := range p.Components {
 		if p.Components[i].Contract.Component == "signer" {
-			p.Components[i].Contract.Features = append(append([]string(nil), p.Components[i].Contract.Features...), update.OwnerKeyAdmissionFeature)
+			features := slices.DeleteFunc(slices.Clone(p.Components[i].Contract.Features), func(f string) bool { return f == update.OwnerKeyAdmissionFeature })
+			p.Components[i].Contract.Features = append(features, update.OwnerKeyAdmissionFeature)
 		}
 	}
 	if err := CheckPackageWalletSigner(m, &p); err != nil {
@@ -587,7 +594,9 @@ func TestPackageWalletAdmissionBindsSignerContract(t *testing.T) {
 	coreOnly := *r.Package
 	coreOnly.Components = append([]update.Component(nil), coreOnly.Components...)
 	for i := range coreOnly.Components {
-		if coreOnly.Components[i].Contract.Component == "core" {
+		if coreOnly.Components[i].Contract.Component == "signer" {
+			coreOnly.Components[i].Contract.Features = slices.DeleteFunc(slices.Clone(coreOnly.Components[i].Contract.Features), func(f string) bool { return f == update.OwnerKeyAdmissionFeature })
+		} else if coreOnly.Components[i].Contract.Component == "core" {
 			coreOnly.Components[i].Contract.Features = append(append([]string(nil), coreOnly.Components[i].Contract.Features...), update.OwnerKeyAdmissionFeature)
 		}
 	}

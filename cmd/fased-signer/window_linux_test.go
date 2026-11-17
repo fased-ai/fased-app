@@ -76,6 +76,38 @@ func TestOwnerWindowCreateReopenVerifyAndRefuseDuplicate(t *testing.T) {
 	}
 }
 
+func TestOwnerWindowUsesOwnerProvenanceAndReopensLocked(t *testing.T) {
+	in := windowInput("setup", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+	dir := ownerFixture(t)
+	root := ownerFixture(t)
+	v, err := signer.OpenOrdinaryCustody(dir, in.SignerID, "devnet")
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := signer.Config{Version: 3, Network: "devnet", SignerID: in.SignerID}
+	prepared := windowRun(t, v, c, root, in)
+	if prepared.Status.FixtureOnly || prepared.Status.Custody == nil || prepared.Status.Custody.Provenance != signer.OwnerKeyProvenance || !prepared.Status.AdmissionHeld {
+		t.Fatal("owner window lost its owner provenance or hold")
+	}
+	in.Phase, in.Backup, in.Fingerprint = "verify", prepared.Backup, prepared.Fingerprint
+	verified := windowRun(t, v, c, root, in)
+	if !verified.BackupVerified {
+		t.Fatal("owner backup was not verified")
+	}
+	if err = v.Close(); err != nil {
+		t.Fatal(err)
+	}
+	v, err = signer.OpenOrdinaryCustody(dir, in.SignerID, "devnet")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer v.Close()
+	status := v.Status()
+	if status.Account == nil || *status.Account != *prepared.Status.Account || !status.Locked || !status.RecoveryRequired || status.FixtureOnly {
+		t.Fatal("restart changed owner wallet identity or hold")
+	}
+}
+
 func TestOwnerWindowInterruptedImportResumesSameKey(t *testing.T) {
 	in := windowInput("import", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
 	in.Seed = bytes.Repeat([]byte{43}, 32)

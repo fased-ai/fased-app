@@ -11,7 +11,7 @@ const OwnerCustodyProfile = "owner-authorized:v1"
 const OwnerKeyProvenance = "owner-input:v1"
 
 // CustodyAdmission is authenticated vault/genesis metadata, never a grant.
-// The controlled provenance is immutable. No production profile is admitted.
+// The controlled provenance is immutable and distinct from owner input.
 type CustodyAdmission struct {
 	Provenance string `json:"provenance"`
 	Version    int    `json:"version"`
@@ -30,7 +30,7 @@ func (a CustodyAdmission) Valid() bool {
 
 // There is no public runtime override. Enabling the reviewed owner binding
 // cannot change the provenance/namespace of an existing controlled key.
-func OrdinaryOwnerAdmissionEnabled() bool { return false }
+func OrdinaryOwnerAdmissionEnabled() bool { return true }
 
 func ValidOrdinaryAccountRef(r AccountRef) bool {
 	b, err := hex.DecodeString(r.PublicKey)

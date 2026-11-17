@@ -17,7 +17,7 @@ import (
 
 // This request carries only the selected network and public operation IDs.
 // The fixed protected helper verifies the journal and physical empty signer.
-func initializePackageWallet(instance, network, operation string, diagnostics io.Writer) error {
+func initializePackageWallet(instance, network, operation string, fixture, ordinary bool, diagnostics io.Writer) error {
 	request := update.WalletInitialization{Version: 1, OperationID: operation, InstanceID: instance, Network: network}
 	if !request.Valid() {
 		return errors.New("invalid wallet initialization")
@@ -29,6 +29,9 @@ func initializePackageWallet(instance, network, operation string, diagnostics io
 	m, err := custodyinstall.LoadPackageInstance(os.Getuid(), filepath.Dir(data))
 	if err != nil || data != filepath.Join(m.Root, "app-state") || m.Location != "local" || m.Network != "" && m.Network != network {
 		return errors.New("the original Local package wallet is required")
+	}
+	if _, err = walletOwnerMode(m, fixture, ordinary, false); err != nil {
+		return err
 	}
 	if _, err = custodyOwnerFlag(m, "setup"); err != nil {
 		return err

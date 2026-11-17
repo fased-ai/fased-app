@@ -14,7 +14,7 @@ func custodyWindowTarget(owner int) (custodyinstall.Manifest, bool, error) {
 	return m, false, err
 }
 
-func initializePackageWallet(string, string, string, io.Writer) error {
+func initializePackageWallet(string, string, string, bool, bool, io.Writer) error {
 	return errors.New("protected package wallet requires Linux")
 }
 

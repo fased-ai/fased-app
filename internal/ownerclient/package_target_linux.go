@@ -10,8 +10,76 @@ import (
 	"strings"
 
 	"github.com/fased-ai/fased-app/internal/custodyinstall"
+	"github.com/fased-ai/fased-app/internal/localinstall"
+	"github.com/fased-ai/fased-app/internal/signer"
 	"github.com/fased-ai/fased-app/internal/update"
 )
+
+// ResumeLocal checks the protected wallet journal before changing the owner
+// draft, including when an earlier initialization stopped before dispatch.
+func ResumeLocal(root, link string) (signer.OwnerIntent, string, error) {
+	intent, origin, err := ParseLink(link)
+	if err != nil || origin != "" || intent.Version != 1 {
+		return signer.OwnerIntent{}, "", errors.New("the original Local wallet request is required")
+	}
+	return resume(root, link, func(request signer.OwnerIntent, saved *draft) error {
+		path, err := localPackageOwnerTarget(os.Getuid(), request.InstanceID)
+		if err != nil || path == "" {
+			return errors.New("the protected Local wallet is unavailable")
+		}
+		m, err := custodyinstall.LoadPackageInstance(os.Getuid(), filepath.Dir(path))
+		if err != nil {
+			return errors.New("the original Local package is unavailable")
+		}
+		_, pending, err := custodyinstall.PendingPackageWallet(m.Owner, m.Location, m.ID)
+		if err != nil {
+			return err
+		}
+		return checkPendingOwnerDraft(request, saved, pending)
+	})
+}
+
+func checkPendingOwnerDraft(request signer.OwnerIntent, saved *draft, pending *update.WalletInitialization) error {
+	if pending == nil {
+		return nil
+	}
+	if !pending.Valid() || saved == nil || saved.Origin != "" || saved.Intent.OperationID != pending.OperationID || saved.Intent.InstanceID != pending.InstanceID || saved.Intent.Network != pending.Network || request.InstanceID != pending.InstanceID || request.Network != pending.Network || request.Action != saved.Intent.Action {
+		return errors.New("resume the original pending wallet operation")
+	}
+	return nil
+}
+
+// LocalOwnerPackage selects the existing protected pair by committed instance,
+// including only the original pending wallet operation during recovery.
+func LocalOwnerPackage(intent signer.OwnerIntent) (Package, error) {
+	var result Package
+	if intent.Validate() != nil || intent.Version != 1 {
+		return result, errors.New("the original Local wallet request is required")
+	}
+	path, err := localPackageOwnerTarget(os.Getuid(), intent.InstanceID)
+	if err != nil || path == "" {
+		return result, errors.New("the protected Local wallet is unavailable")
+	}
+	root := filepath.Dir(path)
+	m, err := custodyinstall.LoadPackageInstance(os.Getuid(), root)
+	if err != nil {
+		return result, errors.New("the original Local package is unavailable")
+	}
+	base, pending, err := custodyinstall.PendingPackageWallet(m.Owner, m.Location, m.ID)
+	if err != nil {
+		return result, err
+	}
+	if pending != nil {
+		if pending.InstanceID != intent.InstanceID || pending.Network != intent.Network || pending.OperationID != intent.OperationID || base.Root != root {
+			return result, errors.New("resume the original wallet setup")
+		}
+		m = base
+	} else if err = custodyinstall.VerifyPackageOwnerTarget(m); err != nil {
+		return result, errors.New("the protected Local package is unavailable")
+	}
+	result = Package{Core: path, Signer: filepath.Join(root, "fased-signer"), CoreSHA256: m.CoreHash, SignerSHA256: m.SignerHash, LocalPaths: localinstall.Paths{Root: root, Data: filepath.Join(root, "app-state")}}
+	return result, result.verify()
+}
 
 // Select by the protected owner commitment, never by a browser-provided path.
 // A different or unfinished package is not converted into a legacy target.

@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Fased Wallet</title>
+    <link rel="stylesheet" href="/wallet.css" />
+    <script defer src="/wallet.js"></script>
+  </head>
+  <body>
+    <main>
+      <h1 id="title">Wallets</h1>
+      <p id="network"></p>
+      <p id="instance"></p>
+      <form id="wallet-form" autocomplete="off">
+        <label
+          >Wallet password<input
+            id="unlock"
+            type="password"
+            minlength="16"
+            maxlength="1024"
+            required
+            autocomplete="new-password"
+        /></label>
+        <label
+          >Confirm wallet password<input
+            id="unlock-confirm"
+            type="password"
+            minlength="16"
+            maxlength="1024"
+            required
+            autocomplete="new-password"
+        /></label>
+        <label
+          >Backup password<input
+            id="backup"
+            type="password"
+            minlength="16"
+            maxlength="1024"
+            required
+            autocomplete="new-password"
+        /></label>
+        <label
+          >Confirm backup password<input
+            id="backup-confirm"
+            type="password"
+            minlength="16"
+            maxlength="1024"
+            required
+            autocomplete="new-password"
+        /></label>
+        <label id="seed-label" hidden
+          >Secret seed<input
+            id="seed"
+            type="password"
+            autocomplete="off"
+            spellcheck="false"
+        /></label>
+        <div id="recovery-fields" hidden>
+          <label
+            >Backup file<input
+              id="backup-upload"
+              type="file"
+              accept="application/json,.json"
+          /></label>
+          <label
+            >Encrypted backup<textarea
+              id="recovery"
+              rows="4"
+              spellcheck="false"
+            ></textarea></label
+          ><label
+            >Backup fingerprint<input
+              id="fingerprint"
+              autocomplete="off"
+              spellcheck="false"
+          /></label>
+        </div>
+        <button id="submit" type="submit">Continue</button>
+      </form>
+      <p id="status" role="status" aria-live="polite"></p>
+      <section id="result" hidden>
+        <h2>Wallet ready</h2>
+        <p>Address <output id="address"></output></p>
+        <p>Backup <output id="backup-file"></output></p>
+        <p>Fingerprint <output id="backup-fingerprint"></output></p>
+      </section>
+    </main>
+  </body>
+</html>

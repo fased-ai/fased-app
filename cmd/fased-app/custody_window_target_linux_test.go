@@ -7,8 +7,35 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/fased-ai/fased-app/internal/custodyinstall"
+	"github.com/fased-ai/fased-app/internal/signer"
 	"github.com/fased-ai/fased-app/internal/update"
 )
+
+func TestWalletOwnerModeDoesNotPromoteFixtures(t *testing.T) {
+	base := custodyinstall.Manifest{Version: 3, Mode: signer.OrdinaryCustodyMode, Profile: signer.OwnerCustodyProfile}
+	for _, tc := range []struct {
+		provenance        string
+		fixture, ordinary bool
+		inspect, allowed  bool
+	}{
+		{signer.ControlledCustodyProfile, true, false, false, true},
+		{signer.ControlledCustodyProfile, false, true, false, false},
+		{signer.ControlledCustodyProfile, false, false, true, true},
+		{signer.OwnerKeyProvenance, false, true, false, true},
+		{signer.OwnerKeyProvenance, true, false, false, false},
+		{signer.OwnerKeyProvenance, false, false, true, true},
+		{signer.OwnerKeyProvenance, false, false, false, false},
+		{signer.OwnerKeyProvenance, true, true, true, false},
+	} {
+		m := base
+		m.Provenance = tc.provenance
+		_, err := walletOwnerMode(m, tc.fixture, tc.ordinary, tc.inspect)
+		if (err == nil) != tc.allowed {
+			t.Fatalf("wrong wallet mode admission for %+v: %v", tc, err)
+		}
+	}
+}
 
 func TestPackageWalletWindowPreservesPendingUpdate(t *testing.T) {
 	root := t.TempDir()

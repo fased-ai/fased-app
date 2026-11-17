@@ -37,7 +37,7 @@ func OpenControlledOrdinaryCustody(dir, signerID, network string) (*Vault, error
 	return openVaultNetwork(dir, signerID, false, ordinaryNamespace+network)
 }
 
-// OpenOrdinaryCustody is the owner policy path. Normal admission is held.
+// OpenOrdinaryCustody uses the owner-input namespace and retains recovery holds.
 func OpenOrdinaryCustody(dir, signerID, network string) (*Vault, error) {
 	if !OrdinaryOwnerAdmissionEnabled() || !managedNetwork(network) {
 		return nil, ErrUnavailable
