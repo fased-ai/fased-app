@@ -74,7 +74,11 @@ func transitionPackageHelper(ctx context.Context, owner int, instance, previousH
 	if fenceErr != nil && !errors.Is(fenceErr, os.ErrNotExist) {
 		return empty, fenceErr
 	}
-	phase, err := classifyPackageHelperTransition(wanted, retained, existing, active.ImageSHA256, fenceHash)
+	installedInstaller := ""
+	if journal.Package != nil {
+		installedInstaller = journal.Package.InstallerDigest()
+	}
+	phase, err := classifyPackageHelperTransition(wanted, retained, existing, active.ImageSHA256, fenceHash, installedInstaller)
 	if err != nil || phase == "superseded" {
 		return empty, err
 	}
@@ -116,13 +120,19 @@ func transitionPackageHelper(ctx context.Context, owner int, instance, previousH
 
 // The fence is durable before the receipt or any authority change. Every
 // interrupted prefix then either resumes the same target or fails closed.
-func classifyPackageHelperTransition(wanted, retained update.PackageHelperTransition, hasReceipt bool, active, fenceHash string) (string, error) {
+func classifyPackageHelperTransition(wanted, retained update.PackageHelperTransition, hasReceipt bool, active, fenceHash, installedInstaller string) (string, error) {
 	if hasReceipt && retained != wanted {
 		if active == wanted.NextHelper && retained.NextHelper == wanted.NextHelper &&
 			retained.PreviousHelper == wanted.PreviousHelper && fenceHash == "" {
 			return "superseded", nil
 		}
 		return "", errors.New("the original helper transition must be preserved")
+	}
+	// Older installed apps independently validate completed approvals at
+	// startup. The same attested bundle must supply the app and successor
+	// helper before the pin changes.
+	if installedInstaller != wanted.NextHelper {
+		return "", errors.New("complete the ordinary Update to the helper's attested package before changing its pin")
 	}
 	if fenceHash != "" {
 		if fenceHash == sum(mustJSON(wanted)) && (active == wanted.PreviousHelper || hasReceipt && active == wanted.NextHelper) {
