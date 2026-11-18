@@ -313,6 +313,13 @@ func bindProvisionedPackageOwner(ctx context.Context, m Manifest) error {
 }
 
 func waitPackageOwnerHealth(ctx context.Context, m Manifest) error {
+	return waitPackageHealth(ctx, m, func(health core.Health) bool {
+		_, err := packageOwnerCommit(m, health)
+		return err == nil
+	})
+}
+
+func waitPackageHealth(ctx context.Context, m Manifest, ownerHealthy func(core.Health) bool) error {
 	deadline := time.NewTimer(20 * time.Second)
 	defer deadline.Stop()
 	tick := time.NewTicker(100 * time.Millisecond)
@@ -327,18 +334,16 @@ func waitPackageOwnerHealth(ctx context.Context, m Manifest) error {
 				var health core.Health
 				err = json.NewDecoder(io.LimitReader(response.Body, 32<<10)).Decode(&health)
 				_ = response.Body.Close()
-				if err == nil && response.StatusCode == http.StatusOK {
-					if _, err = packageOwnerCommit(m, health); err == nil {
-						request, e := http.NewRequestWithContext(ctx, http.MethodGet, "http://"+m.Listen+"/api/v1/health", nil)
+				if err == nil && response.StatusCode == http.StatusOK && ownerHealthy(health) {
+					request, e := http.NewRequestWithContext(ctx, http.MethodGet, "http://"+m.Listen+"/api/v1/health", nil)
+					if e == nil {
+						browser, e := client.Do(request)
 						if e == nil {
-							browser, e := client.Do(request)
-							if e == nil {
-								var public core.Health
-								e = json.NewDecoder(io.LimitReader(browser.Body, 32<<10)).Decode(&public)
-								_ = browser.Body.Close()
-								if e == nil && browser.StatusCode == http.StatusOK && public.InstanceID == health.InstanceID && public.Status == "ok" && public.APIVersion == core.APIVersion {
-									return nil
-								}
+							var public core.Health
+							e = json.NewDecoder(io.LimitReader(browser.Body, 32<<10)).Decode(&public)
+							_ = browser.Body.Close()
+							if e == nil && browser.StatusCode == http.StatusOK && public.InstanceID == health.InstanceID && public.Status == "ok" && public.APIVersion == core.APIVersion {
+								return nil
 							}
 						}
 					}

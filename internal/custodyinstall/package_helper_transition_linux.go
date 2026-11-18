@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/fased-ai/fased-app/internal/core"
 	"github.com/fased-ai/fased-app/internal/maintenance"
 	"github.com/fased-ai/fased-app/internal/signer"
 	"github.com/fased-ai/fased-app/internal/update"
@@ -29,10 +30,16 @@ func TransitionPackageHelper(ctx context.Context, owner int, instance, previousH
 	if m.ID == "" {
 		return nil
 	}
+	original, err := ReadEnrollmentCommit(m)
+	if err != nil {
+		return err
+	}
 	if _, err = protectedSystemctl(ctx, append([]string{"start", "--"}, protectedInstanceUnits(m)...)...); err != nil {
 		return err
 	}
-	return waitPackageOwnerHealth(ctx, m)
+	return waitPackageHealth(ctx, m, func(health core.Health) bool {
+		return installedPackageOwnerHealthy(m, original, health)
+	})
 }
 
 func transitionPackageHelper(ctx context.Context, owner int, instance, previousHelper string) (Manifest, error) {

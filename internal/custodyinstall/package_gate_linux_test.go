@@ -190,6 +190,32 @@ func TestPackageOwnerCommitBindsTheRunningLocalInstance(t *testing.T) {
 	}
 }
 
+func TestInstalledPackageOwnerHealthWithEnrolledWallet(t *testing.T) {
+	_, m := packageGateInitialRecord(t)
+	health := core.Health{Status: "ok", APIVersion: core.APIVersion,
+		InstanceID: base64.RawURLEncoding.EncodeToString([]byte(strings.Repeat("x", 32))),
+		Connection: &core.ConnectionInfo{Location: m.Location, Transport: "loopback", OwnerUID: m.Owner}}
+	fresh, err := packageOwnerCommit(m, health)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.Network = "devnet"
+	if _, err = packageOwnerCommit(m, health); err == nil {
+		t.Fatal("fresh provisioning accepted an enrolled signer")
+	}
+	if installedPackageOwnerHealthy(m, fresh, health) {
+		t.Fatal("wallet enrollment must use the recorded configured owner commitment")
+	}
+	original := packageWalletCommit(m, health.InstanceID)
+	if !installedPackageOwnerHealthy(m, original, health) {
+		t.Fatal("healthy wallet-bearing package was rejected despite the original owner commitment")
+	}
+	health.InstanceID = base64.RawURLEncoding.EncodeToString([]byte(strings.Repeat("y", 32)))
+	if installedPackageOwnerHealthy(m, original, health) {
+		t.Fatal("a different healthy app was accepted")
+	}
+}
+
 func TestPackageOwnerCommitBindsTheRunningRemoteInstance(t *testing.T) {
 	_, m := packageGateInitialRecord(t)
 	m.Location, m.PublicOrigin = "remote", "https://node.example.ts.net:8443"
