@@ -389,6 +389,40 @@ func TestPackageOfflineRecoverySelectsOnlyItsRecordedOperation(t *testing.T) {
 	if _, err := PackageRecoveryOperation(foreign, r); err == nil {
 		t.Fatal("an unrelated installed pair was accepted")
 	}
+	// During the protected stop, only the recorded pair and exact fence
+	// qualify as a temporary outage. Other refusals remain terminal.
+	r.Phase, r.Start = "quiescing", ""
+	for _, tc := range []struct {
+		name  string
+		m     Manifest
+		fence []byte
+		block bool
+		want  bool
+	}{
+		{"original stopped update", base, update.MaintenanceFence(r.OperationID), false, true},
+		{"same installation after manifest swap", target, update.MaintenanceFence(r.OperationID), false, true},
+		{"no fence", base, nil, false, false},
+		{"foreign fence", base, update.MaintenanceFence(strings.Repeat("a", 32)), false, false},
+		{"separate recovery fence", base, update.MaintenanceFence(r.OperationID), true, false},
+		{"foreign pair", foreign, update.MaintenanceFence(r.OperationID), false, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			read := func(path string) (hostFile, error) {
+				switch {
+				case path == base.Root+"/update-active.json" && tc.fence != nil:
+					return hostFile{UID: 0, Regular: true, Mode: 0644, Data: tc.fence}, nil
+				case path == base.Root+"/update-start-blocked.json" && tc.block:
+					return hostFile{UID: 0, Regular: true, Mode: 0644}, nil
+				default:
+					return hostFile{}, os.ErrNotExist
+				}
+			}
+			if got := packageOwnerUpdateStopped(tc.m, r, read); got != tc.want {
+				t.Fatalf("temporary outage = %t, want %t", got, tc.want)
+			}
+		})
+	}
+
 }
 
 func TestPackageGateRequiresOriginalEmptySignerCheckpoint(t *testing.T) {

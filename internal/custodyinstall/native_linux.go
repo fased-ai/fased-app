@@ -188,6 +188,9 @@ func VerifyPackageOwnerTarget(m Manifest) error {
 	if err != nil {
 		return err
 	}
+	if packageOwnerUpdateStopped(m, r, readRoot) {
+		return core.ErrCoreUnavailable
+	}
 	selected, err := SelectProtectedPackageStart(r, m.Owner, m.Location, m.ID)
 	if err != nil || selected != m || VerifyPackageInstance(m) != nil {
 		return errors.New("package owner target differs from its protected recovery state")
@@ -196,6 +199,16 @@ func VerifyPackageOwnerTarget(m Manifest) error {
 		return err
 	}
 	return verifyPackageStartFences(m, r, readRoot)
+}
+
+// A protected stop allows a status caller to wait for the same operation. It
+// never opens the owner channel across the fence or authorizes a second apply.
+func packageOwnerUpdateStopped(m Manifest, r update.MaintenanceRecord, read readHost) bool {
+	if r.Start != "" {
+		return false
+	}
+	_, err := PackageRecoveryOperation(m, r)
+	return err == nil && verifyPackageStartFences(m, r, read) == nil
 }
 
 // PackageOwnerChannel is reached only through the instance's fixed root
@@ -323,7 +336,10 @@ func (s *System) NativeChannel(ctx context.Context, m Manifest) (net.Conn, error
 		return nil, errors.New("protected native owner enrollment required")
 	}
 	if m.Layout == PackageLayout {
-		if VerifyPackageOwnerTarget(m) != nil {
+		if err := VerifyPackageOwnerTarget(m); err != nil {
+			if errors.Is(err, core.ErrCoreUnavailable) {
+				return nil, err
+			}
 			return nil, errors.New("protected Local package owner required")
 		}
 	} else if !m.NativeOwnerAccess || Verify(m) != nil {
