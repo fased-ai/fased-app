@@ -43,11 +43,17 @@ func TestPackageHelperTransitionRecovery(t *testing.T) {
 		{"switched without receipt", wanted, false, next, fence, ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			got, err := classifyPackageHelperTransition(tc.wanted, wanted, tc.receipt, tc.helper, tc.fence)
+			got, err := classifyPackageHelperTransition(tc.wanted, wanted, tc.receipt, tc.helper, tc.fence, next)
 			if got != tc.phase || (err != nil) != (tc.phase == "") {
 				t.Fatalf("got phase %q, error %v; want %q", got, err, tc.phase)
 			}
 		})
+	}
+
+	for _, installed := range []string{previous, ""} {
+		if phase, err := classifyPackageHelperTransition(wanted, update.PackageHelperTransition{}, false, previous, "", installed); err == nil {
+			t.Fatalf("installed predecessor %q was admitted to %q before the paired app Update", installed, phase)
+		}
 	}
 
 	if !wanted.Valid(owner, instance) || !wanted.Inherits(r) {

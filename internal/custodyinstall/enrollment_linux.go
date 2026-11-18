@@ -43,11 +43,23 @@ func ReadEnrollmentCommit(m Manifest) (EnrollmentCommit, error) {
 // The fresh package has no imported source image. Its protected owner record
 // binds the actual running core identity and the immutable instance topology.
 func packageOwnerCommit(m Manifest, health core.Health) (EnrollmentCommit, error) {
-	if m.validatePackage() != nil || (m.Location != "local" && m.Location != "remote") || m.Network != "" || health.Status != "ok" || health.APIVersion != core.APIVersion || !enrollmentInstance(health.InstanceID) ||
+	if m.Network != "" {
+		return EnrollmentCommit{}, errors.New("fresh package owner binding requires an unconfigured signer")
+	}
+	return runningPackageOwnerCommit(m, health)
+}
+
+func runningPackageOwnerCommit(m Manifest, health core.Health) (EnrollmentCommit, error) {
+	if m.validatePackage() != nil || (m.Location != "local" && m.Location != "remote") || health.Status != "ok" || health.APIVersion != core.APIVersion || !enrollmentInstance(health.InstanceID) ||
 		health.Connection == nil || health.Connection.Location != m.Location || health.Connection.Transport != "loopback" || health.Connection.OwnerUID != m.Owner {
 		return EnrollmentCommit{}, errors.New("original running package owner required")
 	}
 	return EnrollmentCommit{Version: 1, ManifestSHA256: sum(mustJSON(EnrollmentIdentity(m))), InstanceID: health.InstanceID, Digest: packageOwnerDigest(m, health.InstanceID)}, nil
+}
+
+func installedPackageOwnerHealthy(m Manifest, original EnrollmentCommit, health core.Health) bool {
+	actual, err := runningPackageOwnerCommit(m, health)
+	return err == nil && actual == original
 }
 
 func validPackageOwnerCommit(m Manifest, c EnrollmentCommit) bool {
