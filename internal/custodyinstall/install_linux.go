@@ -935,7 +935,7 @@ func validateLoadedUnitFields(m Manifest, role, image string, fields map[string]
 	dropIns := strings.Fields(fields["DropInPaths"])
 	if m.Layout == PackageLayout {
 		recovery := packageRecoveryUnit(m)
-		if fields["LimitCORE"] != "0" || !allowedPackageDropIns(fields["DropInPaths"], read) {
+		if fields["LimitCORE"] != "0" || !allowedPackageServiceDropIns(m, role, fields["DropInPaths"], read) {
 			return errors.New("unverified package-instance override; preserving it")
 		}
 		if !slices.Contains(strings.Fields(fields["Requires"]), recovery) || !slices.Contains(strings.Fields(fields["After"]), recovery) {
