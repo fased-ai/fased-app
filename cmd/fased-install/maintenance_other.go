@@ -48,3 +48,7 @@ func maintenanceBootstrapCommand([]string, io.Writer) error {
 func maintenanceTransitionStatusCommand([]string, io.Writer) error {
 	return errors.New("protected maintenance is supported only on Linux")
 }
+
+func maintenancePackageTransitionCommand([]string) error {
+	return errors.New("protected package maintenance requires Linux")
+}

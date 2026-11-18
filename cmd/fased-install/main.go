@@ -94,6 +94,8 @@ func run(args []string, in io.Reader, out, errOut io.Writer) error {
 	}
 	if len(args) > 0 {
 		switch args[0] {
+		case "maintenance-package-transition":
+			return maintenancePackageTransitionCommand(args[1:])
 		case "maintenance-successor":
 			return maintenanceSuccessorCommand(args[1:])
 		case "maintenance-transition-status":

@@ -81,6 +81,28 @@ func maintenancePackageRegisterCommand(args []string, out io.Writer) error {
 	return err
 }
 
+func maintenancePackageTransitionCommand(args []string) error {
+	if len(args) != 8 || args[6] != "--previous-helper" {
+		return errors.New("one exact package and predecessor helper required")
+	}
+	if os.Getuid() != 0 || os.Geteuid() != 0 {
+		return errors.New("administrator package helper transition required")
+	}
+	owner, location, instance, err := packageMaintenanceArguments(args[:6])
+	if err != nil || location != "local" {
+		return errors.New("one exact Local instance is required")
+	}
+	if _, err = packageCandidateTrust(owner, location, instance); err != nil {
+		return err
+	}
+	if err = requireFixturePackage(owner, location, instance, false); err != nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+	return custodyinstall.TransitionPackageHelper(ctx, owner, instance, args[7])
+}
+
 func maintenancePackageGateCommand(args []string) error {
 	if len(args) != 8 || args[6] != "--role" || (args[7] != "app" && args[7] != "signer") {
 		return errors.New("fixed package service role required")

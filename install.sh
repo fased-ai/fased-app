@@ -35,9 +35,11 @@ install_packages() {
 }
 profile='' operator='' action=install listen='127.0.0.1:7331'
 wallet_instance='' wallet_network=''
-candidate_dir='' candidate_packet='' package_instance=''
+candidate_dir='' candidate_packet='' package_instance='' refresh_instance='' previous_helper=''
 while (($#)); do
   case "$1" in
+    --refresh-helper) [[ $action == install && $# -ge 2 ]] || die 'Choose one Local helper transition.'; action=refresh-helper; refresh_instance=$2; shift 2 ;;
+    --previous-helper) (($# >= 2)) || die 'Missing predecessor helper.'; previous_helper=$2; shift 2 ;;
     --local) profile=local; shift ;;
     --remote) profile=remote; shift ;;
     --connect) profile=connect; shift ;;
@@ -50,7 +52,7 @@ while (($#)); do
     --listen) (($# >= 2)) || die 'Missing listener.'; listen=$2; shift 2 ;;
     --candidate-dir) (($# >= 2)) || die 'Missing candidate directory.'; candidate_dir=$2; shift 2 ;;
     --candidate-packet-sha256) (($# >= 2)) || die 'Missing candidate identity.'; candidate_packet=$2; shift 2 ;;
-    --help|-h) printf 'Usage: install.sh [--local|--remote|--connect] [--open|--start|--stop|--status|--recover|--update|--setup|--wallets] [--wallet-instance ID --wallet-network NETWORK] [--operator USER] [--listen 127.0.0.1:PORT]\n'; exit 0 ;;
+    --help|-h) printf 'Usage: install.sh [--local|--remote|--connect] [--open|--start|--stop|--status|--recover|--update|--setup|--wallets] [--wallet-instance ID --wallet-network NETWORK] [--local --refresh-helper INSTANCE --previous-helper SHA256] [--operator USER] [--listen 127.0.0.1:PORT]\n'; exit 0 ;;
     *) die "Unknown option: $1" ;;
   esac
 done
@@ -59,6 +61,11 @@ if [[ $action == wallets ]]; then
   [[ $profile == remote && $wallet_instance =~ ^[A-Za-z0-9_-]{43}$ && ( $wallet_network == devnet || $wallet_network == mainnet-beta ) ]] || die 'Wallets setup requires Remote, the exact workspace and network.'
 else
   [[ -z $wallet_instance && -z $wallet_network ]] || die 'Wallet options require --wallets.'
+fi
+if [[ $action == refresh-helper ]]; then
+  [[ $profile == local && -z $operator && $(/usr/bin/id -u) != 0 && $development_only == 0 && $refresh_instance =~ ^[a-f0-9]{32}$ && $previous_helper =~ ^[a-f0-9]{64}$ ]] || die 'Use the verified Local installer as the instance owner with the exact predecessor helper.'
+else
+  [[ -z $previous_helper ]] || die 'A predecessor helper requires --refresh-helper.'
 fi
 [[ -z $operator || $operator =~ ^[a-z_][a-z0-9_-]{0,30}$ && $operator != root ]] || die 'Invalid ordinary operator.'
 [[ $listen =~ ^127\.0\.0\.1:([0-9]{4,5})$ ]] || die 'Use a fixed loopback port.'
@@ -125,7 +132,7 @@ if [[ $(/usr/bin/id -u) == 0 && $profile != remote && -z ${SUDO_USER:-} && -z $o
   die 'Run Local/Connect from your ordinary computer account. For a VPS, choose Remote.'
 fi
 if [[ -n $candidate_dir || -n $candidate_packet ]]; then
-  [[ $candidate_dir == /* && $candidate_dir != *$'\n'* && $candidate_dir != *$'\r'* && $candidate_packet =~ ^[a-f0-9]{64}$ && ( $profile == local || $profile == remote ) && $action == install && -z $operator && $(/usr/bin/id -u) != 0 && $development_only == 0 ]] || die 'Candidate acceptance requires one exact package and ordinary owner.'
+  [[ $candidate_dir == /* && $candidate_dir != *$'\n'* && $candidate_dir != *$'\r'* && $candidate_packet =~ ^[a-f0-9]{64}$ && ( $profile == local || $profile == remote ) && ( $action == install || $action == refresh-helper ) && -z $operator && $(/usr/bin/id -u) != 0 && $development_only == 0 ]] || die 'Candidate acceptance requires one exact package and ordinary owner.'
 fi
 
 owner_maintenance_setup() {
@@ -153,6 +160,11 @@ owner_maintenance_setup() {
   read -r actual _ < <(/usr/bin/sha256sum -- "$protected")
   [[ $actual == "$installer_sha256" ]] || die 'Protected installer checksum differs.'
   /usr/bin/sudo -- /usr/bin/sync -f -- "$protected"
+  if [[ $action == refresh-helper ]]; then
+    /usr/bin/sudo -- "$protected" maintenance-package-transition --owner "$(/usr/bin/id -u)" --location local --instance "$refresh_instance" --previous-helper "$previous_helper"
+    printf 'Fased maintenance is ready. Use Update in the browser or run fased update.\n'
+    return
+  fi
   if [[ -n $package_instance ]]; then
     current=$(/usr/bin/sudo -- "$protected" maintenance-package-register --owner "$(/usr/bin/id -u)" --location "$profile" --instance "$package_instance")
     [[ $current == "$protected" ]] || die 'Package maintenance identity differs.'
@@ -233,6 +245,18 @@ owner_install() {
   fi
   read -r actual _ < <(/usr/bin/sha256sum "$installer")
   [[ $actual == "$installer_sha256" ]] || die 'Installer checksum differs; nothing was executed.'
+  if [[ $action == refresh-helper ]]; then
+    if [[ -n $candidate_dir ]]; then
+      candidate_report=$("$installer" --verify-candidate "$candidate_dir") || die 'Candidate verification failed.'
+      [[ $candidate_report == *'"linuxBundleVerified":true'* ]] || die 'The attested Linux bundle is required.'
+    else
+      inspection=$("$installer" --inspect-public-package) || die 'Public release verification failed.'
+      read -r kind public_packet public_version public_installer extra <<< "$inspection"
+      [[ $kind == native && $public_packet =~ ^[a-f0-9]{64}$ && $public_version == "$entry_version" && $public_installer == "$installer_sha256" && -z ${extra:-} ]] || die 'The public installer identity differs.'
+    fi
+    owner_maintenance_setup "$installer"
+    return
+  fi
   if [[ -n $candidate_dir ]]; then
     candidate_report=$("$installer" --verify-candidate "$candidate_dir") || die 'Candidate verification failed.'
     if [[ $candidate_report == *'"linuxPackageDigestsVerified":true'* || $candidate_report == *'"linuxBundleVerified":true'* ]]; then

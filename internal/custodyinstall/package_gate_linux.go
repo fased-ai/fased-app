@@ -42,9 +42,7 @@ func VerifyPackageStart(owner int, location, instance, role string) error {
 	if err != nil {
 		return err
 	}
-	selected, err := packageStartSelection(r, owner, location, instance, func(operation string) (update.MaintenanceApproval, error) {
-		return update.ReadPackageMaintenanceApproval(owner, location, instance, operation)
-	})
+	selected, err := selectPackageStart(r, a, location, instance)
 	if err != nil {
 		return err
 	}
@@ -79,8 +77,25 @@ func VerifyPackageStart(owner int, location, instance, role string) error {
 // it does not start a service or replace the physical installed-pair check.
 func SelectProtectedPackageStart(r update.MaintenanceRecord, owner int, location, instance string) (Manifest, error) {
 	return packageStartSelection(r, owner, location, instance, func(operation string) (update.MaintenanceApproval, error) {
-		return update.ReadPackageMaintenanceApproval(owner, location, instance, operation)
+		a, err := maintenance.ReadPackageAuthority(owner, location, instance)
+		if err != nil {
+			return update.MaintenanceApproval{}, err
+		}
+		return readPackageStartApproval(r, a, location, instance, operation)
 	})
+}
+
+func selectPackageStart(r update.MaintenanceRecord, a maintenance.Authority, location, instance string) (Manifest, error) {
+	return packageStartSelection(r, a.Owner, location, instance, func(operation string) (update.MaintenanceApproval, error) {
+		return readPackageStartApproval(r, a, location, instance, operation)
+	})
+}
+
+func readPackageStartApproval(r update.MaintenanceRecord, a maintenance.Authority, location, instance, operation string) (update.MaintenanceApproval, error) {
+	if location == "local" && r.Phase == "completed" && r.Approval != nil && r.Approval.HelperSHA256 != a.ImageSHA256 {
+		return update.ReadInheritedPackageApproval(a.Owner, instance, a.ImageSHA256, r)
+	}
+	return update.ReadPackageMaintenanceApproval(a.Owner, location, instance, operation)
 }
 
 // PackageRecoveryOperation selects only the operation already recorded for the

@@ -112,10 +112,14 @@ func CopyProtected(source, target string, mode os.FileMode, hash string, size in
 // CopyProtectedExecutable installs the pinned helper from its fixed read-only
 // image with the executable mode required by the per-instance service gate.
 func CopyProtectedExecutable(source, target, hash string, size int64) error {
+	return ReplaceProtectedPackageGate(source, target, hash, size, "")
+}
+
+func ReplaceProtectedPackageGate(source, target, hash string, size int64, previous string) error {
 	if filepath.Base(source) != "fased-install" || filepath.Base(target) != "fased-install" {
 		return errors.New("fixed maintenance executable required")
 	}
-	return copyProtectedModes(source, target, 0555, 0755, hash, size, "")
+	return copyProtectedModes(source, target, 0555, 0755, hash, size, previous)
 }
 
 func copyProtectedModes(source, target string, sourceMode, mode os.FileMode, hash string, size int64, previous string) error {
