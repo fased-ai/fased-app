@@ -61,6 +61,16 @@ jobs:
             for lane in core signer handoff handoff_uid inspection vm; do echo "$lane=true" >> "$GITHUB_OUTPUT"; done
             echo "scope=full" >> "$GITHUB_OUTPUT"
           fi
+      - name: Validate version-only release inputs
+        if: steps.route.outputs.scope == 'version'
+        run: |
+          node --input-type=module <<'NODE'
+          import { readFileSync } from "node:fs";
+          import { validateConfig } from "./scripts/prepare-ubuntu-release.mjs";
+          const config = JSON.parse(readFileSync("release/ubuntu.json", "utf8"));
+          const missing = validateConfig(config);
+          if (missing.length) throw Error(`Missing release inputs: ${missing.join(", ")}`);
+          NODE
   core:
     needs: classify
     if: needs.classify.outputs.core == 'true'
