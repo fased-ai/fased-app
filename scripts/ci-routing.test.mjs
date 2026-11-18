@@ -142,8 +142,8 @@ test("aggregate accepts intentional skips only and rejects absent/failing gates"
   assert.throws(() => verifyGate(n));
 });
 
-test("CLI uses cumulative changes, includes renames, and dispatch selects full", async () => {
-  const { mkdtempSync, mkdirSync, writeFileSync, rmSync } =
+test("CLI routes cumulative changes and admits only an exact forward version change", async () => {
+  const { chmodSync, mkdtempSync, mkdirSync, writeFileSync, rmSync } =
     await import("node:fs");
   const { resolve } = await import("node:path");
   const { execFileSync } = await import("node:child_process");
@@ -157,6 +157,11 @@ test("CLI uses cumulative changes, includes renames, and dispatch selects full",
     git("config", "user.name", "Fixture");
     git("config", "user.email", "fixture@example.invalid");
     writeFileSync(`${dir}/README.md`, "base\n");
+    writeFileSync(`${dir}/.gitignore`, ".evidence/\n");
+    mkdirSync(`${dir}/release`);
+    const configPath = `${dir}/release/ubuntu.json`;
+    const config = '{\n  "version": "0.1.16",\n  "target": "linux"\n}\n';
+    writeFileSync(configPath, config);
     git("add", ".");
     git("commit", "-qm", "base");
     const base = git("rev-parse", "HEAD");
@@ -167,7 +172,7 @@ test("CLI uses cumulative changes, includes renames, and dispatch selects full",
     writeFileSync(`${dir}/README.md`, "later docs\n");
     git("add", ".");
     git("commit", "-qm", "docs");
-    const plan = (force = "false") =>
+    const plan = (force = "false", baseRef = base) =>
       JSON.parse(
         execFileSync(process.execPath, [script, "plan"], {
           cwd: dir,
@@ -175,7 +180,7 @@ test("CLI uses cumulative changes, includes renames, and dispatch selects full",
           env: {
             ...process.env,
             GITHUB_OUTPUT: "",
-            BASE_SHA: base,
+            BASE_SHA: baseRef,
             HEAD_SHA: git("rev-parse", "HEAD"),
             FULL_RUN: force,
           },
@@ -186,6 +191,59 @@ test("CLI uses cumulative changes, includes renames, and dispatch selects full",
     git("mv", "internal/core/rpc_check.go", "unknown.go");
     git("commit", "-qm", "rename");
     assert.equal(plan().vm, true);
+    git("switch", "-q", "--detach", base);
+    git("config", "core.fileMode", "true");
+    writeFileSync(configPath, config.replace("0.1.16", "0.1.17"));
+    git("add", ".");
+    git("commit", "-qm", "version only");
+    const version = git("rev-parse", "HEAD");
+    const selected = plan();
+    assert.equal(selected.scope, "version");
+    for (const lane of lanes) assert.equal(selected[lane], false);
+    verifyGate(result(selected));
+    const invalid = result(selected);
+    invalid.classify.outputs.vm = "true";
+    assert.throws(() => verifyGate(invalid), /invalid version-only selection/);
+    invalid.classify.outputs.vm = "false";
+    invalid.classify.result = "failure";
+    assert.throws(() => verifyGate(invalid), /classification must pass/);
+    assert.equal(plan("true").scope, "full");
+
+    for (const [name, text] of [
+      ["rollback", config.replace("0.1.16", "0.1.15")],
+      ["noncanonical version", config.replace("0.1.16", "0.1.017")],
+      [
+        "config drift",
+        config.replace("0.1.16", "0.1.17").replace("linux", "other"),
+      ],
+      [
+        "whitespace drift",
+        config.replace("0.1.16", "0.1.17").replace('"target": ', '"target":  '),
+      ],
+    ]) {
+      git("switch", "-q", "--detach", base);
+      writeFileSync(configPath, text);
+      git("add", ".");
+      git("commit", "-qm", name);
+      assert.equal(plan().scope, "full", name);
+    }
+    git("switch", "-q", "--detach", version);
+    chmodSync(configPath, 0o755);
+    git("add", "release/ubuntu.json");
+    git("commit", "-qm", "mode change");
+    assert.equal(plan().scope, "full");
+    git("switch", "-q", "--detach", version);
+    writeFileSync(`${dir}/README.md`, "mixed changes\n");
+    git("add", ".");
+    git("commit", "-qm", "mixed changes");
+    assert.equal(plan().scope, "full");
+    git("switch", "-q", "--detach", base);
+    writeFileSync(`${dir}/README.md`, "advanced base\n");
+    git("add", ".");
+    git("commit", "-qm", "advanced base");
+    const advanced = git("rev-parse", "HEAD");
+    git("switch", "-q", "--detach", version);
+    assert.equal(plan("false", advanced).scope, "full");
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

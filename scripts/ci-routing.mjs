@@ -10,6 +10,49 @@ export const lanes = [
   "inspection",
   "vm",
 ];
+
+const releaseConfig = "release/ubuntu.json";
+const versionLine =
+  /^  "version": "((?:0|[1-9][0-9]{0,5})(?:\.(?:0|[1-9][0-9]{0,5})){2})",$/gm;
+
+function versionOnly(base, head) {
+  try {
+    const change = execFileSync(
+      "git",
+      ["diff", "--raw", "--no-renames", base, head, "--", releaseConfig],
+      { encoding: "utf8" },
+    );
+    if (
+      !/^:100644 100644 [a-f0-9]+ [a-f0-9]+ M\trelease\/ubuntu\.json\n$/.test(
+        change,
+      )
+    )
+      return false;
+
+    // Latin-1 preserves every byte, including bytes outside the version line.
+    const read = (ref) =>
+      execFileSync("git", ["show", `${ref}:${releaseConfig}`]).toString(
+        "latin1",
+      );
+    const before = read(base);
+    const after = read(head);
+    const oldLines = [...before.matchAll(versionLine)];
+    const newLines = [...after.matchAll(versionLine)];
+    if (oldLines.length !== 1 || newLines.length !== 1) return false;
+    const order = (version) =>
+      version
+        .split(".")
+        .map((part) => part.padStart(6, "0"))
+        .join("");
+    return (
+      order(newLines[0][1]) > order(oldLines[0][1]) &&
+      before.replace(versionLine, () => newLines[0][0]) === after
+    );
+  } catch {
+    return false;
+  }
+}
+
 export function classify(paths) {
   const plan = Object.fromEntries(lanes.map((lane) => [lane, false]));
   let scope = "none";
@@ -51,8 +94,16 @@ export function verifyGate(needs) {
   if (needs.classify?.result !== "success")
     throw new Error("classification must pass");
   const outputs = needs.classify.outputs;
-  if (!outputs || !["none", "rpc", "ui", "full"].includes(outputs.scope))
+  if (
+    !outputs ||
+    !["none", "rpc", "ui", "full", "version"].includes(outputs.scope)
+  )
     throw new Error("invalid scope");
+  if (
+    outputs.scope === "version" &&
+    lanes.some((lane) => outputs[lane] !== "false")
+  )
+    throw new Error("invalid version-only selection");
   if (outputs.signer === "true" && outputs.scope !== "full")
     throw new Error("signer checks require full scope");
   if (
@@ -103,7 +154,19 @@ if (
         mergeBase,
         head,
       ]);
-      plan = classify(raw.toString("utf8").split("\0").filter(Boolean));
+      const paths = raw.toString("utf8").split("\0").filter(Boolean);
+      plan = classify(paths);
+      if (
+        mergeBase === base &&
+        paths.length === 1 &&
+        paths[0] === releaseConfig &&
+        versionOnly(base, head)
+      ) {
+        plan = {
+          ...Object.fromEntries(lanes.map((lane) => [lane, false])),
+          scope: "version",
+        };
+      }
     }
     mkdirSync(".evidence", { recursive: true });
     writeFileSync(
