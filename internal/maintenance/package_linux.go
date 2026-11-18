@@ -5,6 +5,7 @@ package maintenance
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -182,6 +183,16 @@ func ValidatePackageProcess(owner int, location, instance string) (Authority, er
 	}
 	if err = ValidateOwnerIdentity(a); err != nil {
 		return Authority{}, err
+	}
+	if location == "local" {
+		if _, e := update.ReadPackageHelperTransition(owner, instance); e == nil {
+			root, _ := update.PackageInstanceRoot(owner, location, instance)
+			if _, e = os.Lstat(filepath.Join(root, "update-start-blocked.json")); !errors.Is(e, os.ErrNotExist) {
+				return Authority{}, errors.New("resume the original installer helper transition")
+			}
+		} else if !errors.Is(e, os.ErrNotExist) {
+			return Authority{}, e
+		}
 	}
 	path, err := os.Executable()
 	if err != nil || path != ImagePath(a.ImageSHA256) {
@@ -477,4 +488,91 @@ func resumePendingInput(f *os.File, data []byte, mode os.FileMode, uid, gid uint
 		err = errors.Join(f.Chmod(mode), f.Sync())
 	}
 	return err
+}
+
+// PackageTransitionProcess is an administrator-only bootstrap of a verified
+// installer. The instance sudo rule grants only maintenance-package-request.
+func PackageTransitionProcess(owner int, instance string) (Authority, error) {
+	var a Authority
+	if os.Getuid() != 0 || os.Geteuid() != 0 {
+		return a, errors.New("administrator package helper transition required")
+	}
+	if caller := os.Getenv("SUDO_UID"); caller != "" && caller != "0" && caller != strconv.Itoa(owner) {
+		return a, errors.New("maintenance caller does not own this instance")
+	}
+	a, err := ReadPackageAuthority(owner, "local", instance)
+	if err != nil {
+		return a, err
+	}
+	if err = ValidateOwnerIdentity(a); err != nil {
+		return Authority{}, err
+	}
+	image, err := os.Executable()
+	if err != nil {
+		return Authority{}, err
+	}
+	a.ImageSHA256 = filepath.Base(filepath.Dir(image))
+	if err = validatePackageAuthority(a, owner, "local", instance); err != nil || image != ImagePath(a.ImageSHA256) {
+		return Authority{}, errors.New("run only the protected attested successor installer")
+	}
+	return a, VerifyImage(a)
+}
+
+func VerifyPackageTransitionPolicy(previous, next Authority, instance string, resuming bool) error {
+	path, err := packagePolicyPath(next.Owner, "local", instance)
+	if err != nil {
+		return err
+	}
+	oldPolicy, err := packageSudoPolicy(previous, "local", instance)
+	if err != nil {
+		return err
+	}
+	newPolicy, err := packageSudoPolicy(next, "local", instance)
+	if err != nil {
+		return err
+	}
+	digest, _, err := ProtectedDigest(path, 0440, 8192)
+	if err != nil || digest != packageContentHash(oldPolicy) && (!resuming || digest != packageContentHash(newPolicy)) {
+		return errors.New("existing package sudo policy differs; preserve it")
+	}
+	return nil
+}
+
+func ApplyPackageTransitionAuthority(previous, next Authority, instance string) error {
+	if os.Getuid() != 0 || os.Geteuid() != 0 {
+		return errors.New("administrator package helper transition required")
+	}
+	if err := VerifyPackageTransitionPolicy(previous, next, instance, true); err != nil {
+		return err
+	}
+	if err := configurePackageSELinux(next, "local", instance); err != nil {
+		return err
+	}
+	oldPolicy, _ := packageSudoPolicy(previous, "local", instance)
+	newPolicy, _ := packageSudoPolicy(next, "local", instance)
+	cmd := exec.Command("/usr/sbin/visudo", "-c", "-f", "-")
+	cmd.Env = []string{"PATH=/usr/sbin:/usr/bin:/sbin:/bin", "LANG=C"}
+	cmd.Stdin = bytes.NewReader(newPolicy)
+	if err := cmd.Run(); err != nil {
+		return errors.New("successor maintenance policy did not validate")
+	}
+	root, _ := update.PackageMaintenanceRoot(next.Owner, "local", instance)
+	oldAuthority, err := json.Marshal(previous)
+	if err != nil {
+		return err
+	}
+	newAuthority, err := json.Marshal(next)
+	if err != nil {
+		return err
+	}
+	if err = ReplaceProtected(root+"/authority.json", append(newAuthority, '\n'), 0644, packageContentHash(append(oldAuthority, '\n'))); err != nil {
+		return err
+	}
+	path, _ := packagePolicyPath(next.Owner, "local", instance)
+	return ReplaceProtected(path, newPolicy, 0440, packageContentHash(oldPolicy))
+}
+
+func packageContentHash(body []byte) string {
+	h := sha256.Sum256(body)
+	return hex.EncodeToString(h[:])
 }

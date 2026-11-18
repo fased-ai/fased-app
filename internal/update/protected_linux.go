@@ -78,6 +78,24 @@ func ReadMaintenanceApproval(owner int, id string) (MaintenanceApproval, error) 
 // ReadPackageMaintenanceApproval never falls back to an owner-wide approval.
 // The instance path and the approved installation identity must both match.
 func ReadPackageMaintenanceApproval(owner int, location, instance, operation string) (MaintenanceApproval, error) {
+	a, err := readPackageApproval(owner, location, instance, operation)
+	if err != nil {
+		return a, err
+	}
+	root, _ := PackageMaintenanceRoot(owner, location, instance)
+	f, err := OpenProtected(root+"/authority.json", 8192, 0644)
+	if err != nil {
+		return MaintenanceApproval{}, err
+	}
+	b, readErr := io.ReadAll(io.LimitReader(f, 8193))
+	var authority MaintenanceAuthority
+	if err = errors.Join(readErr, f.Close()); err != nil || StrictJSON(b, &authority) != nil || authority.Version != 1 || authority.Owner != owner || authority.Profile != location || authority.ImageSHA256 != a.HelperSHA256 {
+		return MaintenanceApproval{}, errors.New("package approval is not bound to its installed helper")
+	}
+	return a, nil
+}
+
+func readPackageApproval(owner int, location, instance, operation string) (MaintenanceApproval, error) {
 	var a MaintenanceApproval
 	root, err := PackageMaintenanceRoot(owner, location, instance)
 	if err != nil || !IDOK(operation) {
@@ -90,15 +108,6 @@ func ReadPackageMaintenanceApproval(owner int, location, instance, operation str
 	b, readErr := io.ReadAll(io.LimitReader(f, (64<<10)+1))
 	if err = errors.Join(readErr, f.Close()); err != nil || StrictJSON(b, &a) != nil || a.Validate() != nil || a.Owner != owner || a.InstallationID != instance || a.OperationID != operation {
 		return MaintenanceApproval{}, errors.New("protected package approval differs")
-	}
-	f, err = OpenProtected(root+"/authority.json", 8192, 0644)
-	if err != nil {
-		return MaintenanceApproval{}, err
-	}
-	b, readErr = io.ReadAll(io.LimitReader(f, 8193))
-	var authority MaintenanceAuthority
-	if err = errors.Join(readErr, f.Close()); err != nil || StrictJSON(b, &authority) != nil || authority.Version != 1 || authority.Owner != owner || authority.Profile != location || authority.ImageSHA256 != a.HelperSHA256 {
-		return MaintenanceApproval{}, errors.New("package approval is not bound to its installed helper")
 	}
 	return a, nil
 }

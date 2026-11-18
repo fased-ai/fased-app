@@ -111,6 +111,10 @@ func TestPackageMaintenanceEntryRejectsOtherArgumentsAndUnprivilegedCalls(t *tes
 		t.Skip("ordinary-owner refusal requires an unprivileged test runner")
 	}
 	args := []string{"--owner", "1400", "--location", "local", "--instance", id}
+	transition := append(append([]string{"maintenance-package-transition"}, args...), "--previous-helper", strings.Repeat("b", 64))
+	if err := run(transition, strings.NewReader(""), io.Discard, io.Discard); err == nil || err.Error() != "administrator package helper transition required" {
+		t.Fatalf("unprivileged helper transition returned %v", err)
+	}
 	if err := run(append([]string{"maintenance-package-register"}, args...), strings.NewReader(""), io.Discard, io.Discard); err == nil {
 		t.Fatal("unprivileged registration was accepted")
 	}

@@ -190,8 +190,16 @@ func retireFreshPackageCandidate(ctx context.Context, a maintenance.Authority, l
 	} else if custodyinstall.VerifyPackageOwnerTarget(actual) != nil {
 		return errors.New("the original configured wallet identity differs; preserve its candidate")
 	}
+	helper := a.ImageSHA256
+	if location == "local" && receipt.InstallerSHA256 != helper {
+		t, e := update.ReadPackageHelperTransition(a.Owner, instance)
+		if e != nil || !t.Inherits(r) || t.NextHelper != helper || t.PreviousHelper != receipt.InstallerSHA256 {
+			return errors.New("fresh candidate does not match the original helper")
+		}
+		helper = t.PreviousHelper
+	}
 	identity, err := verifyPackageCandidate(ctx, a.Owner, location, instance, receipt.PacketSHA256)
-	if err != nil || !matchingPackageCandidate(receipt, identity, a.ImageSHA256) || identity.Source != installed.Source || identity.ProvenanceSHA256 != installed.ProvenanceSHA256 {
+	if err != nil || !matchingPackageCandidate(receipt, identity, helper) || identity.Source != installed.Source || identity.ProvenanceSHA256 != installed.ProvenanceSHA256 {
 		return errors.New("fresh signed candidate differs; preserve it")
 	}
 	return archivePackageCandidate(a, location, instance, receipt, r)
