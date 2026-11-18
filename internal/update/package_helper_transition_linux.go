@@ -53,7 +53,25 @@ func ReadPackageHelperTransition(owner int, instance string) (PackageHelperTrans
 // Active signer and core approval readers still require the current helper.
 func ReadInheritedPackageApproval(owner int, instance, activeHelper string, r MaintenanceRecord) (MaintenanceApproval, error) {
 	t, err := ReadPackageHelperTransition(owner, instance)
-	if err != nil || t.NextHelper != activeHelper || !t.Inherits(r) || r.Phase != "completed" || r.Approval == nil || r.Approval.HelperSHA256 != t.PreviousHelper {
+	if err != nil || !t.Inherits(r) {
+		return MaintenanceApproval{}, errors.New("the original completed package approval is unavailable")
+	}
+	return readTransitionPredecessorApproval(t, owner, instance, activeHelper, r)
+}
+
+// ReadArchivedPredecessorApproval verifies completed evidence already stored
+// in the protected candidate archive. It is never used for live approval.
+func ReadArchivedPredecessorApproval(owner int, instance, activeHelper string, r MaintenanceRecord) (MaintenanceApproval, error) {
+	t, err := ReadPackageHelperTransition(owner, instance)
+	if err != nil {
+		return MaintenanceApproval{}, err
+	}
+	return readTransitionPredecessorApproval(t, owner, instance, activeHelper, r)
+}
+
+func readTransitionPredecessorApproval(t PackageHelperTransition, owner int, instance, activeHelper string, r MaintenanceRecord) (MaintenanceApproval, error) {
+	if t.NextHelper != activeHelper || r.Owner != owner || r.Phase != "completed" || r.Start != "target" ||
+		r.Approval == nil || r.Approval.HelperSHA256 != t.PreviousHelper {
 		return MaintenanceApproval{}, errors.New("the original completed package approval is unavailable")
 	}
 	a, err := readPackageApproval(owner, "local", instance, r.OperationID)
