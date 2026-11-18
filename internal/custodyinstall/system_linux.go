@@ -190,6 +190,8 @@ func (s *System) Run(ctx context.Context, input []byte, args ...string) ([]byte,
 			switch args[0] {
 			case "/usr/bin/install", "/usr/bin/mv", "/usr/bin/sync", "/usr/sbin/useradd":
 				allowed = true
+			case "/usr/bin/systemd-creds":
+				allowed = providerCredentialEncryption(input, args)
 			}
 		case "cutover":
 			switch args[0] {

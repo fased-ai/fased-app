@@ -153,6 +153,9 @@ func ProvisionProtectedPackage(ctx context.Context, owner int, location, instanc
 		if err = maintenance.EnsureProtectedDirectory(stage); err != nil {
 			return err
 		}
+		if err = preparePackageTaskCredential(ctx, stage, s.Run, maintenance.ProtectedDigest, maintenance.PublishProtected); err != nil {
+			return err
+		}
 		for _, item := range []struct {
 			name string
 			who  Identity
@@ -225,6 +228,9 @@ func ProvisionProtectedPackage(ctx context.Context, owner int, location, instanc
 		if err = maintenance.PublishProtected(filepath.Join("/etc/systemd/system", instanceUnit(m, role)), definitions(m)["fased-"+role+".service"], 0644); err != nil {
 			return err
 		}
+	}
+	if err = publishPackageTaskCredentialUnit(m); err != nil {
+		return err
 	}
 	if _, err = protectedSystemctl(ctx, "daemon-reload"); err != nil {
 		return err
