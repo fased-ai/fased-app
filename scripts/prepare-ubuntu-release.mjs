@@ -51,6 +51,27 @@ export function compatibilityConfig(c) {
   return { ...c, version: "0.1.4" };
 }
 
+function testPredecessorWorkflow(c, env, command) {
+  return (
+    c &&
+    env.FASED_PACKAGE_ONLY === "true" &&
+    env.GITHUB_EVENT_NAME === "workflow_dispatch" &&
+    env.GITHUB_REF === "refs/heads/main" &&
+    env.GITHUB_REPOSITORY === c.repository &&
+    env.GITHUB_REPOSITORY_ID === c.repositoryId &&
+    env.GITHUB_REPOSITORY_OWNER_ID === c.ownerId &&
+    env.GITHUB_WORKFLOW_REF ===
+      `${c.repository}/${c.workflow}@refs/heads/main` &&
+    commit.test(env.GITHUB_SHA ?? "") &&
+    env.FASED_RELEASE_SOURCE === env.GITHUB_SHA &&
+    number.test(env.GITHUB_RUN_ID ?? "") &&
+    number.test(env.GITHUB_RUN_ATTEMPT ?? "") &&
+    env.RUNNER_OS === "Linux" &&
+    env.RUNNER_ARCH === "X64" &&
+    ["prepare", "inventory", "finish"].includes(command)
+  );
+}
+
 // The owner's Fedora has no released predecessor. This source-identical,
 // non-publishable baseline is available only to the protected package-only
 // workflow and is never accepted as the configured 0.1.12 release.
@@ -61,23 +82,8 @@ export function fedoraPredecessorConfig(c, env, command) {
   )
     return c;
   if (
-    !c ||
     env.FASED_FEDORA_PREDECESSOR !== "true" ||
-    env.FASED_PACKAGE_ONLY !== "true" ||
-    env.GITHUB_EVENT_NAME !== "workflow_dispatch" ||
-    env.GITHUB_REF !== "refs/heads/main" ||
-    env.GITHUB_REPOSITORY !== c.repository ||
-    env.GITHUB_REPOSITORY_ID !== c.repositoryId ||
-    env.GITHUB_REPOSITORY_OWNER_ID !== c.ownerId ||
-    env.GITHUB_WORKFLOW_REF !==
-      `${c.repository}/${c.workflow}@refs/heads/main` ||
-    !commit.test(env.GITHUB_SHA ?? "") ||
-    env.FASED_RELEASE_SOURCE !== env.GITHUB_SHA ||
-    !number.test(env.GITHUB_RUN_ID ?? "") ||
-    !number.test(env.GITHUB_RUN_ATTEMPT ?? "") ||
-    env.RUNNER_OS !== "Linux" ||
-    env.RUNNER_ARCH !== "X64" ||
-    !["prepare", "inventory", "finish"].includes(command) ||
+    !testPredecessorWorkflow(c, env, command) ||
     c.version !== "0.1.12" ||
     validateConfig(c).length
   )
@@ -85,6 +91,27 @@ export function fedoraPredecessorConfig(c, env, command) {
       "Fedora predecessor requires the reviewed package-only workflow",
     );
   return { ...c, version: "0.1.10" };
+}
+
+export function automaticPredecessor(c, env, command) {
+  const input = env.FASED_AUTOMATIC_PREDECESSOR_PINS;
+  if (input === undefined || input === "") return null;
+  const pins = /^([1-9][0-9]{3,4}):([a-f0-9]{64}):([a-f0-9]{32})$/.exec(input);
+  if (
+    pins?.[0] !== input ||
+    Number(pins[1]) > 60000 ||
+    !testPredecessorWorkflow(c, env, command) ||
+    (env.FASED_FEDORA_PREDECESSOR !== undefined &&
+      env.FASED_FEDORA_PREDECESSOR !== "false") ||
+    c.version !== "0.1.23" ||
+    c.releaseAuthority !== "github-attestation-v1" ||
+    validateConfig(c).length
+  )
+    throw Error(
+      "Automatic predecessor requires a reviewed package-only workflow and exact receiver pins",
+    );
+  const [, owner, machine, instance] = pins;
+  return { config: { ...c, version: "0.1.22" }, owner, machine, instance };
 }
 const sha = (b) => createHash("sha256").update(b).digest("hex");
 const hash = /^[a-f0-9]{64}$/;
@@ -215,7 +242,7 @@ function file(name, max) {
     identity: { file: name, size: bytes.length, sha256: sha(bytes) },
   };
 }
-export function bindingOverlay(seed, pin, root) {
+export function bindingOverlay(seed, pin, root, automatic) {
   if (!hash.test(pin) || sha(seed) !== pin) throw Error("Seed binding changed");
   const declarations = [
     [
@@ -236,19 +263,36 @@ export function bindingOverlay(seed, pin, root) {
     output,
     source: `package main\nimport "encoding/base64"\nfunc init() {\n b, e := base64.StdEncoding.DecodeString(${JSON.stringify(seed.toString("base64"))})\n if e != nil { panic("invalid compiled public release seed") }\n ${name} = &${type}{Seed:b, SHA256:${JSON.stringify(pin)}}\n}\n`,
   }));
-  return [
-    ...bindings,
-    {
+  bindings.push({
+    target: path.resolve(
+      root,
+      "internal/bootstrap/publisher_seed_generated.go",
+    ),
+    output: "bootstrap.go",
+    source: `package bootstrap\n// Publisher-approved seed SHA256: ${pin}\nfunc init() { productionGitHubActivationEnabled = true }\n`,
+  });
+  if (automatic) {
+    bindings.push({
       target: path.resolve(
         root,
-        "internal/bootstrap/publisher_seed_generated.go",
+        "internal/hostplatform/automatic_predecessor_pins_generated.go",
       ),
-      output: "bootstrap.go",
-      source: `package bootstrap\n// Publisher-approved seed SHA256: ${pin}\nfunc init() { productionGitHubActivationEnabled = true }\n`,
-    },
-  ];
+      output: "automatic-predecessor.go",
+      source: `//go:build linux && amd64 && fased_automatic_predecessor && !custody_acceptance_fixture && !fased_realhost_fixture
+
+package hostplatform
+
+func init() {
+	AutomaticPredecessorOwnerUID = ${JSON.stringify(automatic.owner)}
+	AutomaticPredecessorMachineSHA256 = ${JSON.stringify(automatic.machine)}
+	AutomaticPredecessorInstance = ${JSON.stringify(automatic.instance)}
 }
-function prepare(c) {
+`,
+    });
+  }
+  return bindings;
+}
+function prepare(c, automatic) {
   const missing = validateConfig(c);
   if (missing.length)
     throw Error("Production inputs missing: " + missing.join(", "));
@@ -316,7 +360,12 @@ function prepare(c) {
   mkdirSync(evidence, { mode: 0o700 });
   mkdirSync(path.join(evidence, "bindings"), { mode: 0o700 });
   const replacements = {};
-  for (const b of bindingOverlay(seed, c.seedSha256, process.cwd())) {
+  for (const b of bindingOverlay(
+    seed,
+    c.seedSha256,
+    process.cwd(),
+    automatic,
+  )) {
     if (existsSync(b.target))
       throw Error("Preserve existing generated binding path");
     const output = path.resolve(evidence, "bindings", b.output);
@@ -344,7 +393,7 @@ function prepare(c) {
   });
   writeFileSync(
     process.env.GITHUB_OUTPUT,
-    `version=${c.version}\noverlay=${path.resolve(evidence, "overlay.json")}\n`,
+    `version=${c.version}\noverlay=${path.resolve(evidence, "overlay.json")}\nautomatic_predecessor=${Boolean(automatic)}\n`,
     { flag: "a" },
   );
 }
@@ -1183,7 +1232,8 @@ if (
       evidence = ".evidence/ubuntu-release-compatibility";
       c = compatibilityConfig(c);
     }
-    c = fedoraPredecessorConfig(c, process.env, command);
+    const automatic = automaticPredecessor(c, process.env, command);
+    c = automatic?.config ?? fedoraPredecessorConfig(c, process.env, command);
     const missing = validateConfig(c);
     switch (command) {
       case "replay": {
@@ -1311,7 +1361,7 @@ if (
         );
         break;
       case "prepare":
-        prepare(c);
+        prepare(c, automatic);
         break;
       case "inventory":
         inventory();
