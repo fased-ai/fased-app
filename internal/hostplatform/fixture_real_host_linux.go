@@ -3,9 +3,6 @@
 package hostplatform
 
 import (
-	"crypto/sha256"
-	"crypto/subtle"
-	"encoding/hex"
 	"errors"
 	"os"
 	"path/filepath"
@@ -18,23 +15,6 @@ import (
 // These values are bound into the explicitly compiled disposable build. There
 // is no command-line, HTTP, environment or configuration override.
 var FixtureOwnerUID, FixtureMachineSHA256, FixtureSourceData, FixtureSourceRoot string
-
-func fixtureHostMatches(owner int, ownerPin, machinePin string, machineID []byte) bool {
-	if owner <= 0 || ownerPin != strconv.Itoa(owner) {
-		return false
-	}
-	id := strings.TrimSpace(string(machineID))
-	raw, err := hex.DecodeString(id)
-	if err != nil || len(raw) != 16 || hex.EncodeToString(raw) != id {
-		return false
-	}
-	pin, err := hex.DecodeString(machinePin)
-	if err != nil || len(pin) != sha256.Size || hex.EncodeToString(pin) != machinePin {
-		return false
-	}
-	sum := sha256.Sum256([]byte(id))
-	return subtle.ConstantTimeCompare(sum[:], pin) == 1
-}
 
 // FixtureHostAllowed is scoped to one preselected OS owner and machine. It
 // grants no wallet, update, root or network authority by itself.

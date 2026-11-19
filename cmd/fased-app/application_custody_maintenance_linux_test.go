@@ -96,6 +96,32 @@ func TestCandidateUsesTheSharedCustodyCheckAndManualWorker(t *testing.T) {
 	}
 }
 
+func TestControlledAutomaticControllerUsesOnlyTheRetainedCandidateWorker(t *testing.T) {
+	const owner = 1400
+	release := core.ApplicationRelease{ManifestSHA256: strings.Repeat("a", 64), EngineSHA256: strings.Repeat("b", 64), Sequence: 1000024}
+	o := core.ApplicationUpdateOperation{Automatic: true, ID: update.NewProbe(), Release: &release}
+	candidate := maintenance.CandidateReceipt{Owner: owner, Scope: "update", PacketSHA256: release.ManifestSHA256, ReleaseSHA256: release.ManifestSHA256,
+		EngineSHA256: release.EngineSHA256, Sequence: release.Sequence, ExpiresAt: time.Now().Add(time.Minute).Unix()}
+	started := ""
+	c := custodyMaintenanceController{
+		owner: owner, manualOnly: true,
+		readCandidate: func(int) (maintenance.CandidateReceipt, error) { return candidate, nil },
+		startWorker:   func(_ context.Context, id string) error { started = id; return nil },
+	}
+	if _, err := c.Apply(t.Context(), o); !errors.Is(err, core.ErrApplicationUpdateNotStarted) || started != "" {
+		t.Fatal("ordinary package Automatic was admitted", err)
+	}
+	c.controlledAutomatic = func(v core.ApplicationUpdateOperation) bool { return v.ID == o.ID }
+	if _, err := c.Apply(t.Context(), o); err != nil || started != o.ID {
+		t.Fatal("controlled Automatic did not launch the exact operation worker", err)
+	}
+	started = ""
+	candidate.PacketSHA256 = strings.Repeat("c", 64)
+	if _, err := c.Apply(t.Context(), o); !errors.Is(err, core.ErrApplicationUpdateNotStarted) || started != "" {
+		t.Fatal("a different candidate reached the controlled worker", err)
+	}
+}
+
 func fixtureCustodyPause(id, manifest string) update.CorePauseReceipt {
 	snapshot := update.CoreSnapshot{Version: 1, BootID: update.NewProbe(), ProbeID: update.NewProbe(), InstanceID: "fixture-instance", State: update.State{Name: "core-db", Version: 1, Anchor: strings.Repeat("d", 64)}}
 	request := &update.CorePauseRequest{Version: 1, IntentID: id, Sequence: 8, ManifestSHA256: manifest, Expected: snapshot}

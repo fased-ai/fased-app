@@ -28,6 +28,10 @@ func runEmptyPackageUpdate(ctx context.Context, a maintenance.Authority, r updat
 		r.Application != nil && r.Application.PreviousEngineSHA256 != base.CoreHash {
 		return errors.New("original empty-signer package operation required")
 	}
+	automatic, err := readControlledAutomatic(base, r)
+	if err != nil {
+		return err
+	}
 	// The instance lock protects its own pair and journal. The system launcher
 	// stays unchanged; another instance may be on a different release.
 	if err := verifyPackageRootUnits(ctx, a, base, r.OperationID); err != nil {
@@ -78,7 +82,7 @@ func runEmptyPackageUpdate(ctx context.Context, a maintenance.Authority, r updat
 			if err := protectedAppPeer(ctx, a, base, maintenance.AppMaintenanceRequest{Action: "operation", OperationID: r.OperationID}, &view); err != nil {
 				return err
 			}
-			if err := matchEmptyPackageOperation(view, r, base); err != nil {
+			if err := matchEmptyPackageOperation(view, r, base, automatic); err != nil {
 				return err
 			}
 			r.OwnerLease = r.OperationID
@@ -93,13 +97,13 @@ func runEmptyPackageUpdate(ctx context.Context, a maintenance.Authority, r updat
 		if err := protectedAppPeer(ctx, a, base, maintenance.AppMaintenanceRequest{Action: "application-claim", OperationID: r.OperationID}, &claimed); err != nil {
 			return err
 		}
-		if err := matchEmptyPackageOperation(claimed, r, base); err != nil || claimed.View.Operation.OwnerLease != r.OwnerLease {
+		if err := matchEmptyPackageOperation(claimed, r, base, automatic); err != nil || claimed.View.Operation.OwnerLease != r.OwnerLease {
 			return errors.New("the original application lease is unavailable")
 		}
 		if err := protectedAppPeer(ctx, a, base, maintenance.AppMaintenanceRequest{Action: "application-prepare", OperationID: r.OperationID}, &prepared); err != nil || prepared.Checkpoint == nil {
 			return errors.Join(err, errors.New("the original application checkpoint is unavailable"))
 		}
-		if err := protectedAppPeer(ctx, a, base, maintenance.AppMaintenanceRequest{Action: "application-offline", OperationID: r.OperationID}, &offline); err != nil || offline.Checkpoint == nil || offline.View.Operation.OwnerLease != r.OwnerLease ||
+		if err := protectedAppPeer(ctx, a, base, maintenance.AppMaintenanceRequest{Action: "application-offline", OperationID: r.OperationID}, &offline); err != nil || offline.Checkpoint == nil || !automatic.matchesView(offline) || offline.View.Operation.OwnerLease != r.OwnerLease ||
 			update.SnapshotDigest("package-application-checkpoint", *offline.Checkpoint) != update.SnapshotDigest("package-application-checkpoint", *prepared.Checkpoint) {
 			return errors.Join(err, errors.New("the original application backup could not be verified"))
 		}
@@ -130,7 +134,7 @@ func runEmptyPackageUpdate(ctx context.Context, a maintenance.Authority, r updat
 			return err
 		}
 		var offline core.ApplicationOwnerView
-		if err := protectedAppPeer(ctx, a, base, maintenance.AppMaintenanceRequest{Action: "application-offline", OperationID: r.OperationID}, &offline); err != nil || offline.Checkpoint == nil || offline.View.Operation.OwnerLease != r.OwnerLease ||
+		if err := protectedAppPeer(ctx, a, base, maintenance.AppMaintenanceRequest{Action: "application-offline", OperationID: r.OperationID}, &offline); err != nil || offline.Checkpoint == nil || !automatic.matchesView(offline) || offline.View.Operation.OwnerLease != r.OwnerLease ||
 			update.SnapshotDigest("package-application-checkpoint", *offline.Checkpoint) != update.SnapshotDigest("package-application-checkpoint", *r.Application) {
 			return errors.Join(err, errors.New("the saved application checkpoint changed; preserve the operation"))
 		}
@@ -221,7 +225,7 @@ func runEmptyPackageUpdate(ctx context.Context, a maintenance.Authority, r updat
 	for {
 		var view core.ApplicationOwnerView
 		err := protectedAppPeer(ctx, a, target, maintenance.AppMaintenanceRequest{Action: "operation", OperationID: r.OperationID}, &view)
-		if err == nil && view.RunningSHA256 == target.CoreHash && view.BootID != r.Application.Pause.Core.BootID && view.View.Operation.OwnerLease == r.OwnerLease {
+		if err == nil && automatic.matchesView(view) && view.RunningSHA256 == target.CoreHash && view.BootID != r.Application.Pause.Core.BootID && view.View.Operation.OwnerLease == r.OwnerLease {
 			break
 		}
 		select {
@@ -236,7 +240,7 @@ func runEmptyPackageUpdate(ctx context.Context, a maintenance.Authority, r updat
 	if err := protectedAppPeer(ctx, a, target, maintenance.AppMaintenanceRequest{Action: "application-finish", OperationID: r.OperationID}, &completed); err != nil {
 		return err
 	}
-	if completed.View.Operation.Phase != "completed" || completed.View.Operation.Receipt == nil || completed.View.Operation.Receipt.EngineSHA256 != target.CoreHash {
+	if !automatic.matchesView(completed) || completed.View.Operation.Phase != "completed" || completed.View.Operation.Receipt == nil || completed.View.Operation.Receipt.EngineSHA256 != target.CoreHash {
 		return errors.New("the original application completion is unconfirmed")
 	}
 	r.Phase = "completed"
@@ -252,13 +256,13 @@ const packageUpdateConnected = true
 // Each operation must still verify its package, identity and recovery journal.
 func NativePackageUpdateAvailable() bool { return packageUpdateConnected }
 
-func matchEmptyPackageOperation(view core.ApplicationOwnerView, r update.MaintenanceRecord, base Manifest) error {
+func matchEmptyPackageOperation(view core.ApplicationOwnerView, r update.MaintenanceRecord, base Manifest, automatic *automaticPredecessorAdmission) error {
 	o := view.View.Operation
-	if o.ID != r.OperationID || (o.Phase != "applying" && o.Phase != "recovery") || o.Automatic || o.Release == nil ||
+	if o.ID != r.OperationID || (o.Phase != "applying" && o.Phase != "recovery") || !automatic.matchesView(view) || o.Release == nil ||
 		o.Release.Sequence != r.Package.Sequence || o.Release.ManifestSHA256 != r.Package.ReleaseSHA256 || o.Release.Version != r.Package.Version ||
 		o.PolicySHA256 != update.SnapshotDigest("application-update-policy", view.View.Policy) || view.RunningSHA256 != base.CoreHash ||
 		(o.OwnerLease != "" && o.OwnerLease != r.OperationID) {
-		return errors.New("the original manual application update is required")
+		return errors.New("the original authorized application update is required")
 	}
 	for _, component := range r.Package.Components {
 		if component.Contract.Component == "core" && component.Artifact.SHA256 == o.Release.EngineSHA256 {

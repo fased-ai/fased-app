@@ -351,6 +351,43 @@ func TestApplicationCheckpointOwnerRetryAfterRestartReusesOriginalHold(t *testin
 	}
 }
 
+func TestApplicationCheckpointOfflineRetainsAutomaticPolicy(t *testing.T) {
+	s := fixtureStore(t)
+	fixture := fixtureUpdateController()
+	starts := 0
+	if err := s.BindApplicationMaintenance(fixture.Check, func(context.Context, string) error {
+		starts++
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	p := UpdatePolicy{Mode: "automatic", Notify: true, Pin: &UpdatePin{Sequence: "7", ManifestSHA256: fixture.release.ManifestSHA256}}
+	updateModeFixture(t, s, p)
+	updateTickFixture(t, s)
+	updateTickFixture(t, s)
+	updateTickFixture(t, s)
+	view, err := s.ApplicationUpdates(t.Context())
+	if err != nil || !view.Operation.Automatic || view.Operation.Phase != "applying" || starts != 1 {
+		t.Fatal("controlled Automatic was not dispatched once", err)
+	}
+	id := view.Operation.ID
+	if _, err = s.ApplicationOwnerCommand(t.Context(), ApplicationOwnerCommand{Action: "claim", ID: id, Lease: id}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.ApplicationOwnerCommand(t.Context(), ApplicationOwnerCommand{Action: "prepare", ID: id, Lease: id}); err != nil {
+		t.Fatal(err)
+	}
+	dir := s.dir
+	if err = s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	offline, err := ReadApplicationOwnerOffline(t.Context(), dir, id)
+	if err != nil || offline.Checkpoint == nil || offline.View.Operation.OwnerLease != id || !offline.View.Operation.Automatic ||
+		update.SnapshotDigest("application-update-policy", offline.View.Policy) != view.Operation.PolicySHA256 {
+		t.Fatal("stopped-service readback lost the original Automatic lease or policy", err)
+	}
+}
+
 func TestApplicationCheckpointRetryRequiresExactRolledBackOutcome(t *testing.T) {
 	s := fixtureStore(t)
 	fixture := fixtureUpdateController()

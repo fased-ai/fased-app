@@ -545,13 +545,14 @@ func acquirePackageSigner(ctx context.Context, p *bootstrap.Prepared, a maintena
 }
 
 // A protected worker may only acquire the release selected by the original
-// manual core operation and the candidate admitted for this exact instance.
+// core operation and the candidate admitted for this exact instance.
 func approvedPackageCandidate(view core.ApplicationOwnerView, operation string, installed update.MaintenancePackage, manifest custodyinstall.Manifest, candidate maintenance.CandidateReceipt, bound *maintenance.CandidateOperation, now time.Time) (maintenance.CustodyUpdateRequest, error) {
 	q, release, manual, err := approvedCustodyOperation(view, operation, now)
-	if err != nil || !manual || view.View.Operation.Automatic || release == nil ||
+	if err != nil || release == nil ||
+		!manual && (!custodyinstall.ControlledAutomaticOperation(manifest, &installed, view.View.Operation) || candidate.PacketSHA256 != release.ManifestSHA256) ||
 		!candidate.MatchesBase(manifest.Owner, installed.Sequence, installed.ReleaseSHA256, manifest.ID, update.SnapshotDigest("candidate-base-manifest:v1", manifest)) ||
 		candidate.Sequence != release.Sequence || candidate.ReleaseSHA256 != release.ManifestSHA256 || candidate.EngineSHA256 != release.EngineSHA256 || candidate.ProductVersion != release.Version || candidate.Target != release.Target {
-		return maintenance.CustodyUpdateRequest{}, errors.New("the original manual package operation and candidate must match")
+		return maintenance.CustodyUpdateRequest{}, errors.New("the original authorized package operation and candidate must match")
 	}
 	if _, err = candidateBindingRequired(candidate, packageCandidateOperation(candidate, q), bound, now); err != nil {
 		return maintenance.CustodyUpdateRequest{}, err
@@ -619,8 +620,8 @@ func maintenancePackageAcquire(ctx context.Context, a maintenance.Authority, loc
 		return err
 	}
 	_, expected, manual, err := approvedCustodyOperation(view, operation, time.Now())
-	if err != nil || !manual || view.View.Operation.Automatic || expected == nil {
-		return errors.New("the original manual application operation is required")
+	if err != nil || expected == nil || !manual && !custodyinstall.ControlledAutomaticOperation(manifest, installed, view.View.Operation) {
+		return errors.New("the original authorized application operation is required")
 	}
 	dir, err := update.PackageMaintenanceDirectory(a.Owner, location, instance, operation)
 	if err != nil {
@@ -631,6 +632,10 @@ func maintenancePackageAcquire(ctx context.Context, a maintenance.Authority, loc
 		return err
 	}
 	receipt, err := maintenance.ReadPackageCandidateReceipt(a.Owner, location, instance)
+	if !manual && (err != nil || receipt.Scope != "update" || receipt.PacketSHA256 != expected.ManifestSHA256 ||
+		receipt.ReleaseSHA256 != expected.ManifestSHA256 || bound == nil && time.Now().Unix() >= receipt.ExpiresAt) {
+		return errors.New("the exact admitted controlled Automatic candidate is required")
+	}
 	if bound != nil && (err != nil || bound.PacketSHA256 != receipt.PacketSHA256) {
 		return errors.New("the original bound package candidate is unavailable; preserve the operation")
 	}
@@ -661,6 +666,14 @@ func maintenancePackageAcquire(ctx context.Context, a maintenance.Authority, loc
 	}
 	q, err := approvedPackageCandidate(view, operation, *installed, manifest, admitted, bound, time.Now())
 	if err != nil {
+		return err
+	}
+	if !manual {
+		if err = custodyinstall.VerifyUnconfiguredPackageSigner(ctx, manifest); err != nil {
+			return err
+		}
+	}
+	if err = custodyinstall.RecordControlledAutomatic(manifest, installed, view); err != nil {
 		return err
 	}
 	if err = maintenance.EnsureProtectedDirectory(filepath.Dir(dir)); err != nil {
