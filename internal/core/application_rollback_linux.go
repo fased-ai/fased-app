@@ -114,6 +114,16 @@ func ReadApplicationOwnerOffline(ctx context.Context, directory, id string) (App
 		return out, errors.New("offline instance identity mismatch")
 	}
 	out = ApplicationOwnerView{BootID: o.BootID, View: ApplicationUpdateView{Version: 1, InstanceID: instance, Schema: schema, Revision: revision, Operation: o}}
+	if o.Automatic {
+		// The protected helper rechecks the same policy digest while the owner
+		// service is stopped. Read it from the original database transaction.
+		setup, err := readSetupRecord(ctx, tx)
+		if err != nil || setup.Settings.Updates == nil {
+			return ApplicationOwnerView{}, errors.New("original Automatic update policy unavailable offline")
+		}
+		out.View.Policy = setup.Settings.Updates.Policy
+		out.View.PolicyRevision = setup.Revision
+	}
 	if phase == "idle" {
 		return out, nil
 	}

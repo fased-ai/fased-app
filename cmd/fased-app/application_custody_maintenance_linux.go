@@ -27,6 +27,7 @@ import (
 type custodyMaintenanceController struct {
 	owner                 int
 	manualOnly            bool
+	controlledAutomatic   func(core.ApplicationUpdateOperation) bool
 	check                 func(context.Context) (*core.ApplicationRelease, error)
 	readRecord            func(int) (update.MaintenanceRecord, error)
 	readCandidate         func(int) (maintenance.CandidateReceipt, error)
@@ -182,7 +183,8 @@ func (c *custodyMaintenanceController) Apply(ctx context.Context, o core.Applica
 	if o.Release == nil {
 		return core.ApplicationUpdateReceipt{}, errors.New("reviewed custody release required")
 	}
-	if o.Automatic && c.manualOnly {
+	controlled := o.Automatic && c.controlledAutomatic != nil && c.controlledAutomatic(o)
+	if o.Automatic && c.manualOnly && !controlled {
 		return core.ApplicationUpdateReceipt{}, fmt.Errorf("%w: automatic updates are disabled", core.ErrApplicationUpdateNotStarted)
 	}
 	if o.Automatic {
@@ -194,7 +196,13 @@ func (c *custodyMaintenanceController) Apply(ctx context.Context, o core.Applica
 		if err != nil && !errors.Is(err, os.ErrNotExist) {
 			return core.ApplicationUpdateReceipt{}, fmt.Errorf("%w: candidate status is unavailable", core.ErrApplicationUpdateNotStarted)
 		}
-		if err == nil && candidate.Scope == "update" && candidate.Sequence == o.Release.Sequence && candidate.ReleaseSHA256 == o.Release.ManifestSHA256 && time.Now().Unix() < candidate.ExpiresAt {
+		matches := err == nil && candidate.Scope == "update" && candidate.Sequence == o.Release.Sequence && candidate.ReleaseSHA256 == o.Release.ManifestSHA256 && time.Now().Unix() < candidate.ExpiresAt
+		if controlled {
+			if !matches || candidate.Owner != c.owner || candidate.PacketSHA256 != o.Release.ManifestSHA256 ||
+				candidate.EngineSHA256 != o.Release.EngineSHA256 {
+				return core.ApplicationUpdateReceipt{}, fmt.Errorf("%w: exact retained controlled candidate required", core.ErrApplicationUpdateNotStarted)
+			}
+		} else if matches {
 			return core.ApplicationUpdateReceipt{}, fmt.Errorf("%w: candidate requires a manual update", core.ErrApplicationUpdateNotStarted)
 		}
 	}
@@ -519,6 +527,10 @@ func bindPackageMaintenance(store *core.Store, owner int, dir string) error {
 	}
 	c := packageMaintenanceWorker(owner, m.Location, m.ID)
 	c.manualOnly, c.readRecord, c.readCandidate = true, readRecord, readCandidate
+	c.controlledAutomatic = func(o core.ApplicationUpdateOperation) bool {
+		base, err := r.InstalledPackage()
+		return err == nil && custodyinstall.ControlledAutomaticOperation(m, base, o)
+	}
 	c.verifyTarget = custodyinstall.VerifyPackageInstance
 	c.validateIdle = func(r update.MaintenanceRecord) error {
 		_, err := custodyinstall.ValidateIdlePackageMaintenanceRecord(r, owner, m.Location, m.ID)
