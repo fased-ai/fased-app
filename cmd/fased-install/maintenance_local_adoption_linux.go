@@ -23,7 +23,7 @@ import (
 	"github.com/fased-ai/fased-app/internal/update"
 )
 
-func maintenancePackageAdoptLocalCommand(args []string, out io.Writer) error {
+func maintenancePackageAdoptLocalCommand(action string, args []string, out io.Writer) error {
 	if len(args) != 16 || args[6] != "--listen" || args[8] != "--legacy-candidate" || args[10] != "--retained-candidate" || args[12] != "--prefix" || args[14] != "--data-dir" {
 		return errors.New("one exact Local package and stopped predecessor required")
 	}
@@ -34,6 +34,13 @@ func maintenancePackageAdoptLocalCommand(args []string, out io.Writer) error {
 	a, bridge, err := maintenance.ValidateLocalAdoptionBridge(owner, instance)
 	if err != nil {
 		return err
+	}
+	if action != "prepare" {
+		applyLock, err := maintenance.LocalAdoptionApplyLock(owner, instance)
+		if err != nil {
+			return err
+		}
+		defer applyLock.Close()
 	}
 	lock, err := maintenance.PackageLock(owner, location, instance)
 	if err != nil {
@@ -86,8 +93,24 @@ func maintenancePackageAdoptLocalCommand(args []string, out io.Writer) error {
 		}
 		return nil
 	}}
-	if err := provisionPackageCandidate(ctx, a, location, instance, args[7], lock, &adoption); err != nil {
-		return err
+	var result any
+	if action == "prepare" {
+		if err := provisionPackageCandidate(ctx, a, location, instance, args[7], lock, &adoption); err != nil {
+			return err
+		}
+		result = struct {
+			bootstrap.LocalHandoffStage
+			PackageInstance string `json:"packageInstance"`
+		}{stage, instance}
+	} else {
+		if !stage.MatchesRetainedPackage(owner, receipt.PacketSHA256, maintenance.LegacyLocalRetainedBundle) {
+			return errors.New("the source and retained Local package differ from the adoption")
+		}
+		applied, err := custodyinstall.ApplyLegacyLocalAdoption(ctx, owner, instance, args[7], action == "recover", lock, adoption.commitment(), adoption.verifyImage, adoption.verifySource)
+		if err != nil {
+			return err
+		}
+		result = applied
 	}
 	closeErr := control.Close()
 	waitErr := cmd.Wait()
@@ -95,10 +118,7 @@ func maintenancePackageAdoptLocalCommand(args []string, out io.Writer) error {
 	if err := errors.Join(closeErr, waitErr); err != nil {
 		return errors.New("Local adoption source did not close cleanly; preserve the fenced instance")
 	}
-	return json.NewEncoder(out).Encode(struct {
-		bootstrap.LocalHandoffStage
-		PackageInstance string `json:"packageInstance"`
-	}{stage, instance})
+	return json.NewEncoder(out).Encode(result)
 }
 
 // Both child roles run the same protected image at ordinary UIDs. In
@@ -146,12 +166,23 @@ func (a localAdoptionImport) commitment() custodyinstall.PackageLocalAdoption {
 }
 
 func (a localAdoptionImport) importImage(m custodyinstall.Manifest) error {
-	cmd := localAdoptionChild(a.ctx, a.bridge, m.App.UID, m.App.GID, "import", filepath.Join(m.Root, "app-state"), a.stage.InstanceID, a.stage.StateSHA256)
-	cmd.Stdin = bytes.NewReader(a.image)
-	if err := cmd.Run(); err != nil {
-		return errors.New("could not verify and import the original image as the protected app identity")
+	if err := a.checkImage(m, "import"); err != nil {
+		return err
 	}
 	return a.verifySource()
+}
+
+func (a localAdoptionImport) verifyImage(m custodyinstall.Manifest) error {
+	return a.checkImage(m, "verify")
+}
+
+func (a localAdoptionImport) checkImage(m custodyinstall.Manifest, action string) error {
+	cmd := localAdoptionChild(a.ctx, a.bridge, m.App.UID, m.App.GID, action, filepath.Join(m.Root, "app-state"), a.stage.InstanceID, a.stage.StateSHA256)
+	cmd.Stdin = bytes.NewReader(a.image)
+	if err := cmd.Run(); err != nil {
+		return errors.New("the protected app identity could not verify the staged workspace")
+	}
+	return nil
 }
 
 func maintenanceLocalAdoptionImageCommand(args []string, in io.Reader, out io.Writer) error {
@@ -167,7 +198,7 @@ func maintenanceLocalAdoptionImageCommand(args []string, in io.Reader, out io.Wr
 		}
 		options := bootstrap.Options{Seed: compiledFirstInstallBinding.Seed, SeedSHA256: compiledFirstInstallBinding.SHA256}
 		return bootstrap.ExportLegacyLocalHandoff(ctx, options, args[1], args[2], localinstall.Paths{Root: args[3], Data: args[4]}, in, out)
-	case "import":
+	case "import", "verify":
 		if len(args) != 4 || filepath.Base(args[1]) != "app-state" {
 			return errors.New("one protected app-state directory required")
 		}
@@ -179,6 +210,9 @@ func maintenanceLocalAdoptionImageCommand(args []string, in io.Reader, out io.Wr
 		image, err := core.DecodeEnrollmentImage(raw)
 		if err != nil || image.Schema != core.StateSchema || image.InstanceID != args[2] || core.EnrollmentImageDigest(image) != args[3] {
 			return errors.New("the imported workspace or state digest differs")
+		}
+		if args[0] == "verify" {
+			return core.VerifyImportedEnrollmentImage(ctx, args[1], image)
 		}
 		return core.ImportEnrollmentImage(ctx, args[1], image)
 	default:

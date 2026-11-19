@@ -83,5 +83,11 @@ func VerifyEnrollmentImageLease(lease io.Closer) error {
 func ValidateEnrollmentImage(image EnrollmentImage) error { return validateEnrollmentImage(image) }
 
 func ImportEnrollmentImage(ctx context.Context, dir string, image EnrollmentImage) error {
-	return importEnrollmentImage(ctx, dir, image)
+	return checkEnrollmentStage(ctx, dir, image, true)
+}
+
+// VerifyImportedEnrollmentImage checks the full stopped destination before
+// cutover, including its exact SQLite and credential bytes. It repairs nothing.
+func VerifyImportedEnrollmentImage(ctx context.Context, dir string, image EnrollmentImage) error {
+	return checkEnrollmentStage(ctx, dir, image, false)
 }

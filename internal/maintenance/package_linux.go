@@ -240,6 +240,19 @@ func PackageLock(owner int, location, instance string) (*os.File, error) {
 	return lockPackage(root)
 }
 
+// LocalAdoptionApplyLock remains held while boot recovery takes PackageLock.
+// It serializes the one-time bridge commands across the service-start boundary.
+func LocalAdoptionApplyLock(owner int, instance string) (*os.File, error) {
+	if _, _, err := ValidateLocalAdoptionBridge(owner, instance); err != nil {
+		return nil, err
+	}
+	root, err := update.PackageMaintenanceRoot(owner, "local", instance)
+	if err != nil {
+		return nil, err
+	}
+	return lockPackageFile(root+"/legacy-local-apply.lock", 0, 0)
+}
+
 // WaitPackageLock is for boot recovery, which may overlap a short protected
 // owner request. It uses the same instance lock and remains context-bounded.
 func WaitPackageLock(ctx context.Context, owner int, location, instance string) (*os.File, error) {
