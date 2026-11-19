@@ -34,7 +34,10 @@ const packet = {
 const inventory = {
   repositoryId: "1426211857",
   ownerId: "279582504",
-  assets: [{ name: "install.sh", size: 1, sha256: "c".repeat(64) }],
+  assets: [
+    { name: "install.sh", size: 1, sha256: "c".repeat(64) },
+    { name: "fased-release.json", size: 1, sha256: "f".repeat(64) },
+  ],
 };
 function installedAgent(target = packet, localSha = "a".repeat(64)) {
   return {
@@ -543,6 +546,28 @@ test("owner-reviewed Remote proof joins exact Local CI and rejects substitution,
     ...binding,
     localOnly: true,
     remoteTested: false,
+    legacyMigration: {
+      route: "guarded-format4-adoption",
+      targetPacketSha256: "f".repeat(64),
+      bridgeSha256: "a".repeat(64),
+      proofSha256: "9".repeat(64),
+      operationId: "4".repeat(32),
+      evidenceSha256: "b".repeat(64),
+      checks: {
+        interruptionRecovery: "PASS",
+        workspacePreservation: "PASS",
+        authenticationPreservation: "PASS",
+        alreadyCurrent: "PASS",
+      },
+    },
+    compatiblePredecessor: {
+      version: "0.1.9",
+      source: "d".repeat(40),
+      packetVersion: 4,
+      packetSha256: "2".repeat(64),
+      artifactSetSha256: "e".repeat(64),
+    },
+    lifecycleEvidenceSha256: "3".repeat(64),
     checks: Object.fromEntries(
       stagedAcceptanceContract.local.map((k) => [k, "PASS"]),
     ),
@@ -876,6 +901,41 @@ test("owner-reviewed Remote proof joins exact Local CI and rejects substitution,
           },
         },
         { ...local, uiOutcome: "alreadyCurrent" },
+        { ...local, automaticOutcome: "refused" },
+        { ...local, automaticOperationId: local.cliOperationId },
+        { ...local, legacyMigration: undefined },
+        {
+          ...local,
+          legacyMigration: { ...local.legacyMigration, proofSha256: undefined },
+        },
+        {
+          ...local,
+          legacyMigration: {
+            ...local.legacyMigration,
+            targetPacketSha256: "0".repeat(64),
+          },
+        },
+        {
+          ...local,
+          legacyMigration: {
+            ...local.legacyMigration,
+            operationId: local.uiOperationId,
+          },
+        },
+        {
+          ...local,
+          compatiblePredecessor: {
+            ...local.compatiblePredecessor,
+            version: target.productVersion,
+          },
+        },
+        {
+          ...local,
+          compatiblePredecessor: {
+            ...local.compatiblePredecessor,
+            packetSha256: local.legacyMigration.targetPacketSha256,
+          },
+        },
       ]) {
         await assert.rejects(
           recordLocalAcceptance(
@@ -884,7 +944,7 @@ test("owner-reviewed Remote proof joins exact Local CI and rejects substitution,
             () => assert.fail("incomplete evidence reached GitHub"),
             partial,
           ),
-          /Complete matching|Actual approved|Actual UI/,
+          /Complete matching|Actual approved|Actual UI|guarded Local migration|Distinct actual older|Distinct canonical/,
         );
       }
       actor = { login: "someone-else", id: 1 };
@@ -905,6 +965,17 @@ test("owner-reviewed Remote proof joins exact Local CI and rejects substitution,
       );
       assert.equal(recordedLocal.localReviewCommentId, "99");
       assert.ok(!comments[0].body.includes("/private/local-instance"));
+      const body = JSON.parse(comments[0].body.split("\n")[1]);
+      assert.equal(body.version, 2);
+      assert.deepEqual(body.receipt.legacyMigration, local.legacyMigration);
+      assert.deepEqual(
+        body.receipt.compatiblePredecessor,
+        local.compatiblePredecessor,
+      );
+      assert.equal(
+        body.receipt.automaticOperationId,
+        local.automaticOperationId,
+      );
       assert.deepEqual(
         await recordLocalAcceptance(target, inventory, api, local),
         recordedLocal,
