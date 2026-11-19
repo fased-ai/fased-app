@@ -55,6 +55,7 @@ type packageProvisionIntent struct {
 	Location string                `json:"location"`
 	Instance string                `json:"instance"`
 	Input    PackageProvisionInput `json:"input"`
+	Adoption *PackageLocalAdoption `json:"legacyLocalAdoption,omitempty"`
 }
 
 // ProvisionProtectedPackage installs one fresh instance from the
@@ -63,7 +64,27 @@ type packageProvisionIntent struct {
 // starting the service, whose recovery unit takes the same lock.
 func ProvisionProtectedPackage(ctx context.Context, owner int, location, instance string, input PackageProvisionInput, lock *os.File) error {
 	a, err := maintenance.ValidatePackageProcess(owner, location, instance)
-	if err != nil || lock == nil || !packageUpdateConnected || (location != "local" && location != "remote") || !validListen(input.Listen) || !update.IDOK(instance) {
+	if err != nil {
+		return err
+	}
+	return provisionProtectedPackage(ctx, a, owner, location, instance, input, lock, nil, nil)
+}
+
+// PrepareProtectedLegacyLocalPackage provisions the original retained pair,
+// imports the verified source snapshot and leaves startup fenced.
+func PrepareProtectedLegacyLocalPackage(ctx context.Context, owner int, instance string, input PackageProvisionInput, lock *os.File, adoption PackageLocalAdoption, importImage func(Manifest) error) error {
+	a, _, err := maintenance.ValidateLocalAdoptionBridge(owner, instance)
+	if err != nil {
+		return err
+	}
+	if importImage == nil || !adoption.valid(input) {
+		return errors.New("exact verified legacy Local state and retained package required")
+	}
+	return provisionProtectedPackage(ctx, a, owner, "local", instance, input, lock, &adoption, importImage)
+}
+
+func provisionProtectedPackage(ctx context.Context, a maintenance.Authority, owner int, location, instance string, input PackageProvisionInput, lock *os.File, adoption *PackageLocalAdoption, importImage func(Manifest) error) error {
+	if lock == nil || !packageUpdateConnected || (location != "local" && location != "remote") || !validListen(input.Listen) || !update.IDOK(instance) {
 		return errors.New("one exact fresh package is required")
 	}
 	receipt, err := maintenance.ReadPackageCandidateReceipt(owner, location, instance)
@@ -93,7 +114,7 @@ func ProvisionProtectedPackage(ctx context.Context, owner int, location, instanc
 		return err
 	}
 	stage := filepath.Join(filepath.Dir(root), "."+instance+".pending")
-	intent := packageProvisionIntent{Version: 1, Owner: owner, Location: location, Instance: instance, Input: input}
+	intent := packageProvisionIntent{Version: 1, Owner: owner, Location: location, Instance: instance, Input: input, Adoption: adoption}
 	intentBytes, err := json.Marshal(intent)
 	if err != nil {
 		return err
@@ -204,6 +225,11 @@ func ProvisionProtectedPackage(ctx context.Context, owner int, location, instanc
 				return err
 			}
 		}
+		if adoption != nil {
+			if err = maintenance.PublishProtected(filepath.Join(stage, "update-start-blocked.json"), adoption.fence(), 0644); err != nil {
+				return err
+			}
+		}
 		if err = unix.Renameat2(unix.AT_FDCWD, stage, unix.AT_FDCWD, root, unix.RENAME_NOREPLACE); err != nil {
 			return errors.New("package instance publication conflicted; preserve both")
 		}
@@ -221,8 +247,10 @@ func ProvisionProtectedPackage(ctx context.Context, owner int, location, instanc
 	if err != nil || actual != m || VerifyPackageInstance(actual) != nil {
 		return errors.New("the original provisioned package differs; preserve it")
 	}
-	if err = provisionNativeBootstrap(ctx, m, pack); err != nil {
-		return err
+	if adoption == nil {
+		if err = provisionNativeBootstrap(ctx, m, pack); err != nil {
+			return err
+		}
 	}
 	for _, role := range []string{"app", "signer"} {
 		if err = maintenance.PublishProtected(filepath.Join("/etc/systemd/system", instanceUnit(m, role)), definitions(m)["fased-"+role+".service"], 0644); err != nil {
@@ -234,6 +262,15 @@ func ProvisionProtectedPackage(ctx context.Context, owner int, location, instanc
 	}
 	if _, err = protectedSystemctl(ctx, "daemon-reload"); err != nil {
 		return err
+	}
+	if adoption != nil {
+		if err = prepareLegacyLocalImport(ctx, m, pack, *adoption, importImage); err != nil {
+			return err
+		}
+		if err = initializeProtectedPackageJournal(ctx, a, owner, location, instance, pack, adoption); err != nil {
+			return err
+		}
+		return sealLegacyLocalImport(m, pack, *adoption)
 	}
 	if err = InitializeProtectedPackageJournal(ctx, owner, location, instance, pack); err != nil {
 		return err

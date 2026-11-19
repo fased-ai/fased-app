@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/fased-ai/fased-app/internal/bootstrap"
+	"github.com/fased-ai/fased-app/internal/localinstall"
 	"github.com/fased-ai/fased-app/internal/maintenance"
 	"github.com/fased-ai/fased-app/internal/update"
 )
@@ -94,6 +95,10 @@ func run(args []string, in io.Reader, out, errOut io.Writer) error {
 	}
 	if len(args) > 0 {
 		switch args[0] {
+		case "maintenance-package-adopt-local":
+			return maintenancePackageAdoptLocalCommand(args[1:], out)
+		case "maintenance-local-adoption-image":
+			return maintenanceLocalAdoptionImageCommand(args[1:], in, out)
 		case "maintenance-package-transition":
 			return maintenancePackageTransitionCommand(args[1:])
 		case "maintenance-successor":
@@ -158,6 +163,9 @@ func run(args []string, in io.Reader, out, errOut io.Writer) error {
 	walletNetwork := f.String("wallet-network", "", "network for optional protected Wallets enrollment")
 	entryAction := f.String("entry-action", "", "fixed installed-instance action for the entry launcher")
 	verifyCandidate := f.String("verify-candidate", "", "verify a retained release candidate without installation")
+	verifyLocalHandoff := f.String("verify-local-handoff", "", "verify the retained format-4 target before reviewing a legacy Local handoff")
+	handoffStage := f.String("handoff-stage", "", "optionally prepare a new private adoption stage without applying the Local handoff")
+	legacyCandidate := f.String("legacy-candidate", "", "exact retained public v0.1.6 predecessor directory")
 	installCandidate := f.String("install-candidate", "", "install one independently attested Local candidate")
 	installPublicPackage := f.Bool("install-public-package", false, "install the authenticated public Linux package")
 	stageCandidate := f.String("stage-candidate", "", "admit one independently attested manual update candidate")
@@ -169,6 +177,33 @@ func run(args []string, in io.Reader, out, errOut io.Writer) error {
 	}
 	if f.NArg() != 0 {
 		return errors.New("unexpected installer arguments")
+	}
+	if *verifyLocalHandoff != "" || *legacyCandidate != "" || *handoffStage != "" {
+		mixed := false
+		f.Visit(func(option *flag.Flag) {
+			switch option.Name {
+			case "verify-local-handoff", "legacy-candidate", "prefix", "data-dir", "handoff-stage":
+			default:
+				mixed = true
+			}
+		})
+		if mixed || *verifyLocalHandoff == "" || *legacyCandidate == "" || compiledFirstInstallBinding == nil {
+			return errors.New("Local handoff preflight requires the exact two packets and compiled installer trust")
+		}
+		options := bootstrap.Options{Seed: compiledFirstInstallBinding.Seed, SeedSHA256: compiledFirstInstallBinding.SHA256}
+		paths := localinstall.Paths{Root: *prefix, Data: *data}
+		if *handoffStage != "" {
+			stage, err := bootstrap.PrepareLegacyLocalHandoff(context.Background(), options, *legacyCandidate, *verifyLocalHandoff, paths, *handoffStage)
+			if err != nil {
+				return err
+			}
+			return json.NewEncoder(out).Encode(stage)
+		}
+		report, err := bootstrap.VerifyLegacyLocalHandoff(options, *legacyCandidate, *verifyLocalHandoff, paths)
+		if err != nil {
+			return err
+		}
+		return json.NewEncoder(out).Encode(report)
 	}
 	packageFlags := false
 	f.Visit(func(flag *flag.Flag) {

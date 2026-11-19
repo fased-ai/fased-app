@@ -95,7 +95,7 @@ func packageMaintenanceFiles(a maintenance.Authority, m Manifest) (map[string][]
 	return files, nil
 }
 
-func installPackageMaintenanceUnits(ctx context.Context, a maintenance.Authority, m Manifest) error {
+func installPackageMaintenanceUnits(ctx context.Context, a maintenance.Authority, m Manifest, enableRecovery bool) error {
 	files, err := packageMaintenanceFiles(a, m)
 	if err != nil {
 		return err
@@ -124,6 +124,9 @@ func installPackageMaintenanceUnits(ctx context.Context, a maintenance.Authority
 	}
 	if err = verifyPackageRootUnits(ctx, a, m, m.ID); err != nil {
 		return err
+	}
+	if !enableRecovery {
+		return nil
 	}
 	_, err = protectedSystemctl(ctx, "enable", "--", packageRecoveryUnit(m))
 	return err

@@ -61,7 +61,13 @@ func DecodeEnrollmentImage(raw []byte) (EnrollmentImage, error) {
 }
 
 func ExportEnrollmentImage(ctx context.Context, dir string) (EnrollmentImage, io.Closer, error) {
-	return exportEnrollmentImage(ctx, dir)
+	return exportEnrollmentImage(ctx, dir, false)
+}
+
+// ExportExistingEnrollmentImage takes the normal enrollment leases without
+// creating a missing instance lock on an installed predecessor.
+func ExportExistingEnrollmentImage(ctx context.Context, dir string) (EnrollmentImage, io.Closer, error) {
+	return exportEnrollmentImage(ctx, dir, true)
 }
 
 // VerifyEnrollmentImageLease checks that the lock names still refer to the

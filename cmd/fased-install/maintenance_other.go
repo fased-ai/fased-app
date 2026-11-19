@@ -52,3 +52,11 @@ func maintenanceTransitionStatusCommand([]string, io.Writer) error {
 func maintenancePackageTransitionCommand([]string) error {
 	return errors.New("protected package maintenance requires Linux")
 }
+
+func maintenancePackageAdoptLocalCommand([]string, io.Writer) error {
+	return errors.New("protected Local adoption requires Linux")
+}
+
+func maintenanceLocalAdoptionImageCommand([]string, io.Reader, io.Writer) error {
+	return errors.New("protected Local adoption requires Linux")
+}

@@ -15,6 +15,7 @@ import (
 	"testing"
 
 	"github.com/fased-ai/fased-app/internal/core"
+	"github.com/fased-ai/fased-app/internal/maintenance"
 	"github.com/fased-ai/fased-app/internal/signer"
 	"github.com/fased-ai/fased-app/internal/update"
 )
@@ -291,6 +292,45 @@ func TestLocalPackageJournalRetainsVerifiedWalletClient(t *testing.T) {
 	bad.NativeDesktop = &artifact
 	if packagePairMatches(bad, m) {
 		t.Fatal("a wallet client without a valid digest was accepted")
+	}
+}
+
+func TestLegacyLocalImportBindsIdleJournalWithoutPermittingStart(t *testing.T) {
+	r, m := packageGateInitialRecord(t)
+	p := r.Package
+	p.Version, p.Source, p.ReleaseSHA256 = "0.1.23", maintenance.LegacyLocalRetainedSource, maintenance.LegacyLocalRetainedPacket
+	p.Bundle = &update.LinuxBundle{
+		Archive:        update.Artifact{File: "fased-app-linux-amd64.tar.gz", Size: 30, SHA256: strings.Repeat("a", 64)},
+		ManifestSHA256: maintenance.LegacyLocalRetainedBundle, InstallerSHA256: maintenance.LegacyLocalRetainedInstaller,
+	}
+	for i := range p.Components {
+		p.Components[i].Version = p.Version
+	}
+	source := PackageLocalAdoption{
+		LegacyManifestSHA256: strings.Repeat("1", 64), StateSHA256: strings.Repeat("2", 64),
+		InstanceID: base64.RawURLEncoding.EncodeToString([]byte(strings.Repeat("s", 32))),
+	}
+	commit, proof, err := bindLegacyLocalImport(m, *p, r, source)
+	if err != nil || commit.InstanceID != source.InstanceID || !validPackageOwnerCommit(m, commit) ||
+		proof.Source != source || proof.ApplyAllowed || proof.JournalSHA256 != update.SnapshotDigest("legacy-local-adoption-journal:v1", r) {
+		t.Fatal("source owner and state did not bind to the exact held package", err)
+	}
+	blocked := hostFile{UID: 0, Regular: true, Mode: 0644, Data: source.fence()}
+	if err := verifyPackageStartFences(m, r, func(string) (hostFile, error) { return blocked, nil }); err == nil {
+		t.Fatal("the ordinary app start gate admitted the held import")
+	}
+	if nextCommit, nextProof, err := bindLegacyLocalImport(m, *p, r, source); err != nil || nextCommit != commit || nextProof != proof {
+		t.Fatal("same import did not yield the original commitment after retry", err)
+	}
+	pending := r
+	pending.Phase = "prepared"
+	if _, _, err := bindLegacyLocalImport(m, *p, pending, source); err == nil {
+		t.Fatal("existing recovery was accepted as an initial import")
+	}
+	other := *p
+	other.Sequence++
+	if _, _, err := bindLegacyLocalImport(m, other, r, source); err == nil {
+		t.Fatal("foreign package journal accepted")
 	}
 }
 

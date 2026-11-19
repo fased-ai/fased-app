@@ -130,6 +130,28 @@ func ApplicationUpdateState(paths Paths) (ApplicationUpdateStatus, error) {
 	j, e := readApplicationJournal(p)
 	return j.Status, e
 }
+
+// RequireNoApplicationUpdateFiles inspects the handoff boundary without
+// creating a journal directory or opening an existing recovery record.
+func RequireNoApplicationUpdateFiles(paths Paths) error {
+	p, err := normalize(paths)
+	if err != nil {
+		return err
+	}
+	dir := applicationUpdateDirectory(p)
+	info, err := os.Lstat(dir)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err == nil && info.IsDir() {
+		entries, err := os.ReadDir(dir)
+		if err == nil && len(entries) == 0 {
+			return nil
+		}
+	}
+	return errors.New("existing or unreadable application update files must be preserved")
+}
+
 func storeApplicationJournal(p Paths, j applicationUpdateJournal) error {
 	return core.WritePrivateJSON(filepath.Join(applicationUpdateDirectory(p), "current.json"), j)
 }

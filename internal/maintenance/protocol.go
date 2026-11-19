@@ -16,6 +16,16 @@ import (
 
 const StateRoot = update.MaintenanceRoot
 
+// Only this approved predecessor and retained candidate can use the one-time
+// Local adoption bridge. This does not grant release or update authority.
+const (
+	LegacyLocalPredecessorPacket = "bc64b3c658c36e6e62ec667eb8cdb4936d1c74132dd06c2d448faf241c72eae5"
+	LegacyLocalRetainedPacket    = "f009a6ad164403688e062e384f23c4ead7d994f1f94d339b8fdf4ee82ffb4725"
+	LegacyLocalRetainedSource    = "21c7b865f4ee3ef0a00c1a7e067af6b48f0a6cd5"
+	LegacyLocalRetainedBundle    = "93bd81aa86aa0df2838d00463f49bb3abf3749146bb46f48ffc2f1b607c9de8c"
+	LegacyLocalRetainedInstaller = "b509071c4a640e8965e271b3b9c75fee9441f9c544d09a028229f778b021c2fa"
+)
+
 type Authority = update.MaintenanceAuthority
 
 func OwnerRoot(owner int) string   { return update.MaintenanceOwnerRoot(owner) }
