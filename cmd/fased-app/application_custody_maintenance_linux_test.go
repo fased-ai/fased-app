@@ -258,6 +258,60 @@ func TestCustodyFirstUpdateObservesInitializedJournal(t *testing.T) {
 	}
 }
 
+func TestCustodyCompletionSurvivesWalletEnrollment(t *testing.T) {
+	id := update.NewProbe()
+	digest := strings.Repeat("a", 64)
+	release := &core.ApplicationRelease{Sequence: 8, ManifestSHA256: digest, EngineSHA256: strings.Repeat("b", 64)}
+	want := core.ApplicationUpdateReceipt{ID: id, Sequence: release.Sequence, ManifestSHA256: digest, EngineSHA256: release.EngineSHA256, Phase: "completed"}
+	op := core.ApplicationUpdateOperation{ID: id, OwnerLease: id, Phase: "completed", Release: release, Receipt: &want}
+	r := update.MaintenanceRecord{OperationID: update.NewProbe(), Phase: "idle", Package: &update.MaintenancePackage{Sequence: release.Sequence, ReleaseSHA256: digest}}
+	root := t.TempDir()
+	bound := fixtureCustodyPause(id, digest)
+	actual := bound
+	actual.State = "released"
+	load := func(current update.MaintenanceRecord, operation string) (update.MaintenanceRecord, string, error) {
+		if current.OperationID != r.OperationID || operation != id {
+			t.Fatal("completion lookup was not bound to the idle journal and original operation")
+		}
+		return update.MaintenanceRecord{OperationID: id, OwnerLease: id, Application: &update.ApplicationCheckpoint{Pause: bound}}, root, nil
+	}
+	c := &custodyMaintenanceController{
+		owner: 1000, readRecord: func(int) (update.MaintenanceRecord, error) { return r, nil },
+		validateIdle:          func(update.MaintenanceRecord) error { return nil },
+		readWalletPredecessor: load,
+		pauseStatus:           func(context.Context) (update.CorePauseReceipt, error) { return actual, nil },
+		workerState: func(context.Context, string) (custodyWorkerState, error) {
+			t.Fatal("archived completion must not consult or start a worker")
+			return custodyWorkerState{}, nil
+		},
+	}
+	got, err := c.Status(t.Context(), op)
+	if err != nil || got != want {
+		t.Fatalf("completed update became recovery after enrollment: %v %v", got, err)
+	}
+	for _, name := range []string{"missing protected receipt", "unreleased pause", "different release"} {
+		t.Run(name, func(t *testing.T) {
+			candidate := *c
+			request := op
+			switch name {
+			case "missing protected receipt":
+				candidate.readWalletPredecessor = func(update.MaintenanceRecord, string) (update.MaintenanceRecord, string, error) {
+					return update.MaintenanceRecord{}, "", os.ErrNotExist
+				}
+			case "unreleased pause":
+				candidate.pauseStatus = func(context.Context) (update.CorePauseReceipt, error) { return bound, nil }
+			case "different release":
+				other := *release
+				other.ManifestSHA256 = strings.Repeat("c", 64)
+				request.Release = &other
+			}
+			if got, err := candidate.Status(t.Context(), request); err == nil {
+				t.Fatalf("unsafe completion accepted: %v", got)
+			}
+		})
+	}
+}
+
 func TestCustodyRecoveryRefusesUnreleasedPauseAndForeignFence(t *testing.T) {
 	id, root := update.NewProbe(), t.TempDir()
 	coreHash, signerHash, releaseHash := strings.Repeat("a", 64), strings.Repeat("b", 64), strings.Repeat("c", 64)

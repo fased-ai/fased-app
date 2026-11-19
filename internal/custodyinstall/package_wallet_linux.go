@@ -231,6 +231,41 @@ func retainCompletedWalletPredecessor(r update.MaintenanceRecord, m Manifest) er
 	return maintenance.PublishProtected(dir+"/receipt.json", mustJSON(r), 0644)
 }
 
+// ReadPackageWalletPredecessor verifies a completed app-only update after
+// Wallets reuses its journal slot. It never supplies a live worker approval.
+func ReadPackageWalletPredecessor(current update.MaintenanceRecord, owner int, location, instance, operation string) (update.MaintenanceRecord, string, error) {
+	var receipt update.MaintenanceRecord
+	target, err := ValidateIdlePackageMaintenanceRecord(current, owner, location, instance)
+	if err != nil || target.Network == "" {
+		return receipt, "", errors.New("configured idle package required")
+	}
+	dir, err := update.PackageMaintenanceDirectory(owner, location, instance, operation)
+	if err != nil {
+		return receipt, "", err
+	}
+	f, err := update.OpenProtected(dir+"/receipt.json", 256<<10, 0644)
+	if err != nil {
+		return receipt, "", err
+	}
+	b, err := io.ReadAll(io.LimitReader(f, (256<<10)+1))
+	if err = errors.Join(err, f.Close()); err != nil {
+		return receipt, "", err
+	}
+	if update.StrictJSONBounded(b, &receipt, 256<<10) != nil || receipt.OperationID != operation || receipt.Application == nil ||
+		update.SnapshotDigest("wallet-predecessor-package", receipt.Package) != update.SnapshotDigest("wallet-predecessor-package", current.Package) {
+		return update.MaintenanceRecord{}, "", errors.New("original completed wallet predecessor required")
+	}
+	previous, err := SelectArchivedPackageCompletion(receipt, owner, location, instance)
+	if err != nil || previous.Network != "" {
+		return update.MaintenanceRecord{}, "", errors.New("original empty-signer completion required")
+	}
+	previous.Network = target.Network
+	if previous != target || VerifyPackageOwnerTarget(target) != nil {
+		return update.MaintenanceRecord{}, "", errors.New("configured package differs from the original completed predecessor")
+	}
+	return receipt, target.Root, nil
+}
+
 // ConfigureProtectedPackageWallet is called only by the installed fixed helper
 // while the instance lock is held. It never receives or writes a wallet key.
 func ConfigureProtectedPackageWallet(ctx context.Context, owner int, location, instance string, request update.WalletInitialization, lock *os.File) error {
