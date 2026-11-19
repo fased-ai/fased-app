@@ -26,7 +26,7 @@ func TestUnconfiguredPackageWalletOnlyOffersControlledOwnerSetup(t *testing.T) {
 		t.Fatal("ordinary owner admission was enabled without authorization", v)
 	}
 	s.custodyOwnerSupported = true
-	s.custodyPackageLocal = true
+	s.custodyPackageLocation = "local"
 	v = s.walletSetup(s.fixtureView(t.Context()))
 	if v.State != "configuration-required" || !v.OwnerSupported || !v.FixtureOnly || !v.AdmissionHeld {
 		t.Fatal("the controlled package cannot open its owner setup", v)
@@ -41,8 +41,18 @@ func TestUnconfiguredPackageWalletOnlyOffersControlledOwnerSetup(t *testing.T) {
 	if v.State != "unavailable" || v.OwnerSupported {
 		t.Fatal("Local package setup was offered for a Remote installation", v)
 	}
+	s.custodyPackageLocation, s.custodyPackageID = "remote", "e05bd3b2791e426ba34fe9563cd149cc"
+	v = s.walletSetup(s.fixtureView(t.Context()))
+	if v.State != "configuration-required" || !v.OwnerSupported || v.PackageOwner || v.RemotePackage != s.custodyPackageID || v.FixtureOnly || !v.AdmissionHeld {
+		t.Fatal("matching Remote package must offer protected owner setup", v)
+	}
+	s.custodyOwnerKey = false
+	v = s.walletSetup(s.fixtureView(t.Context()))
+	if v.State != "unavailable" || v.OwnerSupported || v.RemotePackage != "" {
+		t.Fatal("Remote package must not advertise owner setup without owner-key admission", v)
+	}
 	s.installationSource.Store(1)
-	s.custodyPackageLocal = false
+	s.custodyPackageLocation = ""
 	if v = s.walletSetup(s.fixtureView(t.Context())); v.State != "unavailable" || v.OwnerSupported {
 		t.Fatal("package setup was offered for a different installation", v)
 	}

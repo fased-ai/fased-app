@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/fased-ai/fased-app/internal/signer"
+	"github.com/fased-ai/fased-app/internal/update"
 )
 
 //go:embed browser_wallet.html
@@ -36,6 +37,8 @@ type ownerConnectionKey struct{}
 
 type browserWallet struct {
 	intent            signer.OwnerIntent
+	remote            *Client
+	remotePeer        Peer
 	root, host, token string
 	owner             int
 	mu                sync.Mutex
@@ -78,16 +81,69 @@ func OpenLocalBrowser(ctx context.Context, link string) error {
 	if err != nil || self != pair.Core {
 		return errors.New("open Wallets from the original protected package")
 	}
+	return serveWalletBrowser(ctx, &browserWallet{intent: intent, root: root, owner: os.Getuid()})
+}
+
+// OpenRemoteBrowser uses the same owner-only browser and key exchange as
+// Local. The public link supplies only workspace intent. The OS account and
+// protected package identifier are selected by the user on this computer.
+func OpenRemoteBrowser(ctx context.Context, link, user, packageID string) error {
+	if os.Getuid() <= 0 || os.Getuid() != os.Geteuid() || signer.VerifyExecutable() != nil || !update.IDOK(packageID) {
+		return errors.New("the protected Remote Wallets client requires its ordinary owner and exact package")
+	}
+	intent, origin, err := ParseLink(link)
+	if err != nil || origin == "" || intent.Version != 1 {
+		return errors.New("the original Remote wallet request is required")
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return err
+	}
+	root := filepath.Join(home, ".local", "state", "fased", "owner-backups")
+	probeCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	client, err := locate(probeCtx, intent, origin, user, filepath.Join(home, ".ssh", "known_hosts"), os.Getuid(), run)
+	if err != nil {
+		return err
+	}
+	remoteRoot, err := update.PackageInstanceRoot(client.Peer.OwnerUID, "remote", packageID)
+	if err != nil {
+		return err
+	}
+	client.packageOwner = filepath.Join(remoteRoot, "fased-app")
+	if err = client.inspect(probeCtx); err != nil && !errors.Is(err, ErrEnrollmentRequired) {
+		return err
+	}
+	if client.Peer.SignerID != packageID || !sameRemoteWalletPeer(client.Peer, client.Peer) {
+		return errors.New("the selected Remote owner did not verify the original package")
+	}
+	intent, _, err = resume(root, link, func(request signer.OwnerIntent, saved *draft) error {
+		pending := client.Peer.PendingOperation
+		if pending != "" && (!update.IDOK(pending) || saved == nil || !saved.Dispatched || saved.Origin != origin ||
+			saved.Intent.OperationID != pending || saved.Intent.InstanceID != request.InstanceID ||
+			saved.Intent.Network != request.Network || saved.Intent.Action != request.Action) {
+			return errors.New("resume the original pending Remote wallet operation")
+		}
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	client.Intent = intent
+	return serveWalletBrowser(ctx, &browserWallet{intent: intent, remote: client, remotePeer: client.Peer, root: root, owner: os.Getuid()})
+}
+
+func serveWalletBrowser(ctx context.Context, w *browserWallet) error {
 	listener, err := net.Listen("tcp4", "127.0.0.1:0")
 	if err != nil {
-		return errors.New("cannot open the Local wallet")
+		return errors.New("cannot open the protected wallet")
 	}
 	defer listener.Close()
 	var secret [32]byte
 	if _, err = rand.Read(secret[:]); err != nil {
 		return err
 	}
-	w := &browserWallet{intent: intent, root: root, host: listener.Addr().String(), token: hex.EncodeToString(secret[:]), owner: os.Getuid()}
+	w.host, w.token = listener.Addr().String(), hex.EncodeToString(secret[:])
 	w.run = w.enroll
 	server := w.server()
 	result := make(chan error, 1)
@@ -95,7 +151,7 @@ func OpenLocalBrowser(ctx context.Context, link string) error {
 	launch := exec.Command("/usr/bin/xdg-open", "http://"+w.host+"/#"+w.token)
 	if err = launch.Start(); err != nil {
 		_ = server.Close()
-		return errors.New("cannot open the Local wallet in your browser")
+		return errors.New("cannot open the protected wallet in your browser")
 	}
 	_ = launch.Process.Release()
 	select {
@@ -106,7 +162,7 @@ func OpenLocalBrowser(ctx context.Context, link string) error {
 		if errors.Is(err, http.ErrServerClosed) {
 			return nil
 		}
-		return errors.New("Local wallet connection stopped")
+		return errors.New("protected wallet connection stopped")
 	}
 }
 
@@ -187,11 +243,17 @@ func (w *browserWallet) ServeHTTP(out http.ResponseWriter, r *http.Request) {
 
 func (w *browserWallet) enroll(ctx context.Context, input browserInput) (browserResult, error) {
 	var result browserResult
-	pair, err := LocalOwnerPackage(w.intent)
-	if err != nil {
-		return result, err
+	var pair Package
+	var err error
+	signerID := w.remotePeer.SignerID
+	if w.remote == nil {
+		pair, err = LocalOwnerPackage(w.intent)
+		if err != nil {
+			return result, err
+		}
+		signerID = filepath.Base(pair.LocalPaths.Root)
 	}
-	in := signer.OwnerInput{Intent: w.intent, SignerID: filepath.Base(pair.LocalPaths.Root), Phase: "prepare", Unlock: []byte(input.Unlock), BackupPassword: []byte(input.BackupPassword)}
+	in := signer.OwnerInput{Intent: w.intent, SignerID: signerID, Phase: "prepare", Unlock: []byte(input.Unlock), BackupPassword: []byte(input.BackupPassword)}
 	defer in.Clear()
 	if w.intent.Action == "import" {
 		in.Seed, err = hex.DecodeString(strings.TrimSpace(input.Seed))
@@ -215,29 +277,7 @@ func (w *browserWallet) enroll(ctx context.Context, input browserInput) (browser
 	}
 	ctx, cancel := context.WithTimeout(ctx, 3*time.Minute)
 	defer cancel()
-	client, err := Open(ctx, w.intent, "", "")
-	var plan *Enrollment
-	if errors.Is(err, ErrEnrollmentRequired) {
-		plan, err = PrepareEnrollment(ctx, w.intent, "", "", pair)
-		if err != nil {
-			return result, err
-		}
-	} else if err != nil {
-		return result, err
-	}
-	// Initialization changes the protected journal. Persist its identity first,
-	// so another action cannot replace an uncertain operation after a crash.
-	if err = MarkDispatched(w.root, w.intent); err != nil {
-		return result, err
-	}
-	if plan != nil {
-		var packageSetup bool
-		packageSetup, err = plan.RunPackage(ctx)
-		if err != nil || !packageSetup {
-			return result, errors.New("the protected package did not initialize")
-		}
-		client, err = plan.Wait(ctx)
-	}
+	client, err := w.prepareSigner(ctx, pair)
 	if err != nil || client.Peer.SignerID != in.SignerID || client.Peer.Provenance != signer.OwnerKeyProvenance {
 		return result, errors.New("the original owner signer is unavailable")
 	}
@@ -256,4 +296,56 @@ func (w *browserWallet) enroll(ctx context.Context, input browserInput) (browser
 		return result, errors.New("backup verification is incomplete")
 	}
 	return browserResult{Address: verified.Status.PublicIdentity.Address, BackupFile: path, Fingerprint: verified.Fingerprint, RecoveryHeld: verified.Status.RecoveryRequired}, nil
+}
+
+func (w *browserWallet) prepareSigner(ctx context.Context, pair Package) (*Client, error) {
+	if w.remote != nil {
+		c := w.remote
+		before := w.remotePeer
+		err := c.inspect(ctx)
+		if err != nil && !errors.Is(err, ErrEnrollmentRequired) {
+			return nil, err
+		}
+		if !sameRemoteWalletPeer(c.Peer, before) || c.Peer.PendingOperation != "" && c.Peer.PendingOperation != w.intent.OperationID {
+			return nil, errors.New("the Remote wallet target changed; preserve the original operation")
+		}
+		if dispatchErr := MarkDispatched(w.root, w.intent); dispatchErr != nil {
+			return nil, dispatchErr
+		}
+		if errors.Is(err, ErrEnrollmentRequired) {
+			args := append(c.arguments(), "--initialize", "--operation", w.intent.OperationID)
+			if _, err = c.invoke(ctx, c.ownerExecutable(), args, nil); err != nil {
+				return nil, errors.New("Remote wallet setup was interrupted; resume the same operation")
+			}
+			if err = c.inspect(ctx); err != nil || !sameRemoteWalletPeer(c.Peer, before) {
+				return nil, errors.New("the original Remote wallet service is not ready")
+			}
+		}
+		return c, nil
+	}
+	client, err := Open(ctx, w.intent, "", "")
+	var plan *Enrollment
+	if errors.Is(err, ErrEnrollmentRequired) {
+		plan, err = PrepareEnrollment(ctx, w.intent, "", "", pair)
+	}
+	if err != nil {
+		return nil, err
+	}
+	// No mutation precedes the durable draft identity.
+	if err = MarkDispatched(w.root, w.intent); err != nil {
+		return nil, err
+	}
+	if plan != nil {
+		if ok, err := plan.RunPackage(ctx); err != nil || !ok {
+			return nil, errors.New("the protected package did not initialize")
+		}
+		return plan.Wait(ctx)
+	}
+	return client, nil
+}
+
+func sameRemoteWalletPeer(a, b Peer) bool {
+	return a.Ready != nil && b.Ready != nil && a.SignerID == b.SignerID && a.OwnerUID == b.OwnerUID && a.InstanceID == b.InstanceID &&
+		a.Network == b.Network && a.Provenance == signer.OwnerKeyProvenance && a.Provenance == b.Provenance &&
+		len(a.CoreSHA256) == 64 && a.CoreSHA256 == b.CoreSHA256 && len(a.SignerSHA256) == 64 && a.SignerSHA256 == b.SignerSHA256
 }

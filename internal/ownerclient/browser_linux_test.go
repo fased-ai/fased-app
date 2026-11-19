@@ -4,14 +4,19 @@ package ownerclient
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"os/exec"
+	"slices"
 	"strings"
 	"testing"
+
+	"github.com/fased-ai/fased-app/internal/signer"
 )
 
 func TestBrowserWalletRequiresOwnerOriginAndToken(t *testing.T) {
@@ -148,5 +153,70 @@ func TestBrowserWalletRendersAndSubmitsOnLocalHost(t *testing.T) {
 	cmd.Env = append(os.Environ(), "FASED_TEST_ORIGIN=http://"+w.host, "FASED_TEST_TOKEN="+w.token)
 	if output, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("local browser check failed: %v %s", err, output)
+	}
+}
+
+func TestRemoteWalletBrowserResumesOriginalProtectedSetup(t *testing.T) {
+	request := intent()
+	origin := "https://owner.example.ts.net"
+	link, err := Link(request.InstanceID, request.Network, request.Action, origin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := t.TempDir()
+	if err = os.Chmod(root, 0700); err != nil {
+		t.Fatal(err)
+	}
+	request, _, err = Resume(root, link)
+	if err != nil {
+		t.Fatal(err)
+	}
+	notReady, ready := false, true
+	peer := Peer{
+		Version: 1, Ready: &notReady, OwnerUID: 1000, InstanceID: request.InstanceID,
+		Network: request.Network, Provenance: signer.OwnerKeyProvenance,
+		SignerID: strings.Repeat("a", 32), CoreSHA256: strings.Repeat("b", 64), SignerSHA256: strings.Repeat("c", 64),
+	}
+	observed := peer
+	var applies int
+	cmd := "/var/lib/fased-app-package/1000/remote/" + peer.SignerID + "/fased-app"
+	client := &Client{Intent: request, Peer: peer, host: "owner.example.ts.net", user: "operator", knownHosts: "/home/test/.ssh/known_hosts", packageOwner: cmd}
+	client.run = func(_ context.Context, path string, args []string, input []byte) ([]byte, error) {
+		if path != "/usr/bin/ssh" || !slices.Contains(args, cmd) || !slices.Contains(args, "-oStrictHostKeyChecking=yes") || len(input) != 0 {
+			t.Fatal("public setup used an unpinned or secret-bearing command")
+		}
+		if slices.Contains(args, "--inspect") {
+			return json.Marshal(observed)
+		}
+		if !slices.Contains(args, "--initialize") || !slices.Contains(args, "--ordinary-custody") || args[len(args)-1] != request.OperationID {
+			t.Fatal("initialization did not carry the original operation")
+		}
+		applies++
+		if applies == 1 {
+			observed.PendingOperation = request.OperationID
+			return nil, errors.New("interrupted setup")
+		}
+		observed.Ready, observed.PendingOperation = &ready, ""
+		return nil, nil
+	}
+	window := browserWallet{intent: request, root: root, remote: client, remotePeer: peer}
+	if _, err = window.prepareSigner(t.Context(), Package{}); err == nil || applies != 1 {
+		t.Fatal("interruption did not keep the initial setup unresolved", err)
+	}
+	observed.CoreSHA256 = strings.Repeat("d", 64)
+	for range 2 {
+		if _, err = window.prepareSigner(t.Context(), Package{}); err == nil || applies != 1 {
+			t.Fatal("changed image was accepted on retry", err)
+		}
+	}
+	observed.CoreSHA256 = peer.CoreSHA256
+	observed.PendingOperation = strings.Repeat("f", 32)
+	if _, err = window.prepareSigner(t.Context(), Package{}); err == nil || applies != 1 {
+		t.Fatal("another pending operation was accepted", err)
+	}
+	observed.PendingOperation = request.OperationID
+	got, err := window.prepareSigner(t.Context(), Package{})
+	if err != nil || got != client || applies != 2 || client.Peer.Ready == nil || !*client.Peer.Ready {
+		t.Fatal("the original setup could not resume", err)
 	}
 }

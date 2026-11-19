@@ -365,9 +365,9 @@ func TestFreshPackageCandidateRetirementRequiresOriginalIdlePair(t *testing.T) {
 		verified = true
 		return nil
 	}
-	read := func(uid int, instance string) (update.PackageHelperTransition, error) {
-		if uid != owner || instance != id {
-			t.Fatalf("foreign archive lookup: %d %s", uid, instance)
+	read := func(uid int, location, instance string) (update.PackageHelperTransition, error) {
+		if uid != owner || location != a.Profile || instance != id {
+			t.Fatalf("foreign archive lookup: %d %s %s", uid, location, instance)
 		}
 		return lineage, nil
 	}

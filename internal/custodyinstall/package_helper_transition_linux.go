@@ -18,12 +18,12 @@ import (
 
 // TransitionPackageHelper uses a one-time administrator invocation of the
 // exact attested successor. Interrupted cutovers resume with the same command.
-func TransitionPackageHelper(ctx context.Context, owner int, instance, previousHelper string) error {
-	lock, err := maintenance.PackageLock(owner, "local", instance)
+func TransitionPackageHelper(ctx context.Context, owner int, location, instance, previousHelper string) error {
+	lock, err := maintenance.PackageLock(owner, location, instance)
 	if err != nil {
 		return err
 	}
-	m, err := transitionPackageHelper(ctx, owner, instance, previousHelper)
+	m, err := transitionPackageHelper(ctx, owner, location, instance, previousHelper)
 	if err = errors.Join(err, lock.Close()); err != nil {
 		return err
 	}
@@ -42,13 +42,13 @@ func TransitionPackageHelper(ctx context.Context, owner int, instance, previousH
 	})
 }
 
-func transitionPackageHelper(ctx context.Context, owner int, instance, previousHelper string) (Manifest, error) {
+func transitionPackageHelper(ctx context.Context, owner int, location, instance, previousHelper string) (Manifest, error) {
 	var empty Manifest
-	next, err := maintenance.PackageTransitionProcess(owner, instance)
+	next, err := maintenance.PackageTransitionProcess(owner, location, instance)
 	if err != nil {
 		return empty, err
 	}
-	active, err := maintenance.ReadPackageAuthority(owner, "local", instance)
+	active, err := maintenance.ReadPackageAuthority(owner, location, instance)
 	if err != nil {
 		return empty, err
 	}
@@ -57,10 +57,10 @@ func transitionPackageHelper(ctx context.Context, owner int, instance, previousH
 	if active != previous && active != next {
 		return empty, errors.New("the selected predecessor is not this instance's helper")
 	}
-	root, _ := PackageRoot(owner, "local", instance)
-	state, _ := update.PackageMaintenanceRoot(owner, "local", instance)
+	root, _ := PackageRoot(owner, location, instance)
+	state, _ := update.PackageMaintenanceRoot(owner, location, instance)
 	fence := filepath.Join(root, "update-start-blocked.json")
-	journal, err := update.ReadPackageMaintenanceRecord(owner, "local", instance)
+	journal, err := update.ReadPackageMaintenanceRecord(owner, location, instance)
 	if err != nil {
 		return empty, err
 	}
@@ -71,7 +71,7 @@ func transitionPackageHelper(ctx context.Context, owner int, instance, previousH
 	if !wanted.Valid(owner, instance) || !wanted.Inherits(journal) {
 		return empty, errors.New("finish the original package recovery before changing its helper")
 	}
-	retained, err := update.ReadPackageHelperTransition(owner, instance)
+	retained, err := update.ReadPackageHelperTransition(owner, location, instance)
 	existing := err == nil
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return empty, err
@@ -92,7 +92,7 @@ func transitionPackageHelper(ctx context.Context, owner int, instance, previousH
 	if _, err = os.Lstat(filepath.Join(root, "update-active.json")); !errors.Is(err, os.ErrNotExist) {
 		return empty, errors.New("the original package update must finish first")
 	}
-	m, err := selectPackageStart(journal, active, "local", instance)
+	m, err := selectPackageStart(journal, active, location, instance)
 	if err != nil || maintenance.VerifyImage(previous) != nil {
 		return empty, errors.Join(err, errors.New("the original verified deployment is required"))
 	}
@@ -157,10 +157,8 @@ func classifyPackageHelperTransition(wanted, retained update.PackageHelperTransi
 }
 
 func preflightPackageHelperTransition(ctx context.Context, previous maintenance.Authority, m Manifest, journal update.MaintenanceRecord) error {
-	for _, path := range []string{packageTaskCredentialDropIn(m), filepath.Join(m.Root, packageTaskCredential)} {
-		if _, err := os.Lstat(path); !errors.Is(err, os.ErrNotExist) {
-			return errors.New("existing provider credential configuration must be preserved")
-		}
+	if err := preflightTransitionCredential(m); err != nil {
+		return err
 	}
 	if err := verifyLoadedPackageServices(ctx, m); err != nil {
 		return err
@@ -174,6 +172,20 @@ func preflightPackageHelperTransition(ctx context.Context, previous maintenance.
 	result, err := protectedOwnerPeer(ctx, previous, m, signer.Request{Action: "fixture-update-inventory", ProbeID: update.NewProbe()})
 	if err != nil || result.UpdateInventory == nil || result.UpdateInventory.ActiveIntentID != "" {
 		return errors.Join(err, errors.New("the original signer must be reachable with no active update intent"))
+	}
+	return nil
+}
+
+// Older installs have neither credential file. Newer ones must retain the
+// exact drop-in and its existing ciphertext through the helper transition.
+func preflightTransitionCredential(m Manifest) error {
+	dropIn, dropInErr := readRoot(packageTaskCredentialDropIn(m))
+	_, size, credentialErr := maintenance.ProtectedDigest(filepath.Join(m.Root, packageTaskCredential), 0600, packageTaskCredentialLimit)
+	if errors.Is(dropInErr, os.ErrNotExist) && errors.Is(credentialErr, os.ErrNotExist) {
+		return nil
+	}
+	if dropInErr != nil || credentialErr != nil || size < 32 || !known(dropIn, packageTaskCredentialUnit(m), 0644) {
+		return errors.New("existing provider credential configuration must be preserved")
 	}
 	return nil
 }

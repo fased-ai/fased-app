@@ -96,8 +96,8 @@ func SelectArchivedPackageCompletion(r update.MaintenanceRecord, owner int, loca
 		if err != nil {
 			return update.MaintenanceApproval{}, err
 		}
-		if location == "local" && r.Approval != nil && r.Approval.HelperSHA256 != a.ImageSHA256 {
-			return update.ReadArchivedPredecessorApproval(owner, instance, a.ImageSHA256, r)
+		if r.Approval != nil && r.Approval.HelperSHA256 != a.ImageSHA256 {
+			return update.ReadArchivedPredecessorApproval(owner, location, instance, a.ImageSHA256, r)
 		}
 		return update.ReadPackageMaintenanceApproval(owner, location, instance, operation)
 	})
@@ -110,8 +110,8 @@ func selectPackageStart(r update.MaintenanceRecord, a maintenance.Authority, loc
 }
 
 func readPackageStartApproval(r update.MaintenanceRecord, a maintenance.Authority, location, instance, operation string) (update.MaintenanceApproval, error) {
-	if location == "local" && r.Phase == "completed" && r.Approval != nil && r.Approval.HelperSHA256 != a.ImageSHA256 {
-		return update.ReadInheritedPackageApproval(a.Owner, instance, a.ImageSHA256, r)
+	if r.Phase == "completed" && r.Approval != nil && r.Approval.HelperSHA256 != a.ImageSHA256 {
+		return update.ReadInheritedPackageApproval(a.Owner, location, instance, a.ImageSHA256, r)
 	}
 	return update.ReadPackageMaintenanceApproval(a.Owner, location, instance, operation)
 }

@@ -89,8 +89,8 @@ func maintenancePackageTransitionCommand(args []string) error {
 		return errors.New("administrator package helper transition required")
 	}
 	owner, location, instance, err := packageMaintenanceArguments(args[:6])
-	if err != nil || location != "local" {
-		return errors.New("one exact Local instance is required")
+	if err != nil {
+		return err
 	}
 	if _, err = packageCandidateTrust(owner, location, instance); err != nil {
 		return err
@@ -100,7 +100,7 @@ func maintenancePackageTransitionCommand(args []string) error {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
-	return custodyinstall.TransitionPackageHelper(ctx, owner, instance, args[7])
+	return custodyinstall.TransitionPackageHelper(ctx, owner, location, instance, args[7])
 }
 
 func maintenancePackageGateCommand(args []string) error {

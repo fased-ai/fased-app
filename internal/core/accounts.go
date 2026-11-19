@@ -108,8 +108,12 @@ func (s *Store) configureVerifiedSigner(c signer.Config) error {
 		return errors.New("signer identity is already configured")
 	}
 	s.unconfiguredProtectedSigner = c.Version == 3 && c.Mode == signer.OrdinaryCustodyMode && c.Profile == signer.OwnerCustodyProfile && (c.Provenance == signer.OwnerKeyProvenance || c.Provenance == signer.ControlledCustodyProfile) && c.Network == ""
-	if root, err := update.PackageInstanceRoot(c.OwnerUID, "local", c.SignerID); err == nil {
-		s.custodyPackageLocal = c.StateDir == filepath.Join(root, "signer-state") && c.SocketDir == filepath.Join(root, "signer-ipc")
+	for _, location := range []string{"local", "remote"} {
+		root, err := update.PackageInstanceRoot(c.OwnerUID, location, c.SignerID)
+		if err == nil && c.StateDir == filepath.Join(root, "signer-state") && c.SocketDir == filepath.Join(root, "signer-ipc") {
+			s.custodyPackageLocation, s.custodyPackageID = location, c.SignerID
+			break
+		}
 	}
 	s.fixture = func(ctx context.Context, r signer.Request) (signer.Response, error) {
 		// This bridge is read-only even if a future caller constructs another action.
@@ -122,7 +126,7 @@ func (s *Store) configureVerifiedSigner(c signer.Config) error {
 	}
 	if c.Version == 2 || c.Version == 3 {
 		s.custodyNetwork = c.Network
-		s.custodyOwnerKey = c.Version == 3 && c.Profile == signer.OwnerCustodyProfile && c.Provenance == signer.OwnerKeyProvenance && signer.OrdinaryOwnerAdmissionEnabled() && s.custodyPackageLocal
+		s.custodyOwnerKey = c.Version == 3 && c.Profile == signer.OwnerCustodyProfile && c.Provenance == signer.OwnerKeyProvenance && signer.OrdinaryOwnerAdmissionEnabled() && s.custodyPackageLocation != ""
 		s.custodyOwnerSupported = c.Version == 3 && c.Profile == signer.OwnerCustodyProfile && (c.Provenance == signer.ControlledCustodyProfile || s.custodyOwnerKey)
 	}
 	if c.Version == 3 && c.Profile == signer.OwnerCustodyProfile {

@@ -96,8 +96,8 @@ func walletInitialRecord(r update.MaintenanceRecord, owner int, location, instan
 // initialization. The installed helper still rechecks all files and state
 // before resuming the exact recorded request.
 func PendingPackageWallet(owner int, location, instance string) (Manifest, *update.WalletInitialization, error) {
-	if owner <= 0 || owner != os.Getuid() || owner != os.Geteuid() || location != "local" {
-		return Manifest{}, nil, errors.New("the ordinary Local owner is required")
+	if owner <= 0 || owner != os.Getuid() || owner != os.Geteuid() {
+		return Manifest{}, nil, errors.New("the ordinary package owner is required")
 	}
 	r, err := update.ReadPackageMaintenanceRecord(owner, location, instance)
 	if err != nil {
@@ -235,8 +235,8 @@ func retainCompletedWalletPredecessor(r update.MaintenanceRecord, m Manifest) er
 // while the instance lock is held. It never receives or writes a wallet key.
 func ConfigureProtectedPackageWallet(ctx context.Context, owner int, location, instance string, request update.WalletInitialization, lock *os.File) error {
 	a, err := maintenance.ValidatePackageProcess(owner, location, instance)
-	if err != nil || lock == nil || location != "local" || !request.Valid() {
-		return errors.New("original Local package owner and wallet request required")
+	if err != nil || lock == nil || !request.Valid() {
+		return errors.New("original package owner and wallet request required")
 	}
 	r, err := update.ReadPackageMaintenanceRecord(owner, location, instance)
 	if err != nil {
@@ -366,8 +366,8 @@ func resumePackageWalletInitialization(ctx context.Context, a maintenance.Author
 		return zero, errors.New("original package identity required")
 	}
 	base, target, err := ValidatePackageWalletInitialization(r, a.Owner, a.Profile, raw.ID)
-	if err != nil || base.Location != "local" {
-		return zero, errors.New("original Local wallet initialization required")
+	if err != nil {
+		return zero, err
 	}
 	if err = CheckPackageWalletSigner(base, r.Package); err != nil {
 		return zero, err

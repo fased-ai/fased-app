@@ -9,6 +9,7 @@ import {
   accountAddress,
   walletNetwork,
   walletNetworks,
+  remoteWalletOwnerCommand,
   walletOwnerCommands,
   walletOwnerLink,
   walletSetupLabel,
@@ -75,6 +76,10 @@ export function AccountManagement() {
   const [editing, setEditing] = useState("");
   const [newName, setNewName] = useState("");
   const [notice, setNotice] = useState("");
+  const [remoteWalletAction, setRemoteWalletAction] = useState<
+    "setup" | "import" | "recover"
+  >();
+  const [remoteWalletOwner, setRemoteWalletOwner] = useState("");
   const request = core.request;
   useEffect(() => {
     let active = true;
@@ -83,6 +88,8 @@ export function AccountManagement() {
     setSelected("");
     setEditing("");
     setAdding(false);
+    setRemoteWalletAction(undefined);
+    setRemoteWalletOwner("");
     setBusy(false);
     setError("");
     setNotice("");
@@ -323,8 +330,23 @@ export function AccountManagement() {
     ) &&
     walletNetwork(network) &&
     !!view.setup.source;
+  const remoteWalletCommand =
+    remoteWalletAction && view?.setup?.remotePackage
+      ? remoteWalletOwnerCommand(
+          remoteWalletOwner,
+          view.setup.remotePackage,
+          core.instanceId,
+          network,
+          remoteWalletAction,
+          location.origin,
+        )
+      : "";
   async function openOwnerWindow(action: "setup" | "import" | "recover") {
     if (!view?.setup || !ownerWindowReady) return;
+    if (view.setup.source === "remote" && view.setup.remotePackage) {
+      setRemoteWalletAction(action);
+      return;
+    }
     const link = walletOwnerLink(
       core.instanceId,
       network,
@@ -620,6 +642,8 @@ export function AccountManagement() {
                         }
                         onClick={() => {
                           updateDraft({ mode });
+                          if (mode === "watch")
+                            setRemoteWalletAction(undefined);
                           if (
                             mode !== "watch" &&
                             (protectedSetupHeld ||
@@ -643,17 +667,56 @@ export function AccountManagement() {
                         )}
                       </button>
                     ))}
-                  {view?.setup?.packageOwner && ownerWindowReady && (
-                    <button
-                      type="button"
-                      className="secondary"
-                      disabled={busy}
-                      onClick={() => void openOwnerWindow("recover")}
-                    >
-                      {uiText("Recover")}
-                    </button>
-                  )}
+                  {(view?.setup?.packageOwner || view?.setup?.remotePackage) &&
+                    ownerWindowReady && (
+                      <button
+                        type="button"
+                        className="secondary"
+                        disabled={busy}
+                        onClick={() => void openOwnerWindow("recover")}
+                      >
+                        {uiText("Recover")}
+                      </button>
+                    )}
                 </div>
+                {remoteWalletAction &&
+                  ownerWindowReady &&
+                  view?.setup?.remotePackage && (
+                    <div className="owner-helper">
+                      <label>
+                        {uiText("Remote SSH user")}
+                        <input
+                          autoComplete="off"
+                          value={remoteWalletOwner}
+                          onChange={(e) => setRemoteWalletOwner(e.target.value)}
+                          maxLength={32}
+                        />
+                      </label>
+                      <label>
+                        {uiText("Run on your computer")}
+                        <input readOnly value={remoteWalletCommand || ""} />
+                      </label>
+                      <button
+                        type="button"
+                        className="secondary"
+                        disabled={!remoteWalletCommand}
+                        onClick={async () => {
+                          try {
+                            await navigator.clipboard.writeText(
+                              remoteWalletCommand || "",
+                            );
+                            setNotice(uiText("Owner command copied"));
+                          } catch {
+                            setError(
+                              uiText("Select and copy the owner command"),
+                            );
+                          }
+                        }}
+                      >
+                        {uiText("Copy command")}
+                      </button>
+                    </div>
+                  )}
                 {protectedSetupHeld && !ownerWindowReady && (
                   <p className="subtle" role="status">
                     {uiText("Protected setup unavailable")}

@@ -21,15 +21,16 @@ import (
 )
 
 type Peer struct {
-	Provenance   string `json:"provenance,omitempty"`
-	Ready        *bool  `json:"ready,omitempty"`
-	Version      int    `json:"version"`
-	InstanceID   string `json:"instanceId"`
-	SignerID     string `json:"signerId"`
-	Network      string `json:"network"`
-	OwnerUID     int    `json:"ownerUid"`
-	CoreSHA256   string `json:"coreSha256,omitempty"`
-	SignerSHA256 string `json:"signerSha256,omitempty"`
+	Provenance       string `json:"provenance,omitempty"`
+	Ready            *bool  `json:"ready,omitempty"`
+	Version          int    `json:"version"`
+	InstanceID       string `json:"instanceId"`
+	SignerID         string `json:"signerId"`
+	Network          string `json:"network"`
+	OwnerUID         int    `json:"ownerUid"`
+	CoreSHA256       string `json:"coreSha256,omitempty"`
+	SignerSHA256     string `json:"signerSha256,omitempty"`
+	PendingOperation string `json:"pendingOperation,omitempty"`
 }
 
 type command func(context.Context, string, []string, []byte) ([]byte, error)

@@ -42,15 +42,15 @@ func custodyWindowCommand(args []string, in *os.File, out, errOut io.Writer) err
 		return errors.New("wallet operation is only used for initialization")
 	}
 	if *inspect {
-		pending, ok, err := pendingPackageWalletTarget(os.Getuid(), *expected, *network)
+		pending, pendingOperation, err := pendingPackageWalletTarget(os.Getuid(), *expected, *network)
 		if err != nil {
 			return err
 		}
-		if ok {
+		if pendingOperation != "" {
 			if _, err = walletOwnerMode(pending, *disposable, *ordinary, true); err != nil {
 				return err
 			}
-			return writeCustodyWindowInspection(out, pending, *expected, *network, false)
+			return writeCustodyWindowInspection(out, pending, *expected, *network, false, pendingOperation)
 		}
 	}
 	m, packaged, err := custodyWindowTarget(os.Getuid())
@@ -87,7 +87,7 @@ func custodyWindowCommand(args []string, in *os.File, out, errOut io.Writer) err
 		if unconfigured {
 			shownNetwork = *network
 		}
-		return writeCustodyWindowInspection(out, m, *expected, shownNetwork, ready)
+		return writeCustodyWindowInspection(out, m, *expected, shownNetwork, ready, "")
 	}
 	lock, err := custodyinstall.OwnerLock()
 	if err != nil {
@@ -133,20 +133,21 @@ func walletOwnerMode(m custodyinstall.Manifest, fixture, ordinary, inspect bool)
 	return want, nil
 }
 
-func writeCustodyWindowInspection(out io.Writer, m custodyinstall.Manifest, instance, network string, ready bool) error {
+func writeCustodyWindowInspection(out io.Writer, m custodyinstall.Manifest, instance, network string, ready bool, pendingOperation string) error {
 	provenance := ""
 	if m.Provenance == signer.OwnerKeyProvenance {
 		provenance = m.Provenance
 	}
 	return json.NewEncoder(out).Encode(struct {
-		Provenance string `json:"provenance,omitempty"`
-		Version    int    `json:"version"`
-		Instance   string `json:"instanceId"`
-		Signer     string `json:"signerId"`
-		Network    string `json:"network"`
-		Owner      int    `json:"ownerUid"`
-		CoreHash   string `json:"coreSha256"`
-		SignerHash string `json:"signerSha256"`
-		Ready      bool   `json:"ready"`
-	}{provenance, 1, instance, m.ID, network, m.Owner, m.CoreHash, m.SignerHash, ready})
+		Provenance       string `json:"provenance,omitempty"`
+		Version          int    `json:"version"`
+		Instance         string `json:"instanceId"`
+		Signer           string `json:"signerId"`
+		Network          string `json:"network"`
+		Owner            int    `json:"ownerUid"`
+		CoreHash         string `json:"coreSha256"`
+		SignerHash       string `json:"signerSha256"`
+		Ready            bool   `json:"ready"`
+		PendingOperation string `json:"pendingOperation,omitempty"`
+	}{provenance, 1, instance, m.ID, network, m.Owner, m.CoreHash, m.SignerHash, ready, pendingOperation})
 }

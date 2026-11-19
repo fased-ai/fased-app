@@ -60,7 +60,8 @@ type Store struct {
 	unconfiguredProtectedSigner   bool // Verified pre-wallet configuration; it does not prove the signer directory is empty.
 	custodyOwnerSupported         bool
 	custodyOwnerKey               bool                                                               // Owner-input provenance, distinct from disposable fixtures.
-	custodyPackageLocal           bool                                                               // Exact package-local signer topology; public routing metadata only.
+	custodyPackageLocation        string                                                             // Exact package signer profile; public routing metadata only.
+	custodyPackageID              string                                                             // Public package identifier for owner SSH.
 	custodyNetwork                string                                                             // Public immutable v2 configuration; no key material.
 	researchRead                  func(context.Context, researchFactResult) (json.RawMessage, error) // Test-only local projection fault; never configuration/IPC.
 }
