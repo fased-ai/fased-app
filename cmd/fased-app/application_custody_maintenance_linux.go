@@ -25,17 +25,18 @@ import (
 // UI and CLI keep the ordinary Update records and policy. Custody completion
 // consumes the root-bound signer receipt, never the app-only checkpoint.
 type custodyMaintenanceController struct {
-	owner         int
-	manualOnly    bool
-	check         func(context.Context) (*core.ApplicationRelease, error)
-	readRecord    func(int) (update.MaintenanceRecord, error)
-	readCandidate func(int) (maintenance.CandidateReceipt, error)
-	startWorker   func(context.Context, string) error
-	workerState   func(context.Context, string) (custodyWorkerState, error)
-	pauseStatus   func(context.Context) (update.CorePauseReceipt, error)
-	verifyTarget  func(custodyinstall.Manifest) error
-	verifyNative  func(custodyinstall.Manifest, *update.MaintenancePackage) error
-	validateIdle  func(update.MaintenanceRecord) error
+	owner                 int
+	manualOnly            bool
+	check                 func(context.Context) (*core.ApplicationRelease, error)
+	readRecord            func(int) (update.MaintenanceRecord, error)
+	readCandidate         func(int) (maintenance.CandidateReceipt, error)
+	startWorker           func(context.Context, string) error
+	workerState           func(context.Context, string) (custodyWorkerState, error)
+	pauseStatus           func(context.Context) (update.CorePauseReceipt, error)
+	verifyTarget          func(custodyinstall.Manifest) error
+	verifyNative          func(custodyinstall.Manifest, *update.MaintenancePackage) error
+	validateIdle          func(update.MaintenanceRecord) error
+	readWalletPredecessor func(update.MaintenanceRecord, string) (update.MaintenanceRecord, string, error)
 }
 
 // An explicitly compiled controlled build may provide its own fixed channel.
@@ -307,6 +308,9 @@ func (c *custodyMaintenanceController) custodyRecordStatus(ctx context.Context, 
 			} else if _, err := custodyinstall.ValidateInitialMaintenanceRecord(r); err != nil {
 				return proof, true, err
 			}
+			if o.Release.Sequence == r.Package.Sequence && c.readWalletPredecessor != nil && o.Phase == "completed" && o.OwnerLease == o.ID {
+				return c.walletPredecessorStatus(ctx, r, o, proof)
+			}
 			if o.Release.Sequence <= r.Package.Sequence {
 				return proof, true, errors.New("custody update must advance the installed release")
 			}
@@ -357,6 +361,23 @@ func (c *custodyMaintenanceController) custodyRecordStatus(ctx context.Context, 
 		return proof, true, nil
 	}
 	return proof, false, nil
+}
+
+func (c *custodyMaintenanceController) walletPredecessorStatus(ctx context.Context, current update.MaintenanceRecord, o core.ApplicationUpdateOperation, proof core.ApplicationUpdateReceipt) (core.ApplicationUpdateReceipt, bool, error) {
+	completed := proof
+	completed.Phase = "completed"
+	if o.Receipt == nil || *o.Receipt != completed || o.Release.ManifestSHA256 != current.Package.ReleaseSHA256 {
+		return proof, true, errors.New("completed update differs from the installed wallet package")
+	}
+	r, root, err := c.readWalletPredecessor(current, o.ID)
+	if err != nil || r.OperationID != o.ID || r.OwnerLease != o.OwnerLease {
+		return proof, true, errors.Join(err, errors.New("original wallet predecessor receipt is unavailable"))
+	}
+	ready, err := c.completionReady(ctx, r, root)
+	if err != nil || !ready {
+		return proof, true, err
+	}
+	return completed, true, nil
 }
 
 func (c *custodyMaintenanceController) inspectWorker(ctx context.Context, id string) (custodyWorkerState, error) {
@@ -502,6 +523,9 @@ func bindPackageMaintenance(store *core.Store, owner int, dir string) error {
 	c.validateIdle = func(r update.MaintenanceRecord) error {
 		_, err := custodyinstall.ValidateIdlePackageMaintenanceRecord(r, owner, m.Location, m.ID)
 		return err
+	}
+	c.readWalletPredecessor = func(r update.MaintenanceRecord, operation string) (update.MaintenanceRecord, string, error) {
+		return custodyinstall.ReadPackageWalletPredecessor(r, owner, m.Location, m.ID, operation)
 	}
 	c.pauseStatus = func(ctx context.Context) (update.CorePauseReceipt, error) {
 		return store.UpdatePause(ctx, update.CorePauseCommand{Action: "status", ProbeID: update.NewProbe()})
