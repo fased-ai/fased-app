@@ -1,5 +1,5 @@
-// Publication consumes acceptance from the protected workflow's authenticated
-// artifact, never from a caller-supplied local PASS document.
+// Publication consumes protected CI artifacts or repository-owner-reviewed
+// real-host receipts. A caller-supplied PASS file never authorizes publication.
 import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
@@ -361,46 +361,52 @@ export function completeRemoteUpgrade(
   };
 }
 
-function validateJoinedAcceptance(receipt, packet, inventory) {
-  const binding = acceptanceBinding(packet, inventory);
-  const leg = (value, names) => {
-    if (
-      !value ||
-      Object.entries(binding).some(([k, v]) => value[k] !== v) ||
-      value.result !== "PASS" ||
-      value.fixtureOnly !== true ||
-      value.mining !== false ||
-      value.liveFeatures !== false ||
-      value.automaticUpdates !== false ||
-      names.some((name) => value.checks?.[name] !== "PASS")
-    )
-      throw Error("Complete matching installed package leg required");
-  };
-  const applied = (value) => {
-    if (
-      value.upgradeApplied !== true ||
-      value.uiOutcome !== "applied" ||
-      value.cliOutcome !== "applied" ||
-      value.automaticOutcome !== "applied" ||
-      value.automaticPolicyRestored !== "manual" ||
-      value.customerActivation !== false
-    )
-      throw Error(
-        "Actual UI/CLI replacement and restored Manual policy required",
-      );
-  };
-  leg(receipt.local, stagedAcceptanceContract.local);
-  applied(receipt.local);
+function validateAcceptanceLeg(value, binding, checks) {
   if (
-    receipt.local.localOnly !== true ||
-    receipt.local.remoteTested !== false ||
-    receipt.local.releasedPredecessor?.version !== "0.1.6" ||
-    receipt.local.releasedPredecessor.source !==
+    !value ||
+    Object.entries(binding).some(([k, v]) => value[k] !== v) ||
+    value.result !== "PASS" ||
+    value.fixtureOnly !== true ||
+    value.mining !== false ||
+    value.liveFeatures !== false ||
+    value.automaticUpdates !== false ||
+    checks.some((name) => value.checks?.[name] !== "PASS")
+  )
+    throw Error("Complete matching installed package leg required");
+}
+
+function validateAppliedAcceptance(value) {
+  if (
+    value.upgradeApplied !== true ||
+    value.uiOutcome !== "applied" ||
+    value.cliOutcome !== "applied" ||
+    value.automaticOutcome !== "applied" ||
+    value.automaticPolicyRestored !== "manual" ||
+    value.customerActivation !== false
+  )
+    throw Error(
+      "Actual UI/CLI replacement and restored Manual policy required",
+    );
+}
+
+function validateLocalAcceptance(local, binding) {
+  validateAcceptanceLeg(local, binding, stagedAcceptanceContract.local);
+  validateAppliedAcceptance(local);
+  if (
+    local.localOnly !== true ||
+    local.remoteTested !== false ||
+    local.releasedPredecessor?.version !== "0.1.6" ||
+    local.releasedPredecessor.source !==
       "738bd835b8c86c7cf7b3abfb2945240635f51fe7" ||
-    receipt.local.releasedPredecessor.artifactSetSha256 !==
+    local.releasedPredecessor.artifactSetSha256 !==
       "aea00a0d9e1b7ed05a1346428cdf8cc277cbe40f93cfcd86d40fc9b45c559460"
   )
     throw Error("Actual approved released Local predecessor required");
+}
+
+function validateJoinedAcceptance(receipt, packet, inventory) {
+  const binding = acceptanceBinding(packet, inventory);
+  validateLocalAcceptance(receipt.local, binding);
   const localDigest = receipt.localReceiptSha256;
   if (!/^[a-f0-9]{64}$/.test(localDigest ?? ""))
     throw Error("Retained raw Local document digest required");
@@ -408,7 +414,10 @@ function validateJoinedAcceptance(receipt, packet, inventory) {
     [receipt.remoteFresh, "fresh", stagedAcceptanceContract.remoteFresh],
     [receipt.remoteUpgrade, "upgrade", stagedAcceptanceContract.remoteUpgrade],
   ]) {
-    leg(value, [...stagedAcceptanceContract.remoteCommon, ...specific]);
+    validateAcceptanceLeg(value, binding, [
+      ...stagedAcceptanceContract.remoteCommon,
+      ...specific,
+    ]);
     const deviceOwner =
       value.ownerAuthMode === "tailscale-device-v1" &&
       value.checks.protectedOwnerDevice === "PASS";
@@ -448,7 +457,7 @@ function validateJoinedAcceptance(receipt, packet, inventory) {
       );
   }
   const upgrade = receipt.remoteUpgrade;
-  applied(upgrade);
+  validateAppliedAcceptance(upgrade);
   validateRemoteOperations(upgrade);
   const previous = upgrade.predecessor;
   const parts = (v) =>
@@ -593,6 +602,24 @@ async function verifiedProducer(packet, inventory, api, observed = {}) {
   return run;
 }
 
+async function originalCandidateArtifact(packet, api) {
+  const { runId, runAttempt } = packet.release;
+  const listed = await api("GET", `${repo}/actions/runs/${runId}/artifacts`);
+  const artifacts = listed.artifacts?.filter(
+    (a) =>
+      a.name === `ubuntu-amd64-release-candidate-${runAttempt}` && !a.expired,
+  );
+  if (
+    artifacts?.length !== 1 ||
+    !number.test(String(artifacts[0].id)) ||
+    !/^sha256:[a-f0-9]{64}$/.test(artifacts[0].digest ?? "") ||
+    String(artifacts[0].workflow_run?.id) !== runId ||
+    artifacts[0].workflow_run?.head_sha !== packet.source
+  )
+    throw Error("Exact original candidate artifact required for replay");
+  return artifacts[0];
+}
+
 export async function verifyCandidateReplay(
   config,
   directory,
@@ -621,30 +648,18 @@ export async function verifyCandidateReplay(
     );
     if (!/^[a-f0-9]{40}$/.test(run.head_sha ?? ""))
       throw Error("Original candidate source required");
-    await verifiedProducer(
-      { source: run.head_sha, release: { runId, runAttempt: attempt } },
-      config,
-      api,
-    );
-    const listed = await api("GET", `${repo}/actions/runs/${runId}/artifacts`);
-    const artifacts = listed.artifacts?.filter(
-      (a) =>
-        a.name === `ubuntu-amd64-release-candidate-${attempt}` && !a.expired,
-    );
-    if (
-      artifacts?.length !== 1 ||
-      !number.test(String(artifacts[0].id)) ||
-      !/^sha256:[a-f0-9]{64}$/.test(artifacts[0].digest ?? "") ||
-      String(artifacts[0].workflow_run?.id) !== runId ||
-      artifacts[0].workflow_run?.head_sha !== run.head_sha
-    )
-      throw Error("Exact original candidate artifact required for replay");
-    const zip = await downloadArtifact(String(artifacts[0].id));
+    const original = {
+      source: run.head_sha,
+      release: { runId, runAttempt: attempt },
+    };
+    await verifiedProducer(original, config, api, { run });
+    const artifact = await originalCandidateArtifact(original, api);
+    const zip = await downloadArtifact(String(artifact.id));
     if (
       !Buffer.isBuffer(zip) ||
       zip.length === 0 ||
       zip.length > 128 * 1024 * 1024 ||
-      `sha256:${sha(zip)}` !== artifacts[0].digest
+      `sha256:${sha(zip)}` !== artifact.digest
     )
       throw Error("Original replay ZIP digest differs");
     execute(
@@ -688,18 +703,7 @@ with zipfile.ZipFile(io.BytesIO(sys.stdin.buffer.read())) as z:
     throw Error("Replay cannot rebind candidate source, run or attempt");
   const inventory = attestedInventory(config, packet, raw);
   await verifiedProducer(packet, inventory, api);
-  const listed = await api("GET", `${repo}/actions/runs/${runId}/artifacts`);
-  const artifacts = listed.artifacts?.filter(
-    (a) => a.name === `ubuntu-amd64-release-candidate-${attempt}` && !a.expired,
-  );
-  if (
-    artifacts?.length !== 1 ||
-    !number.test(String(artifacts[0].id)) ||
-    !/^sha256:[a-f0-9]{64}$/.test(artifacts[0].digest ?? "") ||
-    String(artifacts[0].workflow_run?.id) !== runId ||
-    artifacts[0].workflow_run?.head_sha !== packet.source
-  )
-    throw Error("Exact original candidate artifact required for replay");
+  const artifact = await originalCandidateArtifact(packet, api);
   for (const asset of inventory.assets) {
     const bytes = read(`${directory}/${asset.name}`);
     if (bytes.length !== asset.size || sha(bytes) !== asset.sha256)
@@ -707,8 +711,8 @@ with zipfile.ZipFile(io.BytesIO(sys.stdin.buffer.read())) as z:
   }
   return {
     ...acceptanceBinding(packet, inventory),
-    candidateArtifactId: String(artifacts[0].id),
-    candidateArtifactDigest: artifacts[0].digest,
+    candidateArtifactId: String(artifact.id),
+    candidateArtifactDigest: artifact.digest,
     buildPerformed: false,
   };
 }
@@ -861,6 +865,7 @@ async function readCIInstalledAcceptance(
 }
 
 const reviewPrefix = "FASED_REMOTE_ACCEPTANCE_V1\n";
+const localReviewPrefix = "FASED_LOCAL_ACCEPTANCE_V1\n";
 const reviewOwner = { login: "fcode-ai", id: "155309118" };
 export function validateInstalledAgent(value, packet, inventory, localSha256) {
   if (
@@ -1017,7 +1022,7 @@ function publicRemoteLeg(value) {
     );
   return projected;
 }
-function reviewedRemote(comment, packet, inventory, proof) {
+function ownerReviewPayload(comment, packet, prefix) {
   if (
     String(comment.user?.id) !== reviewOwner.id ||
     comment.user.login !== reviewOwner.login ||
@@ -1028,18 +1033,95 @@ function reviewedRemote(comment, packet, inventory, proof) {
     comment.path != null ||
     typeof comment.body !== "string" ||
     comment.body.length > 60000 ||
-    !comment.body.startsWith(reviewPrefix)
+    !comment.body.startsWith(prefix)
   )
-    throw Error("Unmodified package-bound fcode-ai Remote review required");
-  const text = comment.body.slice(reviewPrefix.length),
+    throw Error("Unmodified package-bound fcode-ai review required");
+  const text = comment.body.slice(prefix.length),
     review = JSON.parse(text);
+  if (JSON.stringify(review) !== text)
+    throw Error("Canonical owner-reviewed acceptance required");
+  return review;
+}
+
+function publicLocalReceipt(receipt, binding) {
+  validateLocalAcceptance(receipt, binding);
+  const { version, source, artifactSetSha256 } = receipt.releasedPredecessor;
+  return {
+    ...binding,
+    result: "PASS",
+    fixtureOnly: true,
+    mining: false,
+    liveFeatures: false,
+    automaticUpdates: false,
+    localOnly: true,
+    remoteTested: false,
+    releasedPredecessor: { version, source, artifactSetSha256 },
+    upgradeApplied: true,
+    uiOutcome: "applied",
+    cliOutcome: "applied",
+    automaticOutcome: "applied",
+    automaticPolicyRestored: "manual",
+    customerActivation: false,
+    checks: Object.fromEntries(
+      stagedAcceptanceContract.local.map((key) => [key, receipt.checks[key]]),
+    ),
+  };
+}
+
+function localReviewBody(packet, inventory, receipt, artifact) {
+  return (
+    localReviewPrefix +
+    JSON.stringify({
+      version: 1,
+      candidateArtifactId: String(artifact.id),
+      candidateArtifactDigest: artifact.digest,
+      receipt: publicLocalReceipt(
+        receipt,
+        acceptanceBinding(packet, inventory),
+      ),
+    })
+  );
+}
+
+function reviewedLocal(comment, packet, inventory, artifact) {
+  const { receipt } = ownerReviewPayload(comment, packet, localReviewPrefix);
+  if (comment.body !== localReviewBody(packet, inventory, receipt, artifact))
+    throw Error(
+      "Local review differs from the authenticated candidate or receipt",
+    );
+  return {
+    receipt,
+    sha256: sha(JSON.stringify(receipt)),
+    localReviewCommentId: String(comment.id),
+    localReviewSha256: sha(comment.body),
+  };
+}
+
+function localProofReference(proof) {
+  return {
+    localReceiptSha256: proof.sha256,
+    ...(proof.localReviewCommentId
+      ? {
+          localReviewCommentId: proof.localReviewCommentId,
+          localReviewSha256: proof.localReviewSha256,
+        }
+      : { localCIArtifactDigest: proof.artifactDigest }),
+  };
+}
+
+function reviewedRemote(comment, packet, inventory, proof) {
+  const review = ownerReviewPayload(comment, packet, reviewPrefix);
+  const local = localProofReference(proof);
   if (
-    JSON.stringify(review) !== text ||
-    review.version !== 2 ||
+    review.version !== (proof.localReviewCommentId ? 3 : 2) ||
     JSON.stringify(review.binding) !==
       JSON.stringify(acceptanceBinding(packet, inventory)) ||
-    review.localReceiptSha256 !== proof.sha256 ||
-    review.localCIArtifactDigest !== proof.artifactDigest
+    [
+      "localReceiptSha256",
+      "localCIArtifactDigest",
+      "localReviewCommentId",
+      "localReviewSha256",
+    ].some((key) => review[key] !== local[key])
   )
     throw Error(
       "Remote review differs from authenticated Local/package evidence",
@@ -1065,7 +1147,7 @@ function reviewedRemote(comment, packet, inventory, proof) {
     )
   )
     throw Error("Remote review must contain only public acceptance fields");
-  // Local comes exclusively from authenticated CI, never from this comment.
+  // The Remote record references separately authenticated Local proof.
   const receipt = composeInstalledAcceptance(
     proof.receipt,
     review.remoteFresh,
@@ -1085,14 +1167,93 @@ function reviewedRemote(comment, packet, inventory, proof) {
     installedAgentEvidenceSha256: review.installedAgent.evidenceSha256,
   };
 }
-async function remoteReviews(packet, api) {
+async function acceptanceReviews(packet, api, prefix = reviewPrefix) {
   const comments = await api(
     "GET",
     `${repo}/commits/${packet.source}/comments?per_page=100`,
   );
   if (!Array.isArray(comments) || comments.length >= 100)
-    throw Error("Bounded complete Remote review listing required");
-  return comments.filter((c) => c.body?.startsWith(reviewPrefix));
+    throw Error("Bounded complete acceptance review listing required");
+  return comments.filter((c) => c.body?.startsWith(prefix));
+}
+
+async function realHostCandidateArtifact(packet, inventory, api) {
+  if (
+    packet.version !== 4 ||
+    !isMainBoundCandidate(packet) ||
+    !number.test(packet.release.runId) ||
+    !number.test(packet.release.runAttempt)
+  )
+    throw Error("Exact protected format-4 candidate required for Local review");
+  await verifiedProducer(packet, inventory, api);
+  return originalCandidateArtifact(packet, api);
+}
+
+async function readAuthenticatedInstalledAcceptance(
+  packet,
+  inventory,
+  api,
+  options,
+) {
+  if (packet.version === 4 && isMainBoundCandidate(packet)) {
+    const comments = await acceptanceReviews(packet, api, localReviewPrefix);
+    if (comments.length > 1)
+      throw Error("One reviewed Local acceptance is required");
+    if (comments.length === 1) {
+      const artifact = await realHostCandidateArtifact(packet, inventory, api);
+      return reviewedLocal(comments[0], packet, inventory, artifact);
+    }
+  }
+  return readCIInstalledAcceptance(packet, inventory, api, options);
+}
+
+export async function verifyLocalAcceptance(packet, inventory, api, options) {
+  const proof = await readAuthenticatedInstalledAcceptance(
+    packet,
+    inventory,
+    api,
+    options,
+  );
+  const binding = acceptanceBinding(packet, inventory);
+  validateLocalAcceptance(proof.receipt, binding);
+  return { ...binding, ...localProofReference(proof) };
+}
+
+// An owner may record a complete, reviewed real-host receipt. Partial or
+// cross-packet evidence is refused before any remote write.
+export async function recordLocalAcceptance(packet, inventory, api, receipt) {
+  const local = publicLocalReceipt(
+    receipt,
+    acceptanceBinding(packet, inventory),
+  );
+  const artifact = await realHostCandidateArtifact(packet, inventory, api);
+  const actor = await api("GET", "/user");
+  if (String(actor.id) !== reviewOwner.id || actor.login !== reviewOwner.login)
+    throw Error("Only the approved GitHub owner may record Local acceptance");
+  const body = localReviewBody(packet, inventory, local, artifact);
+  const existing = await acceptanceReviews(packet, api, localReviewPrefix);
+  if (existing.length) {
+    if (existing.length !== 1 || existing[0].body !== body)
+      throw Error(
+        "Conflicting Local review exists; preserve original evidence",
+      );
+    return localProofReference(
+      reviewedLocal(existing[0], packet, inventory, artifact),
+    );
+  }
+  const posted = await api(
+    "POST",
+    `${repo}/commits/${packet.source}/comments`,
+    { body },
+  );
+  if (!number.test(String(posted.id)))
+    throw Error("Local review outcome uncertain; reconcile before retry");
+  const retained = await api("GET", `${repo}/comments/${posted.id}`);
+  if (retained.body !== body)
+    throw Error("Local review readback differs; reconcile before retry");
+  return localProofReference(
+    reviewedLocal(retained, packet, inventory, artifact),
+  );
 }
 export async function verifyInstalledAcceptance(
   packet,
@@ -1100,7 +1261,7 @@ export async function verifyInstalledAcceptance(
   api,
   options = {},
 ) {
-  const proof = await readCIInstalledAcceptance(
+  const proof = await readAuthenticatedInstalledAcceptance(
     packet,
     inventory,
     api,
@@ -1108,7 +1269,7 @@ export async function verifyInstalledAcceptance(
   );
   let review = {};
   if (proof.receipt.localOnly === true) {
-    const comments = await remoteReviews(packet, api);
+    const comments = await acceptanceReviews(packet, api);
     if (comments.length !== 1)
       throw Error("One reviewed Remote acceptance is required");
     review = reviewedRemote(comments[0], packet, inventory, proof);
@@ -1138,6 +1299,7 @@ export async function verifyInstalledAcceptance(
     ...acceptanceBinding(packet, inventory),
     artifactId: proof.artifactId,
     artifactDigest: proof.artifactDigest,
+    ...(proof.localReviewCommentId ? localProofReference(proof) : {}),
     installedAgentEvidenceSha256: review.installedAgentEvidenceSha256,
     ...(review.remoteReviewCommentId
       ? {
@@ -1159,7 +1321,7 @@ export async function recordRemoteAcceptance(
   remoteUpgrade,
   options = {},
 ) {
-  const proof = await readCIInstalledAcceptance(
+  const proof = await readAuthenticatedInstalledAcceptance(
     packet,
     inventory,
     api,
@@ -1188,16 +1350,15 @@ export async function recordRemoteAcceptance(
   const body =
     reviewPrefix +
     JSON.stringify({
-      version: 2,
+      version: proof.localReviewCommentId ? 3 : 2,
       binding: acceptanceBinding(packet, inventory),
-      localReceiptSha256: proof.sha256,
-      localCIArtifactDigest: proof.artifactDigest,
+      ...localProofReference(proof),
       remoteFresh: publicRemoteLeg(remoteFresh),
       remoteUpgrade: publicRemoteLeg(remoteUpgrade),
       installedAgent: publicInstalledAgent(options.installedAgent),
     });
   if (body.length > 60000) throw Error("Bounded Remote evidence required");
-  const existing = await remoteReviews(packet, api);
+  const existing = await acceptanceReviews(packet, api);
   if (existing.length) {
     if (existing.length !== 1 || existing[0].body !== body)
       throw Error(
