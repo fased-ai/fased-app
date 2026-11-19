@@ -30,6 +30,16 @@ type LocalHandoffPreflight struct {
 	ApplyAllowed         bool   `json:"applyAllowed"`
 }
 
+// LocalHandoffStage identifies a verified copy of the predecessor's app state.
+// The owner-private receipt carries no permission to install, start, or Apply.
+type LocalHandoffStage struct {
+	LocalHandoffPreflight
+	Version     int    `json:"version"`
+	InstanceID  string `json:"instanceId"`
+	StateSchema int    `json:"stateSchema"`
+	StateSHA256 string `json:"stateSha256"`
+}
+
 func VerifyLegacyLocalHandoff(o Options, predecessor, target string, paths localinstall.Paths) (LocalHandoffPreflight, error) {
 	if runtime.GOOS != "linux" || runtime.GOARCH != "amd64" || os.Getuid() <= 0 || os.Getuid() != os.Geteuid() {
 		return LocalHandoffPreflight{}, errors.New("ordinary Linux amd64 owner required")

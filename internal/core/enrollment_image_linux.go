@@ -89,14 +89,18 @@ func enrollmentRoot(dir string) (*os.File, error) {
 	return f, nil
 }
 
-func enrollmentSource(dir string) (*enrollmentSourceLock, error) {
+func enrollmentSource(dir string, existingLock bool) (*enrollmentSourceLock, error) {
 	r, err := enrollmentRoot(dir)
 	if err != nil {
 		return nil, err
 	}
-	fd, err := unix.Openat(int(r.Fd()), "instance.lock", unix.O_RDWR|unix.O_NOFOLLOW|unix.O_CLOEXEC|unix.O_CREAT|unix.O_EXCL, 0600)
-	if errors.Is(err, unix.EEXIST) {
-		fd, err = unix.Openat(int(r.Fd()), "instance.lock", unix.O_RDWR|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
+	flags := unix.O_RDWR | unix.O_NOFOLLOW | unix.O_CLOEXEC | unix.O_NONBLOCK
+	fd, err := unix.Openat(int(r.Fd()), "instance.lock", flags, 0)
+	if !existingLock && errors.Is(err, unix.ENOENT) {
+		fd, err = unix.Openat(int(r.Fd()), "instance.lock", flags|unix.O_CREAT|unix.O_EXCL, 0600)
+		if errors.Is(err, unix.EEXIST) {
+			fd, err = unix.Openat(int(r.Fd()), "instance.lock", flags, 0)
+		}
 	}
 	if err != nil {
 		r.Close()
@@ -332,12 +336,12 @@ func enrollmentHostPreparation(lock *enrollmentSourceLock, entries map[string]en
 	return nil
 }
 
-func exportEnrollmentImage(ctx context.Context, dir string) (_ EnrollmentImage, closer io.Closer, resultErr error) {
+func exportEnrollmentImage(ctx context.Context, dir string, existingLock bool) (_ EnrollmentImage, closer io.Closer, resultErr error) {
 	var out EnrollmentImage
 	if err := ctx.Err(); err != nil {
 		return out, nil, err
 	}
-	lock, err := enrollmentSource(dir)
+	lock, err := enrollmentSource(dir, existingLock)
 	if err != nil {
 		return out, nil, fmt.Errorf("enrollment source lock: %w", err)
 	}

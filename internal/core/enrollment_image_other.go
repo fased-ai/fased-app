@@ -8,7 +8,7 @@ import (
 	"io"
 )
 
-func exportEnrollmentImage(context.Context, string) (EnrollmentImage, io.Closer, error) {
+func exportEnrollmentImage(context.Context, string, bool) (EnrollmentImage, io.Closer, error) {
 	return EnrollmentImage{}, nil, errors.New("same-instance enrollment requires Linux")
 }
 func validateEnrollmentImage(EnrollmentImage) error {

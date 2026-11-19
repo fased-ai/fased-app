@@ -890,7 +890,7 @@ func TestEnrollmentImageRejectsChangedHostPreparationLock(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			lease, err := enrollmentSource(s.dir)
+			lease, err := enrollmentSource(s.dir, false)
 			if err != nil {
 				t.Fatal(err)
 			}
