@@ -3,6 +3,7 @@ package core
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"strings"
@@ -12,6 +13,37 @@ import (
 type remoteRoundTrip func(*http.Request) (*http.Response, error)
 
 func (f remoteRoundTrip) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+func TestRemoteUpdateStatusGatewayErrorScope(t *testing.T) {
+	const statusRoute = "/api/v1/updates/application"
+	for _, tc := range []struct {
+		name, method, route string
+		status              int
+		remote, want        bool
+	}{
+		{"remote status", http.MethodGet, statusRoute, http.StatusBadGateway, true, true},
+		{"remote apply", http.MethodPost, statusRoute, http.StatusBadGateway, true, false},
+		{"remote health", http.MethodGet, "/api/v1/health", http.StatusBadGateway, true, false},
+		{"local status", http.MethodGet, statusRoute, http.StatusBadGateway, false, false},
+		{"authorization failure", http.MethodGet, statusRoute, http.StatusForbidden, true, false},
+		{"other gateway response", http.MethodGet, statusRoute, http.StatusServiceUnavailable, true, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			client := Client{
+				Endpoint: Endpoint{URL: "https://node.owner.ts.net"},
+				remote:   tc.remote,
+				HTTP: &http.Client{Transport: remoteRoundTrip(func(r *http.Request) (*http.Response, error) {
+					return &http.Response{StatusCode: tc.status, Body: io.NopCloser(strings.NewReader(http.StatusText(tc.status)))}, nil
+				})},
+			}
+			err := client.Do(t.Context(), tc.method, tc.route, nil, nil)
+			if err == nil || errors.Is(err, ErrRemoteUpdateStatusUnavailable) != tc.want || errors.Is(err, ErrCoreUnavailable) {
+				t.Fatalf("unexpected classification: %v", err)
+			}
+		})
+	}
+}
+
 func TestRemoteClientUsesPinnedHTTPSAndNoPassword(t *testing.T) {
 	identity := strings.Repeat("a", 43)
 	for _, scenario := range []string{"good", "changed instance", "revoked"} {

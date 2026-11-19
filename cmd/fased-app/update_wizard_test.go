@@ -5,10 +5,11 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
-	"github.com/fased-ai/fased-app/internal/core"
 	"io"
 	"strings"
 	"testing"
+
+	"github.com/fased-ai/fased-app/internal/core"
 )
 
 func TestSetupMenuHasUpdate(t *testing.T) {
@@ -96,6 +97,68 @@ func TestOrdinaryUpdateReconnectsOnlyAvailability(t *testing.T) {
 		if applies != 1 {
 			t.Fatal("apply was repeated", applies)
 		}
+	}
+}
+
+func TestOrdinaryUpdateResumesSameOperationAfterRemoteGatewayError(t *testing.T) {
+	const original = "54f295b654bc708f793637cd5834434c"
+	release := core.ApplicationRelease{Version: "0.1.19", Sequence: 1000020, ManifestSHA256: strings.Repeat("a", 64)}
+	for _, tc := range []struct {
+		name, finalID, finalVersion, wantError string
+		applyUnacknowledged                    bool
+	}{
+		{name: "original completes", finalID: original, finalVersion: release.Version},
+		{name: "different operation", finalID: strings.Repeat("b", 32), finalVersion: release.Version, wantError: "update operation changed"},
+		{name: "different release", finalID: original, finalVersion: "0.1.20", wantError: "approved update release changed"},
+		{name: "apply not acknowledged", applyUnacknowledged: true, wantError: core.ErrRemoteUpdateStatusUnavailable.Error()},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			applying := core.ApplicationUpdateOperation{ID: original, Phase: "applying", Release: &release}
+			returnedRelease := release
+			returnedRelease.Version = tc.finalVersion
+			completed := core.ApplicationUpdateOperation{ID: tc.finalID, Phase: "completed", Release: &returnedRelease}
+			completed.Receipt = &core.ApplicationUpdateReceipt{
+				ID: completed.ID, Phase: completed.Phase, Sequence: returnedRelease.Sequence, ManifestSHA256: returnedRelease.ManifestSHA256,
+			}
+			steps := []struct {
+				action string
+				op     core.ApplicationUpdateOperation
+				err    error
+			}{
+				{action: "check", op: core.ApplicationUpdateOperation{Phase: "available", Release: &release}},
+				{action: "apply", op: applying},
+				{action: "status", err: core.ErrRemoteUpdateStatusUnavailable},
+				{action: "status", op: completed},
+			}
+			if tc.applyUnacknowledged {
+				steps[1].err = core.ErrCoreUnavailable
+				steps = steps[:3]
+			}
+			next := 0
+			call := func(action string, w io.Writer) error {
+				if next == len(steps) || steps[next].action != action {
+					t.Fatalf("unexpected %q at step %d", action, next)
+				}
+				step := steps[next]
+				next++
+				if step.err != nil {
+					return step.err
+				}
+				return json.NewEncoder(w).Encode(core.ApplicationUpdateView{Operation: step.op})
+			}
+			var out bytes.Buffer
+			err := runUpdateWizard(call, &out, io.Discard, func() {}, 10)
+			if tc.wantError == "" {
+				if err != nil || out.String() != "Updated\n" {
+					t.Fatalf("original update did not complete: %q, %v", out.String(), err)
+				}
+			} else if err == nil || err.Error() != tc.wantError || out.Len() != 0 {
+				t.Fatalf("unexpected completion after a refusal: %q, %v", out.String(), err)
+			}
+			if next != len(steps) {
+				t.Fatalf("used %d of %d expected commands", next, len(steps))
+			}
+		})
 	}
 }
 
