@@ -17,7 +17,7 @@ import {
   prepareReleaseCandidate,
 } from "./release-source.mjs";
 const sha = (b) => createHash("sha256").update(b).digest("hex");
-function fixture(t) {
+function fixture(t, packetFormat = 2) {
   const root = path.resolve(".evidence/attested-release-tests");
   mkdirSync(root, { recursive: true, mode: 0o700 });
   const parent = mkdtempSync(path.join(root, "case-"));
@@ -39,7 +39,7 @@ function fixture(t) {
     sha256: sha(files[name]),
   });
   const packet = {
-    version: 2,
+    version: packetFormat,
     productVersion: c.version,
     source: "a".repeat(40),
     bundleSha256: "b".repeat(64),
@@ -162,6 +162,8 @@ function fixture(t) {
       metadataVerified: !args.includes("--verify-candidate"),
       archiveVerified: true,
       bundleVerified: true,
+      linuxBundleVerified: packetFormat === 4,
+      bundleSha256: packet.bundleSha256,
       provenanceVerified: true,
       installerInvoked: false,
       publicActivation: false,
@@ -203,7 +205,7 @@ function fixture(t) {
 }
 
 test("attested publication runs proof before executable, publishes once and resumes immutable readback", async (t) => {
-  const f = fixture(t),
+  const f = fixture(t, 4),
     options = {
       api: f.api,
       execute: f.execute,
@@ -537,7 +539,7 @@ test("partial draft recovery refuses altered or unexpected uploaded assets befor
 });
 
 test("new publication refuses absent trusted installed acceptance before writes", async (t) => {
-  const f = fixture(t);
+  const f = fixture(t, 4);
   await assert.rejects(
     publishAttested(f.c, f.directory, {
       api: f.api,
@@ -548,4 +550,29 @@ test("new publication refuses absent trusted installed acceptance before writes"
     /protected candidate workflow/,
   );
   assert.equal(f.mutations, 0);
+});
+
+test("format-4 publisher refuses a missing, lightweight or foreign tag before writes", async (t) => {
+  const f = fixture(t, 4);
+  for (const tag of ["missing", "lightweight", "foreign"]) {
+    await assert.rejects(
+      publishAttested(f.c, f.directory, {
+        api: async (method, route, body) => {
+          if (tag === "missing" && route.includes("/git/ref/tags/"))
+            throw Object.assign(Error("tag missing"), { status: 404 });
+          const result = await f.api(method, route, body);
+          if (tag === "lightweight" && route.includes("/git/ref/tags/"))
+            result.object.type = "commit";
+          if (tag === "foreign" && route.includes("/git/tags/"))
+            result.object.sha = "0".repeat(40);
+          return result;
+        },
+        execute: f.execute,
+        verifyAcceptance: f.verifyAcceptance,
+        stateRoot: path.join(f.parent, "publisher"),
+      }),
+      /tag missing|existing annotated release tag|Release tag\/source changed/,
+    );
+    assert.equal(f.mutations, 0);
+  }
 });

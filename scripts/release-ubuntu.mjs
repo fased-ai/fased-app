@@ -15,6 +15,7 @@ import { pathToFileURL } from "node:url";
 import { prepareReleaseCandidate } from "./release-source.mjs";
 import {
   attestedInventory,
+  isMainBoundCandidate,
   verifyInstalledAcceptance,
   recordRemoteAcceptance,
 } from "./release-acceptance.mjs";
@@ -121,6 +122,23 @@ export async function publicAsset(
   return bytes;
 }
 export { attestedInventory } from "./release-acceptance.mjs";
+
+export async function verifyPublisherTag(api, packet, inventory) {
+  const { version, source } = inventory;
+  let { tagObject } = inventory;
+  if (isMainBoundCandidate(packet)) {
+    const ref = await api("GET", repo + `/git/ref/tags/v${version}`);
+    if (
+      ref.ref !== `refs/tags/v${version}` ||
+      ref.object?.type !== "tag" ||
+      !/^[a-f0-9]{40}$/.test(ref.object.sha)
+    )
+      throw Error("Accepted source requires an existing annotated release tag");
+    tagObject = ref.object.sha;
+  }
+  await verifyAnnotatedTag(api, version, tagObject, source);
+  return tagObject;
+}
 
 function checkRelease(release, c, inventory, partial = false) {
   if (
@@ -266,7 +284,10 @@ export async function publishAttested(
     preflight.installerInvoked ||
     preflight.publicActivation ||
     preflight.seedSha256 !== c.seedSha256 ||
-    preflight.archiveSha256 !== packet.archive.sha256
+    preflight.archiveSha256 !== packet.archive.sha256 ||
+    (packet.version === 4 &&
+      (preflight.linuxBundleVerified !== true ||
+        preflight.bundleSha256 !== packet.bundleSha256))
   )
     throw Error("Actual candidate preflight failed");
   const identity = await api("GET", repo);
@@ -286,24 +307,9 @@ export async function publishAttested(
   const acceptance = publicReadback
     ? null
     : await verifyAcceptance(packet, inventory, api);
-  if (packet.version === 2) {
-    const ref = await api("GET", repo + `/git/ref/tags/v${c.version}`);
-    if (
-      ref.ref !== `refs/tags/v${c.version}` ||
-      ref.object?.type !== "tag" ||
-      !/^[a-f0-9]{40}$/.test(ref.object.sha)
-    )
-      throw Error("Accepted source requires an existing annotated release tag");
-    inventory.tagObject = ref.object.sha;
-  }
   // Owner settings are checked before tagging; GITHUB_TOKEN has no admin-read.
   // Canonical publication below and all consumers still require immutable:true.
-  await verifyAnnotatedTag(
-    api,
-    c.version,
-    inventory.tagObject,
-    inventory.source,
-  );
+  inventory.tagObject = await verifyPublisherTag(api, packet, inventory);
   const root = stateRoot;
   ensurePublisherDirectory(root, true);
   const work = path.join(root, `attested-${c.version}`);
@@ -470,6 +476,9 @@ export async function publishAttested(
         report.installerInvoked ||
         report.publicActivation ||
         report.archiveSha256 !== packet.archive.sha256 ||
+        (packet.version === 4 &&
+          (report.linuxBundleVerified !== true ||
+            report.bundleSha256 !== packet.bundleSha256)) ||
         report.sequence !== releaseSequence(c.version)
       )
         throw Error("Public installer/readback differs from release");

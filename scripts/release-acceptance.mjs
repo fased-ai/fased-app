@@ -44,6 +44,16 @@ export const installedAcceptanceChecks = [
 ];
 const sha = (bytes) => createHash("sha256").update(bytes).digest("hex");
 const number = /^[1-9][0-9]*$/;
+const digest = /^[a-f0-9]{64}$/;
+
+export function isMainBoundCandidate(packet) {
+  return (
+    [2, 4].includes(packet.version) &&
+    packet.release?.buildRef === "refs/heads/main" &&
+    packet.release.tagObject === ""
+  );
+}
+
 export function attestedInventory(c, packet, raw) {
   const names = [
     "fased-app-linux-amd64.tar.gz",
@@ -53,16 +63,23 @@ export function attestedInventory(c, packet, raw) {
     "fased-release.json",
   ];
   if (
-    (packet.version === 2
-      ? packet.release?.buildRef !== "refs/heads/main" ||
-        packet.release?.tagObject !== ""
-      : packet.release?.buildRef !== undefined) ||
+    (packet.version === 1
+      ? packet.release?.buildRef !== undefined
+      : !isMainBoundCandidate(packet)) ||
     c.releaseAuthority !== "github-attestation-v1" ||
-    ![1, 2].includes(packet.version) ||
     packet.productVersion !== c.version ||
     !/^[a-f0-9]{40}$/.test(packet.source)
   )
     throw Error("Attested release authority/version required");
+  if (
+    packet.version === 4 &&
+    (!digest.test(packet.bundleSha256 ?? "") ||
+      !digest.test(packet.release.installerSha256 ?? "") ||
+      packet.release.installerSha256 !== packet.installer?.sha256 ||
+      packet.deb !== undefined ||
+      packet.rpm !== undefined)
+  )
+    throw Error("Exact format-4 core and signer bundle identity required");
   const identities = [
     packet.archive,
     packet.installer,
@@ -73,11 +90,11 @@ export function attestedInventory(c, packet, raw) {
   if (
     identities.some(
       (a, i) =>
-        a.file !== names[i] ||
+        a?.file !== names[i] ||
         !Number.isSafeInteger(a.size) ||
         a.size <= 0 ||
         a.size > 128 * 1024 * 1024 ||
-        !/^[a-f0-9]{64}$/.test(a.sha256),
+        !digest.test(a.sha256),
     )
   )
     throw Error("Complete exact attested asset inventory required");
@@ -113,6 +130,7 @@ export function validateInstalledAcceptance(receipt, packet, inventory) {
     return validateJoinedAcceptance(receipt, packet, inventory);
   const binding = acceptanceBinding(packet, inventory);
   const installed =
+    packet.version === 2 &&
     receipt?.upgradeRoute === "installed" &&
     receipt.predecessorPacketVersion === 2 &&
     receipt.candidatePacketVersion === 2 &&
@@ -663,7 +681,7 @@ with zipfile.ZipFile(io.BytesIO(sys.stdin.buffer.read())) as z:
   const raw = read(`${directory}/fased-release.json`),
     packet = JSON.parse(raw);
   if (
-    packet.version !== 2 ||
+    !isMainBoundCandidate(packet) ||
     packet.release?.runId !== runId ||
     packet.release?.runAttempt !== attempt
   )
@@ -713,8 +731,7 @@ async function readCIInstalledAcceptance(
   const id = packet.release.runId,
     attempt = packet.release.runAttempt;
   if (
-    packet.version !== 2 ||
-    packet.release.buildRef !== "refs/heads/main" ||
+    !isMainBoundCandidate(packet) ||
     !number.test(id) ||
     !number.test(attempt)
   )
