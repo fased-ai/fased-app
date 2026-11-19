@@ -24,6 +24,7 @@ const packet = {
   release: {
     sourceTree: "b".repeat(40),
     buildRef: "refs/heads/main",
+    tagObject: "",
     runId: "123",
     runAttempt: "2",
   },
@@ -533,7 +534,7 @@ test("structured actual Local and independent Remote legs join without synthetic
 });
 
 test("owner-reviewed Remote proof joins exact Local CI and rejects substitution, edits and wrong actors", async (t) => {
-  const target = { ...packet, productVersion: "0.1.10" };
+  const target = { ...packet, version: 4, productVersion: "0.1.10" };
   const binding = acceptanceBinding(target, inventory);
   const local = {
     ...receipt(),
@@ -759,6 +760,9 @@ test("owner-reviewed Remote proof joins exact Local CI and rejects substitution,
     },
     (c) => {
       c.body = c.body.replace(localSha, "0".repeat(64));
+    },
+    (c) => {
+      c.body = c.body.replaceAll(binding.artifactSetSha256, "0".repeat(64));
     },
     (c) => {
       c.body = c.body.replace('"normalTLS":true', '"normalTLS":false');
@@ -1086,12 +1090,13 @@ test("acceptance-only replay acquires exact original bytes without a build", asy
   });
   const target = {
     ...packet,
+    version: 4,
     archive: identity("fased-app-linux-amd64.tar.gz"),
     installer: identity("fased-install-linux-amd64"),
     entry: identity("install.sh"),
     release: {
       ...packet.release,
-      tagObject: "",
+      installerSha256: identity("fased-install-linux-amd64").sha256,
       provenance: identity("fased-app-linux-amd64.provenance.sigstore.json"),
     },
   };
