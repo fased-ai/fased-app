@@ -92,6 +92,7 @@ function fixture(t, packetFormat = 2) {
         tag: `v${c.version}`,
         object: { type: "commit", sha: packet.source },
       };
+    if (method === "GET" && url.endsWith("/comments?per_page=100")) return [];
     if (url.includes("/releases/tags/")) {
       if (!release)
         throw Object.assign(Error("not yet created"), { status: 404 });

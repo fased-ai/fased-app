@@ -8,6 +8,8 @@ import {
   installedAcceptanceChecks,
   validateInstalledAcceptance,
   verifyInstalledAcceptance,
+  verifyLocalAcceptance,
+  recordLocalAcceptance,
   recordRemoteAcceptance,
   stagedAcceptanceContract,
   attestedInventory,
@@ -558,6 +560,13 @@ test("owner-reviewed Remote proof joins exact Local CI and rejects substitution,
   );
   const artifactDigest =
     "sha256:" + createHash("sha256").update(raw).digest("hex");
+  const candidate = {
+    id: 7,
+    name: "ubuntu-amd64-release-candidate-2",
+    expired: false,
+    digest: "sha256:" + "6".repeat(64),
+    workflow_run: { id: 123, head_sha: target.source },
+  };
   const remote = (scenario) => ({
     ...binding,
     result: "PASS",
@@ -613,6 +622,17 @@ test("owner-reviewed Remote proof joins exact Local CI and rejects substitution,
       return {
         jobs: [
           {
+            name: "ubuntu-amd64",
+            status: "completed",
+            conclusion: "success",
+            steps: [
+              {
+                name: "Verify original provenance offline and stage public signing inputs",
+                conclusion: "success",
+              },
+            ],
+          },
+          {
             name: "installed-acceptance",
             status: "completed",
             conclusion: "success",
@@ -622,6 +642,7 @@ test("owner-reviewed Remote proof joins exact Local CI and rejects substitution,
     if (url.endsWith("/artifacts"))
       return {
         artifacts: [
+          candidate,
           {
             id: 9,
             name: "ubuntu-amd64-installed-acceptance-2",
@@ -647,7 +668,7 @@ test("owner-reviewed Remote proof joins exact Local CI and rejects substitution,
     if (method === "POST") {
       posted++;
       const c = {
-        id: 99,
+        id: 98 + posted,
         user: actor,
         body: data.body,
         commit_id: target.source,
@@ -655,10 +676,11 @@ test("owner-reviewed Remote proof joins exact Local CI and rejects substitution,
         updated_at: "2026-11-04T12:00:00Z",
         path: null,
       };
-      comments = [c];
+      comments.push(c);
       return c;
     }
-    if (url.endsWith("/comments/99")) return comments[0];
+    if (url.includes("/comments/"))
+      return comments.find((c) => url.endsWith(`/comments/${c.id}`));
     assert.fail(`unexpected API ${method} ${url}`);
   };
   t.mock.method(globalThis, "fetch", async (url, init) => {
@@ -837,6 +859,142 @@ test("owner-reviewed Remote proof joins exact Local CI and rejects substitution,
   );
   assert.ok(comments[0].body.includes('"ownerAuthMode":"password-v1"'));
   assert.equal(posted, 1);
+
+  await t.test(
+    "owner-reviewed Local real-host receipt and exact Remote join",
+    async () => {
+      comments = [];
+      posted = 0;
+      for (const partial of [
+        { ...local, checks: { ...local.checks, rebootReconnect: "OPEN" } },
+        { ...local, artifactSetSha256: "0".repeat(64) },
+        {
+          ...local,
+          releasedPredecessor: {
+            ...local.releasedPredecessor,
+            version: "0.1.16",
+          },
+        },
+        { ...local, uiOutcome: "alreadyCurrent" },
+      ]) {
+        await assert.rejects(
+          recordLocalAcceptance(
+            target,
+            inventory,
+            () => assert.fail("incomplete evidence reached GitHub"),
+            partial,
+          ),
+          /Complete matching|Actual approved|Actual UI/,
+        );
+      }
+      actor = { login: "someone-else", id: 1 };
+      await assert.rejects(
+        recordLocalAcceptance(target, inventory, api, local),
+        /approved GitHub owner/,
+      );
+      assert.equal(posted, 0);
+      actor = { login: "fcode-ai", id: 155309118 };
+      const recordedLocal = await recordLocalAcceptance(
+        target,
+        inventory,
+        api,
+        {
+          ...local,
+          privateStatePath: "/private/local-instance",
+        },
+      );
+      assert.equal(recordedLocal.localReviewCommentId, "99");
+      assert.ok(!comments[0].body.includes("/private/local-instance"));
+      assert.deepEqual(
+        await recordLocalAcceptance(target, inventory, api, local),
+        recordedLocal,
+      );
+      assert.equal(posted, 1);
+      const readOnly = (method, url) => {
+        assert.equal(method, "GET");
+        return api(method, url);
+      };
+      const verifiedLocal = await verifyLocalAcceptance(
+        target,
+        inventory,
+        readOnly,
+      );
+      assert.equal(
+        verifiedLocal.localReceiptSha256,
+        recordedLocal.localReceiptSha256,
+      );
+      assert.equal(
+        verifiedLocal.localReviewSha256,
+        recordedLocal.localReviewSha256,
+      );
+      await assert.rejects(
+        verifyInstalledAcceptance(target, inventory, readOnly),
+        /One reviewed Remote/,
+      );
+
+      const ownedLocal = structuredClone(comments[0]);
+      for (const mutate of [
+        (review) => {
+          review.updated_at = "2026-11-04T13:00:00Z";
+        },
+        (review) => {
+          review.user.id = 1;
+        },
+        (review) => {
+          review.body = review.body.replace(
+            candidate.digest,
+            "sha256:" + "0".repeat(64),
+          );
+        },
+      ]) {
+        comments = [structuredClone(ownedLocal)];
+        mutate(comments[0]);
+        await assert.rejects(
+          verifyLocalAcceptance(target, inventory, readOnly),
+          /Unmodified|authenticated candidate/,
+        );
+      }
+      comments = [ownedLocal];
+      const localReference = {
+        localReceiptSha256: recordedLocal.localReceiptSha256,
+      };
+      const recordedRemote = await recordRemoteAcceptance(
+        target,
+        inventory,
+        api,
+        { ...fresh, ...localReference },
+        { ...preserved, ...localReference },
+        {
+          installedAgent: installedAgent(
+            target,
+            localReference.localReceiptSha256,
+          ),
+        },
+      );
+      const verified = await verifyInstalledAcceptance(
+        target,
+        inventory,
+        readOnly,
+      );
+      assert.equal(
+        verified.localReviewCommentId,
+        recordedLocal.localReviewCommentId,
+      );
+      assert.equal(
+        verified.remoteReviewCommentId,
+        recordedRemote.remoteReviewCommentId,
+      );
+      assert.equal(posted, 2);
+      comments[1].body = comments[1].body.replace(
+        recordedLocal.localReviewSha256,
+        "0".repeat(64),
+      );
+      await assert.rejects(
+        verifyInstalledAcceptance(target, inventory, readOnly),
+        /Remote review differs/,
+      );
+    },
+  );
 });
 
 test("installed agent gate rejects standalone, patched, unbound and incomplete evidence", async () => {

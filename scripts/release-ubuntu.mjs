@@ -17,6 +17,8 @@ import {
   attestedInventory,
   isMainBoundCandidate,
   verifyInstalledAcceptance,
+  verifyLocalAcceptance,
+  recordLocalAcceptance,
   recordRemoteAcceptance,
 } from "./release-acceptance.mjs";
 import { validateConfig } from "./prepare-ubuntu-release.mjs";
@@ -502,12 +504,20 @@ export async function publishAttested(
 }
 export async function main(args = process.argv.slice(2)) {
   const operation = args[0] ?? "ship";
+  const evidenceArgs = new Map([
+    ["accept-local", 3],
+    ["verify-local", 2],
+    ["accept-remote", 5],
+  ]);
+  const evidenceOperation = evidenceArgs.has(operation);
   if (
-    !["ship", "publish", "accept-remote"].includes(operation) ||
-    (operation === "accept-remote" ? args.length !== 5 : args.length > 2)
+    (!evidenceOperation && !["ship", "publish"].includes(operation)) ||
+    (evidenceOperation
+      ? args.length !== evidenceArgs.get(operation)
+      : args.length > 2)
   )
     throw Error(
-      "Use npm run release -- [ship [PR] | publish [candidate-directory] | accept-remote candidate-directory fresh-receipt upgrade-receipt installed-agent-receipt]",
+      "Use npm run release -- [ship [PR] | publish [candidate-directory] | verify-local candidate-directory | accept-local candidate-directory local-receipt | accept-remote candidate-directory fresh-receipt upgrade-receipt installed-agent-receipt]",
     );
   const c = JSON.parse(readFileSync("release/ubuntu.json", "utf8"));
   let token = process.env.GH_TOKEN;
@@ -525,13 +535,24 @@ export async function main(args = process.argv.slice(2)) {
     operation === "ship"
       ? await prepareReleaseCandidate(c.version, args[1])
       : path.resolve(args[1] ?? ".evidence/ubuntu-release");
-  if (operation === "accept-remote") {
+  if (evidenceOperation) {
     const raw = readPublisherFile(path.join(directory, "fased-release.json"));
     const packet = JSON.parse(raw);
+    const inventory = attestedInventory(c, packet, raw);
+    const api = githubPublisher(token);
+    if (operation === "verify-local")
+      return verifyLocalAcceptance(packet, inventory, api);
+    if (operation === "accept-local")
+      return recordLocalAcceptance(
+        packet,
+        inventory,
+        api,
+        JSON.parse(readPublisherFile(args[2])),
+      );
     return recordRemoteAcceptance(
       packet,
-      attestedInventory(c, packet, raw),
-      githubPublisher(token),
+      inventory,
+      api,
       JSON.parse(readPublisherFile(args[2])),
       JSON.parse(readPublisherFile(args[3])),
       { installedAgent: JSON.parse(readPublisherFile(args[4])) },
