@@ -93,6 +93,10 @@ func InitializeProtectedPackageJournal(ctx context.Context, owner int, location,
 	if err != nil {
 		return err
 	}
+	return initializeProtectedPackageJournal(ctx, a, owner, location, instance, p, nil)
+}
+
+func initializeProtectedPackageJournal(ctx context.Context, a maintenance.Authority, owner int, location, instance string, p update.MaintenancePackage, adoption *PackageLocalAdoption) error {
 	root, err := PackageRoot(owner, location, instance)
 	if err != nil {
 		return err
@@ -122,10 +126,8 @@ func InitializeProtectedPackageJournal(ctx context.Context, owner int, location,
 		if err = VerifyUnconfiguredPackageSigner(ctx, m); err != nil {
 			return err
 		}
-		for _, name := range []string{"update-active.json", "update-start-blocked.json"} {
-			if _, err = os.Lstat(root + "/" + name); !errors.Is(err, os.ErrNotExist) {
-				return errors.New("existing package recovery fence must be preserved")
-			}
+		if err = checkPackageInitialFences(m, adoption); err != nil {
+			return err
 		}
 		if err = verifyLoadedPackageServices(ctx, m); err != nil {
 			return err
@@ -143,12 +145,10 @@ func InitializeProtectedPackageJournal(ctx context.Context, owner int, location,
 	if err = VerifyUnconfiguredPackageSigner(ctx, m); err != nil {
 		return err
 	}
-	for _, name := range []string{"update-active.json", "update-start-blocked.json"} {
-		if _, err = os.Lstat(root + "/" + name); !errors.Is(err, os.ErrNotExist) {
-			return errors.New("existing package recovery fence must be preserved")
-		}
+	if err = checkPackageInitialFences(m, adoption); err != nil {
+		return err
 	}
-	if err = installPackageMaintenanceUnits(ctx, a, m); err != nil {
+	if err = installPackageMaintenanceUnits(ctx, a, m, adoption == nil); err != nil {
 		return err
 	}
 	if err = verifyLoadedPackageServices(ctx, m); err != nil {
@@ -159,6 +159,19 @@ func InitializeProtectedPackageJournal(ctx context.Context, owner int, location,
 		return err
 	}
 	return maintenance.PublishProtected(journal+"/custody.json", mustJSON(r), 0644)
+}
+
+func checkPackageInitialFences(m Manifest, adoption *PackageLocalAdoption) error {
+	if _, err := os.Lstat(m.Root + "/update-active.json"); !errors.Is(err, os.ErrNotExist) {
+		return errors.New("existing package recovery fence must be preserved")
+	}
+	if adoption != nil {
+		return verifyLegacyLocalAdoptionFence(m, *adoption)
+	}
+	if _, err := os.Lstat(m.Root + "/update-start-blocked.json"); !errors.Is(err, os.ErrNotExist) {
+		return errors.New("existing package recovery fence must be preserved")
+	}
+	return nil
 }
 
 // VerifyUnconfiguredPackageSigner is read-only. A missing wallet network in a

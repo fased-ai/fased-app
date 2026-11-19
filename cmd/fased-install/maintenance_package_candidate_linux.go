@@ -832,16 +832,33 @@ func maintenancePackageInitialize(ctx context.Context, owner int, location, inst
 	return custodyinstall.InitializeProtectedPackageJournal(ctx, owner, location, instance, p)
 }
 
-func maintenancePackageProvision(ctx context.Context, owner int, location, instance, listen string, lock *os.File) (result error) {
+func maintenancePackageProvision(ctx context.Context, owner int, location, instance, listen string, lock *os.File) error {
 	a, err := maintenance.ValidatePackageProcess(owner, location, instance)
-	if err != nil || (location != "local" && location != "remote") || !custodyinstall.NativePackageUpdateAvailable() {
+	if err != nil {
+		return err
+	}
+	return provisionPackageCandidate(ctx, a, location, instance, listen, lock, nil)
+}
+
+func provisionPackageCandidate(ctx context.Context, a maintenance.Authority, location, instance, listen string, lock *os.File, adoption *localAdoptionImport) (result error) {
+	if (location != "local" && location != "remote") || !custodyinstall.NativePackageUpdateAvailable() {
 		return errors.New("native package provisioning and recovery are unavailable")
 	}
+	owner := a.Owner
 	receipt, err := maintenance.ReadPackageCandidateReceipt(owner, location, instance)
 	if err != nil || receipt.Scope != "fresh" || receipt.InstallerSHA256 != a.ImageSHA256 {
 		return errors.New("the original fresh package candidate is required")
 	}
-	p, err := preparePackageCandidate(ctx, owner, location, instance, receipt.PacketSHA256)
+	var p *bootstrap.Prepared
+	if adoption == nil {
+		p, err = preparePackageCandidate(ctx, owner, location, instance, receipt.PacketSHA256)
+	} else {
+		binding, e := packageCandidateTrust(owner, location, instance)
+		if e != nil {
+			return e
+		}
+		p, err = bootstrap.PrepareLocalAdoptionCandidate(ctx, owner, instance, bootstrap.Options{Seed: binding.Seed, SeedSHA256: binding.SHA256})
+	}
 	if err != nil {
 		return err
 	}
@@ -854,6 +871,9 @@ func maintenancePackageProvision(ctx context.Context, owner int, location, insta
 	identity, err := p.PackageIdentity()
 	if err != nil || !matchingPackageCandidate(receipt, identity, a.ImageSHA256) {
 		return errors.New("the original fresh package proof differs")
+	}
+	if adoption != nil && (location != "local" || !adoption.stage.MatchesRetainedPackage(owner, receipt.PacketSHA256, identity.BundleSHA256)) {
+		return errors.New("the original legacy state and retained bundle must match before import")
 	}
 	state, err := update.PackageMaintenanceRoot(owner, location, instance)
 	if err != nil {
@@ -878,9 +898,12 @@ func maintenancePackageProvision(ctx context.Context, owner int, location, insta
 	if err = acquirePackageSigner(ctx, p, a, dir, identity); err != nil {
 		return err
 	}
-	desktop, err := acquirePackageProvisionDesktop(ctx, p, a, dir, identity.MaintenanceIdentity)
-	if err != nil {
-		return err
+	var desktop *update.Artifact
+	if adoption == nil {
+		desktop, err = acquirePackageProvisionDesktop(ctx, p, a, dir, identity.MaintenanceIdentity)
+		if err != nil {
+			return err
+		}
 	}
 	signerHash, signerSize, err := maintenance.ProtectedDigest(filepath.Join(dir, "fased-signer"), 0755, 64<<20)
 	if err != nil {
@@ -910,6 +933,9 @@ func maintenancePackageProvision(ctx context.Context, owner int, location, insta
 	discard = false
 	if err = p.DiscardMaintenance(); err != nil {
 		return err
+	}
+	if adoption != nil {
+		return custodyinstall.PrepareProtectedLegacyLocalPackage(ctx, owner, instance, input, lock, adoption.commitment(), adoption.importImage)
 	}
 	return custodyinstall.ProvisionProtectedPackage(ctx, owner, location, instance, input, lock)
 }

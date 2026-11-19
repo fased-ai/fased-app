@@ -5,6 +5,7 @@ package bootstrap
 import (
 	"context"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 
@@ -19,6 +20,42 @@ func PrepareLegacyLocalHandoff(ctx context.Context, o Options, predecessor, targ
 		return LocalHandoffStage{}, err
 	}
 	return prepareLegacyLocalStage(ctx, preflight, legacyLocalCore, paths, destination, predecessor, target)
+}
+
+// ExportLegacyLocalHandoff reopens the actual stopped predecessor as its OS
+// owner. The protected importer does not trust a previously staged receipt.
+func ExportLegacyLocalHandoff(ctx context.Context, o Options, predecessor, target string, paths localinstall.Paths, control io.Reader, out io.Writer) error {
+	preflight, err := VerifyLegacyLocalHandoff(o, predecessor, target, paths)
+	if err != nil {
+		return err
+	}
+	image, verify, closeSource, err := openLegacyLocalImage(ctx, preflight, legacyLocalCore, paths)
+	if err != nil {
+		return err
+	}
+	defer closeSource()
+	if err := verify(); err != nil {
+		return err
+	}
+	if err := writeLegacyLocalImage(out, preflight, image); err != nil {
+		return err
+	}
+	var check [7]byte
+	if _, err := io.ReadFull(control, check[:]); err != nil || string(check[:]) != "verify\n" {
+		return errors.New("original Local adoption verification required")
+	}
+	if err := verify(); err != nil {
+		return err
+	}
+	if _, err := io.WriteString(out, "ok\n"); err != nil {
+		return err
+	}
+	// The controller closes the private control pipe after sealing the
+	// journal. Hold the source leases through that publication.
+	if n, err := io.ReadFull(control, check[:1]); n != 0 || !errors.Is(err, io.EOF) {
+		return errors.New("unexpected Local adoption control data")
+	}
+	return nil
 }
 
 func prepareLegacyLocalStage(ctx context.Context, preflight LocalHandoffPreflight, coreSHA256 string, paths localinstall.Paths, destination string, packetDirs ...string) (LocalHandoffStage, error) {
@@ -48,30 +85,11 @@ func prepareLegacyLocalStage(ctx context.Context, preflight LocalHandoffPrefligh
 	if _, err := os.Lstat(destination); !errors.Is(err, os.ErrNotExist) {
 		return stage, errors.New("an adoption stage already exists or is inaccessible; preserve it")
 	}
-	// Use the predecessor's existing installer lock without creating anything
-	// under its install or state directories. The core lease also blocks service
-	// start and direct owner setup writers while copying its SQLite image.
-	installLockPath := filepath.Join(paths.Root, "install.lock")
-	fd, err := unix.Open(installLockPath, unix.O_RDONLY|unix.O_NOFOLLOW|unix.O_CLOEXEC|unix.O_NONBLOCK, 0)
-	if err != nil {
-		return stage, errors.New("the original installation lock is required")
-	}
-	lock := os.NewFile(uintptr(fd), installLockPath)
-	defer lock.Close()
-	info, err := lock.Stat()
-	var st unix.Stat_t
-	if err != nil || unix.Fstat(fd, &st) != nil || st.Mode != unix.S_IFREG|0600 || st.Size != 0 ||
-		st.Uid != uint32(preflight.Owner) || st.Nlink != 1 || unix.Flock(fd, unix.LOCK_EX|unix.LOCK_NB) != nil {
-		return stage, errors.New("the original installation lock is unsafe or busy")
-	}
-	image, lease, err := core.ExportExistingEnrollmentImage(ctx, paths.Data)
+	image, verify, closeSource, err := openLegacyLocalImage(ctx, preflight, coreSHA256, paths)
 	if err != nil {
 		return stage, err
 	}
-	defer lease.Close()
-	if image.Schema != core.StateSchema {
-		return stage, errors.New("the approved predecessor's Local state schema is required")
-	}
+	defer closeSource()
 	pending, err := os.MkdirTemp(parent, ".local-handoff-pending-")
 	if err != nil {
 		return stage, err
@@ -84,8 +102,7 @@ func prepareLegacyLocalStage(ctx context.Context, preflight LocalHandoffPrefligh
 	if err := core.ImportEnrollmentImage(ctx, state, image); err != nil {
 		return stage, err
 	}
-	stage = LocalHandoffStage{LocalHandoffPreflight: preflight, Version: 1, InstanceID: image.InstanceID,
-		StateSchema: image.Schema, StateSHA256: core.EnrollmentImageDigest(image)}
+	stage = legacyLocalStage(preflight, image)
 	if err := core.WritePrivateJSON(filepath.Join(pending, "handoff.json"), stage); err != nil {
 		return LocalHandoffStage{}, err
 	}
@@ -96,10 +113,8 @@ func prepareLegacyLocalStage(ctx context.Context, preflight LocalHandoffPrefligh
 	if err := errors.Join(pendingDir.Sync(), pendingDir.Close()); err != nil {
 		return LocalHandoffStage{}, err
 	}
-	manifest, err := inspectLegacyLocalHandoff(paths, coreSHA256)
-	currentLock, lockErr := os.Lstat(installLockPath)
-	if err != nil || manifest != preflight.LegacyManifestSHA256 || lockErr != nil || !os.SameFile(info, currentLock) || core.VerifyEnrollmentImageLease(lease) != nil {
-		return LocalHandoffStage{}, errors.New("predecessor changed while preparing the adoption stage")
+	if err := verify(); err != nil {
+		return LocalHandoffStage{}, err
 	}
 	currentParent, err := os.Lstat(parent)
 	heldParent, heldErr := parentFile.Stat()
@@ -113,6 +128,42 @@ func prepareLegacyLocalStage(ctx context.Context, preflight LocalHandoffPrefligh
 		return LocalHandoffStage{}, err
 	}
 	return stage, parentFile.Sync()
+}
+
+func openLegacyLocalImage(ctx context.Context, preflight LocalHandoffPreflight, coreSHA256 string, paths localinstall.Paths) (core.EnrollmentImage, func() error, func(), error) {
+	var empty core.EnrollmentImage
+	path := filepath.Join(paths.Root, "install.lock")
+	fd, err := unix.Open(path, unix.O_RDONLY|unix.O_NOFOLLOW|unix.O_CLOEXEC|unix.O_NONBLOCK, 0)
+	if err != nil {
+		return empty, nil, nil, errors.New("the original installation lock is required")
+	}
+	lock := os.NewFile(uintptr(fd), path)
+	info, err := lock.Stat()
+	var st unix.Stat_t
+	if err != nil || unix.Fstat(fd, &st) != nil || st.Mode != unix.S_IFREG|0600 || st.Size != 0 ||
+		st.Uid != uint32(preflight.Owner) || st.Nlink != 1 || unix.Flock(fd, unix.LOCK_EX|unix.LOCK_NB) != nil {
+		lock.Close()
+		return empty, nil, nil, errors.New("the original installation lock is unsafe or busy")
+	}
+	image, lease, err := core.ExportExistingEnrollmentImage(ctx, paths.Data)
+	if err != nil {
+		lock.Close()
+		return empty, nil, nil, err
+	}
+	closeSource := func() { lease.Close(); lock.Close() }
+	if image.Schema != core.StateSchema {
+		closeSource()
+		return empty, nil, nil, errors.New("the approved predecessor's Local state schema is required")
+	}
+	verify := func() error {
+		manifest, err := inspectLegacyLocalHandoff(paths, coreSHA256)
+		currentLock, lockErr := os.Lstat(path)
+		if err != nil || manifest != preflight.LegacyManifestSHA256 || lockErr != nil || !os.SameFile(info, currentLock) || core.VerifyEnrollmentImageLease(lease) != nil {
+			return errors.New("predecessor changed while preparing adoption")
+		}
+		return nil
+	}
+	return image, verify, closeSource, nil
 }
 
 func filepathHasPrefix(path, prefix string) bool {

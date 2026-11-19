@@ -202,6 +202,34 @@ func ValidatePackageProcess(owner int, location, instance string) (Authority, er
 	return a, VerifyImage(a)
 }
 
+// ValidateLocalAdoptionBridge is for a one-time administrator command. The
+// administrator installs this independently attested bridge in the protected
+// image store. The instance continues to pin the original release installer.
+// The bridge command is deliberately absent from the instance sudo policy.
+func ValidateLocalAdoptionBridge(owner int, instance string) (Authority, string, error) {
+	if os.Getuid() != 0 || os.Geteuid() != 0 {
+		return Authority{}, "", errors.New("administrator Local adoption required")
+	}
+	if caller := os.Getenv("SUDO_UID"); caller != "" && caller != "0" && caller != strconv.Itoa(owner) {
+		return Authority{}, "", errors.New("Local adoption caller does not own this instance")
+	}
+	a, err := ReadPackageAuthority(owner, "local", instance)
+	if err != nil || a.ImageSHA256 != LegacyLocalRetainedInstaller || ValidateOwnerIdentity(a) != nil || VerifyImage(a) != nil {
+		return Authority{}, "", errors.New("the retained Local package authority is required")
+	}
+	path, err := os.Executable()
+	hash := filepath.Base(filepath.Dir(path))
+	if err != nil || !canonicalSHA256(hash) || hash == a.ImageSHA256 || path != ImagePath(hash) {
+		return Authority{}, "", errors.New("use the separately attested protected Local adoption bridge")
+	}
+	bridge := a
+	bridge.ImageSHA256 = hash
+	if err := VerifyImage(bridge); err != nil {
+		return Authority{}, "", err
+	}
+	return a, path, nil
+}
+
 // PackageLock serializes protected operations for one instance. Callers must
 // validate their own protected entry before acquiring it and after waiting.
 func PackageLock(owner int, location, instance string) (*os.File, error) {

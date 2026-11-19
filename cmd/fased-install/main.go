@@ -95,6 +95,10 @@ func run(args []string, in io.Reader, out, errOut io.Writer) error {
 	}
 	if len(args) > 0 {
 		switch args[0] {
+		case "maintenance-package-adopt-local":
+			return maintenancePackageAdoptLocalCommand(args[1:], out)
+		case "maintenance-local-adoption-image":
+			return maintenanceLocalAdoptionImageCommand(args[1:], in, out)
 		case "maintenance-package-transition":
 			return maintenancePackageTransitionCommand(args[1:])
 		case "maintenance-successor":

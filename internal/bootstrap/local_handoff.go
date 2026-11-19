@@ -1,22 +1,26 @@
 package bootstrap
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"runtime"
 
+	"github.com/fased-ai/fased-app/internal/core"
 	"github.com/fased-ai/fased-app/internal/localinstall"
+	"github.com/fased-ai/fased-app/internal/maintenance"
 	"github.com/fased-ai/fased-app/internal/update"
 )
 
 // This handoff is scoped to the publisher's approved public v0.1.6
 // predecessor and retained build 44550182096, artifact 14542082707.
 const (
-	legacyLocalPacket  = "bc64b3c658c36e6e62ec667eb8cdb4936d1c74132dd06c2d448faf241c72eae5"
+	legacyLocalPacket  = maintenance.LegacyLocalPredecessorPacket
 	legacyLocalCore    = "349a8145b7d00ece82faad5e95db0325505378d54253e9b4af19275662b7abbc"
-	localHandoffTarget = "f009a6ad164403688e062e384f23c4ead7d994f1f94d339b8fdf4ee82ffb4725"
+	localHandoffTarget = maintenance.LegacyLocalRetainedPacket
 )
 
 // LocalHandoffPreflight records verified inputs for review. It is not an
@@ -38,6 +42,27 @@ type LocalHandoffStage struct {
 	InstanceID  string `json:"instanceId"`
 	StateSchema int    `json:"stateSchema"`
 	StateSHA256 string `json:"stateSha256"`
+}
+
+func legacyLocalStage(preflight LocalHandoffPreflight, image core.EnrollmentImage) LocalHandoffStage {
+	return LocalHandoffStage{LocalHandoffPreflight: preflight, Version: 1, InstanceID: image.InstanceID,
+		StateSchema: image.Schema, StateSHA256: core.EnrollmentImageDigest(image)}
+}
+
+// The JSON header contains identities only. The second value is the bounded
+// private enrollment image sent directly between the two unprivileged roles.
+func writeLegacyLocalImage(out io.Writer, preflight LocalHandoffPreflight, image core.EnrollmentImage) error {
+	e := json.NewEncoder(out)
+	if err := e.Encode(legacyLocalStage(preflight, image)); err != nil {
+		return err
+	}
+	return e.Encode(image)
+}
+
+func (s LocalHandoffStage) MatchesRetainedPackage(owner int, packet, bundle string) bool {
+	return s.Version == 1 && s.Owner == owner && !s.ApplyAllowed && s.StateSchema == core.StateSchema &&
+		s.LegacyPacketSHA256 == legacyLocalPacket && s.TargetPacketSHA256 == localHandoffTarget &&
+		packet == localHandoffTarget && bundle == maintenance.LegacyLocalRetainedBundle && s.TargetBundleSHA256 == bundle
 }
 
 func VerifyLegacyLocalHandoff(o Options, predecessor, target string, paths localinstall.Paths) (LocalHandoffPreflight, error) {

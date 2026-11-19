@@ -16,6 +16,7 @@ import (
 	"os"
 	"path/filepath"
 	"syscall"
+	"time"
 )
 
 // DiscardMaintenance removes only this invocation's exclusive, still-matching
@@ -60,6 +61,32 @@ func PreparePackageMaintenanceCandidate(ctx context.Context, owner int, location
 	}
 	o.protectedOwner = owner
 	return prepareAttestedCandidate(ctx, o, filepath.Join(root, "candidate", admission.PacketSHA256), admission)
+}
+
+// PrepareLocalAdoptionCandidate reads the candidate already staged by the
+// retained installer. Only the administrator bridge may create this separate
+// private verification copy. Normal update authority still needs its pin.
+func PrepareLocalAdoptionCandidate(ctx context.Context, owner int, instance string, o Options) (*Prepared, error) {
+	if _, _, err := maintenance.ValidateLocalAdoptionBridge(owner, instance); err != nil {
+		return nil, err
+	}
+	root, err := update.PackageMaintenanceRoot(owner, "local", instance)
+	if err != nil {
+		return nil, err
+	}
+	parent := filepath.Join(root, "fased-app", "install")
+	o.Directory = filepath.Join(parent, "legacy-local-adoption-verification")
+	if _, err := os.Lstat(o.Directory); err == nil {
+		if err := discardIncompleteMaintenance(parent, o.Directory); err != nil {
+			return nil, err
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return nil, err
+	}
+	o.protectedOwner = owner
+	packet := maintenance.LegacyLocalRetainedPacket
+	admission := CandidateAdmission{PacketSHA256: packet, OperationID: update.NewProbe(), BaselineSHA256: packet, ExpiresAt: o.clock().Add(15 * time.Minute).Unix()}
+	return prepareAttestedCandidate(ctx, o, filepath.Join(root, "candidate", packet), admission)
 }
 
 // PreparePackageMaintenanceNative fetches the public native release only
