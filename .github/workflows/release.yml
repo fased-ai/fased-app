@@ -26,6 +26,11 @@ on:
         required: false
         default: false
         type: boolean
+      automatic_predecessor_pins:
+        description: Optional test-only 0.1.22 pins (owner UID, machine ID SHA256, Local instance ID separated by colons)
+        required: false
+        default: ""
+        type: string
 permissions:
   contents: read
 concurrency:
@@ -42,6 +47,7 @@ jobs:
           FASED_REPLAY_RUN_ATTEMPT: ${{ inputs.candidate_attempt }}
           FASED_PACKAGE_ONLY: ${{ inputs.package_only }}
           FASED_FEDORA_PREDECESSOR: ${{ inputs.fedora_predecessor }}
+          FASED_AUTOMATIC_PREDECESSOR_PINS: ${{ inputs.automatic_predecessor_pins }}
         run: |
           if [[ "$GITHUB_REF" != refs/heads/main || "$FASED_INPUT_SOURCE" != "$GITHUB_SHA" ]]; then
             echo 'Reviewed main source is required.' >&2
@@ -53,6 +59,10 @@ jobs:
           fi
           if [[ "$FASED_FEDORA_PREDECESSOR" == true && ( "$FASED_PACKAGE_ONLY" != true || -n "$FASED_REPLAY_RUN_ID" || -n "$FASED_REPLAY_RUN_ATTEMPT" ) ]]; then
             echo 'The Fedora test predecessor requires a package-only build.' >&2
+            exit 1
+          fi
+          if [[ -n "$FASED_AUTOMATIC_PREDECESSOR_PINS" && ( "$FASED_PACKAGE_ONLY" != true || "$FASED_FEDORA_PREDECESSOR" == true ) ]]; then
+            echo 'The Automatic test predecessor requires its own package-only build.' >&2
             exit 1
           fi
           if [[ -z "$FASED_REPLAY_RUN_ID" && -z "$FASED_REPLAY_RUN_ATTEMPT" ]]; then exit 0; fi
@@ -75,6 +85,7 @@ jobs:
       FASED_RELEASE_SOURCE: ${{ inputs.source }}
       FASED_PACKAGE_ONLY: ${{ inputs.package_only }}
       FASED_FEDORA_PREDECESSOR: ${{ inputs.fedora_predecessor }}
+      FASED_AUTOMATIC_PREDECESSOR_PINS: ${{ inputs.automatic_predecessor_pins }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -98,13 +109,18 @@ jobs:
       - name: Build and package the reviewed core, signer and verifier once
         env:
           FASED_RELEASE_VERSION: ${{ steps.prepare.outputs.version }}
+          FASED_AUTOMATIC_PREDECESSOR: ${{ steps.prepare.outputs.automatic_predecessor }}
           GOFLAGS: -mod=readonly -overlay=${{ steps.prepare.outputs.overlay }}
         run: |
           go mod verify
           export CGO_ENABLED=0
           go build -trimpath -o .evidence/bin/fased-signer ./cmd/fased-signer
-          node scripts/build-core.mjs --version="$FASED_RELEASE_VERSION" --wallet-signer=.evidence/bin/fased-signer --source="$GITHUB_SHA"
-          node scripts/build-core.mjs --installer --version="$FASED_RELEASE_VERSION" --wallet-signer=.evidence/bin/fased-signer --source="$GITHUB_SHA"
+          fixture_args=()
+          if [[ "$FASED_AUTOMATIC_PREDECESSOR" == true ]]; then
+            fixture_args+=(--automatic-predecessor)
+          fi
+          node scripts/build-core.mjs --version="$FASED_RELEASE_VERSION" --wallet-signer=.evidence/bin/fased-signer --source="$GITHUB_SHA" "${fixture_args[@]}"
+          node scripts/build-core.mjs --installer --version="$FASED_RELEASE_VERSION" --wallet-signer=.evidence/bin/fased-signer --source="$GITHUB_SHA" "${fixture_args[@]}"
           go run -ldflags "-X github.com/fased-ai/fased-app/internal/core.Version=$FASED_RELEASE_VERSION" ./cmd/fased-package --engine .evidence/bin/fased-app --signer .evidence/bin/fased-signer --source "$GITHUB_SHA" --out .evidence/ubuntu-release --linux-bundle-format
           cp .evidence/bin/fased-install .evidence/ubuntu-release/fased-install-linux-amd64
           node scripts/prepare-ubuntu-release.mjs inventory
@@ -131,7 +147,7 @@ jobs:
         if: ${{ always() && steps.prepare.outcome == 'success' }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: ubuntu-amd64-${{ inputs.fedora_predecessor && 'fedora-test-predecessor' || 'release-candidate' }}-${{ github.run_attempt }}
+          name: ubuntu-amd64-${{ inputs.automatic_predecessor_pins != '' && 'automatic-test-predecessor' || inputs.fedora_predecessor && 'fedora-test-predecessor' || 'release-candidate' }}-${{ github.run_attempt }}
           include-hidden-files: true
           retention-days: 7
           if-no-files-found: error

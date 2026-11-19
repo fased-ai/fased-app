@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import {
+  automaticPredecessor,
   bindingOverlay,
   attestedCandidatePacket,
   compatibilityConfig,
@@ -99,6 +100,75 @@ test("Fedora test predecessor is package-only and cannot select a publisher", ()
   );
   assert.throws(() =>
     fedoraPredecessorConfig({ ...c, version: "0.1.13" }, staged, "prepare"),
+  );
+});
+
+test("Automatic predecessor binds one Local receiver in the package-only lane", () => {
+  const c = { ...rawConfig, version: "0.1.23" };
+  const owner = "22000";
+  const machine = "a".repeat(64);
+  const instance = "b".repeat(32);
+  const pins = `${owner}:${machine}:${instance}`;
+  const staged = {
+    ...env,
+    GITHUB_EVENT_NAME: "workflow_dispatch",
+    GITHUB_REF: "refs/heads/main",
+    GITHUB_WORKFLOW_REF: `${c.repository}/${c.workflow}@refs/heads/main`,
+    FASED_RELEASE_SOURCE: source.commit,
+    FASED_PACKAGE_ONLY: "true",
+    FASED_FEDORA_PREDECESSOR: "false",
+    FASED_AUTOMATIC_PREDECESSOR_PINS: pins,
+  };
+  const automatic = automaticPredecessor(c, staged, "prepare");
+  assert.deepEqual(automatic, {
+    config: { ...c, version: "0.1.22" },
+    owner,
+    machine,
+    instance,
+  });
+  assert.equal(c.version, "0.1.23");
+  assert.equal(automaticPredecessor(c, env, "prepare"), null);
+  for (const patch of [
+    { FASED_PACKAGE_ONLY: "false" },
+    { FASED_FEDORA_PREDECESSOR: "true" },
+    { GITHUB_REF: "refs/heads/other" },
+    { FASED_RELEASE_SOURCE: "0".repeat(40) },
+    { FASED_AUTOMATIC_PREDECESSOR_PINS: `0:${machine}:${instance}` },
+    { FASED_AUTOMATIC_PREDECESSOR_PINS: `${pins}\n` },
+    { FASED_AUTOMATIC_PREDECESSOR_PINS: `${owner}:${machine}:` },
+  ]) {
+    assert.throws(() =>
+      automaticPredecessor(c, { ...staged, ...patch }, "prepare"),
+    );
+  }
+  for (const command of ["publisher", "replay", "signer-sign"]) {
+    assert.throws(() => automaticPredecessor(c, staged, command));
+  }
+  assert.throws(() =>
+    automaticPredecessor({ ...c, version: "0.1.24" }, staged, "prepare"),
+  );
+  const seed = Buffer.from("approved seed");
+  const bindings = bindingOverlay(seed, sha(seed), "/fixture", automatic);
+  assert.equal(bindings.length, 4);
+  const bound = bindings.at(-1);
+  assert.match(
+    bound.target,
+    /internal\/hostplatform\/automatic_predecessor_pins_generated.go$/,
+  );
+  assert.match(
+    bound.source,
+    /^\/\/go:build .* && fased_automatic_predecessor /,
+  );
+  assert.ok(bound.source.includes(`AutomaticPredecessorOwnerUID = "${owner}"`));
+  assert.ok(
+    bound.source.includes(`AutomaticPredecessorMachineSHA256 = "${machine}"`),
+  );
+  assert.ok(
+    bound.source.includes(`AutomaticPredecessorInstance = "${instance}"`),
+  );
+  assert.throws(
+    () => verifiedCandidate(c, { version: "0.1.22" }, {}, {}, {}, {}),
+    /Candidate\/public approval identity changed/,
   );
 });
 

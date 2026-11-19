@@ -4,6 +4,7 @@ import { copyFile, mkdir, readFile, rm } from "node:fs/promises";
 import { createHash } from "node:crypto";
 const args = process.argv.slice(2);
 const installer = args.includes("--installer");
+const automaticPredecessor = args.includes("--automatic-predecessor");
 const one = (prefix) => {
   const values = args.filter((a) => a.startsWith(prefix));
   if (values.length > 1) throw Error("Duplicate build option");
@@ -17,16 +18,20 @@ if (
   args.some(
     (a) =>
       a !== "--installer" &&
+      a !== "--automatic-predecessor" &&
       !a.startsWith("--version=") &&
       !a.startsWith("--wallet-signer=") &&
       !a.startsWith("--wallet-desktop=") &&
       !a.startsWith("--source="),
   ) ||
-  args.filter((a) => a === "--installer").length > 1
+  args.filter((a) => a === "--installer").length > 1 ||
+  args.filter((a) => a === "--automatic-predecessor").length > 1
 )
   throw Error("Invalid core build option");
 if (version && !/^[0-9]+\.[0-9]+\.[0-9]+(?:-[A-Za-z0-9.-]+)?$/.test(version))
   throw Error("Invalid release version");
+if (automaticPredecessor && (version !== "0.1.22" || !signer || desktop))
+  throw Error("The Automatic predecessor requires the 0.1.22 browser bundle");
 if (
   (signer || desktop || source) &&
   (!signer || !version || !/^[a-f0-9]{40}$/.test(source ?? ""))
@@ -81,14 +86,16 @@ try {
       flags.push(`-X main.compiledNativeDesktopSHA256=${hash}`);
     }
   }
+  const tags = [];
+  if (installer && signer) tags.push("wallet_payload");
+  if (installer && desktop) tags.push("wallet_native");
+  if (automaticPredecessor) tags.push("fased_automatic_predecessor");
   execFileSync(
     "go",
     [
       "build",
       "-trimpath",
-      ...(installer && signer
-        ? ["-tags", desktop ? "wallet_payload,wallet_native" : "wallet_payload"]
-        : []),
+      ...(tags.length ? ["-tags", tags.join(",")] : []),
       ...(flags.length ? ["-ldflags", flags.join(" ")] : []),
       "-o",
       `.evidence/bin/${target}${process.platform === "win32" ? ".exe" : ""}`,
