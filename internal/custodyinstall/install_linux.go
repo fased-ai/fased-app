@@ -897,6 +897,10 @@ func loadedUnitPolicy(m Manifest, role string, wanted []byte, image string) erro
 	return err
 }
 func loadedUnitPolicyFields(m Manifest, role string, wanted []byte, image string) (map[string]string, error) {
+	return inspectLoadedUnitPolicyFields(m, role, wanted, image, nil)
+}
+
+func inspectLoadedUnitPolicyFields(m Manifest, role string, wanted []byte, image string, needsReload *bool) (map[string]string, error) {
 	f, e := readRoot("/etc/systemd/system/" + instanceUnit(m, role))
 	if e != nil {
 		return nil, e
@@ -915,13 +919,28 @@ func loadedUnitPolicyFields(m Manifest, role string, wanted []byte, image string
 			fields[p[0]] = p[1]
 		}
 	}
-	if err := validateLoadedUnitFields(m, role, image, fields, readRoot, scopedMigrationEnabled); err != nil {
+	if err := inspectLoadedUnitFields(m, role, image, fields, readRoot, scopedMigrationEnabled, needsReload); err != nil {
 		return nil, err
 	}
 	return fields, nil
 }
 
 func validateLoadedUnitFields(m Manifest, role, image string, fields map[string]string, read readHost, scope func(int) (bool, error)) error {
+	return inspectLoadedUnitFields(m, role, image, fields, read, scope, nil)
+}
+
+func acceptSystemdUnitFreshness(value string, needsReload *bool) bool {
+	if value == "no" {
+		return true
+	}
+	if value != "yes" || needsReload == nil {
+		return false
+	}
+	*needsReload = true
+	return true
+}
+
+func inspectLoadedUnitFields(m Manifest, role, image string, fields map[string]string, read readHost, scope func(int) (bool, error), needsReload *bool) error {
 	if role != "app" && role != "signer" {
 		return errors.New("unknown managed service")
 	}
@@ -929,7 +948,7 @@ func validateLoadedUnitFields(m Manifest, role, image string, fields map[string]
 	if role == "signer" {
 		i = m.Signer
 	}
-	if instanceUnit(m, role) == "" || fields["FragmentPath"] != "/etc/systemd/system/"+instanceUnit(m, role) || fields["User"] != strconv.Itoa(i.UID) || fields["Group"] != strconv.Itoa(i.GID) || fields["NoNewPrivileges"] != "yes" || fields["ProtectSystem"] != "strict" || fields["NeedDaemonReload"] != "no" || !strings.Contains(fields["ExecStart"], "path="+image+" ;") {
+	if instanceUnit(m, role) == "" || fields["FragmentPath"] != "/etc/systemd/system/"+instanceUnit(m, role) || fields["User"] != strconv.Itoa(i.UID) || fields["Group"] != strconv.Itoa(i.GID) || fields["NoNewPrivileges"] != "yes" || fields["ProtectSystem"] != "strict" || !acceptSystemdUnitFreshness(fields["NeedDaemonReload"], needsReload) || !strings.Contains(fields["ExecStart"], "path="+image+" ;") {
 		return errors.New("unexpected systemd identity/override; refusing project code under a different policy")
 	}
 	dropIns := strings.Fields(fields["DropInPaths"])

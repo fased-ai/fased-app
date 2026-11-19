@@ -133,6 +133,10 @@ func installPackageMaintenanceUnits(ctx context.Context, a maintenance.Authority
 }
 
 func verifyPackageRootUnits(ctx context.Context, a maintenance.Authority, m Manifest, operation string) error {
+	return inspectPackageRootUnits(ctx, a, m, operation, nil)
+}
+
+func inspectPackageRootUnits(ctx context.Context, a maintenance.Authority, m Manifest, operation string, needsReload *bool) error {
 	if !update.IDOK(operation) {
 		return errors.New("exact package operation required")
 	}
@@ -159,7 +163,7 @@ func verifyPackageRootUnits(ctx context.Context, a maintenance.Authority, m Mani
 		if e != nil {
 			return e
 		}
-		if fields["LoadState"] != "loaded" || fields["FragmentPath"] != filepath.Join("/etc/systemd/system", item.fragment) || !allowedPackageDropIns(fields["DropInPaths"], readRoot) || fields["NeedDaemonReload"] != "no" || fields["Type"] != "oneshot" || fields["User"] != "" || fields["Group"] != "" || fields["NoNewPrivileges"] != "yes" || fields["LimitCORE"] != "0" {
+		if fields["LoadState"] != "loaded" || fields["FragmentPath"] != filepath.Join("/etc/systemd/system", item.fragment) || !allowedPackageDropIns(fields["DropInPaths"], readRoot) || !acceptSystemdUnitFreshness(fields["NeedDaemonReload"], needsReload) || fields["Type"] != "oneshot" || fields["User"] != "" || fields["Group"] != "" || fields["NoNewPrivileges"] != "yes" || fields["LimitCORE"] != "0" {
 			return errors.New("foreign or stale package maintenance service; preserve it")
 		}
 		wanted := append([]string{image, item.command}, args...)

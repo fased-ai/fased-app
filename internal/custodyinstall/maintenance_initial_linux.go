@@ -237,9 +237,13 @@ func emptySignerDirectory(path string, uid, gid int) error {
 
 // Verify the actual loaded systemd commands, not just a matching unit file.
 func verifyLoadedPackageServices(ctx context.Context, m Manifest) error {
+	return inspectLoadedPackageServices(ctx, m, nil)
+}
+
+func inspectLoadedPackageServices(ctx context.Context, m Manifest, needsReload *bool) error {
 	for _, role := range []string{"app", "signer"} {
 		definition := definitions(m)["fased-"+role+".service"]
-		if _, err := loadedUnitPolicyFields(m, role, definition, m.Root+"/fased-"+role); err != nil {
+		if _, err := inspectLoadedUnitPolicyFields(m, role, definition, m.Root+"/fased-"+role, needsReload); err != nil {
 			return err
 		}
 		raw, err := atomicUnitServiceProperties(ctx, instanceUnit(m, role))

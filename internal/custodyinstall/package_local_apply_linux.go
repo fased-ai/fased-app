@@ -66,12 +66,6 @@ func ApplyLegacyLocalAdoption(ctx context.Context, owner int, instance, listen s
 		verifyPackageWalletMarker(m) != nil {
 		return result, errors.New("the recorded Local adoption proof and workspace must match")
 	}
-	if err = verifyLoadedPackageServices(ctx, m); err != nil {
-		return result, err
-	}
-	if err = verifyPackageRootUnits(ctx, a, m, instance); err != nil {
-		return result, err
-	}
 	if err = VerifyUnconfiguredPackageSigner(ctx, m); err != nil {
 		return result, err
 	}
@@ -104,6 +98,18 @@ func ApplyLegacyLocalAdoption(ctx context.Context, owner int, instance, listen s
 		}
 	}
 	if err = verifySource(); err != nil {
+		return result, err
+	}
+	verifyUnits := func(needsReload *bool) error {
+		if err := inspectLoadedPackageServices(ctx, m, needsReload); err != nil {
+			return err
+		}
+		return inspectPackageRootUnits(ctx, a, m, instance, needsReload)
+	}
+	if err = reconcileLegacyLocalApplyUnits(recover && !held && !complete, verifyUnits, func() error {
+		_, err := protectedSystemctl(ctx, "daemon-reload")
+		return err
+	}); err != nil {
 		return result, err
 	}
 	if complete {
@@ -151,6 +157,27 @@ func ApplyLegacyLocalAdoption(ctx context.Context, owner int, instance, listen s
 	}
 	result.Completed = true
 	return result, nil
+}
+
+// Interrupted enable can leave the verified unit files on disk ahead of the
+// manager's view. Only recovery of an unfinished, unfenced Apply may refresh
+// it. Verify every other policy property first, then recheck the loaded policy
+// strictly before starting anything.
+func reconcileLegacyLocalApplyUnits(recoverAfterEnable bool, verify func(*bool) error, reload func() error) error {
+	if !recoverAfterEnable {
+		return verify(nil)
+	}
+	var needsReload bool
+	if err := verify(&needsReload); err != nil {
+		return err
+	}
+	if !needsReload {
+		return nil
+	}
+	if err := reload(); err != nil {
+		return err
+	}
+	return verify(nil)
 }
 
 func checkStoppedLegacyOwner(ctx context.Context, a maintenance.Authority) error {
