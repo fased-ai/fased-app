@@ -24,6 +24,7 @@ type WalletSetup struct {
 	NetworkWatchEnabled bool   `json:"networkWatchEnabled"`
 	OwnerSupported      bool   `json:"ownerSupported"`
 	PackageOwner        bool   `json:"packageOwner,omitempty"`
+	RemotePackage       string `json:"remotePackage,omitempty"`
 }
 
 type AccountSetupCommand struct {
@@ -41,16 +42,19 @@ func (s *Store) walletSetup(live FixtureView) WalletSetup {
 		v.FixtureOnly = false
 	}
 	v.InstanceID = s.instanceID
-	v.PackageOwner = s.custodyPackageLocal
 	switch s.installationSource.Load() {
 	case 1:
 		v.Source = "local"
 	case 2:
 		v.Source = "remote"
 	}
+	v.PackageOwner = s.custodyPackageLocation == "local"
+	if v.Source == "remote" && s.custodyPackageLocation == "remote" && s.custodyOwnerKey {
+		v.RemotePackage = s.custodyPackageID
+	}
 	if s.unconfiguredProtectedSigner {
 		v.State = "unavailable"
-		v.OwnerSupported = v.OwnerSupported && s.custodyOwnerSupported && s.custodyPackageLocal && v.Source == "local"
+		v.OwnerSupported = v.OwnerSupported && s.custodyOwnerSupported && (v.Source == "local" && v.PackageOwner || v.RemotePackage != "")
 		if v.OwnerSupported {
 			// The signer is deliberately not contacted before network selection.
 			// The protected helper checks that its real state is empty and stopped.

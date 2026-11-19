@@ -6,6 +6,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"github.com/fased-ai/fased-app/internal/ownerclient"
 	"io"
 	"os"
 	"os/exec"
@@ -29,6 +30,18 @@ func custodyCommand(args []string, in *os.File, out, errOut io.Writer) (result e
 			Supported    bool `json:"supported"`
 			WalletSigner bool `json:"walletSigner"`
 		}{1, ordinaryEnrollmentSupported(), false})
+	}
+	if len(args) > 0 && args[0] == "remote-wallet" {
+		f := flag.NewFlagSet("custody remote-wallet", flag.ContinueOnError)
+		f.SetOutput(errOut)
+		user := f.String("ssh-user", "", "existing private SSH owner")
+		instance := f.String("package-instance", "", "installed Remote package identifier")
+		if err := f.Parse(args[1:]); err != nil || f.NArg() != 1 || *user == "" || *instance == "" {
+			return errors.New("usage: fased custody remote-wallet --ssh-user OWNER --package-instance ID WALLET_LINK")
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+		defer cancel()
+		return ownerclient.OpenRemoteBrowser(ctx, f.Arg(0), *user, *instance)
 	}
 	if len(args) > 0 && args[0] == "window" {
 		return custodyWindowCommand(args[1:], in, out, errOut)

@@ -3,6 +3,7 @@ import {
   accountAddress,
   fixtureNetwork,
   rpcEndpoint,
+  remoteWalletOwnerCommand,
   walletOwnerCommands,
   walletOwnerLink,
   walletSetupLabel,
@@ -404,4 +405,19 @@ it("offers ordinary owner setup only for an empty bound controlled owner profile
   custody.profile = "owner-authorized:v1";
   view.setup!.ownerSupported = false;
   expect(walletOwnerCommands(view, "create", "devnet")).toEqual([]);
+});
+
+it("builds a Remote Wallets command from public, shell-safe inputs", () => {
+  const id = "e05bd3b2791e426ba34fe9563cd149cc";
+  const instance = "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE";
+  const origin = "https://my-server.ts.net";
+  const command = (user: string, target: string, url: string) =>
+    remoteWalletOwnerCommand(user, target, instance, "devnet", "recover", url);
+
+  expect(command("fased-operator", id, origin)).toBe(
+    `fased custody remote-wallet --ssh-user fased-operator --package-instance ${id} '${walletOwnerLink(instance, "devnet", "recover", origin)}'`,
+  );
+  expect(command("owner;exit", id, origin)).toBe("");
+  expect(command("owner", "../fased-app", origin)).toBe("");
+  expect(command("owner", id, "https://public.example")).toBe("");
 });

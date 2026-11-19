@@ -18,6 +18,6 @@ func initializePackageWallet(string, string, string, bool, bool, io.Writer) erro
 	return errors.New("protected package wallet requires Linux")
 }
 
-func pendingPackageWalletTarget(int, string, string) (custodyinstall.Manifest, bool, error) {
-	return custodyinstall.Manifest{}, false, nil
+func pendingPackageWalletTarget(int, string, string) (custodyinstall.Manifest, string, error) {
+	return custodyinstall.Manifest{}, "", nil
 }

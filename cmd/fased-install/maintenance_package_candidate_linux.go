@@ -191,8 +191,8 @@ func retireFreshPackageCandidate(ctx context.Context, a maintenance.Authority, l
 		return errors.New("the original configured wallet identity differs; preserve its candidate")
 	}
 	helper := a.ImageSHA256
-	if location == "local" && receipt.InstallerSHA256 != helper {
-		t, e := update.ReadPackageHelperTransition(a.Owner, instance)
+	if receipt.InstallerSHA256 != helper {
+		t, e := update.ReadPackageHelperTransition(a.Owner, location, instance)
 		if e != nil || !t.Inherits(r) || t.NextHelper != helper || t.PreviousHelper != receipt.InstallerSHA256 {
 			return errors.New("fresh candidate does not match the original helper")
 		}
@@ -342,12 +342,12 @@ func freshPackageCandidateMatches(a maintenance.Authority, location, instance st
 }
 
 func archivedPackageCandidateMatches(a maintenance.Authority, location, instance string, receipt maintenance.CandidateReceipt, r update.MaintenanceRecord,
-	readTransition func(int, string) (update.PackageHelperTransition, error), verifyImage func(maintenance.Authority) error) error {
+	readTransition func(int, string, string) (update.PackageHelperTransition, error), verifyImage func(maintenance.Authority) error) error {
 	if receipt.Scope == "update" {
 		return matchCompletedPackageCandidate(a, location, instance, receipt, r, custodyinstall.SelectArchivedPackageCompletion)
 	}
-	if location == "local" && receipt.InstallerSHA256 != a.ImageSHA256 {
-		t, err := readTransition(a.Owner, instance)
+	if receipt.InstallerSHA256 != a.ImageSHA256 {
+		t, err := readTransition(a.Owner, location, instance)
 		if err != nil || !t.Valid(a.Owner, instance) || t.NextHelper != a.ImageSHA256 || t.PreviousHelper != receipt.InstallerSHA256 ||
 			r.Package == nil || r.Package.InstallerDigest() != t.PreviousHelper {
 			return errors.New("archived package does not belong to the predecessor helper")

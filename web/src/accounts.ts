@@ -60,6 +60,7 @@ export type AccountsView = {
     networkWatchEnabled: boolean;
     ownerSupported: boolean;
     packageOwner?: boolean;
+    remotePackage?: string;
   };
   addresses?: Record<string, string>;
   record: AccountsRecord;
@@ -121,6 +122,25 @@ export function walletOwnerLink(
   }
   q.sort();
   return `${packageOwner ? "fased-wallet" : "fased"}://wallet-owner?${q.toString()}`;
+}
+
+export function remoteWalletOwnerCommand(
+  user: string,
+  packageID: string,
+  instance: string,
+  network: string,
+  action: "setup" | "import" | "recover",
+  origin: string,
+): string {
+  if (
+    !/^[a-z_][a-z0-9_-]{0,31}$/.test(user) ||
+    !/^[0-9a-f]{32}$/.test(packageID) ||
+    !origin
+  )
+    return "";
+  const link = walletOwnerLink(instance, network, action, origin);
+  if (!link) return "";
+  return `fased custody remote-wallet --ssh-user ${user} --package-instance ${packageID} '${link}'`;
 }
 
 export function accountAddress(a: Account, view: AccountsView): string {

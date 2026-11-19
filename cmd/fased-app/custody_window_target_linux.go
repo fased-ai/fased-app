@@ -8,10 +8,13 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/fased-ai/fased-app/internal/custodyinstall"
 	"github.com/fased-ai/fased-app/internal/maintenance"
+	"github.com/fased-ai/fased-app/internal/signer"
 	"github.com/fased-ai/fased-app/internal/update"
 )
 
@@ -22,13 +25,13 @@ func initializePackageWallet(instance, network, operation string, fixture, ordin
 	if !request.Valid() {
 		return errors.New("invalid wallet initialization")
 	}
-	data, err := defaultPackageLocalData("", false)
+	data, err := packageWalletCommandData(os.Getuid())
 	if err != nil || data == "" {
 		return errors.New("the original package wallet is required")
 	}
 	m, err := custodyinstall.LoadPackageInstance(os.Getuid(), filepath.Dir(data))
-	if err != nil || data != filepath.Join(m.Root, "app-state") || m.Location != "local" || m.Network != "" && m.Network != network {
-		return errors.New("the original Local package wallet is required")
+	if err != nil || data != filepath.Join(m.Root, "app-state") || m.Network != "" && m.Network != network {
+		return errors.New("the original package wallet is required")
 	}
 	if _, err = walletOwnerMode(m, fixture, ordinary, false); err != nil {
 		return err
@@ -36,28 +39,56 @@ func initializePackageWallet(instance, network, operation string, fixture, ordin
 	if _, err = custodyOwnerFlag(m, "setup"); err != nil {
 		return err
 	}
+	commit, err := custodyinstall.ReadEnrollmentCommit(m)
+	if err != nil || commit.InstanceID != instance {
+		// In-flight initialization may already have replaced some metadata.
+		// Only its original operation may reach the helper in that case.
+		_, pending, e := custodyinstall.PendingPackageWallet(m.Owner, m.Location, m.ID)
+		if e != nil || pending == nil || *pending != request {
+			return errors.New("the original package workspace and wallet operation are required")
+		}
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
 	return maintenance.PackageCall(ctx, m.Location, m.ID, maintenance.PackageRequest{Version: 1, Action: "wallet-initialize", Wallet: &request}, diagnostics)
 }
 
-func pendingPackageWalletTarget(owner int, instance, network string) (custodyinstall.Manifest, bool, error) {
-	data, err := defaultPackageLocalData("", false)
+// Remote owner commands must execute the exact protected image for their
+// instance. A caller cannot pick a path through an argument or environment.
+func packageWalletCommandData(owner int) (string, error) {
+	image, err := os.Executable()
+	if err != nil {
+		return "", err
+	}
+	base := filepath.Join("/var/lib/fased-app-package", strconv.Itoa(owner), "remote") + "/"
+	if !strings.HasPrefix(image, base) {
+		return defaultPackageLocalData("", false)
+	}
+	root := filepath.Dir(image)
+	expected, err := update.PackageInstanceRoot(owner, "remote", filepath.Base(root))
+	if err != nil || root != expected || image != filepath.Join(root, "fased-app") || signer.VerifyExecutable() != nil {
+		return "", errors.New("the original protected Remote owner command is required")
+	}
+	return filepath.Join(root, "app-state"), nil
+}
+
+func pendingPackageWalletTarget(owner int, instance, network string) (custodyinstall.Manifest, string, error) {
+	data, err := packageWalletCommandData(owner)
 	if err != nil || data == "" {
-		return custodyinstall.Manifest{}, false, err
+		return custodyinstall.Manifest{}, "", err
 	}
 	m, err := custodyinstall.LoadPackageInstance(owner, filepath.Dir(data))
 	if err != nil || data != filepath.Join(m.Root, "app-state") {
-		return custodyinstall.Manifest{}, false, errors.New("the original Local package wallet is required")
+		return custodyinstall.Manifest{}, "", errors.New("the original package wallet is required")
 	}
 	base, pending, err := custodyinstall.PendingPackageWallet(owner, m.Location, m.ID)
 	if err != nil || pending == nil {
-		return custodyinstall.Manifest{}, false, err
+		return custodyinstall.Manifest{}, "", err
 	}
 	if pending.InstanceID != instance || pending.Network != network {
-		return custodyinstall.Manifest{}, false, errors.New("a different wallet setup requires recovery")
+		return custodyinstall.Manifest{}, "", errors.New("a different wallet setup requires recovery")
 	}
-	return base, true, nil
+	return base, pending.OperationID, nil
 }
 
 // An installed package command must never fall back to owner-wide custody.
@@ -66,7 +97,7 @@ func custodyWindowTarget(owner int) (custodyinstall.Manifest, bool, error) {
 	if owner <= 0 || os.Getuid() != owner || os.Geteuid() != owner {
 		return custodyinstall.Manifest{}, false, errors.New("ordinary package owner required")
 	}
-	data, err := defaultPackageLocalData("", false)
+	data, err := packageWalletCommandData(owner)
 	if err != nil {
 		return custodyinstall.Manifest{}, false, err
 	}
