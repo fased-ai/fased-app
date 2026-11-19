@@ -265,6 +265,8 @@ func packageHeldPairMatches(p update.MaintenancePackage, staged update.Intent, h
 	return true
 }
 
+var errPackageRecoveryFenceMissing = errors.New("original package recovery fence is unavailable")
+
 func verifyPackageStartFences(m Manifest, r update.MaintenanceRecord, read readHost) error {
 	if read == nil {
 		return errors.New("protected package fence reader required")
@@ -277,7 +279,7 @@ func verifyPackageStartFences(m Manifest, r update.MaintenanceRecord, read readH
 		if r.Phase == "idle" || r.Phase == "prepared" || r.Phase == "completed" {
 			return nil
 		}
-		return errors.New("original package recovery fence is unavailable")
+		return errPackageRecoveryFenceMissing
 	}
 	if err != nil || r.Phase == "idle" || !known(fence, update.MaintenanceFence(r.OperationID), 0644) {
 		return errors.New("a different package recovery fence is active")

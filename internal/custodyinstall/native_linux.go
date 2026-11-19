@@ -198,7 +198,18 @@ func VerifyPackageOwnerTarget(m Manifest) error {
 	if err = verifyPackageWalletMarker(m); err != nil {
 		return err
 	}
-	return verifyPackageStartFences(m, r, readRoot)
+	return verifyPackageOwnerFences(m, r, readRoot)
+}
+
+// The owner path can wait while the helper persists completion after removing
+// the active fence. The selected pair and its completed signer receipt have
+// already been verified. The service-start gate still requires the fence.
+func verifyPackageOwnerFences(m Manifest, r update.MaintenanceRecord, read readHost) error {
+	err := verifyPackageStartFences(m, r, read)
+	if errors.Is(err, errPackageRecoveryFenceMissing) && m.Location == "local" && r.Start == "target" && r.Phase == "signer-completed" {
+		return core.ErrCoreUnavailable
+	}
+	return err
 }
 
 // A protected stop allows a status caller to wait for the same operation. It

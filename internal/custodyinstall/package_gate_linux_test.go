@@ -677,14 +677,14 @@ func TestPackageGateAdmitsOnlyTheOriginalHeldTarget(t *testing.T) {
 	p.Components = append([]update.Component(nil), previous.Components...)
 	p.Components[0].Artifact.SHA256, p.Components[1].Artifact.SHA256 = target.CoreHash, target.SignerHash
 	op := strings.Repeat("f", 32)
-	core := update.CoreSnapshot{Version: 1, BootID: strings.Repeat("1", 32), ProbeID: strings.Repeat("2", 32), InstanceID: "fixture-instance", State: update.State{Name: "core-db", Version: 1, Anchor: strings.Repeat("3", 64)}}
-	approval := update.MaintenanceApproval{Version: 1, Owner: base.Owner, InstallationID: base.ID, OperationID: op, HelperSHA256: strings.Repeat("4", 64), Source: p.Source, ProductVersion: p.Version, ReleaseSHA256: p.ReleaseSHA256, ProvenanceSHA256: p.ProvenanceSHA256, PreviousCore: base.CoreHash, PreviousSigner: base.SignerHash, PreviousManifest: sum(mustJSON(base)), Core: core,
+	snapshot := update.CoreSnapshot{Version: 1, BootID: strings.Repeat("1", 32), ProbeID: strings.Repeat("2", 32), InstanceID: "fixture-instance", State: update.State{Name: "core-db", Version: 1, Anchor: strings.Repeat("3", 64)}}
+	approval := update.MaintenanceApproval{Version: 1, Owner: base.Owner, InstallationID: base.ID, OperationID: op, HelperSHA256: strings.Repeat("4", 64), Source: p.Source, ProductVersion: p.Version, ReleaseSHA256: p.ReleaseSHA256, ProvenanceSHA256: p.ProvenanceSHA256, PreviousCore: base.CoreHash, PreviousSigner: base.SignerHash, PreviousManifest: sum(mustJSON(base)), Core: snapshot,
 		Plan: update.Manifest{Version: 1, Product: "fased-app-maintenance", Channel: "protected-installer", Sequence: p.Sequence, IssuedAt: 1, ExpiresAt: 2, Target: update.Target{OS: "linux", Arch: "amd64"}, Components: p.Components}}
 	if err := approval.Validate(); err != nil {
 		t.Fatal("invalid approval fixture", err)
 	}
-	request := &update.CorePauseRequest{Version: 1, IntentID: op, Sequence: p.Sequence, ManifestSHA256: approval.Digest(), Expected: core}
-	index := update.RecoveryIndex{Version: 1, Phase: "metadata-backed-up", Binding: update.RecoveryBinding{Version: 1, Pause: update.CorePauseReceipt{Version: 1, State: "paused", PauseID: strings.Repeat("5", 32), Request: request, Core: core}, Signer: update.SignerSnapshot{Version: 3, ActiveIntentID: op, RecoveryHold: true, SequenceFloor: p.Sequence}}, Snapshot: update.MetadataSnapshot{File: "metadata.sqlite", Size: 16, SHA256: strings.Repeat("6", 64)}}
+	request := &update.CorePauseRequest{Version: 1, IntentID: op, Sequence: p.Sequence, ManifestSHA256: approval.Digest(), Expected: snapshot}
+	index := update.RecoveryIndex{Version: 1, Phase: "metadata-backed-up", Binding: update.RecoveryBinding{Version: 1, Pause: update.CorePauseReceipt{Version: 1, State: "paused", PauseID: strings.Repeat("5", 32), Request: request, Core: snapshot}, Signer: update.SignerSnapshot{Version: 3, ActiveIntentID: op, RecoveryHold: true, SequenceFloor: p.Sequence}}, Snapshot: update.MetadataSnapshot{File: "metadata.sqlite", Size: 16, SHA256: strings.Repeat("6", 64)}}
 	staged := update.Intent{ID: op, Sequence: p.Sequence, ManifestSHA256: approval.Digest(), State: "staged", Lifecycle: p.Components[0].Contract.Lifecycle}
 	var contracts []update.Contract
 	for _, component := range p.Components {
@@ -717,6 +717,51 @@ func TestPackageGateAdmitsOnlyTheOriginalHeldTarget(t *testing.T) {
 	if err != nil || selected != target {
 		t.Fatal("the matching held target was refused", err)
 	}
+	t.Run("owner polls after fence removal before final journal write", func(t *testing.T) {
+		completed := *installation
+		completed.Phase, completed.InstalledSequenceCommitted = "completed", true
+		current, durable := r, r
+		current.Installation = &completed
+		released := index.Binding.Pause
+		released.State = "released"
+		missing := func(string) (hostFile, error) { return hostFile{}, os.ErrNotExist }
+		if err := verifyPackageOwnerFences(target, r, missing); err == nil || errors.Is(err, core.ErrCoreUnavailable) {
+			t.Fatal("an earlier missing fence must remain fatal", err)
+		}
+		err := completeVerifiedSignerReceipt(&current, &completed,
+			func(next update.MaintenanceRecord) error { durable = next; return nil },
+			func(*update.Installation) (update.CorePauseReceipt, error) { return released, nil },
+			func() error {
+				selected, err := packageStartSelection(durable, base.Owner, base.Location, base.ID, read)
+				if err != nil || selected != target || durable.Phase != "signer-completed" {
+					t.Fatal("unexpected protected completion phase", err)
+				}
+				if err := verifyPackageStartFences(target, durable, missing); err == nil {
+					t.Fatal("the service-start gate accepted a missing fence")
+				}
+				for _, path := range []string{"/update-active.json", "/update-start-blocked.json"} {
+					foreignFence := func(name string) (hostFile, error) {
+						if name == target.Root+path {
+							return hostFile{UID: 0, Regular: true, Mode: 0644, Data: update.MaintenanceFence(strings.Repeat("9", 32))}, nil
+						}
+						return missing(name)
+					}
+					if err := verifyPackageOwnerFences(target, durable, foreignFence); err == nil || errors.Is(err, core.ErrCoreUnavailable) {
+						t.Fatal("a foreign fence became retryable", path, err)
+					}
+				}
+				if err := verifyPackageOwnerFences(target, durable, missing); !errors.Is(err, core.ErrCoreUnavailable) {
+					t.Fatal("the owner cannot wait for the original final journal write", err)
+				}
+				return nil
+			})
+		if err != nil || durable.OperationID != op || durable.Phase != "completed" {
+			t.Fatal("the same operation did not complete", err)
+		}
+		if err = verifyPackageOwnerFences(target, durable, missing); err != nil {
+			t.Fatal("the completed operation is unreadable", err)
+		}
+	})
 	for name, change := range map[string]func(*update.MaintenanceRecord){
 		"foreign approval": func(v *update.MaintenanceRecord) {
 			a := *v.Approval

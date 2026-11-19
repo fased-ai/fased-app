@@ -66,17 +66,23 @@ func TestOrdinaryUpdateFailureAndBoundedWait(t *testing.T) {
 }
 
 func TestOrdinaryUpdateReconnectsOnlyAvailability(t *testing.T) {
+	const operation = "11111111111111111111111111111111"
+	release := core.ApplicationRelease{Version: "0.1.20", Sequence: 1000021, ManifestSHA256: strings.Repeat("a", 64)}
 	for _, failure := range []error{core.ErrCoreUnavailable, core.ErrUnauthorized} {
 		calls, applies := 0, 0
+		var out bytes.Buffer
 		call := func(action string, w io.Writer) error {
 			calls++
 			if action == "apply" {
 				applies++
 			}
 			if calls == 3 {
+				if action != "status" {
+					t.Fatalf("expected a status read after Apply, got %s", action)
+				}
 				return failure
 			}
-			v := core.ApplicationUpdateView{}
+			v := core.ApplicationUpdateView{Operation: core.ApplicationUpdateOperation{ID: operation, Release: &release}}
 			switch calls {
 			case 1:
 				v.Operation.Phase = "available"
@@ -87,12 +93,12 @@ func TestOrdinaryUpdateReconnectsOnlyAvailability(t *testing.T) {
 			}
 			return json.NewEncoder(w).Encode(v)
 		}
-		e := runUpdateWizard(call, io.Discard, io.Discard, func() {}, 6)
-		if failure == core.ErrCoreUnavailable && e != nil {
-			t.Fatal(e)
+		e := runUpdateWizard(call, &out, io.Discard, func() {}, 6)
+		if failure == core.ErrCoreUnavailable && (e != nil || calls != 4 || out.String() != "Updated\n") {
+			t.Fatal("the original update did not finish after reconnect", calls, out.String(), e)
 		}
-		if failure == core.ErrUnauthorized && e == nil {
-			t.Fatal("authentication failure retried")
+		if failure == core.ErrUnauthorized && (!errors.Is(e, core.ErrUnauthorized) || calls != 3 || out.Len() != 0) {
+			t.Fatal("authentication failure retried or reported completion", calls, out.String(), e)
 		}
 		if applies != 1 {
 			t.Fatal("apply was repeated", applies)
