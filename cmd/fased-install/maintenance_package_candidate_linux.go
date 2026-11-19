@@ -307,6 +307,10 @@ func archivePackageCandidate(a maintenance.Authority, location, instance string,
 }
 
 func completedPackageCandidateMatches(a maintenance.Authority, location, instance string, receipt maintenance.CandidateReceipt, r update.MaintenanceRecord) error {
+	return matchCompletedPackageCandidate(a, location, instance, receipt, r, custodyinstall.SelectProtectedPackageStart)
+}
+
+func matchCompletedPackageCandidate(a maintenance.Authority, location, instance string, receipt maintenance.CandidateReceipt, r update.MaintenanceRecord, selectTarget func(update.MaintenanceRecord, int, string, string) (custodyinstall.Manifest, error)) error {
 	var base, target custodyinstall.Manifest
 	if a.Owner != receipt.Owner || a.Profile != location || receipt.Validate() != nil || receipt.Scope != "update" || r.Owner != a.Owner || r.Phase != "completed" || r.Start != "target" || !r.RecoveryEligible() || r.Package == nil || r.PreviousPackage == nil ||
 		update.StrictJSON(r.Base, &base) != nil || update.StrictJSON(r.Target, &target) != nil || base.ID != instance || target.ID != instance || base.Location != location || target.Location != location ||
@@ -320,7 +324,7 @@ func completedPackageCandidateMatches(a maintenance.Authority, location, instanc
 	if r.Package.InstallerDigest() == "" || r.Package.InstallerDigest() != receipt.InstallerSHA256 {
 		return errors.New("completed package installer identity differs")
 	}
-	selected, err := custodyinstall.SelectProtectedPackageStart(r, a.Owner, location, instance)
+	selected, err := selectTarget(r, a.Owner, location, instance)
 	if err != nil || selected != target {
 		return errors.New("completed package target is not the recorded deployment")
 	}
@@ -335,6 +339,25 @@ func freshPackageCandidateMatches(a maintenance.Authority, location, instance st
 		return errors.New("fresh candidate differs from the protected initial journal")
 	}
 	return nil
+}
+
+func archivedPackageCandidateMatches(a maintenance.Authority, location, instance string, receipt maintenance.CandidateReceipt, r update.MaintenanceRecord,
+	readTransition func(int, string) (update.PackageHelperTransition, error), verifyImage func(maintenance.Authority) error) error {
+	if receipt.Scope == "update" {
+		return matchCompletedPackageCandidate(a, location, instance, receipt, r, custodyinstall.SelectArchivedPackageCompletion)
+	}
+	if location == "local" && receipt.InstallerSHA256 != a.ImageSHA256 {
+		t, err := readTransition(a.Owner, instance)
+		if err != nil || !t.Valid(a.Owner, instance) || t.NextHelper != a.ImageSHA256 || t.PreviousHelper != receipt.InstallerSHA256 ||
+			r.Package == nil || r.Package.InstallerDigest() != t.PreviousHelper {
+			return errors.New("archived package does not belong to the predecessor helper")
+		}
+		a.ImageSHA256 = t.PreviousHelper
+		if err = verifyImage(a); err != nil {
+			return err
+		}
+	}
+	return freshPackageCandidateMatches(a, location, instance, receipt, r)
 }
 
 // Previously archived candidate inputs are allowed beside the new candidate
@@ -370,7 +393,7 @@ func verifyRetainedPackageInputs(root, parent string, a maintenance.Authority, l
 		}
 		journalBytes, err := read(filepath.Join(archive, packet+".journal.json"), 256<<10)
 		var journal update.MaintenanceRecord
-		if err != nil || update.StrictJSONBounded(journalBytes, &journal, 256<<10) != nil || (receipt.Scope == "fresh" && freshPackageCandidateMatches(a, location, instance, receipt, journal) != nil) || (receipt.Scope == "update" && completedPackageCandidateMatches(a, location, instance, receipt, journal) != nil) {
+		if err != nil || update.StrictJSONBounded(journalBytes, &journal, 256<<10) != nil || archivedPackageCandidateMatches(a, location, instance, receipt, journal, update.ReadPackageHelperTransition, maintenance.VerifyImage) != nil {
 			return errors.New("unclassified candidate history; preserve it")
 		}
 		reservation, err := read(filepath.Join(parent, packet+".reservation.json"), 8192)

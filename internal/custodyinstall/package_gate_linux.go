@@ -85,6 +85,24 @@ func SelectProtectedPackageStart(r update.MaintenanceRecord, owner int, location
 	})
 }
 
+// SelectArchivedPackageCompletion only classifies a protected, completed
+// candidate archive. It cannot authorize a service start or a held update.
+func SelectArchivedPackageCompletion(r update.MaintenanceRecord, owner int, location, instance string) (Manifest, error) {
+	if r.Phase != "completed" || r.Start != "target" {
+		return Manifest{}, errors.New("a completed archived package is required")
+	}
+	return packageStartSelection(r, owner, location, instance, func(operation string) (update.MaintenanceApproval, error) {
+		a, err := maintenance.ReadPackageAuthority(owner, location, instance)
+		if err != nil {
+			return update.MaintenanceApproval{}, err
+		}
+		if location == "local" && r.Approval != nil && r.Approval.HelperSHA256 != a.ImageSHA256 {
+			return update.ReadArchivedPredecessorApproval(owner, instance, a.ImageSHA256, r)
+		}
+		return update.ReadPackageMaintenanceApproval(owner, location, instance, operation)
+	})
+}
+
 func selectPackageStart(r update.MaintenanceRecord, a maintenance.Authority, location, instance string) (Manifest, error) {
 	return packageStartSelection(r, a.Owner, location, instance, func(operation string) (update.MaintenanceApproval, error) {
 		return readPackageStartApproval(r, a, location, instance, operation)

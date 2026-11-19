@@ -347,6 +347,42 @@ func TestFreshPackageCandidateRetirementRequiresOriginalIdlePair(t *testing.T) {
 	if err = freshPackageCandidateMatches(a, "local", id, receipt, r); err != nil {
 		t.Fatal("matching initial installation refused", err)
 	}
+	// The same archived initial pair remains evidence after helper rotation,
+	// even though the transition journal records a later completed package.
+	p.Bundle = &update.LinuxBundle{
+		Archive:        update.Artifact{File: "fased-app-linux-amd64.tar.gz", Size: 1, SHA256: strings.Repeat("a", 64)},
+		ManifestSHA256: strings.Repeat("b", 64), InstallerSHA256: a.ImageSHA256,
+	}
+	active := a
+	active.ImageSHA256 = strings.Repeat("9", 64)
+	lineage := update.PackageHelperTransition{Version: 1, Owner: owner, Instance: id,
+		PreviousHelper: a.ImageSHA256, NextHelper: active.ImageSHA256, JournalSHA256: strings.Repeat("8", 64)}
+	verified := false
+	verify := func(got maintenance.Authority) error {
+		if got != a {
+			t.Fatalf("unexpected predecessor helper: %+v", got)
+		}
+		verified = true
+		return nil
+	}
+	read := func(uid int, instance string) (update.PackageHelperTransition, error) {
+		if uid != owner || instance != id {
+			t.Fatalf("foreign archive lookup: %d %s", uid, instance)
+		}
+		return lineage, nil
+	}
+	if err = archivedPackageCandidateMatches(active, "local", id, receipt, r, read, verify); err != nil || !verified {
+		t.Fatal("valid predecessor archive refused", err)
+	}
+	if err = freshPackageCandidateMatches(active, "local", id, receipt, r); err == nil {
+		t.Fatal("historical permission leaked into live candidate retirement")
+	}
+	lineage.NextHelper = strings.Repeat("7", 64)
+	verified = false
+	if err = archivedPackageCandidateMatches(active, "local", id, receipt, r, read, verify); err == nil || verified {
+		t.Fatal("an unrelated helper lineage authorized archive validation")
+	}
+
 	configured := m
 	configured.Network = "devnet"
 	configuredRaw, err := json.Marshal(configured)
@@ -417,6 +453,15 @@ func TestCompletedPackageCandidateRetirementRequiresOriginalCompletion(t *testin
 	if err = completedPackageCandidateMatches(a, "local", id, receipt, r); err != nil {
 		t.Fatal("the original completed candidate was refused", err)
 	}
+	if err = matchCompletedPackageCandidate(a, "local", id, receipt, r, custodyinstall.SelectArchivedPackageCompletion); err != nil {
+		t.Fatal("completed app-only archive was refused", err)
+	}
+	held := r
+	held.Phase, held.Start = "held", ""
+	if _, err = custodyinstall.SelectArchivedPackageCompletion(held, a.Owner, "local", id); err == nil {
+		t.Fatal("held journal was accepted as completed archive")
+	}
+
 	for name, change := range map[string]func(*maintenance.CandidateReceipt, *update.MaintenanceRecord){
 		"unfinished": func(_ *maintenance.CandidateReceipt, r *update.MaintenanceRecord) { r.Phase, r.Start = "held", "" },
 		"wrong predecessor": func(c *maintenance.CandidateReceipt, _ *update.MaintenanceRecord) {
