@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/fased-ai/fased-app/internal/bootstrap"
+	"github.com/fased-ai/fased-app/internal/localinstall"
 	"github.com/fased-ai/fased-app/internal/maintenance"
 	"github.com/fased-ai/fased-app/internal/update"
 )
@@ -158,6 +159,8 @@ func run(args []string, in io.Reader, out, errOut io.Writer) error {
 	walletNetwork := f.String("wallet-network", "", "network for optional protected Wallets enrollment")
 	entryAction := f.String("entry-action", "", "fixed installed-instance action for the entry launcher")
 	verifyCandidate := f.String("verify-candidate", "", "verify a retained release candidate without installation")
+	verifyLocalHandoff := f.String("verify-local-handoff", "", "verify the retained format-4 target before reviewing a legacy Local handoff")
+	legacyCandidate := f.String("legacy-candidate", "", "exact retained public v0.1.6 predecessor directory")
 	installCandidate := f.String("install-candidate", "", "install one independently attested Local candidate")
 	installPublicPackage := f.Bool("install-public-package", false, "install the authenticated public Linux package")
 	stageCandidate := f.String("stage-candidate", "", "admit one independently attested manual update candidate")
@@ -169,6 +172,27 @@ func run(args []string, in io.Reader, out, errOut io.Writer) error {
 	}
 	if f.NArg() != 0 {
 		return errors.New("unexpected installer arguments")
+	}
+	if *verifyLocalHandoff != "" || *legacyCandidate != "" {
+		mixed := false
+		f.Visit(func(option *flag.Flag) {
+			switch option.Name {
+			case "verify-local-handoff", "legacy-candidate", "prefix", "data-dir":
+			default:
+				mixed = true
+			}
+		})
+		if mixed || *verifyLocalHandoff == "" || *legacyCandidate == "" || compiledFirstInstallBinding == nil {
+			return errors.New("Local handoff preflight requires the exact two packets and compiled installer trust")
+		}
+		report, err := bootstrap.VerifyLegacyLocalHandoff(
+			bootstrap.Options{Seed: compiledFirstInstallBinding.Seed, SeedSHA256: compiledFirstInstallBinding.SHA256},
+			*legacyCandidate, *verifyLocalHandoff, localinstall.Paths{Root: *prefix, Data: *data},
+		)
+		if err != nil {
+			return err
+		}
+		return json.NewEncoder(out).Encode(report)
 	}
 	packageFlags := false
 	f.Visit(func(flag *flag.Flag) {
