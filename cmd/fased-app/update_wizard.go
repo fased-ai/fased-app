@@ -128,6 +128,9 @@ func runUpdateWizard(call func(string, io.Writer) error, out, errOut io.Writer, 
 			if applied && errors.Is(e, core.ErrCoreUnavailable) {
 				continue
 			}
+			if admittedID != "" && (phase == "queued" || phase == "applying") && errors.Is(e, core.ErrRemoteUpdateStatusUnavailable) {
+				continue
+			}
 			return e
 		}
 	}

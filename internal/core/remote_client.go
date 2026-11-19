@@ -9,6 +9,10 @@ import (
 	"github.com/fased-ai/fased-app/internal/tailnet"
 )
 
+// ErrRemoteUpdateStatusUnavailable identifies a gateway failure on the
+// Remote update status endpoint.
+var ErrRemoteUpdateStatusUnavailable = errors.New("remote update status temporarily unavailable (HTTP 502)")
+
 // NewRemoteClient is deliberately separate from NewClient's OS-owner socket.
 // It grants no local/maintenance IPC authority and follows no redirects/proxy.
 func NewRemoteClient(ctx context.Context, origin, instanceID string) (*Client, error) {

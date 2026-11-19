@@ -130,6 +130,9 @@ func (c *Client) Do(ctx context.Context, method, route string, input, output any
 	}
 	defer response.Body.Close()
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		if c.remote && method == http.MethodGet && route == "/api/v1/updates/application" && response.StatusCode == http.StatusBadGateway {
+			return ErrRemoteUpdateStatusUnavailable
+		}
 		var message struct {
 			Error string `json:"error"`
 		}
