@@ -14,6 +14,6 @@ func exportEnrollmentImage(context.Context, string, bool) (EnrollmentImage, io.C
 func validateEnrollmentImage(EnrollmentImage) error {
 	return errors.New("same-instance enrollment requires Linux")
 }
-func importEnrollmentImage(context.Context, string, EnrollmentImage) error {
+func checkEnrollmentStage(context.Context, string, EnrollmentImage, bool) error {
 	return errors.New("same-instance enrollment requires Linux")
 }

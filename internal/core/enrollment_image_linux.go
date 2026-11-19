@@ -677,7 +677,7 @@ func enrollmentCredential(name string, data []byte) error {
 	return nil
 }
 
-func importEnrollmentImage(ctx context.Context, dir string, image EnrollmentImage) error {
+func checkEnrollmentStage(ctx context.Context, dir string, image EnrollmentImage, completeCopy bool) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -705,6 +705,9 @@ func importEnrollmentImage(ctx context.Context, dir string, image EnrollmentImag
 			dirs[p] = true
 		}
 	}
+	if !completeCopy && len(existing) != len(wanted)+len(dirs) {
+		return errEnrollmentImage
+	}
 	// Preflight every existing byte before any write. A conflicting complete or
 	// partial stage belongs to its creator and is never overwritten or removed.
 	for path, entry := range existing {
@@ -715,9 +718,12 @@ func importEnrollmentImage(ctx context.Context, dir string, image EnrollmentImag
 			continue
 		}
 		data, ok := wanted[path]
-		if !ok || !bytes.HasPrefix(data, entry.data) {
+		if !ok || (completeCopy && !bytes.HasPrefix(data, entry.data)) || (!completeCopy && !bytes.Equal(data, entry.data)) {
 			return errEnrollmentImage
 		}
+	}
+	if !completeCopy {
+		return nil
 	}
 	for _, f := range image.Files {
 		if err = ctx.Err(); err != nil {

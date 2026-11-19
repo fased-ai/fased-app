@@ -74,22 +74,44 @@ func TestLocalAdoptionImagePreservesAuthenticationBeforeStart(t *testing.T) {
 	if more, err := r.ReadString('\n'); err != nil || more != "ok\n" {
 		t.Fatal("the image reader consumed the source lease acknowledgement", err)
 	}
-	invoke := func(workspace, hash string) error {
-		return run([]string{"maintenance-local-adoption-image", "import", stage, workspace, hash}, bytes.NewReader(raw), io.Discard, io.Discard)
+	invoke := func(action, workspace, hash string) error {
+		return run([]string{"maintenance-local-adoption-image", action, stage, workspace, hash}, bytes.NewReader(raw), io.Discard, io.Discard)
 	}
-	if err := invoke("other", digest); err == nil {
+	if err := invoke("import", "other", digest); err == nil {
 		t.Fatal("a different workspace was accepted")
 	}
-	if err := invoke(image.InstanceID, strings.Repeat("1", 64)); err == nil {
+	if err := invoke("import", image.InstanceID, strings.Repeat("1", 64)); err == nil {
 		t.Fatal("substituted image was accepted")
 	}
 	if entries, err := os.ReadDir(stage); err != nil || len(entries) != 0 {
 		t.Fatal("a refused import wrote state", err)
 	}
-	for range 2 {
-		if err := invoke(image.InstanceID, digest); err != nil {
-			t.Fatal("exact import did not complete on retry", err)
-		}
+	if err := invoke("verify", image.InstanceID, digest); err == nil {
+		t.Fatal("missing imported state admitted for Apply")
+	}
+	if err := invoke("import", image.InstanceID, digest); err != nil {
+		t.Fatal("could not import test image", err)
+	}
+	if err := invoke("verify", image.InstanceID, digest); err != nil {
+		t.Fatal("exact imported state refused", err)
+	}
+	dbPath := filepath.Join(stage, "core.sqlite")
+	f, err := os.Stat(dbPath)
+	if err != nil || f.Size() < 2 {
+		t.Fatal("test import has no database", err)
+	}
+	if err := os.Truncate(dbPath, f.Size()-1); err != nil {
+		t.Fatal(err)
+	}
+	if err := invoke("verify", image.InstanceID, digest); err == nil {
+		t.Fatal("partial imported state admitted for Apply")
+	}
+	partial, err := os.Stat(dbPath)
+	if err != nil || partial.Size() != f.Size()-1 {
+		t.Fatal("read-only verification repaired the truncated state", err)
+	}
+	if err := invoke("import", image.InstanceID, digest); err != nil {
+		t.Fatal("exact original import could not resume", err)
 	}
 	imported, err := core.OpenStore(stage)
 	if err != nil {
@@ -113,5 +135,11 @@ func TestLocalAdoptionRequiresAdministratorEvenForValidArguments(t *testing.T) {
 	err := run(args, strings.NewReader(""), io.Discard, io.Discard)
 	if err == nil || !strings.Contains(err.Error(), "administrator Local adoption required") {
 		t.Fatalf("ordinary caller reached protected adoption: %v", err)
+	}
+	for _, action := range []string{"maintenance-package-apply-local-adoption", "maintenance-package-recover-local-adoption"} {
+		args[0] = action
+		if err := run(args, strings.NewReader(""), io.Discard, io.Discard); err == nil || !strings.Contains(err.Error(), "administrator Local adoption required") {
+			t.Fatalf("ordinary caller reached %s: %v", action, err)
+		}
 	}
 }
