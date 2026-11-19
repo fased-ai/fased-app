@@ -201,7 +201,7 @@ export function validateInstalledAcceptance(receipt, packet, inventory) {
   return binding;
 }
 
-function validateRemoteOperations(value) {
+function validateUpdateOperations(value) {
   const ids = [
     value.uiOperationId,
     value.cliOperationId,
@@ -320,7 +320,7 @@ export function completeRemoteUpgrade(
     cliOperationId: manual.cliOperationId,
     automaticOperationId: browser.automaticOperation.id,
   };
-  validateRemoteOperations(operations);
+  validateUpdateOperations(operations);
   return {
     schemaVersion: 1,
     ...Object.fromEntries(keys.map((key) => [key, manual[key]])),
@@ -389,7 +389,109 @@ function validateAppliedAcceptance(value) {
     );
 }
 
-function validateLocalAcceptance(local, binding) {
+function olderVersion(before, after) {
+  const parts = (version) =>
+    /^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$/.test(version ?? "")
+      ? version.split(".").map(BigInt)
+      : null;
+  const left = parts(before);
+  const right = parts(after);
+  const first = left && right ? left.findIndex((v, i) => v !== right[i]) : -1;
+  return first >= 0 && left[first] < right[first];
+}
+
+function format4LocalEvidence(local, packet, inventory) {
+  const target = inventory.assets.find(
+    ({ name }) => name === "fased-release.json",
+  )?.sha256;
+  const migration = local.legacyMigration;
+  const migrationChecks = [
+    "interruptionRecovery",
+    "workspacePreservation",
+    "authenticationPreservation",
+    "alreadyCurrent",
+  ];
+  if (
+    !migration ||
+    migration.route !== "guarded-format4-adoption" ||
+    !digest.test(target ?? "") ||
+    migration.targetPacketSha256 !== target ||
+    !digest.test(migration.bridgeSha256 ?? "") ||
+    migration.bridgeSha256 === packet.installer?.sha256 ||
+    !digest.test(migration.proofSha256 ?? "") ||
+    !digest.test(migration.evidenceSha256 ?? "") ||
+    !/^[a-f0-9]{32}$/.test(migration.operationId ?? "") ||
+    [
+      local.uiOperationId,
+      local.cliOperationId,
+      local.automaticOperationId,
+    ].includes(migration.operationId) ||
+    migrationChecks.some((key) => migration.checks?.[key] !== "PASS")
+  )
+    throw Error("Exact guarded Local migration and recovery evidence required");
+
+  const predecessor = local.compatiblePredecessor;
+  if (
+    predecessor?.packetVersion !== 4 ||
+    !olderVersion(predecessor.version, packet.productVersion) ||
+    !/^[a-f0-9]{40}$/.test(predecessor.source ?? "") ||
+    [packet.source, local.releasedPredecessor.source].includes(
+      predecessor.source,
+    ) ||
+    !digest.test(predecessor.packetSha256 ?? "") ||
+    predecessor.packetSha256 === target ||
+    !digest.test(predecessor.artifactSetSha256 ?? "") ||
+    [
+      local.artifactSetSha256,
+      local.releasedPredecessor.artifactSetSha256,
+    ].includes(predecessor.artifactSetSha256)
+  )
+    throw Error("Distinct actual older format-4 Local predecessor required");
+  validateUpdateOperations(local);
+  if (
+    !digest.test(local.lifecycleEvidenceSha256 ?? "") ||
+    local.lifecycleEvidenceSha256 === migration.evidenceSha256
+  )
+    throw Error("Separate Local lifecycle evidence digest required");
+
+  const {
+    route,
+    targetPacketSha256,
+    bridgeSha256,
+    proofSha256,
+    operationId,
+    evidenceSha256,
+  } = migration;
+  const { version, source, packetVersion, packetSha256, artifactSetSha256 } =
+    predecessor;
+  return {
+    legacyMigration: {
+      route,
+      targetPacketSha256,
+      bridgeSha256,
+      proofSha256,
+      operationId,
+      evidenceSha256,
+      checks: Object.fromEntries(
+        migrationChecks.map((key) => [key, migration.checks[key]]),
+      ),
+    },
+    compatiblePredecessor: {
+      version,
+      source,
+      packetVersion,
+      packetSha256,
+      artifactSetSha256,
+    },
+    uiOperationId: local.uiOperationId,
+    cliOperationId: local.cliOperationId,
+    automaticOperationId: local.automaticOperationId,
+    lifecycleEvidenceSha256: local.lifecycleEvidenceSha256,
+  };
+}
+
+function validateLocalAcceptance(local, packet, inventory) {
+  const binding = acceptanceBinding(packet, inventory);
   validateAcceptanceLeg(local, binding, stagedAcceptanceContract.local);
   validateAppliedAcceptance(local);
   if (
@@ -402,11 +504,14 @@ function validateLocalAcceptance(local, binding) {
       "aea00a0d9e1b7ed05a1346428cdf8cc277cbe40f93cfcd86d40fc9b45c559460"
   )
     throw Error("Actual approved released Local predecessor required");
+  return packet.version === 4
+    ? format4LocalEvidence(local, packet, inventory)
+    : {};
 }
 
 function validateJoinedAcceptance(receipt, packet, inventory) {
   const binding = acceptanceBinding(packet, inventory);
-  validateLocalAcceptance(receipt.local, binding);
+  validateLocalAcceptance(receipt.local, packet, inventory);
   const localDigest = receipt.localReceiptSha256;
   if (!/^[a-f0-9]{64}$/.test(localDigest ?? ""))
     throw Error("Retained raw Local document digest required");
@@ -458,19 +563,10 @@ function validateJoinedAcceptance(receipt, packet, inventory) {
   }
   const upgrade = receipt.remoteUpgrade;
   validateAppliedAcceptance(upgrade);
-  validateRemoteOperations(upgrade);
+  validateUpdateOperations(upgrade);
   const previous = upgrade.predecessor;
-  const parts = (v) =>
-    /^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$/.test(v ?? "")
-      ? v.split(".").map(BigInt)
-      : null;
-  const before = parts(previous?.version),
-    after = parts(binding.productVersion);
-  const first =
-    before && after ? before.findIndex((v, i) => v !== after[i]) : -1;
   if (
-    first < 0 ||
-    before[first] >= after[first] ||
+    !olderVersion(previous?.version, binding.productVersion) ||
     previous.packetVersion !== 2 ||
     !/^[a-f0-9]{40}$/.test(previous.source ?? "") ||
     previous.source === binding.source ||
@@ -1043,11 +1139,11 @@ function ownerReviewPayload(comment, packet, prefix) {
   return review;
 }
 
-function publicLocalReceipt(receipt, binding) {
-  validateLocalAcceptance(receipt, binding);
+function publicLocalReceipt(receipt, packet, inventory) {
+  const additional = validateLocalAcceptance(receipt, packet, inventory);
   const { version, source, artifactSetSha256 } = receipt.releasedPredecessor;
   return {
-    ...binding,
+    ...acceptanceBinding(packet, inventory),
     result: "PASS",
     fixtureOnly: true,
     mining: false,
@@ -1065,6 +1161,7 @@ function publicLocalReceipt(receipt, binding) {
     checks: Object.fromEntries(
       stagedAcceptanceContract.local.map((key) => [key, receipt.checks[key]]),
     ),
+    ...additional,
   };
 }
 
@@ -1072,13 +1169,10 @@ function localReviewBody(packet, inventory, receipt, artifact) {
   return (
     localReviewPrefix +
     JSON.stringify({
-      version: 1,
+      version: packet.version === 4 ? 2 : 1,
       candidateArtifactId: String(artifact.id),
       candidateArtifactDigest: artifact.digest,
-      receipt: publicLocalReceipt(
-        receipt,
-        acceptanceBinding(packet, inventory),
-      ),
+      receipt: publicLocalReceipt(receipt, packet, inventory),
     })
   );
 }
@@ -1215,17 +1309,14 @@ export async function verifyLocalAcceptance(packet, inventory, api, options) {
     options,
   );
   const binding = acceptanceBinding(packet, inventory);
-  validateLocalAcceptance(proof.receipt, binding);
+  validateLocalAcceptance(proof.receipt, packet, inventory);
   return { ...binding, ...localProofReference(proof) };
 }
 
 // An owner may record a complete, reviewed real-host receipt. Partial or
 // cross-packet evidence is refused before any remote write.
 export async function recordLocalAcceptance(packet, inventory, api, receipt) {
-  const local = publicLocalReceipt(
-    receipt,
-    acceptanceBinding(packet, inventory),
-  );
+  const local = publicLocalReceipt(receipt, packet, inventory);
   const artifact = await realHostCandidateArtifact(packet, inventory, api);
   const actor = await api("GET", "/user");
   if (String(actor.id) !== reviewOwner.id || actor.login !== reviewOwner.login)
@@ -1275,7 +1366,7 @@ export async function verifyInstalledAcceptance(
     review = reviewedRemote(comments[0], packet, inventory, proof);
   } else {
     validateInstalledAcceptance(proof.receipt, packet, inventory);
-    validateRemoteOperations(proof.receipt.remoteUpgrade ?? proof.receipt);
+    validateUpdateOperations(proof.receipt.remoteUpgrade ?? proof.receipt);
     validateInstalledAgent(
       proof.receipt.installedAgent,
       packet,
