@@ -1399,6 +1399,64 @@ test("Remote upgrade completion refuses missing or mismatched actual legs", asyn
       contract.localReceiptSha256,
     );
   assert.doesNotThrow(() => joined(upgrade));
+  const split = structuredClone(format4);
+  const cliId = "C".repeat(43);
+  const automaticId = "A".repeat(43);
+  split.manual.cliInstanceId = cliId;
+  split.automatic.instanceId = automaticId;
+  split.automatic.browser.instanceId = automaticId;
+  split.automatic.postUpdateState.instanceId = automaticId;
+  split.security = Object.fromEntries(
+    [
+      ["ui", split.manual.instanceId, split.manual.uiOperationId],
+      ["cli", cliId, split.manual.cliOperationId],
+      ["automatic", automaticId, split.automatic.browser.automaticOperation.id],
+    ].map(([lane, instanceId, operationId]) => [
+      lane,
+      {
+        ...structuredClone(format4.security),
+        instanceId,
+        operationId,
+        manifestSha256: contract.targetPacketSha256,
+        ownerAuthenticationSha256: auth,
+      },
+    ]),
+  );
+  const splitUpgrade = complete(split);
+  assert.deepEqual(splitUpgrade.receiverIdentities, {
+    ui: createHash("sha256").update(split.manual.instanceId).digest("hex"),
+    cli: createHash("sha256").update(cliId).digest("hex"),
+    automatic: createHash("sha256").update(automaticId).digest("hex"),
+  });
+  assert.throws(() => joined(splitUpgrade), /Distinct Remote receivers/);
+  fresh.instanceId = "F".repeat(43);
+  assert.doesNotThrow(() => joined(splitUpgrade));
+  assert.throws(() =>
+    joined({
+      ...splitUpgrade,
+      receiverIdentities: {
+        ...splitUpgrade.receiverIdentities,
+        cli: splitUpgrade.receiverIdentities.ui,
+      },
+    }),
+  );
+  for (const mutate of [
+    (v) => (v.security.cli.instanceId = v.manual.instanceId),
+    (v) => (v.security.cli.operationId = v.manual.uiOperationId),
+    (v) => (v.security.cli.localReceiptSha256 = "1".repeat(64)),
+    (v) => (v.security.cli.manifestSha256 = "1".repeat(64)),
+    (v) => (v.security.cli.nodeIdentitySha256 = "1".repeat(64)),
+    (v) => (v.security.cli.ownerAuthenticationSha256 = "1".repeat(64)),
+    (v) => (v.security.automatic.checks.publicIPv4Closure = "FAIL"),
+    (v) => (v.automatic.browser.browserClosedDuringApply = false),
+    (v) => (v.automatic.ownedSSHSessionDuringApply = true),
+    (v) => (v.automatic.postUpdateState.instanceId = v.manual.instanceId),
+    (v) => delete v.security.cli,
+  ]) {
+    const changed = structuredClone(split);
+    mutate(changed);
+    assert.throws(() => complete(changed));
+  }
   assert.throws(() =>
     joined({
       ...upgrade,
