@@ -347,6 +347,7 @@ export function browserAddress(config) {
       "automatic-restore",
       "agent-prepare",
       "agent-run",
+      "agent-reopen",
       "agent-reboot",
       "agent-finish",
     ].includes(config.action),
@@ -361,6 +362,27 @@ export function browserAddress(config) {
   }
   const address = new URL(config.url);
   assert.equal(address.username + address.password, "");
+  if (config.realLocalProvider === true || config.action === "agent-reopen") {
+    assert.equal(config.realLocalProvider, true);
+    assert.ok(
+      ["agent-prepare", "agent-run", "agent-reopen", "agent-finish"].includes(
+        config.action,
+      ),
+    );
+    assert.equal(address.origin, "http://127.0.0.1:17485");
+    assert.equal(address.pathname, "/");
+    assert.match(config.instanceId, /^[A-Za-z0-9_-]{43}$/);
+    assert.deepEqual(
+      [...address.searchParams],
+      [["instance", config.instanceId]],
+    );
+    assert.match(address.hash, /^#local=[A-Za-z0-9_-]{43}$/);
+    assert.equal(config.sessionFile, undefined);
+    assert.match(
+      config.version ?? "",
+      /^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$/,
+    );
+  }
   if (config.transport === "tailscale-https") {
     assert.ok(isPrivateTailscaleOrigin(config.expectedOrigin));
     assert.equal(address.origin, config.expectedOrigin);
@@ -770,6 +792,8 @@ export async function runInstalledAgentPhase(
     : { checks: {} };
   const health = await request("health");
   assert.equal(health.version, config.version);
+  if (config.realLocalProvider === true)
+    assert.equal(health.instanceId, config.instanceId);
   for (const key of ["financialExecution", "walletSigner"])
     assert.equal(health.capabilities[key], false);
   const view = () =>
@@ -1170,6 +1194,7 @@ export async function runInstalledAgentPhase(
       const withResult = await view();
       const run = withResult.runs.find((r) => r.taskId === state.taskId);
       assert.ok(run);
+      state.runId = run.id;
       await page
         .getByRole("navigation", { name: "Task views" })
         .getByRole("button", { name: "Results", exact: true })
@@ -1243,6 +1268,40 @@ export async function runInstalledAgentPhase(
       state.checks.taskResult = "PASS";
       state.serviceRestarted = true;
       state.requestCount = (await view()).aiRequests.length;
+    } else if (phase === "agent-reopen") {
+      const v = await view();
+      assert.equal(c.persistentTaskAccessAvailable, true);
+      // The saved note overlaps the reviewed prompt's relevant-memory search.
+      // Reopening history must work while that changed context holds the grant.
+      assert.ok(v.memories.some((m) => m.id === state.memoryId));
+      assert.equal(c.taskAccess, undefined);
+      state.checks.changedContextHoldsGrant = "PASS";
+      state.checks.restartCredentialPolicy = "PASS";
+      assert.equal(v.aiRequests.length, state.requestCount);
+      assert.equal(v.tasks.find((t) => t.id === state.taskId)?.runs, 1);
+      assert.equal(
+        v.aiRequests.find((q) => q.id === state.resultId)?.state,
+        "completed",
+      );
+      assert.equal(
+        v.runs.find((r) => r.id === state.runId)?.taskId,
+        state.taskId,
+      );
+      await installedNavigate(page, "#agents/tasks");
+      await page
+        .getByRole("navigation", { name: "Task views" })
+        .getByRole("button", { name: "Results", exact: true })
+        .click();
+      await expect(
+        page.getByRole("article", { name: "Run " + state.runId, exact: true }),
+      ).toBeVisible();
+      state.checks.sameResultAfterServiceRestart = "PASS";
+      await request("ai/connection", "POST", {
+        action: "task-access-revoke",
+        ref: state.ref,
+      });
+      assert.equal((await account()).taskAccess, undefined);
+      state.revoked = true;
     } else if (phase === "agent-reboot") {
       const v = await view();
       assert.equal(v.aiRequests.length, state.requestCount);
@@ -1314,7 +1373,11 @@ export async function restoreCapturedOwner(page, auth, options) {
 }
 
 export async function runStagedBrowser(config, { chromium, expect }) {
-  assert.equal(process.env.FASED_DISPOSABLE_VM_ACCEPTANCE, "1");
+  if (config.realLocalProvider === true) {
+    assert.equal(process.env.FASED_REAL_LOCAL_PROVIDER_ACCEPTANCE, "1");
+  } else {
+    assert.equal(process.env.FASED_DISPOSABLE_VM_ACCEPTANCE, "1");
+  }
   assert.ok(process.getuid() > 0);
   const address = browserAddress(config);
   const directRemote = config.transport === "tailscale-https";
@@ -1364,7 +1427,11 @@ export async function runStagedBrowser(config, { chromium, expect }) {
   });
   const sessionFile =
     config.sessionFile ?? config.storageFile + ".session.json";
-  if (!directRemote && existsSync(sessionFile)) {
+  if (
+    !directRemote &&
+    config.realLocalProvider !== true &&
+    existsSync(sessionFile)
+  ) {
     const token = JSON.parse(await readFile(sessionFile, "utf8")).token;
     assert.equal(typeof token, "string");
     await context.addInitScript(

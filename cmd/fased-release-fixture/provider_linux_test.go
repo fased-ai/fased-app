@@ -4,10 +4,16 @@ package main
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/json"
+	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/fased-ai/fased-app/internal/localinstall"
 )
 
 func TestProviderFixtureOptionsOwnModeAndExactPackage(t *testing.T) {
@@ -24,6 +30,36 @@ func TestProviderFixtureOptionsOwnModeAndExactPackage(t *testing.T) {
 	var out bytes.Buffer
 	if e := run(append([]string{"installed-provider"}, args...), &out); e == nil || out.Len() != 0 {
 		t.Fatal("owner host admitted to disposable installer", e)
+	}
+}
+
+func TestRealLocalProviderPreparesOnlyFreshAppAndState(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	contents := []byte("fixture executable bytes")
+	engine := filepath.Join(home, "verified-app")
+	if err := os.WriteFile(engine, contents, 0700); err != nil {
+		t.Fatal(err)
+	}
+	want := fmt.Sprintf("%x", sha256.Sum256(contents))
+	args := []string{"installed-provider", "--real-local", "--disposable-fixture", "--engine", engine, "--engine-sha256", want}
+	var out bytes.Buffer
+	if err := run(args, &out); err != nil {
+		t.Fatal(err)
+	}
+	var m localinstall.Manifest
+	if err := json.NewDecoder(&out).Decode(&m); err != nil {
+		t.Fatal(err)
+	}
+	if !m.ProviderFixture || m.Autostart || m.Phase != "ready" || m.Listen != "127.0.0.1:17485" || len(m.Files) != 2 || m.Files["fased-app"] != want {
+		t.Fatal(m)
+	}
+	if parent := filepath.Dir(m.Root); filepath.Dir(parent) != home || filepath.Dir(m.Data) != parent {
+		t.Fatal("fixture escaped its private directory", m)
+	}
+	unit, err := os.ReadFile(filepath.Join(m.Root, "fased-app.service"))
+	if err != nil || !bytes.Contains(unit, []byte("--require-sandbox")) || !bytes.Contains(unit, []byte("--ai-fixture")) || bytes.Contains(unit, []byte("--custody-config")) {
+		t.Fatal("incorrect generated app-only unit", err)
 	}
 }
 
