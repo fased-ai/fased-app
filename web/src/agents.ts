@@ -4,6 +4,12 @@ import type {
   SwapTaskPolicy,
   SwapExecution,
 } from "./onchain";
+import type {
+  WENMiningCommand,
+  WENMiningExecution,
+  WENMiningTaskPolicy,
+  WENMiningView,
+} from "./wen-mining";
 export type OpenAIModelPolicy = {
   provider?: string;
   wireVersion?: string;
@@ -358,6 +364,7 @@ export type StrategyPaperResult = {
 };
 export type AgentTask = {
   swap?: SwapTaskPolicy;
+  wenMining?: WENMiningTaskPolicy;
   strategyPlan?: StrategyTaskPolicy;
   watch?: { rule: NewsWatchRule; seen: string[] };
   calendar?: TaskCalendar;
@@ -378,6 +385,7 @@ export type AgentTask = {
 };
 export type AgentRun = {
   swap?: SwapExecution;
+  wenMining?: WENMiningExecution;
   paper?: StrategyPaperResult;
   analysis?: TaskAnalysisResult;
   watch?: NewsWatchResult;
@@ -551,6 +559,7 @@ export type PlaybookReview = {
 };
 export type AgentView = {
   onchain?: OnchainView;
+  wenMining?: WENMiningView;
   strategies?: AgentStrategy[];
   paperExecutionAvailable?: boolean;
   chatReview?: ChatPermission;
@@ -692,6 +701,7 @@ export type AgentEvidenceView = {
 );
 export type AgentCommand = {
   swap?: SwapCommand;
+  wenMining?: WENMiningCommand;
   strategy?: StrategyPlan;
   strategyId?: string;
   strategyVersion?: number;

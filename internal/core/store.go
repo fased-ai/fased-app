@@ -25,8 +25,9 @@ import (
 type Store struct {
 	appUpdates         applicationUpdates
 	venueCredentials   venueCredentials
-	onchain            *onchainRuntime // Explicit controlled constructor only; ordinary/live admission stays closed.
-	installationSource atomic.Uint32   // Verified installer class, never a browser preference.
+	onchain            *onchainRuntime   // Explicit controlled constructor only; ordinary/live admission stays closed.
+	wenMining          *wenMiningRuntime // Explicit controlled constructor only; mining activation stays OFF.
+	installationSource atomic.Uint32     // Verified installer class, never a browser preference.
 
 	rpcCheckFixture               func(context.Context, RPCCheckRequest) (RPCCheckResult, error) // Tests only; never configuration or IPC.
 	providerFixture               bool
@@ -329,6 +330,9 @@ PRAGMA user_version=1;`)
 	}
 	store := &Store{db: db, dir: dir, now: time.Now, bootID: update.NewProbe(), provider: providerState{apiCredentials: providerActivationEnabled}, taskSecrets: secrets}
 	if err = store.recoverOnchain(ctx); err != nil {
+		return nil, err
+	}
+	if err = store.recoverWENMining(ctx); err != nil {
 		return nil, err
 	}
 	if err = db.QueryRowContext(ctx, "SELECT instance_id FROM instance WHERE id=1").Scan(&store.instanceID); err != nil {

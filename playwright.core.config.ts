@@ -12,6 +12,7 @@ export default defineConfig({
     "strategies.spec.ts",
     "onchain.spec.ts",
     "wallet-read.spec.ts",
+    "wen-mining.spec.ts",
   ],
   outputDir: ".evidence/core-browser",
   reporter: [

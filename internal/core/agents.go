@@ -74,27 +74,29 @@ type PaperBot struct {
 	SpentCents  int64  `json:"spentCents"`
 }
 type AgentTask struct {
-	Swap            *SwapTaskPolicy     `json:"swap,omitempty"`
-	StrategyPlan    *StrategyTaskPolicy `json:"strategyPlan,omitempty"`
-	Watch           *TaskNewsWatch      `json:"watch,omitempty"`
-	Calendar        *TaskCalendar       `json:"calendar,omitempty"`
-	Playbook        *PlaybookOrigin     `json:"playbook,omitempty"`
-	WEN             *WENPaperPlan       `json:"wen,omitempty"`
-	News            *TaskNewsInput      `json:"news,omitempty"`
-	AI              *TaskAIStep         `json:"ai,omitempty"`
-	ID              string              `json:"id"`
-	ProfileID       string              `json:"profileId"`
-	Name            string              `json:"name"`
-	Text            string              `json:"text"`
-	BotID           string              `json:"botId"`
-	IntervalSeconds int64               `json:"intervalSeconds"`
-	MaxRuns         int                 `json:"maxRuns"`
-	Runs            int                 `json:"runs"`
-	NextAt          int64               `json:"nextAt"`
-	State           string              `json:"state"`
+	Swap            *SwapTaskPolicy      `json:"swap,omitempty"`
+	WENMining       *WENMiningTaskPolicy `json:"wenMining,omitempty"`
+	StrategyPlan    *StrategyTaskPolicy  `json:"strategyPlan,omitempty"`
+	Watch           *TaskNewsWatch       `json:"watch,omitempty"`
+	Calendar        *TaskCalendar        `json:"calendar,omitempty"`
+	Playbook        *PlaybookOrigin      `json:"playbook,omitempty"`
+	WEN             *WENPaperPlan        `json:"wen,omitempty"`
+	News            *TaskNewsInput       `json:"news,omitempty"`
+	AI              *TaskAIStep          `json:"ai,omitempty"`
+	ID              string               `json:"id"`
+	ProfileID       string               `json:"profileId"`
+	Name            string               `json:"name"`
+	Text            string               `json:"text"`
+	BotID           string               `json:"botId"`
+	IntervalSeconds int64                `json:"intervalSeconds"`
+	MaxRuns         int                  `json:"maxRuns"`
+	Runs            int                  `json:"runs"`
+	NextAt          int64                `json:"nextAt"`
+	State           string               `json:"state"`
 }
 type AgentRun struct {
 	Swap         *SwapExecution       `json:"swap,omitempty"`
+	WENMining    *WENMiningExecution  `json:"wenMining,omitempty"`
 	Paper        *StrategyPaperResult `json:"paper,omitempty"`
 	Analysis     *TaskAnalysisResult  `json:"analysis,omitempty"`
 	Watch        *NewsWatchResult     `json:"watch,omitempty"`
@@ -142,6 +144,7 @@ type agentDocument struct {
 }
 type AgentView struct {
 	Onchain                 *OnchainView        `json:"onchain,omitempty"`
+	WENMining               *WENMiningView      `json:"wenMining,omitempty"`
 	Strategies              []AgentStrategy     `json:"strategies,omitempty"`
 	PaperExecutionAvailable bool                `json:"paperExecutionAvailable"`
 	ChatReview              *ChatPermission     `json:"chatReview,omitempty"`
@@ -177,6 +180,7 @@ type AgentView struct {
 // rejected. No arbitrary callback, URL, model tool or shell can be submitted.
 type AgentCommand struct {
 	Swap                 *SwapCommand         `json:"swap,omitempty"`
+	WENMining            *WENMiningCommand    `json:"wenMining,omitempty"`
 	Strategy             *StrategyPlan        `json:"strategy,omitempty"`
 	StrategyID           string               `json:"strategyId,omitempty"`
 	StrategyVersion      int                  `json:"strategyVersion,omitempty"`
@@ -426,6 +430,10 @@ func (s *Store) Agents(ctx context.Context, profile, query string) (AgentView, e
 	if s.onchain != nil || len(projection.Tasks) > 0 || len(projection.Runs) > 0 {
 		v.Onchain = &projection
 	}
+	miningProjection := s.wenMiningProjection(d, r, v.ProfileID, s.wenMining != nil)
+	if s.wenMining != nil || len(miningProjection.Tasks) > 0 || len(miningProjection.Runs) > 0 {
+		v.WENMining = &miningProjection
+	}
 	v.PaperExecutionAvailable = s.paperExecutionAvailable()
 	return s.chatView(v), e
 }
@@ -472,7 +480,7 @@ func agentCapacity(d agentDocument) error {
 	if err != nil {
 		return err
 	}
-	reserved := swapFutureStorage(d) + strategyFutureStorage(d) + watchStorage(d) + taskAIFutureStorage(d) + newsStorage(d) + wenReserved + researchStorage(d) + sessionReserved
+	reserved := swapFutureStorage(d) + wenMiningFutureStorage(d) + strategyFutureStorage(d) + watchStorage(d) + taskAIFutureStorage(d) + newsStorage(d) + wenReserved + researchStorage(d) + sessionReserved
 	for _, q := range d.AIRequests {
 		if q.State == "prepared" || q.State == "queued" || q.State == "running" {
 			reserved += agentAIResultReserve
@@ -520,8 +528,23 @@ func (s *Store) changeAgents(ctx context.Context, c AgentCommand, fixture bool) 
 	if c.Swap != nil {
 		return AgentView{}, errors.New("swap fields require their own action")
 	}
+	if strings.HasPrefix(c.Action, "wen-mining-") {
+		view, e := s.changeWENMining(ctx, c)
+		if e != nil {
+			return AgentView{}, e
+		}
+		v, e := s.Agents(ctx, view.ProfileID, "")
+		v.WENMining = &view
+		return v, e
+	}
+	if c.WENMining != nil {
+		return AgentView{}, errors.New("WEN mining fields require their own action")
+	}
 	if strings.HasPrefix(c.ID, swapPrefix) && (c.Action == "task-run" || c.Action == "task-pause" || c.Action == "task-resume") {
 		return s.controlSwapTask(ctx, c)
+	}
+	if strings.HasPrefix(c.ID, wenMiningPrefix) && (c.Action == "task-run" || c.Action == "task-pause" || c.Action == "task-resume") {
+		return s.controlWENMiningTask(ctx, c)
 	}
 
 	defer func() { resultView.PaperExecutionAvailable = s.paperExecutionAvailable() }()

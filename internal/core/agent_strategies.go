@@ -459,6 +459,9 @@ func validateStrategyStorage(raw []byte, d agentDocument) error {
 	if err := validateOnchainStorage(d); err != nil {
 		return err
 	}
+	if err := validateWENMiningStorage(d); err != nil {
+		return err
+	}
 	if len(d.Strategies) > 16 {
 		return errors.New("strategy capacity exceeded")
 	}
