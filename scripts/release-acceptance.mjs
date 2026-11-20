@@ -272,7 +272,6 @@ export function completeRemoteUpgrade(
     "platform",
     "artifactSetSha256",
     "localReceiptSha256",
-    "instanceId",
     "nodeIdentitySha256",
   ];
   const mapped = {
@@ -285,6 +284,28 @@ export function completeRemoteUpgrade(
   const browser = automatic?.browser;
   const after = automatic?.postUpdateState;
   const format4 = format4Inputs !== undefined;
+  const split = format4 && manual?.cliInstanceId !== undefined;
+  const automaticInstance = split ? automatic?.instanceId : manual?.instanceId;
+  const lanes = split
+    ? [
+        [security?.ui, manual.instanceId, manual.uiOperationId],
+        [security?.cli, manual.cliInstanceId, manual.cliOperationId],
+        [
+          security?.automatic,
+          automaticInstance,
+          browser?.automaticOperation?.id,
+        ],
+      ]
+    : [[security, manual?.instanceId]];
+  const receiverIds = lanes.map(([, instanceId]) => instanceId);
+  const matches = (value, instanceId) =>
+    value?.result === "PASS" &&
+    value.instanceId === instanceId &&
+    keys.every((key) => value[key] === manual[key]) &&
+    value.fixtureOnly === true &&
+    ["mining", "liveFeatures", "automaticUpdates"].every(
+      (key) => value[key] === false,
+    );
   const format4Proof = format4 && {
     ...manual,
     automaticPredecessor: automatic?.predecessor,
@@ -331,31 +352,36 @@ export function completeRemoteUpgrade(
           manual.predecessor.packetVersion !== originalPredecessor.version) ||
         manual.checks?.actualPublicPredecessor !== "PASS") ||
     Object.values(mapped).some((key) => manual.checks?.[key] !== "PASS") ||
-    [security, automatic].some(
-      (v) =>
-        !v ||
-        v.result !== "PASS" ||
-        keys.some((key) => v[key] !== manual[key]) ||
-        v.fixtureOnly !== true ||
-        ["mining", "liveFeatures", "automaticUpdates"].some(
-          (key) => v[key] !== false,
-        ),
+    (split &&
+      (new Set(receiverIds).size !== 3 ||
+        receiverIds.some(
+          (id) => typeof id !== "string" || !/^[A-Za-z0-9_-]{43}$/.test(id),
+        ))) ||
+    !matches(automatic, automaticInstance) ||
+    lanes.some(
+      ([proof, instanceId, operationId]) =>
+        !matches(proof, instanceId) ||
+        (split &&
+          (proof.operationId !== operationId ||
+            proof.manifestSha256 !== manual.manifestSha256 ||
+            proof.ownerAuthenticationSha256 !==
+              format4Proof.deviceAuthentication.before)) ||
+        stagedAcceptanceContract.remoteCommon.some(
+          (key) => proof.checks?.[key] !== "PASS",
+        ) ||
+        proof.checks?.alreadyCurrent !== "PASS" ||
+        proof.checks?.authenticationPreservation !== "PASS" ||
+        proof.ownerAuthMode !== "tailscale-device-v1" ||
+        proof.ownerEnrollment !==
+          (format4 ? undefined : "existing-owner-ui-v1") ||
+        proof.transport !== "tailscale-https" ||
+        proof.normalTLS !== true ||
+        proof.sshControlSessionRequired !== false,
     ) ||
-    stagedAcceptanceContract.remoteCommon.some(
-      (key) => security.checks?.[key] !== "PASS",
-    ) ||
-    security.checks?.alreadyCurrent !== "PASS" ||
-    security.checks?.authenticationPreservation !== "PASS" ||
-    security.ownerAuthMode !== "tailscale-device-v1" ||
-    security.ownerEnrollment !==
-      (format4 ? undefined : "existing-owner-ui-v1") ||
-    security.transport !== "tailscale-https" ||
-    security.normalTLS !== true ||
-    security.sshControlSessionRequired !== false ||
     automatic.sshControlSessionRequired !== false ||
     automatic.ownedSSHSessionDuringApply !== false ||
     browser?.result !== "PASS" ||
-    browser.instanceId !== manual.instanceId ||
+    browser.instanceId !== automaticInstance ||
     browser.version !== manual.productVersion ||
     browser.fromVersion !== manual.predecessor?.version ||
     browser.automaticOutcome !== "applied" ||
@@ -373,7 +399,7 @@ export function completeRemoteUpgrade(
     [manual.uiOperationId, manual.cliOperationId].includes(
       browser.automaticOperation.id,
     ) ||
-    after?.instanceId !== manual.instanceId ||
+    after?.instanceId !== automaticInstance ||
     after.installedVersion !== manual.productVersion ||
     after.operation?.id !== browser.automaticOperation.id ||
     after.operation.automatic !== true ||
@@ -393,9 +419,11 @@ export function completeRemoteUpgrade(
     automaticOperationId: browser.automaticOperation.id,
   };
   validateUpdateOperations(operations);
+  const [[primary]] = lanes;
   return {
     schemaVersion: 1,
     ...Object.fromEntries(keys.map((key) => [key, manual[key]])),
+    instanceId: manual.instanceId,
     result: "PASS",
     fixtureOnly: true,
     mining: false,
@@ -413,10 +441,19 @@ export function completeRemoteUpgrade(
           deviceAuthentication: format4Proof.deviceAuthentication,
         }
       : {}),
-    transport: security.transport,
+    ...(split
+      ? {
+          receiverIdentities: {
+            ui: sha(receiverIds[0]),
+            cli: sha(receiverIds[1]),
+            automatic: sha(receiverIds[2]),
+          },
+        }
+      : {}),
+    transport: primary.transport,
     normalTLS: true,
-    ownerAuthMode: security.ownerAuthMode,
-    ownerEnrollment: security.ownerEnrollment,
+    ownerAuthMode: primary.ownerAuthMode,
+    ownerEnrollment: primary.ownerEnrollment,
     sshControlSessionRequired: false,
     passwordPrompt: false,
     upgradeApplied: true,
@@ -427,7 +464,7 @@ export function completeRemoteUpgrade(
     customerActivation: false,
     ...operations,
     checks: {
-      ...security.checks,
+      ...primary.checks,
       ...Object.fromEntries(
         Object.entries(mapped).map(([key, source]) => [
           key,
@@ -643,6 +680,29 @@ function validateJoinedAcceptance(receipt, packet, inventory) {
   validateAppliedAcceptance(upgrade);
   validateUpdateOperations(upgrade);
   const previous = upgrade.predecessor;
+  if (upgrade.receiverIdentities !== undefined) {
+    const ids = upgrade.receiverIdentities;
+    const fresh = receipt.remoteFresh;
+    if (
+      previous?.packetVersion !== 4 ||
+      !ids ||
+      Object.keys(ids).length !== 3 ||
+      ![ids.ui, ids.cli, ids.automatic].every(
+        (id) => typeof id === "string" && digest.test(id),
+      ) ||
+      ids.ui !== (upgrade.instanceIdentitySha256 ?? sha(upgrade.instanceId)) ||
+      new Set([
+        ids.ui,
+        ids.cli,
+        ids.automatic,
+        fresh.instanceIdentitySha256 ?? sha(fresh.instanceId),
+      ]).size !== 4 ||
+      fresh.nodeIdentitySha256 !== upgrade.nodeIdentitySha256
+    )
+      throw Error(
+        "Distinct Remote receivers on the same enrolled node required",
+      );
+  }
   if (
     !olderVersion(previous?.version, binding.productVersion) ||
     (previous.packetVersion === 4
@@ -1222,6 +1282,13 @@ function publicRemoteLeg(value) {
           value.deviceAuthentication[k],
         ]),
       );
+      if (value.receiverIdentities)
+        projected.receiverIdentities = Object.fromEntries(
+          ["ui", "cli", "automatic"].map((k) => [
+            k,
+            value.receiverIdentities[k],
+          ]),
+        );
     }
   }
   return projected;
