@@ -1493,6 +1493,142 @@ test("Remote upgrade completion refuses missing or mismatched actual legs", asyn
     mutate(changed);
     assert.throws(() => complete(changed));
   }
+
+  // Generalize format-4 acceptance to future versions and manual-only releases
+  // (customerActivation: false) without requiring disabled-Automatic builds.
+  const nextTarget = {
+    ...target,
+    productVersion: "0.1.24",
+    source: "4".repeat(40),
+  };
+  const nextPacketSha = "5".repeat(64);
+  const nextInventory = {
+    ...retained,
+    assets: retained.assets.map((entry) =>
+      entry.name === "fased-release.json"
+        ? { ...entry, sha256: nextPacketSha }
+        : entry,
+    ),
+  };
+  const nextBinding = acceptanceBinding(nextTarget, nextInventory);
+  const nextLocalDigest = "6".repeat(64);
+  const nextPredecessor = {
+    version: "0.1.23",
+    source: contract.targetSource,
+    artifactSetSha256: "7".repeat(64),
+    packetVersion: 4,
+    ownerAuthMode: "tailscale-device-v1",
+    packetSha256: contract.targetPacketSha256,
+  };
+  const nextManual = {
+    ...structuredClone(format4.manual),
+    ...nextBinding,
+    localReceiptSha256: nextLocalDigest,
+    manifestSha256: nextPacketSha,
+    predecessor: nextPredecessor,
+    automaticOutcome: "held-manual-only",
+    automaticPolicyRestored: "manual",
+    customerActivation: false,
+    cliInstanceId: cliId,
+  };
+  const nextSecurity = {
+    ui: {
+      ...structuredClone(format4.security),
+      ...nextBinding,
+      localReceiptSha256: nextLocalDigest,
+      instanceId: nextManual.instanceId,
+      operationId: nextManual.uiOperationId,
+      manifestSha256: nextPacketSha,
+      ownerAuthenticationSha256: auth,
+    },
+    cli: {
+      ...structuredClone(format4.security),
+      ...nextBinding,
+      localReceiptSha256: nextLocalDigest,
+      instanceId: cliId,
+      operationId: nextManual.cliOperationId,
+      manifestSha256: nextPacketSha,
+      ownerAuthenticationSha256: auth,
+    },
+  };
+  const nextInputs = {
+    binding: nextBinding,
+    localReceiptSha256: nextLocalDigest,
+    manifestSha256: nextPacketSha,
+    predecessor: nextPredecessor,
+  };
+  const manualOnlyUpgrade = completeRemoteUpgrade(
+    nextManual,
+    nextSecurity,
+    undefined,
+    undefined,
+    nextInputs,
+  );
+  assert.equal(manualOnlyUpgrade.automaticOutcome, "held-manual-only");
+  assert.equal(manualOnlyUpgrade.checks.controlledAutomatic, "HELD");
+  assert.equal(manualOnlyUpgrade.automaticOperationId, undefined);
+  assert.equal(manualOnlyUpgrade.automaticPredecessor, undefined);
+  assert.deepEqual(Object.keys(manualOnlyUpgrade.receiverIdentities), [
+    "ui",
+    "cli",
+  ]);
+  const nextLocal = {
+    ...structuredClone(local),
+    ...nextBinding,
+    automaticOutcome: "held-manual-only",
+    compatiblePredecessor: nextPredecessor,
+    legacyMigration: {
+      ...local.legacyMigration,
+      targetPacketSha256: nextPacketSha,
+    },
+    checks: { ...local.checks, controlledAutomatic: "HELD" },
+  };
+  delete nextLocal.automaticOperationId;
+  const nextFresh = {
+    ...structuredClone(fresh),
+    ...nextBinding,
+    localReceiptSha256: nextLocalDigest,
+    instanceId: "F".repeat(43),
+  };
+  assert.doesNotThrow(() =>
+    composeInstalledAcceptance(
+      nextLocal,
+      nextFresh,
+      manualOnlyUpgrade,
+      nextTarget,
+      nextInventory,
+      nextLocalDigest,
+    ),
+  );
+  // Manual-only refuses customerActivation: true, missing UI/CLI distinction,
+  // or a stray Automatic object.
+  assert.throws(() =>
+    completeRemoteUpgrade(
+      { ...nextManual, customerActivation: true },
+      nextSecurity,
+      undefined,
+      undefined,
+      nextInputs,
+    ),
+  );
+  assert.throws(() =>
+    completeRemoteUpgrade(
+      nextManual,
+      nextSecurity,
+      format4.automatic,
+      undefined,
+      nextInputs,
+    ),
+  );
+  assert.throws(() =>
+    completeRemoteUpgrade(
+      { ...nextManual, cliOperationId: nextManual.uiOperationId },
+      nextSecurity,
+      undefined,
+      undefined,
+      nextInputs,
+    ),
+  );
 });
 
 test("acceptance-only replay acquires exact original bytes without a build", async (t) => {
