@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"flag"
+	"fmt"
 	"github.com/fased-ai/fased-app/internal/localinstall"
 	"io"
 	"os"
@@ -21,6 +22,9 @@ import (
 // Existing maintainer-only binary; never packaged or exposed in the wizard.
 // The supplied executable is the unmodified, independently verified package.
 func installedProvider(args []string, out io.Writer) error {
+	if len(args) > 0 && args[0] == "--real-local" {
+		return prepareLocalProvider(args[1:], out)
+	}
 	if os.Getuid() != 1500 || os.Geteuid() != 1500 || os.Getenv("FASED_DISPOSABLE_VM") != "1" {
 		return errors.New("dedicated disposable provider owner required")
 	}
@@ -52,6 +56,37 @@ func installedProvider(args []string, out io.Writer) error {
 	}
 	if !m.ProviderFixture {
 		return errors.New("installer did not retain provider mode")
+	}
+	return json.NewEncoder(out).Encode(m)
+}
+
+// Prepare the existing app-only installation in a fresh private directory.
+// The operator uses its generated service configuration with the OS
+// credential attached before starting it. Never register or start the default unit.
+func prepareLocalProvider(args []string, out io.Writer) error {
+	if os.Getuid() == 0 || os.Getuid() != os.Geteuid() {
+		return errors.New("real Local fixture requires an ordinary OS user")
+	}
+	options, err := providerOptions(args)
+	if err != nil {
+		return err
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return err
+	}
+	if !filepath.IsAbs(home) {
+		return errors.New("real Local fixture requires an absolute home directory")
+	}
+	dir, err := os.MkdirTemp(home, ".fased-provider-local-")
+	if err != nil {
+		return err
+	}
+	options.Start, options.Autostart = false, false
+	paths := localinstall.Paths{Root: filepath.Join(dir, "app"), Data: filepath.Join(dir, "state")}
+	m, err := localinstall.Install(context.Background(), paths, options)
+	if err != nil {
+		return fmt.Errorf("prepare disposable provider service in %s: %w", dir, err)
 	}
 	return json.NewEncoder(out).Encode(m)
 }

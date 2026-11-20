@@ -911,6 +911,41 @@ test("installed provider browser actions require their dedicated profile and ret
   assert.throws(() =>
     browserAddress({ ...config, action: "ui-update", fromVersion: "0.1.10" }),
   );
+  const instanceId = "a".repeat(43);
+  for (const action of [
+    "agent-prepare",
+    "agent-run",
+    "agent-reopen",
+    "agent-finish",
+  ]) {
+    const local = {
+      ...config,
+      action,
+      realLocalProvider: true,
+      instanceId,
+      version: "0.1.23",
+      url: `${config.url}/?instance=${instanceId}#local=${"b".repeat(43)}`,
+    };
+    assert.equal(browserAddress(local).port, "17485");
+  }
+  const local = {
+    ...config,
+    action: "agent-reopen",
+    realLocalProvider: true,
+    instanceId,
+    version: "0.1.23",
+    url: `${config.url}/?instance=${instanceId}#local=${"b".repeat(43)}`,
+  };
+  for (const change of [
+    { realLocalProvider: false },
+    { action: "agent-reboot" },
+    { instanceId: "c".repeat(43) },
+    { sessionFile: "saved-session.json" },
+    { version: "dev" },
+    { url: local.url.replace("127.0.0.1", "example.com") },
+    { url: local.url.replace("#local=", "#setup=") },
+  ])
+    assert.throws(() => browserAddress({ ...local, ...change }));
 });
 
 test("receipt CLI writes the same typed receipt consumed by the gate without opening a browser", async () => {
