@@ -1,6 +1,8 @@
 import { previewModel } from "../ui-language-preview";
 import { swapState } from "../onchain";
 import { SwapResultFacts, SwapRecoveryActions } from "./OnchainSwap";
+import { miningState } from "../wen-mining";
+import { WENMiningResultFacts, WENMiningRecoveryActions } from "./WENMining";
 import { resolveLanguage, translate } from "../ui-language";
 import { useUI } from "../ui-preferences";
 import { useEffect, useRef, useState } from "react";
@@ -212,6 +214,43 @@ export function AgentTasks({
     });
   }
   function actions(t: AgentTask) {
+    if (t.wenMining) {
+      const run = v.runs.find((r) => r.taskId === t.id);
+      const recovery = v.wenMining?.recovery?.find((r) => r.taskId === t.id);
+      return (
+        <div className="row-actions">
+          <WENMiningRecoveryActions
+            recovery={recovery}
+            disabled={agents.busy}
+            onAction={(action, id) =>
+              void agents.change({ action, wenMining: { id } })
+            }
+          />
+          {(recovery?.pause || recovery?.resume) && (
+            <button
+              className="text-button"
+              disabled={agents.busy || !v.wenMining?.available}
+              onClick={() =>
+                void agents.change({
+                  action: recovery.resume ? "task-resume" : "task-pause",
+                  id: t.id,
+                })
+              }
+            >
+              {uiText(recovery.resume ? "Resume" : "Pause")}
+            </button>
+          )}
+          <button
+            className="text-button"
+            disabled={!run}
+            aria-label={`${uiText("Result")}: ${t.name}`}
+            onClick={() => run && showRun(run.id)}
+          >
+            {uiText("Result")}
+          </button>
+        </div>
+      );
+    }
     if (t.swap) {
       const run = v.runs.find((r) => r.taskId === t.id);
       const recovery = v.onchain?.recovery?.find((r) => r.taskId === t.id);
@@ -371,6 +410,15 @@ export function AgentTasks({
     );
   }
   function status(task: AgentTask) {
+    if (task.wenMining) {
+      return uiText(
+        miningState(
+          v.wenMining?.recovery?.find((r) => r.taskId === task.id)?.status ??
+            v.runs.find((r) => r.taskId === task.id)?.wenMining?.state ??
+            "",
+        ),
+      );
+    }
     return task.swap
       ? uiText(
           swapState(
@@ -426,15 +474,23 @@ export function AgentTasks({
                 ? uiText("News watch")
                 : run.analysis
                   ? uiText("Analysis")
-                  : run.swap
+                  : run.wenMining
                     ? uiText(
-                        swapState(
-                          v.onchain?.recovery?.find(
+                        miningState(
+                          v.wenMining?.recovery?.find(
                             (x) => x.taskId === run.taskId,
-                          )?.status ?? run.swap.state,
+                          )?.status ?? run.wenMining.state,
                         ),
                       )
-                    : run.outcome}
+                    : run.swap
+                      ? uiText(
+                          swapState(
+                            v.onchain?.recovery?.find(
+                              (x) => x.taskId === run.taskId,
+                            )?.status ?? run.swap.state,
+                          ),
+                        )
+                      : run.outcome}
           </Badge>
         </header>
         <time dateTime={new Date(run.at * 1000).toISOString()}>
@@ -455,6 +511,28 @@ export function AgentTasks({
                   uiText("Saved result")}
         </p>
         {run.paper && <PaperResultFacts result={run.paper} />}
+        {run.wenMining && (
+          <>
+            <WENMiningResultFacts
+              result={run.wenMining}
+              operation={task?.wenMining?.operation}
+              recovery={v.wenMining?.recovery?.find(
+                (x) => x.taskId === run.taskId,
+              )}
+            />
+            <div className="row-actions">
+              <WENMiningRecoveryActions
+                recovery={v.wenMining?.recovery?.find(
+                  (x) => x.taskId === run.taskId,
+                )}
+                disabled={agents.busy}
+                onAction={(action, id) => {
+                  void agents.change({ action, wenMining: { id } });
+                }}
+              />
+            </div>
+          </>
+        )}
         {run.swap && (
           <>
             <SwapResultFacts
@@ -794,7 +872,7 @@ export function AgentTasks({
                   <dl className="task-facts">
                     <dt>{uiText("Schedule")}</dt>
                     <dd>
-                      {selectedTask.swap
+                      {selectedTask.swap || selectedTask.wenMining
                         ? uiText("Once")
                         : schedule(selectedTask)}
                     </dd>
@@ -816,6 +894,7 @@ export function AgentTasks({
                     !selectedTask.playbook &&
                     !selectedTask.strategyPlan &&
                     !selectedTask.swap &&
+                    !selectedTask.wenMining &&
                     !selectedTask.botId && (
                       <button
                         className="text-button"
@@ -835,22 +914,24 @@ export function AgentTasks({
                         {tr("Archive task")}
                       </button>
                     )}
-                  {selectedTask.state === "held" && !selectedTask.swap && (
-                    <p role="status">
-                      {v.newsFetches
-                        .filter((f) => f.taskId === selectedTask.id)
-                        .at(-1)?.failure ||
-                        (selectedTask.strategyPlan
-                          ? uiText("Review again")
-                          : selectedTask.ai
-                            ? uiText(
-                                "Review a fresh AI plan before continuing.",
-                              )
-                            : uiText(
-                                "Check the selected news source, then resume.",
-                              ))}
-                    </p>
-                  )}
+                  {selectedTask.state === "held" &&
+                    !selectedTask.swap &&
+                    !selectedTask.wenMining && (
+                      <p role="status">
+                        {v.newsFetches
+                          .filter((f) => f.taskId === selectedTask.id)
+                          .at(-1)?.failure ||
+                          (selectedTask.strategyPlan
+                            ? uiText("Review again")
+                            : selectedTask.ai
+                              ? uiText(
+                                  "Review a fresh AI plan before continuing.",
+                                )
+                              : uiText(
+                                  "Check the selected news source, then resume.",
+                                ))}
+                      </p>
+                    )}
                   {selectedTask.ai?.analysis && (
                     <AnalysisTaskAccess view={v} task={selectedTask} />
                   )}

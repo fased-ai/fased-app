@@ -205,6 +205,11 @@ func (s *Server) startAgentTasks() {
 					e = s.Store.advanceOnchain(onchainContext)
 					done()
 				}
+				if e == nil && s.Store.wenMining != nil {
+					miningContext, done := context.WithTimeout(ctx, 15*time.Second)
+					e = s.Store.advanceWENMining(miningContext)
+					done()
+				}
 				message := ""
 				if e != nil && !errors.Is(e, ErrCorePaused) && !errors.Is(e, context.Canceled) {
 					message = "local task scheduler held; inspect workspace capacity and core state"

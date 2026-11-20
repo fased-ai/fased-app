@@ -79,16 +79,20 @@ func (s *Store) snapshotTx(ctx context.Context, tx snapshotReader, probe string)
 	contract := UpdateContract()
 	features := make([]string, 0, len(contract.State[0].Features))
 	for _, feature := range contract.State[0].Features {
-		if feature == swapRecoveryFeature || feature == ordinaryTradeFeature {
+		if feature == swapRecoveryFeature || feature == ordinaryTradeFeature || feature == wenMiningFeature {
 			var document agentDocument
 			if json.Unmarshal([]byte(v.Agents), &document) != nil {
 				return update.CoreSnapshot{}, errors.New("invalid swap recovery snapshot")
 			}
 			required := false
-			for _, run := range document.Runs {
-				if run.Swap != nil && (feature == swapRecoveryFeature && run.Swap.Version == swapRecoveryVersion || feature == ordinaryTradeFeature && ordinarySwapRun(document, run.TaskID)) {
-					required = true
-					break
+			if feature == wenMiningFeature {
+				required = hasWENMiningRun(document)
+			} else {
+				for _, run := range document.Runs {
+					if run.Swap != nil && (feature == swapRecoveryFeature && run.Swap.Version == swapRecoveryVersion || feature == ordinaryTradeFeature && ordinarySwapRun(document, run.TaskID)) {
+						required = true
+						break
+					}
 				}
 			}
 			if !required {
