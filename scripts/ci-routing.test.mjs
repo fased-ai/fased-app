@@ -399,3 +399,49 @@ test("Mintlify configuration and static assets are docs, executable or mixed pat
     for (const lane of lanes) assert.equal(plan[lane], true);
   }
 });
+
+test("release-script and non-custody agent changes use bounded CI lanes and keep sensitive paths conservative", () => {
+  const release = classify([
+    "scripts/release-acceptance.mjs",
+    "scripts/release-acceptance.test.mjs",
+    "scripts/staged-acceptance-contract.json",
+    "docs/maintainers/ubuntu-release.md",
+  ]);
+  assert.equal(release.scope, "release");
+  for (const lane of lanes) assert.equal(release[lane], false);
+  assert.doesNotThrow(() => verifyGate(result(release)));
+  const badRelease = result(release);
+  badRelease.classify.outputs.core = "true";
+  assert.throws(() => verifyGate(badRelease), /invalid release-only selection/);
+
+  const agent = classify([
+    "internal/core/agent_chat.go",
+    "internal/core/provider_models.json",
+    "internal/core/ai_connection.go",
+    "web/src/pages/Chat.tsx",
+    "docs/ai-connections.md",
+  ]);
+  assert.equal(agent.scope, "agent");
+  assert.equal(agent.core, true);
+  assert.equal(agent.signer, false);
+  assert.equal(agent.handoff, false);
+  assert.equal(agent.handoff_uid, false);
+  assert.equal(agent.inspection, false);
+  assert.equal(agent.vm, false);
+  assert.doesNotThrow(() => verifyGate(result(agent)));
+
+  // Sensitive, mixed, or strategy/browser-poller paths stay conservative.
+  for (const paths of [
+    ["scripts/release-acceptance.mjs", "web/src/pages/Chat.tsx"],
+    ["scripts/staged-package-browser.mjs"],
+    ["internal/core/agent_strategies.go"],
+    ["internal/core/agent_strategies_test.go"],
+    ["internal/core/agent_chat.go", "internal/core/rpc_public.go"],
+    ["internal/core/agent_chat.go", "internal/core/store.go"],
+    ["internal/core/agent_chat.go", "internal/signer/store.go"],
+  ]) {
+    const plan = classify(paths);
+    assert.equal(plan.scope, "full", paths.join(", "));
+    for (const lane of lanes) assert.equal(plan[lane], true);
+  }
+});
