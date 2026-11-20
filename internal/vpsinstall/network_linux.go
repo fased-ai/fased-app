@@ -18,9 +18,10 @@ import (
 )
 
 type networkController struct {
-	ops   hostOps
-	now   func() time.Time
-	proof func(context.Context, Manifest) (networkAccess, error)
+	ops          hostOps
+	now          func() time.Time
+	proof        func(context.Context, Manifest) (networkAccess, error)
+	packageCheck func(Manifest) error
 }
 
 func controller(s *custodyinstall.System) (networkController, error) {
@@ -30,7 +31,12 @@ func controller(s *custodyinstall.System) (networkController, error) {
 	if s.Authorization == "" {
 		s.Authorization = "Authorize explicit Remote network lockdown: an owned nftables input table and SSH key-only policy, protected by a five-minute rollback. Private UI and independent console recovery must already work. Foreign host policies are preserved."
 	}
-	return networkController{ops: liveOps(s), now: time.Now, proof: func(ctx context.Context, m Manifest) (networkAccess, error) { return networkProofWithSystem(ctx, m, s) }}, nil
+	return networkController{
+		ops:          liveOps(s),
+		now:          time.Now,
+		proof:        func(ctx context.Context, m Manifest) (networkAccess, error) { return networkProofWithSystem(ctx, m, s) },
+		packageCheck: func(m Manifest) error { _, e := verifyPackageNetworkInstallation(m); return e },
+	}, nil
 }
 func BeginNetwork(ctx context.Context, m Manifest, s *custodyinstall.System, a NetworkApproval) (NetworkStatus, error) {
 	n, e := controller(s)
@@ -64,7 +70,18 @@ func (n networkController) guard(ctx context.Context, m Manifest) error {
 	return n.guardEnrollment(ctx, m, false)
 }
 func (n networkController) guardEnrollment(ctx context.Context, m Manifest, recovery bool) error {
-	if e := verifyNetworkInstallation(ctx, n.ops, m, recovery); e != nil {
+	if isPackageRemoteManifest(m) {
+		if e := ownedByNetwork(n.ops, m); e != nil {
+			return e
+		}
+		if n.packageCheck != nil {
+			if e := n.packageCheck(m); e != nil {
+				return e
+			}
+		} else if _, e := verifyPackageNetworkInstallation(m); e != nil {
+			return e
+		}
+	} else if e := verifyNetworkInstallation(ctx, n.ops, m, recovery); e != nil {
 		return e
 	}
 	release, e := osRelease(n.ops)
@@ -81,7 +98,7 @@ func (n networkController) withLock(ctx context.Context, m Manifest, f func() (N
 	return n.withLockEnrollment(ctx, m, false, f)
 }
 func (n networkController) withLockEnrollment(ctx context.Context, m Manifest, recovery bool, f func() (NetworkStatus, error)) (NetworkStatus, error) {
-	if e := ownedBy(n.ops, m); e != nil {
+	if e := ownedByNetwork(n.ops, m); e != nil {
 		return NetworkStatus{}, e
 	}
 	l, e := n.ops.lock()

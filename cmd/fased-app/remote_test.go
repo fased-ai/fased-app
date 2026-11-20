@@ -64,10 +64,23 @@ func TestManagedRemoteNetworkConsentAndHandoff(t *testing.T) {
 	if !strings.Contains(out.String(), "second SSH") || !strings.Contains(out.String(), "'vps' 'confirm' 'attempt'") || !strings.Contains(out.String(), "2026-10-28T12:00:00Z") {
 		t.Fatal("missing second-session/recovery instructions", out.String())
 	}
-	for _, args := range [][]string{{"confirm"}, {"confirm", "one", "two"}, {"network", "extra"}, {"harden", "--yes"}} {
+	out.Reset()
+	networkHandoff(&out, vpsinstall.Manifest{Phase: "package-remote", Core: "/pkg/fased-app", Data: "/pkg/app-state"}, vpsinstall.NetworkStatus{Phase: "pending", AttemptID: "attempt", Deadline: time.Date(2026, 10, 28, 12, 0, 0, 0, time.UTC)})
+	if !strings.Contains(out.String(), "'vps' 'confirm' '--data-dir' '/pkg/app-state' 'attempt'") {
+		t.Fatal("missing package data-dir confirmation instruction", out.String())
+	}
+	for _, args := range [][]string{{"confirm"}, {"confirm", "one", "two"}, {"network", "extra"}, {"harden", "--yes"}, {"start", "--data-dir", "/foreign"}, {"access", "--data-dir", "/foreign"}, {"claim-code", "--data-dir", "/foreign"}} {
 		if vpsCommand(args, nil, io.Discard, io.Discard) == nil {
 			t.Fatal("invalid network command accepted", args)
 		}
+	}
+	for _, action := range []string{"harden", "network", "rollback", "finish"} {
+		if err := vpsCommand([]string{action, "--data-dir", "/nonexistent/app-state"}, nil, io.Discard, io.Discard); err == nil || strings.Contains(err.Error(), "only supported for vps network commands") || strings.Contains(err.Error(), "flag provided but not defined") {
+			t.Fatalf("network action %s failed flag validation: %v", action, err)
+		}
+	}
+	if err := vpsCommand([]string{"confirm", "--data-dir", "/nonexistent/app-state", "attempt"}, nil, io.Discard, io.Discard); err == nil || strings.Contains(err.Error(), "only supported for vps network commands") || strings.Contains(err.Error(), "flag provided but not defined") {
+		t.Fatalf("confirm action failed flag validation: %v", err)
 	}
 }
 

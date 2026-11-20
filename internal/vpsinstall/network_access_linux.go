@@ -74,31 +74,57 @@ func networkProofWithSystem(ctx context.Context, m Manifest, system *custodyinst
 		return errors.New("private instance redirects are refused")
 	}}
 	var identity string
-	if system != nil {
-		// The SSH session already identifies this as the serving Tailscale node.
-		// Local health binds its instance; Verify below still requires the real
-		// SSH peer's independent, device-bound HTTPS confirmation.
-		identity, err = checkPrivateLocalApplication(ctx, m, client)
-	} else {
-		identity, err = checkPrivateApplication(ctx, m, client)
-	}
-	if err != nil {
-		return empty, err
-	}
-	// Reuse the private access inventory guard; HTTPS alone does not exclude Funnel.
 	access := privateaccess.System()
 	access.Client = client
-	target := tailnet.Target(m.Data)
-	if f, e := committedEnrollment(liveOps(nil), m); e == nil {
-		target = tailnet.Target(f.Target.Root + "/app-state")
+	var target string
+	if isPackageRemoteManifest(m) {
+		pm, err := verifyPackageNetworkInstallation(m)
+		if err != nil {
+			return empty, err
+		}
+		commit, err := custodyinstall.ReadEnrollmentCommit(pm)
+		if err != nil {
+			return empty, errors.New("completed same-instance package enrollment is required")
+		}
+		identity, err = checkPackagePrivateLocalApplication(ctx, m, commit.InstanceID, client)
+		if err != nil {
+			return empty, err
+		}
+		socket, err := tailnet.ProtectedSocket("package-"+m.ID, m.OwnerUID)
+		if err != nil {
+			return empty, err
+		}
+		target = "unix:" + socket
 		if system != nil {
 			access.Proof = func(ctx context.Context, request core.PrivateAccessProofRequest) (core.PrivateAccessProof, error) {
-				return system.PrivateAccessProof(ctx, f.Target, request)
+				return system.PrivateAccessProof(ctx, pm, request)
 			}
 		}
-	} else if system != nil {
-		access.Proof = func(ctx context.Context, request core.PrivateAccessProofRequest) (core.PrivateAccessProof, error) {
-			return PrivateAccessProof(ctx, m, system, request)
+	} else {
+		if system != nil {
+			// The SSH session already identifies this as the serving Tailscale node.
+			// Local health binds its instance; Verify below still requires the real
+			// SSH peer's independent, device-bound HTTPS confirmation.
+			identity, err = checkPrivateLocalApplication(ctx, m, client)
+		} else {
+			identity, err = checkPrivateApplication(ctx, m, client)
+		}
+		if err != nil {
+			return empty, err
+		}
+		// Reuse the private access inventory guard; HTTPS alone does not exclude Funnel.
+		target = tailnet.Target(m.Data)
+		if f, e := committedEnrollment(liveOps(nil), m); e == nil {
+			target = tailnet.Target(f.Target.Root + "/app-state")
+			if system != nil {
+				access.Proof = func(ctx context.Context, request core.PrivateAccessProofRequest) (core.PrivateAccessProof, error) {
+					return system.PrivateAccessProof(ctx, f.Target, request)
+				}
+			}
+		} else if system != nil {
+			access.Proof = func(ctx context.Context, request core.PrivateAccessProofRequest) (core.PrivateAccessProof, error) {
+				return PrivateAccessProof(ctx, m, system, request)
+			}
 		}
 	}
 	if system != nil {
@@ -113,6 +139,23 @@ func networkProofWithSystem(ctx context.Context, m Manifest, system *custodyinst
 		return empty, err
 	}
 	return p, nil
+}
+
+func checkPackagePrivateLocalApplication(ctx context.Context, m Manifest, expected string, client *http.Client) (string, error) {
+	r, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://"+m.Listen+"/api/v1/health", nil)
+	if err != nil {
+		return "", err
+	}
+	response, err := client.Do(r)
+	if err != nil {
+		return "", err
+	}
+	defer response.Body.Close()
+	h, err := connection.ReadHealth(response, expected)
+	if err != nil || h.Connection == nil || h.Connection.Location != "remote" || h.Connection.OwnerUID != m.OwnerUID || !h.Connection.RemoteReady {
+		return "", errors.New("finish private owner/device setup before lockdown")
+	}
+	return h.InstanceID, nil
 }
 
 func procParent(pid int) (int, error) {

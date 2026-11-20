@@ -522,7 +522,14 @@ func (s *System) appClientInput(ctx context.Context, m Manifest, action string, 
 	if action != "claim-code" && action != "recover" && action != "accounts" && action != "agents" && action != "login" && action != "status" && action != "update-inventory" && action != "update-pause" && action != "update-backup" && action != "update-recovery" && action != "update-status" && action != "update-preferences" {
 		return errors.New("unsupported app helper action")
 	}
-	if e := Verify(m); e != nil {
+	if m.Layout == PackageLayout {
+		if m.Location != "remote" {
+			return errors.New("Remote package installation required")
+		}
+		if e := VerifyPackageInstance(m); e != nil {
+			return e
+		}
+	} else if e := Verify(m); e != nil {
 		return e
 	}
 	if m.Owner != os.Getuid() || os.Getuid() <= 0 || os.Geteuid() != os.Getuid() {
@@ -534,7 +541,7 @@ func (s *System) appClientInput(ctx context.Context, m Manifest, action string, 
 	// This exact Remote proof command has its own fixed, password-free grant.
 	// Running sudo -v first would demand unrelated administrator credentials
 	// even when the owner is already authorized for this one command.
-	if !privateProofStatus(action, flags) {
+	if !privateProofStatus(action, flags) || m.Layout == PackageLayout {
 		if _, e := s.Run(ctx, nil, "/usr/bin/setpriv", "--version"); e != nil {
 			return e
 		}

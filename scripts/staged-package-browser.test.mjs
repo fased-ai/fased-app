@@ -51,7 +51,7 @@ test("Remote owner evidence preserves the authenticated device and enrollment", 
   );
 });
 
-test("Remote format-4 browser requires the exact device-bound predecessor", () => {
+test("Remote format-4 browser accepts generalized device-bound predecessors and rejects downgrades", () => {
   const instanceId = "a".repeat(43);
   const expectedOrigin = "https://node.tail-test.ts.net:8443";
   const config = {
@@ -68,6 +68,20 @@ test("Remote format-4 browser requires the exact device-bound predecessor", () =
     closeForAutomatic: true,
   };
   assert.equal(browserAddress(config).origin, expectedOrigin);
+  assert.equal(
+    browserAddress({
+      ...config,
+      action: "ui-update",
+      predecessor: {
+        ...config.predecessor,
+        version: "0.1.23",
+        packetSha256: "f".repeat(64),
+      },
+      fromVersion: "0.1.23",
+      version: "0.1.24",
+    }).origin,
+    expectedOrigin,
+  );
   for (const origin of [
     expectedOrigin.replace(":8443", ""),
     expectedOrigin.replace(":8443", ":8444"),
@@ -85,7 +99,21 @@ test("Remote format-4 browser requires the exact device-bound predecessor", () =
   assert.throws(() =>
     browserAddress({
       ...config,
-      predecessor: { ...config.predecessor, packetSha256: "f".repeat(64) },
+      predecessor: { ...config.predecessor, packetSha256: "not-a-digest" },
+    }),
+  );
+  assert.throws(() =>
+    browserAddress({
+      ...config,
+      predecessor: { ...config.predecessor, version: "0.1.24" },
+      fromVersion: "0.1.24",
+      version: "0.1.24",
+    }),
+  );
+  assert.throws(() =>
+    browserAddress({
+      ...config,
+      fromVersion: "0.1.21",
     }),
   );
   assert.throws(() => browserAddress({ ...config, closeForAutomatic: false }));

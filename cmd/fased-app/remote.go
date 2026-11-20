@@ -419,8 +419,21 @@ func networkConsent(in io.Reader, out io.Writer) (vpsinstall.NetworkApproval, er
 func networkHandoff(out io.Writer, m vpsinstall.Manifest, status vpsinstall.NetworkStatus) {
 	if status.Phase == "pending" {
 		fmt.Fprintln(out, "Keep this connection open. Open a second SSH TCP connection through Tailscale (no ControlMaster reuse), verify private sign-in, then run before", status.Deadline.UTC().Format(time.RFC3339)+":")
-		fmt.Fprintln(out, installationCommand(m.Core, "vps", "confirm", status.AttemptID))
+		if m.Phase == "package-remote" {
+			fmt.Fprintln(out, installationCommand(m.Core, "vps", "confirm", "--data-dir", m.Data, status.AttemptID))
+		} else {
+			fmt.Fprintln(out, installationCommand(m.Core, "vps", "confirm", status.AttemptID))
+		}
 		fmt.Fprintln(out, "Without confirmation, rollback restores the previous SSH policy and removes only Fased's firewall table.")
+	}
+}
+
+func isVPSNetworkAction(action string) bool {
+	switch action {
+	case "harden", "confirm", "finish", "rollback", "network":
+		return true
+	default:
+		return false
 	}
 }
 
@@ -439,6 +452,7 @@ func vpsCommand(args []string, in io.Reader, out, errOut io.Writer) error {
 	}
 	f := flag.NewFlagSet("vps "+action, flag.ContinueOnError)
 	configure := f.Bool("configure", false, "guide private access change for the same workspace")
+	dataDir := f.String("data-dir", "", "Remote package data directory for network commands")
 	f.SetOutput(errOut)
 	if err := f.Parse(args[1:]); err != nil {
 		return err
@@ -446,13 +460,25 @@ func vpsCommand(args []string, in io.Reader, out, errOut io.Writer) error {
 	if *configure && action != "access" {
 		return errors.New("configure is an access option")
 	}
+	if *dataDir != "" && !isVPSNetworkAction(action) {
+		return errors.New("data-dir is only supported for vps network commands")
+	}
 	if (action == "confirm" && f.NArg() != 1) || (action != "confirm" && f.NArg() != 0) {
 		return errors.New("unexpected vps arguments")
 	}
 	if runtime.GOOS != "linux" || os.Getuid() <= 0 || os.Geteuid() != os.Getuid() {
 		return errors.New("VPS management requires an ordinary Linux administrator")
 	}
-	m, err := vpsinstall.Load(os.Getuid())
+	var m vpsinstall.Manifest
+	var err error
+	if *dataDir != "" {
+		m, err = vpsinstall.LoadPackageNetwork(os.Getuid(), *dataDir)
+	} else {
+		m, err = vpsinstall.Load(os.Getuid())
+		if errors.Is(err, os.ErrNotExist) && isVPSNetworkAction(action) {
+			m, err = vpsinstall.LoadPackageNetwork(os.Getuid(), "")
+		}
+	}
 	if err != nil {
 		return err
 	}

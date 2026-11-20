@@ -331,6 +331,17 @@ export async function browserRequest(page, route, method = "GET", body) {
   );
 }
 
+function olderVersion(before, after) {
+  const parts = (version) =>
+    /^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$/.test(version ?? "")
+      ? version.split(".").map(BigInt)
+      : null;
+  const left = parts(before);
+  const right = parts(after);
+  const first = left && right ? left.findIndex((v, i) => v !== right[i]) : -1;
+  return first >= 0 && left[first] < right[first];
+}
+
 export function browserAddress(config) {
   assert.equal(config.fixtureOnly, true);
   assert.ok(
@@ -438,10 +449,14 @@ export function browserAddress(config) {
   if (format4) {
     assert.equal(config.transport, "tailscale-https");
     assert.equal(config.ownerAuthMode, "tailscale-device-v1");
-    for (const [key, expected] of Object.entries(
-      stagedAcceptanceContract.remoteFormat4.predecessor,
-    ))
-      assert.equal(config.predecessor[key], expected);
+    assert.equal(config.predecessor.ownerAuthMode, "tailscale-device-v1");
+    assert.ok(
+      olderVersion(config.predecessor.version, config.version),
+      "format-4 predecessor version must be older than target version",
+    );
+    assert.match(config.predecessor.source ?? "", /^[a-f0-9]{40}$/);
+    assert.match(config.predecessor.artifactSetSha256 ?? "", /^[a-f0-9]{64}$/);
+    assert.match(config.predecessor.packetSha256 ?? "", /^[a-f0-9]{64}$/);
   } else if (config.ownerAuthMode !== undefined) {
     assert.equal(config.ownerAuthMode, "existing-password-account-preserved");
     assert.equal(config.transport, "tailscale-https");
@@ -482,8 +497,8 @@ export function browserAddress(config) {
     assert.notEqual(config.fromVersion, config.version);
   }
   if (format4 && applying) {
-    assert.equal(config.fromVersion, "0.1.22");
-    assert.equal(config.version, "0.1.23");
+    assert.equal(config.fromVersion, config.predecessor.version);
+    assert.ok(olderVersion(config.fromVersion, config.version));
     if (config.action === "automatic-update")
       assert.equal(config.closeForAutomatic, true);
   }
