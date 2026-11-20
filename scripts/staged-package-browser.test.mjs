@@ -53,7 +53,7 @@ test("Remote owner evidence preserves the authenticated device and enrollment", 
 
 test("Remote format-4 browser requires the exact device-bound predecessor", () => {
   const instanceId = "a".repeat(43);
-  const expectedOrigin = "https://node.tail-test.ts.net";
+  const expectedOrigin = "https://node.tail-test.ts.net:8443";
   const config = {
     fixtureOnly: true,
     action: "automatic-update",
@@ -68,6 +68,14 @@ test("Remote format-4 browser requires the exact device-bound predecessor", () =
     closeForAutomatic: true,
   };
   assert.equal(browserAddress(config).origin, expectedOrigin);
+  for (const origin of [
+    expectedOrigin.replace(":8443", ""),
+    expectedOrigin.replace(":8443", ":8444"),
+    expectedOrigin.replace("node.", "other."),
+  ])
+    assert.throws(() =>
+      browserAddress({ ...config, url: `${origin}/?instance=${instanceId}` }),
+    );
   assert.throws(() =>
     browserAddress({
       ...config,
@@ -245,6 +253,16 @@ test("private preflight accepts only the verified node's bare nonce URL", () => 
     url: "https://node.tail-example.ts.net/#" + "A".repeat(43),
   };
   assert.equal(privatePreflightAddress(config).origin, config.expectedOrigin);
+  const isolatedOrigin = config.expectedOrigin + ":8443";
+  const isolated = {
+    ...config,
+    expectedOrigin: isolatedOrigin,
+    url: isolatedOrigin + "/#" + "A".repeat(43),
+  };
+  assert.equal(privatePreflightAddress(isolated).origin, isolatedOrigin);
+  assert.throws(() =>
+    privatePreflightAddress({ ...isolated, url: config.url }),
+  );
   for (const url of [
     "http://node.tail-example.ts.net/#" + "A".repeat(43),
     "https://other.tail-example.ts.net/#" + "A".repeat(43),
@@ -261,8 +279,17 @@ test("private preflight accepts only the verified node's bare nonce URL", () => 
     "https://node.tail-example.ts.net/path",
     "https://node.example.org",
     "https://node.tail-example.ts.net/#proof",
+    ...["443", "1023", "08443", "65536"].map(
+      (port) => config.expectedOrigin + ":" + port,
+    ),
   ])
-    assert.throws(() => privatePreflightAddress({ ...config, expectedOrigin }));
+    assert.throws(() =>
+      privatePreflightAddress({
+        ...config,
+        expectedOrigin,
+        url: expectedOrigin + "/#" + "A".repeat(43),
+      }),
+    );
   assert.throws(() =>
     privatePreflightAddress({ ...config, fixtureOnly: false }),
   );

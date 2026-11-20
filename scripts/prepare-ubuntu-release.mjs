@@ -36,7 +36,10 @@ import {
   privateSigningPassphrase,
 } from "./local-release-signing.mjs";
 import { openPublisherJournal } from "./publisher-journal.mjs";
-import { verifyCandidateReplay } from "./release-acceptance.mjs";
+import {
+  isPrivateTailscaleOrigin,
+  verifyCandidateReplay,
+} from "./release-acceptance.mjs";
 
 export let evidence = ".evidence/ubuntu-release";
 // A private, independently attested current-reader fixture. This version is
@@ -97,12 +100,13 @@ export function automaticPredecessor(c, env, command) {
   const input = env.FASED_AUTOMATIC_PREDECESSOR_PINS;
   if (input === undefined || input === "") return null;
   const pins =
-    /^([1-9][0-9]{3,4}):([a-f0-9]{64}):([a-f0-9]{32})(?::(https:\/\/[a-z0-9-]+\.[a-z0-9-]+\.ts\.net):([a-f0-9]{64}))?$/.exec(
+    /^([1-9][0-9]{3,4}):([a-f0-9]{64}):([a-f0-9]{32})(?::(\S+):([a-f0-9]{64}))?$/.exec(
       input,
     );
   if (
     pins?.[0] !== input ||
     Number(pins[1]) > 60000 ||
+    (pins[4] !== undefined && !isPrivateTailscaleOrigin(pins[4])) ||
     !testPredecessorWorkflow(c, env, command) ||
     (env.FASED_FEDORA_PREDECESSOR !== undefined &&
       env.FASED_FEDORA_PREDECESSOR !== "false") ||

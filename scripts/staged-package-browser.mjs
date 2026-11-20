@@ -2,6 +2,7 @@
 import assert from "node:assert/strict";
 import {
   acceptanceBinding,
+  isPrivateTailscaleOrigin,
   validateInstalledAgent,
   stagedAcceptanceContract,
   completeRemoteUpgrade,
@@ -361,12 +362,8 @@ export function browserAddress(config) {
   const address = new URL(config.url);
   assert.equal(address.username + address.password, "");
   if (config.transport === "tailscale-https") {
-    const origin = new URL(config.expectedOrigin);
-    assert.equal(origin.protocol, "https:");
-    assert.match(origin.hostname, /^[a-z0-9-]+\.[a-z0-9-]+\.ts\.net$/);
-    assert.equal(origin.href, origin.origin + "/");
-    assert.equal(origin.username + origin.password + origin.port, "");
-    assert.equal(address.origin, origin.origin);
+    assert.ok(isPrivateTailscaleOrigin(config.expectedOrigin));
+    assert.equal(address.origin, config.expectedOrigin);
     assert.equal(address.pathname, "/");
     assert.match(config.instanceId, /^[A-Za-z0-9_-]{43}$/);
     assert.deepEqual(
@@ -474,13 +471,9 @@ export function browserAddress(config) {
 export function privatePreflightAddress(config) {
   assert.equal(config.fixtureOnly, true);
   assert.equal(config.action, "private-preflight");
-  const origin = new URL(config.expectedOrigin),
-    address = new URL(config.url);
-  assert.match(origin.hostname, /^[a-z0-9-]+\.[a-z0-9-]+\.ts\.net$/);
-  assert.equal(origin.protocol, "https:");
-  assert.equal(origin.username + origin.password + origin.port, "");
-  assert.equal(origin.href, origin.origin + "/");
-  assert.equal(address.origin, origin.origin);
+  const address = new URL(config.url);
+  assert.ok(isPrivateTailscaleOrigin(config.expectedOrigin));
+  assert.equal(address.origin, config.expectedOrigin);
   assert.equal(address.username + address.password, "");
   assert.equal(address.pathname, "/");
   assert.equal(address.search, "");

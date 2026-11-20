@@ -13,6 +13,18 @@ for (const value of Object.values(stagedAcceptanceContract))
   if (Array.isArray(value)) Object.freeze(value);
 Object.freeze(stagedAcceptanceContract);
 
+// Match canonical Tailscale Serve origins, including isolated HTTPS listeners.
+// Compare the original string so URL normalization cannot erase an input port.
+export function isPrivateTailscaleOrigin(value) {
+  const match =
+    /^https:\/\/(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.){2}ts\.net(?::([1-9][0-9]{3,4}))?$/.exec(
+      value,
+    );
+  if (!match || match[0] !== value) return false;
+  const port = Number(match[1]);
+  return match[1] === undefined || (port >= 1024 && port <= 65535);
+}
+
 const repo = "/repos/fased-ai/fased-app";
 export const installedAcceptanceChecks = [
   "entry",
