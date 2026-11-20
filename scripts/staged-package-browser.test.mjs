@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { stagedAcceptanceContract } from "./release-acceptance.mjs";
 import {
   browserAddress,
   installedAccount,
@@ -18,7 +19,69 @@ import {
   restoreFixtureManualPolicy,
   detachedFixtureObserver,
   restoreCapturedOwner,
+  remoteOwnerAuthentication,
 } from "./staged-package-browser.mjs";
+
+test("Remote owner evidence preserves the authenticated device and enrollment", () => {
+  const devices = [
+    { userId: 7, nodeId: "approved" },
+    { userId: 7, nodeId: "other" },
+  ];
+  const original = remoteOwnerAuthentication({ current: "approved", devices });
+  assert.equal(
+    remoteOwnerAuthentication({
+      current: "approved",
+      devices: [...devices].reverse(),
+    }),
+    original,
+  );
+  assert.notEqual(
+    remoteOwnerAuthentication({ current: "other", devices }),
+    original,
+  );
+  assert.notEqual(
+    remoteOwnerAuthentication({
+      current: "approved",
+      devices: devices.slice(0, 1),
+    }),
+    original,
+  );
+  assert.throws(() =>
+    remoteOwnerAuthentication({ current: "unapproved", devices }),
+  );
+});
+
+test("Remote format-4 browser requires the exact device-bound predecessor", () => {
+  const instanceId = "a".repeat(43);
+  const expectedOrigin = "https://node.tail-test.ts.net";
+  const config = {
+    fixtureOnly: true,
+    action: "automatic-update",
+    transport: "tailscale-https",
+    expectedOrigin,
+    url: `${expectedOrigin}/?instance=${instanceId}`,
+    instanceId,
+    ownerAuthMode: "tailscale-device-v1",
+    predecessor: stagedAcceptanceContract.remoteFormat4.predecessor,
+    fromVersion: "0.1.22",
+    version: "0.1.23",
+    closeForAutomatic: true,
+  };
+  assert.equal(browserAddress(config).origin, expectedOrigin);
+  assert.throws(() =>
+    browserAddress({
+      ...config,
+      ownerAuthMode: "existing-password-account-preserved",
+    }),
+  );
+  assert.throws(() =>
+    browserAddress({
+      ...config,
+      predecessor: { ...config.predecessor, packetSha256: "f".repeat(64) },
+    }),
+  );
+  assert.throws(() => browserAddress({ ...config, closeForAutomatic: false }));
+});
 
 test("captured old owner reconnects through the actual upgraded device UI", async () => {
   const actions = [];

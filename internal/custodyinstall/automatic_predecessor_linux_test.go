@@ -11,6 +11,8 @@ import (
 
 	"github.com/fased-ai/fased-app/internal/core"
 	"github.com/fased-ai/fased-app/internal/hostplatform"
+	"github.com/fased-ai/fased-app/internal/privateaccess"
+	"github.com/fased-ai/fased-app/internal/tailnet"
 	"github.com/fased-ai/fased-app/internal/update"
 )
 
@@ -82,5 +84,52 @@ func TestControlledAutomaticRecoveryBindsTheOriginalRecordAndPolicy(t *testing.T
 	hostplatform.AutomaticPredecessorMachineSHA256 = strings.Repeat("1", 64)
 	if recovered.matchesRecord(base, r) {
 		t.Fatal("a different machine inherited test-only authority")
+	}
+
+	hostplatform.AutomaticPredecessorMachineSHA256 = fmt.Sprintf("%x", sha256.Sum256([]byte(strings.TrimSpace(string(machine)))))
+	origin := "https://fixture.tail-test.ts.net"
+	device := tailnet.Identity{UserID: 7, NodeID: "approved-device", Login: "fixture@example.test"}
+	remote := base
+	remote.Location, remote.PublicOrigin, remote.Listen = "remote", origin, "127.0.0.1:17482"
+	view.View.Operation.Automatic = true
+	if ControlledAutomaticOperation(remote, previous, view.View.Operation) {
+		t.Fatal("Local fixture admitted a Remote")
+	}
+	t.Cleanup(func() {
+		hostplatform.AutomaticPredecessorRemoteOrigin = ""
+		hostplatform.AutomaticPredecessorRemoteDeviceSHA256 = ""
+	})
+	hostplatform.AutomaticPredecessorRemoteOrigin = origin
+	hostplatform.AutomaticPredecessorRemoteDeviceSHA256 = fmt.Sprintf("%x", sha256.Sum256([]byte("7\x00approved-device")))
+	approval := privateaccess.ProtectedInitialApproval{Version: 1, Owner: remote.Owner, Instance: remote.ID, Origin: origin, Listen: remote.Listen,
+		Sequence: previous.Sequence, ReleaseSHA256: previous.ReleaseSHA256, CoreSHA256: remote.CoreHash, Device: device}
+	remoteAdmission, err := controlledAutomaticAdmission(remote, previous, view)
+	if err != nil || !matchesAutomaticRemoteApproval(remote, previous, approval) || !remoteAdmission.matchesRecord(remote, r) {
+		t.Fatal("exact Remote fixture failed admission or recovery", err)
+	}
+	for _, mutate := range []func(*privateaccess.ProtectedInitialApproval){
+		func(a *privateaccess.ProtectedInitialApproval) { a.Device.NodeID = "other" },
+		func(a *privateaccess.ProtectedInitialApproval) { a.Device.UserID = 8 },
+		func(a *privateaccess.ProtectedInitialApproval) { a.Origin = "https://other.tail-test.ts.net" },
+		func(a *privateaccess.ProtectedInitialApproval) { a.Instance = strings.Repeat("f", 32) },
+		func(a *privateaccess.ProtectedInitialApproval) { a.CoreSHA256 = strings.Repeat("f", 64) },
+		func(a *privateaccess.ProtectedInitialApproval) { a.ReleaseSHA256 = strings.Repeat("f", 64) },
+	} {
+		changed := approval
+		mutate(&changed)
+		if matchesAutomaticRemoteApproval(remote, previous, changed) {
+			t.Fatal("different protected Remote approval inherited Automatic")
+		}
+	}
+	otherOrigin := remote
+	otherOrigin.PublicOrigin = "https://other.tail-test.ts.net"
+	otherPacket := view.View.Operation
+	wrongRelease := release
+	wrongRelease.ManifestSHA256 = strings.Repeat("f", 64)
+	otherPacket.Release = &wrongRelease
+	if ControlledAutomaticOperation(base, previous, view.View.Operation) ||
+		ControlledAutomaticOperation(otherOrigin, previous, view.View.Operation) ||
+		ControlledAutomaticOperation(remote, previous, otherPacket) {
+		t.Fatal("Remote pin admitted Local, a foreign origin or a different update target")
 	}
 }

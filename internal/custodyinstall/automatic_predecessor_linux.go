@@ -10,6 +10,7 @@ import (
 	"github.com/fased-ai/fased-app/internal/core"
 	"github.com/fased-ai/fased-app/internal/hostplatform"
 	"github.com/fased-ai/fased-app/internal/maintenance"
+	"github.com/fased-ai/fased-app/internal/privateaccess"
 	"github.com/fased-ai/fased-app/internal/update"
 )
 
@@ -18,14 +19,30 @@ const automaticPredecessorTarget = "f009a6ad164403688e062e384f23c4ead7d994f1f94d
 // ControlledAutomaticOperation gates the test-only exception in both the
 // installed controller and its privileged helper. Ordinary builds fail closed.
 func ControlledAutomaticOperation(m Manifest, base *update.MaintenancePackage, o core.ApplicationUpdateOperation) bool {
-	return hostplatform.AutomaticPredecessorAllowed(m.Owner, m.Location, m.ID) &&
-		m.Layout == PackageLayout && m.Network == "" && m.PublicOrigin == "" &&
+	return hostplatform.AutomaticPredecessorAllowed(m.Owner, m.Location, m.ID, m.PublicOrigin) &&
+		m.Layout == PackageLayout && m.Network == "" &&
 		base != nil && base.Bundle != nil && !base.DevelopmentOnly &&
 		base.Version == "0.1.22" && base.Sequence == 1000023 && validHex(base.ReleaseSHA256, 32) &&
 		o.Automatic && update.IDOK(o.ID) && validHex(o.PolicySHA256, 32) &&
 		o.Release != nil && o.Release.ManifestSHA256 == automaticPredecessorTarget &&
 		o.Release.Version == "0.1.23" && o.Release.Sequence == 1000024 &&
 		o.Release.Target == (update.Target{OS: "linux", Arch: "amd64"}) && validHex(o.Release.EngineSHA256, 32)
+}
+
+func matchesAutomaticRemoteApproval(m Manifest, base *update.MaintenancePackage, approval privateaccess.ProtectedInitialApproval) bool {
+	return approval.MatchesPackage(m.Owner, m.ID, m.PublicOrigin, m.Listen, base.Sequence, base.ReleaseSHA256, m.CoreHash) &&
+		hostplatform.AutomaticPredecessorDeviceAllowed(approval.Device)
+}
+
+func verifyAutomaticRemoteApproval(m Manifest, base *update.MaintenancePackage) error {
+	if m.Location != "remote" {
+		return nil
+	}
+	approval, err := privateaccess.ReadProtectedPackageInitialApproval(m.Owner, m.ID)
+	if err != nil || !matchesAutomaticRemoteApproval(m, base, approval) {
+		return errors.New("the original pinned Remote device approval is required for controlled Automatic")
+	}
+	return nil
 }
 
 type automaticPredecessorAdmission struct {
@@ -72,6 +89,9 @@ func RecordControlledAutomatic(m Manifest, base *update.MaintenancePackage, view
 	if err != nil {
 		return err
 	}
+	if err = verifyAutomaticRemoteApproval(m, base); err != nil {
+		return err
+	}
 	return maintenance.PublishProtected(path, mustJSON(admission), 0644)
 }
 
@@ -91,6 +111,9 @@ func readControlledAutomatic(base Manifest, r update.MaintenanceRecord) (*automa
 	if err != nil || f.Mode != 0644 || len(f.Data) > 4096 || update.StrictJSON(f.Data, &a) != nil ||
 		!known(f, mustJSON(a), 0644) || !a.matchesRecord(base, r) {
 		return nil, errors.New("original controlled Automatic recovery authority differs; preserve it")
+	}
+	if err = verifyAutomaticRemoteApproval(base, r.PreviousPackage); err != nil {
+		return nil, err
 	}
 	return &a, nil
 }

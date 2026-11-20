@@ -96,7 +96,10 @@ export function fedoraPredecessorConfig(c, env, command) {
 export function automaticPredecessor(c, env, command) {
   const input = env.FASED_AUTOMATIC_PREDECESSOR_PINS;
   if (input === undefined || input === "") return null;
-  const pins = /^([1-9][0-9]{3,4}):([a-f0-9]{64}):([a-f0-9]{32})$/.exec(input);
+  const pins =
+    /^([1-9][0-9]{3,4}):([a-f0-9]{64}):([a-f0-9]{32})(?::(https:\/\/[a-z0-9-]+\.[a-z0-9-]+\.ts\.net):([a-f0-9]{64}))?$/.exec(
+      input,
+    );
   if (
     pins?.[0] !== input ||
     Number(pins[1]) > 60000 ||
@@ -110,8 +113,14 @@ export function automaticPredecessor(c, env, command) {
     throw Error(
       "Automatic predecessor requires a reviewed package-only workflow and exact receiver pins",
     );
-  const [, owner, machine, instance] = pins;
-  return { config: { ...c, version: "0.1.22" }, owner, machine, instance };
+  const [, owner, machine, instance, origin, device] = pins;
+  return {
+    config: { ...c, version: "0.1.22" },
+    owner,
+    machine,
+    instance,
+    ...(origin && { origin, device }),
+  };
 }
 const sha = (b) => createHash("sha256").update(b).digest("hex");
 const hash = /^[a-f0-9]{64}$/;
@@ -286,6 +295,8 @@ func init() {
 	AutomaticPredecessorOwnerUID = ${JSON.stringify(automatic.owner)}
 	AutomaticPredecessorMachineSHA256 = ${JSON.stringify(automatic.machine)}
 	AutomaticPredecessorInstance = ${JSON.stringify(automatic.instance)}
+	AutomaticPredecessorRemoteOrigin = ${JSON.stringify(automatic.origin ?? "")}
+	AutomaticPredecessorRemoteDeviceSHA256 = ${JSON.stringify(automatic.device ?? "")}
 }
 `,
     });

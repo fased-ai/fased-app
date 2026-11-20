@@ -127,6 +127,20 @@ export function updateMode(state) {
   // The installed API omits the default Manual mode, as does its UI parser.
   return mode ?? "manual";
 }
+export function remoteOwnerAuthentication(devices) {
+  const entries = devices?.devices?.map(({ userId, nodeId }) => {
+    assert.ok(Number.isSafeInteger(userId) && userId > 0);
+    assert.ok(typeof nodeId === "string" && nodeId.length > 0);
+    return JSON.stringify([userId, nodeId]);
+  });
+  assert.ok(
+    entries?.length &&
+      devices.devices.some(({ nodeId }) => nodeId === devices.current),
+  );
+  return createHash("sha256")
+    .update(JSON.stringify([devices.current, entries.sort()]))
+    .digest("hex");
+}
 export function retainedWorkspace(workspace) {
   const retained = {};
   for (const key of retainedKeys) {
@@ -401,7 +415,15 @@ export function browserAddress(config) {
       );
   }
   assert.match(config.version, /^\d+\.\d+\.\d+$/);
-  if (config.ownerAuthMode !== undefined) {
+  const format4 = config.predecessor?.packetVersion === 4;
+  if (format4) {
+    assert.equal(config.transport, "tailscale-https");
+    assert.equal(config.ownerAuthMode, "tailscale-device-v1");
+    for (const [key, expected] of Object.entries(
+      stagedAcceptanceContract.remoteFormat4.predecessor,
+    ))
+      assert.equal(config.predecessor[key], expected);
+  } else if (config.ownerAuthMode !== undefined) {
     assert.equal(config.ownerAuthMode, "existing-password-account-preserved");
     assert.equal(config.transport, "tailscale-https");
     assert.ok(
@@ -439,6 +461,12 @@ export function browserAddress(config) {
   if (applying) {
     assert.match(config.fromVersion, /^\d+\.\d+\.\d+$/);
     assert.notEqual(config.fromVersion, config.version);
+  }
+  if (format4 && applying) {
+    assert.equal(config.fromVersion, "0.1.22");
+    assert.equal(config.version, "0.1.23");
+    if (config.action === "automatic-update")
+      assert.equal(config.closeForAutomatic, true);
   }
   return address;
 }
@@ -1301,6 +1329,9 @@ export async function runStagedBrowser(config, { chromium, expect }) {
   const preservedPasswordOwner =
     config.ownerAuthMode === "existing-password-account-preserved";
   const applying = ["ui-update", "automatic-update"].includes(config.action);
+  const format4Automatic =
+    config.action === "automatic-update" &&
+    config.predecessor?.packetVersion === 4;
   const retainIssuedEntry = async (value) => {
     if (!config.entryObservationFile) return;
     assert.equal(directRemote, true);
@@ -1525,6 +1556,37 @@ export async function runStagedBrowser(config, { chromium, expect }) {
         const original = await request("updates/application");
         assert.equal(updateMode(original), "manual");
         assert.equal(original.activationEnabled, false);
+        if (format4Automatic) {
+          const retained =
+            stagedAcceptanceContract.remoteFormat4.targetPacketSha256;
+          await updates
+            .getByRole("button", { name: "Check", exact: true })
+            .click();
+          await expect
+            .poll(
+              async () =>
+                (await request("updates/application")).operation.phase,
+              { timeout: 120000 },
+            )
+            .toBe("available");
+          const available = await request("updates/application");
+          assert.equal(available.operation.release.manifestSha256, retained);
+          if (!available.policy.pin) {
+            await updates
+              .getByText("Schedule and version", { exact: true })
+              .click();
+            await updates
+              .getByRole("button", { name: "Pin release", exact: true })
+              .click();
+          }
+          await expect
+            .poll(
+              async () =>
+                (await request("updates/application")).policy.pin
+                  ?.manifestSha256,
+            )
+            .toBe(retained);
+        }
         automaticPolicyStarted = true;
         await updates
           .getByLabel("Update mode", { exact: true })
@@ -1760,6 +1822,12 @@ export async function runStagedBrowser(config, { chromium, expect }) {
               devices.devices.some(
                 (device) => device.nodeId === devices.current,
               ),
+            ...(devices?.current &&
+            devices.devices.some(({ nodeId }) => nodeId === devices.current)
+              ? {
+                  ownerAuthenticationSha256: remoteOwnerAuthentication(devices),
+                }
+              : {}),
           }
         : {}),
       ...(config.action === "claim"
@@ -1801,7 +1869,9 @@ export async function runStagedBrowser(config, { chromium, expect }) {
     };
   } finally {
     try {
-      if (automaticPolicyStarted) {
+      // Remote format-4 recovery binds the original policy digest. The normal
+      // success path restores Manual after completion; leave uncertain work intact.
+      if (automaticPolicyStarted && !format4Automatic) {
         if (page.isClosed()) {
           page = await context.newPage();
           detachedRequest = undefined;
@@ -1829,6 +1899,9 @@ if (
           config.security,
           config.automatic,
           config.predecessor,
+          config.format4Inputs === undefined
+            ? undefined
+            : JSON.parse(await readFile(config.format4Inputs, "utf8")),
         )
       : config.action === "agent-receipt"
         ? installedAgentReceipt(config)
