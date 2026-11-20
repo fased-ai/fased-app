@@ -213,7 +213,29 @@ export function validateInstalledAcceptance(receipt, packet, inventory) {
   return binding;
 }
 
-function validateUpdateOperations(value) {
+function isManualOnlyFormat4(value, packetVersion) {
+  return (
+    packetVersion === 4 &&
+    value?.automaticOutcome === "held-manual-only" &&
+    value.customerActivation === false &&
+    value.automaticUpdates === false &&
+    value.automaticPolicyRestored === "manual"
+  );
+}
+
+function validateUpdateOperations(value, manualOnly = false) {
+  if (manualOnly) {
+    const ids = [value.uiOperationId, value.cliOperationId];
+    if (
+      value.automaticOperationId !== undefined ||
+      ids.some((id) => !/^[a-f0-9]{32}$/.test(id ?? "")) ||
+      new Set(ids).size !== 2
+    )
+      throw Error(
+        "Distinct canonical UI and CLI operations required for manual-only release",
+      );
+    return;
+  }
   const ids = [
     value.uiOperationId,
     value.cliOperationId,
@@ -227,18 +249,32 @@ function validateUpdateOperations(value) {
 }
 
 function validRemoteFormat4(value, targetPacketSha256) {
-  const contract = stagedAcceptanceContract.remoteFormat4;
   const previous = value?.predecessor;
   const fixture = value?.automaticPredecessor;
   const auth = value?.deviceAuthentication;
+  const manualOnly = isManualOnlyFormat4(value, 4);
+  if (
+    !/^[a-f0-9]{40}$/.test(value?.source ?? "") ||
+    !digest.test(targetPacketSha256 ?? "") ||
+    !digest.test(value?.localReceiptSha256 ?? "") ||
+    previous?.packetVersion !== 4 ||
+    previous.ownerAuthMode !== "tailscale-device-v1" ||
+    !olderVersion(previous.version, value.productVersion) ||
+    !/^[a-f0-9]{40}$/.test(previous.source ?? "") ||
+    previous.source === value.source ||
+    !digest.test(previous.artifactSetSha256 ?? "") ||
+    previous.artifactSetSha256 === value.artifactSetSha256 ||
+    !digest.test(previous.packetSha256 ?? "") ||
+    previous.packetSha256 === targetPacketSha256 ||
+    !digest.test(auth?.before ?? "") ||
+    auth.ui !== auth.before ||
+    auth.cli !== auth.before
+  )
+    return false;
+  if (manualOnly) {
+    return fixture === undefined && auth.automatic === undefined;
+  }
   return (
-    value?.source === contract.targetSource &&
-    value.productVersion === "0.1.23" &&
-    targetPacketSha256 === contract.targetPacketSha256 &&
-    value.localReceiptSha256 === contract.localReceiptSha256 &&
-    Object.entries(contract.predecessor).every(
-      ([key, expected]) => previous?.[key] === expected,
-    ) &&
     fixture?.packetVersion === 4 &&
     fixture.version === previous.version &&
     /^[a-f0-9]{40}$/.test(fixture.source ?? "") &&
@@ -251,8 +287,7 @@ function validRemoteFormat4(value, targetPacketSha256) {
     ![previous.packetSha256, targetPacketSha256].includes(
       fixture.packetSha256,
     ) &&
-    digest.test(auth?.before ?? "") &&
-    ["ui", "cli", "automatic"].every((key) => auth[key] === auth.before)
+    auth.automatic === auth.before
   );
 }
 
@@ -284,18 +319,24 @@ export function completeRemoteUpgrade(
   const browser = automatic?.browser;
   const after = automatic?.postUpdateState;
   const format4 = format4Inputs !== undefined;
+  const manualOnly = format4 && isManualOnlyFormat4(manual, 4);
   const split = format4 && manual?.cliInstanceId !== undefined;
   const automaticInstance = split ? automatic?.instanceId : manual?.instanceId;
   const lanes = split
-    ? [
-        [security?.ui, manual.instanceId, manual.uiOperationId],
-        [security?.cli, manual.cliInstanceId, manual.cliOperationId],
-        [
-          security?.automatic,
-          automaticInstance,
-          browser?.automaticOperation?.id,
-        ],
-      ]
+    ? manualOnly
+      ? [
+          [security?.ui, manual.instanceId, manual.uiOperationId],
+          [security?.cli, manual.cliInstanceId, manual.cliOperationId],
+        ]
+      : [
+          [security?.ui, manual.instanceId, manual.uiOperationId],
+          [security?.cli, manual.cliInstanceId, manual.cliOperationId],
+          [
+            security?.automatic,
+            automaticInstance,
+            browser?.automaticOperation?.id,
+          ],
+        ]
     : [[security, manual?.instanceId]];
   const receiverIds = lanes.map(([, instanceId]) => instanceId);
   const matches = (value, instanceId) =>
@@ -308,14 +349,25 @@ export function completeRemoteUpgrade(
     );
   const format4Proof = format4 && {
     ...manual,
-    automaticPredecessor: automatic?.predecessor,
+    ...(manualOnly ? {} : { automaticPredecessor: automatic?.predecessor }),
     deviceAuthentication: {
       before: manual?.deviceAuthentication?.before,
       ui: manual?.deviceAuthentication?.ui,
       cli: manual?.deviceAuthentication?.cli,
-      automatic: browser?.ownerAuthenticationSha256,
+      ...(manualOnly ? {} : { automatic: browser?.ownerAuthenticationSha256 }),
     },
   };
+  const samePredecessor = (left, right) =>
+    left &&
+    right &&
+    [
+      "version",
+      "source",
+      "artifactSetSha256",
+      "packetVersion",
+      "ownerAuthMode",
+      "packetSha256",
+    ].every((key) => left[key] === right[key]);
   if (
     manual?.result !== "PASS" ||
     manual.scenario !== "manual-remote-replacement" ||
@@ -340,10 +392,7 @@ export function completeRemoteUpgrade(
         ) ||
         format4Inputs.localReceiptSha256 !== manual.localReceiptSha256 ||
         format4Inputs.manifestSha256 !== manual.manifestSha256 ||
-        !validRemoteFormat4(
-          { ...format4Proof, predecessor: format4Inputs.predecessor },
-          manual.manifestSha256,
-        ) ||
+        !samePredecessor(manual.predecessor, format4Inputs.predecessor) ||
         !validRemoteFormat4(format4Proof, manual.manifestSha256)
       : originalPredecessor?.version !== 2 ||
         originalPredecessor.source !== manual.predecessor?.source ||
@@ -353,11 +402,11 @@ export function completeRemoteUpgrade(
         manual.checks?.actualPublicPredecessor !== "PASS") ||
     Object.values(mapped).some((key) => manual.checks?.[key] !== "PASS") ||
     (split &&
-      (new Set(receiverIds).size !== 3 ||
+      (new Set(receiverIds).size !== (manualOnly ? 2 : 3) ||
+        (manualOnly && security?.automatic !== undefined) ||
         receiverIds.some(
           (id) => typeof id !== "string" || !/^[A-Za-z0-9_-]{43}$/.test(id),
         ))) ||
-    !matches(automatic, automaticInstance) ||
     lanes.some(
       ([proof, instanceId, operationId]) =>
         !matches(proof, instanceId) ||
@@ -378,47 +427,58 @@ export function completeRemoteUpgrade(
         proof.normalTLS !== true ||
         proof.sshControlSessionRequired !== false,
     ) ||
-    automatic.sshControlSessionRequired !== false ||
-    automatic.ownedSSHSessionDuringApply !== false ||
-    browser?.result !== "PASS" ||
-    browser.instanceId !== automaticInstance ||
-    browser.version !== manual.productVersion ||
-    browser.fromVersion !== manual.predecessor?.version ||
-    browser.automaticOutcome !== "applied" ||
-    browser.policyRestored !== "manual" ||
-    browser.customerActivation !== false ||
-    browser.browserClosedDuringApply !== true ||
-    browser.preservation !== true ||
-    browser.appliedManifestSha256 !== manual.manifestSha256 ||
-    !/^[a-f0-9]{32}$/.test(browser.automaticOperation?.id ?? "") ||
-    browser.automaticOperation.automatic !== true ||
-    browser.automaticOperation.receipt?.phase !== "completed" ||
-    browser.automaticOperation.receipt.id !== browser.automaticOperation.id ||
-    browser.automaticOperation.receipt.manifestSha256 !==
-      manual.manifestSha256 ||
-    [manual.uiOperationId, manual.cliOperationId].includes(
-      browser.automaticOperation.id,
-    ) ||
-    after?.instanceId !== automaticInstance ||
-    after.installedVersion !== manual.productVersion ||
-    after.operation?.id !== browser.automaticOperation.id ||
-    after.operation.automatic !== true ||
-    after.operation.phase !== "completed" ||
-    after.operation.receipt?.id !== browser.automaticOperation.id ||
-    after.operation.receipt.phase !== "completed" ||
-    after.operation.receipt.manifestSha256 !== manual.manifestSha256 ||
-    after.activationEnabled !== false ||
-    (after.policy?.mode ?? "manual") !== "manual"
+    (manualOnly
+      ? automatic !== undefined && automatic !== null
+      : !matches(automatic, automaticInstance) ||
+        automatic.sshControlSessionRequired !== false ||
+        automatic.ownedSSHSessionDuringApply !== false ||
+        browser?.result !== "PASS" ||
+        browser.instanceId !== automaticInstance ||
+        browser.version !== manual.productVersion ||
+        browser.fromVersion !== manual.predecessor?.version ||
+        browser.automaticOutcome !== "applied" ||
+        browser.policyRestored !== "manual" ||
+        browser.customerActivation !== false ||
+        browser.browserClosedDuringApply !== true ||
+        browser.preservation !== true ||
+        browser.appliedManifestSha256 !== manual.manifestSha256 ||
+        !/^[a-f0-9]{32}$/.test(browser.automaticOperation?.id ?? "") ||
+        browser.automaticOperation.automatic !== true ||
+        browser.automaticOperation.receipt?.phase !== "completed" ||
+        browser.automaticOperation.receipt.id !==
+          browser.automaticOperation.id ||
+        browser.automaticOperation.receipt.manifestSha256 !==
+          manual.manifestSha256 ||
+        [manual.uiOperationId, manual.cliOperationId].includes(
+          browser.automaticOperation.id,
+        ) ||
+        after?.instanceId !== automaticInstance ||
+        after.installedVersion !== manual.productVersion ||
+        after.operation?.id !== browser.automaticOperation.id ||
+        after.operation.automatic !== true ||
+        after.operation.phase !== "completed" ||
+        after.operation.receipt?.id !== browser.automaticOperation.id ||
+        after.operation.receipt.phase !== "completed" ||
+        after.operation.receipt.manifestSha256 !== manual.manifestSha256 ||
+        after.activationEnabled !== false ||
+        (after.policy?.mode ?? "manual") !== "manual")
   )
     throw Error(
-      "Matching actual manual, security and detached Automatic upgrade proofs required",
+      manualOnly
+        ? "Matching actual manual and security upgrade proofs required"
+        : "Matching actual manual, security and detached Automatic upgrade proofs required",
     );
-  const operations = {
-    uiOperationId: manual.uiOperationId,
-    cliOperationId: manual.cliOperationId,
-    automaticOperationId: browser.automaticOperation.id,
-  };
-  validateUpdateOperations(operations);
+  const operations = manualOnly
+    ? {
+        uiOperationId: manual.uiOperationId,
+        cliOperationId: manual.cliOperationId,
+      }
+    : {
+        uiOperationId: manual.uiOperationId,
+        cliOperationId: manual.cliOperationId,
+        automaticOperationId: browser.automaticOperation.id,
+      };
+  validateUpdateOperations(operations, manualOnly);
   const [[primary]] = lanes;
   return {
     schemaVersion: 1,
@@ -437,7 +497,9 @@ export function completeRemoteUpgrade(
     },
     ...(format4
       ? {
-          automaticPredecessor: format4Proof.automaticPredecessor,
+          ...(manualOnly
+            ? {}
+            : { automaticPredecessor: format4Proof.automaticPredecessor }),
           deviceAuthentication: format4Proof.deviceAuthentication,
         }
       : {}),
@@ -446,7 +508,7 @@ export function completeRemoteUpgrade(
           receiverIdentities: {
             ui: sha(receiverIds[0]),
             cli: sha(receiverIds[1]),
-            automatic: sha(receiverIds[2]),
+            ...(manualOnly ? {} : { automatic: sha(receiverIds[2]) }),
           },
         }
       : {}),
@@ -459,7 +521,7 @@ export function completeRemoteUpgrade(
     upgradeApplied: true,
     uiOutcome: manual.uiOutcome,
     cliOutcome: manual.cliOutcome,
-    automaticOutcome: "applied",
+    automaticOutcome: manualOnly ? "held-manual-only" : "applied",
     automaticPolicyRestored: "manual",
     customerActivation: false,
     ...operations,
@@ -471,12 +533,17 @@ export function completeRemoteUpgrade(
           manual.checks[source],
         ]),
       ),
-      controlledAutomatic: "PASS",
+      controlledAutomatic: manualOnly ? "HELD" : "PASS",
     },
   };
 }
 
-function validateAcceptanceLeg(value, binding, checks) {
+function validateAcceptanceLeg(
+  value,
+  binding,
+  checks,
+  { manualOnly = false } = {},
+) {
   if (
     !value ||
     Object.entries(binding).some(([k, v]) => value[k] !== v) ||
@@ -485,17 +552,24 @@ function validateAcceptanceLeg(value, binding, checks) {
     value.mining !== false ||
     value.liveFeatures !== false ||
     value.automaticUpdates !== false ||
-    checks.some((name) => value.checks?.[name] !== "PASS")
+    checks.some((name) =>
+      manualOnly && name === "controlledAutomatic"
+        ? !["HELD", "PASS"].includes(value.checks?.[name])
+        : value.checks?.[name] !== "PASS",
+    )
   )
     throw Error("Complete matching installed package leg required");
 }
 
-function validateAppliedAcceptance(value) {
+function validateAppliedAcceptance(value, packetVersion) {
+  const automaticOk =
+    value.automaticOutcome === "applied" ||
+    isManualOnlyFormat4(value, packetVersion);
   if (
     value.upgradeApplied !== true ||
     value.uiOutcome !== "applied" ||
     value.cliOutcome !== "applied" ||
-    value.automaticOutcome !== "applied" ||
+    !automaticOk ||
     value.automaticPolicyRestored !== "manual" ||
     value.customerActivation !== false
   )
@@ -526,6 +600,7 @@ function format4LocalEvidence(local, packet, inventory) {
     "authenticationPreservation",
     "alreadyCurrent",
   ];
+  const manualOnly = isManualOnlyFormat4(local, 4);
   if (
     !migration ||
     migration.route !== "guarded-format4-adoption" ||
@@ -539,7 +614,7 @@ function format4LocalEvidence(local, packet, inventory) {
     [
       local.uiOperationId,
       local.cliOperationId,
-      local.automaticOperationId,
+      ...(manualOnly ? [] : [local.automaticOperationId]),
     ].includes(migration.operationId) ||
     migrationChecks.some((key) => migration.checks?.[key] !== "PASS")
   )
@@ -562,7 +637,7 @@ function format4LocalEvidence(local, packet, inventory) {
     ].includes(predecessor.artifactSetSha256)
   )
     throw Error("Distinct actual older format-4 Local predecessor required");
-  validateUpdateOperations(local);
+  validateUpdateOperations(local, manualOnly);
   if (
     !digest.test(local.lifecycleEvidenceSha256 ?? "") ||
     local.lifecycleEvidenceSha256 === migration.evidenceSha256
@@ -600,15 +675,18 @@ function format4LocalEvidence(local, packet, inventory) {
     },
     uiOperationId: local.uiOperationId,
     cliOperationId: local.cliOperationId,
-    automaticOperationId: local.automaticOperationId,
+    ...(manualOnly ? {} : { automaticOperationId: local.automaticOperationId }),
     lifecycleEvidenceSha256: local.lifecycleEvidenceSha256,
   };
 }
 
 function validateLocalAcceptance(local, packet, inventory) {
   const binding = acceptanceBinding(packet, inventory);
-  validateAcceptanceLeg(local, binding, stagedAcceptanceContract.local);
-  validateAppliedAcceptance(local);
+  const manualOnly = isManualOnlyFormat4(local, packet.version);
+  validateAcceptanceLeg(local, binding, stagedAcceptanceContract.local, {
+    manualOnly,
+  });
+  validateAppliedAcceptance(local, packet.version);
   if (
     local.localOnly !== true ||
     local.remoteTested !== false ||
@@ -630,14 +708,20 @@ function validateJoinedAcceptance(receipt, packet, inventory) {
   const localDigest = receipt.localReceiptSha256;
   if (!/^[a-f0-9]{64}$/.test(localDigest ?? ""))
     throw Error("Retained raw Local document digest required");
+  const upgradeManualOnly = isManualOnlyFormat4(
+    receipt.remoteUpgrade,
+    packet.version,
+  );
   for (const [value, scenario, specific] of [
     [receipt.remoteFresh, "fresh", stagedAcceptanceContract.remoteFresh],
     [receipt.remoteUpgrade, "upgrade", stagedAcceptanceContract.remoteUpgrade],
   ]) {
-    validateAcceptanceLeg(value, binding, [
-      ...stagedAcceptanceContract.remoteCommon,
-      ...specific,
-    ]);
+    validateAcceptanceLeg(
+      value,
+      binding,
+      [...stagedAcceptanceContract.remoteCommon, ...specific],
+      { manualOnly: scenario === "upgrade" && upgradeManualOnly },
+    );
     const deviceOwner =
       value.ownerAuthMode === "tailscale-device-v1" &&
       value.checks.protectedOwnerDevice === "PASS";
@@ -677,26 +761,29 @@ function validateJoinedAcceptance(receipt, packet, inventory) {
       );
   }
   const upgrade = receipt.remoteUpgrade;
-  validateAppliedAcceptance(upgrade);
-  validateUpdateOperations(upgrade);
+  validateAppliedAcceptance(upgrade, packet.version);
+  validateUpdateOperations(upgrade, upgradeManualOnly);
   const previous = upgrade.predecessor;
   if (upgrade.receiverIdentities !== undefined) {
     const ids = upgrade.receiverIdentities;
     const fresh = receipt.remoteFresh;
+    const expectedKeys = upgradeManualOnly
+      ? ["ui", "cli"]
+      : ["ui", "cli", "automatic"];
+    const upgradeReceivers = expectedKeys.map((key) => ids?.[key]);
     if (
       previous?.packetVersion !== 4 ||
       !ids ||
-      Object.keys(ids).length !== 3 ||
-      ![ids.ui, ids.cli, ids.automatic].every(
+      Object.keys(ids).length !== expectedKeys.length ||
+      !upgradeReceivers.every(
         (id) => typeof id === "string" && digest.test(id),
       ) ||
       ids.ui !== (upgrade.instanceIdentitySha256 ?? sha(upgrade.instanceId)) ||
       new Set([
-        ids.ui,
-        ids.cli,
-        ids.automatic,
+        ...upgradeReceivers,
         fresh.instanceIdentitySha256 ?? sha(fresh.instanceId),
-      ]).size !== 4 ||
+      ]).size !==
+        expectedKeys.length + 1 ||
       fresh.nodeIdentitySha256 !== upgrade.nodeIdentitySha256
     )
       throw Error(
@@ -1267,28 +1354,31 @@ function publicRemoteLeg(value) {
       predecessorFields.map((k) => [k, value.predecessor[k]]),
     );
     if (value.predecessor.packetVersion === 4) {
-      projected.automaticPredecessor = Object.fromEntries(
-        [
-          "version",
-          "source",
-          "artifactSetSha256",
-          "packetVersion",
-          "packetSha256",
-        ].map((k) => [k, value.automaticPredecessor[k]]),
-      );
-      projected.deviceAuthentication = Object.fromEntries(
-        ["before", "ui", "cli", "automatic"].map((k) => [
-          k,
-          value.deviceAuthentication[k],
-        ]),
-      );
-      if (value.receiverIdentities)
-        projected.receiverIdentities = Object.fromEntries(
-          ["ui", "cli", "automatic"].map((k) => [
-            k,
-            value.receiverIdentities[k],
-          ]),
+      const manualOnly = isManualOnlyFormat4(value, 4);
+      if (!manualOnly)
+        projected.automaticPredecessor = Object.fromEntries(
+          [
+            "version",
+            "source",
+            "artifactSetSha256",
+            "packetVersion",
+            "packetSha256",
+          ].map((k) => [k, value.automaticPredecessor[k]]),
         );
+      const authKeys = manualOnly
+        ? ["before", "ui", "cli"]
+        : ["before", "ui", "cli", "automatic"];
+      projected.deviceAuthentication = Object.fromEntries(
+        authKeys.map((k) => [k, value.deviceAuthentication[k]]),
+      );
+      if (value.receiverIdentities) {
+        const receiverKeys = manualOnly
+          ? ["ui", "cli"]
+          : ["ui", "cli", "automatic"];
+        projected.receiverIdentities = Object.fromEntries(
+          receiverKeys.map((k) => [k, value.receiverIdentities[k]]),
+        );
+      }
     }
   }
   return projected;
@@ -1330,7 +1420,9 @@ function publicLocalReceipt(receipt, packet, inventory) {
     upgradeApplied: true,
     uiOutcome: "applied",
     cliOutcome: "applied",
-    automaticOutcome: "applied",
+    automaticOutcome: isManualOnlyFormat4(receipt, packet.version)
+      ? "held-manual-only"
+      : "applied",
     automaticPolicyRestored: "manual",
     customerActivation: false,
     checks: Object.fromEntries(
