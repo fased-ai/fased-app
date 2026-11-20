@@ -53,6 +53,11 @@ function versionOnly(base, head) {
   }
 }
 
+const releaseScriptFile =
+  /^scripts\/(?:release-acceptance(?:\.test)?\.mjs|staged-acceptance-contract\.json|prepare-ubuntu-release(?:\.test)?\.mjs|publish-ubuntu-release\.mjs|publisher-journal\.mjs|release-ubuntu\.mjs|release-source\.mjs|attested-release\.test\.mjs|staged-package-guest\.(?:py|test\.py))$/;
+const agentCoreFile =
+  /^internal\/core\/(?:agent_(?!strategies(?:_|\.))|ai_|provider_|news_)[a-z0-9_]+\.(?:go|json)$/;
+
 export function classify(paths) {
   const plan = Object.fromEntries(lanes.map((lane) => [lane, false]));
   let scope = "none";
@@ -69,19 +74,31 @@ export function classify(paths) {
       /^docs\/assets\/[\w./-]+\.(svg|png|jpe?g|webp|ico|txt)$/.test(file)
     )
       continue;
+    if (releaseScriptFile.test(file)) {
+      if (scope !== "none" && scope !== "release") return full();
+      scope = "release";
+      continue;
+    }
     if (
       /^internal\/core\/(rpc_check|rpc_public|rpc_authenticated)(_test)?\.go$/.test(
         file,
       )
     ) {
+      if (scope !== "none" && scope !== "rpc") return full();
       plan.core = true;
-      scope = scope === "ui" || scope === "full" ? "full" : "rpc";
+      scope = "rpc";
+      continue;
+    }
+    if (agentCoreFile.test(file)) {
+      if (!["none", "ui", "agent"].includes(scope)) return full();
+      plan.core = true;
+      scope = "agent";
       continue;
     }
     if (/^web\/(src|tests)\//.test(file)) {
+      if (!["none", "ui", "agent"].includes(scope)) return full();
       plan.core = true;
-      // A mixed browser/backend change keeps full core regression coverage.
-      scope = scope === "rpc" || scope === "full" ? "full" : "ui";
+      scope = scope === "agent" ? "agent" : "ui";
       continue;
     }
     return full();
@@ -96,7 +113,9 @@ export function verifyGate(needs) {
   const outputs = needs.classify.outputs;
   if (
     !outputs ||
-    !["none", "rpc", "ui", "full", "version"].includes(outputs.scope)
+    !["none", "rpc", "ui", "agent", "release", "full", "version"].includes(
+      outputs.scope,
+    )
   )
     throw new Error("invalid scope");
   if (
@@ -104,6 +123,11 @@ export function verifyGate(needs) {
     lanes.some((lane) => outputs[lane] !== "false")
   )
     throw new Error("invalid version-only selection");
+  if (
+    outputs.scope === "release" &&
+    lanes.some((lane) => outputs[lane] !== "false")
+  )
+    throw new Error("invalid release-only selection");
   if (outputs.signer === "true" && outputs.scope !== "full")
     throw new Error("signer checks require full scope");
   if (

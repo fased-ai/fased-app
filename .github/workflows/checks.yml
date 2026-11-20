@@ -43,7 +43,7 @@ jobs:
       - run: node --test scripts/ci-routing.test.mjs scripts/ci-core-coverage.test.mjs scripts/fixture-installed-trade-journey.test.mjs
       - name: Verify installer and release acceptance contracts
         run: |
-          node --test --test-isolation=none scripts/prepare-ubuntu-release.test.mjs scripts/release-acceptance.test.mjs
+          node --test --test-isolation=none scripts/prepare-ubuntu-release.test.mjs scripts/release-acceptance.test.mjs scripts/attested-release.test.mjs
           # The actual Playwright poller runs in core after dependency installation.
           node --test --test-isolation=none --test-skip-pattern='^the actual poller stops on a terminal update failure$' scripts/staged-package-browser.test.mjs
           python3 scripts/staged-package-guest.test.py
@@ -113,6 +113,9 @@ jobs:
           # The exact complementary partition is required in core-scenarios.
       - if: needs.classify.outputs.scope == 'rpc'
         run: go test -race ./internal/core -run 'Test(RPC|AccountRPC|PublicRPC|ProviderRPC)'
+      - name: Agent and provider core race coverage
+        if: needs.classify.outputs.scope == 'agent'
+        run: go test -race -p 1 ./internal/core -skip '^Test(SwapRecovery|VenueCredential|.*WEN)'
       - run: npm run build:core
       - name: Portable encrypted history and quarantined recovery checks
         if: needs.classify.outputs.signer == 'true'
