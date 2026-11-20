@@ -1113,7 +1113,8 @@ test("accept-remote CLI requires the installed-agent receipt before authenticati
 });
 
 test("Remote upgrade completion refuses missing or mismatched actual legs", async () => {
-  const { completeRemoteUpgrade } = await import("./release-acceptance.mjs");
+  const { completeRemoteUpgrade, composeInstalledAcceptance } =
+    await import("./release-acceptance.mjs");
   const bind = {
     ...acceptanceBinding(packet, inventory),
     localReceiptSha256: "a".repeat(64),
@@ -1293,6 +1294,146 @@ test("Remote upgrade completion refuses missing or mismatched actual legs", asyn
         originalPredecessor,
       ),
     );
+  }
+  const contract = stagedAcceptanceContract.remoteFormat4;
+  const format4 = structuredClone({ manual, security, automatic });
+  const target = {
+    ...packet,
+    version: 4,
+    source: contract.targetSource,
+    productVersion: "0.1.23",
+  };
+  const retained = {
+    ...inventory,
+    assets: inventory.assets.map((entry) =>
+      entry.name === "fased-release.json"
+        ? { ...entry, sha256: contract.targetPacketSha256 }
+        : entry,
+    ),
+  };
+  const binding = acceptanceBinding(target, retained);
+  const auth = "8".repeat(64);
+  for (const item of Object.values(format4))
+    Object.assign(item, binding, {
+      localReceiptSha256: contract.localReceiptSha256,
+    });
+  Object.assign(format4.manual, {
+    ownerAuthMode: "tailscale-device-v1",
+    predecessor: contract.predecessor,
+    manifestSha256: contract.targetPacketSha256,
+    deviceAuthentication: { before: auth, ui: auth, cli: auth },
+  });
+  delete format4.security.ownerEnrollment;
+  delete format4.automatic.ownerEnrollment;
+  format4.automatic.predecessor = {
+    version: "0.1.22",
+    packetVersion: 4,
+    source: "9".repeat(40),
+    packetSha256: "9".repeat(64),
+    artifactSetSha256: "7".repeat(64),
+  };
+  Object.assign(format4.automatic.browser, {
+    version: target.productVersion,
+    fromVersion: "0.1.22",
+    appliedManifestSha256: contract.targetPacketSha256,
+    ownerAuthenticationSha256: auth,
+  });
+  format4.automatic.browser.automaticOperation.receipt.manifestSha256 =
+    contract.targetPacketSha256;
+  format4.automatic.postUpdateState.installedVersion = target.productVersion;
+  format4.automatic.postUpdateState.operation.receipt.manifestSha256 =
+    contract.targetPacketSha256;
+  const inputs = {
+    binding,
+    localReceiptSha256: contract.localReceiptSha256,
+    manifestSha256: contract.targetPacketSha256,
+    predecessor: contract.predecessor,
+  };
+  const complete = (v, input = inputs) =>
+    completeRemoteUpgrade(v.manual, v.security, v.automatic, undefined, input);
+  const upgrade = complete(format4);
+  assert.deepEqual(upgrade.predecessor, contract.predecessor);
+  assert.equal(upgrade.deviceAuthentication.automatic, auth);
+  const local = {
+    ...receipt(),
+    ...binding,
+    localOnly: true,
+    remoteTested: false,
+    compatiblePredecessor: contract.predecessor,
+    lifecycleEvidenceSha256: "3".repeat(64),
+    legacyMigration: {
+      route: "guarded-format4-adoption",
+      operationId: "4".repeat(32),
+      targetPacketSha256: contract.targetPacketSha256,
+      bridgeSha256: "4".repeat(64),
+      proofSha256: "5".repeat(64),
+      evidenceSha256: "6".repeat(64),
+      checks: {
+        interruptionRecovery: "PASS",
+        workspacePreservation: "PASS",
+        authenticationPreservation: "PASS",
+        alreadyCurrent: "PASS",
+      },
+    },
+    checks: Object.fromEntries(
+      stagedAcceptanceContract.local.map((key) => [key, "PASS"]),
+    ),
+  };
+  const fresh = {
+    ...upgrade,
+    scenario: "fresh",
+    checks: Object.fromEntries(
+      [
+        ...stagedAcceptanceContract.remoteCommon,
+        ...stagedAcceptanceContract.remoteFresh,
+      ].map((key) => [key, "PASS"]),
+    ),
+  };
+  const joined = (value) =>
+    composeInstalledAcceptance(
+      local,
+      fresh,
+      value,
+      target,
+      retained,
+      contract.localReceiptSha256,
+    );
+  assert.doesNotThrow(() => joined(upgrade));
+  assert.throws(() =>
+    joined({
+      ...upgrade,
+      deviceAuthentication: {
+        ...upgrade.deviceAuthentication,
+        cli: "1".repeat(64),
+      },
+    }),
+  );
+  assert.throws(() =>
+    joined({
+      ...upgrade,
+      predecessor: { ...upgrade.predecessor, packetVersion: 2 },
+    }),
+  );
+  assert.throws(() =>
+    complete(format4, { ...inputs, localReceiptSha256: "1".repeat(64) }),
+  );
+  for (const mutate of [
+    (v) => {
+      v.manual.predecessor.packetSha256 = "1".repeat(64);
+    },
+    (v) => {
+      v.automatic.predecessor = contract.predecessor;
+    },
+    (v) => {
+      v.automatic.browser.ownerAuthenticationSha256 = "2".repeat(64);
+    },
+    (v) => {
+      v.security.ownerEnrollment = "existing-owner-ui-v1";
+    },
+  ]) {
+    const changed = structuredClone(format4);
+    mutate(changed);
+    assert.throws(() => complete(changed));
   }
 });
 

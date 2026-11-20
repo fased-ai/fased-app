@@ -27,7 +27,7 @@ on:
         default: false
         type: boolean
       automatic_predecessor_pins:
-        description: Optional test-only 0.1.22 pins (owner UID, machine ID SHA256, Local instance ID separated by colons)
+        description: "Test-only 0.1.22 pins: UID:machine SHA256:instance, with :private origin:approved device SHA256 for Remote"
         required: false
         default: ""
         type: string

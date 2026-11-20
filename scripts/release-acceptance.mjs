@@ -214,11 +214,42 @@ function validateUpdateOperations(value) {
     throw Error("Distinct canonical UI, CLI and Automatic operations required");
 }
 
+function validRemoteFormat4(value, targetPacketSha256) {
+  const contract = stagedAcceptanceContract.remoteFormat4;
+  const previous = value?.predecessor;
+  const fixture = value?.automaticPredecessor;
+  const auth = value?.deviceAuthentication;
+  return (
+    value?.source === contract.targetSource &&
+    value.productVersion === "0.1.23" &&
+    targetPacketSha256 === contract.targetPacketSha256 &&
+    value.localReceiptSha256 === contract.localReceiptSha256 &&
+    Object.entries(contract.predecessor).every(
+      ([key, expected]) => previous?.[key] === expected,
+    ) &&
+    fixture?.packetVersion === 4 &&
+    fixture.version === previous.version &&
+    /^[a-f0-9]{40}$/.test(fixture.source ?? "") &&
+    ![previous.source, value.source].includes(fixture.source) &&
+    digest.test(fixture.artifactSetSha256 ?? "") &&
+    ![previous.artifactSetSha256, value.artifactSetSha256].includes(
+      fixture.artifactSetSha256,
+    ) &&
+    digest.test(fixture.packetSha256 ?? "") &&
+    ![previous.packetSha256, targetPacketSha256].includes(
+      fixture.packetSha256,
+    ) &&
+    digest.test(auth?.before ?? "") &&
+    ["ui", "cli", "automatic"].every((key) => auth[key] === auth.before)
+  );
+}
+
 export function completeRemoteUpgrade(
   manual,
   security,
   automatic,
   originalPredecessor,
+  format4Inputs,
 ) {
   const keys = [
     "source",
@@ -241,10 +272,24 @@ export function completeRemoteUpgrade(
   };
   const browser = automatic?.browser;
   const after = automatic?.postUpdateState;
+  const format4 = format4Inputs !== undefined;
+  const format4Proof = format4 && {
+    ...manual,
+    automaticPredecessor: automatic?.predecessor,
+    deviceAuthentication: {
+      before: manual?.deviceAuthentication?.before,
+      ui: manual?.deviceAuthentication?.ui,
+      cli: manual?.deviceAuthentication?.cli,
+      automatic: browser?.ownerAuthenticationSha256,
+    },
+  };
   if (
     manual?.result !== "PASS" ||
     manual.scenario !== "manual-remote-replacement" ||
-    manual.ownerAuthMode !== "existing-password-account-preserved" ||
+    manual.ownerAuthMode !==
+      (format4
+        ? "tailscale-device-v1"
+        : "existing-password-account-preserved") ||
     manual.fixtureOnly !== true ||
     ["mining", "liveFeatures", "automaticUpdates"].some(
       (key) => manual[key] !== false,
@@ -253,12 +298,26 @@ export function completeRemoteUpgrade(
     manual.updatePasswordPrompt !== false ||
     manual.uiOutcome !== "applied" ||
     manual.cliOutcome !== "applied" ||
-    originalPredecessor?.version !== 2 ||
-    originalPredecessor.source !== manual.predecessor?.source ||
-    originalPredecessor.productVersion !== manual.predecessor?.version ||
-    (manual.predecessor.packetVersion !== undefined &&
-      manual.predecessor.packetVersion !== originalPredecessor.version) ||
-    manual.checks?.actualPublicPredecessor !== "PASS" ||
+    (format4
+      ? originalPredecessor !== undefined ||
+        !format4Inputs ||
+        !format4Inputs.binding ||
+        Object.entries(format4Inputs.binding).some(
+          ([key, expected]) => manual[key] !== expected,
+        ) ||
+        format4Inputs.localReceiptSha256 !== manual.localReceiptSha256 ||
+        format4Inputs.manifestSha256 !== manual.manifestSha256 ||
+        !validRemoteFormat4(
+          { ...format4Proof, predecessor: format4Inputs.predecessor },
+          manual.manifestSha256,
+        ) ||
+        !validRemoteFormat4(format4Proof, manual.manifestSha256)
+      : originalPredecessor?.version !== 2 ||
+        originalPredecessor.source !== manual.predecessor?.source ||
+        originalPredecessor.productVersion !== manual.predecessor?.version ||
+        (manual.predecessor.packetVersion !== undefined &&
+          manual.predecessor.packetVersion !== originalPredecessor.version) ||
+        manual.checks?.actualPublicPredecessor !== "PASS") ||
     Object.values(mapped).some((key) => manual.checks?.[key] !== "PASS") ||
     [security, automatic].some(
       (v) =>
@@ -276,7 +335,8 @@ export function completeRemoteUpgrade(
     security.checks?.alreadyCurrent !== "PASS" ||
     security.checks?.authenticationPreservation !== "PASS" ||
     security.ownerAuthMode !== "tailscale-device-v1" ||
-    security.ownerEnrollment !== "existing-owner-ui-v1" ||
+    security.ownerEnrollment !==
+      (format4 ? undefined : "existing-owner-ui-v1") ||
     security.transport !== "tailscale-https" ||
     security.normalTLS !== true ||
     security.sshControlSessionRequired !== false ||
@@ -332,9 +392,15 @@ export function completeRemoteUpgrade(
     scenario: "upgrade",
     predecessor: {
       ...manual.predecessor,
-      packetVersion: originalPredecessor.version,
-      ownerAuthMode: "password-v1",
+      packetVersion: format4 ? 4 : originalPredecessor.version,
+      ownerAuthMode: format4 ? "tailscale-device-v1" : "password-v1",
     },
+    ...(format4
+      ? {
+          automaticPredecessor: format4Proof.automaticPredecessor,
+          deviceAuthentication: format4Proof.deviceAuthentication,
+        }
+      : {}),
     transport: security.transport,
     normalTLS: true,
     ownerAuthMode: security.ownerAuthMode,
@@ -567,7 +633,16 @@ function validateJoinedAcceptance(receipt, packet, inventory) {
   const previous = upgrade.predecessor;
   if (
     !olderVersion(previous?.version, binding.productVersion) ||
-    previous.packetVersion !== 2 ||
+    (previous.packetVersion === 4
+      ? packet.version !== 4 ||
+        !validRemoteFormat4(
+          upgrade,
+          inventory.assets.find(({ name }) => name === "fased-release.json")
+            ?.sha256,
+        )
+      : previous.packetVersion !== 2 ||
+        packet.source ===
+          stagedAcceptanceContract.remoteFormat4.targetSource) ||
     !/^[a-f0-9]{40}$/.test(previous.source ?? "") ||
     previous.source === binding.source ||
     !/^[a-f0-9]{64}$/.test(previous.artifactSetSha256 ?? "") ||
@@ -1106,16 +1181,37 @@ function publicRemoteLeg(value) {
       ],
     ].map((k) => [k, value.checks[k]]),
   );
-  if (value.scenario === "upgrade")
+  if (value.scenario === "upgrade") {
+    const predecessorFields = [
+      "version",
+      "source",
+      "artifactSetSha256",
+      "packetVersion",
+      "ownerAuthMode",
+    ];
+    if (value.predecessor.packetVersion === 4)
+      predecessorFields.push("packetSha256");
     projected.predecessor = Object.fromEntries(
-      [
-        "version",
-        "source",
-        "artifactSetSha256",
-        "packetVersion",
-        "ownerAuthMode",
-      ].map((k) => [k, value.predecessor[k]]),
+      predecessorFields.map((k) => [k, value.predecessor[k]]),
     );
+    if (value.predecessor.packetVersion === 4) {
+      projected.automaticPredecessor = Object.fromEntries(
+        [
+          "version",
+          "source",
+          "artifactSetSha256",
+          "packetVersion",
+          "packetSha256",
+        ].map((k) => [k, value.automaticPredecessor[k]]),
+      );
+      projected.deviceAuthentication = Object.fromEntries(
+        ["before", "ui", "cli", "automatic"].map((k) => [
+          k,
+          value.deviceAuthentication[k],
+        ]),
+      );
+    }
+  }
   return projected;
 }
 function ownerReviewPayload(comment, packet, prefix) {

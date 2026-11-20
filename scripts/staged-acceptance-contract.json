@@ -1,5 +1,18 @@
 {
   "version": 3,
+  "remoteFormat4": {
+    "targetSource": "21c7b865f4ee3ef0a00c1a7e067af6b48f0a6cd5",
+    "targetPacketSha256": "f009a6ad164403688e062e384f23c4ead7d994f1f94d339b8fdf4ee82ffb4725",
+    "localReceiptSha256": "122d49f9cedca29265e7a2f5552b1736b73612e100b475b36d2d97f438cc6fbb",
+    "predecessor": {
+      "version": "0.1.22",
+      "source": "1efebb1f67075a7f81f1297647b3ead18d89c91b",
+      "artifactSetSha256": "7bd1268a57c10fd771622afe1992e7ea564e8a3e1602b48ede6a411f57680014",
+      "packetVersion": 4,
+      "ownerAuthMode": "tailscale-device-v1",
+      "packetSha256": "e29eb31005c6ceed2fc7613fc785208211df742cd375f34b8d3f247f35567fe6"
+    }
+  },
   "local": [
     "entry",
     "local",

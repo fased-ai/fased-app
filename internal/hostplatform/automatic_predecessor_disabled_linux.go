@@ -2,6 +2,9 @@
 
 package hostplatform
 
+import "github.com/fased-ai/fased-app/internal/tailnet"
+
 const AutomaticPredecessorBuild = false
 
-func AutomaticPredecessorAllowed(int, string, string) bool { return false }
+func AutomaticPredecessorAllowed(int, string, string, string) bool { return false }
+func AutomaticPredecessorDeviceAllowed(tailnet.Identity) bool      { return false }

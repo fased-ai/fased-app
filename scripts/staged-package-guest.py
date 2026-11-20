@@ -220,8 +220,15 @@ def package(directory):
     directory = P(directory).resolve(strict=True)
     raw = (directory / "fased-release.json").read_bytes()
     packet = json.loads(raw, object_pairs_hook=unique)
-    if packet.get("version") not in (1, 2) or not re.fullmatch(r"[a-f0-9]{40}", packet.get("source", "")):
+    if packet.get("version") not in (1, 2, 4) or not re.fullmatch(r"[a-f0-9]{40}", packet.get("source", "")):
         raise ValueError("original attested package required")
+    if packet["version"] == 4 and (
+        packet["release"].get("buildRef") != "refs/heads/main" or packet["release"].get("tagObject") != "" or
+        packet["release"].get("installerSha256") != packet["installer"]["sha256"] or
+        not re.fullmatch(r"[a-f0-9]{64}", packet.get("bundleSha256", "")) or
+        "deb" in packet or "rpm" in packet
+    ):
+        raise ValueError("original format-4 browser bundle required")
     identities = [packet["archive"], packet["installer"], packet["release"]["provenance"], packet["entry"]]
     assets = []
     for name, identity in zip(ASSETS[:4], identities):
@@ -343,6 +350,28 @@ def require_local_acceptance(candidate, path):
         any(receipt.get("checks", {}).get(name) != "PASS" for name in LOCAL_REQUIRED_CHECKS)):
         raise RuntimeError("matching completed Local acceptance required before fresh Remote")
     return digest(P(path).read_bytes())
+
+
+def remote_format4_inputs(candidate_path, predecessor_path, local_path):
+    candidate, previous = package(candidate_path), package(predecessor_path)
+    contract = STAGED_ACCEPTANCE_CONTRACT["remoteFormat4"]
+    target, predecessor = binding(candidate), binding(previous)
+    local = document(local_path)
+    previous_identity = {
+        "version": predecessor["productVersion"], "source": predecessor["source"],
+        "artifactSetSha256": predecessor["artifactSetSha256"], "packetVersion": previous["packet"]["version"],
+        "packetSha256": previous["assets"][-1]["sha256"], "ownerAuthMode": "tailscale-device-v1",
+    }
+    if (candidate["packet"]["version"] != 4 or target["source"] != contract["targetSource"] or
+        candidate["assets"][-1]["sha256"] != contract["targetPacketSha256"] or previous_identity != contract["predecessor"]):
+        raise ValueError("exact retained format-4 Remote target and 0.1.22 predecessor required")
+    if (any(local.get(key) != value for key, value in target.items()) or
+        local.get("localReceiptSha256") != contract["localReceiptSha256"] or
+        not re.fullmatch(r"[1-9][0-9]*", local.get("localReviewCommentId", "")) or
+        not re.fullmatch(r"[a-f0-9]{64}", local.get("localReviewSha256", ""))):
+        raise ValueError("authenticated verify-local readback for the retained Remote target required")
+    return {"binding": target, "manifestSha256": contract["targetPacketSha256"],
+            "localReceiptSha256": local["localReceiptSha256"], "predecessor": previous_identity}
 
 
 def vm_guard():
@@ -959,7 +988,7 @@ def prepare_remote_tailnet(work):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("action", choices=["setup", "network", "serve", "select", "owner", "public-probe", "public-probe-prepare", "tailnet-prepare"])
+    parser.add_argument("action", choices=["setup", "network", "serve", "select", "owner", "public-probe", "public-probe-prepare", "tailnet-prepare", "remote-format4-inputs"])
     parser.add_argument("--work", type=P)
     parser.add_argument("--candidate", type=P)
     parser.add_argument("--predecessor", type=P)
@@ -972,7 +1001,13 @@ def main():
     parser.add_argument("--version")
     parser.add_argument("--released-local-only", action="store_true")
     parser.add_argument("--resume", action="store_true")
+    parser.add_argument("--local-acceptance", type=P)
     args = parser.parse_args()
+    if args.action == "remote-format4-inputs":
+        if not args.candidate or not args.predecessor or not args.local_acceptance:
+            parser.error("candidate, predecessor and authenticated Local readback required")
+        print(json.dumps(remote_format4_inputs(args.candidate, args.predecessor, args.local_acceptance)))
+        return
     vm_guard()
     if args.action == "owner":
         print(json.dumps(owner(args), separators=(",", ":")))

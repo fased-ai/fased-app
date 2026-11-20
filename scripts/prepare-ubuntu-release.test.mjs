@@ -166,6 +166,42 @@ test("Automatic predecessor binds one Local receiver in the package-only lane", 
   assert.ok(
     bound.source.includes(`AutomaticPredecessorInstance = "${instance}"`),
   );
+  const origin = "https://locked.tail-test.ts.net";
+  const device = "c".repeat(64);
+  const remote = automaticPredecessor(
+    c,
+    {
+      ...staged,
+      FASED_AUTOMATIC_PREDECESSOR_PINS: `${pins}:${origin}:${device}`,
+    },
+    "prepare",
+  );
+  const remoteSource = bindingOverlay(seed, sha(seed), "/fixture", remote).at(
+    -1,
+  ).source;
+  assert.ok(
+    remoteSource.includes(`AutomaticPredecessorRemoteOrigin = "${origin}"`),
+  );
+  assert.ok(
+    remoteSource.includes(
+      `AutomaticPredecessorRemoteDeviceSHA256 = "${device}"`,
+    ),
+  );
+  for (const suffix of [
+    `:${origin}`,
+    `:${origin}/:${device}`,
+    `:http://locked.tail-test.ts.net:${device}`,
+  ])
+    assert.throws(() =>
+      automaticPredecessor(
+        c,
+        {
+          ...staged,
+          FASED_AUTOMATIC_PREDECESSOR_PINS: pins + suffix,
+        },
+        "prepare",
+      ),
+    );
   assert.throws(
     () => verifiedCandidate(c, { version: "0.1.22" }, {}, {}, {}, {}),
     /Candidate\/public approval identity changed/,
