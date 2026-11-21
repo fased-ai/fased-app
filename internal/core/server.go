@@ -346,7 +346,7 @@ func (s *Server) ConfigureConnection(location string, owner ...int) error {
 		}
 		s.Remote = listener
 		h.remoteIngress = true
-		s.RemoteHTTP = &http.Server{Handler: h.remoteProxy(tailnet.WhoIs), ConnContext: tailnet.ConnContext, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second, WriteTimeout: 30 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 16 * 1024}
+		s.RemoteHTTP = &http.Server{Handler: h.remoteProxy(tailnet.WhoIs), ConnContext: tailnet.ConnContext, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second, WriteTimeout: 90 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 16 * 1024}
 	}
 	h.instanceLocation, h.instanceOwnerUID = location, uid
 	h.instanceOwnerKind = ""

@@ -1,6 +1,8 @@
 package core
 
 import (
+	"bytes"
+	"compress/gzip"
 	"context"
 	"crypto/tls"
 	"crypto/x509"
@@ -8,7 +10,9 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -50,7 +54,9 @@ func TestOpenAIProductionTransportDisabled(t *testing.T) {
 	if tr.enabled != providerActivationEnabled {
 		t.Fatal("transport activation mismatch")
 	}
-	if tr.wire.Proxy != nil || tr.wire.TLSClientConfig.MinVersion != tls.VersionTLS12 || !tr.wire.DisableKeepAlives || !tr.wire.DisableCompression || tr.wire.ResponseHeaderTimeout < 60*time.Second {
+	if tr.wire.Proxy != nil || !tr.wire.ForceAttemptHTTP2 || tr.wire.TLSClientConfig.MinVersion != tls.VersionTLS12 ||
+		!reflect.DeepEqual(tr.wire.TLSClientConfig.CurvePreferences, []tls.CurveID{tls.X25519, tls.CurveP256, tls.CurveP384}) ||
+		tr.wire.DisableKeepAlives || tr.wire.MaxIdleConns < 1 || tr.wire.DisableCompression || tr.wire.ResponseHeaderTimeout < 60*time.Second {
 		t.Fatal("unsafe transport defaults")
 	}
 	tr.enabled = false
@@ -133,5 +139,52 @@ func TestOpenAITransportChatCompletion(t *testing.T) {
 	s.lockAIConnection()
 	if s.aiConnectionValid(connection.Ref) {
 		t.Fatal("lock did not revoke")
+	}
+}
+
+func TestOpenAITransportLargeBearerAndGzipDecoding(t *testing.T) {
+	t.Parallel()
+	var seenUA string
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seenUA = r.Header.Get("User-Agent")
+		var buf bytes.Buffer
+		gz := gzip.NewWriter(&buf)
+		_, _ = gz.Write([]byte(`{"ok":true}`))
+		_ = gz.Close()
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Content-Encoding", "gzip")
+		_, _ = w.Write(buf.Bytes())
+	}))
+	defer server.Close()
+	roots := x509.NewCertPool()
+	roots.AddCert(server.Certificate())
+	tr := newOpenAITransport()
+	tr.enabled = true
+	target, _ := url.Parse(server.URL)
+	tr.wire.TLSClientConfig.RootCAs = roots
+	tr.wire.TLSClientConfig.ServerName = target.Hostname()
+	tr.wire.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
+		return (&net.Dialer{}).DialContext(ctx, network, target.Host)
+	}
+	for _, length := range []int{4096, 8192} {
+		req, _ := http.NewRequest("GET", "https://api.openai.com/v1/models", nil)
+		req.Header.Set("Authorization", "Bearer "+strings.Repeat("t", length))
+		res, err := tr.RoundTrip(req)
+		if err != nil {
+			t.Fatalf("bearer length %d rejected: %v", length, err)
+		}
+		raw, readErr := io.ReadAll(res.Body)
+		res.Body.Close()
+		if readErr != nil || res.Header.Get("Content-Encoding") != "" || string(raw) != `{"ok":true}` {
+			t.Fatalf("gzip transparent decode failed: err=%v enc=%q body=%q", readErr, res.Header.Get("Content-Encoding"), raw)
+		}
+		if !strings.HasPrefix(seenUA, "Fased/") {
+			t.Fatalf("expected Fased User-Agent, got %q", seenUA)
+		}
+	}
+	bad, _ := http.NewRequest("GET", "https://api.openai.com/v1/models", nil)
+	bad.Header.Set("Authorization", "Bearer "+strings.Repeat("t", 8193))
+	if _, err := tr.RoundTrip(bad); err == nil {
+		t.Fatal("oversized bearer token accepted")
 	}
 }

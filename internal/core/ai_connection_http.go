@@ -38,12 +38,19 @@ func (h *HTTPHandler) aiConnectionAPI(w http.ResponseWriter, r *http.Request, to
 		return
 	}
 	v, e := h.store.ChangeAIConnection(r.Context(), c)
-	if errors.Is(e, ErrConflict) || errors.Is(e, ErrCorePaused) {
-		writeError(w, 409, e.Error())
-		return
-	}
 	if e != nil {
-		writeError(w, 400, e.Error())
+		status := 400
+		if errors.Is(e, ErrConflict) || errors.Is(e, ErrCorePaused) {
+			status = 409
+		}
+		logProviderDiag("http-error", map[string]any{
+			"action":   c.Action,
+			"provider": c.Provider,
+			"remote":   c.Remote,
+			"status":   status,
+			"err":      e.Error(),
+		})
+		writeError(w, status, e.Error())
 		return
 	}
 	writeJSON(w, 200, v)

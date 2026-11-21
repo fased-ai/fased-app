@@ -84,6 +84,7 @@ func (s *Store) localOwnerSessionLocked(ctx context.Context) (string, error) {
 	if err = tx.Commit(); err != nil {
 		return "", err
 	}
+	s.restoreOSProtectedConnections(ctx)
 	return token, nil
 }
 

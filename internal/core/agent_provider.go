@@ -32,15 +32,16 @@ type ProviderModel struct {
 	Availability  string             `json:"availability"`
 }
 type ProviderCatalog struct {
-	Policy    string          `json:"policy"`
-	State     string          `json:"state"`
-	FetchedAt int64           `json:"fetchedAt,omitempty"`
-	ExpiresAt int64           `json:"expiresAt,omitempty"`
-	SHA256    string          `json:"sha256,omitempty"`
-	Source    string          `json:"source,omitempty"`
-	Version   int             `json:"version"`
-	Providers []ProviderEntry `json:"providers"`
-	Models    []ProviderModel `json:"models"`
+	Policy      string          `json:"policy"`
+	State       string          `json:"state"`
+	FetchedAt   int64           `json:"fetchedAt,omitempty"`
+	ExpiresAt   int64           `json:"expiresAt,omitempty"`
+	ReviewStale bool            `json:"reviewStale,omitempty"`
+	SHA256      string          `json:"sha256,omitempty"`
+	Source      string          `json:"source,omitempty"`
+	Version     int             `json:"version"`
+	Providers   []ProviderEntry `json:"providers"`
+	Models      []ProviderModel `json:"models"`
 }
 
 func providerCatalog(v AIConnectionView, now int64) ProviderCatalog {
@@ -92,7 +93,7 @@ func (s *Store) resolveAgentProvider(c *AgentCommand, profile AgentProfile) erro
 		}
 	case "openai", "anthropic", "xai", "moonshot", "moonshot-intl", "kimi-code", "ollama-cloud", "google", "openrouter", "qwen", "opencode", "local":
 		policy := openAIModelPolicy(profile.Model)
-		if !currentModelRequest(AgentAIRequest{Model: profile.Model, Policy: &policy}) || profile.Model != policy.Model || policy.ExpiresAt <= s.now().Unix() {
+		if !currentModelRequest(AgentAIRequest{Model: profile.Model, Policy: &policy}) || profile.Model != policy.Model || s.now().Unix() < policy.ReviewedAt {
 			return errors.New("agent model unavailable")
 		}
 		if profile.Provider != "openai" && profile.ConnectionRef == "" {

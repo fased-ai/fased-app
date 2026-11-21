@@ -1467,13 +1467,16 @@ test("provider sign-in remote restores pending attempt on reload and accepts liv
   await expect(link).toBeVisible();
   await expect(redirectInput).toBeVisible();
 
-  // Submitting a bad issuer clears the cancelled pending sign-in UI while preserving the error alert.
+  // Submitting a bad issuer preserves the pending sign-in UI while showing the error alert so the user can retry or cancel.
   const badUrl = new URL((await link.getAttribute("href"))!);
   badUrl.searchParams.set("iss", "https://evil.invalid");
   await redirectInput.fill(badUrl.toString());
   await editor.getByLabel("Vault passphrase", { exact: true }).fill(passphrase);
   await editor.getByRole("button", { name: "Finish", exact: true }).click();
   await expect(editor.getByRole("alert")).toContainText("issuer mismatch");
+  await expect(link).toBeVisible();
+  await expect(redirectInput).toBeVisible();
+  await editor.getByRole("button", { name: "Cancel", exact: true }).click();
   await expect(
     editor.getByRole("button", { name: "Continue with ChatGPT", exact: true }),
   ).toBeVisible();
@@ -1512,6 +1515,10 @@ test("provider sign-in remote restores pending attempt on reload and accepts liv
   await expect(
     editor.locator(`[data-account="${accounts.connections[0].ref}"]`),
   ).toBeVisible();
+  await page.reload();
+  await expect(
+    editor.locator(`[data-account="${accounts.connections[0].ref}"]`),
+  ).toHaveAttribute("aria-pressed", "true");
 });
 
 test("shared Add Provider binds native accounts and latest models across Chat and tasks", async ({

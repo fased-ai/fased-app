@@ -24,8 +24,11 @@ func TestOpenAIAdmissionPolicyAndIntegerTariff(t *testing.T) {
 	if aiUsageCost(q, 1, 0, 0) != 1 || aiUsageCost(q, 10, 10, 1) != 6 {
 		t.Fatal("input/cache/output integer tariff")
 	}
-	if validateAIModelPolicy(q, p.ExpiresAt) == nil {
-		t.Fatal("expired tariff admitted")
+	if validateAIModelPolicy(q, p.ReviewedAt-1) == nil {
+		t.Fatal("pre-review tariff admitted")
+	}
+	if validateAIModelPolicy(q, p.ExpiresAt) != nil {
+		t.Fatal("stale compiled review must not hard-lock models")
 	}
 	p.InputMicrousdPerMillion++
 	if validateAIModelPolicy(q, p.ReviewedAt) == nil {
@@ -298,9 +301,13 @@ func TestOpenAIAdmissionConsentPolicyAndDefaultOff(t *testing.T) {
 		t.Fatal("tariff missing from consent")
 	}
 	old := s.now
-	s.now = func() time.Time { return time.Unix(q.Policy.ExpiresAt, 0) }
+	s.now = func() time.Time { return time.Unix(q.Policy.ReviewedAt-1, 0) }
 	if _, e := s.changeAgents(t.Context(), AgentCommand{Action: "ai-start", ProfileID: v.ProfileID, Revision: v.Revision, ID: q.ID, ConsentDigest: q.Digest}, true); e == nil {
-		t.Fatal("expired admission consent accepted")
+		t.Fatal("pre-review admission consent accepted")
+	}
+	s.now = func() time.Time { return time.Unix(q.Policy.ExpiresAt, 0) }
+	if e := validateAIModelPolicy(q, s.now().Unix()); e != nil {
+		t.Fatalf("stale compiled review broke admission validation: %v", e)
 	}
 	s.now = old
 	if _, e := s.db.Exec("UPDATE update_pause SET phase='paused' WHERE id=1; PRAGMA user_version=8"); e != nil {

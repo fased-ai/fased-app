@@ -416,7 +416,7 @@ func readCompatibleStream(body io.Reader, q AgentAIRequest, onDelta func(string)
 			}
 			text.WriteString(*d.Content)
 			if onDelta != nil {
-				onDelta(text.String())
+				onDelta(partialAIAnswer(text.String()))
 			}
 		}
 		if f.Choices[0].Finish != nil {

@@ -253,7 +253,9 @@ export function AIConnectionSettings({
         : null
       : selected
         ? (root?.connections?.find((a) => a.ref === selected) ?? null)
-        : root;
+        : root?.ref
+          ? root
+          : (root?.connections?.[0] ?? root);
   const [key, setKey] = useState("");
   const [endpoint, setEndpoint] = useState(defaultLocalEndpoint);
   const [serverPreset, setServerPreset] = useState(defaultLocalEndpoint);

@@ -629,3 +629,33 @@ func TestNativeProvidersNoImplicitTransport(t *testing.T) {
 		t.Fatal("native admission used implicit network transport")
 	}
 }
+
+func TestCompatibleStreamEmitsPartialAnswerNotRawJSON(t *testing.T) {
+	t.Parallel()
+	p := openAIModelPolicy(registryForProvider("qwen").Models[0].ID)
+	q := AgentAIRequest{Model: p.Model, Policy: &p, Stream: true, Limits: AILimits{MaxInputTokens: 24000, MaxOutputTokens: 1024}}
+	remoteModel := providerRemoteModel(policyProvider(q.Policy), q.Model)
+	stream := strings.Join([]string{
+		`data: {"id":"c1","object":"chat.completion.chunk","model":"` + remoteModel + `","choices":[{"index":0,"delta":{"role":"assistant","content":"{\"ans"}}]}`,
+		`data: {"id":"c1","object":"chat.completion.chunk","model":"` + remoteModel + `","choices":[{"index":0,"delta":{"content":"wer\":\"Hello"}}]}`,
+		`data: {"id":"c1","object":"chat.completion.chunk","model":"` + remoteModel + `","choices":[{"index":0,"delta":{"content":" trader\",\"cards\":[]}"}}]}`,
+		`data: {"id":"c1","object":"chat.completion.chunk","model":"` + remoteModel + `","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}`,
+		`data: {"id":"c1","object":"chat.completion.chunk","model":"` + remoteModel + `","choices":[],"usage":{"prompt_tokens":10,"completion_tokens":4,"total_tokens":14}}`,
+		`data: [DONE]`,
+	}, "\n\n") + "\n\n"
+	var deltas []string
+	raw, err := readCompatibleStream(strings.NewReader(stream), q, func(partial string) {
+		deltas = append(deltas, partial)
+	})
+	if err != nil || !bytes.Contains(raw, []byte("Hello trader")) {
+		t.Fatalf("readCompatibleStream failed: err=%v raw=%s", err, raw)
+	}
+	if len(deltas) == 0 || deltas[len(deltas)-1] != "Hello trader" {
+		t.Fatalf("expected final delta 'Hello trader', got %v", deltas)
+	}
+	for _, d := range deltas {
+		if strings.Contains(d, `{"ans`) || strings.Contains(d, `"cards"`) {
+			t.Fatalf("compatible stream leaked raw JSON delta: %q", d)
+		}
+	}
+}

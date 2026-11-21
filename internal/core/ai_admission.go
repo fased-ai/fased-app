@@ -152,7 +152,7 @@ func validateAIModelPolicy(q AgentAIRequest, now int64) error {
 		}
 		p = *selected
 	}
-	if q.Policy == nil || *q.Policy != p || q.Model != p.Model || q.ConnectionRef == "" || now < p.ReviewedAt || now >= p.ExpiresAt || q.Limits.MaxInputTokens+q.Limits.MaxOutputTokens > p.ContextTokens || q.Limits.MaxOutputTokens > p.OutputTokens {
+	if q.Policy == nil || *q.Policy != p || q.Model != p.Model || q.ConnectionRef == "" || now < p.ReviewedAt || q.Limits.MaxInputTokens+q.Limits.MaxOutputTokens > p.ContextTokens || q.Limits.MaxOutputTokens > p.OutputTokens {
 		return errors.New("model, token or tariff policy unavailable/expired; review supported admission with an unlocked test connection")
 	}
 	if unmeteredRequest(q) && !validPolicyLimits(q.Limits, q.Policy) {
