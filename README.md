@@ -8,24 +8,24 @@ Self-hosted agents for trading research and automation. Run Fased on your comput
 
 **[Install](#install) · [User guide](docs/index.md) · [Providers](docs/guide/providers.md) · [Network](docs/guide/network.md) · [Status](docs/reference/status.md)**
 
-> **In development.** Evaluation downloads exist, but the revised secure installation and update flow is not ready for general use. Live AI, wallets and trading remain disabled; mining is deferred.
+> **Status:** Ubuntu 24.04 x86-64 Local/Remote installation and updates, live AI providers with OS-protected credentials, and watch-only Solana wallets with live read-only RPC are available. Live wallet signing, trading execution, and WEN mining activation remain disabled; Fased Network is planned. See [Availability](docs/reference/status.md).
 
 ## What’s inside
 
-| Feature           | Use it for                                                                                                      |
-| ----------------- | --------------------------------------------------------------------------------------------------------------- |
-| **Dashboard**     | Arrange your workspace and open the features you use.                                                           |
-| **Providers**     | Connect supported sign-in, API-key or local-server accounts; share model choices across agents, Chat and Tasks. |
-| **Agents & Chat** | Give each agent instructions and context, keep conversations and review proposed work.                          |
-| **Tasks**         | Schedule reminders, watch news, inspect results and pause automation. Deterministic tasks need no AI provider.  |
-| **News & Memory** | Follow sources and retain useful context you can inspect, correct or forget.                                    |
-| **Wallets & RPC** | Protected setup through a separate Go signer; currently limited to disposable keys and controlled endpoints.    |
+| Feature           | Use it for                                                                                                                                          |
+| ----------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Dashboard**     | Arrange your workspace and open the features you use.                                                                                               |
+| **Providers**     | Connect supported sign-in, API-key or local-server accounts with OS-protected credentials across agents, Chat and Tasks.                            |
+| **Agents & Chat** | Give each agent instructions and context, keep conversations and review proposed work.                                                              |
+| **Tasks**         | Schedule reminders, watch news, inspect results and pause automation. Deterministic tasks need no AI provider.                                      |
+| **News & Memory** | Follow sources and retain useful context you can inspect, correct or forget.                                                                        |
+| **Wallets & RPC** | Watch-only Solana accounts with live read-only RPC (keyless public Solana RPC or OS-protected RPC keys); signing and funds custody remain disabled. |
 
 Onchain, Hyperliquid, Mining and the trading-focused Fased Network have separate [roadmaps and availability](docs/reference/status.md). They are not live trading services in this build.
 
 ## Install
 
-Ubuntu 24.04 x86-64 is the first evaluation target. See the [installation guide](docs/guide/install.md) and [availability](docs/reference/status.md) before using a download. The required flow below is still being completed.
+Ubuntu 24.04 x86-64 is supported for Local and mandatory-Tailscale Remote installation; other platforms remain unverified. Format-4 installations update in place; older format-2 evaluation builds require a fresh install. See [Install](docs/guide/install.md) and [Availability](docs/reference/status.md).
 
 | Choose      | Setup and access                                                                                                                                                              |
 | ----------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -39,7 +39,7 @@ The installer supplies compiled Fased and required OS components; no Go, Node, n
 
 **Settings → Updates** and optional `fased update` use the same updater, authorization rules, progress, result and recovery. Routine updates reuse existing owner/device/OS authority without another password or account switch. A CLI client reaches Remote over Tailscale directly, without SSH. Manual is the default; Automatic is explicit opt-in and runs without an open browser or SSH session.
 
-This complete installation/update contract remains under development. Updates preserve data and wallet permissions; they never unlock signing or grant spending authority. [Details](docs/guide/install.md).
+Updates preserve data and wallet permissions; they never unlock signing or grant spending authority. [Details](docs/guide/install.md).
 
 ## Get started
 
@@ -48,7 +48,7 @@ This complete installation/update contract remains under development. Updates pr
 3. Create an **Agent**, select its account and model, then open **Chat**.
 4. Review a **Task**, inspect its result and save useful context to **Memory**.
 
-Provider access is optional for reminders and other deterministic work. Enter credentials only in the dedicated setup screens, never in Chat. Current live-feature restrictions still apply to this flow.
+Provider access is optional for reminders and other deterministic work. Enter credentials only in the dedicated setup screens, never in Chat. Trading execution, signing keys, and WEN mining remain disabled.
 
 ## Guides
 

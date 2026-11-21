@@ -9,6 +9,6 @@ Wallet creation, import, recovery and approval use a protected signing flow. Cha
 
 Installing Fased does not require a wallet. Connecting an existing installation preserves its records and settings. Keep wallet recovery material private and separate from ordinary account passwords.
 
-<Note>Real wallets, funds, live RPC and signing are disabled in the development app. Use test accounts only and do not fund development addresses.</Note>
+<Note>Watch-only Solana accounts and live read-only Solana RPC (balances, tokens and transaction activity via keyless Solana RPC or OS-protected RPC keys) are available. Live signing keys, funds custody and transaction submission remain disabled — do not fund development addresses or enter real recovery phrases.</Note>
 
 An agent, subscription or paper result cannot grant wallet authority. Any uncertain transaction needs review before another action is attempted. See [Availability](/reference/status) and [Strategies](/guide/trading).

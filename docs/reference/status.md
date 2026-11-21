@@ -3,20 +3,20 @@ title: "Availability"
 description: "What you can use and what is planned."
 ---
 
-Fased is in development. These guides explain the product experience; a guide or visible control does not mean a live service is available.
+Fased includes Local and mandatory-Tailscale Remote setup on Ubuntu 24.04 x86-64, live AI providers, and watch-only Solana wallets with live read-only RPC. Trading execution, signing keys, and WEN mining remain disabled.
 
-| Area                                 | Availability                                                                                             |
-| ------------------------------------ | -------------------------------------------------------------------------------------------------------- |
-| Installation and Local/Remote access | Evaluation downloads exist; the revised Local and mandatory-Tailscale Remote setup is under development. |
-| Agents, Chat, Tasks, News and Memory | Available in the development app with sample inputs.                                                     |
-| Providers and models                 | Connection setup is under development; live AI requests are disabled.                                    |
-| Wallets and RPC                      | Development setup is limited to test accounts. Real keys, funds, live RPC and signing are disabled.      |
-| Strategies                           | Paper evaluation is in development. It does not place live orders.                                       |
-| Onchain and Hyperliquid              | Trading is not available.                                                                                |
-| Mining                               | Planned integration; participation through Fased is not available.                                       |
-| Fased Network                        | Planned signal sharing and research services.                                                            |
-| Automatic updates                    | The shared UI/CLI/manual/Automatic update experience is under revision.                                  |
+| Area                                 | Availability                                                                                                                                                                                                            |
+| ------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Installation and Local/Remote access | Available for Ubuntu 24.04 x86-64 (Local loopback and mandatory-Tailscale Remote with dual-stack firewall lockdown).                                                                                                    |
+| Agents, Chat, Tasks, News and Memory | Available.                                                                                                                                                                                                              |
+| Providers and models                 | Available with sign-in, API key, local server support and OS-protected credentials.                                                                                                                                     |
+| Wallets and RPC                      | Watch-only Solana accounts and live read-only Solana RPC (keyless public Solana RPC or OS-protected Helius/Alchemy/custom RPC key) available; real signing keys, funds custody and transaction signing remain disabled. |
+| Strategies                           | Paper evaluation only; does not place live orders.                                                                                                                                                                      |
+| Onchain and Hyperliquid              | Live trading is not available.                                                                                                                                                                                          |
+| Mining                               | Controlled WEN readiness only; live mining activation is disabled.                                                                                                                                                      |
+| Fased Network                        | Planned.                                                                                                                                                                                                                |
+| Updates                              | Shared UI (**Settings → Updates**) and CLI (`fased update`) updater available; Manual is the default, Automatic is opt-in.                                                                                              |
 
-Do not send funds to development addresses or enter real credentials into a test installation. A download does not establish that the revised installation and access contract is complete. Use the platform instructions and availability stated for that release.
+Do not send funds to development addresses or enter wallet seed phrases or recovery keys. Use only the platform instructions and availability stated for your release.
 
 Read [Install](/guide/install), [Wallets](/guide/wallets) and the [Network guide](/guide/network).

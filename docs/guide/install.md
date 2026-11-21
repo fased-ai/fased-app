@@ -3,7 +3,7 @@ title: "Install"
 description: "Local setup and private Remote access."
 ---
 
-**Installation and updates are under revision. The required experience below is not complete in current evaluation builds.** See [Availability](/reference/status).
+Ubuntu 24.04 x86-64 Local and mandatory-Tailscale Remote installation and shared UI/CLI updates are supported; other distributions and architectures remain unverified. Format-4 installations update in place; older format-2 evaluation builds require a fresh install. See [Availability](/reference/status).
 
 ## Choose Local or Remote
 
@@ -17,7 +17,7 @@ Installation needs no Go compiler, Node, Git, AI provider, wallet or RPC.
 
 ## Local
 
-Run the official installer in a terminal. The intended Linux setup downloads one verified prebuilt bundle, uses apt or dnf only for missing operating-system prerequisites, and opens Fased in your browser. It does not require a desktop client. Local access uses your existing OS identity. Your OS may request its normal administrator approval during initial system setup. This revised flow is not yet accepted; platform availability is listed in [Availability](/reference/status).
+Run the official installer in a terminal. The Linux setup downloads one verified prebuilt bundle, uses apt only for missing operating-system prerequisites on Ubuntu 24.04 x86-64, and opens Fased in your browser without requiring a desktop client. Local access uses your existing OS identity. Your OS may request its normal administrator approval during initial system setup. Other platforms are listed in [Availability](/reference/status).
 
 The local listener stays on loopback. The browser session is authorized by the local launcher; being able to reach a localhost port alone does not grant ownership. Background work follows the selected OS service/autostart setting; a sleeping or powered-off computer cannot run it.
 
@@ -66,4 +66,4 @@ Wallet recovery must not depend on the VPS or Tailscale account. Before using re
 
 Existing records, credentials and recovery rights must survive upgrades and removal. Do not overwrite an installation to repair its updater. Wallet recovery is separate from app access and software updates.
 
-Ubuntu 24.04 x86-64 is the first evaluation target. The revised setup, owner authentication and complete update flow remain under implementation. Other OS releases, architectures and native installers require their own acceptance. See [Availability](/reference/status) and [Settings](/guide/settings).
+Ubuntu 24.04 x86-64 Local and mandatory-Tailscale Remote installation and updates are supported. Other OS releases, architectures and native installers remain unverified until their own acceptance is complete. See [Availability](/reference/status) and [Settings](/guide/settings).
