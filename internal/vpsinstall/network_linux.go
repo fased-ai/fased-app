@@ -112,7 +112,7 @@ func (n networkController) withLockEnrollment(ctx context.Context, m Manifest, r
 	return f()
 }
 func (n networkController) validate(m Manifest, a networkAttempt) error {
-	if a.Version != 1 || !canonicalHex(a.ID, 16) || a.ManifestSHA256 != hash(encoded(m)) || a.StartedAt.Unix() <= 0 || !a.Deadline.Equal(a.StartedAt.Add(5*time.Minute)) || a.Access.SSHPort != 22 || a.Access.SessionID == "" || len(a.Access.SessionID) > 512 || strings.ContainsAny(a.Access.SessionID, "\r\n\x00") {
+	if a.Version != 1 || !canonicalHex(a.ID, 16) || a.ManifestSHA256 != networkManifestDigest(m) || a.StartedAt.Unix() <= 0 || !a.Deadline.Equal(a.StartedAt.Add(5*time.Minute)) || a.Access.SSHPort != 22 || a.Access.SessionID == "" || len(a.Access.SessionID) > 512 || strings.ContainsAny(a.Access.SessionID, "\r\n\x00") {
 		return errors.New("invalid immutable network attempt")
 	}
 	return nil
@@ -130,7 +130,7 @@ func (n networkController) load(m Manifest) (networkAttempt, error) {
 		return a, e
 	}
 
-	if strict(b, &p) != nil || p.Version != 1 || p.ManifestSHA256 != hash(encoded(m)) || !canonicalHex(p.AttemptID, 16) || p.Attempt.ID != p.AttemptID || n.validate(m, p.Attempt) != nil {
+	if strict(b, &p) != nil || p.Version != 1 || p.ManifestSHA256 != networkManifestDigest(m) || !canonicalHex(p.AttemptID, 16) || p.Attempt.ID != p.AttemptID || n.validate(m, p.Attempt) != nil {
 		return a, errors.New("invalid owner network pointer")
 	}
 	a = p.Attempt
@@ -164,14 +164,20 @@ func (n networkController) load(m Manifest) (networkAttempt, error) {
 	}
 	return a, nil
 }
+func networkManifestDigest(m Manifest) string {
+	if isPackageRemoteManifest(m) {
+		m.CoreSHA256 = ""
+	}
+	return hash(encoded(m))
+}
 func (n networkController) savePointer(m Manifest, a networkAttempt) error {
-	return n.ops.writeJournal("network.json", networkPointer{Version: 1, AttemptID: a.ID, ManifestSHA256: hash(encoded(m)), Attempt: a})
+	return n.ops.writeJournal("network.json", networkPointer{Version: 1, AttemptID: a.ID, ManifestSHA256: networkManifestDigest(m), Attempt: a})
 }
 func binding(m Manifest) []byte {
 	return encoded(struct {
 		Version, OwnerUID              int
 		InstallationID, ManifestSHA256 string
-	}{1, m.OwnerUID, m.ID, hash(encoded(m))})
+	}{1, m.OwnerUID, m.ID, networkManifestDigest(m)})
 }
 func (n networkController) prepare(ctx context.Context, m Manifest, a networkAttempt) error {
 	o := n.ops
@@ -517,7 +523,7 @@ func (n networkController) begin(ctx context.Context, m Manifest, approval Netwo
 				return NetworkStatus{}, e
 			}
 			now := n.now().UTC().Truncate(time.Second)
-			a = networkAttempt{Version: 1, ID: hex.EncodeToString(id), ManifestSHA256: hash(encoded(m)), Access: proof, StartedAt: now, Deadline: now.Add(5 * time.Minute)}
+			a = networkAttempt{Version: 1, ID: hex.EncodeToString(id), ManifestSHA256: networkManifestDigest(m), Access: proof, StartedAt: now, Deadline: now.Add(5 * time.Minute)}
 		}
 
 		if e = n.validate(m, a); e != nil {

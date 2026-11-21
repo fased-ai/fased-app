@@ -142,3 +142,59 @@ func TestPackageNetworkBeginConfirmAndRollbackLifecycle(t *testing.T) {
 		t.Fatal("foreign firewall table lost during rollback")
 	}
 }
+
+func TestPackageNetworkSurvivesCoreUpgrade(t *testing.T) {
+	id := strings.Repeat("d", 32)
+	host, n, _ := networkFixture(t)
+	m := packageNetworkFixtureManifest(1000, 1005, id)
+	host.base.files[ConfigPath(1000)] = hostFile{UID: 0, GID: 0, Regular: true, Mode: 0644, Data: encoded(m)}
+	current := m
+	n.packageCheck = func(got Manifest) error {
+		if got != current {
+			return os.ErrInvalid
+		}
+		return nil
+	}
+
+	pending, err := n.begin(context.Background(), m, NetworkApproval{PrivateUI: true, ConsoleRecovery: true})
+	if err != nil || pending.Phase != "pending" {
+		t.Fatalf("package network begin failed: status=%+v err=%v", pending, err)
+	}
+	a, err := n.load(m)
+	if err != nil {
+		t.Fatal("load pending attempt", err)
+	}
+	host.proof.SessionID = "second-private-connection"
+	committed, err := n.confirm(context.Background(), m, pending.AttemptID)
+	if err != nil || committed.Phase != "committed" {
+		t.Fatalf("package network confirm failed: status=%+v err=%v", committed, err)
+	}
+
+	upgraded := m
+	upgraded.CoreSHA256 = strings.Repeat("e", 64)
+	host.base.files[ConfigPath(1000)] = hostFile{UID: 0, GID: 0, Regular: true, Mode: 0644, Data: encoded(upgraded)}
+	current = upgraded
+	inspected, err := n.inspect(context.Background(), upgraded)
+	if err != nil || inspected.Phase != "committed" {
+		t.Fatalf("package network inspect after core upgrade failed: status=%+v err=%v", inspected, err)
+	}
+
+	tampered := upgraded
+	tampered.Listen = "127.0.0.1:17499"
+	current = tampered
+	if _, err := n.inspect(context.Background(), tampered); err == nil || !strings.Contains(err.Error(), "invalid owner network pointer") {
+		t.Fatalf("expected invalid owner network pointer for non-core manifest change, got %v", err)
+	}
+
+	current = upgraded
+	rolledBack, err := n.rollback(context.Background(), upgraded)
+	if err != nil || rolledBack.Phase != "rolled-back" {
+		t.Fatalf("package network rollback after core upgrade failed: status=%+v err=%v", rolledBack, err)
+	}
+	if _, ok := host.tables[networkTable(upgraded, a)]; ok {
+		t.Fatal("owned firewall table remained after rollback")
+	}
+	if !bytes.Equal(host.tables["foreign"], []byte("foreign firewall bytes")) {
+		t.Fatal("foreign firewall table lost during rollback")
+	}
+}
