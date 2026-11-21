@@ -169,7 +169,7 @@ func (s *Store) startGoogleSignIn(c AIConnectionCommand) (AIConnectionView, erro
 	if err != nil {
 		return AIConnectionView{}, err
 	}
-	a.view = ProviderSignInView{ID: id, Provider: "google", State: "waiting", ExpiresAt: s.now().Add(5 * time.Minute).Unix(), Remote: c.Remote}
+	a.view = ProviderSignInView{ID: id, Ref: c.Ref, Provider: "google", State: "waiting", ExpiresAt: s.now().Add(5 * time.Minute).Unix(), Remote: c.Remote}
 	listener, err := s.listenProviderSignInLocked(a)
 	if err != nil {
 		return AIConnectionView{}, err
@@ -200,6 +200,7 @@ func (s *Store) startGoogleSignIn(c AIConnectionCommand) (AIConnectionView, erro
 	return s.aiConnectionLocked(c.Ref)
 }
 func googleSignInCallback(a *providerSignInAttempt, callback string) (string, error) {
+	callback = strings.TrimSpace(callback)
 	u, err := url.Parse(callback)
 	base, _ := url.Parse(a.redirect)
 	if err != nil || len(callback) > 4096 || u.Scheme != base.Scheme || u.Host != base.Host || u.Path != base.Path || u.RawPath != "" || u.User != nil || u.Fragment != "" || u.Opaque != "" || u.ForceQuery {
@@ -210,9 +211,15 @@ func googleSignInCallback(a *providerSignInAttempt, callback string) (string, er
 		return "", errors.New("Google callback state/code refused")
 	}
 	for key, values := range q {
-		if len(values) != 1 || (key != "code" && key != "state" && key != "scope" && key != "authuser" && key != "prompt") {
+		if len(values) != 1 || (key != "code" && key != "state" && key != "scope" && key != "authuser" && key != "prompt" && key != "iss" && key != "hd") {
 			return "", errors.New("Google callback fields refused")
 		}
+	}
+	if iss := q.Get("iss"); iss != "" && iss != googleIssuer {
+		return "", errors.New("Google callback issuer refused")
+	}
+	if hd := q.Get("hd"); hd != "" && !validSignInValue(hd, 256) {
+		return "", errors.New("Google callback fields refused")
 	}
 	return q.Get("code"), nil
 }
@@ -278,7 +285,7 @@ func (s *Store) completeGoogleSignIn(ctx context.Context, c AIConnectionCommand)
 		s.provider.mu.Unlock()
 		return AIConnectionView{}, ErrConflict
 	}
-	callback := c.Callback
+	callback := strings.TrimSpace(c.Callback)
 	if callback == "" {
 		callback = a.callback
 	}
@@ -319,6 +326,7 @@ func (s *Store) completeGoogleSignIn(ctx context.Context, c AIConnectionCommand)
 	if err != nil {
 		return v, err
 	}
+	tx.Rollback()
 	return s.refreshProviderModels(ctx, v.Ref, s.providerModelTransport(v.Ref))
 }
 func (s *Store) renewGoogleSignIn(ctx context.Context, c AIConnectionCommand) (AIConnectionView, error) {

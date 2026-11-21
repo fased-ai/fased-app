@@ -34,6 +34,7 @@ const providerSignInMaxCiphertext = providerSignInMaxPlaintext + 16 // AES-GCM a
 
 type ProviderSignInView struct {
 	ID        string `json:"id"`
+	Ref       string `json:"ref,omitempty"`
 	Provider  string `json:"provider"`
 	State     string `json:"state"`
 	URL       string `json:"url"`
@@ -269,7 +270,7 @@ func (s *Store) startProviderSignIn(c AIConnectionCommand) (AIConnectionView, er
 	if err != nil {
 		return AIConnectionView{}, err
 	}
-	a.view = ProviderSignInView{ID: id, Provider: "openai", State: "waiting", ExpiresAt: s.now().Add(5 * time.Minute).Unix(), Remote: c.Remote}
+	a.view = ProviderSignInView{ID: id, Ref: c.Ref, Provider: "openai", State: "waiting", ExpiresAt: s.now().Add(5 * time.Minute).Unix(), Remote: c.Remote}
 	listener, err := s.listenProviderSignInLocked(a)
 	if err != nil {
 		return AIConnectionView{}, err
@@ -352,6 +353,7 @@ func providerSignInCallback(a *providerSignInAttempt, callback string) (string, 
 		code, err := routerSignInCallback(a, callback)
 		return code, "", err
 	}
+	callback = strings.TrimSpace(callback)
 	u, err := url.Parse(callback)
 	base, _ := url.Parse(a.redirect)
 	if err != nil || len(callback) > 4096 || u.Scheme != base.Scheme || u.Host != base.Host || u.Path != base.Path || u.RawPath != "" || u.User != nil || u.Fragment != "" {
@@ -362,9 +364,12 @@ func providerSignInCallback(a *providerSignInAttempt, callback string) (string, 
 		return "", "", errors.New("sign-in state mismatch")
 	}
 	for key, values := range q {
-		if len(values) != 1 || (key != "code" && key != "state" && key != "client_id" && key != "scope" && key != "error" && key != "error_description") {
+		if len(values) != 1 || (key != "code" && key != "state" && key != "client_id" && key != "scope" && key != "iss" && key != "error" && key != "error_description") {
 			return "", "", errors.New("invalid sign-in callback")
 		}
+	}
+	if iss := q.Get("iss"); iss != "" && iss != signInIssuer {
+		return "", "", errors.New("sign-in issuer mismatch")
 	}
 	if q.Get("error") != "" {
 		return "", "", errors.New("sign-in was not authorized")
@@ -397,7 +402,7 @@ func (s *Store) completeProviderSignIn(ctx context.Context, c AIConnectionComman
 		s.provider.mu.Unlock()
 		return s.completeRouterSignIn(ctx, c)
 	}
-	callback := c.Callback
+	callback := strings.TrimSpace(c.Callback)
 	if callback == "" {
 		callback = a.callback
 	}
@@ -445,6 +450,7 @@ func (s *Store) completeProviderSignIn(ctx context.Context, c AIConnectionComman
 	if err != nil {
 		return v, err
 	}
+	tx.Rollback()
 	if !credential.planUse() {
 		return s.AIConnection(v.Ref)
 	}
@@ -607,11 +613,14 @@ func parseProviderSignInModels(raw []byte, fetchedAt int64) ([]discoveredModel, 
 	}
 	rows := []discoveredModel{}
 	for _, model := range response.Models {
-		if !validProviderModelID(model.Slug) || !validAgentText(model.Name, 256, true) || (model.Visibility != "list" && model.Visibility != "hide") {
+		if len(model.Visibility) > 32 || (model.Visibility != "" && !validSignInValue(model.Visibility, 32)) {
 			return nil, errors.New("invalid ChatGPT model entry")
 		}
 		if model.Visibility != "list" {
 			continue
+		}
+		if !validProviderModelID(model.Slug) || !validAgentText(model.Name, 256, true) {
+			return nil, errors.New("invalid ChatGPT model entry")
 		}
 		// This route provides no creation timestamp. The retained value is the
 		// verified catalogue observation time, never evidence of model age.
@@ -634,7 +643,7 @@ func exchangeProviderSignIn(ctx context.Context, wire http.RoundTripper, form ur
 	if err := signInHTTP(ctx, wire, "POST", signInIssuer+"/api/accounts/oauth/token", form, &result); err != nil {
 		return providerSignInCredential{}, err
 	}
-	if !strings.EqualFold(result.Type, "Bearer") || result.ExpiresIn < 1 || result.ExpiresIn > 86400 {
+	if !strings.EqualFold(result.Type, "Bearer") || result.ExpiresIn < 1 || result.ExpiresIn > 31*86400 {
 		return providerSignInCredential{}, errors.New("invalid sign-in token grant")
 	}
 	d, err := readSignInDiscovery(ctx, wire)
@@ -726,22 +735,35 @@ func validateOIDCIDToken(ctx context.Context, wire http.RoundTripper, jwks, toke
 		return "", refused
 	}
 	var c struct {
-		Iss, Sub, Nonce string
-		Aud             json.RawMessage
-		Exp, Iat        int64
+		Iss, Sub, Nonce, Azp string
+		Aud                  json.RawMessage
+		Exp, Iat             int64
 	}
 	if json.Unmarshal(claims, &c) != nil || (c.Iss != issuer && !(issuer == googleIssuer && c.Iss == "accounts.google.com")) || !validSignInValue(c.Sub, 512) || c.Exp <= now || c.Iat > now+30 || c.Iat < now-86400 || nonce != "" && c.Nonce != nonce {
 		return "", refused
 	}
+	if c.Azp != "" && c.Azp != client {
+		return "", refused
+	}
 	var audience string
-	if json.Unmarshal(c.Aud, &audience) != nil {
-		var audiences []string
-		if json.Unmarshal(c.Aud, &audiences) != nil || len(audiences) != 1 {
+	if json.Unmarshal(c.Aud, &audience) == nil {
+		if audience != client {
 			return "", refused
 		}
-		audience = audiences[0]
+		return c.Sub, nil
 	}
-	if audience != client {
+	var audiences []string
+	if json.Unmarshal(c.Aud, &audiences) != nil || len(audiences) == 0 || len(audiences) > 16 {
+		return "", refused
+	}
+	matched := false
+	for _, entry := range audiences {
+		if entry == client {
+			matched = true
+			break
+		}
+	}
+	if !matched || len(audiences) > 1 && c.Azp != client {
 		return "", refused
 	}
 	return c.Sub, nil

@@ -117,3 +117,48 @@ func TestAdmittedChatStreamsThroughControlledHTTPS(t *testing.T) {
 		t.Fatal("generation-only stream sent to token counter")
 	}
 }
+
+func TestAIStreamAcceptsReasoningEventsWithoutLeakingReasoningIntoAnswer(t *testing.T) {
+	text := `{"answer":"Final non-reasoning answer","cards":[]}`
+	response := map[string]any{
+		"id":           "reasoning-response",
+		"model":        fixtureAIModel,
+		"status":       "completed",
+		"service_tier": "default",
+		"usage":        map[string]int{"input_tokens": 100, "output_tokens": 30, "total_tokens": 130},
+		"output": []any{
+			map[string]any{"type": "reasoning", "summary": []any{}},
+			map[string]any{"type": "message", "role": "assistant", "status": "completed", "content": []any{map[string]string{"type": "output_text", "text": text}}},
+		},
+	}
+	frames := []map[string]any{
+		{"type": "response.created", "response": map[string]any{"id": "reasoning-response", "model": fixtureAIModel}},
+		{"type": "response.in_progress", "response": map[string]any{"id": "reasoning-response", "model": fixtureAIModel}},
+		{"type": "response.output_item.added", "output_index": 0},
+		{"type": "response.reasoning_summary_part.added", "output_index": 0},
+		{"type": "response.reasoning_summary_text.delta", "output_index": 0, "delta": "Secret chain of thought"},
+		{"type": "response.reasoning_summary_text.done", "output_index": 0, "text": "Secret chain of thought"},
+		{"type": "response.reasoning_summary_part.done", "output_index": 0},
+		{"type": "response.reasoning_text.delta", "output_index": 0, "delta": "More internal reasoning"},
+		{"type": "response.reasoning_text.done", "output_index": 0, "text": "More internal reasoning"},
+		{"type": "response.output_item.done", "output_index": 0},
+		{"type": "response.output_item.added", "output_index": 1},
+		{"type": "response.content_part.added", "output_index": 1, "content_index": 0},
+		{"type": "response.output_text.delta", "delta": text, "output_index": 1, "content_index": 0},
+		{"type": "response.output_text.done", "text": text, "output_index": 1, "content_index": 0},
+		{"type": "response.content_part.done", "output_index": 1, "content_index": 0},
+		{"type": "response.output_item.done", "output_index": 1},
+		{"type": "response.completed", "response": response},
+	}
+	var b strings.Builder
+	for i, frame := range frames {
+		frame["sequence_number"] = i
+		raw, _ := json.Marshal(frame)
+		b.WriteString("event: " + frame["type"].(string) + "\ndata: " + string(raw) + "\n\n")
+	}
+	seen := ""
+	raw, err := readAIStream(strings.NewReader(b.String()), fixtureAIModel, func(v string) { seen = v }, true)
+	if err != nil || len(raw) == 0 || seen != "Final non-reasoning answer" || strings.Contains(seen, "Secret") || strings.Contains(seen, "internal reasoning") {
+		t.Fatal("reasoning SSE events failed or leaked into answer", seen, err)
+	}
+}

@@ -147,7 +147,9 @@ func readAIStream(body io.Reader, model string, onDelta func(string), planModes 
 			}
 			identity = r.ID
 			seenCreated = true
-		case "response.in_progress", "response.output_item.added", "response.content_part.added", "response.content_part.done", "response.output_item.done":
+		case "response.in_progress", "response.output_item.added", "response.content_part.added", "response.content_part.done", "response.output_item.done",
+			"response.reasoning_summary_part.added", "response.reasoning_summary_text.delta", "response.reasoning_summary_text.done", "response.reasoning_summary_part.done",
+			"response.reasoning_text.delta", "response.reasoning_text.done":
 			if !seenCreated {
 				return false
 			}

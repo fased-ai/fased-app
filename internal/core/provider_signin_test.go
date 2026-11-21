@@ -3,9 +3,13 @@ package core
 import (
 	"bytes"
 	"context"
+	"crypto"
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/rand"
+	"crypto/rsa"
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"io"
@@ -447,4 +451,162 @@ func TestProviderSignInVaultMaximumAccountsAndOversizePreservation(t *testing.T)
 	if _, ok := parseProviderSignInCredential(oversizedPlain); ok {
 		t.Fatal("oversized plaintext admitted")
 	}
+}
+
+func TestProviderSignInLiveCallbackIssWhitespaceReconnectRefModelsAndOIDC(t *testing.T) {
+	t.Run("iss-and-whitespace-remote-and-reconnect-ref", func(t *testing.T) {
+		s := fixtureStore(t)
+		start, err := s.ChangeAIConnection(t.Context(), AIConnectionCommand{Action: "sign-in-start", Provider: "openai", Remote: true, Name: "Live SIWC"})
+		if err != nil || start.SignIn == nil || start.SignIn.Ref != "" {
+			t.Fatal("new sign-in ref should be empty", err, start.SignIn)
+		}
+		u, _ := url.Parse(start.SignIn.URL)
+		q := u.Query()
+		q.Set("iss", signInIssuer)
+		q.Set("scope", "chatgpt.tokens.use.direct email offline_access openid profile resource.invoke")
+		u.RawQuery = q.Encode()
+		account, err := s.ChangeAIConnection(t.Context(), AIConnectionCommand{
+			Action:     "sign-in-complete",
+			SignInID:   start.SignIn.ID,
+			Callback:   "  " + u.String() + " \n",
+			Passphrase: testVaultPassword,
+		})
+		if err != nil || account.Ref == "" || account.AuthMethod != "sign-in" || !account.PlanUse {
+			t.Fatal("live-style iss+whitespace callback failed", err)
+		}
+		recon, err := s.ChangeAIConnection(t.Context(), AIConnectionCommand{Action: "sign-in-start", Provider: "openai", Ref: account.Ref, Remote: true})
+		if err != nil || recon.SignIn == nil || recon.SignIn.Ref != account.Ref {
+			t.Fatal("reconnect sign-in ref missing", err, recon.SignIn)
+		}
+		if _, err = s.ChangeAIConnection(t.Context(), AIConnectionCommand{Action: "sign-in-cancel", SignInID: recon.SignIn.ID}); err != nil {
+			t.Fatal(err)
+		}
+	})
+
+	t.Run("local-listener-iss-and-mismatched-iss", func(t *testing.T) {
+		s := fixtureStore(t)
+		start, err := s.ChangeAIConnection(t.Context(), AIConnectionCommand{Action: "sign-in-start", Provider: "openai", Remote: false})
+		if err != nil {
+			t.Fatal(err)
+		}
+		u, _ := url.Parse(start.SignIn.URL)
+		bad := *u
+		bq := bad.Query()
+		bq.Set("iss", "https://evil.invalid")
+		bad.RawQuery = bq.Encode()
+		resBad, err := http.Get(bad.String())
+		if err != nil {
+			t.Fatal(err)
+		}
+		resBad.Body.Close()
+		if resBad.StatusCode != 400 {
+			t.Fatal("mismatched iss callback accepted on loopback listener", resBad.StatusCode)
+		}
+		q := u.Query()
+		q.Set("iss", signInIssuer)
+		u.RawQuery = q.Encode()
+		resGood, err := http.Get(u.String())
+		if err != nil {
+			t.Fatal(err)
+		}
+		resGood.Body.Close()
+		if resGood.StatusCode != 200 {
+			t.Fatal("valid iss callback rejected on loopback listener", resGood.StatusCode)
+		}
+		account, err := s.ChangeAIConnection(t.Context(), AIConnectionCommand{Action: "sign-in-complete", SignInID: start.SignIn.ID, Passphrase: testVaultPassword})
+		if err != nil || account.Ref == "" {
+			t.Fatal("local iss completion failed", err)
+		}
+
+		// Direct callback rejection on Remote mismatched iss
+		start2, err := s.ChangeAIConnection(t.Context(), AIConnectionCommand{Action: "sign-in-start", Provider: "openai", Remote: true})
+		if err != nil {
+			t.Fatal(err)
+		}
+		u2, _ := url.Parse(start2.SignIn.URL)
+		q2 := u2.Query()
+		q2.Set("iss", "https://evil.invalid")
+		u2.RawQuery = q2.Encode()
+		if _, err = s.ChangeAIConnection(t.Context(), AIConnectionCommand{Action: "sign-in-complete", SignInID: start2.SignIn.ID, Callback: u2.String(), Passphrase: testVaultPassword}); err == nil {
+			t.Fatal("remote mismatched iss accepted")
+		}
+	})
+
+	t.Run("parseProviderSignInModels-visibility", func(t *testing.T) {
+		raw, _ := json.Marshal(map[string]any{
+			"models": []any{
+				map[string]string{"slug": admittedOpenAIModel, "display_name": "GPT-6.1 Terra", "visibility": "list"},
+				map[string]string{"slug": "internal model!", "display_name": "Bad\nName", "visibility": "private"},
+				map[string]string{"slug": "hidden-model", "display_name": "Hidden", "visibility": "none"},
+				map[string]string{"slug": "legacy-hidden", "display_name": "Legacy", "visibility": "hide"},
+			},
+		})
+		rows, err := parseProviderSignInModels(raw, 1795219200)
+		if err != nil || len(rows) != 1 || rows[0].ID != admittedOpenAIModel {
+			t.Fatal("failed skipping non-list visibility models", rows, err)
+		}
+		badControl, _ := json.Marshal(map[string]any{
+			"models": []any{
+				map[string]string{"slug": admittedOpenAIModel, "display_name": "Bad Vis", "visibility": "list\n"},
+			},
+		})
+		if _, err = parseProviderSignInModels(badControl, 1795219200); err == nil {
+			t.Fatal("control character visibility accepted")
+		}
+		badListEntry, _ := json.Marshal(map[string]any{
+			"models": []any{
+				map[string]string{"slug": "bad slug", "display_name": "Broken", "visibility": "list"},
+			},
+		})
+		if _, err = parseProviderSignInModels(badListEntry, 1795219200); err == nil {
+			t.Fatal("invalid listed model accepted")
+		}
+	})
+
+	t.Run("validateOIDCIDToken-multi-audience-and-azp", func(t *testing.T) {
+		key, err := rsa.GenerateKey(rand.Reader, 2048)
+		if err != nil {
+			t.Fatal(err)
+		}
+		now := int64(1795267200)
+		client := "oaiapp_test_client"
+		jwksJSON, _ := json.Marshal(map[string]any{
+			"keys": []any{map[string]string{
+				"kty": "RSA", "kid": "k1", "alg": "RS256", "use": "sig",
+				"n": base64.RawURLEncoding.EncodeToString(key.N.Bytes()), "e": "AQAB",
+			}},
+		})
+		fetch := func(_ context.Context, _ http.RoundTripper, _, _ string, _ url.Values, target any) error {
+			return json.Unmarshal(jwksJSON, target)
+		}
+		signToken := func(claims map[string]any) string {
+			h, _ := json.Marshal(map[string]string{"alg": "RS256", "kid": "k1"})
+			c, _ := json.Marshal(claims)
+			msg := base64.RawURLEncoding.EncodeToString(h) + "." + base64.RawURLEncoding.EncodeToString(c)
+			d := sha256.Sum256([]byte(msg))
+			sig, _ := rsa.SignPKCS1v15(rand.Reader, key, crypto.SHA256, d[:])
+			return msg + "." + base64.RawURLEncoding.EncodeToString(sig)
+		}
+		good := signToken(map[string]any{
+			"iss": signInIssuer, "sub": "user-1", "nonce": "n1", "azp": client,
+			"aud": []string{client, signInResource}, "iat": now, "exp": now + 3600,
+		})
+		if sub, err := validateOIDCIDToken(t.Context(), nil, signInIssuer+"/.well-known/jwks.json", good, client, "n1", now, signInIssuer, fetch); err != nil || sub != "user-1" {
+			t.Fatal("multi-audience azp-matched id_token refused", sub, err)
+		}
+		missingAzp := signToken(map[string]any{
+			"iss": signInIssuer, "sub": "user-1", "nonce": "n1",
+			"aud": []string{client, signInResource}, "iat": now, "exp": now + 3600,
+		})
+		if _, err := validateOIDCIDToken(t.Context(), nil, signInIssuer+"/.well-known/jwks.json", missingAzp, client, "n1", now, signInIssuer, fetch); err == nil {
+			t.Fatal("multi-audience without azp accepted")
+		}
+		wrongAzp := signToken(map[string]any{
+			"iss": signInIssuer, "sub": "user-1", "nonce": "n1", "azp": "oaiapp_other",
+			"aud": client, "iat": now, "exp": now + 3600,
+		})
+		if _, err := validateOIDCIDToken(t.Context(), nil, signInIssuer+"/.well-known/jwks.json", wrongAzp, client, "n1", now, signInIssuer, fetch); err == nil {
+			t.Fatal("mismatched azp accepted")
+		}
+	})
 }

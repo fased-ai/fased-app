@@ -288,3 +288,42 @@ func TestGoogleOAuthCallbackOriginScopeAndCancellation(t *testing.T) {
 		t.Fatal("Google altered unrelated login")
 	}
 }
+
+func TestGoogleOAuthCallbackAcceptsIssAndWorkspaceHdAndRejectsWrongIssuer(t *testing.T) {
+	s := fixtureStore(t)
+	start, err := s.ChangeAIConnection(t.Context(), googleStartCommand(t, true))
+	if err != nil {
+		t.Fatal(err)
+	}
+	u, _ := url.Parse(start.SignIn.URL)
+	q := u.Query()
+	q.Set("iss", googleIssuer)
+	q.Set("hd", "example.com")
+	u.RawQuery = q.Encode()
+	a, err := s.ChangeAIConnection(t.Context(), AIConnectionCommand{
+		Action:     "sign-in-complete",
+		SignInID:   start.SignIn.ID,
+		Callback:   " " + u.String() + "\n",
+		Passphrase: testVaultPassword,
+	})
+	if err != nil || a.Ref == "" || a.AuthMethod != "oauth" {
+		t.Fatal("Google callback with iss and hd refused", err)
+	}
+
+	start2, err := s.ChangeAIConnection(t.Context(), googleStartCommand(t, true))
+	if err != nil {
+		t.Fatal(err)
+	}
+	u2, _ := url.Parse(start2.SignIn.URL)
+	q2 := u2.Query()
+	q2.Set("iss", "https://evil.invalid")
+	u2.RawQuery = q2.Encode()
+	if _, err = s.ChangeAIConnection(t.Context(), AIConnectionCommand{
+		Action:     "sign-in-complete",
+		SignInID:   start2.SignIn.ID,
+		Callback:   u2.String(),
+		Passphrase: testVaultPassword,
+	}); err == nil {
+		t.Fatal("Google callback with mismatched iss accepted")
+	}
+}

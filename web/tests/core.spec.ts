@@ -13015,6 +13015,102 @@ for (const location of ["local", "remote"]) {
   });
 }
 
+test("provider sign-in remote restores pending attempt on reload and accepts live iss callback", async ({
+  page,
+}) => {
+  test.setTimeout(90000);
+  await stop();
+  await start(true);
+  await page.route("**/api/v1/health", async (route) => {
+    const response = await route.fetch();
+    const body = await response.json();
+    body.connection = { location: "remote", transport: "loopback" };
+    await route.fulfill({ response, json: body });
+  });
+  await page.goto(url + "/#providers");
+  const claim = JSON.parse(
+    await readFile(join(dir, "claim-code.json"), "utf8"),
+  );
+  await openOwnerSetup(page, claim.code);
+  await page.getByLabel("Create owner password").fill(fixturePassword);
+  await page
+    .getByRole("button", { name: "Claim workspace", exact: true })
+    .click();
+  await expect(
+    page.getByRole("button", { name: "Sign out", exact: true }),
+  ).toBeVisible();
+  const login = spawn(binary, ["login", "--data-dir", dir, "--password-stdin"]);
+  login.stdin!.end(fixturePassword + "\n");
+  expect((await once(login, "exit"))[0]).toBe(0);
+
+  const editor = page.getByRole("region", { name: "Providers", exact: true });
+  await expect(editor).toBeVisible();
+  const passphrase = "disposable-remote-reload-iss-vault";
+
+  await editor.getByRole("button", { name: "Sign in", exact: true }).click();
+  await editor
+    .getByRole("button", { name: "Continue with ChatGPT", exact: true })
+    .click();
+  const link = editor.getByRole("link", { name: "Open sign-in", exact: true });
+  await expect(link).toBeVisible();
+  const redirectInput = editor.getByLabel("Redirect URL", { exact: true });
+  await expect(redirectInput).toHaveAttribute(
+    "placeholder",
+    "http://127.0.0.1:.../auth/callback?...",
+  );
+
+  // Reloading #providers while pending must restore the active Sign-in UI, not trap on disabled Sign in.
+  await page.reload();
+  await expect(link).toBeVisible();
+  await expect(redirectInput).toBeVisible();
+
+  // Submitting a bad issuer clears the cancelled pending sign-in UI while preserving the error alert.
+  const badUrl = new URL((await link.getAttribute("href"))!);
+  badUrl.searchParams.set("iss", "https://evil.invalid");
+  await redirectInput.fill(badUrl.toString());
+  await editor.getByLabel("Vault passphrase", { exact: true }).fill(passphrase);
+  await editor.getByRole("button", { name: "Finish", exact: true }).click();
+  await expect(editor.getByRole("alert")).toContainText("issuer mismatch");
+  await expect(
+    editor.getByRole("button", { name: "Continue with ChatGPT", exact: true }),
+  ).toBeVisible();
+
+  // Start again, reload #providers, paste callback containing OpenAI's RFC 9207 iss + whitespace.
+  await editor.getByLabel("Name", { exact: true }).fill("ChatGPT live iss");
+  await editor
+    .getByRole("button", { name: "Continue with ChatGPT", exact: true })
+    .click();
+  await expect(link).toBeVisible();
+  await page.reload();
+  await expect(link).toBeVisible();
+  const goodUrl = new URL((await link.getAttribute("href"))!);
+  goodUrl.searchParams.set("iss", "https://auth.openai.com");
+  goodUrl.searchParams.set(
+    "scope",
+    "chatgpt.tokens.use.direct email offline_access openid profile resource.invoke",
+  );
+  await redirectInput.fill(`  ${goodUrl.toString()}  `);
+  await editor.getByLabel("Vault passphrase", { exact: true }).fill(passphrase);
+  await expect(
+    editor.getByRole("button", { name: "Finish", exact: true }),
+  ).toBeEnabled();
+  await editor.getByRole("button", { name: "Finish", exact: true }).click();
+
+  await expect
+    .poll(async () => (await privateCLI(["ai-connection"])).connections.length)
+    .toBe(1);
+  const accounts = await privateCLI(["ai-connection"]);
+  expect(accounts.connections[0]).toMatchObject({
+    name: "ChatGPT live iss",
+    provider: "openai",
+    authMethod: "sign-in",
+    planUse: true,
+  });
+  await expect(
+    editor.locator(`[data-account="${accounts.connections[0].ref}"]`),
+  ).toBeVisible();
+});
+
 test("activity and notifications open the exact task run", async ({
   page,
   isMobile,
