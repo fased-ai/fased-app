@@ -64,6 +64,7 @@ export function TaskAccessSettings({
         task.ai.connectionRef === connection.ref &&
         ["scheduled", "paused"].includes(task.state),
     ) ?? [];
+  const needsPassphrase = !connection.osProtected;
   async function change(action: string) {
     if (!v) return;
     const epoch = generation.current;
@@ -86,7 +87,11 @@ export function TaskAccessSettings({
             }
           : {}),
         ...(action === "task-access-allow"
-          ? { allowance: review, consentDigest: review?.id, passphrase: secret }
+          ? {
+              allowance: review,
+              consentDigest: review?.id,
+              ...(needsPassphrase ? { passphrase: secret } : {}),
+            }
           : {}),
       });
       if (epoch === generation.current) setReview(next.accessReview);
@@ -262,16 +267,18 @@ export function TaskAccessSettings({
                   : "Selected tasks only. Closing the browser keeps them running. Lock, sign-out, expiry or restart stops credential access.",
             )}
           </p>
-          <label>
-            {t("Vault passphrase")}
-            <input
-              type="password"
-              autoComplete="off"
-              value={passphrase}
-              onChange={(e) => setPassphrase(e.target.value)}
-              maxLength={1024}
-            />
-          </label>
+          {needsPassphrase && (
+            <label>
+              {t("Vault passphrase")}
+              <input
+                type="password"
+                autoComplete="off"
+                value={passphrase}
+                onChange={(e) => setPassphrase(e.target.value)}
+                maxLength={1024}
+              />
+            </label>
+          )}
           <details>
             <summary>{t("Limits")}</summary>
             <dl>
@@ -284,7 +291,11 @@ export function TaskAccessSettings({
           <div className="agent-actions">
             <button
               className="primary"
-              disabled={busy || connection.planPaused || passphrase.length < 12}
+              disabled={
+                busy ||
+                connection.planPaused ||
+                (needsPassphrase && passphrase.length < 12)
+              }
             >
               {t("Allow task access")}
             </button>

@@ -78,10 +78,10 @@ export function ScheduledAITasks({ view: v }: { view: AgentView }) {
     const p = selectedPolicy;
     if (!p) return;
     budgetModel.current = identity;
-    if (isUnmeteredPolicy(p)) {
-      if (p.provider === "local") setDeadline(60);
-      return;
+    if (p.provider === "local" || !selectedAccount?.testOnly) {
+      setDeadline((d) => (d <= 5 ? 60 : d));
     }
+    if (isUnmeteredPolicy(p)) return;
     const ceiling = Math.ceil(
       (input * p.inputMicrousdPerMillion +
         Math.max(output, p.billableOutputTokens || 0) *
@@ -613,7 +613,7 @@ export function ScheduledAITasks({ view: v }: { view: AgentView }) {
                 type="number"
                 required
                 min={1}
-                max={selectedPolicy?.provider === "local" ? 120 : 5}
+                max={120}
                 value={deadline}
                 onChange={(e) => setDeadline(e.target.valueAsNumber)}
               />

@@ -293,7 +293,7 @@ test("Google auth source maintenance includes official API OAuth and CLI restric
       return new Response("Official controlled source", { status: 200 });
     },
   });
-  assert.ok(seen.includes("https://ai.google.dev/gemini-api/docs/oauth"));
+  assert.ok(seen.includes("https://aistudio.google.com/docs/oauth"));
   assert.ok(seen.includes("https://geminicli.com/docs/resources/tos-privacy/"));
   assert.equal(p.status, "manual-policy-review-required");
   await assert.rejects(applyReviewed(p, raw));

@@ -177,13 +177,9 @@ func TestTaskAnalysisRequiredVersusOptionalFailureAndUnknownHolds(t *testing.T) 
 					if err := s.Close(); err != nil {
 						t.Fatal(err)
 					}
-					var err error
-					s, err = OpenStore(dir)
-					if err != nil {
-						t.Fatal(err)
-					}
-					defer s.Close()
+					s = reopenFixtureStore(t, dir)
 					s.now = func() time.Time { return now }
+					var err error
 					v, err = s.Agents(t.Context(), v.ProfileID, "")
 					if err != nil || !reflect.DeepEqual(v.Tasks, before.Tasks) || !reflect.DeepEqual(v.Runs, before.Runs) {
 						t.Fatal("restart lost fallback result", err)
@@ -424,7 +420,7 @@ func TestTaskAnalysisNativeGrantAndSourceUseExistingCredentialBoundary(t *testin
 		t.Fatal("native account/grant/source was disconnected", q.State, q.Failure, v.Tasks)
 	}
 	status, _ := s.AIConnection(a.Ref)
-	if !status.Locked || status.TaskAccess == nil || status.TaskAccess.UsedRequests != 1 || status.LiveCallsEnabled {
+	if !status.Locked || status.TaskAccess == nil || status.TaskAccess.UsedRequests != 1 {
 		t.Fatal("task grant unlocked Chat or changed live gate", status.Locked)
 	}
 }

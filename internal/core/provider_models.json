@@ -1,8 +1,8 @@
 {
   "version": 1,
   "policy": "latest-only",
-  "reviewedAt": 1793059200,
-  "expiresAt": 1795651200,
+  "reviewedAt": 1795219200,
+  "expiresAt": 1797811200,
   "provider": "openai",
   "sources": {
     "models": "https://developers.openai.com/api/docs/models.md",
@@ -25,38 +25,38 @@
       "reasoning": "none"
     },
     {
-      "id": "gpt-6.1-sol",
-      "name": "GPT-6.1 Sol",
+      "id": "gpt-6.2-sol",
+      "name": "GPT-6.2 Sol",
       "tier": "Balanced",
       "input": 2000000,
       "cached": 100000,
       "output": 10000000,
       "contextTokens": 1050000,
       "outputTokens": 128000,
-      "source": "https://developers.openai.com/api/docs/models/gpt-6.1-sol.md",
+      "source": "https://developers.openai.com/api/docs/models/gpt-6.2-sol.md",
       "reasoning": "low"
     },
     {
-      "id": "gpt-6-astra",
-      "name": "GPT-6 Astra",
+      "id": "gpt-6.2-astra",
+      "name": "GPT-6.2 Astra",
       "tier": "Deep",
-      "input": 10000000,
-      "cached": 1000000,
-      "output": 50000000,
+      "input": 8000000,
+      "cached": 400000,
+      "output": 40000000,
       "contextTokens": 1050000,
       "outputTokens": 128000,
-      "source": "https://developers.openai.com/api/docs/models/gpt-6-astra.md",
+      "source": "https://developers.openai.com/api/docs/models/gpt-6.2-astra.md",
       "reasoning": "low"
     }
   ],
   "sourceHashes": {
-    "https://developers.openai.com/api/docs/models.md": "20c47a1ecc7d475474667c6bf55a1093d524629db806f59f821c1d3206b12332",
-    "https://developers.openai.com/api/docs/pricing.md": "93d302a9b7a384877533bc3ab5bb48eebf4b56bd6add0f194095054b2a13f952",
-    "https://developers.openai.com/api/reference/overview.md": "a046d08b9f57f2d8e5e540c2a9ae201b93a6c64647679e81bea0eabe787f58b7",
-    "https://developers.openai.com/api/reference/resources/models/methods/list.md": "eab68faf1e12d93d77b96881a0f51f7ecfd85a4da94bb48fba64925a6c82a157",
-    "https://developers.openai.com/api/docs/guides/prompt-caching.md": "2da1ea8a2404b306773bee6aa1027ca36c9d0bc2f8a4ea3df83166d3da9d7e6c",
-    "https://developers.openai.com/api/docs/models/gpt-6.1-terra.md": "cd34faa8904d85961ab5fe270f079b8be45a9c876af6c809b38b2c069f687a7a",
-    "https://developers.openai.com/api/docs/models/gpt-6.1-sol.md": "374c323fe934443bd6d5f90f3e16dc4fb06552c83bde433dee60b0a84d9bd388",
-    "https://developers.openai.com/api/docs/models/gpt-6-astra.md": "b7c19b3bb89e87a392a0f3f8b732c5e7c9f0bf558cbe3022c491575a947fcef8"
+    "https://developers.openai.com/api/docs/models.md": "17ccdfe4098e838f457e2b6b104dd7ba934382220db78f7e11946d90b1af0687",
+    "https://developers.openai.com/api/docs/pricing.md": "88f7825ffddb006fefea4d3838831bd3deaed6f72df6914ad79aefa021d51355",
+    "https://developers.openai.com/api/reference/overview.md": "a7d89ced9f4c13de148756e9fece862221067fd83ea0eb57a8a5e24e5358e318",
+    "https://developers.openai.com/api/reference/resources/models/methods/list.md": "b5e088c1c0f01400268144c559f1a985a2fc99b391452e83f6fa0d0899f9c44d",
+    "https://developers.openai.com/api/docs/guides/prompt-caching.md": "41fd5ad72dc74045ffb0fbe33e8213a879cc018a473b1e022b7be8fa04057625",
+    "https://developers.openai.com/api/docs/models/gpt-6.1-terra.md": "b7db94c4ba947e82ef8cf72df3e4fec7212f085bce310557085f048b7314bce6",
+    "https://developers.openai.com/api/docs/models/gpt-6.2-sol.md": "551d09dbb7e6f64a1af314446b8d5a72ab9bf66daa4407060007d11ce54acf43",
+    "https://developers.openai.com/api/docs/models/gpt-6.2-astra.md": "b12e61471fed60c843626fdee3dea09c86babae84ea779a5f5eb9193cb62720f"
   }
 }

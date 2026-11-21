@@ -620,8 +620,8 @@ def health(port):
     with urllib.request.urlopen("http://127.0.0.1:" + str(port) + "/api/v1/health", timeout=5) as response:
         result = json.load(response)
     capabilities = result.get("capabilities", {})
-    if any(capabilities.get(name) is not False for name in ("aiConnections", "financialExecution", "walletSigner")):
-        raise RuntimeError("held live capabilities enabled")
+    if capabilities.get("aiConnections") is not True or any(capabilities.get(name) is not False for name in ("financialExecution", "walletSigner")):
+        raise RuntimeError("unexpected live capabilities state")
     return result
 
 

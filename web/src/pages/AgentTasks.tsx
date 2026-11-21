@@ -1307,7 +1307,8 @@ function TaskComposer({
     !!entry?.selectable &&
     !interactiveOnly;
   const local = policy?.provider === "local";
-  const deadline = draft.deadline ?? (local ? 60 : 3);
+  const deadline =
+    draft.deadline ?? (local || (account && !account.testOnly) ? 60 : 3);
   const ceiling = policy
     ? Math.ceil(
         (draft.input * policy.inputMicrousdPerMillion +
@@ -1839,7 +1840,7 @@ function TaskComposer({
                           type="number"
                           required
                           min={1}
-                          max={local ? 60 : 5}
+                          max={120}
                           value={deadline}
                           onChange={(e) =>
                             edit(() =>

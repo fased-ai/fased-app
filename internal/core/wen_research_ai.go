@@ -433,7 +433,7 @@ func (s *Store) PrepareWENResearchAI(ctx context.Context, c WENResearchAIPrepare
 		t.RootSHA256 = researchHash(t.Root)
 	}
 	l := c.Limits
-	if l.MaxInputTokens < 1000 || l.MaxInputTokens > 32000 || l.MaxOutputTokens < 128 || l.MaxOutputTokens > 1024 || l.DeadlineSeconds < 1 || l.DeadlineSeconds > 5 || l.BudgetMicrousd < 1 || l.BudgetMicrousd > 1000000 {
+	if l.MaxInputTokens < 1000 || l.MaxInputTokens > 32000 || l.MaxOutputTokens < 128 || l.MaxOutputTokens > 1024 || l.DeadlineSeconds < 1 || l.DeadlineSeconds > 120 || l.BudgetMicrousd < 1 || l.BudgetMicrousd > 1000000 {
 		return out, errors.New("invalid explicit request limits")
 	}
 	q := AgentAIRequest{ID: child, ResearchTurnID: id, ResearchStep: 1, ProfileID: t.Profile, SessionID: t.SessionID, Prompt: c.Prompt, Model: c.Model, ConnectionRef: c.ConnectionRef, Context: researchContext(t), Limits: l, State: "prepared", CreatedAt: now, Cards: []AIActionCard{}}

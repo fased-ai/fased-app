@@ -50,7 +50,7 @@ func personaDigest(p AgentProfile) string {
 	return hex.EncodeToString(h[:])
 }
 func validAILimits(l AILimits) bool {
-	return l.MaxInputTokens >= 1000 && l.MaxInputTokens <= 32000 && l.MaxOutputTokens >= 128 && l.MaxOutputTokens <= 1024 && l.DeadlineSeconds >= 1 && l.DeadlineSeconds <= 5 && l.BudgetMicrousd >= 1 && l.BudgetMicrousd <= 10000000
+	return l.MaxInputTokens >= 1000 && l.MaxInputTokens <= 32000 && l.MaxOutputTokens >= 128 && l.MaxOutputTokens <= 1024 && l.DeadlineSeconds >= 1 && l.DeadlineSeconds <= 120 && l.BudgetMicrousd >= 1 && l.BudgetMicrousd <= 10000000
 }
 func validChatPermission(p ChatPermission, stored ...bool) bool {
 	_, current := currentProviderModel(p.Model)

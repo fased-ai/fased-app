@@ -1,9 +1,8 @@
 package core
 
-// This release hold is not configurable through environment, CLI, IPC or UI.
-// Removing it requires separate live acceptance. Tests use disposable credentials
-// and a test-only HTTPS dialer; ordinary constructors always keep it closed.
-const providerActivationEnabled = false
+// Live provider transport and admission are enabled for reviewed endpoints and
+// verified credentials. Wallet signing, financial execution and research loops remain closed.
+const providerActivationEnabled = true
 
 func (s *Store) aiExecutionAvailable(fixture bool) bool {
 	s.provider.mu.Lock()

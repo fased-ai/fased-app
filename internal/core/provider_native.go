@@ -849,6 +849,9 @@ func newerProviderRecord(m currentModel, r discoveredModel, all []discoveredMode
 		}
 		return false
 	case "xai":
+		if r.ID == "grok-4.20" {
+			return false
+		}
 		a, b := strings.TrimPrefix(r.ID, "grok-"), strings.TrimPrefix(m.ID, "grok-")
 		// Only stable numeric releases supersede; preview/vision variants do not.
 		return newerProviderGeneration("gpt-"+a+"-grok", "gpt-"+b+"-grok")

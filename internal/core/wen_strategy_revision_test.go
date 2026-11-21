@@ -105,11 +105,7 @@ func TestWENStrategyRevisionSourceBytesAtomicSaveAndRestart(t *testing.T) {
 	if err := s.Close(); err != nil {
 		t.Fatal(err)
 	}
-	n, err := OpenStore(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer n.Close()
+	n := reopenFixtureStore(t, dir)
 	l, err := n.WENResearch(t.Context(), c.Profile)
 	if err != nil || l.Versions[0] != review.Parent || l.Versions[1] != result.Library.Versions[1] {
 		t.Fatal("restart lineage", err)

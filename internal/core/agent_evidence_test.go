@@ -222,11 +222,7 @@ func TestAgentEvidenceReadOnlyFreshnessAndRestart(t *testing.T) {
 	if err = s.Close(); err != nil {
 		t.Fatal(err)
 	}
-	n, err := OpenStore(s.dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer n.Close()
+	n := reopenFixtureStore(t, s.dir)
 	n.now = clock
 	got, err := n.AgentEvidence(t.Context(), v.ProfileID, "headline", v.NewsFetches[0].ID, v.NewsFetches[0].Items[0].ID)
 	if err != nil || got.SHA256 != headline.SHA256 || got.Freshness != "disabled" || calls.Load() != 1 {

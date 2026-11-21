@@ -328,11 +328,7 @@ func TestAgentAIEvidenceRestartProviderDraftAndHolds(t *testing.T) {
 			if err := s.Close(); err != nil {
 				t.Fatal(err)
 			}
-			n, err := OpenStore(s.dir)
-			if err != nil {
-				t.Fatal(err)
-			}
-			defer n.Close()
+			n := reopenFixtureStore(t, s.dir)
 			n.now = func() time.Time { return now }
 			profile := v.Profiles[0]
 			for _, p := range v.Profiles {

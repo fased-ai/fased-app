@@ -151,7 +151,7 @@ func (s *Store) providerRuntimeTransport() http.RoundTripper {
 	if t := s.pilotTransport(""); t != nil {
 		return t
 	}
-	return newOpenAITransport()
+	return nativeProviderRouter{}
 }
 func pilotStandaloneOptionsAllowed(fixture, sessionFixture bool, publicOrigin string, custodyConfig []string) bool {
 	return !fixture && !sessionFixture && publicOrigin == "" && (len(custodyConfig) == 0 || len(custodyConfig) == 1 && custodyConfig[0] == "")

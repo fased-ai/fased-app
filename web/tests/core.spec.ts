@@ -450,12 +450,8 @@ test("reviewed recurring tasks preserve named zones bounds CLI results pause and
   const other = await privateCLI(["agents", "--profile", "news-researcher"]);
   expect(other.tasks).toHaveLength(0);
   const health = await (await page.request.get(url + "/api/v1/health")).json();
-  for (const key of [
-    "aiConnections",
-    "financialExecution",
-    "walletSigner",
-    "updater",
-  ])
+  expect(health.capabilities.aiConnections).toBe(true);
+  for (const key of ["financialExecution", "walletSigner", "updater"])
     expect(health.capabilities[key]).toBe(false);
   if (isMobile)
     expect(
@@ -625,12 +621,8 @@ test("existing pages localize controls and keep owner drafts records and Meteora
   expect(await privateCLI(["agents"])).toEqual(before);
   expect(external).toEqual([]);
   const health = await (await page.request.get(url + "/api/v1/health")).json();
-  for (const key of [
-    "aiConnections",
-    "financialExecution",
-    "walletSigner",
-    "updater",
-  ])
+  expect(health.capabilities.aiConnections).toBe(true);
+  for (const key of ["financialExecution", "walletSigner", "updater"])
     expect(health.capabilities[key]).toBe(false);
   if (!isMobile)
     expect((await page.locator(".shell-header").boundingBox())!.height).toBe(
@@ -822,12 +814,8 @@ test("Meteora shell preserves drafts and records through navigation theme langua
       50,
     );
   const health = await (await page.request.get(url + "/api/v1/health")).json();
-  for (const key of [
-    "aiConnections",
-    "financialExecution",
-    "walletSigner",
-    "updater",
-  ])
+  expect(health.capabilities.aiConnections).toBe(true);
+  for (const key of ["financialExecution", "walletSigner", "updater"])
     expect(health.capabilities[key]).toBe(false);
   expect(external).toEqual([]);
 });
@@ -1017,7 +1005,7 @@ test.describe("calendar reminders", () => {
       state: "completed",
     });
     expect(v.runs).toHaveLength(1);
-    expect(v.providerCallsEnabled).toBe(false);
+    expect(v.providerCallsEnabled).toBe(true);
     expect(v.financialExecution).toBe(false);
     const foreign = await privateCLI([
       "agents",
@@ -1207,7 +1195,7 @@ test("compact Tasks reviews without writes and preserves bounded runs across UI 
   expect(foreign.tasks).toHaveLength(0);
   expect(foreign.runs).toHaveLength(0);
   expect(v.tasks[0].id).toBe(id);
-  expect(v.providerCallsEnabled).toBe(false);
+  expect(v.providerCallsEnabled).toBe(true);
   expect(v.financialExecution).toBe(false);
   expect(external).toEqual([]);
   expect(
@@ -1767,7 +1755,7 @@ async function fixtureProviderSelection(
       m.recommended && m.provider === provider,
   );
   expect(model).toBeTruthy();
-  expect(account.liveCallsEnabled).toBe(false);
+  expect(account.testOnly).toBe(true);
   return { provider, model: model.id, accountRef: account.ref };
 }
 
@@ -2452,7 +2440,7 @@ test("reviewed memory restoration shares inert UI CLI drafts, expiry, current-on
   await expect(card(original.id).locator(":scope > p")).toHaveText(
     "Current owner preference",
   );
-  expect(v.providerCallsEnabled).toBe(false);
+  expect(v.providerCallsEnabled).toBe(true);
   expect(v.financialExecution).toBe(false);
   expect(v.tasks).toHaveLength(0);
   expect(v.runs).toHaveLength(0);
@@ -3590,7 +3578,7 @@ test("reminder task draft shares inert inspection edited review and bounded crea
   for (const field of ["tasks", "runs", "notices", "aiRequests"])
     expect(reopened[field]).toEqual(v[field]);
   expect(reopened.aiRequests).toHaveLength(0);
-  expect(reopened.providerCallsEnabled).toBe(false);
+  expect(reopened.providerCallsEnabled).toBe(true);
   expect(reopened.financialExecution).toBe(false);
   await revealControl(page, page.getByLabel("Agent", { exact: true }), "");
   await page
@@ -4145,7 +4133,7 @@ test("joined agent workspace preserves news chat reminder run memory and reviewe
     "xai",
   );
   expect(restarted.aiFixtureAvailable).toBe(false);
-  expect(restarted.providerCallsEnabled).toBe(false);
+  expect(restarted.providerCallsEnabled).toBe(true);
   expect(restarted.financialExecution).toBe(false);
   for (const query of [
     prompt.toUpperCase(),
@@ -4719,12 +4707,8 @@ test("claim, UI/CLI setup, restart and logout preserve one Local instance", asyn
     location: "local",
     transport: "loopback",
   });
-  for (const key of [
-    "aiConnections",
-    "walletSigner",
-    "financialExecution",
-    "updater",
-  ])
+  expect(unchangedHealth.capabilities.aiConnections).toBe(true);
+  for (const key of ["walletSigner", "financialExecution", "updater"])
     expect(unchangedHealth.capabilities[key]).toBe(false);
   const duplicate = await exec(binary, [
     "serve",
@@ -5841,7 +5825,7 @@ test("local agents share UI and CLI records, isolate profiles and survive core r
   expect(view.runs).toHaveLength(1);
   expect(view.bots[0].spentCents).toBe(100);
   expect(view.financialExecution).toBe(false);
-  expect(view.providerCallsEnabled).toBe(false);
+  expect(view.providerCallsEnabled).toBe(true);
   const other = await privateCLI(["agents", "--profile", "news-researcher"]);
   expect(other.messages).toHaveLength(0);
   expect(other.memories).toHaveLength(0);
@@ -6087,7 +6071,7 @@ test("bounded news inputs retain provenance across UI CLI and restart, hold depe
     "completed",
   ]);
   expect(v.newsFetches[0].bodySha256).toBe(first.bodySha256);
-  expect(v.providerCallsEnabled).toBe(false);
+  expect(v.providerCallsEnabled).toBe(true);
   expect(v.financialExecution).toBe(false);
   expect(
     await page.evaluate(
@@ -6257,7 +6241,7 @@ test("OpenAI test connection shares encrypted storage, bound consent and restart
   await expect(panel.getByRole("status")).toHaveText("No connection saved");
   agents = await privateCLI(["agents"]);
   expect(agents.aiRequests[0].state).toBe("completed");
-  expect(agents.providerCallsEnabled).toBe(false);
+  expect(agents.providerCallsEnabled).toBe(true);
   expect(output).not.toContain(key);
   await page.screenshot({
     path: `.evidence/p5-openai-connection/${test.info().project.name}.png`,
@@ -6413,7 +6397,7 @@ test("optional provider fixture requires scoped disclosure and budgets, preserve
       ]);
       expect(other.sessions).toHaveLength(0);
       expect(other.aiRequests).toHaveLength(0);
-      expect(hit.providerCallsEnabled).toBe(false);
+      expect(hit.providerCallsEnabled).toBe(true);
     }
   };
   await checkSearch();
@@ -6452,7 +6436,7 @@ test("optional provider fixture requires scoped disclosure and budgets, preserve
     profileId: saved.profileId,
     name: profileName,
     provider: "openai",
-    model: "gpt-6.1-sol",
+    model: "gpt-6.2-sol",
   });
   await page.reload();
   await revealControl(page, page.getByLabel("Provider", { exact: true }), "");
@@ -6461,7 +6445,7 @@ test("optional provider fixture requires scoped disclosure and budgets, preserve
   );
   await revealControl(page, page.getByLabel("Model", { exact: true }), "");
   await expect(page.getByLabel("Model", { exact: true })).toHaveValue(
-    "gpt-6.1-sol",
+    "gpt-6.2-sol",
   );
   await page.getByRole("button", { name: "Save agent", exact: true }).click();
   await expect
@@ -6895,7 +6879,7 @@ test("OpenAI model admission binds token and tariff evidence across UI CLI tasks
   expect(view.aiRequests[0].admission).toEqual(manual.admission);
   expect(view.aiRequests[0].policy).toEqual(manual.policy);
   expect((await privateCLI(["ai-connection"])).locked).toBe(true);
-  expect(view.providerCallsEnabled).toBe(false);
+  expect(view.providerCallsEnabled).toBe(true);
   expect(view.financialExecution).toBe(false);
   await page.goto(url + "/#agents/chat");
   await revealControl(
@@ -6956,7 +6940,7 @@ test("WEN paper journey shares UI and CLI review, cancel and restart receipts wi
     page.getByRole("region", { name: "WEN paper journey" }),
   ).toHaveCount(0);
   const ordinary = await privateCLI(["agents"]);
-  expect(ordinary.providerCallsEnabled).toBe(false);
+  expect(ordinary.providerCallsEnabled).toBe(true);
   expect(ordinary.financialExecution).toBe(false);
   const listen = new URL(url).host;
   await stop();
@@ -7589,7 +7573,7 @@ test("chat reminder drafts require shared UI and CLI review before scheduling an
   expect(v.notices).toHaveLength(2);
   expect(v.aiRequests).toHaveLength(2);
   expect(v.aiFixtureAvailable).toBe(false);
-  expect(v.providerCallsEnabled).toBe(false);
+  expect(v.providerCallsEnabled).toBe(true);
   expect(v.financialExecution).toBe(false);
   expect(v.bots).toHaveLength(0);
   const other = await privateCLI(["agents", "--profile", "news-researcher"]);
@@ -7850,7 +7834,7 @@ test("chat memory requires explicit source-backed UI and CLI save and survives r
   expect(v.tasks).toHaveLength(0);
   expect(v.runs).toHaveLength(0);
   expect(v.notices).toHaveLength(0);
-  expect(v.providerCallsEnabled).toBe(false);
+  expect(v.providerCallsEnabled).toBe(true);
   expect(v.financialExecution).toBe(false);
   expect(v.aiFixtureAvailable).toBe(false);
   const other = await privateCLI(["agents", "--profile", "news-researcher"]);
@@ -8096,7 +8080,7 @@ test("task run chat shares historical UI and CLI capture, explicit fixture expla
     notices: v.notices,
     aiRequests: v.aiRequests,
   }).toEqual(retained);
-  expect(v.providerCallsEnabled).toBe(false);
+  expect(v.providerCallsEnabled).toBe(true);
   expect(v.financialExecution).toBe(false);
   const other = await privateCLI(["agents", "--profile", "news-researcher"]);
   expect(other.messages).toHaveLength(0);
@@ -8410,7 +8394,7 @@ test("news chat shares saved headline UI and CLI capture, reviewed memory, expli
     runs: v.runs,
     notices: v.notices,
   }).toEqual(disabled);
-  expect(v.providerCallsEnabled).toBe(false);
+  expect(v.providerCallsEnabled).toBe(true);
   expect(v.financialExecution).toBe(false);
   const other = await privateCLI(["agents", "--profile", "news-researcher"]);
   expect(other.messages).toHaveLength(0);
@@ -8714,7 +8698,7 @@ test("profile memory recall shares read-only UI and CLI search, source inspectio
   await expect(inspection).toContainText(answer.answer);
   expect((await recall("", note.id)).source).toEqual(source);
   expect((await read()).aiRequests).toEqual(beforeRestart.aiRequests);
-  expect((await read()).providerCallsEnabled).toBe(false);
+  expect((await read()).providerCallsEnabled).toBe(true);
   expect((await read()).financialExecution).toBe(false);
   await page.screenshot({
     path: `.evidence/memory-recall/${isMobile ? "mobile" : "desktop"}.png`,
@@ -9102,7 +9086,7 @@ test("manual AI memory selection shares exact UI/CLI disclosure, consent and res
     .getByRole("button", { name: "Selection conversation", exact: true })
     .click();
   expect((await read()).aiRequests).toEqual(beforeRestart);
-  expect((await read()).providerCallsEnabled).toBe(false);
+  expect((await read()).providerCallsEnabled).toBe(true);
   expect((await read()).financialExecution).toBe(false);
   await expect(
     review.getByRole("combobox", {
@@ -9659,7 +9643,7 @@ test("saved AI request draft shares editable UI/CLI settings, fresh consent and 
       exact: true,
     }),
   ).toBeDisabled();
-  expect((await read()).providerCallsEnabled).toBe(false);
+  expect((await read()).providerCallsEnabled).toBe(true);
   expect((await read()).financialExecution).toBe(false);
   await page.screenshot({
     path: resolve(
@@ -10072,7 +10056,7 @@ test("local agent evidence inspection shares UI/CLI sources, inert reads and res
   expect(v.aiRequests).toEqual([]);
   expect(v.newsFetches).toHaveLength(1);
   expect(v.runs).toHaveLength(1);
-  expect(v.providerCallsEnabled).toBe(false);
+  expect(v.providerCallsEnabled).toBe(true);
   expect(v.financialExecution).toBe(false);
   await page.screenshot({
     path: resolve(
@@ -10423,7 +10407,7 @@ test("reviewed AI evidence shares UI/CLI disclosure, explicit consent and scoped
     name: "Trading Analyst",
     text: after.profiles.find((p: any) => p.id === profileId).persona,
     provider: "openai",
-    model: "gpt-6.1-sol",
+    model: "gpt-6.2-sol",
   });
   await stop();
   await start();
@@ -11501,12 +11485,8 @@ test("installation connection rejects Remote tunnels without changing Local data
       path: `.evidence/installation-local-${isMobile ? "mobile" : "desktop"}.png`,
       fullPage: true,
     });
-    for (const name of [
-      "aiConnections",
-      "financialExecution",
-      "walletSigner",
-      "updater",
-    ])
+    expect(health.capabilities.aiConnections).toBe(true);
+    for (const name of ["financialExecution", "walletSigner", "updater"])
       expect(health.capabilities[name]).toBe(false);
   } finally {
     if (remote.exitCode === null) {
@@ -12507,11 +12487,11 @@ test("provider editor follows core credential admission without enabling live ca
   });
   expect(status.ok()).toBe(true);
   const connection = await status.json();
-  expect(connection.liveCallsEnabled).toBe(false);
-  expect(connection.credentialModes).toEqual(["test"]);
+  expect(connection.liveCallsEnabled).toBe(true);
+  expect(connection.credentialModes).toContain("openai");
   let saved: Record<string, unknown> | undefined;
   // UI-only capability injection. POST is intercepted and never reaches a vault,
-  // model endpoint or live admission path. Ordinary server remains closed.
+  // model endpoint or live admission path.
   await page.route("**/api/v1/ai/connection", async (route) => {
     if (route.request().method() === "POST") {
       saved = route.request().postDataJSON();
@@ -12519,10 +12499,12 @@ test("provider editor follows core credential admission without enabling live ca
         json: {
           credentialMode: "openai",
           credentialModes: ["openai"],
+          osVaultAvailable: false,
+          osProtected: false,
           ref: "",
           model: "gpt-6.1-terra",
           locked: true,
-          liveCallsEnabled: false,
+          liveCallsEnabled: true,
         },
       });
       return;
@@ -12530,7 +12512,12 @@ test("provider editor follows core credential admission without enabling live ca
     // Reuse the immutable core status; refreshing the editor can cancel GETs.
     // Do not leave a second upstream fetch racing that UI cancellation.
     await route.fulfill({
-      json: { ...connection, credentialModes: ["openai"] },
+      json: {
+        ...connection,
+        credentialModes: ["openai"],
+        osVaultAvailable: false,
+        osProtected: false,
+      },
     });
   });
   await page.getByRole("button", { name: "Setup", exact: true }).click();
@@ -12557,11 +12544,7 @@ test("provider editor follows core credential admission without enabling live ca
   await page.reload();
   await expect(page).toHaveURL(/#providers$/);
   await expect(editor).toBeVisible();
-  await revealControl(
-    page,
-    editor.getByLabel("Vault passphrase", { exact: true }),
-    "",
-  );
+  await revealControl(page, editor.getByLabel("API key", { exact: true }), "");
   await expect(editor.getByLabel("API key", { exact: true })).toBeVisible();
   await expect(editor.getByRole("status")).toContainText("No connection saved");
 });
@@ -12612,7 +12595,7 @@ test("multiple accounts keep scheduled agent selection and refuse a stale provid
     action: "profile-update",
     name: "Analyst",
     provider: "openai",
-    model: "gpt-6.1-sol",
+    model: "gpt-6.2-sol",
     accountRef: b.ref,
   });
   await command({ action: "session-create", name: "Account schedule" });
@@ -12650,7 +12633,7 @@ test("multiple accounts keep scheduled agent selection and refuse a stale provid
     .click();
   await expect.poll(async () => (await read()).tasks.length).toBe(1);
   expect((await read()).tasks[0].ai.connectionRef).toBe(b.ref);
-  expect((await read()).tasks[0].ai.model).toBe("gpt-6.1-sol");
+  expect((await read()).tasks[0].ai.model).toBe("gpt-6.2-sol");
   const retainedTask = (await read()).tasks[0];
   const refreshed = await privateCLI(["ai-connection", "--request-stdin"], {
     action: "models-refresh",
@@ -12661,7 +12644,7 @@ test("multiple accounts keep scheduled agent selection and refuse a stale provid
     refreshed.catalog.models
       .filter((m: any) => m.selectable)
       .map((m: any) => m.id),
-  ).toEqual(["gpt-6.1-terra", "gpt-6.1-sol", "gpt-6-astra"]);
+  ).toEqual(["gpt-6.1-terra", "gpt-6.2-sol", "gpt-6.2-astra"]);
   expect((await read()).tasks[0]).toEqual(retainedTask);
   expect((await read()).tasks[0].state).toBe("review");
   await page.goto(url + "/#agents/settings");
@@ -13812,7 +13795,7 @@ test("shared Add Provider binds native accounts and latest models across Chat an
             "claude-haiku-5-5",
             "claude-sonnet-5-5",
             "claude-opus-5-5",
-            "claude-fable-5-1",
+            "claude-fable-5-2",
           ]
         : ["grok-4.7"],
     );
@@ -17476,4 +17459,230 @@ test("ordinary mobile Providers scrolls all brands and its saved lower account w
   expect((await privateCLI(["agents"])).aiRequests).toHaveLength(0);
   expect(writes).toEqual([]);
   expect(external).toEqual([]);
+});
+
+test("passwordless OS-protected providers and task access work without a vault passphrase", async ({
+  page,
+}) => {
+  await page.goto(url);
+  const claim = JSON.parse(
+    await readFile(join(dir, "claim-code.json"), "utf8"),
+  );
+  await openOwnerSetup(page, claim.code);
+  await page.getByLabel("Create owner password").fill(fixturePassword);
+  await page
+    .getByRole("button", { name: "Claim workspace", exact: true })
+    .click();
+  await expect(
+    page.getByRole("heading", { name: "Dashboard", exact: true }),
+  ).toBeVisible();
+  const token = await page.evaluate(() =>
+    sessionStorage.getItem("fased.core.session.v1"),
+  );
+  const baseConnection = await (
+    await page.request.get(url + "/api/v1/ai/connection", {
+      headers: { Authorization: `Bearer ${token}` },
+    })
+  ).json();
+
+  let savedAccount: Record<string, any> | undefined;
+  let signIn: Record<string, any> | undefined;
+  let accessReview: Record<string, any> | undefined;
+  let taskAccess: Record<string, any> | undefined;
+  const postedActions: Record<string, unknown>[] = [];
+  const makeAccount = (catalogState: string) => ({
+    ...baseConnection,
+    ref: "acct-os-1",
+    name: "OS Protected OpenAI",
+    provider: "openai",
+    authMethod: savedAccount?.authMethod ?? "api-key",
+    credentialMode: "openai",
+    credentialModes: ["openai", "openrouter", "local"],
+    osVaultAvailable: true,
+    osProtected: true,
+    locked: false,
+    testOnly: false,
+    liveCallsEnabled: true,
+    persistentTaskAccessAvailable: true,
+    model: "gpt-6.2-sol",
+    catalog: {
+      ...baseConnection.catalog,
+      state: catalogState,
+      models: [
+        {
+          id: "gpt-6.2-sol",
+          name: "GPT-6.2 Sol",
+          provider: "openai",
+          method: savedAccount?.authMethod ?? "api-key",
+          connectionRef: "acct-os-1",
+          recommended: true,
+          selectable: true,
+          availability: "ready",
+        },
+      ],
+    },
+    ...(taskAccess ? { taskAccess } : {}),
+  });
+  const rootPayload = () => ({
+    ...baseConnection,
+    ...(savedAccount ?? {}),
+    credentialModes: ["openai", "openrouter", "local"],
+    osVaultAvailable: true,
+    signInAvailable: true,
+    liveCallsEnabled: true,
+    persistentTaskAccessAvailable: true,
+    connections: savedAccount ? [savedAccount] : [],
+    ...(signIn ? { signIn } : {}),
+    ...(accessReview ? { accessReview } : {}),
+  });
+
+  await page.route("**/api/v1/agents**", async (route) => {
+    const res = await route.fetch();
+    const json = await res.json();
+    if (route.request().method() === "GET") {
+      json.tasks = [
+        ...(json.tasks ?? []),
+        {
+          id: "task-os-1",
+          name: "Passwordless scheduled summary",
+          state: "scheduled",
+          ai: {
+            authorized: true,
+            connectionRef: "acct-os-1",
+            digest: "digest-os-1",
+          },
+        },
+      ];
+    }
+    await route.fulfill({ response: res, json });
+  });
+  await page.route("**/api/v1/ai/connection", async (route) => {
+    if (route.request().method() === "GET") {
+      await route.fulfill({ json: rootPayload() });
+      return;
+    }
+    const body = route.request().postDataJSON() as Record<string, any>;
+    postedActions.push(body);
+    expect(body).not.toHaveProperty("passphrase");
+    const now = Math.floor(Date.now() / 1000);
+    if (body.action === "sign-in-start") {
+      signIn = {
+        id: "si-os-1",
+        provider: "openai",
+        state: "waiting",
+        url: "https://auth.openai.com/oauth/authorize?state=mock-os-1",
+        expiresAt: now + 300,
+        remote: false,
+      };
+    } else if (body.action === "sign-in-complete") {
+      signIn = undefined;
+      savedAccount = makeAccount("ready");
+      savedAccount.authMethod = "sign-in";
+    } else if (body.action === "add") {
+      savedAccount = makeAccount("missing");
+    } else if (body.action === "models-refresh") {
+      savedAccount = makeAccount("ready");
+    } else if (body.action === "task-access-review") {
+      accessReview = {
+        id: "allow-os-1",
+        connectionRef: "acct-os-1",
+        profileId: body.profileId || "trading-analyst",
+        model: "gpt-6.2-sol",
+        tasks: [{ id: "task-os-1", digest: "digest-os-1" }],
+        createdAt: now,
+        expiresAt: now + 3600,
+        maxRequests: 5,
+        budgetMicrousd: 100000,
+        usedRequests: 0,
+        allocatedMicrousd: 0,
+        continueOnSignOut: true,
+        continueAfterRestart: true,
+      };
+    } else if (body.action === "task-access-allow") {
+      taskAccess = accessReview;
+      accessReview = undefined;
+      if (savedAccount) savedAccount = { ...savedAccount, taskAccess };
+    } else if (body.action === "remove") {
+      savedAccount = undefined;
+      taskAccess = undefined;
+      accessReview = undefined;
+    }
+    await route.fulfill({ json: rootPayload() });
+  });
+
+  await openProviders(page);
+  const editor = page.getByRole("region", { name: "Providers", exact: true });
+  await expect(editor).toBeVisible();
+  await expect(editor.getByLabel("Vault passphrase")).toHaveCount(0);
+
+  // Sign-in CTA switches from primary Open sign-in to secondary once callback is ready.
+  await editor.getByRole("button", { name: "Sign in", exact: true }).click();
+  await editor
+    .getByRole("button", { name: "Continue with ChatGPT", exact: true })
+    .click();
+  const openSignIn = editor.getByRole("link", {
+    name: "Open sign-in",
+    exact: true,
+  });
+  await expect(openSignIn).toHaveClass(/\bprimary\b/);
+  await expect(
+    editor.getByRole("button", { name: "Finish", exact: true }),
+  ).toBeDisabled();
+  signIn = { ...signIn, state: "callback-ready" };
+  await page.evaluate(() =>
+    window.dispatchEvent(new Event("ai-connection-changed")),
+  );
+  await expect(openSignIn).toHaveClass(/\bsecondary\b/);
+  await expect(
+    editor.getByRole("button", { name: "Finish", exact: true }),
+  ).toBeEnabled();
+  await editor.getByRole("button", { name: "Finish", exact: true }).click();
+  await expect
+    .poll(() => postedActions.some((a) => a.action === "sign-in-complete"))
+    .toBe(true);
+
+  // Switch to adding a passwordless API key account with catalog refresh in Models header and 1-click Remove.
+  savedAccount = undefined;
+  await editor
+    .getByRole("button", { name: "Add provider", exact: true })
+    .click();
+  await expect(editor.getByLabel("Vault passphrase")).toHaveCount(0);
+  await editor
+    .getByLabel("API key", { exact: true })
+    .fill("disposable-os-vault-input-not-issued");
+  await editor.getByRole("button", { name: "Save", exact: true }).click();
+  await expect(editor.locator(".provider-models")).toBeVisible();
+  const refreshModels = editor
+    .locator(".provider-models header")
+    .getByRole("button", { name: "Refresh", exact: true });
+  await expect(refreshModels).toBeVisible();
+  await refreshModels.click();
+  await expect(refreshModels).toHaveCount(0);
+
+  // Background task access allowance works with zero Vault passphrase prompt.
+  await editor.getByText("Background access", { exact: true }).click();
+  await editor
+    .getByRole("checkbox", {
+      name: "Passwordless scheduled summary",
+      exact: true,
+    })
+    .check();
+  await editor
+    .getByRole("button", { name: "Review access", exact: true })
+    .click();
+  await expect(editor.getByLabel("Vault passphrase")).toHaveCount(0);
+  await editor
+    .getByRole("button", { name: "Allow task access", exact: true })
+    .click();
+  await expect
+    .poll(() => postedActions.some((a) => a.action === "task-access-allow"))
+    .toBe(true);
+
+  // 1-click Remove requires no passphrase.
+  await editor.getByText("Edit", { exact: true }).click();
+  await expect(editor.getByLabel("Vault passphrase")).toHaveCount(0);
+  await editor.getByRole("button", { name: "Remove", exact: true }).click();
+  await expect
+    .poll(() => postedActions.some((a) => a.action === "remove"))
+    .toBe(true);
 });

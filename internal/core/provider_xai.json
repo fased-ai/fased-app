@@ -1,8 +1,8 @@
 {
   "version": 1,
   "policy": "latest-only",
-  "reviewedAt": 1793059200,
-  "expiresAt": 1795651200,
+  "reviewedAt": 1795219200,
+  "expiresAt": 1797811200,
   "provider": "xai",
   "sources": {
     "models": "https://docs.x.ai/developers/models",
@@ -30,5 +30,16 @@
       "reasoning": "low",
       "billableOutputTokens": 500000
     }
-  ]
+  ],
+  "sourceHashes": {
+    "https://docs.x.ai/developers/models": "31d52e77653e42f0fd61034b6dfb7a824a0232bcbd28a8c36daab9282903f90c",
+    "https://docs.x.ai/developers/pricing": "634bacf2609157ccf9dc48b97abf8f2f3be4698a2ca19de1bb746608f59bf393",
+    "https://docs.x.ai/developers/rest-api-reference/inference/responses": "c3df54cc89e58d274ce0d5bedd348994d96e415654388898b1e1f7765e35087a",
+    "https://docs.x.ai/developers/rest-api-reference/inference/models": "fa8ebbc9bda427b4a9eabd3e3cdf8ede1546b664d2686105a80de1d72ba0513b",
+    "https://docs.x.ai/developers/advanced-api-usage/prompt-caching": "9b2a2b882b3a9d0c49b7bf3b2bfd1b9feef1cdca31a5ae5f949e733e556fe074",
+    "https://docs.x.ai/build/enterprise": "293a82de2c28c9067056f5f3ad9b47b017cfaf9ce78aa5c927fdcb1799fb9ec7",
+    "https://auth.x.ai/.well-known/openid-configuration": "7e99ae56bdf679119e536d31bf31d193b4aae95f1ef6f1349582e62b68ba5122",
+    "https://raw.githubusercontent.com/xai-org/grok-build/main/crates/codegen/xai-grok-pager/docs/user-guide/02-authentication.md": "4e2d87b5edded0aa676349ab44bf0a297669f64aeb635f3f3cd3e2e265931c63",
+    "https://docs.x.ai/developers/models/grok-4.7": "cf323be0bbc5ccf47c3b50b9f5f4cbcf481584f446cdc79d677d3beaf483c440"
+  }
 }

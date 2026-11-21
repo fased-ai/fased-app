@@ -47,11 +47,7 @@ func TestAgentRunChatCaptureRestartAndMemory(t *testing.T) {
 	if err := s.Close(); err != nil {
 		t.Fatal(err)
 	}
-	n, err := OpenStore(s.dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer n.Close()
+	n := reopenFixtureStore(t, s.dir)
 	v = fixtureProfileProvider(t, n, AgentCommand{Action: "profile-update", ProfileID: v.ProfileID, Name: "Trading Analyst", Provider: "xai"})
 	if len(v.Messages) != 1 || v.Messages[0] != m || len(v.AIRequests) != 0 {
 		t.Fatal("restart/provider change lost snapshot or called AI")

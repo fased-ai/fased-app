@@ -349,12 +349,8 @@ try {
     retained = await api(page, "setup");
   assert.equal(after.body.instanceId, before.body.instanceId);
   assert.deepEqual(retained.body, setup.body);
-  for (const capability of [
-    "aiConnections",
-    "walletSigner",
-    "financialExecution",
-    "updater",
-  ])
+  assert.equal(after.body.capabilities.aiConnections, true);
+  for (const capability of ["walletSigner", "financialExecution", "updater"])
     assert.equal(after.body.capabilities[capability], false);
   assert.equal(after.body.connection.ownerUid, 1000);
   result.checks.protectedTerminalRecovery = true;

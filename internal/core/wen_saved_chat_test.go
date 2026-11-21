@@ -88,11 +88,7 @@ func TestWENSavedChatExactScopeReadOnlyAndRestart(t *testing.T) {
 	if err := s.Close(); err != nil {
 		t.Fatal(err)
 	}
-	n, err := OpenStore(s.dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer n.Close()
+	n := reopenFixtureStore(t, s.dir)
 	view, err := n.Agents(t.Context(), "wen-operator", "")
 	if err != nil || view.Messages[0].Text != review.Text || view.FinancialExecution || view.ProviderCallsEnabled || len(view.Tasks) != 0 {
 		t.Fatal("restart", err)

@@ -18,7 +18,7 @@ func admitDisposableAPI(t *testing.T, s *Store, ref string) AIConnectionView {
 	t.Helper()
 	s.provider.apiCredentials = true
 	v, e := s.ChangeAIConnection(t.Context(), AIConnectionCommand{Action: "save", CredentialMode: "openai", Ref: ref, Key: disposableAPIInput, Passphrase: testVaultPassword})
-	if e != nil || v.CredentialMode != "openai" || v.TestOnly || v.Locked || v.LiveCallsEnabled {
+	if e != nil || v.CredentialMode != "openai" || v.TestOnly || v.Locked || !v.LiveCallsEnabled {
 		t.Fatal("API fixture save", e)
 	}
 	return v
@@ -75,6 +75,7 @@ func TestAPICredentialVaultLifecycleAndClosedRestart(t *testing.T) {
 		t.Fatal(e)
 	}
 	defer restarted.Close()
+	restarted.provider.apiCredentials = false
 	locked, e := restarted.AIConnection()
 	if e != nil || !locked.Locked || locked.TestOnly || locked.CredentialMode != "openai" || locked.Ref != rotated.Ref {
 		t.Fatal("restart state", e)

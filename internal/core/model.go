@@ -79,8 +79,14 @@ type Health struct {
 	Capabilities map[string]bool `json:"capabilities"`
 }
 
+func (s *Store) aiConnectionsCapability() bool {
+	s.provider.mu.Lock()
+	defer s.provider.mu.Unlock()
+	return providerActivationEnabled && s.provider.apiCredentials
+}
+
 func (s *Store) Health() Health {
-	return Health{Status: "ok", APIVersion: APIVersion, Version: Version, InstanceID: s.instanceID, Capabilities: map[string]bool{"persistentSetup": true, "ownerAuthentication": true, "walletSigner": false, "financialExecution": false, "aiConnections": false, "updater": false}}
+	return Health{Status: "ok", APIVersion: APIVersion, Version: Version, InstanceID: s.instanceID, Capabilities: map[string]bool{"persistentSetup": true, "ownerAuthentication": true, "walletSigner": false, "financialExecution": false, "aiConnections": s.aiConnectionsCapability(), "updater": false}}
 }
 
 type Endpoint struct {

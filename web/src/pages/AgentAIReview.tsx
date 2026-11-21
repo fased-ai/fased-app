@@ -199,10 +199,10 @@ function AgentAIForm({
     if (!p) return;
     budgetModel.current = identity;
     setLimitsIdentity(identity);
-    if (isUnmeteredPolicy(p)) {
-      if (p.provider === "local") setDeadline(60);
-      return;
+    if (p.provider === "local" || !selectedAccess?.testOnly) {
+      setDeadline((d) => (d <= 5 ? 60 : d));
     }
+    if (isUnmeteredPolicy(p)) return;
     const ceiling = Math.ceil(
       (input * p.inputMicrousdPerMillion +
         Math.max(output, p.billableOutputTokens || 0) *
@@ -1224,7 +1224,7 @@ function AgentAIForm({
                     <input
                       type="number"
                       min={1}
-                      max={selectedPolicy?.provider === "local" ? 120 : 5}
+                      max={120}
                       required
                       value={deadline}
                       onChange={(e) => setDeadline(e.target.valueAsNumber)}

@@ -644,7 +644,7 @@ class VMLifecycleTest(unittest.TestCase):
                 self.assertEqual(pathlib.Path(command[2]).stat().st_mode & 0o777,0o600)
                 return subprocess.CompletedProcess(command,0,json.dumps({'result':'PASS','action':'private-preflight','privateBrowserApproved':True}).encode(),b'')
             candidate={'packet':{'source':'a'*40,'productVersion':'0.2.0','release':{'sourceTree':'b'*40,'runId':'12','runAttempt':'1'}},'assets':[]}
-            health={'version':'0.2.0','capabilities':{'aiConnections':False,'financialExecution':False,'walletSigner':False}}
+            health={'version':'0.2.0','capabilities':{'aiConnections':True,'financialExecution':False,'walletSigner':False}}
             response=Mock();response.__enter__=Mock(return_value=io.BytesIO(json.dumps(health).encode()));response.__exit__=Mock(return_value=False)
             opener=Mock();opener.open.return_value=response
             fixture=SimpleNamespace(RemoteJourney=guest.RemoteJourney,browser_link=guest.browser_link,binding=guest.binding,write_private=guest.write_private,redacted=guest.redacted,terminal=terminal,PREPARATION_ANSWERS=guest.PREPARATION_ANSWERS,RemoteEnrollmentRetry=guest.RemoteEnrollmentRetry,private_tailnet_origin=guest.private_tailnet_origin,

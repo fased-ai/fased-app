@@ -137,7 +137,11 @@ func (s *Store) NewSession(ctx context.Context) (string, error) {
 		return "", err
 	}
 	_, err = s.db.ExecContext(ctx, "INSERT INTO sessions(token_hash,expires) VALUES(?,?)", tokenHash(token), s.now().Add(SessionLifetime).Unix())
-	return token, err
+	if err != nil {
+		return "", err
+	}
+	s.restoreOSProtectedConnections(ctx)
+	return token, nil
 }
 func (s *Store) Session(ctx context.Context, token string) bool {
 	if len(token) != 43 {

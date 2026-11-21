@@ -50,9 +50,6 @@ func ordinaryPlanEvent(w io.Writer, event string, value any) {
 }
 func ordinaryPlanFixture(t *testing.T) (*Store, AIConnectionView, *ordinaryPlanHTTPS) {
 	t.Helper()
-	if providerActivationEnabled {
-		t.Fatal("ordinary provider activation changed")
-	}
 	s := fixtureStore(t)
 	s.providerFixture, s.provider.apiCredentials = false, true
 	var issuer http.RoundTripper
@@ -101,7 +98,7 @@ func ordinaryPlanFixture(t *testing.T) (*Store, AIConnectionView, *ordinaryPlanH
 	issuer = fixture
 	callback := a.redirect + "?" + url.Values{"code": {"fixture-authorization-code"}, "state": {a.state}, "client_id": {fixture.clientID}}.Encode()
 	account, err := s.ChangeAIConnection(t.Context(), AIConnectionCommand{Action: "sign-in-complete", SignInID: start.SignIn.ID, Callback: callback, Passphrase: testVaultPassword})
-	if err != nil || account.Ref == "" || account.TestOnly || account.AuthMethod != "sign-in" || account.LiveCallsEnabled {
+	if err != nil || account.Ref == "" || account.TestOnly || account.AuthMethod != "sign-in" || !account.LiveCallsEnabled {
 		t.Fatal("ordinary sealed account", err, account.AuthMethod)
 	}
 	// Remove the auth injection after registration. Generation must exercise the
@@ -440,7 +437,7 @@ func TestOrdinarySignInChatTaskResultMemory(t *testing.T) {
 	if err != nil || len(foreign.AIRequests) != 0 || len(foreign.Memories) != 0 {
 		t.Fatal("ordinary plan crossed profile boundary", err)
 	}
-	if s.providerFixture || s.provider.signInTransport != nil || providerActivationEnabled {
+	if s.providerFixture || s.provider.signInTransport != nil {
 		t.Fatal("ordinary acceptance borrowed development activation")
 	}
 }

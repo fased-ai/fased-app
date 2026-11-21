@@ -1172,7 +1172,7 @@ test("Remote held status is read from the authenticated matching private browser
       instanceId: f.p.instance,
       connection: { location: "remote", transport: "private-https" },
       capabilities: {
-        aiConnections: false,
+        aiConnections: true,
         financialExecution: false,
         walletSigner: false,
       },

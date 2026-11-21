@@ -95,11 +95,7 @@ func TestReminderTaskDraftCreateRestartAndOriginalCounters(t *testing.T) {
 	if err = s.Close(); err != nil {
 		t.Fatal(err)
 	}
-	n, err := OpenStore(s.dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer n.Close()
+	n := reopenFixtureStore(t, s.dir)
 	n.now = func() time.Time { return now }
 	v = fixtureProfileProvider(t, n, AgentCommand{Action: "profile-update", ProfileID: v.ProfileID, Name: "Trading Analyst", Provider: "xai"})
 	if len(v.Tasks) != 2 || v.Tasks[0] != original || v.Tasks[1] != copy || len(v.Runs) != 1 || len(v.AIRequests) != 0 {

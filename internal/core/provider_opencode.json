@@ -2,12 +2,12 @@
   "version": 1,
   "policy": "latest-only",
   "provider": "opencode",
-  "reviewedAt": 1793145600,
-  "expiresAt": 1795737600,
+  "reviewedAt": 1795219200,
+  "expiresAt": 1797811200,
   "sources": {
-    "models": "https://opencode.ai/v2/docs/console/models/",
-    "pricing": "https://opencode.ai/v2/docs/console/models/",
-    "contract": "https://opencode.ai/v2/docs/console/models/"
+    "models": "https://opencode.ai/docs/console/models/",
+    "pricing": "https://opencode.ai/docs/console/models/",
+    "contract": "https://opencode.ai/docs/console/models/"
   },
   "models": [
     {
@@ -21,7 +21,7 @@
       "currency": "USD",
       "contextTokens": 1048576,
       "outputTokens": 8192,
-      "source": "https://opencode.ai/v2/docs/console/models/",
+      "source": "https://opencode.ai/docs/console/models/",
       "reasoning": "none"
     }
   ]

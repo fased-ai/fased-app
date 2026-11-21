@@ -376,7 +376,7 @@ func TestAgentAIInputBoundsExpiryMigrationAndCapacity(t *testing.T) {
 	s := fixtureStore(t)
 	v := aiPrepare(t, s)
 	q := v.AIRequests[0]
-	for _, l := range []AILimits{{24000, 1024, 3, 1}, {-1, 1024, 3, 30000}, {24000, 99999, 3, 30000}, {24000, 1024, 30, 30000}} {
+	for _, l := range []AILimits{{24000, 1024, 3, 1}, {-1, 1024, 3, 30000}, {24000, 99999, 3, 30000}, {24000, 1024, 121, 30000}} {
 		if _, e := s.ChangeAgents(t.Context(), AgentCommand{Action: "ai-prepare", Revision: v.Revision, ProfileID: v.ProfileID, ID: q.SessionID, Text: "bounded", Limits: &l}); e == nil {
 			t.Fatal("invalid budget accepted")
 		}
@@ -606,11 +606,7 @@ func TestAgentAISearchHistorySurvivesProviderChangesAndRestart(t *testing.T) {
 	if e := s.Close(); e != nil {
 		t.Fatal(e)
 	}
-	reopened, e := OpenStore(s.dir)
-	if e != nil {
-		t.Fatal(e)
-	}
-	defer reopened.Close()
+	reopened := reopenFixtureStore(t, s.dir)
 	check(reopened)
 }
 
@@ -930,11 +926,7 @@ func TestAgentAIMemorySelectionPrivacyRestartAndProvider(t *testing.T) {
 			if err := s.Close(); err != nil {
 				t.Fatal(err)
 			}
-			n, err := OpenStore(s.dir)
-			if err != nil {
-				t.Fatal(err)
-			}
-			defer n.Close()
+			n := reopenFixtureStore(t, s.dir)
 			v, _ = n.Agents(t.Context(), v.ProfileID, "")
 			if v.AIRequests[0].Context != q.Context || v.AIRequests[0].Digest != q.Digest || v.ProviderCallsEnabled {
 				t.Fatal("restart changed review or enabled AI")
@@ -952,7 +944,7 @@ func TestAgentAIMemorySelectionPrivacyRestartAndProvider(t *testing.T) {
 				r.Body = io.NopCloser(strings.NewReader(string(b)))
 				return (fixtureAITransport{}).RoundTrip(r)
 			})
-			if err = n.advanceAgentAI(t.Context(), rt, true); err != nil {
+			if err := n.advanceAgentAI(t.Context(), rt, true); err != nil {
 				t.Fatal(err)
 			}
 			v, _ = n.Agents(t.Context(), v.ProfileID, "")
@@ -1230,7 +1222,7 @@ func TestAgentAIRequestDraftIntegrityAndIsolation(t *testing.T) {
 		{"duplicate-key", func(d *agentDocument) {
 			d.AIRequests[0].Context = strings.Replace(d.AIRequests[0].Context, `"mode":"selected"`, `"mode":"none","mode":"selected"`, 1)
 		}, true},
-		{"limits", func(d *agentDocument) { d.AIRequests[0].Limits.DeadlineSeconds = 99 }, true},
+		{"limits", func(d *agentDocument) { d.AIRequests[0].Limits.DeadlineSeconds = 121 }, true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

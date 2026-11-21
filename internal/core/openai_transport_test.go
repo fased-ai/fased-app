@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"strings"
 	"testing"
+	"time"
 )
 
 // Only test binaries contain endpoint/CA injection. The actual request keeps
@@ -45,6 +46,13 @@ func (t testOpenAITransport) RoundTrip(r *http.Request) (*http.Response, error) 
 
 func TestOpenAIProductionTransportDisabled(t *testing.T) {
 	tr := newOpenAITransport()
+	if tr.enabled != providerActivationEnabled {
+		t.Fatal("transport activation mismatch")
+	}
+	if tr.wire.Proxy != nil || tr.wire.TLSClientConfig.MinVersion != tls.VersionTLS12 || !tr.wire.DisableKeepAlives || !tr.wire.DisableCompression || tr.wire.ResponseHeaderTimeout < 60*time.Second {
+		t.Fatal("unsafe transport defaults")
+	}
+	tr.enabled = false
 	tr.wire.DialContext = func(context.Context, string, string) (net.Conn, error) {
 		t.Fatal("disabled transport dialed")
 		return nil, nil
@@ -52,10 +60,7 @@ func TestOpenAIProductionTransportDisabled(t *testing.T) {
 	req, _ := http.NewRequest("POST", "https://api.openai.com/v1/responses", strings.NewReader(`{}`))
 	req.Header.Set("Authorization", "Bearer "+testAPIKey)
 	if _, err := tr.RoundTrip(req); err == nil {
-		t.Fatal("production dispatch enabled")
-	}
-	if tr.wire.Proxy != nil || tr.wire.TLSClientConfig.MinVersion != tls.VersionTLS12 || !tr.wire.DisableKeepAlives {
-		t.Fatal("unsafe transport defaults")
+		t.Fatal("disabled transport dispatched")
 	}
 }
 

@@ -53,7 +53,7 @@ func TestOpenAIPilotPreparationInertAndExclusive(t *testing.T) {
 		t.Fatal(e)
 	}
 	v, e := s.AIConnection()
-	if e != nil || v.Ref != "" || v.LiveCallsEnabled || v.PilotAvailable || v.PilotEnrollment || s.pilot.target != nil {
+	if e != nil || v.Ref != "" || v.PilotAvailable || v.PilotEnrollment || s.pilot.target != nil {
 		t.Fatal("prepared metadata acted as runtime configuration", e)
 	}
 	for _, name := range []string{"ai-credentials.json", "claim-code.json", "instance.lock"} {
@@ -146,7 +146,8 @@ func TestOpenAIPilotActivationSyntheticInputsOnly(t *testing.T) {
 		t.Fatal(e)
 	}
 	t.Cleanup(func() { _ = s.Close() })
-	s.now = func() time.Time { return time.Date(2026, 10, 27, 0, 0, 0, 0, time.UTC) }
+	reviewedAt := openAIModelPolicy().ReviewedAt
+	s.now = func() time.Time { return time.Unix(reviewedAt, 0).UTC() }
 	v := newsAdd(t, s, "trading-analyst")
 	v = agentApply(t, s, AgentCommand{Action: "news-fetch", ProfileID: v.ProfileID, ID: v.NewsSources[0].ID})
 	b := p.Target

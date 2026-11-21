@@ -292,7 +292,7 @@ export function AgentPlaybooks({ view: v }: { view: AgentView }) {
                 [
                   ["maxInputTokens", "Input token limit", 1000, 32000],
                   ["maxOutputTokens", "Output token limit", 128, 1024],
-                  ["deadlineSeconds", "Request deadline (seconds)", 1, 5],
+                  ["deadlineSeconds", "Request deadline (seconds)", 1, 120],
                   ["budgetMicrousd", "Fixture budget (micro USD)", 1, 1000000],
                 ] as const
               ).map(([key, label, min, max]) => (

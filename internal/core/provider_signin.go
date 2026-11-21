@@ -207,12 +207,12 @@ func (s *Store) changeProviderSignIn(ctx context.Context, c AIConnectionCommand)
 		s.provider.mu.Unlock()
 		return s.AIConnection()
 	case "sign-in-complete":
-		if c.Ref != "" || c.Provider != "" || c.Name != "" || c.Remote || !validPassword(c.Passphrase) {
+		if c.Ref != "" || c.Provider != "" || c.Name != "" || c.Remote || !s.validPassphraseOrOS(ctx, c.Passphrase) {
 			return AIConnectionView{}, errors.New("finish with the pending sign-in and vault passphrase")
 		}
 		return s.completeProviderSignIn(ctx, c)
 	case "sign-in-refresh", "sign-in-disconnect":
-		if c.SignInID != "" || c.Callback != "" || c.Provider != "" || c.Name != "" || c.Remote || !validConnectionRef(c.Ref) || !validPassword(c.Passphrase) {
+		if c.SignInID != "" || c.Callback != "" || c.Provider != "" || c.Name != "" || c.Remote || !validConnectionRef(c.Ref) || !s.validPassphraseOrOS(ctx, c.Passphrase) {
 			return AIConnectionView{}, errors.New("select the sign-in account and enter its vault passphrase")
 		}
 		return s.renewProviderSignIn(ctx, c)
@@ -439,7 +439,7 @@ func (s *Store) completeProviderSignIn(ctx context.Context, c AIConnectionComman
 		s.provider.mu.Unlock()
 		return AIConnectionView{}, ErrConflict
 	}
-	v, err := s.saveProviderSignInLocked(credential, c.Passphrase, a.ref, a.name, a.fixture, a.digest)
+	v, err := s.saveProviderSignInLocked(ctx, credential, c.Passphrase, a.ref, a.name, a.fixture, a.digest)
 	s.cancelProviderSignInLocked()
 	s.provider.mu.Unlock()
 	if err != nil {
@@ -451,15 +451,15 @@ func (s *Store) completeProviderSignIn(ctx context.Context, c AIConnectionComman
 	return s.refreshProviderModels(ctx, v.Ref, s.providerModelTransport(v.Ref))
 }
 
-func (s *Store) saveProviderSignInLocked(c providerSignInCredential, passphrase, ref, name string, fixture bool, expected [32]byte) (AIConnectionView, error) {
+func (s *Store) saveProviderSignInLocked(ctx context.Context, c providerSignInCredential, passphrase, ref, name string, fixture bool, expected [32]byte) (AIConnectionView, error) {
 	raw, _ := json.Marshal(c)
 	defer clear(raw)
 	if _, ok := parseProviderSignInCredential(raw); !ok {
 		return AIConnectionView{}, errors.New("invalid sign-in credential")
 	}
-	return s.persistSignInCredentialLocked(raw, passphrase, ref, name, "openai", "openai-signin", fixture, expected)
+	return s.persistSignInCredentialLocked(ctx, raw, passphrase, ref, name, "openai", "openai-signin", fixture, expected)
 }
-func (s *Store) persistSignInCredentialLocked(raw []byte, passphrase, ref, name, provider, mode string, fixture bool, expected [32]byte) (AIConnectionView, error) {
+func (s *Store) persistSignInCredentialLocked(ctx context.Context, raw []byte, passphrase, ref, name, provider, mode string, fixture bool, expected [32]byte) (AIConnectionView, error) {
 	col, err := s.readAIVaultCollection()
 	if errors.Is(err, os.ErrNotExist) {
 		col = aiVaultCollection{Version: 3}
@@ -478,7 +478,7 @@ func (s *Store) persistSignInCredentialLocked(raw []byte, passphrase, ref, name,
 		if sha256.Sum256(encoded) != expected {
 			return AIConnectionView{}, ErrConflict
 		}
-		plain, err := s.openAIVault(env, passphrase)
+		plain, err := s.openAIVaultWithContext(ctx, env, passphrase)
 		clear(plain)
 		if err != nil {
 			return AIConnectionView{}, err
@@ -497,7 +497,11 @@ func (s *Store) persistSignInCredentialLocked(raw []byte, passphrase, ref, name,
 	if _, err = rand.Read(env.Nonce); err != nil {
 		return AIConnectionView{}, err
 	}
-	key := passwordHash(passphrase, env.Salt)
+	key, osProtected, err := s.vaultSealKey(ctx, passphrase, env.Salt, true)
+	if err != nil {
+		return AIConnectionView{}, err
+	}
+	env.OSProtected = osProtected
 	block, _ := aes.NewCipher(key)
 	clear(key)
 	gcm, _ := cipher.NewGCM(block)
@@ -519,7 +523,14 @@ func (s *Store) persistSignInCredentialLocked(raw []byte, passphrase, ref, name,
 	state := s.credentialLocked(env.Ref)
 	encoded, _ := json.Marshal(env)
 	state.digest = sha256.Sum256(encoded)
-	state.ref, state.key, state.expires = env.Ref, append([]byte(nil), raw...), s.now().Add(15*time.Minute).Unix()
+	state.ref, state.key = env.Ref, append([]byte(nil), raw...)
+	state.osProtected = env.OSProtected
+	state.manuallyLocked = false
+	if env.OSProtected {
+		state.expires = 0
+	} else {
+		state.expires = s.now().Add(15 * time.Minute).Unix()
+	}
 	return s.aiConnectionLocked(env.Ref)
 }
 
@@ -537,7 +548,7 @@ func signInHTTP(ctx context.Context, wire http.RoundTripper, method, endpoint st
 	if wire == nil || !signInEndpoint(endpoint) {
 		return errors.New("untrusted sign-in endpoint")
 	}
-	ctx, cancel := context.WithTimeout(ctx, 8*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
 	var body io.Reader
 	if form != nil {
@@ -756,7 +767,7 @@ func (s *Store) renewProviderSignIn(ctx context.Context, c AIConnectionCommand) 
 		s.provider.mu.Unlock()
 		return AIConnectionView{}, errors.New("sign-in account unavailable")
 	}
-	plain, err := s.openAIVault(env, c.Passphrase)
+	plain, err := s.openAIVaultWithContext(ctx, env, c.Passphrase)
 	credential, ok := parseProviderSignInCredential(plain)
 	clear(plain)
 	if err != nil || !ok {
@@ -816,7 +827,7 @@ func (s *Store) renewProviderSignIn(ctx context.Context, c AIConnectionCommand) 
 		}
 		credential.AccessToken, credential.RefreshToken, credential.IDToken, credential.Scope = "", "", "", ""
 		credential.SignedOut, credential.ExpiresAt = true, 0
-		if _, err = s.saveProviderSignInLocked(credential, c.Passphrase, c.Ref, env.Name, env.TestOnly, expected); err != nil {
+		if _, err = s.saveProviderSignInLocked(ctx, credential, c.Passphrase, c.Ref, env.Name, env.TestOnly, expected); err != nil {
 			return AIConnectionView{}, err
 		}
 		s.clearAIConnectionLocked(c.Ref)
@@ -842,7 +853,7 @@ func (s *Store) renewProviderSignIn(ctx context.Context, c AIConnectionCommand) 
 		s.provider.mu.Unlock()
 		return AIConnectionView{}, ErrConflict
 	}
-	v, err := s.saveProviderSignInLocked(renewed, c.Passphrase, c.Ref, env.Name, env.TestOnly, expected)
+	v, err := s.saveProviderSignInLocked(ctx, renewed, c.Passphrase, c.Ref, env.Name, env.TestOnly, expected)
 	s.provider.mu.Unlock()
 	if err != nil {
 		return v, err

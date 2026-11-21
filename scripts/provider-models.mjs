@@ -133,6 +133,7 @@ function sourceAllowed(provider, source) {
       "kimi-code": ["https://www.kimi.com"],
       "ollama-cloud": ["https://docs.ollama.com", "https://ollama.com"],
       google: [
+        "https://aistudio.google.com",
         "https://ai.google.dev",
         "https://developers.google.com",
         "https://geminicli.com",
@@ -281,8 +282,10 @@ export async function checkProviders(
     try {
       response = await fetcher(retrievedFrom, {
         redirect: "error",
-        signal: AbortSignal.timeout(10000),
-        headers: { accept: "text/markdown" },
+        signal: AbortSignal.timeout(15000),
+        headers: {
+          accept: r.provider === "xai" ? "text/plain, */*" : "text/markdown",
+        },
       });
     } catch (error) {
       throw new Error(
@@ -319,7 +322,7 @@ export async function checkProviders(
           ? /gpt-\d+(?:\.\d+)?-(?:sol|terra|astra)\b/g
           : r.provider === "anthropic"
             ? /claude-(?:haiku|sonnet|opus|fable)-\d+-\d+\b/g
-            : /grok-\d+(?:\.\d+)?\b/g,
+            : /grok-\d+(?:\.\d+)?(?![\w.-])/g,
       ) ?? [],
     ),
   ];
@@ -332,6 +335,7 @@ export async function checkProviders(
     .map((m) => m.id);
   const generation = (id) => modelParts(r.provider, id).generation;
   const newerThan = (a, b) => {
+    if (r.provider === "xai" && a === "grok-4.20") return false;
     const x = generation(a),
       y = generation(b);
     return x[0] > y[0] || (x[0] === y[0] && (x[1] ?? 0) > (y[1] ?? 0));
@@ -435,7 +439,10 @@ export async function checkCompatibleModels(
     const response = await fetcher(url, {
       redirect: "error",
       signal: AbortSignal.timeout(10000),
-      headers: { accept: "text/html,text/markdown,application/json" },
+      headers: {
+        accept: "text/html,text/markdown,application/json",
+        "accept-language": "en-US,en;q=0.9",
+      },
     });
     assert.equal(response.status, 200, "Official source unavailable: " + url);
     const reader = response.body.getReader();

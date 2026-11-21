@@ -14,7 +14,7 @@ import (
 
 func TestOpenAIPilotOrdinaryHold(t *testing.T) {
 	s := fixtureStore(t)
-	if s.pilot.target != nil || providerActivationEnabled || newOpenAITransport().enabled {
+	if s.pilot.target != nil {
 		t.Fatal("ordinary runtime admitted a pilot")
 	}
 	v, _ := s.Agents(t.Context(), "", "")
@@ -28,7 +28,8 @@ func TestOpenAIPilotOrdinaryHold(t *testing.T) {
 func pilotStore(t *testing.T) (*Store, AIConnectionView, OpenAIPilotAllowance) {
 	t.Helper()
 	s := fixtureStore(t)
-	s.now = func() time.Time { return time.Date(2026, 10, 27, 0, 0, 0, 0, time.UTC) }
+	reviewedAt := openAIModelPolicy().ReviewedAt
+	s.now = func() time.Time { return time.Unix(reviewedAt, 0).UTC() }
 	connection := admitDisposableAPI(t, s, "")
 	s.pilot.target = &openAIPilotTarget{s.instanceID, connection.Ref, "trading-analyst", admittedOpenAIModel}
 	s.provider.apiCredentials, s.providerFixture = false, false
@@ -437,11 +438,7 @@ func TestOpenAIPilotJoinedChatTaskMemoryAndRestart(t *testing.T) {
 	if e = s.Close(); e != nil {
 		t.Fatal(e)
 	}
-	n, e := OpenStore(dir)
-	if e != nil {
-		t.Fatal(e)
-	}
-	defer n.Close()
+	n := reopenFixtureStore(t, dir)
 	if e = n.advanceAgentAI(t.Context(), aiTestTransport(func(*http.Request) (*http.Response, error) {
 		t.Error("restart replay")
 		return nil, io.ErrUnexpectedEOF

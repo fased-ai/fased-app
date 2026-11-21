@@ -25,14 +25,24 @@ type openAITransport struct {
 func newOpenAITransport() *openAITransport {
 	return &openAITransport{enabled: providerActivationEnabled, wire: &http.Transport{
 		Proxy:                  nil,
-		DialContext:            (&net.Dialer{Timeout: time.Second}).DialContext,
+		DialContext:            (&net.Dialer{Timeout: 10 * time.Second}).DialContext,
 		TLSClientConfig:        &tls.Config{MinVersion: tls.VersionTLS12},
-		TLSHandshakeTimeout:    time.Second,
-		ResponseHeaderTimeout:  5 * time.Second,
-		MaxResponseHeaderBytes: 8192,
+		TLSHandshakeTimeout:    10 * time.Second,
+		ResponseHeaderTimeout:  120 * time.Second,
+		MaxResponseHeaderBytes: 32768,
 		DisableKeepAlives:      true,
 		DisableCompression:     true,
 	}}
+}
+
+type nativeProviderRouter struct{}
+
+func (nativeProviderRouter) RoundTrip(r *http.Request) (*http.Response, error) {
+	provider, _ := r.Context().Value(providerNameContextKey{}).(string)
+	if provider == "" {
+		provider = "openai"
+	}
+	return newNativeProviderTransport(provider).RoundTrip(r)
 }
 
 func (t *openAITransport) RoundTrip(r *http.Request) (*http.Response, error) {
@@ -64,7 +74,13 @@ func (t *openAITransport) RoundTrip(r *http.Request) (*http.Response, error) {
 	if strings.ContainsAny(token, " \t\r\n") {
 		return nil, errors.New("provider authentication required")
 	}
-	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	var ctx context.Context
+	var cancel context.CancelFunc
+	if _, hasDeadline := r.Context().Deadline(); hasDeadline {
+		ctx, cancel = context.WithCancel(r.Context())
+	} else {
+		ctx, cancel = context.WithTimeout(r.Context(), 120*time.Second)
+	}
 	copy := r.Clone(ctx)
 	// Do not inherit cookies, routing headers, idempotency keys or ambient auth.
 	copy.Header = make(http.Header)

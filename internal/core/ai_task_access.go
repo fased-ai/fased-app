@@ -136,7 +136,7 @@ func (s *Store) changeTaskAccess(ctx context.Context, tx *sql.Tx, c AIConnection
 		}
 		state.taskAccess = nil
 		state.durableAccess = false
-		if state.expires <= s.now().Unix() {
+		if !state.osProtected && state.expires <= s.now().Unix() {
 			s.clearAIConnectionLocked(c.Ref)
 		}
 		return s.aiConnectionLocked(c.Ref)
@@ -159,7 +159,7 @@ func (s *Store) changeTaskAccess(ctx context.Context, tx *sql.Tx, c AIConnection
 		v.AccessReview = &a
 		return v, nil
 	}
-	if c.Action != "task-access-allow" || c.Allowance == nil || c.Key != "" || !validPassword(c.Passphrase) {
+	if c.Action != "task-access-allow" || c.Allowance == nil || c.Key != "" || !s.validPassphraseOrOSLocked(ctx, c.Passphrase) {
 		return v, errors.New("exact reviewed allowance and vault passphrase required")
 	}
 	if c.ContinueOnSignOut || c.ContinueAfterRestart {
@@ -184,7 +184,7 @@ func (s *Store) changeTaskAccess(ctx context.Context, tx *sql.Tx, c AIConnection
 	if e != nil {
 		return v, errors.New("credential vault unavailable")
 	}
-	plain, e := s.openAIVault(env, c.Passphrase)
+	plain, e := s.openAIVaultWithContext(ctx, env, c.Passphrase)
 	defer clear(plain)
 	if e != nil {
 		return v, errors.New("vault unlock failed")
@@ -290,11 +290,13 @@ func (s *Store) logoutAIConnections() {
 	s.cancelProviderSignInLocked()
 	for ref, state := range s.provider.accounts {
 		if !state.planPaused && !s.pilotTargetLocked(ref) && state.taskAccess != nil && state.taskAccess.ContinueOnSignOut && s.taskAccessCurrent(state.taskAccess, state) {
+			state.osProtected = false
 			state.expires = 0
 			state.discovery = modelDiscovery{}
 			state.modelRefresh++
 			continue
 		}
 		s.clearAIConnectionLocked(ref)
+		state.manuallyLocked = false
 	}
 }
