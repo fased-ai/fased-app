@@ -2,6 +2,7 @@ package core
 
 import (
 	"context"
+	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
 	"errors"
@@ -9,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -31,6 +33,10 @@ func TestPublicRPCAdmissionClosed(t *testing.T) {
 	rt := newPublicRPCTransport()
 	if rt.enabled != rpcActivationEnabled {
 		t.Fatal("unexpected transport activation state", rt.enabled)
+	}
+	wantCurves := []tls.CurveID{tls.X25519, tls.CurveP256, tls.CurveP384}
+	if rt.transport.TLSClientConfig == nil || rt.transport.TLSClientConfig.MinVersion != tls.VersionTLS12 || !slices.Equal(rt.transport.TLSClientConfig.CurvePreferences, wantCurves) {
+		t.Fatalf("unexpected TLS config: %+v", rt.transport.TLSClientConfig)
 	}
 	rt.enabled = false
 	rt.transport.DialContext = func(context.Context, string, string) (net.Conn, error) {
