@@ -137,20 +137,35 @@ func validateAIModelPolicy(q AgentAIRequest, now int64) error {
 	if q.Model == fixtureAIModel && q.Policy == nil {
 		return nil
 	}
-	p := openAIModelPolicy(q.Model)
-	if q.Policy != nil && q.Policy.WireVersion == "openai-signin-v1" {
-		selected := legacySignInModelPolicy(q.Model)
+	var p OpenAIModelPolicy
+	if q.Policy != nil && isDiscoveredPolicy(q.Policy) {
+		method := "api-key"
+		if planSignInPolicy(q.Policy) {
+			method = "sign-in"
+		} else if localPolicy(q.Policy) {
+			method = "local"
+		}
+		selected := dynamicModelPolicy(policyProvider(q.Policy), q.Model, method)
 		if selected == nil {
-			return errors.New("sign-in model policy unavailable")
+			return errors.New("discovered model policy unavailable")
 		}
 		p = *selected
-	}
-	if planSignInRequest(q) {
-		selected := chatModelPolicyForMethod(q.Model, "sign-in")
-		if selected == nil {
-			return errors.New("plan model policy unavailable")
+	} else {
+		p = openAIModelPolicy(q.Model)
+		if q.Policy != nil && q.Policy.WireVersion == "openai-signin-v1" {
+			selected := legacySignInModelPolicy(q.Model)
+			if selected == nil {
+				return errors.New("sign-in model policy unavailable")
+			}
+			p = *selected
 		}
-		p = *selected
+		if planSignInRequest(q) {
+			selected := chatModelPolicyForMethod(q.Model, "sign-in")
+			if selected == nil {
+				return errors.New("plan model policy unavailable")
+			}
+			p = *selected
+		}
 	}
 	if q.Policy == nil || *q.Policy != p || q.Model != p.Model || q.ConnectionRef == "" || now < p.ReviewedAt || q.Limits.MaxInputTokens+q.Limits.MaxOutputTokens > p.ContextTokens || q.Limits.MaxOutputTokens > p.OutputTokens {
 		return errors.New("model, token or tariff policy unavailable/expired; review supported admission with an unlocked test connection")
@@ -187,7 +202,8 @@ func openAIRequestAllowed(r *http.Request) bool {
 	if r.URL.Scheme != "https" || r.URL.Host != "api.openai.com" || r.URL.RawQuery != "" || r.URL.ForceQuery || r.URL.Fragment != "" || r.URL.User != nil {
 		return false
 	}
-	_, known := currentProviderModel(strings.TrimPrefix(r.URL.Path, "/v1/models/"))
+	modelID := strings.TrimPrefix(r.URL.Path, "/v1/models/")
+	known := validProviderModelID(modelID) && !strings.Contains(modelID, "/") && !strings.Contains(modelID, "..")
 	return (r.Method == "GET" && (r.URL.Path == "/v1/models" || strings.HasPrefix(r.URL.Path, "/v1/models/") && known)) ||
 		(r.Method == "POST" && (r.URL.Path == "/v1/responses" || r.URL.Path == "/v1/responses/input_tokens"))
 }
@@ -304,7 +320,7 @@ func admitOpenAI(ctx context.Context, q *AgentAIRequest, rt http.RoundTripper, n
 		Shutdown *string `json:"shutdown_date"`
 	}
 	hash, e := admissionJSON(ctx, rt, "GET", "/v1/models/"+q.Model, nil, &model)
-	if e != nil || model.ID != q.Model || model.Object != "model" || (model.OwnedBy != "openai" && model.OwnedBy != "system") || model.Created == nil || *model.Created <= 0 || *model.Created > now().Unix() || model.Shutdown != nil {
+	if e != nil || model.ID != q.Model || model.Object != "model" || !providerOwnsModel("openai", model.OwnedBy) || model.Created == nil || *model.Created <= 0 || *model.Created > now().Unix()+300 || model.Shutdown != nil {
 		return refuse()
 	}
 	a.AccessAt, a.ModelRecordSHA256 = now().Unix(), hash

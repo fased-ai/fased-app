@@ -123,8 +123,8 @@ func providerRequestAllowed(id string, r *http.Request) bool {
 			return true
 		}
 		if strings.HasPrefix(path, "/v1/models/") {
-			m, found := currentProviderModel(strings.TrimPrefix(path, "/v1/models/"))
-			return found && modelProvider(m) == p.ID
+			id := strings.TrimPrefix(path, "/v1/models/")
+			return validProviderModelID(id) && !strings.Contains(id, "/") && !strings.Contains(id, "..")
 		}
 		return false
 	}
@@ -747,7 +747,7 @@ func parseProviderModelList(provider string, raw []byte, object *string, rows *[
 		*object = v.Object
 		if provider == "local" {
 			for i := range v.Data {
-				if v.Data[i].OwnedBy == "library" || v.Data[i].OwnedBy == "local" || v.Data[i].OwnedBy == "vllm" || v.Data[i].OwnedBy == "organization_owner" || v.Data[i].OwnedBy == "lmstudio" || v.Data[i].OwnedBy == "lmstudio-community" {
+				if v.Data[i].OwnedBy != "system" && v.Data[i].OwnedBy != "foreign" {
 					v.Data[i].OwnedBy = "local"
 				}
 			}

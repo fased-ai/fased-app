@@ -255,18 +255,29 @@ func TestProviderModelsNewGenerationRemovesOldSelection(t *testing.T) {
 	s := fixtureStore(t)
 	a := saveTestConnection(t, s)
 	rt := httpsFixture(t, func(w http.ResponseWriter, r *http.Request) {
-		admissionReply(w, modelRows(admittedOpenAIModel, "gpt-7-terra"))
+		body := modelRows(admittedOpenAIModel, "gpt-7-terra", "gpt-retired-1")
+		rows := body["data"].([]map[string]any)
+		rows[2]["shutdown_date"] = "2026-10-23"
+		admissionReply(w, body)
 	})
 	v, err := s.refreshProviderModels(t.Context(), a.Ref, rt)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if m := modelChoice(v, admittedOpenAIModel); m.Selectable || m.Availability != "superseded" {
-		t.Fatal("old generation selectable")
+	if m := modelChoice(v, admittedOpenAIModel); !m.Selectable || m.Availability != "fixture" {
+		t.Fatal("curated model became unselectable", m)
 	}
-	p := openAIModelPolicy()
-	if s.providerRequestAllowed(AgentAIRequest{ConnectionRef: a.Ref, Model: p.Model, Policy: &p}, true) {
-		t.Fatal("known older generation could dispatch")
+	if m := modelChoice(v, "gpt-7-terra"); !m.Selectable || m.Policy == nil || !isDiscoveredPolicy(m.Policy) {
+		t.Fatal("discovered newer generation not selectable", m)
+	}
+	if m := modelChoice(v, "gpt-retired-1"); m.Selectable || m.Availability != "retired" {
+		t.Fatal("retired model became selectable", m)
+	}
+	if _, err := s.ChangeAgents(t.Context(), AgentCommand{Action: "profile-update", Name: "Analyst", Provider: "openai", AccountRef: &a.Ref, Model: "gpt-unlisted-9"}); err == nil {
+		t.Fatal("unlisted model selected on profile")
+	}
+	if !s.providerRequestAllowed(AgentAIRequest{ConnectionRef: a.Ref, Model: admittedOpenAIModel, Policy: modelChoice(v, admittedOpenAIModel).Policy}, true) {
+		t.Fatal("listed model blocked")
 	}
 	if !newerProviderGeneration("gpt-6.10-sol", "gpt-6.2-sol") || newerProviderGeneration("gpt-7-sol", "gpt-6.2-astra") {
 		t.Fatal("generation comparison")
@@ -300,27 +311,26 @@ func TestProviderModelsSupersessionSurvivesFailedRefreshAndUnlock(t *testing.T) 
 	t.Parallel()
 	s := fixtureStore(t)
 	a := saveTestConnection(t, s)
-	p := openAIModelPolicy()
-	q := AgentAIRequest{ConnectionRef: a.Ref, Model: p.Model, Policy: &p}
-	newer := httpsFixture(t, func(w http.ResponseWriter, r *http.Request) { admissionReply(w, modelRows(p.Model, "gpt-7-terra")) })
-	if _, err := s.refreshProviderModels(t.Context(), a.Ref, newer); err != nil {
-		t.Fatal(err)
+	newer := httpsFixture(t, func(w http.ResponseWriter, r *http.Request) {
+		admissionReply(w, modelRows(admittedOpenAIModel, "gpt-7-terra"))
+	})
+	v, err := s.refreshProviderModels(t.Context(), a.Ref, newer)
+	if err != nil || !modelChoice(v, "gpt-7-terra").Selectable {
+		t.Fatal("discovered model missing", err, v.Catalog)
 	}
 	failed := httpsFixture(t, func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(401) })
-	if _, err := s.refreshProviderModels(t.Context(), a.Ref, failed); err != nil {
-		t.Fatal(err)
-	}
-	if s.providerRequestAllowed(q, true) {
-		t.Fatal("failure forgot newer generation")
+	v, err = s.refreshProviderModels(t.Context(), a.Ref, failed)
+	if err != nil || v.Catalog.State != "failed" || modelChoice(v, admittedOpenAIModel).Selectable || modelChoice(v, "gpt-7-terra").ID != "" {
+		t.Fatal("failed refresh left models selectable", err, v.Catalog)
 	}
 	if _, err := s.ChangeAIConnection(t.Context(), AIConnectionCommand{Action: "lock", Ref: a.Ref}); err != nil {
 		t.Fatal(err)
 	}
-	v, err := s.ChangeAIConnection(t.Context(), AIConnectionCommand{Action: "unlock", Ref: a.Ref, Passphrase: testVaultPassword})
+	v, err = s.ChangeAIConnection(t.Context(), AIConnectionCommand{Action: "unlock", Ref: a.Ref, Passphrase: testVaultPassword})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if s.providerRequestAllowed(q, true) || modelChoice(v, p.Model).Selectable {
-		t.Fatal("unlock restored superseded model")
+	if modelChoice(v, "gpt-7-terra").Selectable || modelChoice(v, "gpt-7-terra").ID != "" {
+		t.Fatal("unlock restored stale discovered model", v.Catalog)
 	}
 }

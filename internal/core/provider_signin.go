@@ -426,8 +426,9 @@ func (s *Store) listenProviderSignInLocked(a *providerSignInAttempt) (net.Listen
 			return
 		}
 		a.callback, a.view.State = callback, "callback-ready"
-		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-		io.WriteString(w, "Return to Fased to finish connecting your account.")
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.Header().Set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'none'")
+		io.WriteString(w, "<!doctype html><meta charset=\"utf-8\"><title>Fased</title><body style=\"font-family:system-ui,sans-serif;background:#0d1014;color:#f3f5f8;display:grid;place-items:center;min-height:100vh;margin:0\"><p>Return to Fased — your account is connecting. You can close this tab.</p></body>")
 	})}
 	return listener, nil
 }
@@ -756,32 +757,80 @@ func readSignInDiscovery(ctx context.Context, wire http.RoundTripper) (signInDis
 }
 
 func parseProviderSignInModels(raw []byte, fetchedAt int64) ([]discoveredModel, error) {
-	var response struct {
+	var envelope struct {
+		Object string `json:"object"`
 		Models []struct {
 			Slug       string `json:"slug"`
 			Name       string `json:"display_name"`
 			Visibility string `json:"visibility"`
 		} `json:"models"`
+		Data []discoveredModel `json:"data"`
 	}
-	if json.Unmarshal(raw, &response) != nil || response.Models == nil || len(response.Models) > 512 {
+	if json.Unmarshal(raw, &envelope) != nil {
+		logProviderDiag("models-parse", map[string]any{"reason": "invalid_json", "bytes": len(raw)})
 		return nil, errors.New("invalid ChatGPT model catalogue")
 	}
-	rows := []discoveredModel{}
-	for _, model := range response.Models {
-		if len(model.Visibility) > 32 || (model.Visibility != "" && !validSignInValue(model.Visibility, 32)) {
-			return nil, errors.New("invalid ChatGPT model entry")
+	if envelope.Models != nil {
+		if len(envelope.Models) > 2048 {
+			logProviderDiag("models-parse", map[string]any{"reason": "too_many_models", "count": len(envelope.Models)})
+			return nil, errors.New("invalid ChatGPT model catalogue")
 		}
-		if model.Visibility != "list" {
-			continue
+		rows := []discoveredModel{}
+		for _, model := range envelope.Models {
+			if len(model.Visibility) > 32 || (model.Visibility != "" && !validSignInValue(model.Visibility, 32)) {
+				return nil, errors.New("invalid ChatGPT model entry")
+			}
+			if model.Visibility != "" && model.Visibility != "list" {
+				continue
+			}
+			if !validProviderModelID(model.Slug) {
+				return nil, errors.New("invalid ChatGPT model entry")
+			}
+			name := model.Name
+			if name == "" || !validAgentText(name, 256, true) {
+				name = model.Slug
+			}
+			// This route provides no creation timestamp. The retained value is the
+			// verified catalogue observation time, never evidence of model age.
+			rows = append(rows, discoveredModel{ID: model.Slug, Name: name, Object: "model", OwnedBy: "openai", Created: fetchedAt})
 		}
-		if !validProviderModelID(model.Slug) || !validAgentText(model.Name, 256, true) {
-			return nil, errors.New("invalid ChatGPT model entry")
-		}
-		// This route provides no creation timestamp. The retained value is the
-		// verified catalogue observation time, never evidence of model age.
-		rows = append(rows, discoveredModel{ID: model.Slug, Object: "model", OwnedBy: "openai", Created: fetchedAt})
+		return rows, nil
 	}
-	return rows, nil
+	if envelope.Data != nil {
+		if (envelope.Object != "" && envelope.Object != "list") || len(envelope.Data) > 2048 {
+			logProviderDiag("models-parse", map[string]any{"reason": "invalid_data_list", "object": envelope.Object, "count": len(envelope.Data)})
+			return nil, errors.New("invalid ChatGPT model catalogue")
+		}
+		rows := make([]discoveredModel, 0, len(envelope.Data))
+		for _, item := range envelope.Data {
+			if !validProviderModelID(item.ID) {
+				return nil, errors.New("invalid ChatGPT model entry")
+			}
+			if item.Object == "" {
+				item.Object = "model"
+			}
+			if item.OwnedBy == "" {
+				item.OwnedBy = "openai"
+			}
+			if item.Created <= 0 {
+				item.Created = fetchedAt
+			}
+			if item.Name == "" || !validAgentText(item.Name, 256, true) {
+				item.Name = item.ID
+			}
+			rows = append(rows, item)
+		}
+		return rows, nil
+	}
+	var obj map[string]json.RawMessage
+	keys := []string{}
+	if json.Unmarshal(raw, &obj) == nil {
+		for k := range obj {
+			keys = append(keys, sanitizeDiagValue(k, 40))
+		}
+	}
+	logProviderDiag("models-parse", map[string]any{"reason": "unrecognized_shape", "keys": strings.Join(keys, ",")})
+	return nil, errors.New("invalid ChatGPT model catalogue")
 }
 
 type signInTokenResponse struct {

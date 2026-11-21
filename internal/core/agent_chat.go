@@ -9,6 +9,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 
 	"github.com/fased-ai/fased-app/internal/update"
@@ -53,9 +54,12 @@ func validAILimits(l AILimits) bool {
 	return l.MaxInputTokens >= 1000 && l.MaxInputTokens <= 32000 && l.MaxOutputTokens >= 128 && l.MaxOutputTokens <= 1024 && l.DeadlineSeconds >= 1 && l.DeadlineSeconds <= 120 && l.BudgetMicrousd >= 1 && l.BudgetMicrousd <= 10000000
 }
 func validChatPermission(p ChatPermission, stored ...bool) bool {
+	return validChatPermissionWithPolicy(p, chatModelPolicy(p.Model), stored...)
+}
+func validChatPermissionWithPolicy(p ChatPermission, policy *OpenAIModelPolicy, stored ...bool) bool {
 	_, current := currentProviderModel(p.Model)
-	modelOK := (p.Model == fixtureAIModel || current) && p.Limits.BudgetMicrousd <= maxModelBudget(p.Model)
-	reservation := aiRequestReservation(AgentAIRequest{Model: p.Model, Policy: chatModelPolicy(p.Model), Limits: p.Limits})
+	modelOK := p.Model != legacyOpenAIModel && (p.Model == fixtureAIModel || current || (policy != nil && isDiscoveredPolicy(policy))) && p.Limits.BudgetMicrousd <= maxModelBudget(p.Model)
+	reservation := aiRequestReservation(AgentAIRequest{Model: p.Model, Policy: policy, Limits: p.Limits})
 	if len(stored) > 0 && stored[0] {
 		modelOK = validProviderModelID(p.Model)
 		reservation = 0
@@ -68,6 +72,138 @@ func validChatPermission(p ChatPermission, stored ...bool) bool {
 	}
 	return len(p.ID) == 64 && len(p.PersonaDigest) == 64 && len(p.BootID) == 32 && (len(p.ConnectionRef) == 0 || len(p.ConnectionRef) == 43) && (p.Model == fixtureAIModel || p.ConnectionRef != "") && p.ID == chatDigest(p) && p.ProfileID != "" && p.SessionID != "" && len(p.BootID) > 0 && p.Revision >= 0 && p.CreatedAt > 0 && p.ExpiresAt >= p.CreatedAt+60 && p.ExpiresAt <= p.CreatedAt+86400 &&
 		(p.MemoryMode == "relevant" || p.MemoryMode == "none") && modelOK && limitsOK && p.MaxRequests >= 1 && p.MaxRequests <= 20 && p.Limits.BudgetMicrousd >= reservation && p.BudgetMicrousd >= reservation && p.BudgetMicrousd <= 20000000 && p.UsedRequests >= 0 && p.UsedRequests <= p.MaxRequests && p.AllocatedMicrousd >= 0 && p.AllocatedMicrousd <= p.BudgetMicrousd
+}
+func isDiscoveredPolicy(p *OpenAIModelPolicy) bool {
+	if p == nil || !validProviderModelID(p.Model) || p.Model == fixtureAIModel || p.Model == legacyOpenAIModel {
+		return false
+	}
+	prov := policyProvider(p)
+	return p.ID == fmt.Sprintf("%s-discovered-v1:%s", prov, p.Model) ||
+		(prov == "openai" && p.ID == fmt.Sprintf("openai-discovered-v1:%s:sign-in-plan-v2", p.Model))
+}
+func registryCeilingPricing(reg modelRegistry) (input, cached, output int64, ok bool) {
+	for _, m := range reg.Models {
+		if (m.Currency != "" && m.Currency != "USD") || m.Input <= 0 || m.Output <= 0 {
+			continue
+		}
+		if !ok || m.Input > input {
+			input = m.Input
+		}
+		if m.Cached > cached {
+			cached = m.Cached
+		}
+		if m.Output > output {
+			output = m.Output
+		}
+		ok = true
+	}
+	return input, cached, output, ok
+}
+func dynamicModelPolicy(provider, model, method string) *OpenAIModelPolicy {
+	if m, ok := currentProviderModel(model); ok && modelProvider(m) == provider {
+		return chatModelPolicyForMethod(model, method)
+	}
+	if !validProviderModelID(model) || model == legacyOpenAIModel || model == fixtureAIModel || provider == "" || provider == "none" {
+		return nil
+	}
+	if provider != "local" {
+		if _, ok := providerDefinitionFor(provider); !ok {
+			return nil
+		}
+	}
+	reg := registryForProvider(provider)
+	reviewedAt := reg.ReviewedAt
+	if reviewedAt <= 0 {
+		reviewedAt = 1
+	}
+	p := OpenAIModelPolicy{
+		ID:            fmt.Sprintf("%s-discovered-v1:%s", provider, model),
+		Model:         model,
+		ReviewedAt:    reviewedAt,
+		ExpiresAt:     0,
+		ContextTokens: 128000,
+		OutputTokens:  16384,
+		Reasoning:     "none",
+		ModelSource:   providerOrigin(provider) + providerModelsPath(provider),
+		TariffSource:  reg.Sources["pricing"],
+		TokenSource:   reg.Sources["contract"],
+	}
+	switch {
+	case provider == "local":
+		p.Provider = "local"
+		p.WireVersion = localWire
+		p.ModelSource = reg.Sources["discovery"]
+		p.TokenSource = reg.Sources["discovery"]
+		return &p
+	case provider == "openai" && method == "sign-in":
+		p.ID += ":sign-in-plan-v2"
+		p.WireVersion = planSignInWire
+		p.Reasoning = ""
+		p.TariffSource = "https://developers.openai.com/siwc/token-sharing-open-source/models-and-inference"
+		p.TokenSource = "https://developers.openai.com/siwc/token-sharing-open-source/preview-limitations"
+		return &p
+	case provider == "openai":
+		in, cached, out, ok := registryCeilingPricing(reg)
+		if !ok {
+			return nil
+		}
+		p.Reasoning = ""
+		p.InputMicrousdPerMillion, p.CachedMicrousdPerMillion, p.OutputMicrousdPerMillion = in, cached, out
+		p.TokenSource = "https://developers.openai.com/api/reference/resources/responses/subresources/input_tokens/methods/count"
+		return &p
+	case provider == "kimi-code":
+		p.Provider = "kimi-code"
+		p.WireVersion = "kimi-code-chat-v1"
+		p.Reasoning = "low"
+		return &p
+	case provider == "ollama-cloud":
+		p.Provider = "ollama-cloud"
+		p.WireVersion = "ollama-cloud-chat-v1"
+		return &p
+	case compatibleProvider(provider):
+		in, cached, out, ok := registryCeilingPricing(reg)
+		if !ok {
+			return nil
+		}
+		p.Provider = provider
+		p.WireVersion = provider + "-chat-v1"
+		p.MaxRequestBudgetMicrousd = maxModelBudget(model)
+		p.InputMicrousdPerMillion, p.CachedMicrousdPerMillion, p.OutputMicrousdPerMillion = in, cached, out
+		if provider == "moonshot-intl" {
+			p.CacheMode = "kimi-implicit-5m"
+		}
+		if provider == "openrouter" {
+			p.CachedMicrousdPerMillion = in
+		}
+		return &p
+	case provider == "anthropic":
+		in, cached, out, ok := registryCeilingPricing(reg)
+		if !ok {
+			return nil
+		}
+		p.Provider = "anthropic"
+		p.WireVersion = "anthropic-messages-v1"
+		p.APIVersion = "2026-10-21"
+		p.Reasoning = "low"
+		p.MaxRequestBudgetMicrousd = maxModelBudget(model)
+		p.InputMicrousdPerMillion, p.CachedMicrousdPerMillion, p.OutputMicrousdPerMillion = in, cached, out
+		p.TokenSource = "https://platform.claude.com/docs/en/api/messages/count_tokens"
+		return &p
+	case provider == "xai":
+		in, cached, out, ok := registryCeilingPricing(reg)
+		if !ok {
+			return nil
+		}
+		p.Provider = "xai"
+		p.WireVersion = "xai-responses-v1"
+		p.Reasoning = "low"
+		p.MaxRequestBudgetMicrousd = maxModelBudget(model)
+		p.InputMicrousdPerMillion, p.CachedMicrousdPerMillion, p.OutputMicrousdPerMillion = in, cached, out
+		p.TokenSource = "https://docs.x.ai/developers/rest-api-reference/inference/other"
+		return &p
+	default:
+		return nil
+	}
 }
 func chatModelPolicy(model string) *OpenAIModelPolicy {
 	if _, ok := currentProviderModel(model); ok || model == legacyOpenAIModel {
@@ -112,21 +248,20 @@ func legacySignInModelPolicy(model string) *OpenAIModelPolicy {
 	return &copy
 }
 func (s *Store) chatPolicy(p ChatPermission) *OpenAIModelPolicy {
-	method := "api-key"
 	if p.ConnectionRef != "" {
 		connection, err := s.AIConnection(p.ConnectionRef)
 		if err != nil || connection.Ref != p.ConnectionRef {
 			return nil
 		}
-		method = connection.AuthMethod
+		return dynamicModelPolicy(connection.Provider, p.Model, connection.AuthMethod)
 	}
-	return chatModelPolicyForMethod(p.Model, method)
+	return chatModelPolicyForMethod(p.Model, "api-key")
 }
 func validChatPermissionPolicy(p ChatPermission, policy *OpenAIModelPolicy) bool {
 	if !unmeteredPolicy(policy) {
-		return validChatPermission(p)
+		return validChatPermissionWithPolicy(p, policy)
 	}
-	return validChatPermission(p, true) && p.Limits.BudgetMicrousd == 0 && p.BudgetMicrousd == 0 && p.AllocatedMicrousd == 0 && validPolicyLimits(p.Limits, policy)
+	return validChatPermissionWithPolicy(p, policy, true) && p.Limits.BudgetMicrousd == 0 && p.BudgetMicrousd == 0 && p.AllocatedMicrousd == 0 && validPolicyLimits(p.Limits, policy)
 }
 func (s *Store) validChatPermission(p ChatPermission) bool {
 	return validChatPermissionPolicy(p, s.chatPolicy(p))
@@ -189,7 +324,7 @@ func (s *Store) chatReview(d agentDocument, c AgentCommand, profile string, revi
 	p.AccessEpoch = s.chatEpoch.Load()
 	p.ConnectionEpoch = s.connectionAccessEpoch(p.ConnectionRef)
 	p.ID = chatDigest(p)
-	if !s.validChatPermission(p) || validateAIModelPolicy(AgentAIRequest{Model: p.Model, ConnectionRef: p.ConnectionRef, Policy: chatModelPolicyForMethod(p.Model, c.providerAuthMethod), Limits: p.Limits}, now) != nil || !s.aiConnectionValid(p.ConnectionRef) || !s.pilotGrantAllowed(p.ConnectionRef, profile, p.Model, p.ExpiresAt, p.MaxRequests, p.BudgetMicrousd, p.Limits, false) {
+	if !s.validChatPermission(p) || validateAIModelPolicy(AgentAIRequest{Model: p.Model, ConnectionRef: p.ConnectionRef, Policy: s.chatPolicy(p), Limits: p.Limits}, now) != nil || !s.aiConnectionValid(p.ConnectionRef) || !s.pilotGrantAllowed(p.ConnectionRef, profile, p.Model, p.ExpiresAt, p.MaxRequests, p.BudgetMicrousd, p.Limits, false) {
 		return p, errors.New("invalid Chat limits or locked connection")
 	}
 	return p, nil
@@ -255,6 +390,7 @@ func (s *Store) changeChat(d *agentDocument, c AgentCommand, profile, id string,
 			if err != nil || connection.Ref != p.ConnectionRef {
 				return errors.New("selected Chat account unavailable")
 			}
+			cmd.providerName = connection.Provider
 			cmd.providerAuthMethod = connection.AuthMethod
 		}
 		if e := changeAgentAI(d, cmd, profile, id, now, true, nil); e != nil {

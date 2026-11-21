@@ -1030,13 +1030,25 @@ func (a authenticatedAITransport) RoundTrip(r *http.Request) (*http.Response, er
 	if len(key) == 0 && strings.Split(res.Header.Get("Content-Type"), ";")[0] == "text/event-stream" {
 		return res, nil
 	}
-	limit := int64(16384)
+	limit := int64(262144)
 	if a.modelsOnly || r.Method == "GET" && r.URL.Path == providerModelsPath(v.Provider) {
 		limit = providerModelBodyLimit(v.Provider)
 	}
 	body, e := io.ReadAll(io.LimitReader(res.Body, limit+1))
 	res.Body.Close()
-	if e != nil || int64(len(body)) > limit || len(key) > 0 && bytes.Contains(body, key) {
+	keyEcho := len(key) > 0 && bytes.Contains(body, key)
+	if e != nil || int64(len(body)) > limit || keyEcho {
+		readErr := ""
+		if e != nil {
+			readErr = e.Error()
+		}
+		logProviderDiag("transport-read", map[string]any{
+			"provider": v.Provider, "method": v.AuthMethod, "path": r.URL.Path,
+			"status": res.StatusCode, "bodyBytes": len(body), "limit": limit,
+			"contentType":     res.Header.Get("Content-Type"),
+			"contentEncoding": res.Header.Get("Content-Encoding"),
+			"readErr":         readErr, "keyEcho": keyEcho,
+		})
 		return nil, errors.New("provider response refused")
 	}
 	res.Body = io.NopCloser(bytes.NewReader(body))

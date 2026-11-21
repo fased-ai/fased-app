@@ -27,11 +27,72 @@ installCoreFixture();
 test("Local owner setup opens without a password and keeps logout final", async ({
   page,
 }) => {
+  await stop();
+  await start(false, "127.0.0.1:0", "local", false);
   await page.goto(url);
+  await expect(
+    page.getByRole("button", { name: "Sign out", exact: true }),
+  ).toBeVisible();
+  await expect(page.locator('input[type="password"]')).toHaveCount(0);
+  await expect(
+    page.getByRole("heading", { name: "Chat", exact: true }),
+  ).toBeVisible();
+  const connectCard = page.getByRole("region", {
+    name: "Connect AI",
+    exact: true,
+  });
+  await expect(connectCard).toBeVisible();
+  await expect(
+    connectCard.getByRole("button", {
+      name: "Connect provider",
+      exact: true,
+    }),
+  ).toBeVisible();
+  await expect(
+    connectCard.getByRole("button", { name: "Skip", exact: true }),
+  ).toBeVisible();
+
+  await page.getByRole("button", { name: "Sign out", exact: true }).click();
   await expect(
     page.getByRole("heading", { name: "Open Fased", exact: true }),
   ).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Open Fased", exact: true }),
+  ).toBeVisible();
+  await expect(page.getByText("Instance details")).toHaveCount(0);
+  await expect(page.getByText("Open Fased on this computer.")).toHaveCount(0);
   await expect(page.locator('input[type="password"]')).toHaveCount(0);
+  await expect(
+    page.getByRole("button", { name: "Sign out", exact: true }),
+  ).toHaveCount(0);
+  await page.reload();
+  await expect(
+    page.getByRole("button", { name: "Open Fased", exact: true }),
+  ).toBeVisible();
+
+  const missingHeader = await page.request.post(url + "/api/v1/auth/local", {
+    headers: { Origin: url },
+    data: { action: "browser" },
+  });
+  expect(missingHeader.status()).toBe(403);
+  for (const sfs of ["cross-site", "same-site"]) {
+    const blocked = await page.request.post(url + "/api/v1/auth/local", {
+      headers: {
+        Origin: url,
+        "X-Fased-Local": "1",
+        "Sec-Fetch-Site": sfs,
+      },
+      data: { action: "browser" },
+    });
+    expect(blocked.status()).toBe(403);
+  }
+
+  await page.getByRole("button", { name: "Open Fased", exact: true }).click();
+  await expect(
+    page.getByRole("button", { name: "Sign out", exact: true }),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "Sign out", exact: true }).click();
+
   const { stdout } = await exec(binary, ["setup-link", "--data-dir", dir]);
   const link = stdout.trim(),
     proof = new URL(link).hash.slice("#local=".length);
@@ -332,7 +393,7 @@ test("expired owner access returns to sign-in without replay or stale-session re
 test("claim, UI/CLI setup, restart and logout preserve one Local instance", async ({
   page,
 }) => {
-  await page.goto(url);
+  await page.goto(url + "/#overview");
   await expect(page.getByRole("heading", { name: "Open Fased" })).toBeVisible();
   await captureScreenshot(page, {
     path: `.evidence/claim-${test.info().project.name}.png`,

@@ -64,6 +64,7 @@ test("normal Chat grants bounded replies, streams Send and retains scoped histor
     exact: true,
   });
   await expect(provider).toBeVisible();
+  await provider.getByRole("button", { name: "API key", exact: true }).click();
   await revealControl(
     page,
     provider.getByLabel("Vault passphrase", { exact: true }),
@@ -1710,7 +1711,11 @@ test("configured agent joins account Chat task result and memory without partial
     .fill("Prefer daily SOL risk summaries");
   await page.getByRole("button", { name: "Save memory", exact: true }).click();
   await expect.poll(async () => (await read()).memories.length).toBe(1);
-  await page.getByRole("button", { name: "Memory", exact: true }).click();
+  await page.getByRole("button", { name: "More", exact: true }).click();
+  await page
+    .getByRole("navigation", { name: "More pages", exact: true })
+    .getByRole("link", { name: "Memory", exact: true })
+    .click();
   await expect(
     page.getByText("Prefer daily SOL risk summaries", { exact: true }),
   ).toBeVisible();

@@ -7,7 +7,13 @@ import { RefreshCw, Plus, ArrowLeft, Search, LockKeyhole } from "../icons";
 import { useUI } from "../ui-preferences";
 import type { OpenAIModelPolicy, OpenAIAdmission } from "../agents";
 import { isUnmeteredPolicy, planFailureDetails } from "../agents";
-import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import { useWorkspace } from "../workspace";
 import { useCore } from "../core";
 import { TaskAccessSettings, type TaskAccessAllowance } from "./TaskAccess";
@@ -178,6 +184,26 @@ export function ConnectionPicker({
     </label>
   );
 }
+function ConnectionOptions({
+  collapsed,
+  open,
+  summary,
+  children,
+}: {
+  collapsed: boolean;
+  open: boolean;
+  summary: string;
+  children: ReactNode;
+}) {
+  return collapsed ? (
+    <details className="connection-options" open={open}>
+      <summary>{summary}</summary>
+      {children}
+    </details>
+  ) : (
+    <>{children}</>
+  );
+}
 export function AIConnectionSettings({
   startNew = false,
 }: { startNew?: boolean } = {}) {
@@ -190,7 +216,8 @@ export function AIConnectionSettings({
     refresh,
     core,
   } = useAIConnection();
-  const { setProvidersOpen, agents } = useWorkspace();
+  const { setProvidersOpen, providersPreset, clearProvidersPreset, agents } =
+    useWorkspace();
   const assignedAccount =
     agents.view?.profiles.find((p) => p.id === agents.view?.profileId)
       ?.connectionRef || "";
@@ -203,6 +230,7 @@ export function AIConnectionSettings({
 
   const [selected, setSelected] = useState(startNew ? "new" : assignedAccount);
   const selectionChosen = useRef(false);
+  const methodChosen = useRef(false);
   useEffect(() => {
     if (!selectionChosen.current && assignedAccount)
       setSelected(assignedAccount);
@@ -210,6 +238,51 @@ export function AIConnectionSettings({
   const [newProvider, setNewProvider] = useState("openai");
   const [newMethod, setNewMethod] = useState("api-key");
   const [callback, setCallback] = useState("");
+  useEffect(() => {
+    if (!providersPreset) return;
+    const nextProvider = providersPreset.provider || "openai";
+    selectionChosen.current = true;
+    methodChosen.current = !!providersPreset.method;
+    setSelected("new");
+    setNewProvider(nextProvider);
+    setGoogleProject("");
+    setNewMethod(
+      providersPreset.method ||
+        (nextProvider === "local"
+          ? "local"
+          : nextProvider === "openai" && root?.signInAvailable
+            ? "sign-in"
+            : "api-key"),
+    );
+    setServerPreset(defaultLocalEndpoint);
+    setEndpoint(defaultLocalEndpoint);
+    setKey("");
+    setPassphrase("");
+    setCallback("");
+    clearProvidersPreset();
+  }, [providersPreset, clearProvidersPreset, root?.signInAvailable]);
+  useEffect(() => {
+    if (
+      root?.signInAvailable &&
+      !root?.signIn &&
+      !methodChosen.current &&
+      !providersPreset &&
+      (selected === "new" || (!root.ref && !root.connections?.length)) &&
+      newProvider === "openai" &&
+      newMethod !== "sign-in"
+    ) {
+      setNewMethod("sign-in");
+    }
+  }, [
+    root?.signInAvailable,
+    root?.signIn,
+    root?.ref,
+    root?.connections?.length,
+    providersPreset,
+    selected,
+    newProvider,
+    newMethod,
+  ]);
   useEffect(() => {
     if (!root?.signIn) return;
     selectionChosen.current = true;
@@ -228,14 +301,6 @@ export function AIConnectionSettings({
         root?.connections?.find((a) => a.ref === selected)?.googleProject || "",
       );
   }, [selected, root?.connections]);
-  const [name, setName] = useState("");
-  const savedName =
-    selected && selected !== "new"
-      ? root?.connections?.find((a) => a.ref === selected)?.name || ""
-      : root?.name || "";
-  useEffect(() => {
-    setName(selected === "new" ? "" : savedName);
-  }, [selected, savedName]);
 
   const view =
     selected === "new" || (!root?.ref && !root?.connections?.length)
@@ -342,6 +407,7 @@ export function AIConnectionSettings({
       return;
     }
     selectionChosen.current = true;
+    const hadConnections = !!(root?.ref || root?.connections?.length);
     setBusy(true);
     setError("");
     const secret = passphrase,
@@ -351,7 +417,6 @@ export function AIConnectionSettings({
     try {
       const command = {
         action: action === "save" && selected === "new" ? "add" : action,
-        name: action === "save" ? name : undefined,
         ref: view?.ref ?? "",
         ...(["save", "unlock", "remove"].includes(action) && needsPassphrase
           ? { passphrase: secret }
@@ -379,7 +444,6 @@ export function AIConnectionSettings({
               ...(provider === "google" ? { googleProject } : {}),
               ref: view.ref,
               ...(provider === "google" ? { googleProject } : {}),
-              name,
               remote: core.connection?.location === "remote",
             }
           : action === "sign-in-complete"
@@ -405,8 +469,55 @@ export function AIConnectionSettings({
         setSelected(next.ref);
         setCallback("");
       }
-      setView(await core.request<Connection>("ai/connection"));
+      const refreshed = next.connections
+        ? next
+        : await core.request<Connection>("ai/connection");
+      setView(refreshed);
       window.dispatchEvent(new Event("ai-connection-changed"));
+      if (
+        !hadConnections &&
+        (action === "save" || action === "sign-in-complete")
+      ) {
+        const activeProfile = agents.view?.profiles.find(
+          (p) => p.id === agents.view?.profileId,
+        );
+        const added =
+          refreshed.connections?.find((a) => a.ref === next.ref) ??
+          (refreshed.ref === next.ref ? refreshed : next);
+        if (
+          activeProfile &&
+          activeProfile.provider === "none" &&
+          agents.view &&
+          added?.ref &&
+          added.provider &&
+          !added.locked
+        ) {
+          const models =
+            added.catalog?.models ?? refreshed.catalog?.models ?? [];
+          const firstModel =
+            models.find(
+              (m) =>
+                m.connectionRef === added.ref && m.selectable && m.recommended,
+            )?.id ??
+            models.find((m) => m.connectionRef === added.ref && m.selectable)
+              ?.id ??
+            models.find((m) => m.provider === added.provider && m.recommended)
+              ?.id ??
+            "";
+          const revision = agents.view.revision;
+          void agents
+            .change({
+              action: "profile-update",
+              revision,
+              name: activeProfile.name,
+              text: activeProfile.persona,
+              provider: added.provider as Provider,
+              accountRef: added.ref,
+              model: firstModel,
+            })
+            .catch(() => {});
+        }
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : "Credential operation failed");
       if (action === "sign-in-complete") {
@@ -418,20 +529,52 @@ export function AIConnectionSettings({
       setBusy(false);
     }
   }
+  const autoCompletedSignIn = useRef("");
+  const autoCompleteFn = useRef(change);
+  autoCompleteFn.current = change;
+  useEffect(() => {
+    if (!signIn || signIn.remote || signIn.state !== "waiting") return;
+    const timer = window.setInterval(() => {
+      void refresh();
+    }, 1000);
+    return () => clearInterval(timer);
+  }, [signIn?.id, signIn?.remote, signIn?.state, refresh]);
+  useEffect(() => {
+    if (!signIn) {
+      autoCompletedSignIn.current = "";
+      return;
+    }
+    if (
+      !signIn.remote &&
+      signIn.state === "callback-ready" &&
+      !needsPassphrase &&
+      !busy &&
+      autoCompletedSignIn.current !== signIn.id
+    ) {
+      autoCompletedSignIn.current = signIn.id;
+      void autoCompleteFn.current("sign-in-complete");
+    }
+  }, [signIn?.id, signIn?.remote, signIn?.state, needsPassphrase, busy]);
   function chooseProvider(id: string) {
     selectionChosen.current = true;
+    methodChosen.current = false;
     setSelected("new");
     setNewProvider(id);
     setGoogleProject("");
-    setNewMethod(id === "local" ? "local" : "api-key");
+    setNewMethod(
+      id === "local"
+        ? "local"
+        : id === "openai" && root?.signInAvailable
+          ? "sign-in"
+          : "api-key",
+    );
     setServerPreset(defaultLocalEndpoint);
     setEndpoint(defaultLocalEndpoint);
-    setName("");
     setKey("");
     setPassphrase("");
     setCallback("");
   }
-  const visibleProviders =
+  const visibleProviders = (
     root?.catalog?.providers.filter(
       (p) =>
         (!p.family || p.family === p.id) &&
@@ -446,7 +589,23 @@ export function AIConnectionSettings({
                   ?.family === p.id) &&
               a.name?.toLowerCase().includes(search.toLowerCase()),
           )),
-    ) || [];
+    ) || []
+  )
+    .map((p, index) => ({
+      provider: p,
+      index,
+      connected:
+        root?.connections?.some(
+          (a) =>
+            a.provider === p.id ||
+            root?.catalog?.providers.find((x) => x.id === a.provider)
+              ?.family === p.id,
+        ) ?? false,
+    }))
+    .sort((a, b) =>
+      a.connected === b.connected ? a.index - b.index : a.connected ? -1 : 1,
+    )
+    .map((x) => x.provider);
   return (
     <section className="providers-page" aria-label={uiText("Providers")}>
       <header className="providers-heading">
@@ -588,35 +747,46 @@ export function AIConnectionSettings({
                 {uiText(catalogProvider.route)}
               </span>
             )}
-            <button
-              className="shell-icon"
-              type="button"
-              aria-label={uiText("Add provider")}
-              title={uiText("Add provider")}
-              disabled={busy || !!signIn || root?.pilotEnrollment}
-              onClick={() => {
-                setSelected("new");
-                setName("");
-                setNewMethod(newProvider === "local" ? "local" : "api-key");
-                setCallback("");
-                setKey("");
-                setServerPreset(defaultLocalEndpoint);
-                setEndpoint(defaultLocalEndpoint);
-                setPassphrase("");
-              }}
-            >
-              <Plus size={16} />
-            </button>
-            <button
-              type="button"
-              className="shell-icon"
-              aria-label={uiText("Refresh models")}
-              title={uiText("Refresh models")}
-              disabled={busy || !view?.ref || view.locked}
-              onClick={() => void change("models-refresh")}
-            >
-              <RefreshCw size={16} />
-            </button>
+            <div className="provider-heading-actions">
+              {view?.ref && (
+                <button
+                  className="shell-icon"
+                  type="button"
+                  aria-label={uiText("Add provider")}
+                  title={uiText("Add provider")}
+                  disabled={busy || !!signIn || root?.pilotEnrollment}
+                  onClick={() => {
+                    methodChosen.current = false;
+                    setSelected("new");
+                    setNewProvider(provider);
+                    setNewMethod(
+                      provider === "local"
+                        ? "local"
+                        : provider === "openai" && root?.signInAvailable
+                          ? "sign-in"
+                          : "api-key",
+                    );
+                    setCallback("");
+                    setKey("");
+                    setServerPreset(defaultLocalEndpoint);
+                    setEndpoint(defaultLocalEndpoint);
+                    setPassphrase("");
+                  }}
+                >
+                  <Plus size={16} />
+                </button>
+              )}
+              <button
+                type="button"
+                className="shell-icon"
+                aria-label={uiText("Refresh models")}
+                title={uiText("Refresh models")}
+                disabled={busy || !view?.ref || view.locked}
+                onClick={() => void change("models-refresh")}
+              >
+                <RefreshCw size={16} />
+              </button>
+            </div>
           </div>
           <div className="agent-record-body">
             {!view?.ref && regionalProviders.length > 1 && (
@@ -635,45 +805,49 @@ export function AIConnectionSettings({
                 ))}
               </div>
             )}
-            {!view?.ref && hasSignIn && (
-              <div
-                className="provider-methods"
-                aria-label={uiText("Connection")}
-              >
-                <button
-                  type="button"
-                  className="secondary"
-                  aria-pressed={newMethod === "sign-in"}
-                  disabled={busy || !!signIn || !signInAvailable}
-                  onClick={() => {
-                    setNewMethod("sign-in");
-                    setKey("");
-                    setPassphrase("");
-                  }}
+            {!view?.ref &&
+              hasSignIn &&
+              (provider !== "google" || signInAvailable) && (
+                <div
+                  className="provider-methods"
+                  aria-label={uiText("Connection")}
                 >
-                  {uiText("Sign in")}
-                </button>
-                <button
-                  type="button"
-                  className="secondary"
-                  aria-pressed={newMethod === "api-key"}
-                  disabled={busy || !!signIn}
-                  onClick={() => {
-                    setNewMethod("api-key");
-                    setKey("");
-                    setPassphrase("");
-                    setCallback("");
-                  }}
-                >
-                  {uiText("API key")}
-                </button>
-              </div>
-            )}
+                  <button
+                    type="button"
+                    className="secondary"
+                    aria-pressed={newMethod === "sign-in"}
+                    disabled={busy || !!signIn || !signInAvailable}
+                    onClick={() => {
+                      methodChosen.current = true;
+                      setNewMethod("sign-in");
+                      setKey("");
+                      setPassphrase("");
+                    }}
+                  >
+                    {uiText("Sign in")}
+                  </button>
+                  <button
+                    type="button"
+                    className="secondary"
+                    aria-pressed={newMethod === "api-key"}
+                    disabled={busy || !!signIn}
+                    onClick={() => {
+                      methodChosen.current = true;
+                      setNewMethod("api-key");
+                      setKey("");
+                      setPassphrase("");
+                      setCallback("");
+                    }}
+                  >
+                    {uiText("API key")}
+                  </button>
+                </div>
+              )}
             <p className="connection-status" role="status">
               {view?.ref
                 ? `${uiText(view.planPaused ? "Paused" : view.locked ? (view.taskAccess ? "Chat locked" : "Locked") : "Unlocked")} · ${providerName}`
                 : uiText(
-                    selected && selected !== "new"
+                    root && !view && selected && selected !== "new"
                       ? "Unavailable"
                       : "No connection saved",
                   )}
@@ -701,12 +875,12 @@ export function AIConnectionSettings({
                 }
               />
             )}
-            <details
-              className="connection-options"
+            <ConnectionOptions
               key={selected || view?.ref || "new"}
-              open={startNew || selected === "new" || !view?.ref || !!signIn}
+              collapsed={!!view?.ref}
+              open={startNew || !!signIn}
+              summary={uiText("Edit")}
             >
-              <summary>{uiText(view?.ref ? "Edit" : "Connect")}</summary>
               <form
                 onSubmit={(e) => {
                   e.preventDefault();
@@ -716,14 +890,6 @@ export function AIConnectionSettings({
                 }}
                 autoComplete="off"
               >
-                <label>
-                  {uiText("Name")}
-                  <input
-                    value={name}
-                    maxLength={80}
-                    onChange={(e) => setName(e.target.value)}
-                  />
-                </label>
                 {isLocal && (
                   <label>
                     {uiText("Endpoint")}
@@ -869,16 +1035,18 @@ export function AIConnectionSettings({
                         </button>
                       ) : (
                         <>
-                          <button
-                            className="primary"
-                            disabled={
-                              busy ||
-                              (needsPassphrase && passphrase.length < 12) ||
-                              !signInReady
-                            }
-                          >
-                            {uiText("Finish")}
-                          </button>
+                          {(signIn.remote || needsPassphrase || busy) && (
+                            <button
+                              className="primary"
+                              disabled={
+                                busy ||
+                                (needsPassphrase && passphrase.length < 12) ||
+                                !signInReady
+                              }
+                            >
+                              {uiText("Finish")}
+                            </button>
+                          )}
                           <button
                             type="button"
                             className="secondary"
@@ -930,28 +1098,35 @@ export function AIConnectionSettings({
                       {view?.ref ? uiText("Replace") : uiText("Save")}
                     </button>
                   )}
-                  {(view?.ref || (selected && selected !== "new")) && (
+                  {(view?.ref ||
+                    (root && !view && selected && selected !== "new")) && (
                     <>
-                      <button
-                        type="button"
-                        className="secondary"
-                        disabled={
-                          busy ||
-                          !view?.ref ||
-                          (needsPassphrase && passphrase.length < 12)
-                        }
-                        onClick={() => void change("unlock")}
-                      >
-                        {uiText(view?.planPaused ? "Review access" : "Unlock")}
-                      </button>
-                      <button
-                        type="button"
-                        className="secondary"
-                        disabled={busy || !view?.ref}
-                        onClick={() => void change("lock")}
-                      >
-                        {uiText("Lock")}
-                      </button>
+                      {(!view?.osProtected || view?.planPaused) && (
+                        <button
+                          type="button"
+                          className="secondary"
+                          disabled={
+                            busy ||
+                            !view?.ref ||
+                            (needsPassphrase && passphrase.length < 12)
+                          }
+                          onClick={() => void change("unlock")}
+                        >
+                          {uiText(
+                            view?.planPaused ? "Review access" : "Unlock",
+                          )}
+                        </button>
+                      )}
+                      {!view?.osProtected && (
+                        <button
+                          type="button"
+                          className="secondary"
+                          disabled={busy || !view?.ref}
+                          onClick={() => void change("lock")}
+                        >
+                          {uiText("Lock")}
+                        </button>
+                      )}
                       {method !== "sign-in" && (
                         <button
                           type="button"
@@ -970,34 +1145,10 @@ export function AIConnectionSettings({
                   )}
                 </div>
               </form>
-              <details className="connection-inspection">
-                <summary>{uiText("Recovery")}</summary>
-                {view?.planFailure && (
-                  <details>
-                    <summary>{uiText("Provider response")}</summary>
-                    <pre>{pausedFailure?.details || view.planFailure}</pre>
-                  </details>
-                )}
-                {needsPassphrase && (
-                  <>
-                    <p>
-                      {uiText(
-                        "Encrypted with your separate vault passphrase. Unlock lasts 15 minutes; lock, sign-out and restart end it. An unlocked key is accessible to the running core.",
-                      )}
-                    </p>
-                    <p>
-                      {uiText(
-                        "Metadata backups exclude credentials. Keep the vault and passphrase; owner password recovery cannot recover them. Reconnecting preserves request records and budget holds.",
-                      )}
-                    </p>
-                  </>
-                )}
-                <p>
-                  {uiText("Connection: ")}
-                  {view?.ref || uiText("None")}
-                </p>
-              </details>
-            </details>
+              {view?.planFailure && (
+                <p role="alert">{pausedFailure?.details || view.planFailure}</p>
+              )}
+            </ConnectionOptions>
           </div>
           {view?.ref && (
             <section className="provider-models" aria-label={uiText("Models")}>

@@ -147,6 +147,13 @@ export async function revealControl(
       await page.getByRole("button", { name: "Remember", exact: true }).click();
     else if (hint.includes("Task name"))
       await page.getByRole("button", { name: "New task", exact: true }).click();
+    else if (control.toString().includes("API key")) {
+      const apiKeyMethod = page.getByRole("button", {
+        name: "API key",
+        exact: true,
+      });
+      if (await apiKeyMethod.isVisible()) await apiKeyMethod.click();
+    }
   }
   // Let navigation attach its control before choosing the owning disclosure.
   await expect(control).toBeAttached();
@@ -210,12 +217,14 @@ export async function start(
   aiFixture = false,
   listen = "127.0.0.1:0",
   location = "local",
+  requirePassword = true,
 ) {
   output = "";
   child = spawn(binary, [
     "serve",
     ...(aiFixture ? ["--ai-fixture"] : []),
     ...(location === "remote" ? ["--instance-location", "remote"] : []),
+    ...(requirePassword && location === "local" ? ["--require-password"] : []),
     "--listen",
     listen,
     "--data-dir",

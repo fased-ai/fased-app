@@ -11,7 +11,7 @@ import {
   useAIConnection,
 } from "./AIConnection";
 import { useRef, useState, type FormEvent } from "react";
-import { BookOpen, Plus, Settings2, History, Plug, ArrowUp } from "../icons";
+import { Plus, History, Plug, ArrowUp } from "../icons";
 import { SectionHead, Dialog } from "../components/shared";
 import {
   useWorkspace,
@@ -38,7 +38,9 @@ const date = (at: number) =>
 export function LocalAgents() {
   const { t: uiText } = useUI();
   const t = uiText;
-  const { agents, setProfileOpen, tab, navigate } = useWorkspace();
+  const core = useCore();
+  const { agents, setProfileOpen, tab, setAgentSettingsDrafts } =
+    useWorkspace();
   const [taskPanel, setTaskPanel] = useState("automations");
   return (
     <>
@@ -76,22 +78,6 @@ export function LocalAgents() {
             )}
             <button
               className="icon-button"
-              aria-label={t("Memory")}
-              data-tooltip={t("Memory")}
-              onClick={() => navigate("agents/memory")}
-            >
-              <BookOpen size={17} />
-            </button>
-            <button
-              className="icon-button"
-              aria-label={t("Agents")}
-              data-tooltip={t("Agents")}
-              onClick={() => navigate("agents/settings")}
-            >
-              <Settings2 size={17} />
-            </button>
-            <button
-              className="icon-button"
               aria-label={t("New agent")}
               data-tooltip={t("New agent")}
               onClick={() => setProfileOpen(true)}
@@ -106,7 +92,18 @@ export function LocalAgents() {
           {agents.error}{" "}
           <button
             className="text-button"
-            onClick={() => void agents.refresh().catch(() => {})}
+            onClick={() => {
+              if (tab === "settings" && agents.view) {
+                const key = `${core.instanceId}:${agents.view.profileId}`;
+                setAgentSettingsDrafts((drafts) => {
+                  if (!drafts.has(key)) return drafts;
+                  const next = new Map(drafts);
+                  next.delete(key);
+                  return next;
+                });
+              }
+              void agents.refresh().catch(() => {});
+            }}
           >
             {uiText("Refresh records")}
           </button>
@@ -142,6 +139,7 @@ function LocalAgentEditor({
     tab,
     navigate,
     setProvidersOpen,
+    openProvidersWith,
     agentSettingsDrafts,
     setAgentSettingsDrafts,
     chatModelDrafts,
@@ -163,6 +161,19 @@ function LocalAgentEditor({
     useState<ResearchSelection>();
   const profile = v.profiles.find((p) => p.id === v.profileId)!;
   const { view: connection } = useAIConnection();
+  const hasConnectedProvider = !!(
+    connection?.ref || connection?.connections?.length
+  );
+  const hasProfileSessions = v.sessions.some(
+    (s) => s.profileId === v.profileId,
+  );
+  const [welcomeDismissed, setWelcomeDismissed] = useState(() => {
+    try {
+      return sessionStorage.getItem("fased.welcome.dismissed") === "1";
+    } catch {
+      return false;
+    }
+  });
   const [session, setSession] = useState("");
   const [sessionName, setSessionName] = useState("");
   const [firstSend, setFirstSend] = useState<{
@@ -176,10 +187,8 @@ function LocalAgentEditor({
   const [memoryID, setMemoryID] = useState("");
   const [memory, setMemory] = useState("");
   const [source, setSource] = useState("");
-  const [expiry, setExpiry] = useState("");
   const [memoryRestore, setMemoryRestore] =
     useState<AgentMemoryRestoreDraft | null>(null);
-  const [memoryExpiryEdited, setMemoryExpiryEdited] = useState(false);
   const memoryExpiryOriginal = useRef(0);
   const profileDraftKey = `${core.instanceId}:${v.profileId}`;
   const newChatKey = `${profileDraftKey}:new`;
@@ -266,6 +275,12 @@ function LocalAgentEditor({
   );
   const activeSession =
     matching.find((s) => s.id === session) ?? matching.at(-1);
+  function dismissWelcome() {
+    setWelcomeDismissed(true);
+    try {
+      sessionStorage.setItem("fased.welcome.dismissed", "1");
+    } catch {}
+  }
   const message = activeSession
     ? (messageDrafts.get(
         `${core.instanceId}:${v.profileId}:${activeSession.id}`,
@@ -306,9 +321,7 @@ function LocalAgentEditor({
     setMemoryID("");
     setMemory("");
     setSource("");
-    setExpiry("");
     setMemoryRestore(null);
-    setMemoryExpiryEdited(false);
     memoryExpiryOriginal.current = 0;
   }
   function editMemory(
@@ -322,18 +335,7 @@ function LocalAgentEditor({
     setMemory(m.text);
     setSource(m.source);
     setMemoryRestore(restoration);
-    setMemoryExpiryEdited(false);
     memoryExpiryOriginal.current = m.expiresAt;
-    setExpiry(
-      m.expiresAt
-        ? new Date(
-            m.expiresAt * 1000 -
-              new Date(m.expiresAt * 1000).getTimezoneOffset() * 60000,
-          )
-            .toISOString()
-            .slice(0, 19)
-        : "",
-    );
   }
   function submit(fn: () => Promise<void>) {
     return (e: FormEvent) => {
@@ -619,6 +621,34 @@ function LocalAgentEditor({
               </>
             ) : (
               <div className="chat-thread">
+                {core.mode === "ready" &&
+                  connection &&
+                  !hasConnectedProvider &&
+                  !hasProfileSessions &&
+                  !welcomeDismissed && (
+                    <section
+                      className="panel connect-ai-card"
+                      aria-label={uiText("Connect AI")}
+                    >
+                      <h2>{uiText("Connect AI")}</h2>
+                      <div className="connect-ai-actions">
+                        <button
+                          type="button"
+                          className="primary"
+                          onClick={() => setProvidersOpen(true)}
+                        >
+                          {uiText("Connect provider")}
+                        </button>
+                        <button
+                          type="button"
+                          className="text-button"
+                          onClick={dismissWelcome}
+                        >
+                          {uiText("Skip")}
+                        </button>
+                      </div>
+                    </section>
+                  )}
                 <form
                   className="chat-message-form"
                   onSubmit={submit(async () => {
@@ -776,7 +806,7 @@ function LocalAgentEditor({
                 className="secondary"
                 onClick={() => setProvidersOpen(true)}
               >
-                <Settings2 size={16} />
+                <Plug size={16} />
                 {t("Providers")}
               </button>
             </div>
@@ -848,11 +878,42 @@ function LocalAgentEditor({
                     }}
                   >
                     <option value="none">{uiText("No AI")}</option>
-                    {connection?.catalog?.providers.map((item) => (
-                      <option key={item.id} value={item.id}>
-                        {item.name}
-                      </option>
-                    ))}
+                    {(() => {
+                      const items = connection?.catalog?.providers ?? [];
+                      const isConnected = (id: string) =>
+                        connection?.connections?.some(
+                          (a) => a.provider === id,
+                        ) ||
+                        (!!connection?.ref && connection?.provider === id);
+                      const connected = items.filter((item) =>
+                        isConnected(item.id),
+                      );
+                      const other = items.filter(
+                        (item) => !isConnected(item.id),
+                      );
+                      return (
+                        <>
+                          {connected.length > 0 && (
+                            <optgroup label={uiText("Connected")}>
+                              {connected.map((item) => (
+                                <option key={item.id} value={item.id}>
+                                  {item.name}
+                                </option>
+                              ))}
+                            </optgroup>
+                          )}
+                          {other.length > 0 && (
+                            <optgroup label={uiText("Other")}>
+                              {other.map((item) => (
+                                <option key={item.id} value={item.id}>
+                                  {item.name}
+                                </option>
+                              ))}
+                            </optgroup>
+                          )}
+                        </>
+                      );
+                    })()}
                     {provider !== "none" &&
                       !connection?.catalog?.providers.some(
                         (item) => item.id === provider,
@@ -863,69 +924,94 @@ function LocalAgentEditor({
                       )}
                   </select>
                 </label>
-                {provider !== "none" && (
-                  <label>
-                    {uiText("Account")}
-                    <select
-                      aria-label={uiText("Account")}
-                      value={accountRef}
-                      disabled={agents.busy}
-                      onChange={(e) => setAccountRef(e.target.value)}
-                    >
-                      <option value="">
-                        {uiText(provider === "openai" ? "Default" : "Select")}
-                      </option>
-                      {connection?.connections
-                        ?.filter((a) => a.provider === provider)
-                        .map((a) => (
-                          <option key={a.ref} value={a.ref}>
-                            {a.name ||
-                              connection?.catalog?.providers.find(
-                                (p) => p.id === a.provider,
-                              )?.name ||
-                              "OpenAI"}
-                          </option>
-                        ))}
-                      {accountRef &&
-                        !connection?.connections?.some(
-                          (a) => a.ref === accountRef,
-                        ) && (
-                          <option value={accountRef} disabled>
-                            {uiText("Unavailable")}
-                          </option>
-                        )}
-                    </select>
-                  </label>
-                )}
-                <div hidden={provider === "none"}>
-                  {" "}
-                  <AIModelPicker
-                    value={model}
-                    onChange={setModel}
-                    connectionRef={
-                      provider !== "none"
-                        ? accountRef ||
-                          (connection?.provider === provider
-                            ? connection.ref
-                            : "") ||
-                          ""
-                        : ""
-                    }
-                    allowDemo={provider === "none"}
-                    disabled={agents.busy}
-                  />
-                </div>
+                {provider !== "none" &&
+                  ((connection?.connections?.filter(
+                    (a) => a.provider === provider,
+                  ).length ?? 0) >= 2 ||
+                    (!!accountRef &&
+                      !connection?.connections?.some(
+                        (a) => a.ref === accountRef,
+                      ))) && (
+                    <label>
+                      {uiText("Account")}
+                      <select
+                        aria-label={uiText("Account")}
+                        value={accountRef}
+                        disabled={agents.busy}
+                        onChange={(e) => setAccountRef(e.target.value)}
+                      >
+                        <option value="">
+                          {uiText(provider === "openai" ? "Default" : "Select")}
+                        </option>
+                        {connection?.connections
+                          ?.filter((a) => a.provider === provider)
+                          .map((a) => (
+                            <option key={a.ref} value={a.ref}>
+                              {a.name ||
+                                connection?.catalog?.providers.find(
+                                  (p) => p.id === a.provider,
+                                )?.name ||
+                                "OpenAI"}
+                            </option>
+                          ))}
+                        {accountRef &&
+                          !connection?.connections?.some(
+                            (a) => a.ref === accountRef,
+                          ) && (
+                            <option value={accountRef} disabled>
+                              {uiText("Unavailable")}
+                            </option>
+                          )}
+                      </select>
+                    </label>
+                  )}
+                {(() => {
+                  const hasAccount = !!(
+                    connection?.connections?.some(
+                      (a) => a.provider === provider,
+                    ) ||
+                    (connection?.provider === provider && !!connection?.ref)
+                  );
+                  const showModel =
+                    provider === "none" || hasAccount || !!model;
+                  return (
+                    <>
+                      {showModel && (
+                        <div hidden={provider === "none"}>
+                          {" "}
+                          <AIModelPicker
+                            value={model}
+                            onChange={setModel}
+                            connectionRef={
+                              provider !== "none"
+                                ? accountRef ||
+                                  (connection?.provider === provider
+                                    ? connection.ref
+                                    : "") ||
+                                  ""
+                                : ""
+                            }
+                            allowDemo={provider === "none"}
+                            disabled={agents.busy}
+                          />
+                        </div>
+                      )}
+                      {provider !== "none" && !hasAccount && (
+                        <button
+                          type="button"
+                          className="secondary"
+                          onClick={() => openProvidersWith({ provider })}
+                        >
+                          {`${uiText("Connect")} ${providerNames[provider] || provider}`}
+                        </button>
+                      )}
+                    </>
+                  );
+                })()}
               </fieldset>
               <div className="row-actions">
                 <button className="primary" disabled={agents.busy}>
                   {uiText("Save agent")}
-                </button>
-                <button
-                  type="button"
-                  className="text-button"
-                  onClick={() => reloadProfile()}
-                >
-                  {uiText("Reload")}
                 </button>
               </div>
             </form>
@@ -1002,11 +1088,7 @@ function LocalAgentEditor({
                         id: memoryID || undefined,
                         text: memory,
                         source: source.trim() || "Owner note",
-                        expiresAt: !memoryExpiryEdited
-                          ? memoryExpiryOriginal.current
-                          : expiry
-                            ? Math.floor(new Date(expiry).getTime() / 1000)
-                            : 0,
+                        expiresAt: memoryID ? memoryExpiryOriginal.current : 0,
                       })
                     )
                       resetMemory();
@@ -1090,18 +1172,6 @@ function LocalAgentEditor({
                         placeholder={uiText(
                           "e.g. Owner preference, reviewed today",
                         )}
-                      />
-                    </label>
-                    <label>
-                      {uiText("Expiry (optional)")}
-                      <input
-                        type="datetime-local"
-                        step="1"
-                        value={expiry}
-                        onChange={(e) => {
-                          setExpiry(e.target.value);
-                          setMemoryExpiryEdited(true);
-                        }}
                       />
                     </label>
                   </details>

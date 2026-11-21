@@ -174,17 +174,21 @@ func taskAIRequestValid(d agentDocument, q AgentAIRequest, now int64) error {
 }
 func changeTaskAI(d *agentDocument, c AgentCommand, profile, id string, now int64, fixture bool) error {
 	if c.Action == "task-ai-prepare" {
-		if m, ok := currentProviderModel(c.Model); ok && modelProvider(m) == "kimi-code" {
+		if m, ok := currentProviderModel(c.Model); (ok && modelProvider(m) == "kimi-code") || c.providerName == "kimi-code" {
 			return errors.New("Kimi Code is interactive only; choose a Platform API account for tasks")
 		}
-		if !validAgentText(c.Name, 80, true) || !validAgentText(c.Text, 1000, true) || (c.Calendar == nil && (c.IntervalSeconds < 60 || c.IntervalSeconds > 604800)) || c.MaxRuns < 1 || c.MaxRuns > 10 || c.AuthorizationSeconds < 60 || c.AuthorizationSeconds > 604800 || !validPolicyTotal(chatModelPolicyForMethod(c.Model, c.providerAuthMethod), c.TotalBudgetMicrousd) || len(d.Tasks) >= 100 {
+		taskPolicy := chatModelPolicyForMethod(c.Model, c.providerAuthMethod)
+		if c.providerName != "" {
+			taskPolicy = dynamicModelPolicy(c.providerName, c.Model, c.providerAuthMethod)
+		}
+		if !validAgentText(c.Name, 80, true) || !validAgentText(c.Text, 1000, true) || (c.Calendar == nil && (c.IntervalSeconds < 60 || c.IntervalSeconds > 604800)) || c.MaxRuns < 1 || c.MaxRuns > 10 || c.AuthorizationSeconds < 60 || c.AuthorizationSeconds > 604800 || !validPolicyTotal(taskPolicy, c.TotalBudgetMicrousd) || len(d.Tasks) >= 100 {
 			return errors.New("bounded AI task name/prompt/schedule/authorization and total budget required")
 		}
 		// Reuse the exact request validator and complete wire disclosure, then reserve
 		// all future request slots rather than publishing a disposable preview request.
 		copy := *d
 		copy.AIRequests = append([]AgentAIRequest{}, d.AIRequests...)
-		if e := changeAgentAI(&copy, AgentCommand{providerAuthMethod: c.providerAuthMethod, Model: c.Model, ConnectionRef: c.ConnectionRef, Action: "ai-prepare", ID: c.ID, Text: c.Text, Limits: c.Limits, MemorySelection: c.MemorySelection}, profile, id, now, false, nil); e != nil {
+		if e := changeAgentAI(&copy, AgentCommand{providerName: c.providerName, providerAuthMethod: c.providerAuthMethod, Model: c.Model, ConnectionRef: c.ConnectionRef, Action: "ai-prepare", ID: c.ID, Text: c.Text, Limits: c.Limits, MemorySelection: c.MemorySelection}, profile, id, now, false, nil); e != nil {
 			return e
 		}
 		q := copy.AIRequests[len(copy.AIRequests)-1]

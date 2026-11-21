@@ -51,16 +51,10 @@ func providerModelsPath(id string) string {
 	return providerBasePath(id) + "/models"
 }
 func providerModelBodyLimit(id string) int64 {
-	if id == "openrouter" {
-		return 2097152
-	}
-	return 262144
+	return 4 * 1024 * 1024
 }
 func providerJSONNodes(id string) int {
-	if id == "openrouter" {
-		return 262144
-	}
-	return 32768
+	return 524288
 }
 func compatibleRequestAllowed(id string, r *http.Request) bool {
 	if id == "qwen" && r.Method == http.MethodGet {
@@ -265,7 +259,7 @@ func admitCompatible(ctx context.Context, q *AgentAIRequest, rt http.RoundTrippe
 	found := false
 	seen := map[string]bool{}
 	for _, row := range rows {
-		if !validProviderModelID(row.ID) || seen[row.ID] || row.Created < 0 || row.Created > now().Unix() || newerProviderRecordForID(q.Model, row, rows) {
+		if !validProviderModelID(row.ID) || seen[row.ID] || row.Created < 0 || row.Created > now().Unix()+300 {
 			return refuse()
 		}
 		seen[row.ID] = true

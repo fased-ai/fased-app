@@ -227,10 +227,19 @@ test("Meteora shell preserves drafts and records through navigation theme langua
     exact: true,
   });
   expect((await rail.textContent())?.trim()).toBe("");
-  await rail.getByRole("link", { name: "Mining", exact: true }).focus();
+  for (const hidden of ["News", "Mining", "Onchain", "Hyperliquid"]) {
+    await expect(
+      rail.getByRole("link", {
+        name: hidden,
+        exact: true,
+        includeHidden: true,
+      }),
+    ).toHaveCount(0);
+  }
+  await rail.getByRole("link", { name: "Memory", exact: true }).focus();
   expect(
     await rail
-      .getByRole("link", { name: "Mining", exact: true })
+      .getByRole("link", { name: "Memory", exact: true })
       .evaluate((el) => getComputedStyle(el, "::after").opacity),
   ).toBe("1");
   await page
@@ -242,8 +251,13 @@ test("Meteora shell preserves drafts and records through navigation theme langua
     name: "More pages",
     exact: true,
   });
+  for (const hidden of ["Mining", "Onchain", "Hyperliquid"]) {
+    await expect(
+      more.getByRole("link", { name: hidden, exact: true }),
+    ).toHaveCount(0);
+  }
   await expect(
-    more.getByRole("link", { name: "Onchain", exact: true }),
+    more.getByRole("link", { name: "News", exact: true }),
   ).toBeVisible();
   await expect(
     more.getByRole("link", { name: "Memory", exact: true }),
@@ -264,7 +278,7 @@ test("Meteora shell preserves drafts and records through navigation theme langua
     page.getByRole("button", { name: "More", exact: true }),
   ).toBeFocused();
   await page.getByRole("button", { name: "More", exact: true }).click();
-  await more.getByRole("link", { name: "Onchain", exact: true }).click();
+  await more.getByRole("link", { name: "News", exact: true }).click();
   await page
     .getByRole("navigation", { name: "Main navigation", exact: true })
     .getByRole("link", { name: "Chat", exact: true })
@@ -585,7 +599,7 @@ test("shared WEN Overview Wallets and Settings preserve fixture authority and re
   page.setDefaultTimeout(10000);
   await stop();
   await start(true);
-  await page.goto(url);
+  await page.goto(url + "/#overview");
   const claim = JSON.parse(
     await readFile(join(dir, "claim-code.json"), "utf8"),
   );
@@ -782,7 +796,7 @@ test("shared WEN remaining agent pages preserve news provenance paper budgets an
   page.setDefaultTimeout(10000);
   await stop();
   await start(true);
-  await page.goto(url);
+  await page.goto(url + "/#overview");
   const claim = JSON.parse(
     await readFile(join(dir, "claim-code.json"), "utf8"),
   );
@@ -1098,7 +1112,7 @@ test("Dashboard drag and resize autosave without a duplicate home rail shortcut"
       });
     else await route.continue();
   });
-  await page.goto(url);
+  await page.goto(url + "/#overview");
   const claim = JSON.parse(
     await readFile(join(dir, "claim-code.json"), "utf8"),
   );
@@ -1266,6 +1280,7 @@ test("compact agent pages share one provider editor and keep feed settings off t
     .click();
   const provider = page.getByRole("region", { name: "Providers", exact: true });
   await expect(provider.locator(".ai-connection")).toHaveCount(1);
+  await provider.getByRole("button", { name: "API key", exact: true }).click();
   await expect(provider.getByLabel("API key", { exact: true })).toBeVisible();
   await expect(provider.getByLabel("API key", { exact: true })).toHaveValue("");
   await captureScreenshot(page, {
@@ -1290,6 +1305,7 @@ test("compact agent pages share one provider editor and keep feed settings off t
     .getByRole("button", { name: "Providers", exact: true })
     .last()
     .click();
+  await provider.getByRole("button", { name: "API key", exact: true }).click();
   await revealControl(
     page,
     provider.getByLabel("Vault passphrase", { exact: true }),
@@ -1352,7 +1368,7 @@ test("Dashboard joins provider agent Chat reviewed task result and memory withou
   page.on("request", (r) => {
     if (!fixtureOrigins.has(new URL(r.url()).origin)) external.push(r.url());
   });
-  await page.goto(url);
+  await page.goto(url + "/#overview");
   const claim = JSON.parse(
     await readFile(join(dir, "claim-code.json"), "utf8"),
   );
@@ -1416,6 +1432,7 @@ test("Dashboard joins provider agent Chat reviewed task result and memory withou
     .click();
   const editor = page.getByRole("region", { name: "Providers", exact: true });
   await expect(instance).not.toBeVisible();
+  await editor.getByRole("button", { name: "API key", exact: true }).click();
   await revealControl(
     page,
     editor.getByLabel("Vault passphrase", { exact: true }),
@@ -1434,7 +1451,7 @@ test("Dashboard joins provider agent Chat reviewed task result and memory withou
   await editor
     .getByRole("button", { name: "Add provider", exact: true })
     .click();
-  await editor.getByLabel("Name", { exact: true }).fill("Research");
+  await editor.getByRole("button", { name: "API key", exact: true }).click();
   await editor
     .getByLabel("API key", { exact: true })
     .fill("fased-test-second-dashboard-key");
@@ -1447,7 +1464,7 @@ test("Dashboard joins provider agent Chat reviewed task result and memory withou
     .toBe(2);
   const providerAccounts = await privateCLI(["ai-connection"]);
   const connection = providerAccounts.connections.find(
-    (a: any) => a.name === "Research",
+    (a: any) => a.ref !== primary.ref,
   );
   expect(providerAccounts.ref).toBe(primary.ref);
   expect(connection.ref).not.toBe(primary.ref);
@@ -1619,7 +1636,11 @@ test("Dashboard joins provider agent Chat reviewed task result and memory withou
   expect(JSON.stringify((await read()).memories[0])).toContain(
     resultMessage.id,
   );
-  await page.getByRole("button", { name: "Memory", exact: true }).click();
+  await page.getByRole("button", { name: "More", exact: true }).click();
+  await page
+    .getByRole("navigation", { name: "More pages", exact: true })
+    .getByRole("link", { name: "Memory", exact: true })
+    .click();
   await expect(
     page.getByText("Prefer daily SOL risk summaries", { exact: true }),
   ).toBeVisible();

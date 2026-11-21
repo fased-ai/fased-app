@@ -310,6 +310,9 @@ func changeAgentAI(d *agentDocument, c AgentCommand, profile, id string, now int
 		}
 		l := *c.Limits
 		selectedPolicy := chatModelPolicyForMethod(c.Model, c.providerAuthMethod)
+		if c.providerName != "" {
+			selectedPolicy = dynamicModelPolicy(c.providerName, c.Model, c.providerAuthMethod)
+		}
 		if !validPolicyLimits(l, selectedPolicy) || !unmeteredPolicy(selectedPolicy) && l.BudgetMicrousd > maxModelBudget(c.Model) {
 			return errors.New("invalid token/time limits or insufficient fixture budget")
 		}
@@ -319,7 +322,7 @@ func changeAgentAI(d *agentDocument, c AgentCommand, profile, id string, now int
 		}
 		q := AgentAIRequest{ConnectionRef: c.ConnectionRef, ID: id, ProfileID: profile, SessionID: c.ID, Prompt: c.Text, Model: fixtureAIModel, Context: context, Limits: l, State: "prepared", CreatedAt: now, Cards: []AIActionCard{}}
 		if c.Model != "" && c.Model != fixtureAIModel {
-			q.Model, q.Policy = c.Model, chatModelPolicyForMethod(c.Model, c.providerAuthMethod)
+			q.Model, q.Policy = c.Model, selectedPolicy
 		}
 		if e := validateAIModelPolicy(q, now); e != nil {
 			return e
@@ -444,7 +447,9 @@ func aiWire(q AgentAIRequest) ([]byte, error) {
 	}
 	if q.Policy != nil && q.Policy.CacheMode != "" {
 		wire["prompt_cache_options"] = map[string]string{"mode": q.Policy.CacheMode}
-		wire["reasoning"] = map[string]string{"effort": q.Policy.Reasoning}
+		if q.Policy.Reasoning != "" {
+			wire["reasoning"] = map[string]string{"effort": q.Policy.Reasoning}
+		}
 	}
 	return json.Marshal(wire)
 }
@@ -508,8 +513,8 @@ func callReviewedAgentAIStreamAt(ctx context.Context, q AgentAIRequest, rt http.
 	}
 	defer res.Body.Close()
 	if unmeteredRequest(q) && res.StatusCode != 200 {
-		raw, readErr := io.ReadAll(io.LimitReader(res.Body, 16385))
-		if readErr != nil || len(raw) > 16384 {
+		raw, readErr := io.ReadAll(io.LimitReader(res.Body, 262145))
+		if readErr != nil || len(raw) > 262144 {
 			return reconcilePlanFailure(q, &planProviderFailure{Status: res.StatusCode, Body: "invalid", Code: "response_unverified"}, res.Header.Get("X-Request-Id"))
 		}
 		return reconcilePlanFailure(q, planFailure(res.StatusCode, res.Header.Get("Content-Type"), res.Header.Get("X-Request-Id"), raw, false), res.Header.Get("X-Request-Id"))
@@ -529,9 +534,9 @@ func callReviewedAgentAIStreamAt(ctx context.Context, q AgentAIRequest, rt http.
 		}
 		return q, errors.New("provider stream unavailable; reservation retained")
 	} else {
-		b, e = io.ReadAll(io.LimitReader(res.Body, 16385))
+		b, e = io.ReadAll(io.LimitReader(res.Body, 262145))
 	}
-	if e != nil || len(b) > 16384 || res.StatusCode != 200 {
+	if e != nil || len(b) > 262144 || res.StatusCode != 200 {
 		if unmeteredRequest(q) {
 			return reconcilePlanFailure(q, e, res.Header.Get("X-Request-Id"))
 		}
@@ -628,7 +633,7 @@ func callReviewedAgentAIStreamAt(ctx context.Context, q AgentAIRequest, rt http.
 	q.HeldMicrousd = 0
 	q.State = "failed"
 	q.Failure = "Response was incomplete, refused or failed validation. No action was executed."
-	if _, current := currentProviderModel(q.Model); current {
+	if q.Policy != nil {
 		// Reasoning metadata is never surfaced or interpreted as an action. The one
 		// assistant message remains the only admissible answer.
 		if len(wire.Output) > 8 {

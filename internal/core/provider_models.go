@@ -85,6 +85,7 @@ func validProviderModelID(id string) bool {
 type discoveredModel struct {
 	Line     string  `json:"line,omitempty"`
 	ID       string  `json:"id"`
+	Name     string  `json:"name,omitempty"`
 	Object   string  `json:"object"`
 	Created  int64   `json:"created"`
 	OwnedBy  string  `json:"owned_by"`
@@ -130,18 +131,6 @@ func (s *Store) refreshProviderModels(ctx context.Context, ref string, rt http.R
 	state = s.provider.accounts[ref]
 	if err != nil || state == nil || current.Ref != ref || current.Locked || state.epoch != epoch || state.digest != digest || state.modelRefresh != refresh {
 		return current, ErrConflict
-	}
-	if result.State == "ready" {
-		if state.superseded == nil {
-			state.superseded = map[string]bool{}
-		}
-		for _, entry := range registryForProvider(provider).Models {
-			for _, record := range result.Models {
-				if record.Shutdown == nil && (record.OwnedBy == provider || record.OwnedBy == "system") && newerProviderRecord(entry, record, result.Models) {
-					state.superseded[entry.ID] = true
-				}
-			}
-		}
 	}
 	state.discovery = result
 	return s.aiConnectionLocked(ref)
@@ -211,9 +200,20 @@ func fetchProviderModelList(ctx context.Context, client *http.Client, provider s
 			logProviderDiag("models-fetch", map[string]any{"provider": provider, "method": method, "endpoint": safeEndpointPath(providerOrigin(provider) + path), "reason": "parse_error", "err": errText})
 			return failed
 		}
-		for _, m := range records {
-			if !validProviderModelID(m.ID) || seen[m.ID] || m.Object != "model" || (m.Created <= 0 && !compatibleProvider(provider) && provider != "local") || m.Created < 0 || m.Created > now.Unix() || len(m.OwnedBy) < 1 || len(m.OwnedBy) > 128 {
-				logProviderDiag("models-fetch", map[string]any{"provider": provider, "method": method, "endpoint": safeEndpointPath(providerOrigin(provider) + path), "reason": "entry_invalid"})
+		for i := range records {
+			if records[i].Object == "" {
+				records[i].Object = "model"
+			}
+			if records[i].OwnedBy == "" {
+				records[i].OwnedBy = provider
+			}
+			m := records[i]
+			if !validProviderModelID(m.ID) || seen[m.ID] || m.Object != "model" || (m.Created <= 0 && !compatibleProvider(provider) && provider != "local" && method != "sign-in") || m.Created < 0 || m.Created > now.Unix()+300 || len(m.OwnedBy) < 1 || len(m.OwnedBy) > 128 {
+				logProviderDiag("models-fetch", map[string]any{
+					"provider": provider, "method": method, "endpoint": safeEndpointPath(providerOrigin(provider) + path),
+					"reason": "entry_invalid", "modelId": sanitizeDiagValue(m.ID, 64), "object": sanitizeDiagValue(m.Object, 24),
+					"created": m.Created, "ownedBy": sanitizeDiagValue(m.OwnedBy, 40), "duplicate": seen[m.ID],
+				})
 				return failed
 			}
 			seen[m.ID] = true
@@ -250,6 +250,10 @@ func fetchProviderModelList(ctx context.Context, client *http.Client, provider s
 	return failed
 }
 
+func providerOwnsModel(provider, ownedBy string) bool {
+	return ownedBy == provider || ownedBy == "system" || (provider == "openai" && (strings.HasPrefix(ownedBy, "openai-") || ownedBy == "chatgpt"))
+}
+
 func discoveredProviderCatalog(v AIConnectionView, d modelDiscovery, now int64) ProviderCatalog {
 	provider := v.Provider
 	if provider == "" {
@@ -261,7 +265,9 @@ func discoveredProviderCatalog(v AIConnectionView, d modelDiscovery, now int64) 
 	for _, r := range d.Models {
 		records[r.ID] = r
 	}
+	curated := map[string]bool{}
 	for _, entry := range registry.Models {
+		curated[entry.ID] = true
 		m := ProviderModel{ID: entry.ID, Name: entry.Name, Provider: provider, Method: "api-key", ConnectionRef: v.Ref, Recommended: true, Tier: entry.Tier, Policy: chatModelPolicy(entry.ID)}
 		if v.AuthMethod == "oauth" {
 			m.Method = "oauth"
@@ -271,12 +277,6 @@ func discoveredProviderCatalog(v AIConnectionView, d modelDiscovery, now int64) 
 			m.Policy = chatModelPolicyForMethod(entry.ID, "sign-in")
 		}
 		record, listed := records[entry.ID]
-		superseded := false
-		for _, r := range records {
-			if r.Shutdown == nil && (r.OwnedBy == provider || r.OwnedBy == "system") && newerProviderRecord(entry, r, d.Models) {
-				superseded = true
-			}
-		}
 		switch {
 		case entry.Currency != "" && entry.Currency != "USD":
 			m.Policy = nil
@@ -295,13 +295,11 @@ func discoveredProviderCatalog(v AIConnectionView, d modelDiscovery, now int64) 
 			m.Availability = d.State
 		case now < d.FetchedAt || now >= d.ExpiresAt:
 			m.Availability = "stale"
-		case superseded:
-			m.Availability = "superseded"
 		case !listed:
 			m.Availability = "unavailable"
 		case record.Shutdown != nil:
 			m.Availability = "retired"
-		case record.OwnedBy != provider && record.OwnedBy != "system":
+		case !providerOwnsModel(provider, record.OwnedBy):
 			m.Availability = "unsupported"
 		case v.TestOnly:
 			m.Availability = "fixture"
@@ -315,17 +313,55 @@ func discoveredProviderCatalog(v AIConnectionView, d modelDiscovery, now int64) 
 		}
 		catalog.Models = append(catalog.Models, m)
 	}
-	// Account-specific unsupported entries remain inspectable without allowing a
-	// new unknown tariff, alias, older generation or adapter through admission.
+	method := v.AuthMethod
+	if method == "" {
+		method = "api-key"
+	}
 	ids := []string{}
 	for id := range records {
-		if _, ok := currentProviderModel(id); !ok {
+		if !curated[id] {
 			ids = append(ids, id)
 		}
 	}
 	sort.Strings(ids)
 	for _, id := range ids {
-		catalog.Models = append(catalog.Models, ProviderModel{ID: id, Name: id, Provider: provider, Method: "api-key", ConnectionRef: v.Ref, Availability: "unsupported"})
+		rec := records[id]
+		name := rec.Name
+		if name == "" {
+			name = id
+		}
+		pol := dynamicModelPolicy(provider, id, method)
+		m := ProviderModel{ID: id, Name: name, Provider: provider, Method: method, ConnectionRef: v.Ref, Policy: pol}
+		switch {
+		case pol == nil:
+			m.Availability = "currency-unsupported"
+		case v.AuthMethod == "sign-in" && !v.PlanUse && !v.Locked:
+			m.Availability = "plan-access-required"
+		case v.Ref == "":
+			m.Availability = "disconnected"
+		case v.Locked:
+			m.Availability = "locked"
+		case d.State == "":
+			m.Availability = "unverified"
+		case d.State != "ready":
+			m.Availability = d.State
+		case now < d.FetchedAt || now >= d.ExpiresAt:
+			m.Availability = "stale"
+		case rec.Shutdown != nil:
+			m.Availability = "retired"
+		case !providerOwnsModel(provider, rec.OwnedBy):
+			m.Availability = "unsupported"
+		case v.TestOnly:
+			m.Availability = "fixture"
+			m.Selectable = true
+		case !v.LiveCallsEnabled:
+			m.Availability = "disabled"
+			m.Selectable = true
+		default:
+			m.Availability = "available"
+			m.Selectable = true
+		}
+		catalog.Models = append(catalog.Models, m)
 	}
 	if catalog.State == "" {
 		catalog.State = "unverified"
@@ -335,8 +371,13 @@ func discoveredProviderCatalog(v AIConnectionView, d modelDiscovery, now int64) 
 
 // New model policies must never reach a reader that can erase/rewrite them.
 func currentModelRequest(q AgentAIRequest) bool {
-	_, ok := currentProviderModel(q.Model)
-	return ok && q.Policy != nil
+	if q.Policy == nil {
+		return false
+	}
+	if _, ok := currentProviderModel(q.Model); ok {
+		return true
+	}
+	return isDiscoveredPolicy(q.Policy)
 }
 
 func newerProviderGeneration(candidate, current string) bool {

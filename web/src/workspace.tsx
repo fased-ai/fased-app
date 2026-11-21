@@ -13,6 +13,10 @@ import { useCore } from "./core";
 import { useAgents } from "./agents";
 import type { Action, Provider } from "./state";
 import type { AccountsView } from "./accounts";
+export type ProvidersPreset = {
+  provider?: string;
+  method?: "api-key" | "sign-in" | "local";
+};
 export type AgentSettingsDraft = {
   values: {
     name: string;
@@ -69,8 +73,18 @@ function loadInitialState() {
     return initialState();
   }
 }
+function defaultLandingRoute() {
+  if (import.meta.env.DEV) {
+    try {
+      if (sessionStorage.getItem("fased.test.prototype") === "1")
+        return "overview";
+    } catch {}
+  }
+  return "agents/chat";
+}
 function getRoute() {
   const raw = window.location.hash.slice(1);
+  if (!raw) return defaultLandingRoute();
   const aliases: Record<string, string> = {
     dashboard: "overview",
     chat: "agents/chat",
@@ -91,7 +105,7 @@ function getRoute() {
     route,
   )
     ? route
-    : "overview";
+    : defaultLandingRoute();
 }
 function useWorkspaceState() {
   const { t } = useUI();
@@ -222,12 +236,21 @@ function useWorkspaceState() {
   );
   const [setupOpen, setSetupOpen] = useState(false);
   const providersOpen = route === "providers";
+  const [providersPreset, setProvidersPreset] =
+    useState<ProvidersPreset | null>(null);
   const [providerReturn, setProviderReturn] = useState("agents/settings");
   function setProvidersOpen(open: boolean) {
     if (open) {
       if (route !== "providers") setProviderReturn(route);
       navigate("providers");
     } else navigate(providerReturn);
+  }
+  function openProvidersWith(preset?: ProvidersPreset) {
+    setProvidersPreset(preset ?? null);
+    setProvidersOpen(true);
+  }
+  function clearProvidersPreset() {
+    setProvidersPreset(null);
   }
   const [noticesOpen, setNoticesOpen] = useState(false);
   const [actionOpen, setActionOpen] = useState(false);
@@ -359,6 +382,9 @@ function useWorkspaceState() {
     setSetupOpen,
     providersOpen,
     setProvidersOpen,
+    providersPreset,
+    openProvidersWith,
+    clearProvidersPreset,
     noticesOpen,
     setNoticesOpen,
     actionOpen,

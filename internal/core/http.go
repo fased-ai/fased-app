@@ -43,6 +43,7 @@ type HTTPHandler struct {
 	instanceLocation  string
 	instanceOwnerUID  int
 	instanceOwnerKind string
+	requirePassword   bool
 	assets            fs.FS
 	authSlots         chan struct{}
 	aiSlots           chan struct{}
@@ -88,6 +89,9 @@ func NewHTTPHandler(store *Store, baseURL, publicOrigin string, assets fs.FS) (*
 		h.publicHost = parsed.Host
 	}
 	return h, nil
+}
+func (h *HTTPHandler) SetRequirePassword(v bool) {
+	h.requirePassword = v
 }
 func isLoopbackHost(host string) bool { ip := net.ParseIP(host); return ip != nil && ip.IsLoopback() }
 func (h *HTTPHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -209,7 +213,9 @@ func (h *HTTPHandler) api(w http.ResponseWriter, r *http.Request) {
 				writeError(w, 500, "state unavailable")
 				return
 			}
-			result["passwordAvailable"] = claimed && !localPasswordDisabled(salt)
+			passwordAvailable := claimed && !localPasswordDisabled(salt)
+			result["passwordAvailable"] = passwordAvailable
+			result["localAutoEnter"] = !h.requirePassword && !passwordAvailable
 		}
 		if valid {
 			result["csrfToken"] = csrfToken(token)

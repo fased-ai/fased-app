@@ -64,6 +64,7 @@ func reviewAgentTask(d agentDocument, c AgentCommand, profile string, revision, 
 		unexpected.Limits = nil
 		unexpected.TotalBudgetMicrousd = 0
 		unexpected.AuthorizationSeconds = 0
+		unexpected.providerName = ""
 		unexpected.providerAuthMethod = ""
 	}
 	unexpected.Action, unexpected.ProfileID, unexpected.Name, unexpected.Text, unexpected.BotID, unexpected.NewsSourceID, unexpected.ConsentDigest = "", "", "", "", "", "", ""

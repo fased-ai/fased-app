@@ -251,3 +251,119 @@ func TestLocalOwnerCLIAndBrowserShareManualAndAutomaticUpdater(t *testing.T) {
 	}
 	updateModeFixture(t, srv.Store, UpdatePolicy{Mode: "manual", Notify: true})
 }
+
+func TestLocalBrowserAutoEnterSecurity(t *testing.T) {
+	t.Parallel()
+	newHandler := func(t *testing.T) (*Store, *HTTPHandler) {
+		t.Helper()
+		s, err := OpenStore(filepath.Join(t.TempDir(), "state"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = s.Close() })
+		h, err := NewHTTPHandler(s, "http://127.0.0.1:7331", "", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return s, h
+	}
+	readAuthState := func(t *testing.T, h *HTTPHandler) map[string]any {
+		t.Helper()
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "http://127.0.0.1:7331/api/v1/auth/state", nil))
+		if w.Code != http.StatusOK {
+			t.Fatalf("auth/state status=%d body=%s", w.Code, w.Body.String())
+		}
+		var out map[string]any
+		if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil {
+			t.Fatal(err)
+		}
+		return out
+	}
+	callBrowser := func(h *HTTPHandler, origin, localHdr, secFetchSite string) *httptest.ResponseRecorder {
+		r := httptest.NewRequest(http.MethodPost, "http://127.0.0.1:7331/api/v1/auth/local", bytes.NewBufferString(`{"action":"browser"}`))
+		if origin != "" {
+			r.Header.Set("Origin", origin)
+		}
+		r.Header.Set("Content-Type", "application/json")
+		if localHdr != "" {
+			r.Header.Set("X-Fased-Local", localHdr)
+		}
+		if secFetchSite != "" {
+			r.Header.Set("Sec-Fetch-Site", secFetchSite)
+		}
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, r)
+		return w
+	}
+
+	s, h := newHandler(t)
+	if state := readAuthState(t, h); state["localAutoEnter"] != true || state["passwordAvailable"] != false {
+		t.Fatalf("expected default Local auto-enter state, got %#v", state)
+	}
+	if w := callBrowser(h, "http://127.0.0.1:7331", "", "same-origin"); w.Code != http.StatusForbidden {
+		t.Fatalf("missing X-Fased-Local status=%d", w.Code)
+	}
+	if w := callBrowser(h, "http://127.0.0.1:7331", "1", "cross-site"); w.Code != http.StatusForbidden {
+		t.Fatalf("cross-site Sec-Fetch-Site status=%d", w.Code)
+	}
+	if w := callBrowser(h, "http://127.0.0.1:7331", "1", "same-site"); w.Code != http.StatusForbidden {
+		t.Fatalf("same-site Sec-Fetch-Site status=%d", w.Code)
+	}
+	if w := callBrowser(h, "https://evil.example", "1", "same-origin"); w.Code != http.StatusForbidden {
+		t.Fatalf("foreign origin status=%d", w.Code)
+	}
+	w := callBrowser(h, "http://127.0.0.1:7331", "1", "same-origin")
+	if w.Code != http.StatusOK {
+		t.Fatalf("same-origin browser entry failed: %d %s", w.Code, w.Body.String())
+	}
+	var session struct {
+		SessionToken string `json:"sessionToken"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &session); err != nil || !s.Session(t.Context(), session.SessionToken) {
+		t.Fatalf("invalid browser auto-enter session: %v %q", err, w.Body.String())
+	}
+	if state := readAuthState(t, h); state["localAutoEnter"] != true || state["passwordAvailable"] != false {
+		t.Fatalf("passwordless claim should preserve localAutoEnter, got %#v", state)
+	}
+	if w = callBrowser(h, "http://127.0.0.1:7331", "1", ""); w.Code != http.StatusOK {
+		t.Fatalf("empty Sec-Fetch-Site on same-origin loopback failed: %d %s", w.Code, w.Body.String())
+	}
+
+	h.SetRequirePassword(true)
+	if state := readAuthState(t, h); state["localAutoEnter"] != false {
+		t.Fatalf("expected localAutoEnter=false when requirePassword=true, got %#v", state)
+	}
+	if w = callBrowser(h, "http://127.0.0.1:7331", "1", "same-origin"); w.Code != http.StatusForbidden {
+		t.Fatalf("requirePassword=true admitted browser action: %d", w.Code)
+	}
+	h.SetRequirePassword(false)
+
+	h.instanceLocation = "remote"
+	if w = callBrowser(h, "http://127.0.0.1:7331", "1", "same-origin"); w.Code != http.StatusForbidden {
+		t.Fatalf("remote admitted browser action: %d", w.Code)
+	}
+	h.instanceLocation = "local"
+
+	s.fixture = func(context.Context, signer.Request) (signer.Response, error) {
+		return signer.Response{}, errors.New("not called")
+	}
+	if w = callBrowser(h, "http://127.0.0.1:7331", "1", "same-origin"); w.Code != http.StatusForbidden {
+		t.Fatalf("custody fixture admitted browser action: %d", w.Code)
+	}
+
+	ps, ph := newHandler(t)
+	code, err := ps.IssueClaimCode(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = ps.Claim(t.Context(), code.Code, "owner-password-configured"); err != nil {
+		t.Fatal(err)
+	}
+	if state := readAuthState(t, ph); state["localAutoEnter"] != false || state["passwordAvailable"] != true {
+		t.Fatalf("password-claimed instance should disable localAutoEnter, got %#v", state)
+	}
+	if w = callBrowser(ph, "http://127.0.0.1:7331", "1", "same-origin"); w.Code != http.StatusForbidden {
+		t.Fatalf("password-claimed instance admitted passwordless browser action: %d", w.Code)
+	}
+}

@@ -375,3 +375,9 @@ func (s *Server) ConfigureInstallationSource(source string) error {
 	s.Store.installationSource.Store(value)
 	return nil
 }
+
+// ConfigureRequirePassword switches Local instances from instant loopback
+// auto-entry back to explicit launch links or owner passwords.
+func (s *Server) ConfigureRequirePassword(v bool) {
+	s.HTTP.Handler.(*HTTPHandler).SetRequirePassword(v)
+}

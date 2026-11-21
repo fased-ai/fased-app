@@ -45,6 +45,14 @@ func (s *Store) localOwnerSession(ctx context.Context) (string, error) {
 	return s.localOwnerSessionLocked(ctx)
 }
 
+func (s *Store) hasPassword(ctx context.Context) (bool, error) {
+	var salt, hash []byte
+	if err := s.db.QueryRowContext(ctx, "SELECT password_salt, password_hash FROM instance WHERE id=1").Scan(&salt, &hash); err != nil {
+		return false, err
+	}
+	return len(hash) > 0 && !localPasswordDisabled(salt), nil
+}
+
 func (s *Store) localOwnerSessionLocked(ctx context.Context) (string, error) {
 	token, err := randomToken()
 	if err != nil {
@@ -116,11 +124,11 @@ func (h *HTTPHandler) localOwnerAPI(w http.ResponseWriter, r *http.Request) {
 	if !decodeJSON(w, r, &request) {
 		return
 	}
-	if !ordinary && request.Action != "exchange" {
+	if !ordinary && request.Action != "exchange" && request.Action != "browser" {
 		writeError(w, 403, "protected Local owner access required")
 		return
 	}
-	if request.Action != "exchange" && r.Context().Value(privateIPCKey{}) != true {
+	if request.Action != "exchange" && request.Action != "browser" && r.Context().Value(privateIPCKey{}) != true {
 		writeError(w, 403, "Local OS owner access required")
 		return
 	}
@@ -142,6 +150,33 @@ func (h *HTTPHandler) localOwnerAPI(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		token, err = h.store.exchangeLocalLaunch(r.Context(), request.Code)
+	case "browser":
+		if !(ordinary || h.protectedLocalOwnerAllowed()) || h.requirePassword {
+			writeError(w, 403, "Local OS owner access required")
+			return
+		}
+		if r.Header.Get("X-Fased-Local") != "1" {
+			writeError(w, 403, "Local browser confirmation required")
+			return
+		}
+		if sfs := r.Header.Get("Sec-Fetch-Site"); sfs != "" && sfs != "same-origin" {
+			writeError(w, 403, "same-origin request required")
+			return
+		}
+		hasPW, pwErr := h.store.hasPassword(r.Context())
+		if pwErr != nil {
+			writeError(w, 500, "state unavailable")
+			return
+		}
+		if hasPW {
+			writeError(w, 403, "Owner password required")
+			return
+		}
+		if !h.allowRate(r, "auth-local", 20) {
+			writeError(w, 429, ErrRateLimited.Error())
+			return
+		}
+		token, err = h.store.localOwnerSession(r.Context())
 	default:
 		writeError(w, 400, "unsupported Local access request")
 		return

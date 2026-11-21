@@ -22,6 +22,12 @@ type Health = {
   apiVersion: string;
   instanceId: string;
   version: string;
+  capabilities?: {
+    aiConnections?: boolean;
+    walletSigner?: boolean;
+    financialExecution?: boolean;
+    updater?: boolean;
+  };
   connection: {
     location: "local" | "remote";
     transport: "loopback" | "private-https";
@@ -47,11 +53,22 @@ function useCoreState() {
   const [pending, setPending] = useState({ generation: 0, count: 0 });
   const [instanceId, setInstanceId] = useState("");
   const [version, setVersion] = useState("");
+  const [capabilities, setCapabilities] = useState<
+    Health["capabilities"] | null
+  >(null);
   const [connection, setConnection] = useState<InstanceConnection | null>(null);
   const [remoteAccess, setRemoteAccess] = useState(false);
   const [remoteEnrolled, setRemoteEnrolled] = useState(false);
   const [remoteSignedOut, setRemoteSignedOut] = useState(false);
   const [localAccess, setLocalAccess] = useState(false);
+  const [localAutoEnter, setLocalAutoEnter] = useState(false);
+  const [localSignedOut, setLocalSignedOut] = useState(() => {
+    try {
+      return sessionStorage.getItem("fased.local.signed-out") === "1";
+    } catch {
+      return false;
+    }
+  });
   const [passwordAvailable, setPasswordAvailable] = useState(false);
   const connectedID = useRef(
     new URL(location.href).searchParams.get("instance") ?? "",
@@ -83,6 +100,7 @@ function useCoreState() {
     setSetup(null);
     setInstanceId("");
     setVersion("");
+    setCapabilities(null);
     setError(reason);
     setMode("locked");
     try {
@@ -97,9 +115,10 @@ function useCoreState() {
       method = "GET",
       body?: unknown,
       signal?: AbortSignal,
+      extraHeaders?: Record<string, string>,
     ): Promise<T> => {
       const epoch = authGeneration.current;
-      const headers: Record<string, string> = {};
+      const headers: Record<string, string> = { ...extraHeaders };
       if (token.current && route !== "health")
         headers.Authorization = `Bearer ${token.current}`;
       if (method !== "GET") {
@@ -179,6 +198,7 @@ function useCoreState() {
         authenticated: boolean;
         csrfToken?: string;
         localAccess?: boolean;
+        localAutoEnter?: boolean;
         remoteAccess?: boolean;
         remoteEnrolled?: boolean;
         remoteSignedOut?: boolean;
@@ -187,6 +207,7 @@ function useCoreState() {
       }>("auth/state");
       if (epoch !== authGeneration.current) return;
       setLocalAccess(auth.localAccess === true);
+      setLocalAutoEnter(auth.localAutoEnter === true);
       setRemoteAccess(auth.remoteAccess === true);
       setRemoteEnrolled(auth.remoteEnrolled === true);
       setRemoteSignedOut(auth.remoteSignedOut === true);
@@ -227,6 +248,7 @@ function useCoreState() {
       setSetup(current);
       setInstanceId(health.instanceId);
       setVersion(health.version);
+      setCapabilities(health.capabilities ?? null);
       setMode("ready");
     } catch (e) {
       if (epoch === authGeneration.current) throw e;
@@ -253,6 +275,7 @@ function useCoreState() {
       if (fixturePreview && e instanceof CoreError && e.status === 0)
         setMode("prototype");
       else {
+        setLocalAutoEnter(false);
         setMode("error");
         setError(
           "The Fased instance is unavailable. Restart it or retry the connection.",
@@ -289,6 +312,7 @@ function useCoreState() {
         connection.transport !== "loopback"
       )
         await inspect();
+      const browserLocal = local && code === undefined && !nativeLocal;
       const session = await request<{
         csrfToken: string;
         sessionToken?: string;
@@ -310,16 +334,25 @@ function useCoreState() {
             : { code }
           : nativeLocal
             ? {}
-            : local
-              ? { action: "exchange", code }
-              : code === undefined
-                ? { password }
-                : { password, code },
+            : browserLocal
+              ? { action: "browser" }
+              : local
+                ? { action: "exchange", code }
+                : code === undefined
+                  ? { password }
+                  : { password, code },
+        undefined,
+        browserLocal ? { "X-Fased-Local": "1" } : undefined,
       );
       if (epoch !== authGeneration.current) return;
       if (remote) {
         try {
           sessionStorage.removeItem("fased.remote.signed-out");
+        } catch {}
+      }
+      if (local) {
+        try {
+          sessionStorage.removeItem("fased.local.signed-out");
         } catch {}
       }
       csrf.current = session.csrfToken;
@@ -337,6 +370,7 @@ function useCoreState() {
       }
       await refresh();
       if (epoch === authGeneration.current && remote) setRemoteSignedOut(false);
+      if (epoch === authGeneration.current && local) setLocalSignedOut(false);
     } catch (e) {
       if (epoch === authGeneration.current) {
         setError(e instanceof Error ? e.message : "Authentication failed");
@@ -396,6 +430,12 @@ function useCoreState() {
             sessionStorage.setItem("fased.remote.signed-out", "1");
           } catch {}
         }
+        if (localAccess) {
+          setLocalSignedOut(true);
+          try {
+            sessionStorage.setItem("fased.local.signed-out", "1");
+          } catch {}
+        }
         lock();
       }
     } catch (e) {
@@ -410,6 +450,8 @@ function useCoreState() {
     remoteEnrolled,
     remoteSignedOut,
     localAccess,
+    localAutoEnter,
+    localSignedOut,
     passwordAvailable,
     mode,
     request,
@@ -418,6 +460,7 @@ function useCoreState() {
     saving: pending.generation === authGeneration.current && pending.count > 0,
     instanceId,
     version,
+    capabilities,
     connection,
     authenticate,
     updateSetup,
@@ -427,6 +470,7 @@ function useCoreState() {
       try {
         await refresh();
       } catch {
+        setLocalAutoEnter(false);
         setMode("error");
         setError("The Fased instance is unavailable. Retry the connection.");
       }

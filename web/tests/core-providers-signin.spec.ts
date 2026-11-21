@@ -56,6 +56,7 @@ test("OpenAI test connection shares encrypted storage, bound consent and restart
   await expect(panel.getByRole("status")).toHaveText("No connection saved");
   const key = "fased-test-browser-disposable-key";
   const passphrase = "disposable-browser-vault-passphrase";
+  await panel.getByRole("button", { name: "API key", exact: true }).click();
   await revealControl(page, panel.getByLabel("API key"), "");
   await panel.getByLabel("API key").fill(key);
   await revealControl(page, panel.getByLabel("Vault passphrase"), "");
@@ -870,7 +871,7 @@ test("provider editor follows core credential admission without enabling live ca
 }) => {
   await stop();
   await start();
-  await page.goto(url);
+  await page.goto(url + "/#overview");
   const claim = JSON.parse(
     await readFile(join(dir, "claim-code.json"), "utf8"),
   );
@@ -929,6 +930,7 @@ test("provider editor follows core credential admission without enabling live ca
     .getByRole("button", { name: "Providers", exact: true })
     .click();
   const editor = page.getByRole("region", { name: "Providers", exact: true });
+  await editor.getByRole("button", { name: "API key", exact: true }).click();
   await revealControl(
     page,
     editor.getByLabel("Vault passphrase", { exact: true }),
@@ -947,6 +949,7 @@ test("provider editor follows core credential admission without enabling live ca
   await page.reload();
   await expect(page).toHaveURL(/#providers$/);
   await expect(editor).toBeVisible();
+  await editor.getByRole("button", { name: "API key", exact: true }).click();
   await revealControl(page, editor.getByLabel("API key", { exact: true }), "");
   await expect(editor.getByLabel("API key", { exact: true })).toBeVisible();
   await expect(editor.getByRole("status")).toContainText("No connection saved");
@@ -1152,7 +1155,6 @@ for (const location of ["local", "remote"]) {
       .getByRole("button", { name: "Add provider", exact: true })
       .click();
     await editor.getByRole("button", { name: "Sign in", exact: true }).click();
-    await editor.getByLabel("Name", { exact: true }).fill("ChatGPT research");
     await editor
       .getByRole("button", { name: "Continue with ChatGPT", exact: true })
       .click();
@@ -1192,7 +1194,6 @@ for (const location of ["local", "remote"]) {
       (a: any) => a.authMethod === "sign-in",
     );
     expect(account).toMatchObject({
-      name: "ChatGPT research",
       provider: "openai",
       authMethod: "sign-in",
       planUse: true,
@@ -1482,7 +1483,6 @@ test("provider sign-in remote restores pending attempt on reload and accepts liv
   ).toBeVisible();
 
   // Start again, reload #providers, paste callback containing OpenAI's RFC 9207 iss + whitespace.
-  await editor.getByLabel("Name", { exact: true }).fill("ChatGPT live iss");
   await editor
     .getByRole("button", { name: "Continue with ChatGPT", exact: true })
     .click();
@@ -1507,7 +1507,6 @@ test("provider sign-in remote restores pending attempt on reload and accepts liv
     .toBe(1);
   const accounts = await privateCLI(["ai-connection"]);
   expect(accounts.connections[0]).toMatchObject({
-    name: "ChatGPT live iss",
     provider: "openai",
     authMethod: "sign-in",
     planUse: true,
@@ -1573,9 +1572,6 @@ test("shared Add Provider binds native accounts and latest models across Chat an
     ).toHaveCount(0);
 
     await editor
-      .getByLabel("Name", { exact: true })
-      .fill(provider === "anthropic" ? "Claude research" : "Grok research");
-    await editor
       .getByLabel("API key", { exact: true })
       .fill(`fased-test-${provider}-disposable-ui-key`);
     await editor
@@ -1594,13 +1590,6 @@ test("shared Add Provider binds native accounts and latest models across Chat an
       (a: any) => a.provider === provider,
     );
     refs[provider] = account.ref;
-    await expect(editor.getByLabel("Name", { exact: true })).toHaveValue(
-      account.name,
-    );
-    await revealControl(page, editor.getByLabel("Name", { exact: true }), "");
-    await editor
-      .getByLabel("Name", { exact: true })
-      .fill("Unsaved provider name");
     const refreshButton = editor.getByRole("button", {
       name: "Refresh models",
       exact: true,
@@ -1613,10 +1602,6 @@ test("shared Add Provider binds native accounts and latest models across Chat an
     await refreshButton.click();
     expect((await refreshed).status()).toBe(200);
     await expect(refreshButton).toBeEnabled();
-    await expect(editor.getByLabel("Name", { exact: true })).toHaveValue(
-      "Unsaved provider name",
-    );
-    await editor.getByLabel("Name", { exact: true }).fill(account.name);
     expect(account.liveCallsEnabled).toBe(false);
     expect(
       account.catalog.models
@@ -1657,9 +1642,7 @@ test("shared Add Provider binds native accounts and latest models across Chat an
     const providerSelect = page.getByLabel("Provider", { exact: true });
     await revealControl(page, providerSelect);
     await providerSelect.selectOption(provider);
-    await expect(page.getByLabel("Account", { exact: true })).toHaveValue(
-      refs[provider],
-    );
+    await expect(page.getByLabel("Account", { exact: true })).toHaveCount(0);
     const model = provider === "anthropic" ? "claude-sonnet-5-5" : "grok-4.7";
     await page.getByLabel("Model", { exact: true }).selectOption(model);
     await page.getByRole("button", { name: "Save agent", exact: true }).click();
@@ -1669,6 +1652,10 @@ test("shared Add Provider binds native accounts and latest models across Chat an
           (await read()).profiles.find((p: any) => p.id === profileId).model,
       )
       .toBe(model);
+    expect(
+      (await read()).profiles.find((p: any) => p.id === profileId)
+        .connectionRef,
+    ).toBe(refs[provider]);
     await page.goto(url + "/#agents/chat");
     await page.getByLabel("Agent", { exact: true }).selectOption(profileId);
     await page
@@ -1927,7 +1914,6 @@ test("local provider connects in UI and shares configured agent Chat without API
   await expect(editor.getByLabel("Endpoint", { exact: true })).toHaveValue(
     "http://127.0.0.1:11434/v1",
   );
-  await editor.getByLabel("Name", { exact: true }).fill("Browser local");
   await expect(
     editor.getByLabel("API key (optional)", { exact: true }),
   ).toHaveValue("");
@@ -2120,7 +2106,6 @@ test("Providers page preserves agent drafts and shares account models without ge
   await expect(
     providers.getByRole("heading", { name: "Anthropic", exact: true }),
   ).toBeVisible();
-  await providers.getByLabel("Name", { exact: true }).fill("Claude research");
   await providers
     .getByLabel("API key", { exact: true })
     .fill("fased-test-anthropic-page-disposable");
@@ -2201,9 +2186,7 @@ test("Providers page preserves agent drafts and shares account models without ge
   await expect(page.getByLabel("Provider", { exact: true })).toHaveValue(
     "anthropic",
   );
-  await expect(page.getByLabel("Account", { exact: true })).toHaveValue(
-    account.ref,
-  );
+  await expect(page.getByLabel("Account", { exact: true })).toHaveCount(0);
   await expect(page.getByLabel("Model", { exact: true })).toHaveValue(
     draftModel,
   );
@@ -2240,7 +2223,9 @@ test("Providers page preserves agent drafts and shares account models without ge
     (await readOriginal()).profiles.find((p: any) => p.id === originalAgent)
       .name,
   ).toBe("Saved in another window");
-  await page.getByRole("button", { name: "Reload", exact: true }).click();
+  await page
+    .getByRole("button", { name: "Refresh records", exact: true })
+    .click();
   await expect(
     page.getByRole("textbox", { name: "Name", exact: true }),
   ).toHaveValue("Saved in another window");
@@ -2373,9 +2358,6 @@ test("New cloud accounts use the Providers page and shared agent Chat without ge
     "opencode",
   ]) {
     await providers.locator(`[data-provider="${provider}"] > button`).click();
-    await providers
-      .getByLabel("Name", { exact: true })
-      .fill(provider + " browser");
     await providers
       .getByLabel("API key", { exact: true })
       .fill(`fased-test-${provider}-disposable-ui-key`);
@@ -2599,16 +2581,12 @@ test("Named local servers share setup models and agent Chat without retargeting 
   );
   expect((await privateCLI(["agents"])).aiRequests).toHaveLength(0);
   await editor.getByLabel("Search providers", { exact: true }).clear();
-  await editor.getByLabel("Name", { exact: true }).fill("Local server draft");
   await editor
     .getByLabel("Vault passphrase", { exact: true })
     .fill("disposable-local-preset-vault");
   await editor
     .getByRole("button", { name: "Connect vLLM", exact: true })
     .click();
-  await expect(editor.getByLabel("Name", { exact: true })).toHaveValue(
-    "Local server draft",
-  );
   await expect(
     editor.getByLabel("Vault passphrase", { exact: true }),
   ).toHaveValue("disposable-local-preset-vault");
@@ -2785,7 +2763,6 @@ test("Qwen API keeps its region and model through Providers, agent and Chat", as
   await expect(
     providers.getByRole("button", { name: "Sign in", exact: true }),
   ).toHaveCount(0);
-  await providers.getByLabel("Name", { exact: true }).fill("Qwen Singapore");
   await providers
     .getByLabel("API key", { exact: true })
     .fill("fased-test-qwen-region-disposable-key");
@@ -2959,9 +2936,6 @@ test("Kimi regional USD account shares agent Chat and preserves mainland records
     providers.getByRole("button", { name: "Sign in", exact: true }),
   ).toHaveCount(0);
   await providers
-    .getByLabel("Name", { exact: true })
-    .fill("Kimi International");
-  await providers
     .getByLabel("API key", { exact: true })
     .fill("fased-test-kimi-region-disposable-key");
   await providers
@@ -3129,9 +3103,6 @@ test("Google API sign-in uses project models in agent Chat and preserves its API
     .click();
   await providers.getByRole("button", { name: "Sign in", exact: true }).click();
   await expect(providers.getByLabel("API key", { exact: true })).toHaveCount(0);
-  await providers
-    .getByLabel("Name", { exact: true })
-    .fill("Google OAuth project");
   await providers
     .getByLabel("Project", { exact: true })
     .fill("fased-fixture-project");
@@ -3320,9 +3291,6 @@ test("Kimi Code membership connects models agent and normal Chat without task au
     providers.getByRole("button", { name: "Sign in", exact: true }),
   ).toHaveCount(0);
   await providers
-    .getByLabel("Name", { exact: true })
-    .fill("Personal Kimi Code");
-  await providers
     .getByLabel("API key", { exact: true })
     .fill("fased-test-kimi-region-disposable-key");
   await providers
@@ -3499,9 +3467,6 @@ test("Anthropic workspace account joins models agent Chat and preserves existing
     providers.getByRole("button", { name: "Sign in", exact: true }),
   ).toHaveCount(0);
   await providers
-    .getByLabel("Name", { exact: true })
-    .fill("Anthropic workspace");
-  await providers
     .getByLabel("API key", { exact: true })
     .fill("fased-test-kimi-region-disposable-key");
   await providers
@@ -3672,9 +3637,6 @@ test("Ollama Cloud key joins models agent Chat and task access without an invent
   await expect(
     providers.getByRole("button", { name: "Sign in", exact: true }),
   ).toHaveCount(0);
-  await providers
-    .getByLabel("Name", { exact: true })
-    .fill("Ollama Cloud account");
   await providers
     .getByLabel("API key", { exact: true })
     .fill("fased-test-kimi-region-disposable-key");
@@ -3990,7 +3952,7 @@ test("ordinary mobile Providers scrolls all brands and its saved lower account w
 test("passwordless OS-protected providers and task access work without a vault passphrase", async ({
   page,
 }) => {
-  await page.goto(url);
+  await page.goto(url + "/#overview");
   const claim = JSON.parse(
     await readFile(join(dir, "claim-code.json"), "utf8"),
   );
@@ -4141,7 +4103,7 @@ test("passwordless OS-protected providers and task access work without a vault p
   await expect(editor).toBeVisible();
   await expect(editor.getByLabel("Vault passphrase")).toHaveCount(0);
 
-  // Sign-in CTA switches from primary Open sign-in to secondary once callback is ready.
+  // Local passwordless sign-in auto-completes once callback-ready without extra Finish clicks.
   await editor.getByRole("button", { name: "Sign in", exact: true }).click();
   await editor
     .getByRole("button", { name: "Continue with ChatGPT", exact: true })
@@ -4153,16 +4115,11 @@ test("passwordless OS-protected providers and task access work without a vault p
   await expect(openSignIn).toHaveClass(/\bprimary\b/);
   await expect(
     editor.getByRole("button", { name: "Finish", exact: true }),
-  ).toBeDisabled();
+  ).toHaveCount(0);
   signIn = { ...signIn, state: "callback-ready" };
   await page.evaluate(() =>
     window.dispatchEvent(new Event("ai-connection-changed")),
   );
-  await expect(openSignIn).toHaveClass(/\bsecondary\b/);
-  await expect(
-    editor.getByRole("button", { name: "Finish", exact: true }),
-  ).toBeEnabled();
-  await editor.getByRole("button", { name: "Finish", exact: true }).click();
   await expect
     .poll(() => postedActions.some((a) => a.action === "sign-in-complete"))
     .toBe(true);
@@ -4172,6 +4129,7 @@ test("passwordless OS-protected providers and task access work without a vault p
   await editor
     .getByRole("button", { name: "Add provider", exact: true })
     .click();
+  await editor.getByRole("button", { name: "API key", exact: true }).click();
   await expect(editor.getByLabel("Vault passphrase")).toHaveCount(0);
   await editor
     .getByLabel("API key", { exact: true })
@@ -4204,9 +4162,15 @@ test("passwordless OS-protected providers and task access work without a vault p
     .poll(() => postedActions.some((a) => a.action === "task-access-allow"))
     .toBe(true);
 
-  // 1-click Remove requires no passphrase.
+  // 1-click Remove requires no passphrase and Lock/Unlock are hidden for OS-protected vaults.
   await editor.getByText("Edit", { exact: true }).click();
   await expect(editor.getByLabel("Vault passphrase")).toHaveCount(0);
+  await expect(
+    editor.getByRole("button", { name: "Lock", exact: true }),
+  ).toHaveCount(0);
+  await expect(
+    editor.getByRole("button", { name: "Unlock", exact: true }),
+  ).toHaveCount(0);
   await editor.getByRole("button", { name: "Remove", exact: true }).click();
   await expect
     .poll(() => postedActions.some((a) => a.action === "remove"))

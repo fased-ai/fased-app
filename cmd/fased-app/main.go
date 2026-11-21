@@ -208,6 +208,7 @@ func run(args []string, in *os.File, out, errOut io.Writer) error {
 	researchOrigin := flags.String("wen-research-origin", "", "optional local read-only Kraken research service")
 	publicOrigin := flags.String("public-origin", "", "exact private HTTPS origin behind a trusted local proxy")
 	requireSandbox := flags.Bool("require-sandbox", false, "require installed Linux mount isolation before starting")
+	requirePassword := flags.Bool("require-password", false, "require explicit owner password instead of instant Local browser entry")
 	installationRoot := flags.String("installation-root", "", "immutable installed application directory")
 	remoteConfig := flags.String("remote-config", "", "immutable managed Remote installation identity")
 	custodyConfig := flags.String("custody-config", "", "root-owned managed fixture identity; never enables real wallets")
@@ -309,7 +310,7 @@ func run(args []string, in *os.File, out, errOut io.Writer) error {
 			if *custodyConfig != "" || *requireSandbox || *publicOrigin != "" {
 				return errors.New("AI fixture requires a standalone local development core")
 			}
-			return serveAgentFixture(*dir, *listen, out)
+			return serveAgentFixture(*dir, *listen, *requirePassword, out)
 		}
 		source := ""
 		if *requireSandbox && *installationRoot != "" && *custodyConfig == "" {
@@ -318,7 +319,7 @@ func run(args []string, in *os.File, out, errOut io.Writer) error {
 				source = "remote"
 			}
 		}
-		return serveInstalledRuntimeWithProviderFixture(*installationRoot, *dir, *listen, *publicOrigin, *researchOrigin, *instanceLocation, source, ownerUID, installedProviderFixture, out, *custodyConfig)
+		return serveInstalledRuntimeWithOptions(*installationRoot, *dir, *listen, *publicOrigin, *researchOrigin, *instanceLocation, source, ownerUID, installedProviderFixture, *requirePassword, out, *custodyConfig)
 	case "setup-link":
 		return ownerSetupLink(ctx, *dir, *publicOrigin, out)
 	case "claim-code":
@@ -496,6 +497,9 @@ func serveInstalledRuntimeAt(installationRoot, dir, listen, publicOrigin, resear
 	return serveInstalledRuntimeWithProviderFixture(installationRoot, dir, listen, publicOrigin, researchOrigin, location, source, ownerUID, false, out, custodyConfig...)
 }
 func serveInstalledRuntimeWithProviderFixture(installationRoot, dir, listen, publicOrigin, researchOrigin, location, source string, ownerUID int, fixture bool, out io.Writer, custodyConfig ...string) error {
+	return serveInstalledRuntimeWithOptions(installationRoot, dir, listen, publicOrigin, researchOrigin, location, source, ownerUID, fixture, false, out, custodyConfig...)
+}
+func serveInstalledRuntimeWithOptions(installationRoot, dir, listen, publicOrigin, researchOrigin, location, source string, ownerUID int, fixture, requirePassword bool, out io.Writer, custodyConfig ...string) error {
 	start := core.Start
 	if fixture {
 		if installationRoot == "" || source != location || (source != "local" && source != "remote") || researchOrigin != "" || len(custodyConfig) > 1 || len(custodyConfig) == 1 && custodyConfig[0] != "" {
@@ -509,6 +513,7 @@ func serveInstalledRuntimeWithProviderFixture(installationRoot, dir, listen, pub
 		return err
 	}
 	if err = server.ConfigureConnection(location, ownerUID); err == nil {
+		server.ConfigureRequirePassword(requirePassword)
 		projectionSource := source
 		if len(custodyConfig) == 1 && custodyConfig[0] != "" {
 			projectionSource, err = verifiedCustodyInstallationSource(custodyConfig[0], installationRoot, dir, location, publicOrigin)
@@ -587,11 +592,12 @@ func custodySourceProjection(m custodyinstall.Manifest, c signer.Config, root, d
 	}
 	return m.Location, nil
 }
-func serveAgentFixture(dir, listen string, out io.Writer) error {
+func serveAgentFixture(dir, listen string, requirePassword bool, out io.Writer) error {
 	server, err := core.StartAgentFixture(context.Background(), dir, listen, "", fasedapp.UI())
 	if err != nil {
 		return err
 	}
+	server.ConfigureRequirePassword(requirePassword)
 	return serveStarted(server, out)
 }
 func serveStarted(server *core.Server, out io.Writer) error {
