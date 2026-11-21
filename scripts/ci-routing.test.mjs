@@ -16,7 +16,7 @@ test("docs, RPC, UI and coupled changes select bounded coverage", () => {
     classify([
       "web/src/pages/Wallets.tsx",
       "internal/core/rpc_public.go",
-      "web/tests/core.spec.ts",
+      "web/tests/core-auth-owner.spec.ts",
     ]).scope,
     "full",
   );
@@ -66,6 +66,9 @@ function result(plan) {
     result: plan.core || plan.signer || plan.inspection ? "success" : "skipped",
   };
   needs["core-scenarios"] = {
+    result: plan.scope === "full" ? "success" : "skipped",
+  };
+  needs["core-packages"] = {
     result: plan.scope === "full" ? "success" : "skipped",
   };
   return needs;
@@ -336,8 +339,12 @@ test("browser and joined CLI coverage run independently of retained native clien
   );
   const browser = workflow.split("\n  browser:\n")[1].split("\n  signer:\n")[0];
   assert.match(browser, /if: needs.classify.outputs.core == 'true'/);
+  assert.match(browser, /matrix:\n\s+shard: \[1, 2\]/);
   assert.match(browser, /npm run test:ui/);
-  assert.match(browser, /npm run test:core-ui -- --fully-parallel --workers=3/);
+  assert.match(
+    browser,
+    /npm run test:core-ui -- --fully-parallel --workers=4 --shard=\$\{\{ matrix\.shard \}\}\/2/,
+  );
   assert.match(browser, /npm run test:core-ui -- --grep/);
   assert.doesNotMatch(
     workflow,

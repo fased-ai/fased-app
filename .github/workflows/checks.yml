@@ -136,11 +136,7 @@ jobs:
         env:
           FASED_FAST_TEST_KDF: "1"
         run: |
-          # Update unit coverage runs in the required handoff job on the same head.
-          go list ./internal/... ./cmd/fased-app ./cmd/fased-signer ./cmd/fased-install ./cmd/fased-package ./cmd/fased-release-candidate > .evidence/core-test-packages.txt
-          mapfile -t fased_other_packages < <(grep -vE '/internal/(core|update)$' .evidence/core-test-packages.txt)
-          test "${#fased_other_packages[@]}" -gt 0
-          go test -race "${fased_other_packages[@]}"
+          # Update and sibling package race suites run in parallel required jobs on the same head.
           go test -race ./internal/core -skip '^Test(SwapRecovery|VenueCredential|.*WEN)'
           # The exact complementary partition is required in core-scenarios.
       - if: needs.classify.outputs.scope == 'rpc'
@@ -253,6 +249,38 @@ jobs:
             .evidence/p4-complete/core-cli-result.json
             .evidence/p4-complete/core-cli.log
           retention-days: 7
+  core-packages:
+    needs: [classify, build-artifacts]
+    if: needs.classify.outputs.scope == 'full'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.x"
+          cache: true
+      - uses: actions/download-artifact@v4
+        with:
+          name: ci-built-binaries
+          path: .
+      - run: chmod +x .evidence/bin/*
+      - name: Install Linux sandbox prerequisite
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends bubblewrap
+      - name: Non-core package race coverage
+        env:
+          FASED_FAST_TEST_KDF: "1"
+        run: |
+          mkdir -p .evidence
+          go list ./internal/... ./cmd/fased-app ./cmd/fased-signer ./cmd/fased-install ./cmd/fased-package ./cmd/fased-release-candidate > .evidence/core-test-packages.txt
+          mapfile -t fased_other_packages < <(grep -vE '/internal/(core|update)$' .evidence/core-test-packages.txt)
+          test "${#fased_other_packages[@]}" -gt 0
+          go test -race "${fased_other_packages[@]}"
   browser:
     needs: [classify, build-artifacts]
     if: needs.classify.outputs.core == 'true'
@@ -260,6 +288,10 @@ jobs:
     # The joined browser/CLI suite reached the ten-minute limit while tests
     # were still completing; retain the full suite and allow normal teardown.
     timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -284,6 +316,7 @@ jobs:
       - if: steps.pw-cache.outputs.cache-hit != 'true'
         run: npx playwright install --only-shell chromium
       - name: Browser UI journey
+        if: matrix.shard == 1
         run: npm run test:ui
       - name: Build controlled Wallets browser adapters
         if: needs.classify.outputs.scope != 'rpc'
@@ -298,15 +331,16 @@ jobs:
         env:
           FASED_WALLET_BROWSER_BINARY: .evidence/bin/wallet-core.test
           FASED_WALLET_OWNER_BINARY: .evidence/bin/wallet-owner.test
-        run: npm run test:core-ui -- --fully-parallel --workers=3
+        run: npm run test:core-ui -- --fully-parallel --workers=4 --shard=${{ matrix.shard }}/2
       - name: Affected RPC browser and CLI journey
-        if: needs.classify.outputs.scope == 'rpc'
+        if: needs.classify.outputs.scope == 'rpc' && matrix.shard == 1
         run: npm run test:core-ui -- --grep 'public account records share UI/CLI state without wallet authority'
       - uses: actions/upload-artifact@v4
         if: failure() || cancelled()
         with:
-          name: browser-failure-evidence
+          name: browser-failure-evidence-${{ matrix.shard }}
           include-hidden-files: true
+          if-no-files-found: ignore
           path: |
             .evidence/*.json
             .evidence/*.png
@@ -490,6 +524,10 @@ jobs:
     runs-on: ubuntu-24.04
     # Measured attempts: 8m04s / 7m56s, including successful test teardown.
     timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        leg: [fixture, network, enrollment]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -506,12 +544,15 @@ jobs:
           path: .
       - run: chmod +x .evidence/bin/*
       - name: Prepare signed Ubuntu sources for installed enrollment
+        if: matrix.leg == 'enrollment'
         run: |
           node scripts/ci-ubuntu-mirror.mjs
           sudo install -m 0644 .evidence/ubuntu.sources /etc/apt/sources.list.d/ubuntu.sources
       - run: npm ci
-      - run: go test -c -o .evidence/bin/wallet-core.test ./internal/core
-      - run: node scripts/build-inspection-predecessor.mjs
+      - if: matrix.leg == 'fixture' || matrix.leg == 'network'
+        run: go test -c -o .evidence/bin/wallet-core.test ./internal/core
+      - if: matrix.leg == 'fixture'
+        run: node scripts/build-inspection-predecessor.mjs
       - id: pw-cache
         uses: actions/cache@v4
         with:
@@ -521,6 +562,7 @@ jobs:
       - if: steps.pw-cache.outputs.cache-hit != 'true'
         run: npx playwright install --only-shell chromium
       - name: Actual disposable installed inspection and guarded bridge
+        if: matrix.leg == 'fixture'
         env:
           FASED_INSTALLED_INSPECTION_FIXTURE: "1"
           FASED_INSPECTION_ACCEPTANCE: "1"
@@ -530,11 +572,13 @@ jobs:
           FASED_MANAGED_EVIDENCE: .evidence/p4-installed-inspection/managed
         run: node scripts/check-installed-inspection-fixture.mjs
       - name: Installed network custody and reviewed replacement recovery
+        if: matrix.leg == 'network'
         env:
           FASED_MANAGED_NETWORK: "devnet"
           FASED_MANAGED_EVIDENCE: .evidence/p3-network-managed
         run: node scripts/check-managed-custody.mjs
       - name: Controlled enrollment and protected ordinary Local enrollment
+        if: matrix.leg == 'enrollment'
         env:
           FASED_ENROLLMENT_ACCEPTANCE: "1"
         run: |
@@ -544,8 +588,9 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: installed-inspection-fixture
+          name: installed-inspection-fixture-${{ matrix.leg }}
           include-hidden-files: true
+          if-no-files-found: ignore
           path: |
             .evidence/p4-installed-inspection/*.json
             .evidence/p4-installed-inspection/*.stdout
@@ -570,6 +615,7 @@ jobs:
         classify,
         build-artifacts,
         core,
+        core-packages,
         core-scenarios,
         browser,
         signer,
