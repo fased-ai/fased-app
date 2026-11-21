@@ -582,3 +582,52 @@ func TestCustodyWorkerSystemdStatusParsing(t *testing.T) {
 		}
 	}
 }
+
+func TestGeneralAutomaticControllerRequiresAllowAutomaticCandidateAndPackagePolicy(t *testing.T) {
+	const owner = 1400
+	release := core.ApplicationRelease{
+		ManifestSHA256: strings.Repeat("a", 64),
+		EngineSHA256:   strings.Repeat("b", 64),
+		Sequence:       1000026,
+	}
+	o := core.ApplicationUpdateOperation{Automatic: true, ID: update.NewProbe(), Release: &release}
+	candidate := maintenance.CandidateReceipt{
+		Version:        1,
+		Owner:          owner,
+		Scope:          "update",
+		PacketSHA256:   release.ManifestSHA256,
+		ReleaseSHA256:  release.ManifestSHA256,
+		EngineSHA256:   release.EngineSHA256,
+		Sequence:       release.Sequence,
+		AllowAutomatic: false,
+		ExpiresAt:      time.Now().Add(time.Minute).Unix(),
+	}
+	starts := 0
+	c := custodyMaintenanceController{
+		owner:            owner,
+		automaticAllowed: func(core.ApplicationUpdateOperation) bool { return true },
+		readCandidate:    func(int) (maintenance.CandidateReceipt, error) { return candidate, nil },
+		startWorker:      func(context.Context, string) error { starts++; return nil },
+	}
+	if _, err := c.Apply(t.Context(), o); !errors.Is(err, core.ErrApplicationUpdateNotStarted) || starts != 0 {
+		t.Fatalf("general Automatic consumed manual-only candidate: starts=%d err=%v", starts, err)
+	}
+	candidate.AllowAutomatic = true
+	if _, err := c.Apply(t.Context(), o); err != nil || starts != 1 {
+		t.Fatalf("general Automatic refused allowAutomatic candidate: starts=%d err=%v", starts, err)
+	}
+	candidate.PacketSHA256 = strings.Repeat("c", 64)
+	if _, err := c.Apply(t.Context(), o); !errors.Is(err, core.ErrApplicationUpdateNotStarted) || starts != 1 {
+		t.Fatalf("general Automatic accepted foreign packet candidate: starts=%d err=%v", starts, err)
+	}
+	c.readCandidate = func(int) (maintenance.CandidateReceipt, error) {
+		return maintenance.CandidateReceipt{}, os.ErrNotExist
+	}
+	if _, err := c.Apply(t.Context(), o); err != nil || starts != 2 {
+		t.Fatalf("general Automatic refused public release without local candidate: starts=%d err=%v", starts, err)
+	}
+	c.automaticAllowed = func(core.ApplicationUpdateOperation) bool { return false }
+	if _, err := c.Apply(t.Context(), o); !errors.Is(err, core.ErrApplicationUpdateNotStarted) || starts != 2 {
+		t.Fatalf("disallowed package admitted Automatic: starts=%d err=%v", starts, err)
+	}
+}

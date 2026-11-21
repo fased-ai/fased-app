@@ -80,7 +80,12 @@ func DecodePackageRequest(data []byte) (PackageRequest, error) {
 		}
 	case "candidate-stage":
 		var candidateFields map[string]json.RawMessage
-		if len(fields) != 3 || fields["candidate"] == nil || update.StrictJSON(fields["candidate"], &candidateFields) != nil || len(candidateFields) != 2 || candidateFields["packetSha256"] == nil || candidateFields["scope"] == nil || r.Candidate == nil || !canonicalSHA256(r.Candidate.PacketSHA256) || (r.Candidate.Scope != "fresh" && r.Candidate.Scope != "update") {
+		if len(fields) != 3 || fields["candidate"] == nil || update.StrictJSON(fields["candidate"], &candidateFields) != nil ||
+			(len(candidateFields) != 2 && len(candidateFields) != 3) ||
+			candidateFields["packetSha256"] == nil || candidateFields["scope"] == nil ||
+			(len(candidateFields) == 3 && candidateFields["allowAutomatic"] == nil) ||
+			r.Candidate == nil || !canonicalSHA256(r.Candidate.PacketSHA256) || (r.Candidate.Scope != "fresh" && r.Candidate.Scope != "update") ||
+			(r.Candidate.Scope == "fresh" && candidateFields["allowAutomatic"] != nil) {
 			return PackageRequest{}, errors.New("one exact native candidate required")
 		}
 	case "provision":
@@ -106,8 +111,9 @@ const PackageOwnerStreamPrefix = "FASED-PACKAGE-OWNER-STREAM-1\n"
 // CandidateRequest carries an exact public CI artifact identity, never a
 // caller-selected root path, command, trust root, or network endpoint.
 type CandidateRequest struct {
-	PacketSHA256 string `json:"packetSha256"`
-	Scope        string `json:"scope"`
+	PacketSHA256   string `json:"packetSha256"`
+	Scope          string `json:"scope"`
+	AllowAutomatic bool   `json:"allowAutomatic,omitempty"`
 }
 
 // CandidateReceipt is public release metadata written only after the fixed
@@ -116,6 +122,7 @@ type CandidateReceipt struct {
 	Version           int           `json:"version"`
 	Owner             int           `json:"owner"`
 	Scope             string        `json:"scope"`
+	AllowAutomatic    bool          `json:"allowAutomatic,omitempty"`
 	PacketSHA256      string        `json:"packetSha256"`
 	InstallerSHA256   string        `json:"installerSha256"`
 	EngineSHA256      string        `json:"engineSha256"`
@@ -154,7 +161,7 @@ func (r CandidateReceipt) Validate() error {
 	}
 	switch r.Scope {
 	case "fresh":
-		if r.BaseSequence != 0 || r.BaseReleaseSHA256 != "" || r.BaseInstallation != "" || r.BaseManifestSHA != "" || r.ExpiresAt != 0 {
+		if r.BaseSequence != 0 || r.BaseReleaseSHA256 != "" || r.BaseInstallation != "" || r.BaseManifestSHA != "" || r.ExpiresAt != 0 || r.AllowAutomatic {
 			return errors.New("fresh candidate cannot authorize an update")
 		}
 	case "update":
@@ -238,7 +245,7 @@ func DecodeRequest(data []byte) (Request, error) {
 	switch r.Action {
 	case "candidate-stage":
 		q := r.Candidate
-		if q == nil || !canonicalSHA256(q.PacketSHA256) || (q.Scope != "fresh" && q.Scope != "update") || r.Serve != nil || r.Remote != nil || r.Peer != nil || r.Custody != nil || r.Enrollment != nil || r.Image != nil {
+		if q == nil || !canonicalSHA256(q.PacketSHA256) || (q.Scope != "fresh" && q.Scope != "update") || q.AllowAutomatic || r.Serve != nil || r.Remote != nil || r.Peer != nil || r.Custody != nil || r.Enrollment != nil || r.Image != nil {
 			return r, errors.New("one fixed candidate identity and scope required")
 		}
 	case "custody-enrollment-activation":

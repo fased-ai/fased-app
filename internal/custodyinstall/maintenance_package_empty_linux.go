@@ -28,9 +28,15 @@ func runEmptyPackageUpdate(ctx context.Context, a maintenance.Authority, r updat
 		r.Application != nil && r.Application.PreviousEngineSHA256 != base.CoreHash {
 		return errors.New("original empty-signer package operation required")
 	}
-	automatic, err := readControlledAutomatic(base, r)
-	if err != nil {
+	var automatic automaticViewMatcher
+	if pkgAuto, err := readPackageAutomaticOperation(base, r); err != nil {
 		return err
+	} else if pkgAuto != nil {
+		automatic = pkgAuto
+	} else if legacyAuto, err := readControlledAutomatic(base, r); err != nil {
+		return err
+	} else if legacyAuto != nil {
+		automatic = legacyAuto
 	}
 	// The instance lock protects its own pair and journal. The system launcher
 	// stays unchanged; another instance may be on a different release.
@@ -103,7 +109,7 @@ func runEmptyPackageUpdate(ctx context.Context, a maintenance.Authority, r updat
 		if err := protectedAppPeer(ctx, a, base, maintenance.AppMaintenanceRequest{Action: "application-prepare", OperationID: r.OperationID}, &prepared); err != nil || prepared.Checkpoint == nil {
 			return errors.Join(err, errors.New("the original application checkpoint is unavailable"))
 		}
-		if err := protectedAppPeer(ctx, a, base, maintenance.AppMaintenanceRequest{Action: "application-offline", OperationID: r.OperationID}, &offline); err != nil || offline.Checkpoint == nil || !automatic.matchesView(offline) || offline.View.Operation.OwnerLease != r.OwnerLease ||
+		if err := protectedAppPeer(ctx, a, base, maintenance.AppMaintenanceRequest{Action: "application-offline", OperationID: r.OperationID}, &offline); err != nil || offline.Checkpoint == nil || !automaticViewMatches(automatic, offline) || offline.View.Operation.OwnerLease != r.OwnerLease ||
 			update.SnapshotDigest("package-application-checkpoint", *offline.Checkpoint) != update.SnapshotDigest("package-application-checkpoint", *prepared.Checkpoint) {
 			return errors.Join(err, errors.New("the original application backup could not be verified"))
 		}
@@ -134,7 +140,7 @@ func runEmptyPackageUpdate(ctx context.Context, a maintenance.Authority, r updat
 			return err
 		}
 		var offline core.ApplicationOwnerView
-		if err := protectedAppPeer(ctx, a, base, maintenance.AppMaintenanceRequest{Action: "application-offline", OperationID: r.OperationID}, &offline); err != nil || offline.Checkpoint == nil || !automatic.matchesView(offline) || offline.View.Operation.OwnerLease != r.OwnerLease ||
+		if err := protectedAppPeer(ctx, a, base, maintenance.AppMaintenanceRequest{Action: "application-offline", OperationID: r.OperationID}, &offline); err != nil || offline.Checkpoint == nil || !automaticViewMatches(automatic, offline) || offline.View.Operation.OwnerLease != r.OwnerLease ||
 			update.SnapshotDigest("package-application-checkpoint", *offline.Checkpoint) != update.SnapshotDigest("package-application-checkpoint", *r.Application) {
 			return errors.Join(err, errors.New("the saved application checkpoint changed; preserve the operation"))
 		}
@@ -225,7 +231,7 @@ func runEmptyPackageUpdate(ctx context.Context, a maintenance.Authority, r updat
 	for {
 		var view core.ApplicationOwnerView
 		err := protectedAppPeer(ctx, a, target, maintenance.AppMaintenanceRequest{Action: "operation", OperationID: r.OperationID}, &view)
-		if err == nil && automatic.matchesView(view) && view.RunningSHA256 == target.CoreHash && view.BootID != r.Application.Pause.Core.BootID && view.View.Operation.OwnerLease == r.OwnerLease {
+		if err == nil && automaticViewMatches(automatic, view) && view.RunningSHA256 == target.CoreHash && view.BootID != r.Application.Pause.Core.BootID && view.View.Operation.OwnerLease == r.OwnerLease {
 			break
 		}
 		select {
@@ -240,7 +246,7 @@ func runEmptyPackageUpdate(ctx context.Context, a maintenance.Authority, r updat
 	if err := protectedAppPeer(ctx, a, target, maintenance.AppMaintenanceRequest{Action: "application-finish", OperationID: r.OperationID}, &completed); err != nil {
 		return err
 	}
-	if !automatic.matchesView(completed) || completed.View.Operation.Phase != "completed" || completed.View.Operation.Receipt == nil || completed.View.Operation.Receipt.EngineSHA256 != target.CoreHash {
+	if !automaticViewMatches(automatic, completed) || completed.View.Operation.Phase != "completed" || completed.View.Operation.Receipt == nil || completed.View.Operation.Receipt.EngineSHA256 != target.CoreHash {
 		return errors.New("the original application completion is unconfirmed")
 	}
 	r.Phase = "completed"
@@ -256,9 +262,20 @@ const packageUpdateConnected = true
 // Each operation must still verify its package, identity and recovery journal.
 func NativePackageUpdateAvailable() bool { return packageUpdateConnected }
 
-func matchEmptyPackageOperation(view core.ApplicationOwnerView, r update.MaintenanceRecord, base Manifest, automatic *automaticPredecessorAdmission) error {
+type automaticViewMatcher interface {
+	matchesView(core.ApplicationOwnerView) bool
+}
+
+func automaticViewMatches(automatic automaticViewMatcher, view core.ApplicationOwnerView) bool {
+	if automatic == nil {
+		return !view.View.Operation.Automatic
+	}
+	return automatic.matchesView(view)
+}
+
+func matchEmptyPackageOperation(view core.ApplicationOwnerView, r update.MaintenanceRecord, base Manifest, automatic automaticViewMatcher) error {
 	o := view.View.Operation
-	if o.ID != r.OperationID || (o.Phase != "applying" && o.Phase != "recovery") || !automatic.matchesView(view) || o.Release == nil ||
+	if o.ID != r.OperationID || (o.Phase != "applying" && o.Phase != "recovery") || !automaticViewMatches(automatic, view) || o.Release == nil ||
 		o.Release.Sequence != r.Package.Sequence || o.Release.ManifestSHA256 != r.Package.ReleaseSHA256 || o.Release.Version != r.Package.Version ||
 		o.PolicySHA256 != update.SnapshotDigest("application-update-policy", view.View.Policy) || view.RunningSHA256 != base.CoreHash ||
 		(o.OwnerLease != "" && o.OwnerLease != r.OperationID) {

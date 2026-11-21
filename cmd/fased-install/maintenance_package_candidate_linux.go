@@ -55,6 +55,8 @@ func maintenancePackageStageCandidate(ctx context.Context, owner int, location, 
 			}
 		} else if old.PacketSHA256 != q.PacketSHA256 || old.Scope != q.Scope {
 			return empty, errors.New("another candidate is retained; preserve its original operation")
+		} else if q.Scope == "update" && old.AllowAutomatic != q.AllowAutomatic {
+			return empty, errors.New("candidate automatic admission differs; preserve its original operation")
 		} else if q.Scope == "update" && time.Now().Unix() >= old.ExpiresAt {
 			return empty, errors.New("candidate review expired; preserve its original operation")
 		} else {
@@ -150,6 +152,7 @@ func maintenancePackageStageCandidate(ctx context.Context, owner int, location, 
 	}
 	receipt := maintenance.CandidateReceipt{Version: 1, Owner: owner, Scope: q.Scope, PacketSHA256: q.PacketSHA256, InstallerSHA256: identity.InstallerSHA256, EngineSHA256: identity.Core.SHA256, ProductVersion: identity.Version, Sequence: identity.Sequence, ReleaseSHA256: identity.ReleaseSHA256, Target: identity.Target}
 	if installed != nil {
+		receipt.AllowAutomatic = q.AllowAutomatic
 		receipt.BaseSequence, receipt.BaseReleaseSHA256 = installed.Sequence, installed.ReleaseSHA256
 		receipt.BaseInstallation = instance
 		receipt.BaseManifestSHA = update.SnapshotDigest("candidate-base-manifest:v1", base)
@@ -397,7 +400,7 @@ func verifyRetainedPackageInputs(root, parent string, a maintenance.Authority, l
 			return errors.New("unclassified candidate history; preserve it")
 		}
 		reservation, err := read(filepath.Join(parent, packet+".reservation.json"), 8192)
-		expected, _ := candidateDocument(maintenance.CandidateRequest{PacketSHA256: packet, Scope: receipt.Scope})
+		expected, _ := candidateDocument(maintenance.CandidateRequest{PacketSHA256: packet, Scope: receipt.Scope, AllowAutomatic: receipt.AllowAutomatic})
 		info, statErr := os.Lstat(filepath.Join(parent, packet))
 		if err != nil || !bytes.Equal(reservation, expected) || statErr != nil || !protectedCandidateDirectory(info) {
 			return errors.New("unclassified retained candidate; preserve it")
@@ -548,8 +551,10 @@ func acquirePackageSigner(ctx context.Context, p *bootstrap.Prepared, a maintena
 // core operation and the candidate admitted for this exact instance.
 func approvedPackageCandidate(view core.ApplicationOwnerView, operation string, installed update.MaintenancePackage, manifest custodyinstall.Manifest, candidate maintenance.CandidateReceipt, bound *maintenance.CandidateOperation, now time.Time) (maintenance.CustodyUpdateRequest, error) {
 	q, release, manual, err := approvedCustodyOperation(view, operation, now)
-	if err != nil || release == nil ||
-		!manual && (!custodyinstall.ControlledAutomaticOperation(manifest, &installed, view.View.Operation) || candidate.PacketSHA256 != release.ManifestSHA256) ||
+	automaticAdmitted := !manual && release != nil &&
+		((custodyinstall.AutomaticPackageOperation(manifest, &installed, view.View.Operation) && candidate.AllowAutomatic) ||
+			(custodyinstall.ControlledAutomaticOperation(manifest, &installed, view.View.Operation) && candidate.PacketSHA256 == release.ManifestSHA256))
+	if err != nil || release == nil || (!manual && !automaticAdmitted) ||
 		!candidate.MatchesBase(manifest.Owner, installed.Sequence, installed.ReleaseSHA256, manifest.ID, update.SnapshotDigest("candidate-base-manifest:v1", manifest)) ||
 		candidate.Sequence != release.Sequence || candidate.ReleaseSHA256 != release.ManifestSHA256 || candidate.EngineSHA256 != release.EngineSHA256 || candidate.ProductVersion != release.Version || candidate.Target != release.Target {
 		return maintenance.CustodyUpdateRequest{}, errors.New("the original authorized package operation and candidate must match")
@@ -620,7 +625,9 @@ func maintenancePackageAcquire(ctx context.Context, a maintenance.Authority, loc
 		return err
 	}
 	_, expected, manual, err := approvedCustodyOperation(view, operation, time.Now())
-	if err != nil || expected == nil || !manual && !custodyinstall.ControlledAutomaticOperation(manifest, installed, view.View.Operation) {
+	controlledAuto := !manual && custodyinstall.ControlledAutomaticOperation(manifest, installed, view.View.Operation)
+	generalAuto := !manual && custodyinstall.AutomaticPackageOperation(manifest, installed, view.View.Operation)
+	if err != nil || expected == nil || (!manual && !controlledAuto && !generalAuto) {
 		return errors.New("the original authorized application operation is required")
 	}
 	dir, err := update.PackageMaintenanceDirectory(a.Owner, location, instance, operation)
@@ -632,9 +639,12 @@ func maintenancePackageAcquire(ctx context.Context, a maintenance.Authority, loc
 		return err
 	}
 	receipt, err := maintenance.ReadPackageCandidateReceipt(a.Owner, location, instance)
-	if !manual && (err != nil || receipt.Scope != "update" || receipt.PacketSHA256 != expected.ManifestSHA256 ||
+	if controlledAuto && (err != nil || receipt.Scope != "update" || receipt.PacketSHA256 != expected.ManifestSHA256 ||
 		receipt.ReleaseSHA256 != expected.ManifestSHA256 || bound == nil && time.Now().Unix() >= receipt.ExpiresAt) {
 		return errors.New("the exact admitted controlled Automatic candidate is required")
+	}
+	if generalAuto && err == nil && receipt.Scope == "update" && receipt.ReleaseSHA256 == expected.ManifestSHA256 && !receipt.AllowAutomatic && !controlledAuto {
+		return errors.New("the staged candidate requires a manual update")
 	}
 	if bound != nil && (err != nil || bound.PacketSHA256 != receipt.PacketSHA256) {
 		return errors.New("the original bound package candidate is unavailable; preserve the operation")
@@ -643,7 +653,7 @@ func maintenancePackageAcquire(ctx context.Context, a maintenance.Authority, loc
 		if bound != nil {
 			return errors.New("the bound package candidate differs from the original operation")
 		}
-		receipt, err = acquirePublicPackageCandidate(ctx, a, location, instance, *expected)
+		receipt, err = acquirePublicPackageCandidate(ctx, a, location, instance, *expected, generalAuto)
 	}
 	if err != nil {
 		return errors.Join(err, errors.New("the approved package candidate is unavailable"))
@@ -673,14 +683,21 @@ func maintenancePackageAcquire(ctx context.Context, a maintenance.Authority, loc
 			return err
 		}
 	}
-	if err = custodyinstall.RecordControlledAutomatic(manifest, installed, view); err != nil {
-		return err
-	}
 	if err = maintenance.EnsureProtectedDirectory(filepath.Dir(dir)); err != nil {
 		return err
 	}
 	if err = maintenance.EnsureProtectedDirectory(dir); err != nil {
 		return err
+	}
+	if controlledAuto || (hostplatform.AutomaticPredecessorBuild && manual) {
+		if err = custodyinstall.RecordControlledAutomatic(manifest, installed, view); err != nil {
+			return err
+		}
+	}
+	if generalAuto {
+		if err = custodyinstall.RecordPackageAutomaticOperation(manifest, installed, view); err != nil {
+			return err
+		}
 	}
 	if bound == nil {
 		original := packageCandidateOperation(receipt, q)
@@ -745,7 +762,7 @@ func packageNeedsAcquisition(receipt maintenance.CandidateReceipt, expected core
 
 // A normal Update fetches and retains the independently authenticated public
 // package selected by the core operation. A changed latest release is refused.
-func acquirePublicPackageCandidate(ctx context.Context, a maintenance.Authority, location, instance string, expected core.ApplicationRelease) (receipt maintenance.CandidateReceipt, result error) {
+func acquirePublicPackageCandidate(ctx context.Context, a maintenance.Authority, location, instance string, expected core.ApplicationRelease, allowAutomatic bool) (receipt maintenance.CandidateReceipt, result error) {
 	o, err := packageCandidateOptions(a.Owner, location, instance)
 	if err != nil {
 		return receipt, err
@@ -766,7 +783,7 @@ func acquirePublicPackageCandidate(ctx context.Context, a maintenance.Authority,
 		_ = writer.CloseWithError(e)
 		done <- e
 	}()
-	q := maintenance.CandidateRequest{PacketSHA256: expected.ManifestSHA256, Scope: "update"}
+	q := maintenance.CandidateRequest{PacketSHA256: expected.ManifestSHA256, Scope: "update", AllowAutomatic: allowAutomatic}
 	receipt, err = maintenancePackageStageCandidate(ctx, a.Owner, location, instance, q, reader)
 	_ = reader.CloseWithError(err)
 	writeErr := <-done

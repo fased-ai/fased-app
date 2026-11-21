@@ -340,7 +340,7 @@ func (s *System) Run(ctx context.Context, input []byte, args ...string) ([]byte,
 		return nil, errors.New("unknown custody OS tool")
 	}
 	tools := []string{"/usr/bin/sudo", args[0]}
-	if !s.authorized && !s.NonInteractive && os.Getenv("FASED_INSTALL_ROOT_ENTRY") == "1" {
+	if !s.authorized && !s.NonInteractive {
 		tools = append(tools, "/usr/bin/true")
 	}
 	for _, p := range tools {
@@ -354,20 +354,26 @@ func (s *System) Run(ctx context.Context, input []byte, args ...string) ([]byte,
 			prompt = "Authorize disposable custody installation: dedicated locked OS accounts, root-owned files and system services. Fased itself remains unprivileged. No real wallets are enabled."
 		}
 		fmt.Fprintln(s.Out, prompt)
-		args := []string{"-v"}
-		if os.Getenv("FASED_INSTALL_ROOT_ENTRY") == "1" {
-			// This flag selects a noninteractive probe, not authority. Every
-			// subsequent operation still needs its own sudo -n permission.
-			args = []string{"-n", "--", "/usr/bin/true"}
+		// Probe passwordless sudo first so NOPASSWD/locked-password VPS admins
+		// are not blocked by sudo -v when non-interactive or %sudo is present.
+		probe := s.sudo(ctx, "-n", "--", "/usr/bin/true")
+		probe.Stdout = io.Discard
+		probe.Stderr = io.Discard
+		if probe.Run() == nil {
+			s.authorized = true
+		} else {
+			if os.Getenv("FASED_INSTALL_ROOT_ENTRY") == "1" {
+				return nil, errors.New("OS authorization cancelled or unavailable; requested setup was not performed")
+			}
+			c := s.sudo(ctx, "-v")
+			c.Stdin = s.In
+			c.Stdout = s.Out
+			c.Stderr = s.Out
+			if e := c.Run(); e != nil {
+				return nil, errors.New("OS authorization cancelled or unavailable; requested setup was not performed")
+			}
+			s.authorized = true
 		}
-		c := s.sudo(ctx, args...)
-		c.Stdin = s.In
-		c.Stdout = s.Out
-		c.Stderr = s.Out
-		if e := c.Run(); e != nil {
-			return nil, errors.New("OS authorization cancelled or unavailable; requested setup was not performed")
-		}
-		s.authorized = true
 	}
 	c := s.sudo(ctx, append([]string{"-n", "--"}, args...)...)
 	c.Stdin = bytes.NewReader(input)
