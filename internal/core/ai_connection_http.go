@@ -22,16 +22,18 @@ func (h *HTTPHandler) aiConnectionAPI(w http.ResponseWriter, r *http.Request, to
 	if !h.mutation(w, r) || !h.csrf(w, r, token) {
 		return
 	}
-	if !h.allowAuth() {
+	if !h.allowRate(r, "ai-connection", 20) {
 		writeError(w, 429, ErrRateLimited.Error())
 		return
 	}
-	select {
-	case h.authSlots <- struct{}{}:
-		defer func() { <-h.authSlots }()
-	default:
-		writeError(w, 429, "credential operation busy")
-		return
+	if h.aiSlots != nil {
+		select {
+		case h.aiSlots <- struct{}{}:
+			defer func() { <-h.aiSlots }()
+		default:
+			writeError(w, 429, "credential operation busy")
+			return
+		}
 	}
 	var c AIConnectionCommand
 	if !decodeJSON(w, r, &c) {

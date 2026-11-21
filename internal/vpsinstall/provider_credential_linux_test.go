@@ -266,7 +266,7 @@ func TestProtectedProviderCredentialOrdinaryReader(t *testing.T) {
 			t.Fatal("ordinary installer cannot verify encrypted identity", err)
 		}
 	}
-	if *count != 1 || h.files[taskCredentialPath(m)].Mode.Perm() != 0644 {
+	if *count != 1 || h.files[taskCredentialPath(m)].Mode.Perm() != 0600 {
 		t.Fatal("ciphertext was replaced or cannot be verified without elevation")
 	}
 }
@@ -280,22 +280,22 @@ func TestProtectedProviderCredentialRefusesForeignState(t *testing.T) {
 			switch fault {
 			case "oversized-target":
 				h.files[taskCredentialDirectory] = hostFile{UID: 0, Mode: os.ModeDir | 0755, Directory: true}
-				h.files[path] = hostFile{UID: 0, Mode: 0644, Regular: true, Data: make([]byte, 16385)}
+				h.files[path] = hostFile{UID: 0, Mode: 0600, Regular: true, Data: make([]byte, 16385)}
 			case "oversized-stage":
 				h.files[taskCredentialDirectory] = hostFile{UID: 0, Mode: os.ModeDir | 0755, Directory: true}
 				stage := filepath.Join(filepath.Dir(path), "."+filepath.Base(path)+"-"+m.ID+".pending")
-				h.files[stage] = hostFile{UID: 0, Mode: 0644, Regular: true, Data: make([]byte, 16385)}
+				h.files[stage] = hostFile{UID: 0, Mode: 0600, Regular: true, Data: make([]byte, 16385)}
 			case "foreign-directory":
 				h.files[taskCredentialDirectory] = hostFile{UID: 1000, Mode: os.ModeDir | 0755, Directory: true}
 			case "private-directory":
 				h.files[taskCredentialDirectory] = hostFile{UID: 0, Mode: os.ModeDir | 0700, Directory: true}
 			case "foreign-file", "wrong-file-mode":
 				h.files[taskCredentialDirectory] = hostFile{UID: 0, Mode: os.ModeDir | 0755, Directory: true}
-				f := hostFile{UID: 0, Mode: 0644, Regular: true, Data: bytes.Repeat([]byte{7}, 100)}
+				f := hostFile{UID: 0, Mode: 0600, Regular: true, Data: bytes.Repeat([]byte{7}, 100)}
 				if fault == "foreign-file" {
 					f.UID = 1000
 				} else {
-					f.Mode = 0600
+					f.Mode = 0666
 				}
 				h.files[path] = f
 			case "foreign-dropin":

@@ -1,10 +1,13 @@
 package core
 
 import (
+	"bufio"
 	"crypto/rand"
 	"crypto/subtle"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"github.com/fased-ai/fased-app/internal/tailnet"
 	"io"
 	"io/fs"
@@ -12,7 +15,9 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"os"
 	"path"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -20,6 +25,11 @@ import (
 )
 
 const sessionCookie = "fased_session"
+
+type rateWindow struct {
+	start    time.Time
+	attempts int
+}
 
 type HTTPHandler struct {
 	wenResearchOrigin string
@@ -35,16 +45,24 @@ type HTTPHandler struct {
 	instanceOwnerKind string
 	assets            fs.FS
 	authSlots         chan struct{}
+	aiSlots           chan struct{}
 	privateProof      privateAccessProofCache
-	limiter           struct {
-		sync.Mutex
-		start    time.Time
-		attempts int
-	}
+	limiterMu         sync.Mutex
+	limiter           map[string]*rateWindow
+	loopbackPeerUID   func(client, server *net.TCPAddr) (int, bool, error)
 }
 
 func NewHTTPHandler(store *Store, baseURL, publicOrigin string, assets fs.FS) (*HTTPHandler, error) {
-	h := &HTTPHandler{store: store, origins: map[string]bool{}, hosts: map[string]bool{}, assets: assets, authSlots: make(chan struct{}, 2), instanceLocation: "local"}
+	h := &HTTPHandler{
+		store:            store,
+		origins:          map[string]bool{},
+		hosts:            map[string]bool{},
+		assets:           assets,
+		authSlots:        make(chan struct{}, 2),
+		aiSlots:          make(chan struct{}, 2),
+		instanceLocation: "local",
+		limiter:          map[string]*rateWindow{},
+	}
 	if _, err := rand.Read(h.wenResearchKey[:]); err != nil {
 		return nil, err
 	}
@@ -77,9 +95,11 @@ func (h *HTTPHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Referrer-Policy", "no-referrer")
 	w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; object-src 'none'; base-uri 'none'; form-action 'self'")
 	w.Header().Set("X-Frame-Options", "DENY")
-	if h.remoteIngress && !h.legacyRemoteAccess(r.Context()) && r.Context().Value(remoteIdentityKey{}) == nil && ((r.Host == h.publicHost) || (r.Context().Value(privateIPCKey{}) != true && strings.HasPrefix(r.URL.Path, "/api/") && r.URL.Path != "/api/v1/health")) {
-		writeError(w, 403, "Private Tailscale access required")
-		return
+	if h.remoteIngress && !h.legacyRemoteAccess(r.Context()) && r.Context().Value(remoteIdentityKey{}) == nil {
+		if r.Host == h.publicHost || (r.Context().Value(privateIPCKey{}) != true && (!h.hosts[r.Host] || r.Method != http.MethodGet || r.URL.Path != "/api/v1/health" || !h.checkLoopbackPeerUID(r, true))) {
+			writeError(w, 403, "Private Tailscale access required")
+			return
+		}
 	}
 	if !h.hosts[r.Host] {
 		writeError(w, http.StatusForbidden, "unexpected request host")
@@ -166,7 +186,7 @@ func (h *HTTPHandler) api(w http.ResponseWriter, r *http.Request) {
 		token := h.session(r)
 		valid := h.ownerSession(r, token)
 		result := map[string]any{"claimed": claimed, "authenticated": valid}
-		if _, ok := r.Context().Value(remoteIdentityKey{}).(tailnet.Identity); ok {
+		if id, ok := r.Context().Value(remoteIdentityKey{}).(tailnet.Identity); ok {
 			result["remoteAccess"] = true
 			owner, e := h.store.remoteOwner(r.Context())
 			if e != nil {
@@ -177,6 +197,9 @@ func (h *HTTPHandler) api(w http.ResponseWriter, r *http.Request) {
 			result["legacyAuthenticated"] = h.store.Session(r.Context(), token)
 			if result["legacyAuthenticated"] == true {
 				result["csrfToken"] = csrfToken(token)
+			}
+			if !valid && id.NodeID != "" && h.store.isRemoteSignedOut(id.NodeID) {
+				result["remoteSignedOut"] = true
 			}
 		}
 		if h.localOwnerAllowed() || h.protectedLocalOwnerAllowed() {
@@ -201,10 +224,14 @@ func (h *HTTPHandler) api(w http.ResponseWriter, r *http.Request) {
 			writeError(w, 405, "method not allowed")
 			return
 		}
+		if h.instanceLocation == "local" && r.Context().Value(remoteIdentityKey{}) == nil && !h.checkLoopbackPeerUID(r, false) {
+			writeError(w, 403, "Local OS owner access required")
+			return
+		}
 		if !h.mutation(w, r) {
 			return
 		}
-		if !h.allowAuth() {
+		if !h.allowRate(r, "auth-login", 8) {
 			writeError(w, 429, ErrRateLimited.Error())
 			return
 		}
@@ -233,8 +260,10 @@ func (h *HTTPHandler) api(w http.ResponseWriter, r *http.Request) {
 			writeError(w, 401, "authentication failed; check credentials and claim-code expiry")
 			return
 		}
-		h.setCookie(w, r, token, int(SessionLifetime.Seconds()))
-		writeJSON(w, 200, map[string]any{"authenticated": true, "csrfToken": csrfToken(token), "sessionToken": token, "sessionMode": h.sessionMode(r)})
+		if id, ok := r.Context().Value(remoteIdentityKey{}).(tailnet.Identity); ok && id.NodeID != "" {
+			h.store.clearRemoteSignedOut(id.NodeID)
+		}
+		h.writeSessionResponse(w, r, token)
 		return
 	}
 	// Capture before session authentication/body decoding so an admitted slow
@@ -543,6 +572,9 @@ func (h *HTTPHandler) api(w http.ResponseWriter, r *http.Request) {
 			writeError(w, 500, "logout failed")
 			return
 		}
+		if id, ok := r.Context().Value(remoteIdentityKey{}).(tailnet.Identity); ok && id.NodeID != "" {
+			h.store.markRemoteSignedOut(id.NodeID)
+		}
 		h.setCookie(w, r, "", -1)
 		writeJSON(w, 200, map[string]bool{"authenticated": false})
 		return
@@ -557,19 +589,162 @@ func (h *HTTPHandler) api(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 404, "unknown API operation")
 	}
 }
-func (h *HTTPHandler) allowAuth() bool {
-	h.limiter.Lock()
-	defer h.limiter.Unlock()
-	now := h.store.now()
-	if h.limiter.start.IsZero() || now.Sub(h.limiter.start) >= time.Minute {
-		h.limiter.start = now
-		h.limiter.attempts = 0
+func (h *HTTPHandler) ratePeerKey(r *http.Request) string {
+	if id, ok := r.Context().Value(remoteIdentityKey{}).(tailnet.Identity); ok && id.NodeID != "" {
+		return "node:" + id.NodeID
 	}
-	if h.limiter.attempts >= 8 {
+	if r.Context().Value(privateIPCKey{}) == true {
+		return "ipc"
+	}
+	host := r.RemoteAddr
+	if parsed, _, err := net.SplitHostPort(r.RemoteAddr); err == nil && parsed != "" {
+		host = parsed
+	}
+	return "ip:" + host
+}
+
+func (h *HTTPHandler) allowRate(r *http.Request, bucket string, limit int) bool {
+	h.limiterMu.Lock()
+	defer h.limiterMu.Unlock()
+	if h.limiter == nil {
+		h.limiter = map[string]*rateWindow{}
+	}
+	now := h.store.now()
+	key := bucket + "|" + h.ratePeerKey(r)
+	w := h.limiter[key]
+	if w == nil {
+		if len(h.limiter) >= 1024 {
+			for k, existing := range h.limiter {
+				if now.Sub(existing.start) >= time.Minute {
+					delete(h.limiter, k)
+				}
+			}
+		}
+		if len(h.limiter) >= 1024 {
+			for k := range h.limiter {
+				delete(h.limiter, k)
+				break
+			}
+		}
+		w = &rateWindow{start: now}
+		h.limiter[key] = w
+	}
+	if now.Sub(w.start) >= time.Minute {
+		w.start = now
+		w.attempts = 0
+	}
+	if w.attempts >= limit {
 		return false
 	}
-	h.limiter.attempts++
+	w.attempts++
 	return true
+}
+
+func (h *HTTPHandler) writeSessionResponse(w http.ResponseWriter, r *http.Request, token string) {
+	mode := h.sessionMode(r)
+	h.setCookie(w, r, token, int(SessionLifetime.Seconds()))
+	resp := map[string]any{
+		"authenticated": true,
+		"csrfToken":     csrfToken(token),
+		"sessionMode":   mode,
+	}
+	if mode != "cookie" {
+		resp["sessionToken"] = token
+	}
+	writeJSON(w, 200, resp)
+}
+
+func (h *HTTPHandler) checkLoopbackPeerUID(r *http.Request, allowRoot bool) bool {
+	if r.Context().Value(privateIPCKey{}) == true || r.Context().Value(remoteIdentityKey{}) != nil {
+		return true
+	}
+	lookup := h.loopbackPeerUID
+	localAddr, hasLocal := r.Context().Value(http.LocalAddrContextKey).(*net.TCPAddr)
+	if !hasLocal && lookup == nil {
+		return true
+	}
+	var remoteAddr *net.TCPAddr
+	if host, portStr, err := net.SplitHostPort(r.RemoteAddr); err == nil {
+		if ip := net.ParseIP(host); ip != nil {
+			if port, convErr := strconv.Atoi(portStr); convErr == nil {
+				remoteAddr = &net.TCPAddr{IP: ip, Port: port}
+			}
+		}
+	}
+	if lookup == nil {
+		if remoteAddr == nil || !remoteAddr.IP.IsLoopback() {
+			return false
+		}
+		if runtime.GOOS != "linux" {
+			return true
+		}
+		lookup = linuxLoopbackPeerUID
+	}
+	uid, found, err := lookup(remoteAddr, localAddr)
+	if err != nil || !found {
+		return false
+	}
+	if uid == os.Getuid() || (h.instanceOwnerUID > 0 && uid == h.instanceOwnerUID) || (h.store != nil && h.store.custodyOwnerUID > 0 && uid == h.store.custodyOwnerUID) || (allowRoot && uid == 0) {
+		return true
+	}
+	return false
+}
+
+func linuxLoopbackPeerUID(clientAddr, serverAddr *net.TCPAddr) (int, bool, error) {
+	if runtime.GOOS != "linux" {
+		return 0, true, nil
+	}
+	if clientAddr == nil || serverAddr == nil || clientAddr.Port <= 0 || clientAddr.Port > 65535 || serverAddr.Port <= 0 || serverAddr.Port > 65535 {
+		return 0, false, errors.New("invalid loopback TCP endpoint")
+	}
+	scanProc := func(procPath, wantClient, wantServer string) (int, bool, error) {
+		f, err := os.Open(procPath)
+		if err != nil {
+			return 0, false, err
+		}
+		defer f.Close()
+		scanner := bufio.NewScanner(f)
+		first := true
+		for scanner.Scan() {
+			if first {
+				first = false
+				continue
+			}
+			fields := strings.Fields(scanner.Text())
+			if len(fields) < 8 || fields[1] != wantClient || fields[2] != wantServer {
+				continue
+			}
+			if fields[3] != "01" && fields[3] != "04" && fields[3] != "05" && fields[3] != "08" {
+				continue
+			}
+			uid, convErr := strconv.Atoi(fields[7])
+			if convErr != nil || uid < 0 {
+				return 0, false, errors.New("invalid loopback peer UID")
+			}
+			return uid, true, nil
+		}
+		return 0, false, scanner.Err()
+	}
+	format4 := func(ip4 net.IP, port int) string {
+		return fmt.Sprintf("%08X:%04X", binary.NativeEndian.Uint32(ip4.To4()), port)
+	}
+	format6 := func(ip16 net.IP, port int) string {
+		ip := ip16.To16()
+		return fmt.Sprintf("%08X%08X%08X%08X:%04X",
+			binary.NativeEndian.Uint32(ip[0:4]),
+			binary.NativeEndian.Uint32(ip[4:8]),
+			binary.NativeEndian.Uint32(ip[8:12]),
+			binary.NativeEndian.Uint32(ip[12:16]),
+			port)
+	}
+	if c4, s4 := clientAddr.IP.To4(), serverAddr.IP.To4(); c4 != nil && s4 != nil {
+		uid, found, err := scanProc("/proc/net/tcp", format4(c4, clientAddr.Port), format4(s4, serverAddr.Port))
+		if found || err != nil && !errors.Is(err, os.ErrNotExist) {
+			return uid, found, err
+		}
+		return scanProc("/proc/net/tcp6", format6(c4.To16(), clientAddr.Port), format6(s4.To16(), serverAddr.Port))
+	}
+	return scanProc("/proc/net/tcp6", format6(clientAddr.IP.To16(), clientAddr.Port), format6(serverAddr.IP.To16(), serverAddr.Port))
 }
 func (h *HTTPHandler) mutation(w http.ResponseWriter, r *http.Request) bool {
 	if r.Method != http.MethodPost && r.Method != http.MethodPut {
@@ -609,17 +784,17 @@ func (h *HTTPHandler) csrf(w http.ResponseWriter, r *http.Request, token string)
 	return true
 }
 func (h *HTTPHandler) session(r *http.Request) string {
+	if h.sessionMode(r) == "cookie" {
+		cookie, err := r.Cookie(sessionCookie)
+		if err != nil {
+			return ""
+		}
+		return cookie.Value
+	}
 	if auth := r.Header.Get("Authorization"); strings.HasPrefix(auth, "Bearer ") {
 		return strings.TrimPrefix(auth, "Bearer ")
 	}
-	if r.TLS == nil && !(h.publicHost != "" && r.Host == h.publicHost) {
-		return ""
-	}
-	cookie, err := r.Cookie(sessionCookie)
-	if err != nil {
-		return ""
-	}
-	return cookie.Value
+	return ""
 }
 func (h *HTTPHandler) setCookie(w http.ResponseWriter, r *http.Request, token string, maxAge int) {
 	if r.TLS == nil && !(h.publicHost != "" && r.Host == h.publicHost) {

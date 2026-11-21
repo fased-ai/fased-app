@@ -150,6 +150,9 @@ func (s *Store) remoteSession(ctx context.Context, id tailnet.Identity, code, ex
 			return "", err
 		}
 	}
+	if err = pruneSessionsLocked(ctx, tx, s.now().Unix(), id.NodeID); err != nil {
+		return "", err
+	}
 	if _, err = tx.ExecContext(ctx, "INSERT INTO sessions(token_hash,expires) VALUES(?,?)", tokenHash(token), s.now().Add(SessionLifetime).Unix()); err != nil {
 		return "", err
 	}
@@ -193,6 +196,36 @@ func (h *HTTPHandler) ownerSession(r *http.Request, token string) bool {
 	var node string
 	return h.store.db.QueryRowContext(r.Context(), "SELECT node_id FROM remote_sessions WHERE token_hash=?", tokenHash(token)).Scan(&node) == nil && node == id.NodeID
 }
+func (s *Store) markRemoteSignedOut(nodeID string) {
+	if nodeID == "" {
+		return
+	}
+	s.authMu.Lock()
+	defer s.authMu.Unlock()
+	if s.remoteSignedOut == nil {
+		s.remoteSignedOut = map[string]bool{}
+	}
+	s.remoteSignedOut[nodeID] = true
+}
+
+func (s *Store) clearRemoteSignedOut(nodeID string) {
+	if nodeID == "" {
+		return
+	}
+	s.authMu.Lock()
+	defer s.authMu.Unlock()
+	delete(s.remoteSignedOut, nodeID)
+}
+
+func (s *Store) isRemoteSignedOut(nodeID string) bool {
+	if nodeID == "" {
+		return false
+	}
+	s.authMu.Lock()
+	defer s.authMu.Unlock()
+	return s.remoteSignedOut[nodeID]
+}
+
 func (h *HTTPHandler) remoteOwnerAPI(w http.ResponseWriter, r *http.Request) {
 	if !h.mutation(w, r) {
 		return
@@ -202,8 +235,13 @@ func (h *HTTPHandler) remoteOwnerAPI(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 403, "Open Fased through Tailscale.")
 		return
 	}
+	if !h.allowRate(r, "auth-remote", 20) {
+		writeError(w, 429, ErrRateLimited.Error())
+		return
+	}
 	var request struct {
-		Code string `json:"code"`
+		Code    string `json:"code"`
+		Confirm bool   `json:"confirm"`
 	}
 	if !decodeJSON(w, r, &request) {
 		return
@@ -217,13 +255,17 @@ func (h *HTTPHandler) remoteOwnerAPI(w http.ResponseWriter, r *http.Request) {
 	if owner.UserID == 0 && h.store.Session(r.Context(), existing) && !h.csrf(w, r, existing) {
 		return
 	}
+	if owner.UserID != 0 && remoteDeviceAllowed(owner, id) && request.Code == "" && !request.Confirm && h.store.isRemoteSignedOut(id.NodeID) {
+		writeError(w, 401, "Sign in again to reconnect.")
+		return
+	}
 	token, err := h.store.remoteSession(r.Context(), id, request.Code, existing)
 	if err != nil {
 		writeError(w, 401, "Use an approved device or a setup link.")
 		return
 	}
-	h.setCookie(w, r, token, int(SessionLifetime.Seconds()))
-	writeJSON(w, 200, map[string]any{"authenticated": true, "csrfToken": csrfToken(token), "sessionToken": token, "sessionMode": h.sessionMode(r)})
+	h.store.clearRemoteSignedOut(id.NodeID)
+	h.writeSessionResponse(w, r, token)
 }
 
 // Only the installed app-identity IPC may bind the previously verified
@@ -275,16 +317,29 @@ func (h *HTTPHandler) remotePackageSetupAPI(w http.ResponseWriter, r *http.Reque
 	writeJSON(w, 200, map[string]string{"instanceId": h.store.instanceID, "code": code})
 }
 
+func remoteProxyPeer(r *http.Request, publicHost string) (string, bool) {
+	protos := r.Header.Values("X-Forwarded-Proto")
+	hosts := r.Header.Values("X-Forwarded-Host")
+	xff := r.Header.Values("X-Forwarded-For")
+	if len(r.Header.Values("Tailscale-Funnel-Request")) != 0 || len(protos) != 1 || protos[0] != "https" || len(hosts) != 1 || hosts[0] != publicHost {
+		return "", false
+	}
+	if len(xff) != 1 || xff[0] == "" || strings.Contains(xff[0], ",") {
+		return "", false
+	}
+	return xff[0], true
+}
+
 // Only the separate root-peer Unix ingress may supply proxy identity. Loopback
 // HTTP, private maintenance IPC and caller-provided headers grant no such role.
 func (h *HTTPHandler) remoteProxy(resolve tailnet.Resolver) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !tailnet.Trusted(r) || r.Header.Get("Tailscale-Funnel-Request") != "" || r.Header.Get("X-Forwarded-Proto") != "https" || r.Header.Get("X-Forwarded-Host") != h.publicHost {
+		if !tailnet.Trusted(r) {
 			writeError(w, 403, "Private Tailscale access required")
 			return
 		}
-		peer := r.Header.Get("X-Forwarded-For")
-		if peer == "" || strings.Contains(peer, ",") {
+		peer, ok := remoteProxyPeer(r, h.publicHost)
+		if !ok {
 			writeError(w, 403, "Private client identity required")
 			return
 		}

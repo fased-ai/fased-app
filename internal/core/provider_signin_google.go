@@ -170,7 +170,7 @@ func (s *Store) startGoogleSignIn(c AIConnectionCommand) (AIConnectionView, erro
 		return AIConnectionView{}, err
 	}
 	a.view = ProviderSignInView{ID: id, Ref: c.Ref, Provider: "google", State: "waiting", ExpiresAt: s.now().Add(5 * time.Minute).Unix(), Remote: c.Remote}
-	listener, err := s.listenProviderSignInLocked(a)
+	listener, err := s.prepareSignInCallbackLocked(a)
 	if err != nil {
 		return AIConnectionView{}, err
 	}
@@ -185,7 +185,9 @@ func (s *Store) startGoogleSignIn(c AIConnectionCommand) (AIConnectionView, erro
 		a.wire = s.googleOAuthWire(client)
 	}
 	if err != nil || a.wire == nil {
-		listener.Close()
+		if listener != nil {
+			listener.Close()
+		}
 		return AIConnectionView{}, errors.New("Google sign-in unavailable")
 	}
 	s.provider.signIn = a
@@ -196,7 +198,9 @@ func (s *Store) startGoogleSignIn(c AIConnectionCommand) (AIConnectionView, erro
 			s.cancelProviderSignInLocked()
 		}
 	})
-	go a.server.Serve(listener)
+	if listener != nil && a.server != nil {
+		go a.server.Serve(listener)
+	}
 	return s.aiConnectionLocked(c.Ref)
 }
 func googleSignInCallback(a *providerSignInAttempt, callback string) (string, error) {

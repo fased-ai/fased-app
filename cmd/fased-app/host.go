@@ -177,11 +177,7 @@ func hostCommand(args []string, out, errOut io.Writer) error {
 				_, e = fmt.Fprintln(out, address)
 				return e
 			}
-			process := exec.Command("xdg-open", address)
-			if e = process.Start(); e != nil {
-				return errors.New("cannot open the browser; use open --print for the private URL")
-			}
-			return process.Process.Release()
+			return openBrowserLaunch(address)
 		}
 		target, found, e := enrolledTarget(paths.Data)
 		if e != nil {
@@ -204,11 +200,7 @@ func hostCommand(args []string, out, errOut io.Writer) error {
 					return localOwnerSetupLink(ctx, paths.Data, origin)
 				}
 				ops.open = func(url, _ string) error {
-					process := exec.Command("xdg-open", url)
-					if err := process.Start(); err != nil {
-						return errors.New("cannot open the browser; use open --print for the private URL")
-					}
-					return process.Process.Release()
+					return openBrowserLaunch(url)
 				}
 			}
 			if command == "open" && ownerLink != "" {
@@ -551,21 +543,9 @@ func hostCommand(args []string, out, errOut io.Writer) error {
 		if _, err = localinstall.Load(paths); err != nil {
 			return err
 		}
-		var process *exec.Cmd
-		switch runtime.GOOS {
-		case "linux":
-			process = exec.Command("xdg-open", url)
-		case "darwin":
-			process = exec.Command("open", url)
-		case "windows":
-			process = exec.Command("rundll32.exe", "url.dll,FileProtocolHandler", url)
-		default:
-			return errors.New("no browser opener on this platform")
+		if err = openBrowserLaunch(url); err != nil {
+			return err
 		}
-		if err = process.Start(); err != nil {
-			return errors.New("cannot open the browser; use open --print for the private URL")
-		}
-		_ = process.Process.Release()
 		fmt.Fprintln(out, url)
 		return nil
 	}

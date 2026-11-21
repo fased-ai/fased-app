@@ -5,8 +5,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -371,5 +373,164 @@ func TestRemoteInitialHandoffIsBoundToPredeploymentDevice(t *testing.T) {
 	}
 	if _, err = s.remoteSession(t.Context(), owner, rotated.Code, ""); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestRemoteSecuritySeamsRateCapLogoutAndLoopbackClosure(t *testing.T) {
+	t.Parallel()
+	s := fixtureStore(t)
+	owner := tailnet.Identity{UserID: 7, NodeID: "owner-node", Login: "owner@example.test"}
+	claim, err := s.IssueRemoteClaim(t.Context(), owner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	initialToken, err := s.remoteSession(t.Context(), owner, claim.Code, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	const origin = "https://node.owner.ts.net"
+	h, err := NewHTTPHandler(s, "http://127.0.0.1:7331", origin, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.remoteIngress, h.instanceLocation = true, "remote"
+
+	// 1. Proxy rejects multiple X-Forwarded-For / X-Forwarded-Host / X-Forwarded-Proto header lines.
+	resolveCalls := 0
+	proxy := h.remoteProxy(func(context.Context, string) (tailnet.Identity, error) {
+		resolveCalls++
+		return owner, nil
+	})
+	baseProxyReq := func() *http.Request {
+		r := httptest.NewRequest(http.MethodGet, origin+"/api/v1/auth/state", nil)
+		r.Header.Set("X-Forwarded-For", "100.101.102.103")
+		r.Header.Set("X-Forwarded-Host", "node.owner.ts.net")
+		r.Header.Set("X-Forwarded-Proto", "https")
+		return r
+	}
+	if peer, ok := remoteProxyPeer(baseProxyReq(), "node.owner.ts.net"); !ok || peer != "100.101.102.103" {
+		t.Fatalf("valid proxy headers rejected: ok=%v peer=%q", ok, peer)
+	}
+	for _, mutate := range []func(*http.Request){
+		func(r *http.Request) { r.Header.Add("X-Forwarded-For", "100.101.102.104") },
+		func(r *http.Request) { r.Header.Set("X-Forwarded-For", "100.101.102.103, 100.101.102.104") },
+		func(r *http.Request) { r.Header.Add("X-Forwarded-Host", "node.owner.ts.net") },
+		func(r *http.Request) { r.Header.Add("X-Forwarded-Proto", "https") },
+		func(r *http.Request) { r.Header.Set("Tailscale-Funnel-Request", "1") },
+	} {
+		r := baseProxyReq()
+		mutate(r)
+		if _, ok := remoteProxyPeer(r, "node.owner.ts.net"); ok {
+			t.Fatal("duplicate or unsafe proxy header accepted by remoteProxyPeer")
+		}
+		w := httptest.NewRecorder()
+		proxy.ServeHTTP(w, r)
+		if w.Code != http.StatusForbidden {
+			t.Fatalf("duplicate forwarded header accepted: %d", w.Code)
+		}
+	}
+	if resolveCalls != 0 {
+		t.Fatalf("duplicate header request reached tailnet resolver %d times", resolveCalls)
+	}
+
+	// 2. Remote mode closes all loopback HTTP routes except GET /api/v1/health.
+	for _, tc := range []struct {
+		method, path string
+		want         int
+	}{
+		{http.MethodGet, "/", http.StatusForbidden},
+		{http.MethodGet, "/.fased-private-access", http.StatusForbidden},
+		{http.MethodGet, "/api/v1/auth/state", http.StatusForbidden},
+		{http.MethodPost, "/api/v1/health", http.StatusForbidden},
+		{http.MethodGet, "/api/v1/health", http.StatusOK},
+	} {
+		r := httptest.NewRequest(tc.method, "http://127.0.0.1:7331"+tc.path, nil)
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, r)
+		if w.Code != tc.want {
+			t.Fatalf("loopback %s %s got %d, want %d", tc.method, tc.path, w.Code, tc.want)
+		}
+	}
+	h.loopbackPeerUID = func(*net.TCPAddr, *net.TCPAddr) (int, bool, error) {
+		return os.Getuid() + 1, true, nil
+	}
+	rForeignHealth := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:7331/api/v1/health", nil)
+	wForeignHealth := httptest.NewRecorder()
+	h.ServeHTTP(wForeignHealth, rForeignHealth)
+	if wForeignHealth.Code != http.StatusForbidden {
+		t.Fatalf("foreign loopback UID accessed Remote health: %d", wForeignHealth.Code)
+	}
+	h.loopbackPeerUID = nil
+
+	// 3. Server-side explicit logout blocks silent {} re-login and exposes remoteSignedOut in auth/state.
+	doRemote := func(method, path, body, cookieVal, csrf string) *httptest.ResponseRecorder {
+		r := httptest.NewRequest(method, origin+path, strings.NewReader(body)).WithContext(context.WithValue(t.Context(), remoteIdentityKey{}, owner))
+		if method == http.MethodPost {
+			r.Header.Set("Origin", origin)
+			r.Header.Set("Content-Type", "application/json")
+		}
+		if cookieVal != "" {
+			r.AddCookie(&http.Cookie{Name: sessionCookie, Value: cookieVal})
+		}
+		if csrf != "" {
+			r.Header.Set("X-CSRF-Token", csrf)
+		}
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, r)
+		return w
+	}
+	if w := doRemote(http.MethodPost, "/api/v1/auth/logout", `{}`, initialToken, csrfToken(initialToken)); w.Code != http.StatusOK {
+		t.Fatalf("remote logout failed: %d %s", w.Code, w.Body.String())
+	}
+	stateRes := doRemote(http.MethodGet, "/api/v1/auth/state", "", "", "")
+	var authState map[string]any
+	if stateRes.Code != http.StatusOK || json.Unmarshal(stateRes.Body.Bytes(), &authState) != nil || authState["authenticated"] != false || authState["remoteSignedOut"] != true {
+		t.Fatalf("auth/state missing remoteSignedOut after logout: %d %s", stateRes.Code, stateRes.Body.String())
+	}
+	if w := doRemote(http.MethodPost, "/api/v1/auth/remote", `{}`, "", ""); w.Code != http.StatusUnauthorized {
+		t.Fatalf("silent re-login bypassed server logout confirmation: %d", w.Code)
+	}
+	confirmRes := doRemote(http.MethodPost, "/api/v1/auth/remote", `{"confirm":true}`, "", "")
+	var confirmBody map[string]any
+	if confirmRes.Code != http.StatusOK || json.Unmarshal(confirmRes.Body.Bytes(), &confirmBody) != nil || confirmBody["sessionToken"] != nil {
+		t.Fatalf("explicit confirm remote login failed or leaked sessionToken: %d %s", confirmRes.Code, confirmRes.Body.String())
+	}
+	cookies := confirmRes.Result().Cookies()
+	if len(cookies) != 1 || cookies[0].Name != sessionCookie {
+		t.Fatalf("missing remote session cookie: %+v", cookies)
+	}
+
+	// 4. POST /api/v1/auth/remote rate limit returns 429 on burst.
+	for i := 0; i < 18; i++ {
+		if w := doRemote(http.MethodPost, "/api/v1/auth/remote", `{"confirm":true}`, "", ""); w.Code != http.StatusOK {
+			t.Fatalf("unexpected remote login failure before rate limit at %d: %d", i, w.Code)
+		}
+	}
+	if w := doRemote(http.MethodPost, "/api/v1/auth/remote", `{"confirm":true}`, "", ""); w.Code != http.StatusTooManyRequests {
+		t.Fatalf("POST /api/v1/auth/remote not rate limited: %d", w.Code)
+	}
+
+	// 5. Session expiry pruning and per-node active session cap (<= maxRemoteSessionsPerNode).
+	if _, err = s.db.Exec("INSERT INTO sessions(token_hash,expires) VALUES(?,?)", tokenHash(strings.Repeat("z", 43)), s.now().Unix()-10); err != nil {
+		t.Fatal(err)
+	}
+	issued := make([]string, 0, maxRemoteSessionsPerNode+4)
+	for i := 0; i < maxRemoteSessionsPerNode+4; i++ {
+		tok, e := s.remoteSession(t.Context(), owner, "", "")
+		if e != nil {
+			t.Fatal(e)
+		}
+		issued = append(issued, tok)
+	}
+	var count int
+	if err = s.db.QueryRow("SELECT COUNT(*) FROM sessions WHERE expires<=?", s.now().Unix()).Scan(&count); err != nil || count != 0 {
+		t.Fatalf("expired sessions not pruned: count=%d err=%v", count, err)
+	}
+	if err = s.db.QueryRow("SELECT COUNT(*) FROM remote_sessions WHERE node_id=?", owner.NodeID).Scan(&count); err != nil || count != maxRemoteSessionsPerNode {
+		t.Fatalf("per-node remote session cap mismatch: count=%d err=%v", count, err)
+	}
+	if s.Session(t.Context(), issued[0]) || !s.Session(t.Context(), issued[len(issued)-1]) {
+		t.Fatal("oldest/newest session eviction did not preserve latest active sessions")
 	}
 }

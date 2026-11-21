@@ -332,7 +332,7 @@ func (s *Store) startProviderSignIn(c AIConnectionCommand) (AIConnectionView, er
 		return AIConnectionView{}, err
 	}
 	a.view = ProviderSignInView{ID: id, Ref: c.Ref, Provider: "openai", State: "waiting", ExpiresAt: s.now().Add(10 * time.Minute).Unix(), Remote: c.Remote}
-	listener, err := s.listenProviderSignInLocked(a)
+	listener, err := s.prepareSignInCallbackLocked(a)
 	if err != nil {
 		return AIConnectionView{}, err
 	}
@@ -348,7 +348,9 @@ func (s *Store) startProviderSignIn(c AIConnectionCommand) (AIConnectionView, er
 	if a.wire == nil && a.fixture {
 		fixture, err := newProviderSignInFixture(a, s.now)
 		if err != nil {
-			listener.Close()
+			if listener != nil {
+				listener.Close()
+			}
 			return AIConnectionView{}, err
 		}
 		a.wire = fixture
@@ -357,7 +359,9 @@ func (s *Store) startProviderSignIn(c AIConnectionCommand) (AIConnectionView, er
 		a.wire = newOpenAITransport().wire
 	}
 	if a.wire == nil {
-		listener.Close()
+		if listener != nil {
+			listener.Close()
+		}
 		return AIConnectionView{}, errors.New("sign-in transport unavailable")
 	}
 	s.provider.signIn = a
@@ -368,8 +372,31 @@ func (s *Store) startProviderSignIn(c AIConnectionCommand) (AIConnectionView, er
 			s.cancelProviderSignInLocked()
 		}
 	})
-	go a.server.Serve(listener)
+	if listener != nil && a.server != nil {
+		go a.server.Serve(listener)
+	}
 	return s.aiConnectionLocked(c.Ref)
+}
+
+func randomRemoteCallbackRedirect() (string, error) {
+	var b [2]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return "", err
+	}
+	port := 32768 + int(uint16(b[0])<<8|uint16(b[1]))%(61000-32768)
+	return fmt.Sprintf("http://127.0.0.1:%d/auth/callback", port), nil
+}
+
+func (s *Store) prepareSignInCallbackLocked(a *providerSignInAttempt) (net.Listener, error) {
+	if a.view.Remote {
+		redirect, err := randomRemoteCallbackRedirect()
+		if err != nil {
+			return nil, err
+		}
+		a.redirect = redirect
+		return nil, nil
+	}
+	return s.listenProviderSignInLocked(a)
 }
 
 // One callback implementation for each supported public-client flow.
@@ -389,7 +416,7 @@ func (s *Store) listenProviderSignInLocked(a *providerSignInAttempt) (net.Listen
 		}
 		s.provider.mu.Lock()
 		defer s.provider.mu.Unlock()
-		if s.provider.signIn != a || a.busy || a.view.Remote && a.view.Provider != "google" || a.view.ExpiresAt <= s.now().Unix() || a.callback != "" {
+		if s.provider.signIn != a || a.busy || a.view.Remote || a.view.ExpiresAt <= s.now().Unix() || a.callback != "" {
 			http.Error(w, "Return to Fased", 409)
 			return
 		}

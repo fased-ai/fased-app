@@ -1002,3 +1002,27 @@ func TestProviderSignInRedactedDiagnostics(t *testing.T) {
 		}
 	}
 }
+
+func TestRemoteProviderSignInOpensNoVPSLoopbackSocket(t *testing.T) {
+	t.Parallel()
+	s := fixtureStore(t)
+	start, err := s.ChangeAIConnection(t.Context(), AIConnectionCommand{Action: "sign-in-start", Provider: "openai", Remote: true, Name: "Remote No Socket"})
+	if err != nil || start.SignIn == nil {
+		t.Fatal(err)
+	}
+	s.provider.mu.Lock()
+	attempt := s.provider.signIn
+	s.provider.mu.Unlock()
+	if attempt == nil || attempt.server != nil {
+		t.Fatalf("Remote OpenAI sign-in opened a loopback callback server: %+v", attempt)
+	}
+	u, err := url.Parse(attempt.redirect)
+	if err != nil || u.Scheme != "http" || u.Hostname() != "127.0.0.1" || u.Path != "/auth/callback" {
+		t.Fatalf("unexpected Remote redirect URI: %q err=%v", attempt.redirect, err)
+	}
+	client := &http.Client{Timeout: 500 * time.Millisecond}
+	if res, getErr := client.Get(attempt.redirect); getErr == nil {
+		res.Body.Close()
+		t.Fatalf("unexpected listening callback socket on VPS in Remote mode: %d", res.StatusCode)
+	}
+}
