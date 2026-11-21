@@ -9,11 +9,15 @@ it("keeps legacy Remote and ordinary Local handoffs distinct", () => {
   expect(validOwnerHandoff({ location: "local", ownerUid: 1000 })).toBe(false);
 });
 it("uses clean non-dev handoff commands for Local and Remote", () => {
-  expect(ownerHandoff({ location: "local", ownerUid: 1000, ownerKind: "custody" })).toEqual({
+  expect(
+    ownerHandoff({ location: "local", ownerUid: 1000, ownerKind: "custody" }),
+  ).toEqual({
     claim: "fased open",
     recovery: ["fased open"],
   });
-  expect(ownerHandoff({ location: "remote", ownerUid: 1000, ownerKind: "custody" })).toEqual({
+  expect(
+    ownerHandoff({ location: "remote", ownerUid: 1000, ownerKind: "custody" }),
+  ).toEqual({
     claim: "fased vps access",
     recovery: ["fased vps access"],
   });

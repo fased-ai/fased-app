@@ -23,8 +23,7 @@ export function ownerHandoff(
 ): { claim: string; recovery: string[] } | undefined {
   if (!c || !validOwnerHandoff(c) || !c.ownerUid) return;
   if (c.ownerKind === "custody") {
-    const command =
-      c.location === "remote" ? "fased vps access" : "fased open";
+    const command = c.location === "remote" ? "fased vps access" : "fased open";
     return {
       claim: command,
       recovery: [command],

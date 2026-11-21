@@ -279,7 +279,9 @@ export function CoreGate({ children }: { children: ReactNode }) {
               </button>
             ) : (
               <p role={claimError ? "alert" : "status"}>
-                {uiText(claimError || "Use an approved device or a setup link.")}
+                {uiText(
+                  claimError || "Use an approved device or a setup link.",
+                )}
               </p>
             )}
             {(core.mode === "unclaimed" || core.remoteEnrolled || code) &&

@@ -249,11 +249,12 @@ export function ApplicationUpdatesPanel() {
                     <option value="automatic">{t("Automatic")}</option>
                   </select>
                 </label>
-                {view.policy.mode === "automatic" && !view.activationEnabled && (
-                  <p className="subtle">
-                    {t("Automatic installation is not active.")}
-                  </p>
-                )}
+                {view.policy.mode === "automatic" &&
+                  !view.activationEnabled && (
+                    <p className="subtle">
+                      {t("Automatic installation is not active.")}
+                    </p>
+                  )}
                 <label className="checkbox-row">
                   <input
                     type="checkbox"
@@ -277,13 +278,13 @@ export function ApplicationUpdatesPanel() {
                           ...view.policy,
                           window: e.target.checked
                             ? {
-                              timeZone:
-                                Intl.DateTimeFormat().resolvedOptions()
-                                  .timeZone || "UTC",
-                              days: [0, 1, 2, 3, 4, 5, 6],
-                              start: "02:00",
-                              end: "04:00",
-                            }
+                                timeZone:
+                                  Intl.DateTimeFormat().resolvedOptions()
+                                    .timeZone || "UTC",
+                                days: [0, 1, 2, 3, 4, 5, 6],
+                                start: "02:00",
+                                end: "04:00",
+                              }
                             : undefined,
                         })
                       }
