@@ -501,7 +501,8 @@ export async function remoteHeldStatus(p, page) {
   assert.equal(health.instanceId, p.instance);
   assert.equal(health.connection?.location, "remote");
   assert.equal(health.connection?.transport, "private-https");
-  for (const key of ["aiConnections", "financialExecution", "walletSigner"])
+  assert.equal(health.capabilities?.aiConnections, true);
+  for (const key of ["financialExecution", "walletSigner"])
     assert.equal(health.capabilities?.[key], false);
   assert.equal(auth.authenticated, true);
   assert.equal(auth.remoteAccess, true);

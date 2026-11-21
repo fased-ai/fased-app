@@ -50,7 +50,7 @@ func TestOpenAIPilotPreparationCLI(t *testing.T) {
 	}
 	defer s.Close()
 	v, e := s.AIConnection()
-	if e != nil || v.PilotAvailable || v.LiveCallsEnabled || v.Ref != "" {
+	if e != nil || v.PilotAvailable || v.Ref != "" {
 		t.Fatal("CLI review file enabled runtime")
 	}
 }

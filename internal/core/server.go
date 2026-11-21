@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 )
 
@@ -94,6 +95,9 @@ func startModesWithTaskSecrets(ctx context.Context, dir, listen, publicOrigin st
 	store.sessionFixture = sessionFixture
 	store.providerFixture = fixture
 	store.providerOnlyFixture = providerOnly
+	if fixture || sessionFixture {
+		store.provider.apiCredentials = false
+	}
 	failed := true
 	defer func() {
 		if failed {
@@ -139,14 +143,14 @@ func startModesWithTaskSecrets(ctx context.Context, dir, listen, publicOrigin st
 		listener.Close()
 		return nil, err
 	}
-	server := &Server{Store: store, Listener: listener, Lock: lock, URL: baseURL, dir: dir, HTTP: &http.Server{Handler: handler, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second, WriteTimeout: 15 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 16 * 1024}}
+	server := &Server{Store: store, Listener: listener, Lock: lock, URL: baseURL, dir: dir, HTTP: &http.Server{Handler: handler, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second, WriteTimeout: 30 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 16 * 1024}}
 	ipc, network, address, err := listenIPC(dir, store.instanceID)
 	if err != nil {
 		listener.Close()
 		return nil, err
 	}
 	server.IPC = ipc
-	server.IPCServer = &http.Server{Handler: privateIPCHandler(handler), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second, WriteTimeout: 15 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 16 * 1024}
+	server.IPCServer = &http.Server{Handler: privateIPCHandler(handler), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second, WriteTimeout: 30 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 16 * 1024}
 	if err = WritePrivateJSON(filepath.Join(dir, "endpoint.json"), Endpoint{URL: baseURL, InstanceID: store.instanceID, Network: network, Address: address}); err != nil {
 		listener.Close()
 		ipc.Close()
@@ -162,17 +166,19 @@ func (s *Server) startAgentTasks() {
 	ctx, cancel := context.WithCancel(context.Background())
 	s.taskCancel = cancel
 	s.taskDone = make(chan struct{})
+	var newsRT http.RoundTripper = newPublicNewsTransport()
+	var aiRT http.RoundTripper = s.Store.providerRuntimeTransport()
+	if s.agentFixture {
+		newsRT = fixtureNewsTransport{now: s.Store.now, store: s.Store}
+		aiRT = fixtureAITransport{}
+	}
+	var wg sync.WaitGroup
+	wg.Add(1)
 	go func() {
-		defer close(s.taskDone)
+		defer wg.Done()
 		ticker := time.NewTicker(time.Second)
 		defer ticker.Stop()
 		lastError := ""
-		var newsRT http.RoundTripper = newPublicNewsTransport()
-		var aiRT http.RoundTripper = s.Store.providerRuntimeTransport()
-		if s.agentFixture {
-			newsRT = fixtureNewsTransport{now: s.Store.now, store: s.Store}
-			aiRT = fixtureAITransport{}
-		}
 		for {
 			select {
 			case <-ctx.Done():
@@ -193,11 +199,6 @@ func (s *Server) startAgentTasks() {
 				}
 				if e == nil && !s.Store.sessionFixture {
 					e = s.Store.advanceAgentNews(c, newsRT, s.Store.aiExecutionAvailable(s.agentFixture))
-					stop()
-					c, stop = context.WithTimeout(ctx, 5*time.Second)
-					if e == nil {
-						e = s.Store.advanceAgentAI(c, aiRT, s.agentFixture)
-					}
 				}
 				stop()
 				if e == nil && s.Store.onchain != nil {
@@ -220,6 +221,37 @@ func (s *Server) startAgentTasks() {
 				lastError = message
 			}
 		}
+	}()
+	if !s.Store.sessionFixture {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			ticker := time.NewTicker(time.Second)
+			defer ticker.Stop()
+			lastError := ""
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-ticker.C:
+					c, stop := context.WithTimeout(ctx, 130*time.Second)
+					e := s.Store.advanceAgentAI(c, aiRT, s.agentFixture)
+					stop()
+					message := ""
+					if e != nil && !errors.Is(e, ErrCorePaused) && !errors.Is(e, context.Canceled) {
+						message = "local task scheduler held; inspect workspace capacity and core state"
+					}
+					if message != "" && message != lastError {
+						log.Print(message)
+					}
+					lastError = message
+				}
+			}
+		}()
+	}
+	go func() {
+		wg.Wait()
+		close(s.taskDone)
 	}()
 }
 func (s *Server) Serve() error {
@@ -313,7 +345,7 @@ func (s *Server) ConfigureConnection(location string, owner ...int) error {
 		}
 		s.Remote = listener
 		h.remoteIngress = true
-		s.RemoteHTTP = &http.Server{Handler: h.remoteProxy(tailnet.WhoIs), ConnContext: tailnet.ConnContext, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second, WriteTimeout: 15 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 16 * 1024}
+		s.RemoteHTTP = &http.Server{Handler: h.remoteProxy(tailnet.WhoIs), ConnContext: tailnet.ConnContext, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second, WriteTimeout: 30 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 16 * 1024}
 	}
 	h.instanceLocation, h.instanceOwnerUID = location, uid
 	h.instanceOwnerKind = ""

@@ -43,7 +43,7 @@ func TestKimiCodeAccountChatAndTaskBoundary(t *testing.T) {
 			s.provider.apiCredentials = true
 			key := "sk-kimi-disposable-fixture-key-only"
 			account, err := s.ChangeAIConnection(t.Context(), AIConnectionCommand{Action: "add", Provider: "kimi-code", Name: "Personal Kimi Code", CredentialMode: "kimi-code", Key: key, Passphrase: testVaultPassword})
-			if err != nil || account.Locked || account.LiveCallsEnabled || account.AuthMethod != "api-key" || len(account.Catalog.Models) != 2 {
+			if err != nil || account.Locked || !account.LiveCallsEnabled || account.AuthMethod != "api-key" || len(account.Catalog.Models) != 2 {
 				t.Fatal("membership account", account, err)
 			}
 			afterSetup, _, _ := readAgents(t.Context(), s.db)
@@ -136,7 +136,7 @@ func TestKimiCodeAccountChatAndTaskBoundary(t *testing.T) {
 			}
 			defer reopened.Close()
 			locked, _ := reopened.AIConnection(account.Ref)
-			if !locked.Locked || locked.LiveCallsEnabled {
+			if !locked.Locked {
 				t.Fatal("restart retained authority")
 			}
 			saved, err := reopened.Agents(t.Context(), v.ProfileID, "")

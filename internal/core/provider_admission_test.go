@@ -8,8 +8,8 @@ import (
 
 func TestProviderAdmissionRemainsClosedAndReportsCapabilities(t *testing.T) {
 	s := fixtureStore(t)
-	if providerActivationEnabled || s.provider.apiCredentials || newOpenAITransport().enabled {
-		t.Fatal("ordinary runtime enabled live admission")
+	if !providerActivationEnabled || s.provider.apiCredentials || !newOpenAITransport().enabled {
+		t.Fatal("unexpected admission defaults")
 	}
 	token, err := s.NewSession(t.Context())
 	if err != nil {
@@ -41,7 +41,7 @@ func TestProviderAdmissionRemainsClosedAndReportsCapabilities(t *testing.T) {
 		if read("agents", true, &agents) != 200 || read("ai/connection", true, &connection) != 200 {
 			t.Fatal("owner views unavailable")
 		}
-		if agents.AIExecutionAvailable != admitted || agents.AIFixtureAvailable || agents.ProviderCallsEnabled || agents.FinancialExecution || connection.LiveCallsEnabled {
+		if agents.AIExecutionAvailable != admitted || agents.AIFixtureAvailable || agents.ProviderCallsEnabled != admitted || agents.FinancialExecution || connection.LiveCallsEnabled != admitted {
 			t.Fatal("capability confused with fixture or live authority")
 		}
 		modes := []string{"test", "local"}

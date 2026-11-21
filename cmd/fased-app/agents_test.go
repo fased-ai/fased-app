@@ -488,7 +488,7 @@ func TestAgentAIEvidenceCLIPrivateRoundTrip(t *testing.T) {
 				Selection core.AIEvidenceSelection `json:"evidenceSelection"`
 				Evidence  core.AgentEvidenceView   `json:"evidence"`
 			}
-			if err = json.Unmarshal([]byte(q.Context), &context); err != nil || context.Version != "manual-ai-evidence-v1" || context.Selection != *ref || context.Evidence.SHA256 != e.SHA256 || !bytes.Equal(context.Evidence.Data, e.Data) || q.State != "prepared" || q.HeldMicrousd != 0 || v.ProviderCallsEnabled {
+			if err = json.Unmarshal([]byte(q.Context), &context); err != nil || context.Version != "manual-ai-evidence-v1" || context.Selection != *ref || context.Evidence.SHA256 != e.SHA256 || !bytes.Equal(context.Evidence.Data, e.Data) || q.State != "prepared" || q.HeldMicrousd != 0 {
 				t.Fatal("CLI preparation/disclosure differs", err)
 			}
 			after, _ := server.Store.Agents(t.Context(), v.ProfileID, "")

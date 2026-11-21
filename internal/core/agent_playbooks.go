@@ -93,7 +93,7 @@ func migratePlaybooks(ctx context.Context, db *sql.DB) error {
 	return tx.Commit()
 }
 func playbookLimits(l AILimits) bool {
-	return l.MaxInputTokens >= 1000 && l.MaxInputTokens <= 32000 && l.MaxOutputTokens >= 128 && l.MaxOutputTokens <= 1024 && l.DeadlineSeconds >= 1 && l.DeadlineSeconds <= 5 && l.BudgetMicrousd >= aiReservation(l) && l.BudgetMicrousd <= 1000000
+	return l.MaxInputTokens >= 1000 && l.MaxInputTokens <= 32000 && l.MaxOutputTokens >= 128 && l.MaxOutputTokens <= 1024 && l.DeadlineSeconds >= 1 && l.DeadlineSeconds <= 120 && l.BudgetMicrousd >= aiReservation(l) && l.BudgetMicrousd <= 1000000
 }
 func playbookHash(v PlaybookVersion) string { b, _ := json.Marshal(v); return newsHash(b) }
 func validatePlaybookStorage(raw []byte, d agentDocument) error {

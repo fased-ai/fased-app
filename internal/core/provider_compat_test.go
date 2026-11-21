@@ -188,6 +188,7 @@ func TestCompatibleVaultCapacityRestartAndBinding(t *testing.T) {
 	}
 	defer next.Close()
 	next.providerFixture = true
+	next.provider.apiCredentials = false
 	view, err := next.AIConnection()
 	if err != nil || len(view.Connections) != 16 {
 		t.Fatal("restart lost accounts", err)

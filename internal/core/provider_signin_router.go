@@ -158,7 +158,7 @@ func (s *Store) completeRouterSignIn(ctx context.Context, c AIConnectionCommand)
 		err = errors.New("connection limit reached")
 	}
 	if err == nil {
-		view, err = s.persistAIConnectionLocked(AIConnectionCommand{Action: "add", Provider: "openrouter", Name: a.name, Key: key, Passphrase: c.Passphrase}, col, "openrouter", mode, false)
+		view, err = s.persistAIConnectionLocked(ctx, AIConnectionCommand{Action: "add", Provider: "openrouter", Name: a.name, Key: key, Passphrase: c.Passphrase}, col, "openrouter", mode, false)
 	}
 	s.cancelProviderSignInLocked()
 	s.provider.mu.Unlock()
@@ -173,7 +173,7 @@ func exchangeRouterSignIn(ctx context.Context, wire http.RoundTripper, code, ver
 	if wire == nil {
 		return "", errors.New("sign-in unavailable")
 	}
-	ctx, cancel := context.WithTimeout(ctx, 8*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
 	body, _ := json.Marshal(map[string]string{"code": code, "code_verifier": verifier, "code_challenge_method": "S256"})
 	defer clear(body)

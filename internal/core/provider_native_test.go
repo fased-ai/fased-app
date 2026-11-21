@@ -28,7 +28,7 @@ func addNativeAccount(t *testing.T, s *Store, provider string, api bool) AIConne
 		key = disposableAPIInput
 	}
 	v, err := s.ChangeAIConnection(t.Context(), AIConnectionCommand{Action: "add", Provider: provider, Name: provider, CredentialMode: mode, Key: key, Passphrase: testVaultPassword})
-	if err != nil || v.Provider != provider || v.Locked || v.LiveCallsEnabled {
+	if err != nil || v.Provider != provider || v.Locked || v.LiveCallsEnabled != s.provider.apiCredentials {
 		t.Fatal("native account", v.Provider, err)
 	}
 	return v

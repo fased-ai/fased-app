@@ -16,6 +16,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -71,6 +72,8 @@ type AIConnectionView struct {
 	CredentialMode                string                `json:"credentialMode"`
 	TaskAccess                    *TaskAccessAllowance  `json:"taskAccess,omitempty"`
 	PersistentTaskAccessAvailable bool                  `json:"persistentTaskAccessAvailable"`
+	OSVaultAvailable              bool                  `json:"osVaultAvailable"`
+	OSProtected                   bool                  `json:"osProtected,omitempty"`
 	AccessReview                  *TaskAccessAllowance  `json:"accessReview,omitempty"`
 	AdmissionPolicy               OpenAIModelPolicy     `json:"admissionPolicy"`
 	Ref                           string                `json:"ref"`
@@ -84,15 +87,16 @@ type AIConnectionView struct {
 	OutputMicrousdPerToken        int64                 `json:"outputMicrousdPerToken,omitempty"`
 }
 type aiVaultEnvelope struct {
-	TestOnly   bool   `json:"testOnly,omitempty"`
-	Provider   string `json:"provider,omitempty"`
-	Name       string `json:"name,omitempty"`
-	Mode       string `json:"mode,omitempty"`
-	Version    int    `json:"version"`
-	Ref        string `json:"ref"`
-	Salt       []byte `json:"salt"`
-	Nonce      []byte `json:"nonce"`
-	Ciphertext []byte `json:"ciphertext"`
+	OSProtected bool   `json:"osProtected,omitempty"`
+	TestOnly    bool   `json:"testOnly,omitempty"`
+	Provider    string `json:"provider,omitempty"`
+	Name        string `json:"name,omitempty"`
+	Mode        string `json:"mode,omitempty"`
+	Version     int    `json:"version"`
+	Ref         string `json:"ref"`
+	Salt        []byte `json:"salt"`
+	Nonce       []byte `json:"nonce"`
+	Ciphertext  []byte `json:"ciphertext"`
 }
 type providerState struct {
 	signIn          *providerSignInAttempt
@@ -105,6 +109,8 @@ type providerState struct {
 	mu             sync.Mutex
 }
 type providerCredential struct {
+	osProtected    bool
+	manuallyLocked bool
 	planPaused     bool
 	planFailure    string
 	superseded     map[string]bool
@@ -264,6 +270,7 @@ func (s *Store) clearAIConnectionLocked(refs ...string) {
 	s.provider.nextEpoch++
 	state.epoch = s.provider.nextEpoch
 	clear(state.key)
+	state.osProtected = false
 	state.taskAccess = nil
 	state.durableAccess = false
 	state.taskAccessLast = 0
@@ -287,6 +294,7 @@ func (s *Store) aiConnectionLocked(refs ...string) (v AIConnectionView, err erro
 	v = AIConnectionView{CredentialMode: "test", AdmissionPolicy: openAIModelPolicy(), Provider: "openai", Model: fixtureAIModel, Locked: true, TestOnly: true, InputMicrousdPerToken: 1, OutputMicrousdPerToken: 4}
 	defer func() {
 		v.PersistentTaskAccessAvailable = s.persistentTaskAccessAvailable
+		v.OSVaultAvailable = s.persistentTaskAccessAvailable && !s.isFixtureTaskSecrets()
 		v.SignInAvailable = s.providerSignInAvailableLocked()
 		v.SignIn = s.providerSignInViewLocked()
 		v.AuthMethod = "api-key"
@@ -387,6 +395,7 @@ func (s *Store) aiConnectionLocked(refs ...string) (v AIConnectionView, err erro
 	v.Name = env.Name
 	v.Provider = aiVaultProvider(env)
 	v.Ref = env.Ref
+	v.OSProtected = env.OSProtected
 	v.PlanPaused, v.PlanFailure = state.planPaused, state.planFailure
 	v.CredentialMode = aiVaultMode(env)
 	v.TestOnly = v.CredentialMode == "test" || (env.Version == 5 || env.Version == 6) && env.TestOnly
@@ -412,7 +421,7 @@ func (s *Store) aiConnectionLocked(refs ...string) (v AIConnectionView, err erro
 	}
 	encoded, _ := json.Marshal(env)
 	if state.digest == sha256.Sum256(encoded) && state.ref == env.Ref && len(state.key) > 0 {
-		if state.expires > s.now().Unix() {
+		if state.osProtected || state.expires > s.now().Unix() {
 			v.Locked = false
 			v.UnlockExpires = state.expires
 		}
@@ -582,7 +591,7 @@ func (s *Store) providerModelTransport(ref string) http.RoundTripper {
 		return fixtureAITransport{}
 	}
 	v, err := s.AIConnection(ref)
-	if err != nil {
+	if err != nil || v.TestOnly {
 		return nil
 	}
 	return newNativeProviderTransport(v.Provider)
@@ -621,6 +630,9 @@ func (s *Store) changeAIConnection(ctx context.Context, c AIConnectionCommand) (
 			return v, e
 		}
 		s.clearAIConnectionLocked(c.Ref)
+		if v.Ref != "" {
+			s.credentialLocked(v.Ref).manuallyLocked = true
+		}
 		return s.aiConnectionLocked(c.Ref)
 	}
 	tx, e := s.db.BeginTx(ctx, nil)
@@ -693,7 +705,7 @@ func (s *Store) changeAIConnection(ctx context.Context, c AIConnectionCommand) (
 	if provider == "qwen" && (c.Action == "save" || c.Action == "add") && strings.HasPrefix(c.Key, "sk-sp-") {
 		return v, errors.New("Qwen subscription keys cannot be used with ModelStudio API access")
 	}
-	if !validPassword(c.Passphrase) || ((c.Action == "save" || c.Action == "add") && !validAICredential(mode, c.Key)) || (c.Action != "save" && c.Action != "add" && c.Key != "") {
+	if !s.validPassphraseOrOSLocked(ctx, c.Passphrase) || ((c.Action == "save" || c.Action == "add") && !validAICredential(mode, c.Key)) || (c.Action != "save" && c.Action != "add" && c.Key != "") {
 		return v, errors.New("invalid credential or vault passphrase")
 	}
 	if (c.Action != "save" && c.Action != "add") || v.Ref != "" {
@@ -701,7 +713,7 @@ func (s *Store) changeAIConnection(ctx context.Context, c AIConnectionCommand) (
 		if err != nil {
 			return v, errors.New("credential vault unavailable")
 		}
-		plain, err := s.openAIVault(env, c.Passphrase)
+		plain, err := s.openAIVaultWithContext(ctx, env, c.Passphrase)
 		defer clear(plain)
 		if err != nil {
 			return v, errors.New("vault unlock failed")
@@ -724,7 +736,14 @@ func (s *Store) changeAIConnection(ctx context.Context, c AIConnectionCommand) (
 			s.clearAIConnectionLocked(env.Ref)
 			state := s.credentialLocked(env.Ref)
 			state.digest = sha256.Sum256(encoded)
-			state.ref, state.key, state.expires = env.Ref, append([]byte(nil), plain...), s.now().Add(15*time.Minute).Unix()
+			state.ref, state.key = env.Ref, append([]byte(nil), plain...)
+			state.osProtected = env.OSProtected
+			state.manuallyLocked = false
+			if env.OSProtected {
+				state.expires = 0
+			} else {
+				state.expires = s.now().Add(15 * time.Minute).Unix()
+			}
 			state.taskAccess, state.durableAccess, state.taskAccessLast = taskAccess, durable && taskAccess != nil, last
 			state.planPaused, state.planFailure = false, ""
 			return s.aiConnectionLocked(env.Ref)
@@ -760,13 +779,13 @@ func (s *Store) changeAIConnection(ctx context.Context, c AIConnectionCommand) (
 	if !validAgentText(c.Name, 80, false) {
 		return v, errors.New("invalid connection name")
 	}
-	return s.persistAIConnectionLocked(c, col, provider, mode, bootstrap)
+	return s.persistAIConnectionLocked(ctx, c, col, provider, mode, bootstrap)
 }
 
 // Caller holds the metadata transaction and credential mutex, and has validated
 // authority, key class and account identity. OAuth-issued API keys use the same
 // encrypted envelope as manually entered API keys, never ChatGPT plan authority.
-func (s *Store) persistAIConnectionLocked(c AIConnectionCommand, col aiVaultCollection, provider, mode string, bootstrap bool) (AIConnectionView, error) {
+func (s *Store) persistAIConnectionLocked(ctx context.Context, c AIConnectionCommand, col aiVaultCollection, provider, mode string, bootstrap bool) (AIConnectionView, error) {
 	var v AIConnectionView
 	var e error
 	env := aiVaultEnvelope{Name: strings.TrimSpace(c.Name), Version: 1, Salt: make([]byte, 16), Nonce: make([]byte, 12)}
@@ -797,7 +816,11 @@ func (s *Store) persistAIConnectionLocked(c AIConnectionCommand, col aiVaultColl
 	if _, e = rand.Read(env.Nonce); e != nil {
 		return v, e
 	}
-	key := passwordHash(c.Passphrase, env.Salt)
+	key, osProtected, e := s.vaultSealKey(ctx, c.Passphrase, env.Salt, true)
+	if e != nil {
+		return v, e
+	}
+	env.OSProtected = osProtected
 	block, _ := aes.NewCipher(key)
 	clear(key)
 	gcm, _ := cipher.NewGCM(block)
@@ -829,11 +852,19 @@ func (s *Store) persistAIConnectionLocked(c AIConnectionCommand, col aiVaultColl
 	state := s.credentialLocked(env.Ref)
 	encoded, _ := json.Marshal(env)
 	state.digest = sha256.Sum256(encoded)
-	state.ref, state.key, state.expires = env.Ref, append([]byte(nil), plain...), s.now().Add(15*time.Minute).Unix()
+	state.ref, state.key = env.Ref, append([]byte(nil), plain...)
+	state.osProtected = env.OSProtected
+	state.manuallyLocked = false
+	if env.OSProtected {
+		state.expires = 0
+	} else {
+		state.expires = s.now().Add(15 * time.Minute).Unix()
+	}
 	return s.aiConnectionLocked(env.Ref)
 }
 
 type providerMethodContextKey struct{}
+type providerNameContextKey struct{}
 
 type authenticatedAITransport struct {
 	modelsOnly bool
@@ -949,7 +980,9 @@ func (a authenticatedAITransport) RoundTrip(r *http.Request) (*http.Response, er
 	if !providerRequestAllowed(v.Provider, r) {
 		return nil, errors.New("provider origin refused")
 	}
-	copy := r.Clone(context.WithValue(r.Context(), providerMethodContextKey{}, v.AuthMethod))
+	reqCtx := context.WithValue(r.Context(), providerMethodContextKey{}, v.AuthMethod)
+	reqCtx = context.WithValue(reqCtx, providerNameContextKey{}, v.Provider)
+	copy := r.Clone(reqCtx)
 	copy.Header = r.Header.Clone()
 	copy.Header.Del("Authorization")
 	copy.Header.Del("x-api-key")
@@ -1091,37 +1124,120 @@ func validAICredential(mode, key string) bool {
 	}
 	return true
 }
-func (s *Store) aiVaultAAD(v aiVaultEnvelope) []byte {
-	if v.Version == 7 {
-		return []byte("fased-anthropic-workspace-v7:" + s.instanceID + ":" + v.Provider + ":" + v.Mode + ":" + v.Ref)
-	}
-	if v.Version == 6 {
-		kind := "live"
-		if v.TestOnly {
-			kind = "fixture"
-		}
-		return []byte("fased-local-provider-v6:" + s.instanceID + ":" + v.Provider + ":" + v.Mode + ":" + v.Ref + ":" + kind)
-	}
-	if v.Version == 5 {
-		kind := "live"
-		if v.TestOnly {
-			kind = "fixture"
-		}
-		return []byte("fased-provider-signin-v5:" + s.instanceID + ":" + v.Provider + ":" + v.Mode + ":" + v.Ref + ":" + kind)
-	}
-	if v.Version == 1 {
-		return []byte("fased-api-vault-v1:" + s.instanceID + ":" + v.Ref)
-	}
-	if v.Version == 2 {
-		return []byte("fased-api-vault-v2:" + s.instanceID + ":openai:" + v.Mode + ":" + v.Ref)
-	}
-	return []byte("fased-api-vault-v4:" + s.instanceID + ":" + v.Provider + ":" + v.Mode + ":" + v.Ref)
+func (s *Store) isFixtureTaskSecrets() bool {
+	_, ok := s.taskSecrets.(fixtureTaskSecrets)
+	return ok
 }
+
+// Caller holds s.provider.mu or calls during construction before publication.
+func (s *Store) osVaultSecretsAvailableLocked(ctx context.Context) bool {
+	return !s.isFixtureTaskSecrets() && s.probeTaskSecrets(ctx)
+}
+
+func (s *Store) osVaultSecretsAvailable(ctx context.Context) bool {
+	s.provider.mu.Lock()
+	defer s.provider.mu.Unlock()
+	return s.osVaultSecretsAvailableLocked(ctx)
+}
+
+func (s *Store) validPassphraseOrOSLocked(ctx context.Context, passphrase string) bool {
+	if passphrase != "" {
+		return validPassword(passphrase)
+	}
+	return s.osVaultSecretsAvailableLocked(ctx)
+}
+
+func (s *Store) validPassphraseOrOS(ctx context.Context, passphrase string) bool {
+	if passphrase != "" {
+		return validPassword(passphrase)
+	}
+	return s.osVaultSecretsAvailable(ctx)
+}
+
+func deriveOSVaultKey(osKey, salt []byte) []byte {
+	h := sha256.New()
+	h.Write([]byte("fased-provider-os-vault-v1:"))
+	h.Write(osKey)
+	h.Write(salt)
+	return h.Sum(nil)
+}
+
+func (s *Store) vaultSealKey(ctx context.Context, passphrase string, salt []byte, create bool) ([]byte, bool, error) {
+	if passphrase != "" {
+		if !validPassword(passphrase) {
+			return nil, false, errors.New("invalid vault passphrase")
+		}
+		return passwordHash(passphrase, salt), false, nil
+	}
+	if !s.osVaultSecretsAvailableLocked(ctx) {
+		return nil, false, errors.New("vault passphrase or system credential protection required")
+	}
+	osKey, err := s.taskSecretKey(ctx, create)
+	if err != nil || len(osKey) != 32 {
+		clear(osKey)
+		return nil, false, errors.New("system credential protection unavailable")
+	}
+	derived := deriveOSVaultKey(osKey, salt)
+	clear(osKey)
+	return derived, true, nil
+}
+
+func (s *Store) aiVaultAAD(v aiVaultEnvelope) []byte {
+	var aad string
+	switch v.Version {
+	case 7:
+		aad = "fased-anthropic-workspace-v7:" + s.instanceID + ":" + v.Provider + ":" + v.Mode + ":" + v.Ref
+	case 6:
+		kind := "live"
+		if v.TestOnly {
+			kind = "fixture"
+		}
+		aad = "fased-local-provider-v6:" + s.instanceID + ":" + v.Provider + ":" + v.Mode + ":" + v.Ref + ":" + kind
+	case 5:
+		kind := "live"
+		if v.TestOnly {
+			kind = "fixture"
+		}
+		aad = "fased-provider-signin-v5:" + s.instanceID + ":" + v.Provider + ":" + v.Mode + ":" + v.Ref + ":" + kind
+	case 1:
+		aad = "fased-api-vault-v1:" + s.instanceID + ":" + v.Ref
+	case 2:
+		aad = "fased-api-vault-v2:" + s.instanceID + ":openai:" + v.Mode + ":" + v.Ref
+	default:
+		aad = "fased-api-vault-v4:" + s.instanceID + ":" + v.Provider + ":" + v.Mode + ":" + v.Ref
+	}
+	if v.OSProtected {
+		aad += ":os:" + s.dir + ":" + strconv.Itoa(os.Geteuid())
+	}
+	return []byte(aad)
+}
+
 func (s *Store) openAIVault(v aiVaultEnvelope, passphrase string) ([]byte, error) {
+	return s.openAIVaultWithContext(context.Background(), v, passphrase)
+}
+
+func (s *Store) openAIVaultWithContext(ctx context.Context, v aiVaultEnvelope, passphrase string) ([]byte, error) {
 	if !validAIVaultMode(v) {
 		return nil, errors.New("vault mode unavailable")
 	}
-	key := passwordHash(passphrase, v.Salt)
+	var key []byte
+	if v.OSProtected {
+		if passphrase != "" || s.isFixtureTaskSecrets() {
+			return nil, errors.New("vault unlock failed")
+		}
+		osKey, err := s.taskSecretKey(ctx, false)
+		if err != nil || len(osKey) != 32 {
+			clear(osKey)
+			return nil, errors.New("vault unlock failed")
+		}
+		key = deriveOSVaultKey(osKey, v.Salt)
+		clear(osKey)
+	} else {
+		if !validPassword(passphrase) {
+			return nil, errors.New("vault unlock failed")
+		}
+		key = passwordHash(passphrase, v.Salt)
+	}
 	block, _ := aes.NewCipher(key)
 	clear(key)
 	gcm, _ := cipher.NewGCM(block)
@@ -1135,6 +1251,77 @@ func (s *Store) openAIVault(v aiVaultEnvelope, passphrase string) ([]byte, error
 		return nil, errors.New("vault unlock failed")
 	}
 	return plain, nil
+}
+
+func (s *Store) restoreOSProtectedConnections(ctx context.Context) {
+	s.provider.mu.Lock()
+	defer s.provider.mu.Unlock()
+	if s.isFixtureTaskSecrets() {
+		return
+	}
+	col, err := s.readAIVaultCollection()
+	if err != nil || len(col.Accounts) == 0 {
+		return
+	}
+	hasOS := false
+	for _, env := range col.Accounts {
+		if env.OSProtected {
+			hasOS = true
+			break
+		}
+	}
+	if !hasOS {
+		return
+	}
+	osKey, err := s.taskSecretKey(ctx, false)
+	if err != nil || len(osKey) != 32 {
+		clear(osKey)
+		return
+	}
+	defer clear(osKey)
+	for _, env := range col.Accounts {
+		if !env.OSProtected || !validAIVaultMode(env) || !s.aiVaultModeAllowed(env) {
+			continue
+		}
+		state := s.credentialLocked(env.Ref)
+		if state.manuallyLocked || state.planPaused {
+			continue
+		}
+		key := deriveOSVaultKey(osKey, env.Salt)
+		block, _ := aes.NewCipher(key)
+		clear(key)
+		gcm, _ := cipher.NewGCM(block)
+		plain, err := gcm.Open(nil, env.Nonce, env.Ciphertext, s.aiVaultAAD(env))
+		valid := validAICredential(aiVaultMode(env), string(plain))
+		if env.Version == 7 {
+			_, valid = parseAnthropicWorkspace(plain, aiVaultMode(env))
+		}
+		if err != nil || !valid {
+			clear(plain)
+			continue
+		}
+		if env.Version == 5 {
+			if aiVaultMode(env) == "openai-signin" {
+				if cred, ok := parseProviderSignInCredential(plain); !ok || cred.SignedOut {
+					clear(plain)
+					continue
+				}
+			} else if aiVaultMode(env) == "google-oauth" {
+				if cred, ok := parseGoogleCredential(plain); !ok || cred.SignedOut {
+					clear(plain)
+					continue
+				}
+			}
+		}
+		encoded, _ := json.Marshal(env)
+		state.digest = sha256.Sum256(encoded)
+		state.ref = env.Ref
+		clear(state.key)
+		state.key = append([]byte(nil), plain...)
+		clear(plain)
+		state.osProtected = true
+		state.expires = 0
+	}
 }
 
 func migrateProviderAccounts(ctx context.Context, db *sql.DB, dir string) error {

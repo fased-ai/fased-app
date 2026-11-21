@@ -41,13 +41,24 @@ func fixtureDir(t *testing.T) string {
 }
 func fixtureStore(t *testing.T) *Store {
 	t.Helper()
-	s, err := OpenStore(fixtureDir(t))
+	s, err := openStoreWithTaskSecrets(fixtureDir(t), fixtureTaskSecrets{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = s.Close() })
 	s.providerFixture = true
-	s.taskSecrets = fixtureTaskSecrets{}
+	s.provider.apiCredentials = false
+	return s
+}
+
+func reopenFixtureStore(t *testing.T, dir string) *Store {
+	t.Helper()
+	s, err := openStoreWithTaskSecrets(dir, fixtureTaskSecrets{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+	s.provider.apiCredentials = false
 	return s
 }
 func claimFixture(t *testing.T, s *Store) string {

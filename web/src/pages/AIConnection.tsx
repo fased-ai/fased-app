@@ -70,6 +70,8 @@ export type Connection = {
   credentialModes?: CredentialMode[];
   taskAccess?: TaskAccessAllowance;
   persistentTaskAccessAvailable?: boolean;
+  osVaultAvailable?: boolean;
+  osProtected?: boolean;
   accessReview?: TaskAccessAllowance;
   admissionPolicy: OpenAIModelPolicy;
   ref: string;
@@ -312,6 +314,14 @@ export function AIConnectionSettings({
   const server = servers.find((s) => s.endpoint === endpoint);
   const apiMode =
     view?.credentialModes?.includes(provider as CredentialMode) ?? false;
+  const needsPassphrase = view?.ref
+    ? !view.osProtected
+    : !root?.osVaultAvailable;
+  const signInReady = signIn
+    ? signIn.remote && signIn.provider !== "google"
+      ? !!callback
+      : signIn.state === "callback-ready"
+    : false;
   async function change(action: string) {
     if (!view) {
       setError(uiText("Previous connection unavailable"));
@@ -329,7 +339,7 @@ export function AIConnectionSettings({
         action: action === "save" && selected === "new" ? "add" : action,
         name: action === "save" ? name : undefined,
         ref: view?.ref ?? "",
-        ...(["save", "unlock", "remove"].includes(action)
+        ...(["save", "unlock", "remove"].includes(action) && needsPassphrase
           ? { passphrase: secret }
           : {}),
         ...(action === "save"
@@ -363,11 +373,15 @@ export function AIConnectionSettings({
                 action,
                 signInId: signIn?.id,
                 callback: callback || undefined,
-                passphrase: secret,
+                ...(needsPassphrase ? { passphrase: secret } : {}),
               }
             : action === "sign-in-cancel"
               ? { action, signInId: signIn?.id }
-              : { action, ref: view.ref, passphrase: secret };
+              : {
+                  action,
+                  ref: view.ref,
+                  ...(needsPassphrase ? { passphrase: secret } : {}),
+                };
       const next = await core.request<Connection>(
         "ai/connection",
         "POST",
@@ -758,7 +772,7 @@ export function AIConnectionSettings({
                       )}
                     </p>
                     <a
-                      className="secondary"
+                      className={signInReady ? "secondary" : "primary"}
                       href={signIn.url}
                       target="_blank"
                       rel="noopener noreferrer"
@@ -787,16 +801,18 @@ export function AIConnectionSettings({
                     )}
                   </>
                 )}
-                <label>
-                  {uiText("Vault passphrase")}
-                  <input
-                    type="password"
-                    autoComplete="off"
-                    value={passphrase}
-                    maxLength={1024}
-                    onChange={(e) => setPassphrase(e.target.value)}
-                  />
-                </label>
+                {needsPassphrase && (
+                  <label>
+                    {uiText("Vault passphrase")}
+                    <input
+                      type="password"
+                      autoComplete="off"
+                      value={passphrase}
+                      maxLength={1024}
+                      onChange={(e) => setPassphrase(e.target.value)}
+                    />
+                  </label>
+                )}
                 <div className="agent-actions">
                   {method === "sign-in" ? (
                     <>
@@ -832,10 +848,8 @@ export function AIConnectionSettings({
                             className="primary"
                             disabled={
                               busy ||
-                              passphrase.length < 12 ||
-                              (signIn.remote && signIn.provider !== "google"
-                                ? !callback
-                                : signIn.state !== "callback-ready")
+                              (needsPassphrase && passphrase.length < 12) ||
+                              !signInReady
                             }
                           >
                             {uiText("Finish")}
@@ -855,7 +869,10 @@ export function AIConnectionSettings({
                           <button
                             type="button"
                             className="secondary"
-                            disabled={busy || passphrase.length < 12}
+                            disabled={
+                              busy ||
+                              (needsPassphrase && passphrase.length < 12)
+                            }
                             onClick={() => void change("sign-in-refresh")}
                           >
                             {uiText("Refresh")}
@@ -863,7 +880,10 @@ export function AIConnectionSettings({
                           <button
                             type="button"
                             className="secondary"
-                            disabled={busy || passphrase.length < 12}
+                            disabled={
+                              busy ||
+                              (needsPassphrase && passphrase.length < 12)
+                            }
                             onClick={() => void change("sign-in-disconnect")}
                           >
                             {uiText("Disconnect")}
@@ -878,7 +898,7 @@ export function AIConnectionSettings({
                         busy ||
                         !view ||
                         (isLocal ? !endpoint : !key) ||
-                        passphrase.length < 12 ||
+                        (needsPassphrase && passphrase.length < 12) ||
                         (view.pilotEnrollment && !!view.ref)
                       }
                     >
@@ -890,7 +910,11 @@ export function AIConnectionSettings({
                       <button
                         type="button"
                         className="secondary"
-                        disabled={busy || !view?.ref || passphrase.length < 12}
+                        disabled={
+                          busy ||
+                          !view?.ref ||
+                          (needsPassphrase && passphrase.length < 12)
+                        }
                         onClick={() => void change("unlock")}
                       >
                         {uiText(view?.planPaused ? "Review access" : "Unlock")}
@@ -908,7 +932,9 @@ export function AIConnectionSettings({
                           type="button"
                           className="secondary"
                           disabled={
-                            busy || !view?.ref || passphrase.length < 12
+                            busy ||
+                            !view?.ref ||
+                            (needsPassphrase && passphrase.length < 12)
                           }
                           onClick={() => void change("remove")}
                         >
@@ -927,16 +953,20 @@ export function AIConnectionSettings({
                     <pre>{pausedFailure?.details || view.planFailure}</pre>
                   </details>
                 )}
-                <p>
-                  {uiText(
-                    "Encrypted with your separate vault passphrase. Unlock lasts 15 minutes; lock, sign-out and restart end it. An unlocked key is accessible to the running core.",
-                  )}
-                </p>
-                <p>
-                  {uiText(
-                    "Metadata backups exclude credentials. Keep the vault and passphrase; owner password recovery cannot recover them. Reconnecting preserves request records and budget holds.",
-                  )}
-                </p>
+                {needsPassphrase && (
+                  <>
+                    <p>
+                      {uiText(
+                        "Encrypted with your separate vault passphrase. Unlock lasts 15 minutes; lock, sign-out and restart end it. An unlocked key is accessible to the running core.",
+                      )}
+                    </p>
+                    <p>
+                      {uiText(
+                        "Metadata backups exclude credentials. Keep the vault and passphrase; owner password recovery cannot recover them. Reconnecting preserves request records and budget holds.",
+                      )}
+                    </p>
+                  </>
+                )}
                 <p>
                   {uiText("Connection: ")}
                   {view?.ref || uiText("None")}
@@ -948,6 +978,16 @@ export function AIConnectionSettings({
             <section className="provider-models" aria-label={uiText("Models")}>
               <header>
                 <h3>{uiText("Models")}</h3>
+                {!view.locked && view.catalog?.state !== "ready" && (
+                  <button
+                    type="button"
+                    className="secondary"
+                    disabled={busy}
+                    onClick={() => void change("models-refresh")}
+                  >
+                    {uiText("Refresh")}
+                  </button>
+                )}
               </header>
               <ul>
                 {view.catalog?.models

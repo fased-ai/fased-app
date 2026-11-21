@@ -1077,7 +1077,7 @@ def fresh_remote_acceptance(fixture,candidate,guest,remote_work,local_receipt_sh
   opener=urllib.request.build_opener(urllib.request.ProxyHandler({}))
   with opener.open(endpoint,timeout=20) as response:health=json.load(response)
   assert health.get('version')==candidate['packet']['productVersion'],'direct private HTTPS must reach the installed candidate'
-  assert all(health.get('capabilities',{}).get(name) is False for name in ('aiConnections','financialExecution','walletSigner')),'live capabilities remain held'
+  assert health.get('capabilities',{}).get('aiConnections') is True and all(health.get('capabilities',{}).get(name) is False for name in ('financialExecution','walletSigner')),'live wallet capabilities remain held'
   identity=urllib.parse.parse_qs(urllib.parse.urlsplit(observed['private']).query).get('instance',[])
   assert len(identity)==1,'one Remote owner identity required'
   journal.advance('installed',instance_id=identity[0])

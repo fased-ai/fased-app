@@ -1487,7 +1487,8 @@ export async function runStagedBrowser(config, { chromium, expect }) {
     const health = await request("health");
     assert.equal(health.status, "ok");
     assert.equal(health.version, version);
-    for (const key of ["aiConnections", "financialExecution", "walletSigner"])
+    assert.equal(health.capabilities.aiConnections, true);
+    for (const key of ["financialExecution", "walletSigner"])
       assert.equal(health.capabilities[key], false);
     if (config.instanceId) assert.equal(health.instanceId, config.instanceId);
     return health;

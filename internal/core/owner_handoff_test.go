@@ -45,7 +45,10 @@ func TestInstalledOwnerHandoffIsMetadataNotAuthority(t *testing.T) {
 		if _, present := connection["ownerUid"]; present != (c.owner > 0) {
 			t.Fatal("ordinary instances acquired a dedicated owner identity", connection)
 		}
-		for _, name := range []string{"walletSigner", "financialExecution", "aiConnections", "updater"} {
+		if !health.Capabilities["aiConnections"] {
+			t.Fatal("live aiConnections capability missing")
+		}
+		for _, name := range []string{"walletSigner", "financialExecution", "updater"} {
 			if health.Capabilities[name] {
 				t.Fatal("metadata enabled a held capability", name)
 			}

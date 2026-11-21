@@ -28,7 +28,7 @@ func validPolicyLimits(l AILimits, p *OpenAIModelPolicy) bool {
 	if !unmeteredPolicy(p) {
 		return validAILimits(l)
 	}
-	return l.MaxInputTokens >= 1000 && l.MaxInputTokens <= 32000 && l.MaxOutputTokens >= 128 && l.MaxOutputTokens <= 1024 && l.DeadlineSeconds >= 1 && l.DeadlineSeconds <= 5 && l.BudgetMicrousd == 0
+	return l.MaxInputTokens >= 1000 && l.MaxInputTokens <= 32000 && l.MaxOutputTokens >= 128 && l.MaxOutputTokens <= 1024 && l.DeadlineSeconds >= 1 && l.DeadlineSeconds <= 120 && l.BudgetMicrousd == 0
 }
 func validPolicyTotal(p *OpenAIModelPolicy, budget int64) bool {
 	if unmeteredPolicy(p) {

@@ -1,8 +1,8 @@
 {
   "version": 1,
   "policy": "latest-only",
-  "reviewedAt": 1793059200,
-  "expiresAt": 1795651200,
+  "reviewedAt": 1795219200,
+  "expiresAt": 1797811200,
   "provider": "anthropic",
   "sources": {
     "models": "https://platform.claude.com/docs/en/models/overview",
@@ -60,16 +60,26 @@
     {
       "provider": "anthropic",
       "line": "fable",
-      "id": "claude-fable-5-1",
-      "name": "Claude Fable 5.1",
+      "id": "claude-fable-5-2",
+      "name": "Claude Fable 5.2",
       "tier": "Deep",
-      "input": 10000000,
-      "cached": 250000,
-      "output": 50000000,
+      "input": 8000000,
+      "cached": 200000,
+      "output": 40000000,
       "contextTokens": 1000000,
       "outputTokens": 128000,
-      "source": "https://platform.claude.com/docs/en/models/fable-5-1/overview",
+      "source": "https://platform.claude.com/docs/en/models/fable-5-2/overview",
       "reasoning": "low"
     }
-  ]
+  ],
+  "sourceHashes": {
+    "https://platform.claude.com/docs/en/models/overview": "41f5ac40ac7890dc6983142312f31f0719430c3c242fc93a3fc5bc63e3816641",
+    "https://platform.claude.com/docs/en/about-claude/pricing": "488e03e9cc17c794593348133aa9869d650964d599af58604a9838a0ae47e816",
+    "https://platform.claude.com/docs/en/api/overview": "43e3298e372097310d15081bc287cad98dcebc1f3550ff5f9805688d4b9cf986",
+    "https://platform.claude.com/docs/en/api/models/list": "709ddaca24018c3a9a605d8583f4fe66aa83b5ebc0ee50730558d0e586f9e321",
+    "https://platform.claude.com/docs/en/build-with-claude/prompt-caching": "cbcba50751b133ed9f9ace7dbcb6d93b78312f7bf15136e4e9b0e4b1387c2ced",
+    "https://platform.claude.com/docs/en/api/messages/create": "3b1c9d193d2d404822e1da2284af548ffe1d10a0b71e477f331cba2a16dd8efc",
+    "https://platform.claude.com/docs/en/manage-claude/authentication": "8f891267444ef5454dd38448df0faf4defb537ff4cad2d58be0d8039ed5a070c",
+    "https://code.claude.com/docs/en/legal-and-compliance": "1a7c59468a71304f19e6ce74c8d23b7d71382b81daa5d1c7afe524cc644d6e16"
+  }
 }

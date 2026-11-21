@@ -115,7 +115,7 @@ func (s *Store) refreshProviderModels(ctx context.Context, ref string, rt http.R
 	s.provider.mu.Unlock()
 
 	result := modelDiscovery{State: "failed"}
-	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	provider := v.Provider
 	client := http.Client{Transport: authenticatedAITransport{store: s, ref: ref, next: rt, modelsOnly: true}, CheckRedirect: func(*http.Request, []*http.Request) error { return errors.New("provider redirect refused") }}

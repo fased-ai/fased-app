@@ -2,8 +2,8 @@
   "version": 1,
   "policy": "latest-only",
   "provider": "moonshot",
-  "reviewedAt": 1793145600,
-  "expiresAt": 1795737600,
+  "reviewedAt": 1795219200,
+  "expiresAt": 1797811200,
   "sources": {
     "models": "https://platform.kimi.com/docs/guide/kimi-k3-1-pro-quickstart",
     "pricing": "https://platform.kimi.com/docs/pricing/chat",

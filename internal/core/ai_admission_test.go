@@ -14,7 +14,7 @@ import (
 func TestOpenAIAdmissionPolicyAndIntegerTariff(t *testing.T) {
 	p := openAIModelPolicy()
 	q := AgentAIRequest{Model: p.Model, Policy: &p, ConnectionRef: "disposable-connection", Limits: AILimits{MaxInputTokens: 24000, MaxOutputTokens: 1024}}
-	if e := validateAIModelPolicy(q, time.Date(2026, 10, 27, 0, 0, 0, 0, time.UTC).Unix()); e != nil {
+	if e := validateAIModelPolicy(q, time.Unix(p.ReviewedAt, 0).UTC().Unix()); e != nil {
 		t.Fatal(e)
 	}
 	if aiRequestReservation(q) != 29120 {
@@ -34,7 +34,8 @@ func TestOpenAIAdmissionPolicyAndIntegerTariff(t *testing.T) {
 
 func admissionStore(t *testing.T) (*Store, AIConnectionView) {
 	s := fixtureStore(t)
-	s.now = func() time.Time { return time.Date(2026, 10, 27, 0, 0, 0, 0, time.UTC) }
+	reviewedAt := openAIModelPolicy().ReviewedAt
+	s.now = func() time.Time { return time.Unix(reviewedAt, 0).UTC() }
 	return s, saveTestConnection(t, s)
 }
 func admissionPlan(t *testing.T, s *Store, ref string, scheduled bool) AgentView {
@@ -126,11 +127,7 @@ func TestOpenAIAdmissionHTTPSJoinedTaskAndRestart(t *testing.T) {
 	if e := s.Close(); e != nil {
 		t.Fatal(e)
 	}
-	n, e := OpenStore(s.dir)
-	if e != nil {
-		t.Fatal(e)
-	}
-	defer n.Close()
+	n := reopenFixtureStore(t, s.dir)
 	got, _ := n.Agents(t.Context(), v.ProfileID, "")
 	if *got.AIRequests[0].Admission != *q.Admission || *got.AIRequests[0].Policy != *q.Policy || got.AIRequests[0].SpentMicrousd != 2546 {
 		t.Fatal("restart lost admission provenance")

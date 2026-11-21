@@ -40,9 +40,9 @@ func TestProviderModelsAccountIsolationFreshnessAndFailure(t *testing.T) {
 			t.Error("discovery did more than list", r.Method, r.URL)
 		}
 		if r.Header.Get("Authorization") == "Bearer "+testAPIKey {
-			admissionReply(w, modelRows(admittedOpenAIModel, "gpt-6.1-sol"))
+			admissionReply(w, modelRows(admittedOpenAIModel, "gpt-6.2-sol"))
 		} else if r.Header.Get("Authorization") == "Bearer "+secondKey {
-			admissionReply(w, modelRows("gpt-6-astra", legacyOpenAIModel))
+			admissionReply(w, modelRows("gpt-6.2-astra", legacyOpenAIModel))
 		} else {
 			t.Error("wrong credential")
 		}
@@ -55,7 +55,7 @@ func TestProviderModelsAccountIsolationFreshnessAndFailure(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !modelChoice(av, admittedOpenAIModel).Selectable || modelChoice(av, "gpt-6-astra").Selectable || !modelChoice(bv, "gpt-6-astra").Selectable || modelChoice(bv, admittedOpenAIModel).Selectable || modelChoice(bv, legacyOpenAIModel).Selectable {
+	if !modelChoice(av, admittedOpenAIModel).Selectable || modelChoice(av, "gpt-6.2-astra").Selectable || !modelChoice(bv, "gpt-6.2-astra").Selectable || modelChoice(bv, admittedOpenAIModel).Selectable || modelChoice(bv, legacyOpenAIModel).Selectable {
 		t.Fatal("account catalogues crossed")
 	}
 	if av.Catalog.SHA256 == "" || av.Catalog.SHA256 == bv.Catalog.SHA256 || av.Catalog.Source != "https://api.openai.com/v1/models" {
@@ -67,7 +67,7 @@ func TestProviderModelsAccountIsolationFreshnessAndFailure(t *testing.T) {
 		t.Fatal("failure reused cache", err)
 	}
 	bv, _ = s.AIConnection(b.Ref)
-	if !modelChoice(bv, "gpt-6-astra").Selectable {
+	if !modelChoice(bv, "gpt-6.2-astra").Selectable {
 		t.Fatal("other account invalidated")
 	}
 	// Keep interactive access while expiring only the account-list evidence.
@@ -77,7 +77,7 @@ func TestProviderModelsAccountIsolationFreshnessAndFailure(t *testing.T) {
 	later := s.now().Add(16 * time.Minute)
 	s.now = func() time.Time { return later }
 	bv, _ = s.AIConnection(b.Ref)
-	if modelChoice(bv, "gpt-6-astra").Availability != "stale" {
+	if modelChoice(bv, "gpt-6.2-astra").Availability != "stale" {
 		t.Fatal("stale list selectable")
 	}
 }
@@ -165,7 +165,7 @@ func TestProviderModelsLatestOnlyAndLegacyInspection(t *testing.T) {
 	if !validChatPermission(p, true) || validChatPermission(p) {
 		t.Fatal("old receipt not inspectable or became executable")
 	}
-	current := openAIModelPolicy("gpt-6.1-sol")
+	current := openAIModelPolicy("gpt-6.2-sol")
 	q.Model = current.Model
 	q.Policy = &current
 	raw, _ := aiWire(q)
@@ -226,7 +226,7 @@ func TestProviderModelsReasoningStreamAndEveryCurrentModel(t *testing.T) {
 			}
 		})
 	}
-	const model = "gpt-6.1-sol"
+	const model = "gpt-6.2-sol"
 	text := `{"answer":"Fixture answer","cards":[]}`
 	frame := func(kind string, seq int, extra map[string]any) string {
 		m := map[string]any{"type": kind, "sequence_number": seq}
@@ -262,7 +262,7 @@ func TestProviderModelsNewGenerationRemovesOldSelection(t *testing.T) {
 	if s.providerRequestAllowed(AgentAIRequest{ConnectionRef: a.Ref, Model: p.Model, Policy: &p}, true) {
 		t.Fatal("known older generation could dispatch")
 	}
-	if !newerProviderGeneration("gpt-6.10-sol", "gpt-6.2-sol") || newerProviderGeneration("gpt-7-sol", "gpt-6-astra") {
+	if !newerProviderGeneration("gpt-6.10-sol", "gpt-6.2-sol") || newerProviderGeneration("gpt-7-sol", "gpt-6.2-astra") {
 		t.Fatal("generation comparison")
 	}
 }
@@ -271,7 +271,7 @@ func TestProviderModelsFrozenDraftSurvivesRegistryRemoval(t *testing.T) {
 	s := fixtureStore(t)
 	a := saveTestConnection(t, s)
 	v := agentApply(t, s, AgentCommand{Action: "session-create", ProfileID: "trading-analyst", Name: "Frozen"})
-	v = agentApply(t, s, AgentCommand{Action: "ai-prepare", ProfileID: v.ProfileID, ID: v.Sessions[0].ID, ConnectionRef: a.Ref, Model: "gpt-6.1-sol", Text: "Preserve this draft", Limits: &AILimits{MaxInputTokens: 24000, MaxOutputTokens: 1024, DeadlineSeconds: 5, BudgetMicrousd: 100000}})
+	v = agentApply(t, s, AgentCommand{Action: "ai-prepare", ProfileID: v.ProfileID, ID: v.Sessions[0].ID, ConnectionRef: a.Ref, Model: "gpt-6.2-sol", Text: "Preserve this draft", Limits: &AILimits{MaxInputTokens: 24000, MaxOutputTokens: 1024, DeadlineSeconds: 5, BudgetMicrousd: 100000}})
 	q := v.AIRequests[0]
 	before, _ := aiWire(q)
 	saved := currentModels

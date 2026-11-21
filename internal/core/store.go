@@ -353,6 +353,8 @@ PRAGMA user_version=1;`)
 	if err = store.restoreTaskAccess(ctx); err != nil {
 		return nil, err
 	}
+	store.probeTaskSecrets(ctx)
+	store.restoreOSProtectedConnections(ctx)
 	return store, nil
 }
 func (s *Store) Close() error {

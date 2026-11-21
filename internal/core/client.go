@@ -69,7 +69,7 @@ func NewClient(ctx context.Context, dir string) (*Client, error) {
 	transport := &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
 		return dialIPC(ctx, endpoint.Network, endpoint.Address)
 	}}
-	c := &Client{Endpoint: endpoint, HTTP: &http.Client{Transport: transport, Timeout: 10 * time.Second, CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return errors.New("redirects are not allowed") }}}
+	c := &Client{Endpoint: endpoint, HTTP: &http.Client{Transport: transport, Timeout: 30 * time.Second, CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return errors.New("redirects are not allowed") }}}
 	var health Health
 	if err = c.Do(ctx, http.MethodGet, "/api/v1/health", nil, &health); err != nil {
 		c.Close()
