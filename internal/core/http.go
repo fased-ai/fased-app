@@ -684,7 +684,7 @@ func (h *HTTPHandler) checkLoopbackPeerUID(r *http.Request, allowRoot bool) bool
 	if err != nil || !found {
 		return false
 	}
-	if uid == os.Getuid() || (h.instanceOwnerUID > 0 && uid == h.instanceOwnerUID) || (allowRoot && uid == 0) {
+	if uid == os.Getuid() || (h.instanceOwnerUID > 0 && uid == h.instanceOwnerUID) || (h.store != nil && h.store.custodyOwnerUID > 0 && uid == h.store.custodyOwnerUID) || (allowRoot && uid == 0) {
 		return true
 	}
 	return false

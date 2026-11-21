@@ -59,6 +59,7 @@ type Store struct {
 	remoteSignedOut               map[string]bool
 	fixture                       func(context.Context, signer.Request) (signer.Response, error)
 	protectedOwnerUID             int  // Verified Local OS-owner identity; never wallet authority.
+	custodyOwnerUID               int  // Verified custody signer OwnerUID for loopback peer-UID auth checks; never wallet authority.
 	unconfiguredProtectedSigner   bool // Verified pre-wallet configuration; it does not prove the signer directory is empty.
 	custodyOwnerSupported         bool
 	custodyOwnerKey               bool                                                               // Owner-input provenance, distinct from disposable fixtures.

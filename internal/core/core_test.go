@@ -15,6 +15,8 @@ import (
 	"testing"
 	"testing/fstest"
 	"time"
+
+	"github.com/fased-ai/fased-app/internal/signer"
 )
 
 const testPassword = "fixture-only-owner-password"
@@ -561,5 +563,62 @@ func TestPartitionedRateLimitAndLoopbackPeerUID(t *testing.T) {
 	localRes.Body.Close()
 	if localRes.StatusCode != http.StatusForbidden {
 		t.Fatalf("foreign loopback UID local exchange accepted: %d", localRes.StatusCode)
+	}
+
+	// Verified v1 custody OwnerUID must be allowed on Local loopback auth even while instanceOwnerUID stays 0.
+	if uid := os.Getuid(); uid > 0 && os.Geteuid() == uid {
+		sV1 := fixtureStore(t)
+		claimFixture(t, sV1)
+		v1Config := signer.Config{
+			Version:   1,
+			Mode:      signer.FixtureNetwork,
+			SignerID:  strings.Repeat("a", 32),
+			OwnerUID:  uid + 7,
+			AppUID:    uid,
+			SignerUID: uid + 8,
+			StateDir:  "/fixture/signer-state",
+			SocketDir: "/fixture/signer-ipc",
+		}
+		if err = sV1.configureVerifiedSigner(v1Config); err != nil {
+			t.Fatal(err)
+		}
+		hV1, err := NewHTTPHandler(sV1, "http://127.0.0.1:7331", "", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if hV1.instanceOwnerUID != 0 {
+			t.Fatalf("unexpected non-zero instanceOwnerUID for v1 custody: %d", hV1.instanceOwnerUID)
+		}
+		peerUID := v1Config.OwnerUID
+		hV1.loopbackPeerUID = func(*net.TCPAddr, *net.TCPAddr) (int, bool, error) {
+			return peerUID, true, nil
+		}
+		tsV1 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			hV1.origins["http://"+r.Host] = true
+			hV1.hosts[r.Host] = true
+			hV1.ServeHTTP(w, r)
+		}))
+		defer tsV1.Close()
+		doV1Login := func() int {
+			req, _ := http.NewRequest(http.MethodPost, tsV1.URL+"/api/v1/auth/login", strings.NewReader(`{"password":"`+testPassword+`"}`))
+			req.Header.Set("Origin", tsV1.URL)
+			req.Header.Set("Content-Type", "application/json")
+			res, e := tsV1.Client().Do(req)
+			if e != nil {
+				t.Fatal(e)
+			}
+			res.Body.Close()
+			return res.StatusCode
+		}
+		if code := doV1Login(); code != http.StatusOK {
+			t.Fatalf("v1 custody OwnerUID loopback login rejected: %d", code)
+		}
+		peerUID = v1Config.OwnerUID + 1
+		if code := doV1Login(); code != http.StatusForbidden {
+			t.Fatalf("unrelated UID accepted under v1 custody: %d", code)
+		}
+		if hV1.instanceOwnerUID != 0 {
+			t.Fatalf("v1 custody instanceOwnerUID mutated: %d", hV1.instanceOwnerUID)
+		}
 	}
 }
