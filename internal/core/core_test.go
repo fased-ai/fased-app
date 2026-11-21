@@ -5,10 +5,12 @@ import (
 	"encoding/json"
 	"errors"
 	"io/fs"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"testing/fstest"
@@ -406,5 +408,158 @@ func TestConcurrentSetupHasOneWinner(t *testing.T) {
 	}
 	if wins != 1 || conflicts != 1 {
 		t.Fatal("concurrent edits silently overwrote each other")
+	}
+}
+
+func TestCookieModeOmitsSessionTokenAndRejectsBearer(t *testing.T) {
+	t.Parallel()
+	s := fixtureStore(t)
+	claimFixture(t, s)
+	const origin = "https://node.owner.ts.net"
+	h, err := NewHTTPHandler(s, "http://127.0.0.1:7331", origin, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest(http.MethodPost, origin+"/api/v1/auth/login", strings.NewReader(`{"password":"`+testPassword+`"}`))
+	req.Header.Set("Origin", origin)
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("cookie login failed: %d %s", w.Code, w.Body.String())
+	}
+	var payload map[string]any
+	if err = json.Unmarshal(w.Body.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if _, leaked := payload["sessionToken"]; leaked || payload["sessionMode"] != "cookie" {
+		t.Fatalf("cookie response leaked sessionToken or wrong mode: %v", payload)
+	}
+	cookies := w.Result().Cookies()
+	if len(cookies) != 1 || cookies[0].Name != sessionCookie {
+		t.Fatalf("missing session cookie: %+v", cookies)
+	}
+	cookieVal := cookies[0].Value
+
+	// Authorization: Bearer must be ignored/rejected on cookie-mode HTTPS routes.
+	bearerReq := httptest.NewRequest(http.MethodGet, origin+"/api/v1/setup", nil)
+	bearerReq.Header.Set("Authorization", "Bearer "+cookieVal)
+	bearerRes := httptest.NewRecorder()
+	h.ServeHTTP(bearerRes, bearerReq)
+	if bearerRes.Code != http.StatusUnauthorized {
+		t.Fatalf("cookie mode accepted Bearer header: %d", bearerRes.Code)
+	}
+
+	// Valid cookie succeeds.
+	cookieReq := httptest.NewRequest(http.MethodGet, origin+"/api/v1/setup", nil)
+	cookieReq.AddCookie(&http.Cookie{Name: sessionCookie, Value: cookieVal})
+	cookieRes := httptest.NewRecorder()
+	h.ServeHTTP(cookieRes, cookieReq)
+	if cookieRes.Code != http.StatusOK {
+		t.Fatalf("valid cookie rejected: %d %s", cookieRes.Code, cookieRes.Body.String())
+	}
+}
+
+func TestPartitionedRateLimitAndLoopbackPeerUID(t *testing.T) {
+	t.Parallel()
+	s := fixtureStore(t)
+	claimFixture(t, s)
+	h, err := NewHTTPHandler(s, "http://127.0.0.1:7331", "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	token, err := s.Login(t.Context(), testPassword)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Exhaust /api/v1/auth/login from one loopback source IP.
+	for i := 0; i < 8; i++ {
+		r := httptest.NewRequest(http.MethodPost, "http://127.0.0.1:7331/api/v1/auth/login", strings.NewReader(`{"password":"wrong"}`))
+		r.RemoteAddr = "127.0.0.1:41001"
+		r.Header.Set("Origin", "http://127.0.0.1:7331")
+		r.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, r)
+	}
+	blocked := httptest.NewRequest(http.MethodPost, "http://127.0.0.1:7331/api/v1/auth/login", strings.NewReader(`{"password":"`+testPassword+`"}`))
+	blocked.RemoteAddr = "127.0.0.1:41002"
+	blocked.Header.Set("Origin", "http://127.0.0.1:7331")
+	blocked.Header.Set("Content-Type", "application/json")
+	blockedRes := httptest.NewRecorder()
+	h.ServeHTTP(blockedRes, blocked)
+	if blockedRes.Code != http.StatusTooManyRequests {
+		t.Fatalf("expected 429 on saturated auth-login bucket, got %d", blockedRes.Code)
+	}
+
+	// Different peer IP on /api/v1/auth/login is unaffected.
+	otherIP := httptest.NewRequest(http.MethodPost, "http://127.0.0.1:7331/api/v1/auth/login", strings.NewReader(`{"password":"`+testPassword+`"}`))
+	otherIP.RemoteAddr = "127.0.0.2:41003"
+	otherIP.Header.Set("Origin", "http://127.0.0.1:7331")
+	otherIP.Header.Set("Content-Type", "application/json")
+	otherRes := httptest.NewRecorder()
+	h.ServeHTTP(otherRes, otherIP)
+	if otherRes.Code != http.StatusOK {
+		t.Fatalf("login rate limit bled across peer IPs: %d %s", otherRes.Code, otherRes.Body.String())
+	}
+
+	// /api/v1/ai/connection from the first peer IP stays unthrottled by auth-login.
+	aiReq := httptest.NewRequest(http.MethodPost, "http://127.0.0.1:7331/api/v1/ai/connection", strings.NewReader(`{"action":"lock"}`))
+	aiReq.RemoteAddr = "127.0.0.1:41004"
+	aiReq.Header.Set("Origin", "http://127.0.0.1:7331")
+	aiReq.Header.Set("Content-Type", "application/json")
+	aiReq.Header.Set("Authorization", "Bearer "+token)
+	aiReq.Header.Set("X-CSRF-Token", csrfToken(token))
+	aiRes := httptest.NewRecorder()
+	h.ServeHTTP(aiRes, aiReq)
+	if aiRes.Code == http.StatusTooManyRequests {
+		t.Fatal("auth-login rate limit throttled /api/v1/ai/connection")
+	}
+
+	// Real TCP loopback request exercises /proc/net/tcp same-UID enforcement on Linux.
+	h2, err := NewHTTPHandler(s, "http://127.0.0.1:7331", "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		h2.origins["http://"+r.Host] = true
+		h2.hosts[r.Host] = true
+		h2.ServeHTTP(w, r)
+	}))
+	defer ts.Close()
+	client := ts.Client()
+	loginURL := ts.URL + "/api/v1/auth/login"
+	sendRealLogin := func() *http.Response {
+		req, _ := http.NewRequest(http.MethodPost, loginURL, strings.NewReader(`{"password":"`+testPassword+`"}`))
+		req.Header.Set("Origin", ts.URL)
+		req.Header.Set("Content-Type", "application/json")
+		res, err := client.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		res.Body.Close()
+		return res
+	}
+	if res := sendRealLogin(); res.StatusCode != http.StatusOK {
+		t.Fatalf("real same-UID loopback TCP login failed (GOOS=%s): %d", runtime.GOOS, res.StatusCode)
+	}
+
+	// Simulated foreign UID must be refused with 403 on Local auth routes.
+	h2.loopbackPeerUID = func(*net.TCPAddr, *net.TCPAddr) (int, bool, error) {
+		return os.Getuid() + 1, true, nil
+	}
+	if res := sendRealLogin(); res.StatusCode != http.StatusForbidden {
+		t.Fatalf("foreign loopback UID login accepted: %d", res.StatusCode)
+	}
+	localReq, _ := http.NewRequest(http.MethodPost, ts.URL+"/api/v1/auth/local", strings.NewReader(`{"action":"exchange","code":"`+strings.Repeat("a", 43)+`"}`))
+	localReq.Header.Set("Origin", ts.URL)
+	localReq.Header.Set("Content-Type", "application/json")
+	localRes, err := client.Do(localReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	localRes.Body.Close()
+	if localRes.StatusCode != http.StatusForbidden {
+		t.Fatalf("foreign loopback UID local exchange accepted: %d", localRes.StatusCode)
 	}
 }

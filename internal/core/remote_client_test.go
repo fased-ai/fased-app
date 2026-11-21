@@ -6,8 +6,11 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/fased-ai/fased-app/internal/tailnet"
 )
 
 type remoteRoundTrip func(*http.Request) (*http.Response, error)
@@ -106,5 +109,46 @@ func TestRemoteClientUsesPinnedHTTPSAndNoPassword(t *testing.T) {
 			c.Close()
 			t.Fatal("unsafe origin accepted", origin)
 		}
+	}
+}
+
+func TestRemoteClientCookieModeAndConfirmReconnect(t *testing.T) {
+	t.Parallel()
+	s := fixtureStore(t)
+	owner := tailnet.Identity{UserID: 9, NodeID: "cli-node", Login: "cli@example.test"}
+	claim, err := s.IssueRemoteClaim(t.Context(), owner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.remoteSession(t.Context(), owner, claim.Code, ""); err != nil {
+		t.Fatal(err)
+	}
+	// Simulate explicit browser logout on this node before CLI reconnect.
+	s.markRemoteSignedOut(owner.NodeID)
+
+	const origin = "https://cli.owner.ts.net"
+	h, err := NewHTTPHandler(s, "http://127.0.0.1:7331", origin, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.remoteIngress, h.instanceLocation = true, "remote"
+
+	transport := remoteRoundTrip(func(r *http.Request) (*http.Response, error) {
+		ctx := context.WithValue(r.Context(), remoteIdentityKey{}, owner)
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, r.WithContext(ctx))
+		return rec.Result(), nil
+	})
+	client, err := newRemoteClient(t.Context(), origin, s.Health().InstanceID, transport)
+	if err != nil {
+		t.Fatalf("cookie-mode remote client failed: %v", err)
+	}
+	defer client.Close()
+	if client.Token != "" || client.cookie == "" {
+		t.Fatalf("expected cookie session without bearer token, got token=%q cookieLen=%d", client.Token, len(client.cookie))
+	}
+	var setup SetupRecord
+	if err = client.Do(t.Context(), http.MethodGet, "/api/v1/setup", nil, &setup); err != nil {
+		t.Fatalf("authenticated GET over cookie session failed: %v", err)
 	}
 }

@@ -50,6 +50,7 @@ function useCoreState() {
   const [connection, setConnection] = useState<InstanceConnection | null>(null);
   const [remoteAccess, setRemoteAccess] = useState(false);
   const [remoteEnrolled, setRemoteEnrolled] = useState(false);
+  const [remoteSignedOut, setRemoteSignedOut] = useState(false);
   const [localAccess, setLocalAccess] = useState(false);
   const [passwordAvailable, setPasswordAvailable] = useState(false);
   const connectedID = useRef(
@@ -180,6 +181,7 @@ function useCoreState() {
         localAccess?: boolean;
         remoteAccess?: boolean;
         remoteEnrolled?: boolean;
+        remoteSignedOut?: boolean;
         legacyAuthenticated?: boolean;
         passwordAvailable?: boolean;
       }>("auth/state");
@@ -187,6 +189,7 @@ function useCoreState() {
       setLocalAccess(auth.localAccess === true);
       setRemoteAccess(auth.remoteAccess === true);
       setRemoteEnrolled(auth.remoteEnrolled === true);
+      setRemoteSignedOut(auth.remoteSignedOut === true);
       if (auth.legacyAuthenticated) csrf.current = auth.csrfToken ?? "";
       setPasswordAvailable(auth.passwordAvailable === true);
       if (
@@ -265,6 +268,7 @@ function useCoreState() {
     code?: string,
     local = false,
     remote = false,
+    confirm = false,
   ) {
     const epoch = ++authGeneration.current;
     setError("");
@@ -287,7 +291,7 @@ function useCoreState() {
         await inspect();
       const session = await request<{
         csrfToken: string;
-        sessionToken: string;
+        sessionToken?: string;
         sessionMode?: "bearer" | "cookie";
       }>(
         remote
@@ -301,7 +305,9 @@ function useCoreState() {
                 : "auth/claim",
         "POST",
         remote
-          ? { code }
+          ? confirm
+            ? { code, confirm: true }
+            : { code }
           : nativeLocal
             ? {}
             : local
@@ -322,7 +328,7 @@ function useCoreState() {
       const cookieMode = session.sessionMode
         ? session.sessionMode === "cookie"
         : location.protocol === "https:";
-      token.current = cookieMode ? "" : session.sessionToken;
+      token.current = cookieMode ? "" : (session.sessionToken ?? "");
       try {
         if (token.current) sessionStorage.setItem(sessionKey, token.current);
         else sessionStorage.removeItem(sessionKey);
@@ -330,6 +336,7 @@ function useCoreState() {
         /* current-tab memory still works */
       }
       await refresh();
+      if (epoch === authGeneration.current && remote) setRemoteSignedOut(false);
     } catch (e) {
       if (epoch === authGeneration.current) {
         setError(e instanceof Error ? e.message : "Authentication failed");
@@ -384,6 +391,7 @@ function useCoreState() {
       await request("auth/logout", "POST", {});
       if (epoch === authGeneration.current) {
         if (remoteAccess) {
+          setRemoteSignedOut(true);
           try {
             sessionStorage.setItem("fased.remote.signed-out", "1");
           } catch {}
@@ -400,6 +408,7 @@ function useCoreState() {
   return {
     remoteAccess,
     remoteEnrolled,
+    remoteSignedOut,
     localAccess,
     passwordAvailable,
     mode,

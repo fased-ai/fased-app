@@ -372,6 +372,9 @@ func waitPackageHealth(ctx context.Context, m Manifest, ownerHealthy func(core.H
 				err = json.NewDecoder(io.LimitReader(response.Body, 32<<10)).Decode(&health)
 				_ = response.Body.Close()
 				if err == nil && response.StatusCode == http.StatusOK && ownerHealthy(health) {
+					if m.Location != "local" {
+						return nil
+					}
 					request, e := http.NewRequestWithContext(ctx, http.MethodGet, "http://"+m.Listen+"/api/v1/health", nil)
 					if e == nil {
 						browser, e := client.Do(request)

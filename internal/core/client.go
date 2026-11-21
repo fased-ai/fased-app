@@ -36,6 +36,7 @@ type Client struct {
 	HTTP            *http.Client
 	Token           string
 	CSRF            string
+	cookie          string
 	localOwner      bool
 	remote          bool
 	custodyAccounts bool
@@ -121,7 +122,9 @@ func (c *Client) Do(ctx context.Context, method, route string, input, output any
 	if c.custodyOnchain {
 		req.Header.Set(custodyOnchainHeader, c.Endpoint.InstanceID)
 	}
-	if c.Token != "" {
+	if c.cookie != "" {
+		req.AddCookie(&http.Cookie{Name: sessionCookie, Value: c.cookie})
+	} else if c.Token != "" {
 		req.Header.Set("Authorization", "Bearer "+c.Token)
 	}
 	response, err := c.HTTP.Do(req)
@@ -165,7 +168,7 @@ func (c *Client) Login(ctx context.Context, password string) error {
 func (c *Client) Claim(ctx context.Context, code, password string) error {
 	return c.authenticate(ctx, "/api/v1/auth/claim", map[string]string{"code": code, "password": password})
 }
-func (c *Client) authenticate(ctx context.Context, route string, credentials map[string]string) error {
+func (c *Client) authenticate(ctx context.Context, route string, credentials any) error {
 	request, err := json.Marshal(credentials)
 	if err != nil {
 		return err
@@ -198,7 +201,16 @@ func (c *Client) authenticate(ctx context.Context, route string, credentials map
 		return err
 	}
 	c.Token = result.SessionToken
-	if c.Token == "" || result.CSRFToken == "" {
+	c.cookie = ""
+	if c.Token == "" {
+		for _, ck := range response.Cookies() {
+			if ck.Name == sessionCookie && ck.Value != "" {
+				c.cookie = ck.Value
+				break
+			}
+		}
+	}
+	if (c.Token == "" && c.cookie == "") || result.CSRFToken == "" {
 		return errors.New("core did not create a session")
 	}
 	c.CSRF = result.CSRFToken

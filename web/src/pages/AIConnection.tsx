@@ -332,7 +332,7 @@ export function AIConnectionSettings({
     ? !view.osProtected
     : !root?.osVaultAvailable;
   const signInReady = signIn
-    ? signIn.remote && signIn.provider !== "google"
+    ? signIn.remote
       ? !!callback.trim()
       : signIn.state === "callback-ready"
     : false;
@@ -798,7 +798,7 @@ export function AIConnectionSettings({
                     >
                       {uiText("Open sign-in")}
                     </a>
-                    {signIn.remote && signIn.provider !== "google" && (
+                    {signIn.remote && (
                       <label>
                         {uiText(
                           signIn.provider === "openrouter"

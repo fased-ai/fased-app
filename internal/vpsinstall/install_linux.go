@@ -30,6 +30,7 @@ import (
 
 type hostFile struct {
 	Data               []byte
+	Size               int64
 	UID, GID           int
 	Mode               os.FileMode
 	Directory, Regular bool
@@ -83,7 +84,7 @@ func file(path string) (hostFile, error) {
 	if !ok {
 		return hostFile{}, errors.New("unknown host file ownership")
 	}
-	f := hostFile{UID: int(st.Uid), GID: int(st.Gid), Mode: i.Mode(), Directory: i.IsDir(), Regular: i.Mode().IsRegular()}
+	f := hostFile{Size: i.Size(), UID: int(st.Uid), GID: int(st.Gid), Mode: i.Mode(), Directory: i.IsDir(), Regular: i.Mode().IsRegular()}
 	// The app-owned empty marker is inspected by metadata; its 0600 bytes are
 	// deliberately unreadable to the administrator. Procfs files report size 0
 	// despite having content, so other regular files still use bounded reads.

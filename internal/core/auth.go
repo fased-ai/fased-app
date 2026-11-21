@@ -7,6 +7,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
+	"database/sql"
 	"encoding/base64"
 	"errors"
 	"os"
@@ -20,6 +21,10 @@ import (
 
 const SessionLifetime = 12 * time.Hour
 const ClaimLifetime = 15 * time.Minute
+const (
+	maxRemoteSessionsPerNode = 16
+	maxLocalSessions         = 32
+)
 
 const (
 	prodKDFTime    uint32 = 3
@@ -140,16 +145,54 @@ func (s *Store) Login(ctx context.Context, password string) (string, error) {
 	}
 	return s.NewSession(ctx)
 }
+func pruneSessionsLocked(ctx context.Context, tx *sql.Tx, now int64, nodeID string) error {
+	if _, err := tx.ExecContext(ctx, "DELETE FROM sessions WHERE expires<=?", now); err != nil {
+		return err
+	}
+	if nodeID != "" {
+		_, err := tx.ExecContext(ctx, `DELETE FROM sessions WHERE token_hash IN (
+			SELECT s.token_hash FROM sessions s
+			JOIN remote_sessions r ON r.token_hash=s.token_hash
+			WHERE r.node_id=?
+			ORDER BY s.expires DESC, s.rowid DESC
+			LIMIT -1 OFFSET ?
+		)`, nodeID, maxRemoteSessionsPerNode-1)
+		return err
+	}
+	var version int
+	if err := tx.QueryRowContext(ctx, "PRAGMA user_version").Scan(&version); err != nil {
+		return err
+	}
+	if version >= RemoteOwnerStateSchema {
+		_, err := tx.ExecContext(ctx, `DELETE FROM sessions WHERE token_hash NOT IN (SELECT token_hash FROM remote_sessions) AND rowid NOT IN (
+			SELECT rowid FROM sessions WHERE token_hash NOT IN (SELECT token_hash FROM remote_sessions)
+			ORDER BY expires DESC, rowid DESC LIMIT ?
+		)`, maxLocalSessions-1)
+		return err
+	}
+	_, err := tx.ExecContext(ctx, `DELETE FROM sessions WHERE rowid NOT IN (
+		SELECT rowid FROM sessions ORDER BY expires DESC, rowid DESC LIMIT ?
+	)`, maxLocalSessions-1)
+	return err
+}
+
 func (s *Store) NewSession(ctx context.Context) (string, error) {
 	token, err := randomToken()
 	if err != nil {
 		return "", err
 	}
-	if _, err = s.db.ExecContext(ctx, "DELETE FROM sessions WHERE expires<=?", s.now().Unix()); err != nil {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
 		return "", err
 	}
-	_, err = s.db.ExecContext(ctx, "INSERT INTO sessions(token_hash,expires) VALUES(?,?)", tokenHash(token), s.now().Add(SessionLifetime).Unix())
-	if err != nil {
+	defer tx.Rollback()
+	if err = pruneSessionsLocked(ctx, tx, s.now().Unix(), ""); err != nil {
+		return "", err
+	}
+	if _, err = tx.ExecContext(ctx, "INSERT INTO sessions(token_hash,expires) VALUES(?,?)", tokenHash(token), s.now().Add(SessionLifetime).Unix()); err != nil {
+		return "", err
+	}
+	if err = tx.Commit(); err != nil {
 		return "", err
 	}
 	s.restoreOSProtectedConnections(ctx)

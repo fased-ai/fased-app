@@ -3,6 +3,7 @@
 package vpsinstall
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"errors"
@@ -13,6 +14,42 @@ import (
 	"github.com/fased-ai/fased-app/internal/providersecrets"
 	"github.com/fased-ai/fased-app/internal/tailnet"
 )
+
+func taskCredentialSize(f hostFile) int64 {
+	if f.Size > 0 {
+		return f.Size
+	}
+	return int64(len(f.Data))
+}
+
+func inspectTaskCredential(o hostOps, path string) (hostFile, bool, error) {
+	var err error
+	if o.rootParents != nil {
+		err = o.rootParents(path)
+	} else {
+		err = parents(o, filepath.Dir(path))
+	}
+	if err != nil {
+		return hostFile{}, false, err
+	}
+	f, err := o.read(path)
+	if err == nil {
+		if !f.Regular || f.UID != 0 || f.GID != 0 || (f.Mode.Perm() != 0600 && f.Mode.Perm() != 0644) || f.Mode&(os.ModeSetuid|os.ModeSetgid|os.ModeSticky) != 0 {
+			return f, false, errors.New("preserve foreign protected credential")
+		}
+		return f, true, nil
+	}
+	if errors.Is(err, os.ErrNotExist) {
+		return hostFile{}, false, err
+	}
+	if errors.Is(err, os.ErrPermission) {
+		if !f.Regular || f.UID != 0 || f.GID != 0 || f.Mode.Perm() != 0600 || f.Mode&(os.ModeSetuid|os.ModeSetgid|os.ModeSticky) != 0 {
+			return f, false, errors.New("preserve foreign protected credential")
+		}
+		return f, false, nil
+	}
+	return hostFile{}, false, err
+}
 
 // The existing installer executes only fixed OS utilities with privilege. The
 // core receives a read-only decrypted credential and remains a locked app user.
@@ -31,9 +68,9 @@ func prepareTaskCredential(ctx context.Context, o hostOps, m Manifest) error {
 	if e = trustedTool(o, "/usr/bin/systemd-creds"); e != nil {
 		return e
 	}
-	// Only the host-encrypted envelope is readable for ordinary-owner integrity
-	// verification. Its plaintext wrapping key stays in systemd's root-only
-	// store; no privileged read interface or shared OS directory is relaxed.
+	// The host-encrypted credential file is 0600 root:root; an ordinary
+	// non-root installer verifies its root ancestry, ownership, mode, and
+	// bounded size via metadata without elevating to read bytes.
 	directory := taskCredentialDirectory
 	entry, e := o.read(directory)
 	if errors.Is(e, os.ErrNotExist) {
@@ -44,8 +81,8 @@ func prepareTaskCredential(ctx context.Context, o hostOps, m Manifest) error {
 		return errors.New("preserve foreign credential directory")
 	}
 	target := filepath.Join(directory, taskCredentialID(m))
-	if f, e := rootFile(o, target); e == nil {
-		if !f.Regular || f.Mode.Perm() != 0644 || len(f.Data) < 32 || len(f.Data) > 16384 {
+	if f, _, e := inspectTaskCredential(o, target); e == nil {
+		if size := taskCredentialSize(f); size < 32 || size > 16384 {
 			return errors.New("preserve foreign protected credential")
 		}
 		return prepareTaskCredentialDropIn(ctx, o, m)
@@ -54,11 +91,15 @@ func prepareTaskCredential(ctx context.Context, o hostOps, m Manifest) error {
 	}
 	stage := filepath.Join(directory, "."+filepath.Base(target)+"-"+m.ID+".pending")
 	var encrypted []byte
-	if f, e := rootFile(o, stage); e == nil {
-		if !f.Regular || f.Mode.Perm() != 0644 || len(f.Data) < 32 || len(f.Data) > 16384 {
+	staged := false
+	if f, readable, e := inspectTaskCredential(o, stage); e == nil {
+		if size := taskCredentialSize(f); size < 32 || size > 16384 {
 			return errors.New("preserve protected credential staging")
 		}
-		encrypted = f.Data
+		staged = true
+		if readable {
+			encrypted = f.Data
+		}
 	} else if !errors.Is(e, os.ErrNotExist) {
 		return e
 	} else {
@@ -76,8 +117,38 @@ func prepareTaskCredential(ctx context.Context, o hostOps, m Manifest) error {
 		}
 	}
 	// Keep this encrypted OS key on removal/repair just like retained app state.
-	if e = publish(ctx, o, target, m.ID, encrypted, 0644); e != nil {
-		return e
+	if o.protectedPublish != nil {
+		if len(encrypted) == 0 {
+			return errors.New("preserve protected credential staging")
+		}
+		if e = o.protectedPublish(target, encrypted, 0600); e != nil {
+			return e
+		}
+	} else {
+		if !staged {
+			if _, e = o.run(ctx, encrypted, "/usr/bin/install", "-m", "600", "-o", "root", "-g", "root", "--", "/dev/stdin", stage); e != nil {
+				return e
+			}
+			st, readable, e := inspectTaskCredential(o, stage)
+			if e != nil || st.Mode.Perm() != 0600 || taskCredentialSize(st) != int64(len(encrypted)) || (readable && !bytes.Equal(st.Data, encrypted)) {
+				return errors.New("root staging verification failed")
+			}
+		}
+		if _, e = o.run(ctx, nil, "/usr/bin/sync", "-f", stage); e != nil {
+			return e
+		}
+		if _, e = o.run(ctx, nil, "/usr/bin/ln", "--no-target-directory", "--", stage, target); e != nil {
+			return e
+		}
+		if _, e = o.run(ctx, nil, "/usr/bin/sync", "-f", directory); e != nil {
+			return e
+		}
+		if _, e = o.run(ctx, nil, "/usr/bin/rm", "--", stage); e != nil {
+			return e
+		}
+		if _, e = o.run(ctx, nil, "/usr/bin/sync", "-f", directory); e != nil {
+			return e
+		}
 	}
 	return prepareTaskCredentialDropIn(ctx, o, m)
 }

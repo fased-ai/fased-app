@@ -34,7 +34,7 @@ func newRemoteClient(ctx context.Context, origin, instanceID string, transport h
 		c.Close()
 		return nil, errors.New("Remote instance identity changed; no credentials sent")
 	}
-	if err := c.authenticate(ctx, "/api/v1/auth/remote", map[string]string{}); err != nil {
+	if err := c.authenticate(ctx, "/api/v1/auth/remote", map[string]any{"confirm": true}); err != nil {
 		c.Close()
 		return nil, err
 	}

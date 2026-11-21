@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -139,5 +140,74 @@ func TestOwnerSetupLinkPreservesClaimedWorkspace(t *testing.T) {
 	}
 	if strings.Contains(output.String(), "#setup=") || !server.Store.Session(t.Context(), session) {
 		t.Fatal("reopen reset an existing owner")
+	}
+}
+
+func TestPrivateLaunchFileOmitsSecretFromBrowserArgs(t *testing.T) {
+	cacheRoot := t.TempDir()
+	t.Setenv("XDG_CACHE_HOME", cacheRoot)
+	secret := strings.Repeat("b", 43)
+	target := "http://127.0.0.1:7331/?instance=" + strings.Repeat("a", 43) + "#local=" + secret
+	if !needsPrivateLaunchFile(target) || needsPrivateLaunchFile("http://127.0.0.1:7331") {
+		t.Fatal("unexpected needsPrivateLaunchFile classification")
+	}
+	launchURL, err := writePrivateLaunchFile(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(launchURL, "file://") || strings.Contains(launchURL, secret) || strings.Contains(launchURL, "#local=") || strings.Contains(launchURL, "#setup=") {
+		t.Fatalf("launch file URL leaked secret or used wrong scheme: %q", launchURL)
+	}
+	parsed, err := url.Parse(launchURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	launchDir := filepath.Join(cacheRoot, "fased-launch")
+	if filepath.Dir(parsed.Path) != launchDir {
+		t.Fatalf("launch file outside %s: %s", launchDir, parsed.Path)
+	}
+	dirInfo, err := os.Stat(launchDir)
+	if err != nil || dirInfo.Mode().Perm() != 0700 {
+		t.Fatalf("launch dir mode want 0700, got %v err=%v", dirInfo, err)
+	}
+	fileInfo, err := os.Stat(parsed.Path)
+	if err != nil || fileInfo.Mode().Perm() != 0600 {
+		t.Fatalf("launch file mode want 0600, got %v err=%v", fileInfo, err)
+	}
+	raw, err := os.ReadFile(parsed.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(raw)
+	if !strings.Contains(text, `name="referrer" content="no-referrer"`) || !strings.Contains(text, `http-equiv="refresh"`) || !strings.Contains(text, target) {
+		t.Fatalf("unexpected launch file content: %s", text)
+	}
+	if runtime.GOOS == "linux" {
+		bin := t.TempDir()
+		capture := filepath.Join(t.TempDir(), "arg.txt")
+		script := "#!/bin/sh\nprintf '%s' \"$1\" > \"$FASED_LAUNCH_CAPTURE\"\n"
+		if err := os.WriteFile(filepath.Join(bin, "xdg-open"), []byte(script), 0700); err != nil {
+			t.Fatal(err)
+		}
+		t.Setenv("FASED_LAUNCH_CAPTURE", capture)
+		t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+		if err := openBrowserLaunch(target); err != nil {
+			t.Fatal(err)
+		}
+		deadline := time.Now().Add(3 * time.Second)
+		for {
+			b, readErr := os.ReadFile(capture)
+			if readErr == nil && len(b) > 0 {
+				got := string(b)
+				if !strings.HasPrefix(got, "file://") || strings.Contains(got, secret) || strings.Contains(got, "#local=") {
+					t.Fatalf("xdg-open argv leaked launch secret: %q", got)
+				}
+				break
+			}
+			if time.Now().After(deadline) {
+				t.Fatal("timed out waiting for stub xdg-open capture")
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
 	}
 }

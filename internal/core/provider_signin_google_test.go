@@ -63,15 +63,23 @@ func connectGoogleFixture(t *testing.T, s *Store, remote bool) AIConnectionView 
 	if err != nil {
 		t.Fatal(err)
 	}
-	response, err := http.Get(v.SignIn.URL)
-	if err != nil {
-		t.Fatal(err)
+	command := AIConnectionCommand{Action: "sign-in-complete", SignInID: v.SignIn.ID, Passphrase: testVaultPassword}
+	if remote {
+		if s.provider.signIn == nil || s.provider.signIn.server != nil {
+			t.Fatal("remote Google sign-in opened a VPS loopback listener")
+		}
+		command.Callback = v.SignIn.URL
+	} else {
+		response, err := http.Get(v.SignIn.URL)
+		if err != nil {
+			t.Fatal(err)
+		}
+		response.Body.Close()
+		if response.StatusCode != 200 {
+			t.Fatal("private loopback callback failed", response.StatusCode)
+		}
 	}
-	response.Body.Close()
-	if response.StatusCode != 200 {
-		t.Fatal("private loopback callback failed", response.StatusCode)
-	}
-	a, err := s.ChangeAIConnection(t.Context(), AIConnectionCommand{Action: "sign-in-complete", SignInID: v.SignIn.ID, Passphrase: testVaultPassword})
+	a, err := s.ChangeAIConnection(t.Context(), command)
 	if err != nil {
 		t.Fatal(err)
 	}

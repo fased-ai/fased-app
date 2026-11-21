@@ -75,7 +75,7 @@ func (s *Store) localOwnerSessionLocked(ctx context.Context) (string, error) {
 			return "", err
 		}
 	}
-	if _, err = tx.ExecContext(ctx, "DELETE FROM sessions WHERE expires<=?", s.now().Unix()); err != nil {
+	if err = pruneSessionsLocked(ctx, tx, s.now().Unix(), ""); err != nil {
 		return "", err
 	}
 	if _, err = tx.ExecContext(ctx, "INSERT INTO sessions(token_hash,expires) VALUES(?,?)", tokenHash(token), s.now().Add(SessionLifetime).Unix()); err != nil {
@@ -98,6 +98,10 @@ func (h *HTTPHandler) protectedLocalOwnerAllowed() bool {
 
 func (h *HTTPHandler) localOwnerAPI(w http.ResponseWriter, r *http.Request) {
 	if !h.mutation(w, r) {
+		return
+	}
+	if !h.checkLoopbackPeerUID(r, false) {
+		writeError(w, 403, "Local OS owner access required")
 		return
 	}
 	ordinary := h.localOwnerAllowed()
@@ -133,6 +137,10 @@ func (h *HTTPHandler) localOwnerAPI(w http.ResponseWriter, r *http.Request) {
 	case "session":
 		token, err = h.store.localOwnerSession(r.Context())
 	case "exchange":
+		if !h.allowRate(r, "auth-local", 20) {
+			writeError(w, 429, ErrRateLimited.Error())
+			return
+		}
 		token, err = h.store.exchangeLocalLaunch(r.Context(), request.Code)
 	default:
 		writeError(w, 400, "unsupported Local access request")
@@ -142,8 +150,7 @@ func (h *HTTPHandler) localOwnerAPI(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 401, "Reopen Fased to connect.")
 		return
 	}
-	h.setCookie(w, r, token, int(SessionLifetime.Seconds()))
-	writeJSON(w, 200, map[string]any{"authenticated": true, "csrfToken": csrfToken(token), "sessionToken": token, "sessionMode": h.sessionMode(r)})
+	h.writeSessionResponse(w, r, token)
 }
 
 func localPasswordDisabled(salt []byte) bool { return bytes.Equal(salt, localOwnerSalt) }

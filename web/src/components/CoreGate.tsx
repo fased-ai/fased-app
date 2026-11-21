@@ -39,9 +39,14 @@ export function CoreGate({ children }: { children: ReactNode }) {
     }
     if (!["locked", "unclaimed"].includes(core.mode)) return;
     try {
-      if (!code && sessionStorage.getItem("fased.remote.signed-out") === "1")
+      if (
+        !code &&
+        (core.remoteSignedOut ||
+          sessionStorage.getItem("fased.remote.signed-out") === "1")
+      )
         return;
     } catch {
+      if (!code && core.remoteSignedOut) return;
       /* OS-device authority still requires explicit Connect after this window's logout. */
     }
     if (!core.remoteEnrolled && !code) return;
@@ -72,6 +77,7 @@ export function CoreGate({ children }: { children: ReactNode }) {
   }, [
     core.remoteAccess,
     core.remoteEnrolled,
+    core.remoteSignedOut,
     core.connection,
     core.mode,
     code,
@@ -190,7 +196,7 @@ export function CoreGate({ children }: { children: ReactNode }) {
         core.mode === "unclaimed" ? code.trim() : undefined,
       );
       if (core.remoteAccess)
-        await core.authenticate("", undefined, false, true);
+        await core.authenticate("", undefined, false, true, true);
       setPassword("");
       setCode("");
       ownerSetup = null;
@@ -267,12 +273,20 @@ export function CoreGate({ children }: { children: ReactNode }) {
                 className="button primary"
                 disabled={core.saving}
                 onClick={() => {
-                  remoteAttempt = undefined;
-                  void core
-                    .authenticate("", code || undefined, false, true)
-                    .catch(() =>
-                      setClaimError("Use an approved device or a setup link."),
-                    );
+                  const instance = core.connection?.instanceId ?? "";
+                  const attempt = core.authenticate(
+                    "",
+                    code || undefined,
+                    false,
+                    true,
+                    true,
+                  );
+                  remoteAttempt = instance
+                    ? { instance, result: attempt }
+                    : undefined;
+                  void attempt.catch(() =>
+                    setClaimError("Use an approved device or a setup link."),
+                  );
                 }}
               >
                 {uiText("Connect")}

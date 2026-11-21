@@ -56,6 +56,7 @@ type Store struct {
 	authMu                        sync.Mutex
 	localLaunchHash               string
 	localLaunchExpires            time.Time
+	remoteSignedOut               map[string]bool
 	fixture                       func(context.Context, signer.Request) (signer.Response, error)
 	protectedOwnerUID             int  // Verified Local OS-owner identity; never wallet authority.
 	unconfiguredProtectedSigner   bool // Verified pre-wallet configuration; it does not prove the signer directory is empty.

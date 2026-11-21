@@ -25,7 +25,7 @@ func localRequest(ctx context.Context, method string, data []byte, etag string) 
 		return nil, "", errors.New("guided Tailscale Serve configuration currently targets Linux VPS only")
 	}
 	t := &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
-		return (&net.Dialer{}).DialContext(ctx, "unix", "/var/run/tailscale/tailscaled.sock")
+		return dialTailscaled(ctx)
 	}}
 	defer t.CloseIdleConnections()
 	c := &http.Client{Transport: t, Timeout: 15 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return errors.New("local daemon redirected") }}
