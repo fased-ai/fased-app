@@ -35,6 +35,7 @@ install_packages() {
 }
 profile='' operator='' action=install listen='127.0.0.1:7331'
 wallet_instance='' wallet_network=''
+server_transport='' server_domain='' purge=0
 candidate_dir='' candidate_packet='' package_instance='' refresh_instance='' previous_helper=''
 while (($#)); do
   case "$1" in
@@ -42,21 +43,44 @@ while (($#)); do
     --previous-helper) (($# >= 2)) || die 'Missing predecessor helper.'; previous_helper=$2; shift 2 ;;
     --local) profile=local; shift ;;
     --remote) profile=remote; shift ;;
+    --server) profile=server; shift ;;
     --connect) profile=connect; shift ;;
+    --transport) (($# >= 2)) || die 'Missing server transport.'; server_transport=${2,,}; shift 2 ;;
+    --domain) (($# >= 2)) || die 'Missing server domain.'; server_domain=$2; shift 2 ;;
     --open|--start|--stop|--status|--recover|--update|--setup|--wallets)
       [[ $action == install ]] || die 'Choose one management action.'
       action=${1#--}; shift ;;
+    --uninstall)
+      [[ $action == install ]] || die 'Choose one management action.'
+      action=uninstall; shift ;;
+    --purge) purge=1; shift ;;
     --wallet-instance) (($# >= 2)) || die 'Missing workspace.'; wallet_instance=$2; shift 2 ;;
     --wallet-network) (($# >= 2)) || die 'Missing network.'; wallet_network=$2; shift 2 ;;
     --operator) (($# >= 2)) || die 'Missing operator.'; operator=$2; shift 2 ;;
     --listen) (($# >= 2)) || die 'Missing listener.'; listen=$2; shift 2 ;;
     --candidate-dir) (($# >= 2)) || die 'Missing candidate directory.'; candidate_dir=$2; shift 2 ;;
     --candidate-packet-sha256) (($# >= 2)) || die 'Missing candidate identity.'; candidate_packet=$2; shift 2 ;;
-    --help|-h) printf 'Usage: install.sh [--local|--remote|--connect] [--open|--start|--stop|--status|--recover|--update|--setup|--wallets] [--wallet-instance ID --wallet-network NETWORK] [--local --refresh-helper INSTANCE --previous-helper SHA256] [--operator USER] [--listen 127.0.0.1:PORT]\n'; exit 0 ;;
+    --help|-h) printf 'Usage: install.sh [--local|--remote|--server|--connect] [--transport tailscale|cloudflare|domain|ssh] [--domain HOST] [--open|--start|--stop|--status|--recover|--update|--setup|--wallets|--uninstall] [--purge] [--wallet-instance ID --wallet-network NETWORK] [--local --refresh-helper INSTANCE --previous-helper SHA256] [--operator USER] [--listen 127.0.0.1:PORT]\n'; exit 0 ;;
     *) die "Unknown option: $1" ;;
   esac
 done
 [[ $entry_version =~ ^[0-9]+\.[0-9]+\.[0-9]+([-+][a-zA-Z0-9.-]+)?$ && $installer_sha256 =~ ^[a-f0-9]{64}$ && $seed_sha256 =~ ^[a-f0-9]{64}$ ]] || die 'No trusted installer release is published yet.'
+if [[ -n $server_transport || -n $server_domain ]]; then
+  [[ $profile == server && $action == install ]] || die '--transport and --domain require --server.'
+fi
+if [[ -n $server_transport ]]; then
+  [[ $server_transport == tailscale || $server_transport == cloudflare || $server_transport == domain || $server_transport == ssh ]] || die 'Server transport must be tailscale, cloudflare, domain, or ssh.'
+fi
+if [[ -n $server_domain ]]; then
+  [[ $server_transport != ssh ]] || die 'SSH tunnel transport does not take --domain.'
+  [[ ${#server_domain} -le 253 && $server_domain == *.* && $server_domain =~ ^[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?)+$ ]] || die 'Invalid server HTTPS domain.'
+fi
+if [[ $purge == 1 ]]; then
+  [[ $action == uninstall ]] || die '--purge requires --uninstall.'
+fi
+if [[ $action == uninstall ]]; then
+  [[ $profile == server ]] || die '--uninstall is currently supported with --server.'
+fi
 if [[ $action == wallets ]]; then
   [[ $profile == remote && $wallet_instance =~ ^[A-Za-z0-9_-]{43}$ && ( $wallet_network == devnet || $wallet_network == mainnet-beta ) ]] || die 'Wallets setup requires Remote, the exact workspace and network.'
 else
@@ -115,9 +139,9 @@ if [[ -z $profile ]]; then
   suggested=local
   if [[ -n ${SSH_CONNECTION:-} || $(/usr/bin/id -u) == 0 && -z ${SUDO_USER:-} ]]; then suggested=remote; fi
   if [[ $action == install ]]; then
-    printf 'Fased\n  Local\n  Remote\n  Connect\n  Update\nChoose [local/remote/connect/update, default %s]: ' "$suggested" >&3
+    printf 'Fased\n  Local\n  Remote\n  Server\n  Connect\n  Update\nChoose [local/remote/server/connect/update, default %s]: ' "$suggested" >&3
     IFS= read -r choice <&3
-    case "${choice,,}" in "") profile=$suggested ;; local|remote|connect) profile=${choice,,} ;; update) action=update ;; *) die 'Choose Local, Remote, Connect or Update.' ;; esac
+    case "${choice,,}" in "") profile=$suggested ;; local|remote|server|connect) profile=${choice,,} ;; update) action=update ;; *) die 'Choose Local, Remote, Server, Connect or Update.' ;; esac
   fi
   if [[ -z $profile ]]; then
     printf 'Installation [local/remote, default %s]: ' "$suggested" >&3
@@ -128,15 +152,37 @@ fi
 if [[ $profile == remote ]]; then
 @REMOTE_PLATFORMS@
 fi
-if [[ $(/usr/bin/id -u) == 0 && $profile != remote && -z ${SUDO_USER:-} && -z $operator ]]; then
-  die 'Run Local/Connect from your ordinary computer account. For a VPS, choose Remote.'
+if [[ $(/usr/bin/id -u) == 0 && $profile != remote && $profile != server && -z ${SUDO_USER:-} && -z $operator ]]; then
+  die 'Run Local/Connect from your ordinary computer account. For a VPS, choose Remote or Server.'
+fi
+if [[ $action == uninstall && $profile == server ]]; then
+  installed_bin=''
+  for candidate in "$HOME/.local/share/fased-app/fased-app" "$HOME/.local/bin/fased-app" /usr/local/bin/fased-app; do
+    if [[ -x $candidate ]]; then installed_bin=$candidate; break; fi
+  done
+  [[ -n $installed_bin ]] || die 'No installed Fased server binary was found.'
+  uninstall_args=(server uninstall)
+  if [[ $purge == 1 ]]; then uninstall_args+=(--purge); fi
+  exec "$installed_bin" "${uninstall_args[@]}"
+fi
+if [[ $profile == server && $action == install ]]; then
+  if [[ -z $server_transport ]]; then
+    printf 'Fased Server\n  ssh        — SSH tunnel (loopback only)\n  tailscale  — Tailscale private HTTPS\n  cloudflare — Cloudflare Tunnel HTTPS\n  domain     — Your own domain (Caddy auto-HTTPS)\nTransport [ssh/tailscale/cloudflare/domain, default ssh]: ' >&3
+    IFS= read -r choice <&3
+    case "${choice,,}" in "") server_transport=ssh ;; ssh|tailscale|cloudflare|domain) server_transport=${choice,,} ;; *) die 'Choose ssh, tailscale, cloudflare, or domain.' ;; esac
+  fi
+  if [[ ( $server_transport == cloudflare || $server_transport == domain ) && -z $server_domain ]]; then
+    printf 'HTTPS domain (e.g. fased.example.com): ' >&3
+    IFS= read -r server_domain <&3
+    [[ ${#server_domain} -le 253 && $server_domain == *.* && $server_domain =~ ^[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?)+$ ]] || die 'Invalid server HTTPS domain.'
+  fi
 fi
 if [[ -n $candidate_dir || -n $candidate_packet ]]; then
   [[ $candidate_dir == /* && $candidate_dir != *$'\n'* && $candidate_dir != *$'\r'* && $candidate_packet =~ ^[a-f0-9]{64}$ && ( $profile == local || $profile == remote ) && ( $action == install || $action == refresh-helper ) && -z $operator && $(/usr/bin/id -u) != 0 && $development_only == 0 ]] || die 'Candidate acceptance requires one exact package and ordinary owner.'
 fi
 
 owner_maintenance_setup() {
-  [[ $profile != connect ]] || return 0
+  [[ $profile != connect && $profile != server ]] || return 0
   local acquired=$1 protected="/var/lib/fased-maintenance/images/$installer_sha256/fased-install" stage current recovered=0
   # Administrator consent is for this one authenticated setup. No OS-tool
   # command is added to sudoers; subsequent maintenance uses one fixed helper.
@@ -223,6 +269,10 @@ owner_install() {
     verifier_args=(--install-candidate "$candidate_dir" --candidate-packet-sha256 "$candidate_packet" --profile "$profile" --listen "$listen")
   fi
   if [[ $action == wallets ]]; then verifier_args+=(--wallet-instance "$wallet_instance" --wallet-network "$wallet_network"); fi
+  if [[ $profile == server ]]; then
+    verifier_args+=(--server-transport "$server_transport")
+    if [[ -n $server_domain ]]; then verifier_args+=(--server-domain "$server_domain"); fi
+  fi
   if [[ $development_only == 1 ]]; then
     printf '%s' "$fixture_ca_base64" | /usr/bin/base64 --decode > "$work/ca.pem"
     curl_args+=(--cacert "$work/ca.pem")
@@ -306,18 +356,21 @@ owner_install() {
 
 if [[ $(/usr/bin/id -u) != 0 ]]; then
   [[ -z $operator ]] || die '--operator is only for the root bootstrap.'
-  [[ -x /usr/bin/sudo ]] || die 'This account needs administrator preparation (sudo).'
+  if [[ $profile != connect && $profile != server ]] && [[ ! -x /usr/bin/sudo ]]; then
+    die 'This account needs administrator preparation (sudo).'
+  fi
   missing=()
   packages=(ca-certificates curl)
-  if [[ $profile != connect && $action == install ]]; then
+  if [[ $profile != connect && $profile != server && $action == install ]]; then
     case "$package_family" in apt) packages+=(polkitd) ;; dnf) packages+=(polkit) ;; esac
   fi
-  if [[ $profile != connect && -e /sys/fs/selinux/enforce ]]; then packages+=(policycoreutils-python-utils); fi
+  if [[ $profile != connect && $profile != server && -e /sys/fs/selinux/enforce ]]; then packages+=(policycoreutils-python-utils); fi
   if [[ $profile == remote ]]; then packages+=(nftables openssh-server); fi
   for package in "${packages[@]}"; do
     package_installed "$package" || missing+=("$package")
   done
   if ((${#missing[@]})); then
+    [[ -x /usr/bin/sudo ]] || die 'This account needs administrator preparation (sudo).'
     printf 'Preparing required system packages with administrator approval…\n' >&2
     install_packages "${missing[@]}"
   fi
@@ -331,10 +384,10 @@ fi
 printf 'Preparing Linux for Fased…\n' >&2
 missing=()
 packages=(ca-certificates curl sudo util-linux)
-if [[ $profile != connect && $action == install ]]; then
+if [[ $profile != connect && $profile != server && $action == install ]]; then
   case "$package_family" in apt) packages+=(polkitd) ;; dnf) packages+=(polkit) ;; esac
 fi
-if [[ $profile != connect && -e /sys/fs/selinux/enforce ]]; then packages+=(policycoreutils-python-utils); fi
+if [[ $profile != connect && $profile != server && -e /sys/fs/selinux/enforce ]]; then packages+=(policycoreutils-python-utils); fi
 if [[ $profile == remote ]]; then packages+=(nftables openssh-server); fi
 for package in "${packages[@]}"; do
   package_installed "$package" || missing+=("$package")
@@ -487,7 +540,7 @@ if [[ $profile == remote && $action == install && $ssh_user == root && -f /root/
   if [[ ${#recovery_candidates[@]} == 1 ]]; then recovery_key=${recovery_candidates[0]}; fi
 fi
 body="$(declare -f die owner_install); owner_install"
-/usr/sbin/runuser -u "$operator" -- /usr/bin/env -i HOME="$owner_home" USER="$operator" LOGNAME="$operator" PATH=/usr/sbin:/usr/bin:/sbin:/bin SSH_CONNECTION="${SSH_CONNECTION:-}" FASED_INSTALL_SSH_USER="$ssh_user" FASED_PROTECTED_INSTALLER="$protected_installer" FASED_BOOTSTRAP_RECOVERY_KEY="$recovery_key" action="$action" wallet_instance="${wallet_instance:-}" wallet_network="${wallet_network:-}" entry_version="$entry_version" installer_url="$installer_url" installer_sha256="$installer_sha256" seed_base64="$seed_base64" seed_sha256="$seed_sha256" fixture_ca_base64="$fixture_ca_base64" development_only="$development_only" listen="$listen" profile="$profile" XDG_RUNTIME_DIR="$runtime" DBUS_SESSION_BUS_ADDRESS="${runtime:+unix:path=$runtime/bus}" /bin/bash -c "$body" <&3
+/usr/sbin/runuser -u "$operator" -- /usr/bin/env -i HOME="$owner_home" USER="$operator" LOGNAME="$operator" PATH=/usr/sbin:/usr/bin:/sbin:/bin SSH_CONNECTION="${SSH_CONNECTION:-}" FASED_INSTALL_SSH_USER="$ssh_user" FASED_PROTECTED_INSTALLER="$protected_installer" FASED_BOOTSTRAP_RECOVERY_KEY="$recovery_key" action="$action" wallet_instance="${wallet_instance:-}" wallet_network="${wallet_network:-}" server_transport="${server_transport:-}" server_domain="${server_domain:-}" entry_version="$entry_version" installer_url="$installer_url" installer_sha256="$installer_sha256" seed_base64="$seed_base64" seed_sha256="$seed_sha256" fixture_ca_base64="$fixture_ca_base64" development_only="$development_only" listen="$listen" profile="$profile" XDG_RUNTIME_DIR="$runtime" DBUS_SESSION_BUS_ADDRESS="${runtime:+unix:path=$runtime/bus}" /bin/bash -c "$body" <&3
 
 # The root-owned command contains only fixed OS identity/drop operations. All
 # Fased/user-owned code starts AFTER runuser; updates still use the installed

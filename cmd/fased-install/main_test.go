@@ -54,8 +54,8 @@ func TestFixturePackageIdentityHasNoProductionOverride(t *testing.T) {
 }
 
 func TestInstallerUpgradeRefusesMixedModesBeforeAcquisition(t *testing.T) {
-	for _, args := range [][]string{{"--upgrade", "--install"}, {"--remote"}, {"--upgrade", "--start=false"}} {
-		if e := run(args, nil, io.Discard, io.Discard); e == nil || !strings.Contains(e.Error(), "choose installation") {
+	for _, args := range [][]string{{"--upgrade", "--install"}, {"--remote"}, {"--upgrade", "--start=false"}, {"--install", "--profile", "local", "--server-transport", "ssh"}, {"--install", "--server-domain", "fased.example.com"}} {
+		if e := run(args, nil, io.Discard, io.Discard); e == nil || (!strings.Contains(e.Error(), "choose installation") && !strings.Contains(e.Error(), "--profile server")) {
 			t.Fatal(args, e)
 		}
 	}

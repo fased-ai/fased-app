@@ -895,3 +895,98 @@ test("public bundle reaches only its verified Local or Remote package handoff", 
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("Server entry supports multi-distro hosts without polkit/nftables and validates flags", () => {
+  const armSeed = Buffer.from(
+    JSON.stringify({
+      ...JSON.parse(seed.toString()),
+      target: { os: "linux", arch: "arm64" },
+    }),
+  );
+  const rendered = renderEntry(template, {
+    version: "1.0.0",
+    targets: [
+      config,
+      { ...config, seed: armSeed, installer: Buffer.from("arm verifier") },
+    ],
+  });
+  assertShellSyntax(rendered);
+
+  // Package selection for --server skips polkitd/polkit/nftables while preserving Local.
+  const ownerStart = template.indexOf(
+    "  missing=()\n  packages=(ca-certificates curl)",
+  );
+  const end = template.indexOf("  for package in", ownerStart);
+  const selection = template.slice(ownerStart, end);
+  const pkgCheck = spawnSync("bash", [
+    "-c",
+    `
+    set -eu
+    profile=server package_family=apt action=install
+    ${selection}
+    printf '%s\\n' "\${packages[@]}"
+  `,
+  ]);
+  assert.equal(pkgCheck.status, 0, pkgCheck.stderr.toString());
+  const pkgs = pkgCheck.stdout.toString().trim().split("\n");
+  assert.deepEqual(pkgs, ["ca-certificates", "curl"]);
+
+  // Multi-distro server acceptance (Debian, Rocky, Fedora, Ubuntu; both amd64 & arm64).
+  const dir = mkdtempSync(join(tmpdir(), "fased-server-entry-"));
+  try {
+    const osRelease = join(dir, "os-release");
+    for (const tool of ["apt-get", "dpkg-query", "dnf", "rpm"]) {
+      writeFileSync(join(dir, tool), "#!/bin/sh\nexit 0\n", { mode: 0o700 });
+    }
+    const detached = `import os,subprocess,sys
+r=subprocess.run(['bash','-c',sys.argv[1],'entry','--server','--transport','cloudflare','--domain','fased.example.com'],stdout=subprocess.PIPE,stderr=subprocess.PIPE,preexec_fn=os.setsid,timeout=4)
+sys.stdout.buffer.write(r.stdout);sys.stderr.buffer.write(r.stderr);sys.exit(r.returncode)
+`;
+    for (const [release, cpu] of [
+      ["ID=debian\nVERSION_ID=12\n", "aarch64"],
+      ['ID=rocky\nID_LIKE="rhel fedora"\nVERSION_ID=9.5\n', "aarch64"],
+      ["ID=fedora\nVERSION_ID=45\n", "x86_64"],
+      ["ID=ubuntu\nVERSION_ID=24.04\n", "aarch64"],
+    ]) {
+      writeFileSync(osRelease, release);
+      let script = rendered
+        .replaceAll("/etc/os-release", osRelease)
+        .replace("case $(/usr/bin/uname -m)", `case ${cpu}`);
+      for (const tool of ["apt-get", "dpkg-query", "dnf", "rpm"]) {
+        script = script.replaceAll(`/usr/bin/${tool}`, join(dir, tool));
+      }
+      const result = spawnSync("python3", ["-c", detached, script], {
+        timeout: 6000,
+      });
+      assert.equal(result.status, 1, result.stderr.toString());
+      assert.match(
+        result.stderr.toString(),
+        /Run this command in an interactive terminal/,
+      );
+    }
+
+    // Bad flag combinations fail early with explicit diagnostics.
+    for (const [args, wantErr] of [
+      [["--server", "--transport", "bogus"], /Server transport must be/],
+      [
+        ["--transport", "cloudflare", "--domain", "fased.example.com"],
+        /--transport and --domain require --server/,
+      ],
+      [
+        ["--server", "--transport", "ssh", "--domain", "fased.example.com"],
+        /SSH tunnel transport does not take --domain/,
+      ],
+      [
+        ["--server", "--transport", "cloudflare", "--domain", "http://bad.com"],
+        /Invalid server HTTPS domain/,
+      ],
+      [["--server", "--purge"], /--purge requires --uninstall/],
+    ]) {
+      const r = spawnSync("bash", ["-c", rendered, "entry", ...args]);
+      assert.equal(r.status, 1);
+      assert.match(r.stderr.toString(), wantErr);
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
