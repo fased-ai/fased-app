@@ -12,6 +12,7 @@ import (
 )
 
 func TestReminderTaskDraftReviewIsInert(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	v := agentRunChatFixture(t, s)
 	before, revision, err := readAgents(t.Context(), s.db)
@@ -43,6 +44,7 @@ func reminderTaskCommand(v AgentView) AgentCommand {
 }
 
 func TestReminderTaskDraftCreateRestartAndOriginalCounters(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	now := time.Unix(1800000000, 0)
 	s.now = func() time.Time { return now }
@@ -111,6 +113,7 @@ func TestReminderTaskDraftCreateRestartAndOriginalCounters(t *testing.T) {
 }
 
 func TestReminderTaskDraftSourceAndBindingRefusals(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name string
 		doc  func(*agentDocument)
@@ -172,6 +175,7 @@ func TestReminderTaskDraftSourceAndBindingRefusals(t *testing.T) {
 }
 
 func TestReminderTaskDraftStaleAndConcurrentCreation(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	v := agentRunChatFixture(t, s)
 	c := reminderTaskCommand(v)
@@ -207,6 +211,7 @@ func TestReminderTaskDraftStaleAndConcurrentCreation(t *testing.T) {
 }
 
 func TestReminderTaskDraftHTTPStrictAndAuthenticated(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	token := claimFixture(t, s)
 	v := agentRunChatFixture(t, s)

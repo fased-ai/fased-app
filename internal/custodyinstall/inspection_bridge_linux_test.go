@@ -19,6 +19,7 @@ import (
 )
 
 func TestInspectionGuardedUnitsBeforeFence(t *testing.T) {
+	t.Parallel()
 	m := fixtureManifest()
 	m.InspectionBridge = strings.Repeat("a", 32)
 	for _, candidate := range []bool{true, false} {
@@ -86,6 +87,7 @@ func signInspectionMaintenance(t *testing.T, tx *InspectionBridge, contracts []u
 	tx.Trust = mustJSON(trust)
 }
 func TestInspectionBridgeFiniteLifecycleContracts(t *testing.T) {
+	t.Parallel()
 	tx := inspectionBridgePlanFixture(t)
 	if signer.UpdateContract().Lifecycle != nil {
 		t.Fatal("test must cover the actual signer contract shape")
@@ -125,6 +127,7 @@ func TestInspectionBridgeFiniteLifecycleContracts(t *testing.T) {
 }
 
 func TestInspectionBridgeGeneratorDigest(t *testing.T) {
+	t.Parallel()
 	c := exec.Command("node", "--input-type=module", "-e", `import{fixtureInspectionDigest as digest}from './scripts/fixture-inspection-journey.mjs';process.stdout.write(digest('fixture-unit-pair:v1',['first\nline','second=policy']));`)
 	c.Dir = "../.."
 	got, e := c.Output()
@@ -138,6 +141,7 @@ func TestInspectionBridgeGeneratorDigest(t *testing.T) {
 }
 
 func TestInspectionBridgeFixtureEnvelope(t *testing.T) {
+	t.Parallel()
 	tx := inspectionBridgePlanFixture(t)
 	var original update.Envelope
 	if update.StrictJSON(tx.Maintenance, &original) != nil {
@@ -174,6 +178,7 @@ func TestInspectionBridgeFixtureEnvelope(t *testing.T) {
 }
 
 func TestInspectionBridgeUnitClassification(t *testing.T) {
+	t.Parallel()
 	tx := inspectionBridgePlanFixture(t)
 	for _, variant := range []string{"old", "guarded", "final", "mixed", "foreign", "uid", "mode"} {
 		t.Run(variant, func(t *testing.T) {
@@ -216,6 +221,7 @@ func TestInspectionBridgeUnitClassification(t *testing.T) {
 }
 
 func TestInspectionBridgeStoppedFailure(t *testing.T) {
+	t.Parallel()
 	for _, state := range []string{"inactive", "failed", "active", "activating", "failed-live"} {
 		t.Run(state, func(t *testing.T) {
 			m := fixtureManifest()

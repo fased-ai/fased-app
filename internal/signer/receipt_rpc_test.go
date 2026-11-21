@@ -17,6 +17,7 @@ import (
 )
 
 func TestReceiptRPCCredentialsOwnerEncryptionLeaseAndRestart(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	os.Chmod(dir, 0700)
 	chain := &onchaintest.Chain{}
@@ -137,6 +138,7 @@ func TestReceiptRPCCredentialsOwnerEncryptionLeaseAndRestart(t *testing.T) {
 }
 
 func TestReceiptRPCControlledHTTPSVerifiesOriginalAndRetainsHold(t *testing.T) {
+	t.Parallel()
 	fixture := onchaintest.NewHTTPS(t, "https://mainnet.helius-rpc.com")
 	factory := func(a onchain.CredentialAccess) (SwapObserver, error) {
 		return onchain.NewControlledAuthenticatedVerifier(fixture.Transport, a)
@@ -259,6 +261,7 @@ func TestReceiptRPCControlledHTTPSVerifiesOriginalAndRetainsHold(t *testing.T) {
 }
 
 func TestReceiptRPCRefusesWrongBindingRotationAndExpiry(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	os.Chmod(dir, 0700)
 	chain := &onchaintest.Chain{}
@@ -312,6 +315,7 @@ func TestReceiptRPCRefusesWrongBindingRotationAndExpiry(t *testing.T) {
 }
 
 func TestReceiptRPCCiphertextBindingAndImportedKeyHold(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	os.Chmod(dir, 0700)
 	chain := &onchaintest.Chain{}

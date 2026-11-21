@@ -26,6 +26,7 @@ func ordinaryVault(t *testing.T, dir string) *Vault {
 	return v
 }
 func TestOrdinaryCustodyLifecycle(t *testing.T) {
+	t.Parallel()
 	password := []byte("disposable ordinary custody password")
 	for _, origin := range []string{"generated", "imported"} {
 		t.Run(origin, func(t *testing.T) {
@@ -129,6 +130,7 @@ func TestOrdinaryCustodyLifecycle(t *testing.T) {
 	}
 }
 func TestOrdinaryCustodyPublicationAndNoPromotion(t *testing.T) {
+	t.Parallel()
 	password := []byte("disposable ordinary custody password")
 	for _, phase := range []string{"staged", "published"} {
 		t.Run(phase, func(t *testing.T) {
@@ -182,6 +184,7 @@ func TestOrdinaryCustodyPublicationAndNoPromotion(t *testing.T) {
 	}
 }
 func TestOrdinaryCustodyRejectsHistoryAndMetadataErasure(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	v := ordinaryVault(t, dir)
 	password := []byte("disposable ordinary custody password")
@@ -211,6 +214,7 @@ func TestOrdinaryCustodyRejectsHistoryAndMetadataErasure(t *testing.T) {
 }
 
 func TestOrdinaryCustodyEmptyStatusIsNotAdmission(t *testing.T) {
+	t.Parallel()
 	v := ordinaryVault(t, t.TempDir())
 	s := v.Status()
 	if s.Account != nil || s.Custody == nil || s.Custody.Class != OrdinaryCustodyMode || s.Custody.Valid() || !s.AdmissionHeld || !s.Locked {
@@ -219,6 +223,7 @@ func TestOrdinaryCustodyEmptyStatusIsNotAdmission(t *testing.T) {
 }
 
 func TestOrdinaryOwnerProfileLifecycleAndNoProvenancePromotion(t *testing.T) {
+	t.Parallel()
 	password := []byte("disposable owner policy password")
 	for _, origin := range []string{"generated", "imported"} {
 		t.Run(origin, func(t *testing.T) {

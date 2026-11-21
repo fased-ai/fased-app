@@ -11,6 +11,7 @@ import (
 )
 
 func TestWENResearchAISnapshotBackup(t *testing.T) {
+	t.Parallel()
 	s, _, _, c := readBatchFixture(t)
 	before, e := s.UpdateSnapshot(t.Context(), update.NewProbe())
 	if e != nil {
@@ -44,6 +45,7 @@ func TestWENResearchAISnapshotBackup(t *testing.T) {
 }
 
 func TestWENResearchAILegacyHolds(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	v := aiPrepare(t, s)
 	injectRevisionAgents(t, s, func(d *agentDocument) {
@@ -64,6 +66,7 @@ func TestWENResearchAILegacyHolds(t *testing.T) {
 }
 
 func TestWENResearchLoopSnapshotBackup(t *testing.T) {
+	t.Parallel()
 	s, _, _, c := readBatchFixture(t)
 	r := loopPrepared(t, s, c, 2, 3)
 	r = loopAdvance(t, s, r, fixtureAITransport{})

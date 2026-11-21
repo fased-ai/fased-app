@@ -26,11 +26,7 @@ func modelTransaction(t *testing.T) (InstallTransaction, string) {
 	if os.Geteuid() == 0 {
 		t.Fatal("project tests cannot run as root")
 	}
-	parent := filepath.Join("..", "..", ".evidence", "p4-install", "controller-fixtures")
-	if e := os.MkdirAll(parent, 0700); e != nil {
-		t.Fatal(e)
-	}
-	dir, e := os.MkdirTemp(parent, "txn-")
+	dir, e := os.MkdirTemp("", "txn-")
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -168,6 +164,7 @@ func modelOps(t *testing.T, x InstallTransaction, dir string) installOps {
 	return o
 }
 func TestInstallationInterruptionRetryAndFinancialPreservation(t *testing.T) {
+	t.Parallel()
 	for _, phase := range []string{"held", "stopped", "core-replaced", "pair-replaced", "inventory-replaced", "started", "healthy-held", "rollback", "rollback-stopped", "rollback-core-replaced", "rollback-pair-replaced", "rollback-inventory-replaced", "rollback-started", "rolled-back-held"} {
 		t.Run(phase, func(t *testing.T) {
 			x, dir := modelTransaction(t)
@@ -208,6 +205,7 @@ func TestInstallationInterruptionRetryAndFinancialPreservation(t *testing.T) {
 	}
 }
 func TestInstallationFailedHealthAndForeignBytes(t *testing.T) {
+	t.Parallel()
 	t.Run("failed-health", func(t *testing.T) {
 		x, dir := modelTransaction(t)
 		os.WriteFile(dir+"/failed-health", nil, 0600)
@@ -275,19 +273,7 @@ func TestInstallationActualChildDeath(t *testing.T) {
 }
 
 func TestInstallationOwnerLockIsExclusiveAcrossClients(t *testing.T) {
-	parent := filepath.Join("..", "..", ".evidence", "p4-install", "lock-fixtures")
-	if e := os.MkdirAll(parent, 0700); e != nil {
-		t.Fatal(e)
-	}
-	dir, e := os.MkdirTemp(parent, "owner-")
-	if e != nil {
-		t.Fatal(e)
-	}
-	dir, e = filepath.Abs(dir)
-	if e != nil {
-		t.Fatal(e)
-	}
-	t.Cleanup(func() { os.RemoveAll(dir) })
+	dir := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", dir)
 	a, e := OwnerLock()
 	if e != nil {
@@ -307,6 +293,7 @@ func TestInstallationOwnerLockIsExclusiveAcrossClients(t *testing.T) {
 }
 
 func TestInstallationOldReceiptCannotReplayAfterAbort(t *testing.T) {
+	t.Parallel()
 	x, dir := modelTransaction(t)
 	o := modelOps(t, x, dir)
 	if _, e := runTransaction(t.Context(), x, false, o); e != nil {

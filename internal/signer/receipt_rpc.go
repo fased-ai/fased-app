@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/fased-ai/fased-app/internal/onchain"
-	"golang.org/x/crypto/argon2"
 )
 
 const MaxReceiptRPCLease = 15 * time.Minute
@@ -119,7 +118,7 @@ func validReceiptRPCSecret(key []byte) bool {
 	return true
 }
 func receiptRPCGCM(password, salt []byte) (cipher.AEAD, error) {
-	key := argon2.IDKey(password, salt, 3, 64*1024, 2, 32)
+	key := deriveVaultKey(password, salt)
 	defer clear(key)
 	block, e := aes.NewCipher(key)
 	if e != nil {

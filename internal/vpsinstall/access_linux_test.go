@@ -42,6 +42,7 @@ func searchableAccessFixture(t *testing.T) (*memoryHost, hostOps, Manifest) {
 }
 
 func TestRemoteAccessStageSupportsOrdinaryOwnerReadback(t *testing.T) {
+	t.Parallel()
 	h, o, m := searchableAccessFixture(t)
 	core := bytes.Clone(h.files[m.Core].Data)
 	next, err := changeAccess(t.Context(), o, m, "https://node.owner.ts.net", nil)
@@ -57,6 +58,7 @@ func TestRemoteAccessStageSupportsOrdinaryOwnerReadback(t *testing.T) {
 }
 
 func TestRemoteAccessEmptyPrivateStageRecoversOriginalOperation(t *testing.T) {
+	t.Parallel()
 	h, o, m := searchableAccessFixture(t)
 	state, err := status(t.Context(), o, m)
 	if err != nil {
@@ -86,6 +88,7 @@ func TestRemoteAccessEmptyPrivateStageRecoversOriginalOperation(t *testing.T) {
 }
 
 func TestRemoteAccessPreservesNonemptyOrForeignPrivateStage(t *testing.T) {
+	t.Parallel()
 	for _, kind := range []string{"nonempty", "owner", "group", "symlink", "mode"} {
 		t.Run(kind, func(t *testing.T) {
 			h, o, m := searchableAccessFixture(t)
@@ -145,6 +148,7 @@ func activeAccessFixture(t *testing.T) (*memoryHost, hostOps, Manifest) {
 	return h, o, m
 }
 func TestRemoteAccessChangePreservesIdentityAndRollsBack(t *testing.T) {
+	t.Parallel()
 	h, o, m := activeAccessFixture(t)
 	data := append([]byte(nil), h.files[m.Core].Data...)
 	next, e := changeAccess(t.Context(), o, m, "https://node.owner.ts.net:8443", func(context.Context, Manifest) error { return nil })
@@ -177,6 +181,7 @@ func TestRemoteAccessChangePreservesIdentityAndRollsBack(t *testing.T) {
 	}
 }
 func TestRemoteAccessInterruptedGenerationRecoversBeforeRetry(t *testing.T) {
+	t.Parallel()
 	h, o, m := activeAccessFixture(t)
 	originalRun := o.run
 	cut := errors.New("disposable process cut")
@@ -212,6 +217,7 @@ func TestRemoteAccessInterruptedGenerationRecoversBeforeRetry(t *testing.T) {
 	}
 }
 func TestRemoteAccessRefusesPendingUpdate(t *testing.T) {
+	t.Parallel()
 	_, o, m := activeAccessFixture(t)
 	target := m
 	target.ApplicationSequence = 7
@@ -232,6 +238,7 @@ func TestRemoteAccessRefusesPendingUpdate(t *testing.T) {
 }
 
 func TestRemoteAccessAndUpdateTransactionsFenceEachOther(t *testing.T) {
+	t.Parallel()
 	f := remoteApplicationFixture(t)
 	m := f.old
 	next := m

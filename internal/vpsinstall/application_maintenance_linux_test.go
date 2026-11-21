@@ -99,6 +99,7 @@ func (f *maintenanceHost) prepare(t *testing.T) {
 	}
 }
 func TestRemoteMaintenancePreparationLaunchAndDeferredCompletion(t *testing.T) {
+	t.Parallel()
 	f := maintenanceHostFor(t)
 	f.prepare(t)
 	if f.starts != 0 || len(f.enabled) != 0 {
@@ -144,6 +145,7 @@ func TestRemoteMaintenancePreparationLaunchAndDeferredCompletion(t *testing.T) {
 	}
 }
 func TestRemoteMaintenanceRefusesForeignAuthorityAndUnrelatedCaller(t *testing.T) {
+	t.Parallel()
 	for _, kind := range []string{"policy", "image", "template", "override", "caller", "id"} {
 		t.Run(kind, func(t *testing.T) {
 			f := maintenanceHostFor(t)
@@ -186,6 +188,7 @@ func TestRemoteMaintenanceRefusesForeignAuthorityAndUnrelatedCaller(t *testing.T
 	}
 }
 func TestRemoteMaintenanceRemovalRevokesOnlyOwnedPolicies(t *testing.T) {
+	t.Parallel()
 	f := maintenanceHostFor(t)
 	f.prepare(t)
 	id := strings.Repeat("a", 32)
@@ -215,6 +218,7 @@ func TestRemoteMaintenanceRemovalRevokesOnlyOwnedPolicies(t *testing.T) {
 	}
 }
 func TestRemoteMaintenanceOSRuleBoundariesAndSudoSyntax(t *testing.T) {
+	t.Parallel()
 	f := maintenanceHostFor(t)
 	m := f.manifest
 	id := strings.Repeat("a", 32)
@@ -278,6 +282,7 @@ func TestRemoteMaintenanceOSRuleBoundariesAndSudoSyntax(t *testing.T) {
 	}
 }
 func TestRemoteMaintenancePolkitLaunchOnly(t *testing.T) {
+	t.Parallel()
 	f := maintenanceHostFor(t)
 	node, e := exec.LookPath("node")
 	if e != nil {
@@ -290,6 +295,7 @@ func TestRemoteMaintenancePolkitLaunchOnly(t *testing.T) {
 }
 
 func TestRemoteMaintenancePolicyReadDoesNotTreatUnavailableAuthorityAsMissing(t *testing.T) {
+	t.Parallel()
 	f := maintenanceHostFor(t)
 	f.prepare(t)
 	read := f.ops.read
@@ -324,6 +330,7 @@ func TestRemoteMaintenancePolicyReadDoesNotTreatUnavailableAuthorityAsMissing(t 
 	}
 }
 func TestRemoteMaintenanceCancelledPreparationDoesNotMutate(t *testing.T) {
+	t.Parallel()
 	f := maintenanceHostFor(t)
 	before := len(f.host.calls)
 	ctx, cancel := context.WithCancel(t.Context())
@@ -337,6 +344,7 @@ func TestRemoteMaintenanceCancelledPreparationDoesNotMutate(t *testing.T) {
 }
 
 func TestRemoteMaintenancePreparationInterruptionPreservesDataAndResumes(t *testing.T) {
+	t.Parallel()
 	baseline := maintenanceHostFor(t)
 	before := len(baseline.host.calls)
 	baseline.prepare(t)
@@ -368,6 +376,7 @@ func TestRemoteMaintenancePreparationInterruptionPreservesDataAndResumes(t *test
 }
 
 func TestRemoteMaintenanceNeverCopiesUnsupportedOlderHelper(t *testing.T) {
+	t.Parallel()
 	f := maintenanceHostFor(t)
 	before := len(f.host.calls)
 	f.ops.applicationContract = func(context.Context, Manifest) ([]byte, error) { return []byte("0.0.0-core.1\n"), nil }
@@ -383,6 +392,7 @@ func TestRemoteMaintenanceNeverCopiesUnsupportedOlderHelper(t *testing.T) {
 }
 
 func TestRemoteMaintenanceOwnerJournalCannotBeReplacedThroughParent(t *testing.T) {
+	t.Parallel()
 	f := maintenanceHostFor(t)
 	control := "/home/owner/.config/fased-app-vps-installer"
 	for _, p := range []string{"/home", "/home/owner", "/home/owner/.config", control} {
@@ -418,6 +428,7 @@ func TestRemoteMaintenanceOwnerJournalCannotBeReplacedThroughParent(t *testing.T
 }
 
 func TestRemoteMaintenanceUbuntuProtectedPolkitDirectoryGroup(t *testing.T) {
+	t.Parallel()
 	f := maintenanceHostFor(t)
 	dir := f.host.files["/etc/polkit-1/rules.d"]
 	dir.GID = 990

@@ -14,6 +14,7 @@ import (
 )
 
 func TestPinnedNativeUpdateSessionRequiresExactApplicationIdentity(t *testing.T) {
+	t.Parallel()
 	for _, remote := range []bool{false, true} {
 		tx, _, _, _ := ordinaryBootstrapModel(t, remote)
 		m := tx.Base
@@ -54,6 +55,7 @@ func TestPinnedNativeUpdateSessionRequiresExactApplicationIdentity(t *testing.T)
 }
 
 func TestNativeUpdateSessionRefusesAnyRecoveryFence(t *testing.T) {
+	t.Parallel()
 	m := fixtureManifest()
 	for _, tc := range []struct {
 		name    string
@@ -79,6 +81,7 @@ func TestNativeUpdateSessionRefusesAnyRecoveryFence(t *testing.T) {
 }
 
 func TestNativeUpdateSessionBindingAndGeneration(t *testing.T) {
+	t.Parallel()
 	tx, _, _, _ := ordinaryBootstrapModel(t)
 	m := tx.Base
 	b := nativeUpdateSessionBinding{1, m, sum([]byte("current verified reader"))}
@@ -128,6 +131,7 @@ func TestNativeUpdateSessionBindingAndGeneration(t *testing.T) {
 	}
 }
 func TestNativeUpdateSessionStageDropsAndPreservesForeignState(t *testing.T) {
+	t.Parallel()
 	for _, kind := range []string{"ok", "repeat", "foreign-helper", "foreign-binding", "refused-auth", "wrong-output", "remote-ok", "remote-repeat", "remote-foreign-helper", "remote-foreign-binding", "remote-refused-auth", "remote-wrong-output"} {
 		t.Run(kind, func(t *testing.T) {
 			tx, dir, _, _ := ordinaryBootstrapModel(t)
@@ -221,6 +225,7 @@ func TestNativeUpdateSessionStageDropsAndPreservesForeignState(t *testing.T) {
 }
 
 func TestRemoteSourceSessionBinding(t *testing.T) {
+	t.Parallel()
 	tx, _, _, _ := ordinaryBootstrapModel(t, true)
 	m := tx.Base
 	b := nativeUpdateSessionBinding{1, m, sum([]byte("current source helper"))}

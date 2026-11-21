@@ -9,6 +9,7 @@ import (
 )
 
 func TestPrivateStateRejectsSymlinksAndBroadPermissions(t *testing.T) {
+	t.Parallel()
 	dir := fixtureDir(t)
 	if err := os.Chmod(dir, 0755); err != nil {
 		t.Fatal(err)

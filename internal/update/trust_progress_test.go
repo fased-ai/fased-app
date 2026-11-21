@@ -6,6 +6,7 @@ import (
 )
 
 func TestTrustRehearsalPersistsVerifiedProgressOnLaterFailure(t *testing.T) {
+	t.Parallel()
 	for _, kind := range []string{"revoked-root-targets", "timestamp-before-bad-snapshot"} {
 		t.Run(kind, func(t *testing.T) {
 			f := newTrustFixture(t)

@@ -45,7 +45,11 @@ func TestSwapStateReaderHistoricalHold(t *testing.T) {
 	e := *v.record
 	e.RecoveryRequired = true
 	e.RecoveredHistorySHA256 = "1111111111111111111111111111111111111111111111111111111111111111"
-	key := argon2.IDKey(fixturePassword, e.Salt, 3, 64*1024, 2, 32)
+	tCost, mCost, pCost := uint32(3), uint32(64*1024), uint8(2)
+	if os.Getenv("FASED_FAST_TEST_KDF") == "1" {
+		tCost, mCost, pCost = 1, 1024, 1
+	}
+	key := argon2.IDKey(fixturePassword, e.Salt, tCost, mCost, pCost, 32)
 	block, err := aes.NewCipher(key)
 	clear(key)
 	if err != nil {

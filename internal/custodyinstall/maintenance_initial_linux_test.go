@@ -16,6 +16,7 @@ import (
 )
 
 func TestInitialPackageRecoveryRequiresStoppedEmptySigner(t *testing.T) {
+	t.Parallel()
 	_, m := packageGateInitialRecord(t)
 	dir := filepath.Join(t.TempDir(), "signer-state")
 	if err := os.Mkdir(dir, 0700); err != nil {
@@ -71,6 +72,7 @@ func TestInitialPackageRecoveryRequiresStoppedEmptySigner(t *testing.T) {
 }
 
 func TestEmptySignerDirectoryRejectsSymlinkAndWrongIdentity(t *testing.T) {
+	t.Parallel()
 	dir := filepath.Join(t.TempDir(), "state")
 	if err := os.Mkdir(dir, 0700); err != nil {
 		t.Fatal(err)
@@ -91,6 +93,7 @@ func TestEmptySignerDirectoryRejectsSymlinkAndWrongIdentity(t *testing.T) {
 }
 
 func TestInitialServiceRecoveryRefusesRunningProcesses(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name, state, main, control string
 		wantOK, wantReset          bool
@@ -134,6 +137,7 @@ func TestInitialServiceRecoveryRefusesRunningProcesses(t *testing.T) {
 }
 
 func TestRefusedUpdateRequiresFreshUnheldCore(t *testing.T) {
+	t.Parallel()
 	probe := strings.Repeat("1", 32)
 	snapshot := update.CoreSnapshot{Version: 1, ProbeID: probe, BootID: strings.Repeat("2", 32), InstanceID: "fixture-instance", State: update.State{Name: "core-db", Version: 1, Anchor: strings.Repeat("a", 64)}}
 	request := &update.CorePauseRequest{Version: 1, IntentID: strings.Repeat("3", 32), Sequence: 2, ManifestSHA256: strings.Repeat("b", 64), Expected: snapshot}
@@ -175,6 +179,7 @@ func initialMaintenanceFixture() update.MaintenanceRecord {
 }
 
 func TestInitialMaintenanceRecordRefusesForeignOrPendingState(t *testing.T) {
+	t.Parallel()
 	if _, err := ValidateInitialMaintenanceRecord(initialMaintenanceFixture()); err != nil {
 		t.Fatal(err)
 	}
@@ -204,6 +209,7 @@ func TestInitialMaintenanceRecordRefusesForeignOrPendingState(t *testing.T) {
 }
 
 func TestInitialPackageJournalBindsInstanceAndPair(t *testing.T) {
+	t.Parallel()
 	makeRecord := func() update.MaintenanceRecord {
 		r := initialMaintenanceFixture()
 		var m Manifest
@@ -259,6 +265,7 @@ func TestInitialPackageJournalBindsInstanceAndPair(t *testing.T) {
 }
 
 func TestInitialMaintenanceRecordBindsProtectedDesktop(t *testing.T) {
+	t.Parallel()
 	r := initialMaintenanceFixture()
 	var m Manifest
 	if err := strict(r.Base, &m); err != nil {
@@ -291,6 +298,7 @@ func TestInitialMaintenanceRecordBindsProtectedDesktop(t *testing.T) {
 }
 
 func TestProtectedWorkerRefusesIdleInstallation(t *testing.T) {
+	t.Parallel()
 	r := initialMaintenanceFixture()
 	if err := validateProtectedUpdateRecord(r, r.OperationID); err == nil {
 		t.Fatal("initial idle journal was accepted as an update transaction")
@@ -309,6 +317,7 @@ func TestProtectedWorkerRefusesIdleInstallation(t *testing.T) {
 }
 
 func TestInitialMaintenancePreservesInstalledReleaseDuringRecovery(t *testing.T) {
+	t.Parallel()
 	r := initialMaintenanceFixture()
 	base := *r.Package
 	target := base

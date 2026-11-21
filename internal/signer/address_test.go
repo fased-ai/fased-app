@@ -7,6 +7,7 @@ import (
 )
 
 func TestPublicAddressCanonicalRoundTrip(t *testing.T) {
+	t.Parallel()
 	for _, key := range []string{strings.Repeat("00", 32), strings.Repeat("ff", 32), strings.Repeat("00", 8) + strings.Repeat("42", 24), strings.Repeat("01", 32)} {
 		address, err := FormatPublicKey(key)
 		if err != nil {

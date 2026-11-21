@@ -29,19 +29,8 @@ func TestProtectedUpdateReviewCancelStalenessAndCommit(t *testing.T) {
 	for _, tc := range []string{"cancel", "changed-core", "changed-signer", "bad-artifact", "prepare", "stage", "stage-stale-core", "stage-bad-source", "preflight", "preflight-existing-idle", "preflight-existing-released", "preflight-existing-race", "preflight-owner-interrupted", "preflight-corrupt-reply", "preflight-core-released", "preflight-abort-interrupted", "backup", "backup-interrupted", "backup-corrupt-reply", "backup-signer-aborted", "backup-staged-corrupt", "backup-held-resume"} {
 		t.Run(tc, func(t *testing.T) {
 			needsPreflight := strings.HasPrefix(tc, "preflight") || strings.HasPrefix(tc, "backup")
-			root := filepath.Join("..", "..", ".evidence", "p4-intents", "owner-fixtures")
-			if e := os.MkdirAll(root, 0700); e != nil {
-				t.Fatal(e)
-			}
-			dir, e := os.MkdirTemp(root, "owner-")
-			if e != nil {
-				t.Fatal(e)
-			}
-			t.Cleanup(func() {
-				if e := os.RemoveAll(dir); e != nil {
-					t.Error(e)
-				}
-			})
+			dir := shortFixtureDir(t, "owner-")
+			var e error
 			state := filepath.Join(dir, "signer")
 			if e = os.Mkdir(state, 0700); e != nil {
 				t.Fatal(e)

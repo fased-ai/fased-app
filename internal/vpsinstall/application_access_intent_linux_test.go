@@ -30,6 +30,7 @@ func accessUpdateFixture(t *testing.T) (*remoteUpdateFixture, Manifest, accessJo
 }
 
 func TestRemoteAccessCommitAdvancesOwnerIntent(t *testing.T) {
+	t.Parallel()
 	f, _, _ := accessUpdateFixture(t)
 	var got intent
 	if strict(f.h.journals["intent.json"], &got) != nil || got != intentFor(f.old) {
@@ -38,6 +39,7 @@ func TestRemoteAccessCommitAdvancesOwnerIntent(t *testing.T) {
 }
 
 func TestRemoteApplicationCompletionBridgesExactCommittedAccess(t *testing.T) {
+	t.Parallel()
 	f, previous, _ := accessUpdateFixture(t)
 	// Reproduce installations whose access operation committed before owner
 	// intent synchronization existed. The update must use that exact chain.
@@ -71,6 +73,7 @@ func TestRemoteApplicationCompletionBridgesExactCommittedAccess(t *testing.T) {
 }
 
 func TestRemoteApplicationCompletionRejectsForeignAccessBridge(t *testing.T) {
+	t.Parallel()
 	for _, kind := range []string{"prepared", "switched", "rolled-back", "id", "different-target", "foreign-intent", "missing", "unknown"} {
 		t.Run(kind, func(t *testing.T) {
 			f, previous, access := accessUpdateFixture(t)
@@ -115,6 +118,7 @@ func TestRemoteApplicationCompletionRejectsForeignAccessBridge(t *testing.T) {
 }
 
 func TestRemoteAccessOwnerIntentWriteInterruptionRetriesTerminalOperation(t *testing.T) {
+	t.Parallel()
 	for _, rollback := range []bool{false, true} {
 		t.Run(map[bool]string{false: "committed", true: "rolled-back"}[rollback], func(t *testing.T) {
 			f := remoteApplicationFixture(t)

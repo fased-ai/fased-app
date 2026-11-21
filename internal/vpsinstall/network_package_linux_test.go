@@ -41,6 +41,7 @@ func packageNetworkFixtureManifest(ownerUID, appUID int, id string) Manifest {
 }
 
 func TestPackageNetworkValidationAndOwnership(t *testing.T) {
+	t.Parallel()
 	id := strings.Repeat("b", 32)
 	m := packageNetworkFixtureManifest(1000, 1005, id)
 	if err := m.validatePackageNetwork(); err != nil {
@@ -80,6 +81,7 @@ func TestPackageNetworkValidationAndOwnership(t *testing.T) {
 }
 
 func TestPackageNetworkBeginConfirmAndRollbackLifecycle(t *testing.T) {
+	t.Parallel()
 	id := strings.Repeat("c", 32)
 	host, n, _ := networkFixture(t)
 	m := packageNetworkFixtureManifest(1000, 1005, id)
@@ -144,6 +146,7 @@ func TestPackageNetworkBeginConfirmAndRollbackLifecycle(t *testing.T) {
 }
 
 func TestPackageNetworkSurvivesCoreUpgrade(t *testing.T) {
+	t.Parallel()
 	id := strings.Repeat("d", 32)
 	host, n, _ := networkFixture(t)
 	m := packageNetworkFixtureManifest(1000, 1005, id)

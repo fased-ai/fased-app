@@ -13,6 +13,7 @@ import (
 )
 
 func TestPackageMetadataMaintenanceRefusesAnotherInstance(t *testing.T) {
+	t.Parallel()
 	id := strings.Repeat("a", 32)
 	root, err := update.PackageInstanceRoot(1800, "local", id)
 	if err != nil {

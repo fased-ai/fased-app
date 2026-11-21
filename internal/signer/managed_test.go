@@ -27,6 +27,7 @@ func managedFixture(t *testing.T, dir, network string) *Vault {
 	return v
 }
 func TestManagedKeyLifecycle(t *testing.T) {
+	t.Parallel()
 	for _, network := range []string{"devnet", "mainnet-beta"} {
 		t.Run(network, func(t *testing.T) {
 			dir := fixtureDir(t)
@@ -120,6 +121,7 @@ func TestManagedKeyLifecycle(t *testing.T) {
 	}
 }
 func TestManagedKeyPublicationAndRetainedHistory(t *testing.T) {
+	t.Parallel()
 	for _, phase := range []string{"staged", "journal:managed-key-init:durable", "published"} {
 		t.Run(phase, func(t *testing.T) {
 			dir := fixtureDir(t)
@@ -166,6 +168,7 @@ func TestManagedKeyPublicationAndRetainedHistory(t *testing.T) {
 	}
 }
 func TestManagedKeyAdmissionAndHistoryRefusal(t *testing.T) {
+	t.Parallel()
 	fixture := openFixture(t, fixtureDir(t))
 	if e := fixture.importManagedSeed(bytes.Repeat([]byte{9}, 32), fixturePassword); e == nil {
 		t.Fatal("ordinary vault admitted managed import")
@@ -196,6 +199,7 @@ func TestManagedKeyAdmissionAndHistoryRefusal(t *testing.T) {
 }
 
 func TestManagedOwnerDispatchAndPublicView(t *testing.T) {
+	t.Parallel()
 	v := managedFixture(t, fixtureDir(t), "devnet")
 	call := func(action string, owner bool, password, document []byte) Response {
 		return execute(v, Request{Action: action, Password: bytes.Clone(password), Document: bytes.Clone(document), UnlockSeconds: 60}, owner)
@@ -238,6 +242,7 @@ func TestManagedOwnerDispatchAndPublicView(t *testing.T) {
 }
 
 func TestManagedConfigBindsVersionAndNetwork(t *testing.T) {
+	t.Parallel()
 	c := Config{Version: 2, Mode: ManagedFixtureMode, Network: "devnet", SignerID: testSignerID, OwnerUID: 1001, AppUID: 1002, SignerUID: 1003, StateDir: "/one", SocketDir: "/two"}
 	if e := c.Validate(); e != nil {
 		t.Fatal(e)
@@ -252,6 +257,7 @@ func TestManagedConfigBindsVersionAndNetwork(t *testing.T) {
 }
 
 func TestManagedTransportVersionAndOwnerRole(t *testing.T) {
+	t.Parallel()
 	v := managedFixture(t, fixtureDir(t), "devnet")
 	c := Config{Version: 2, Mode: ManagedFixtureMode, Network: "devnet", SignerID: testSignerID, OwnerUID: os.Geteuid(), AppUID: os.Geteuid() + 1000, SignerUID: os.Geteuid(), StateDir: "unused", SocketDir: fixtureDir(t)}
 	ctx, cancel := context.WithCancel(context.Background())
@@ -293,6 +299,7 @@ func TestManagedTransportVersionAndOwnerRole(t *testing.T) {
 }
 
 func TestManagedReadOnlyUpdateInventory(t *testing.T) {
+	t.Parallel()
 	dir := fixtureDir(t)
 	v := managedFixture(t, dir, "devnet")
 	if e := v.Create(fixturePassword); e != nil {

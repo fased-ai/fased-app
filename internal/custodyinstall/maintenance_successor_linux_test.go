@@ -13,6 +13,7 @@ import (
 )
 
 func TestSuccessorOwnerPathRequiresOriginalLock(t *testing.T) {
+	t.Parallel()
 	a := maintenance.Authority{ImageSHA256: strings.Repeat("1", 64)}
 	successor := maintenance.ImagePath(strings.Repeat("2", 64))
 	if _, err := protectedOwnerPeerImage(t.Context(), a, Manifest{}, successor, nil, signer.Request{}); err == nil {
@@ -24,6 +25,7 @@ func TestSuccessorOwnerPathRequiresOriginalLock(t *testing.T) {
 }
 
 func TestOriginalSignerConfigRejectsChangedIdentityAndPaths(t *testing.T) {
+	t.Parallel()
 	tx, _ := modelTransaction(t)
 	i := &update.Installation{Version: 1, Binding: tx.Binding, Digest: update.InstallDigest(tx.Binding), Phase: "completed", InstalledSequenceCommitted: true}
 	r := update.MaintenanceRecord{Owner: tx.Base.Owner, Base: mustJSON(tx.Base), Target: mustJSON(tx.Target), Installation: i}
@@ -72,6 +74,7 @@ func TestOriginalSignerConfigRejectsChangedIdentityAndPaths(t *testing.T) {
 }
 
 func TestProtectedSignerCompletionPersistsBeforeReleaseAndReplays(t *testing.T) {
+	t.Parallel()
 	tx, _ := modelTransaction(t)
 	snapshot := update.CoreSnapshot{Version: 1, BootID: strings.Repeat("1", 32), ProbeID: strings.Repeat("2", 32), InstanceID: "fixture-instance", State: update.State{Name: "core-db", Version: 1, Anchor: strings.Repeat("3", 64)}}
 	tx.Binding.Index.Binding.Pause.Request.Expected = snapshot

@@ -7,6 +7,7 @@ import (
 )
 
 func TestPackageInstanceIdentityIsSeparateFromLegacyAndOtherProfiles(t *testing.T) {
+	t.Parallel()
 	for _, location := range []string{"local", "remote"} {
 		m := Manifest{Layout: PackageLayout, Version: 3, Mode: "ordinary-custody:v1", Profile: "owner-authorized:v1", Provenance: "owner-input:v1", Enrollment: true, Location: location, Owner: 1000, ID: strings.Repeat("a", 32), Listen: "127.0.0.1:17331", CoreHash: strings.Repeat("b", 64), SignerHash: strings.Repeat("c", 64)}
 		if location == "remote" {
@@ -58,6 +59,7 @@ func TestPackageInstanceIdentityIsSeparateFromLegacyAndOtherProfiles(t *testing.
 }
 
 func TestPackageRootRejectsForeignIdentity(t *testing.T) {
+	t.Parallel()
 	id := strings.Repeat("a", 32)
 	for _, row := range []struct {
 		owner    int
@@ -71,6 +73,7 @@ func TestPackageRootRejectsForeignIdentity(t *testing.T) {
 }
 
 func TestPackageServiceIdentityIsBoundToInstance(t *testing.T) {
+	t.Parallel()
 	id := strings.Repeat("a", 32)
 	local := Manifest{Layout: PackageLayout, Owner: 1000, Location: "local", ID: id}
 	remote := local

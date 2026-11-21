@@ -143,6 +143,7 @@ func bootstrapOps(t *testing.T, tx BootstrapTransaction, dir string) (installOps
 var bootstrapPhases = []string{"core-replaced", "pair-replaced", "started", "installer-intent.json", "installer-ready.json", "installer-owner", "forward-only", "released", "completed"}
 
 func TestBootstrapInterruptionCurrentAndStale(t *testing.T) {
+	t.Parallel()
 	for _, phase := range bootstrapPhases {
 		t.Run(phase, func(t *testing.T) {
 			tx, dir, _ := bootstrapModel(t)
@@ -175,6 +176,7 @@ func TestBootstrapInterruptionCurrentAndStale(t *testing.T) {
 	}
 }
 func TestBootstrapFailedHealthAndForeignRecords(t *testing.T) {
+	t.Parallel()
 	for _, bad := range []string{"health", "foreign"} {
 		t.Run(bad, func(t *testing.T) {
 			tx, dir, _ := bootstrapModel(t)
@@ -244,6 +246,7 @@ func TestBootstrapActualChildDeath(t *testing.T) {
 }
 
 func TestBootstrapNeverRestartsOldReaderAfterHistoryChanges(t *testing.T) {
+	t.Parallel()
 	tx, dir, _ := bootstrapModel(t)
 	o, c := bootstrapOps(t, tx, dir)
 	health := o.health

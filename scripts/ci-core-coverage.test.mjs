@@ -78,6 +78,10 @@ test("full race groups retain every package and require parallel scenarios and d
     new URL("../.github/workflows/checks.yml", import.meta.url),
     "utf8",
   );
+  const buildArtifacts = workflow.slice(
+    workflow.indexOf("  build-artifacts:\n"),
+    workflow.indexOf("  core:\n"),
+  );
   const core = workflow.slice(
     workflow.indexOf("  core:\n"),
     workflow.indexOf("  core-scenarios:\n"),
@@ -109,12 +113,10 @@ test("full race groups retain every package and require parallel scenarios and d
     /go list \.\/internal\/\.\.\. \.\/cmd\/fased-app \.\/cmd\/fased-signer \.\/cmd\/fased-install \.\/cmd\/fased-package/,
   );
   assert.match(core, /grep -vE '\/internal\/\(core\|update\)\$'/);
-  assert.match(core, /go test -race -p 1 "\$\{fased_other_packages\[@\]\}"/);
-  const skip = core.match(
-    /go test -race -p 1 \.\/internal\/core -skip '([^']+)'/,
-  );
+  assert.match(core, /go test -race "\$\{fased_other_packages\[@\]\}"/);
+  const skip = core.match(/go test -race \.\/internal\/core -skip '([^']+)'/);
   const run = scenarios.match(
-    /go test -race -p 1 \.\/internal\/core -run '([^']+)'/,
+    /go test -race \.\/internal\/core -run '([^']+)'/,
   );
   assert.ok(
     skip && run,
@@ -128,18 +130,23 @@ test("full race groups retain every package and require parallel scenarios and d
   assert.equal(run[1], "^Test(SwapRecovery|VenueCredential|.*WEN)");
   assert.equal(
     workflow.split(
-      "go test -race -p 1 ./internal/core -run '^Test(SwapRecovery|VenueCredential|.*WEN)'",
+      "go test -race ./internal/core -run '^Test(SwapRecovery|VenueCredential|.*WEN)'",
     ).length - 1,
     1,
     "the complementary partition must execute exactly once",
   );
   assert.doesNotMatch(
     core,
-    /go test -race -p 1 \.\/internal\/core -run '\^Test\(SwapRecovery/,
+    /go test -race \.\/internal\/core -run '\^Test\(SwapRecovery/,
+  );
+  assert.doesNotMatch(
+    workflow,
+    /go test -race -p 1\b/,
+    "bounded Go race suites must run parallel package tests",
   );
   assert.match(
     scenarios,
-    /needs: classify\n\s+if: needs.classify.outputs.scope == 'full'/,
+    /needs: \[classify, build-artifacts\]\n\s+if: needs\.classify\.outputs\.scope == 'full'/,
   );
   assert.match(scenarios, /runs-on: ubuntu-24\.04\n\s+timeout-minutes: 10/);
   for (const prerequisite of [
@@ -150,20 +157,24 @@ test("full race groups retain every package and require parallel scenarios and d
     "actions/setup-go@v5",
     'go-version: "1.26.x"',
     "npm run build",
+    "npm run build:core",
+    "name: ci-built-binaries",
   ])
     assert.ok(
-      scenarios.includes(prerequisite),
-      `retain scenario prerequisite: ${prerequisite}`,
+      buildArtifacts.includes(prerequisite),
+      `retain shared artifact prerequisite: ${prerequisite}`,
     );
   const aggregate = workflow.slice(workflow.indexOf("  prototype:\n"));
+  assert.match(aggregate, /\n\s+build-artifacts,/);
   assert.match(aggregate, /\n\s+core-scenarios,/);
   assert.match(
     handoff,
-    /name: Update unit race coverage\n\s+if: needs.classify.outputs.scope == 'full'\n\s+run: go test -race -p 1 \.\/internal\/update/,
+    /name: Update unit race coverage\n\s+if: needs\.classify\.outputs\.scope == 'full'[\s\S]*?\n\s+run: go test -race \.\/internal\/update/,
   );
   assert.match(core, /timeout-minutes: 20/);
   for (const [job, minutes] of Object.entries({
     documentation: 3,
+    "build-artifacts": 8,
     core: 20,
     "core-scenarios": 10,
     browser: 15,
@@ -199,6 +210,7 @@ test("full race groups retain every package and require parallel scenarios and d
       },
     };
     for (const name of [
+      "build-artifacts",
       "core",
       "core-scenarios",
       "browser",
@@ -219,6 +231,10 @@ test("ordinary admission checks run once in parallel without consuming the manag
     new URL("../.github/workflows/checks.yml", import.meta.url),
     "utf8",
   );
+  const buildArtifacts = workflow.slice(
+    workflow.indexOf("  build-artifacts:\n"),
+    workflow.indexOf("  core:\n"),
+  );
   const scenarios = workflow.slice(
     workflow.indexOf("  core-scenarios:\n"),
     workflow.indexOf("  browser:\n"),
@@ -227,16 +243,19 @@ test("ordinary admission checks run once in parallel without consuming the manag
     workflow.indexOf("  signer:\n"),
     workflow.indexOf("  handoff:\n"),
   );
-  const build = scenarios.indexOf(
-    "      - name: Build ordinary admission CLI binaries\n",
+  const download = scenarios.indexOf(
+    "      - uses: actions/download-artifact@v4\n",
   );
   assert.ok(
-    build > scenarios.indexOf("      - run: npm run build\n"),
+    buildArtifacts.indexOf("      - run: npm run build:core\n") >
+      buildArtifacts.indexOf("      - run: npm run build\n"),
     "current UI assets precede ordinary CLI binaries",
   );
-  assert.match(
-    scenarios.slice(build),
-    /run: \|\n\s+npm run build:core\n\s+go build -trimpath -o \.evidence\/bin\/fased-signer \.\/cmd\/fased-signer/,
+  assert.ok(
+    buildArtifacts.includes("name: ci-built-binaries") &&
+      scenarios.includes("name: ci-built-binaries") &&
+      download >= 0,
+    "core-scenarios downloads the shared UI and binary artifacts",
   );
   for (const [name, command, env] of [
     [
@@ -270,7 +289,7 @@ test("ordinary admission checks run once in parallel without consuming the manag
       `ordinary work must leave signer: ${name}`,
     );
     const start = scenarios.indexOf(`      - name: ${name}\n`);
-    assert.ok(start > build, `compiled binaries before check: ${name}`);
+    assert.ok(start > download, `compiled binaries before check: ${name}`);
     const end = scenarios.indexOf("\n      - ", start + 1);
     const step = scenarios.slice(start, end < 0 ? undefined : end);
     assert.ok(

@@ -122,6 +122,7 @@ func TestManagedOnchainUnknownRestartAndAccountBinding(t *testing.T) {
 	saveSwapEvidence(t, "managed-restarted", h.command(t, "swap-view", SwapCommand{}))
 }
 func TestManagedOnchainDeclinesWatchOnlyAndChangedEpoch(t *testing.T) {
+	t.Parallel()
 	for _, change := range []string{"watch", "epoch", "network"} {
 		t.Run(change, func(t *testing.T) {
 			h := setupManagedSwapHarness(t, fixtureStore(t))
@@ -161,6 +162,7 @@ func TestManagedOnchainDeclinesWatchOnlyAndChangedEpoch(t *testing.T) {
 }
 
 func TestManagedOnchainSchema31MigrationPreservesDataAndRefusesUnprotectedState(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	var raw string
 	var rev int64
@@ -203,6 +205,7 @@ func TestManagedOnchainSchema31MigrationPreservesDataAndRefusesUnprotectedState(
 }
 
 func TestManagedOnchainInstalledBridgeRejectsUntrustedConfiguration(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	dir := t.TempDir()
 	path := filepath.Join(dir, "identity.json")

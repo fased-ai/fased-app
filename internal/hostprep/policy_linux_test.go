@@ -97,15 +97,12 @@ func TestFedoraDesktopPreparationRejectsUnscopedDNF(t *testing.T) {
 }
 
 func TestIncompleteIntentDoesNotAuthorizePublication(t *testing.T) {
-	root, _ := filepath.Abs("../../.evidence/hostprep-fixtures")
-	if e := os.MkdirAll(root, 0700); e != nil {
+	t.Parallel()
+	d := t.TempDir()
+	var e error
+	if e = os.Chmod(d, 0700); e != nil {
 		t.Fatal(e)
 	}
-	d, e := os.MkdirTemp(root, "invalid-intent-")
-	if e != nil {
-		t.Fatal(e)
-	}
-	t.Cleanup(func() { os.RemoveAll(d) })
 	if e = core.WritePrivateJSON(filepath.Join(d, "host-preparation.json"), receipt{Schema: 1, Phase: "ready"}); e != nil {
 		t.Fatal(e)
 	}
@@ -123,15 +120,8 @@ func TestIncompleteIntentDoesNotAuthorizePublication(t *testing.T) {
 }
 
 func TestOSCopyAcceptsGoPipe(t *testing.T) {
-	root, _ := filepath.Abs("../../.evidence/hostprep-fixtures")
-	if e := os.MkdirAll(root, 0700); e != nil {
-		t.Fatal(e)
-	}
-	d, e := os.MkdirTemp(root, "pipe-")
-	if e != nil {
-		t.Fatal(e)
-	}
-	t.Cleanup(func() { os.RemoveAll(d) })
+	t.Parallel()
+	d := t.TempDir()
 	b, e := os.ReadFile("../../packaging/linux/apparmor/bwrap-userns-restrict")
 	if e != nil {
 		t.Fatal(e)
@@ -197,17 +187,15 @@ func (h *fakeHost) run(_ context.Context, input []byte, args ...string) ([]byte,
 	return nil, nil
 }
 func TestPolicyPreparationPreservesConflictsAndResumes(t *testing.T) {
-	root, _ := filepath.Abs("../../.evidence/hostprep-fixtures")
-	if e := os.MkdirAll(root, 0700); e != nil {
-		t.Fatal(e)
-	}
+	t.Parallel()
 	for _, failure := range []string{"copy", "load"} {
 		t.Run(failure, func(t *testing.T) {
-			d, e := os.MkdirTemp(root, "retry-")
-			if e != nil {
+			t.Parallel()
+			d := t.TempDir()
+			var e error
+			if e = os.Chmod(d, 0700); e != nil {
 				t.Fatal(e)
 			}
-			t.Cleanup(func() { os.RemoveAll(d) })
 			policy, e := os.ReadFile("../../packaging/linux/apparmor/bwrap-userns-restrict")
 			if e != nil {
 				t.Fatal(e)
@@ -242,11 +230,11 @@ func TestPolicyPreparationPreservesConflictsAndResumes(t *testing.T) {
 			}
 		})
 	}
-	d, e := os.MkdirTemp(root, "conflict-")
-	if e != nil {
+	d := t.TempDir()
+	var e error
+	if e = os.Chmod(d, 0700); e != nil {
 		t.Fatal(e)
 	}
-	t.Cleanup(func() { os.RemoveAll(d) })
 	policy, _ := os.ReadFile("../../packaging/linux/apparmor/bwrap-userns-restrict")
 	for _, f := range []hostFile{{Data: []byte("administrator policy"), Root: true, Regular: true, Mode: 0644}, {Data: policy, Root: false, Regular: true, Mode: 0644}, {Data: policy, Root: true, Regular: false, Mode: 0644}, {Data: policy, Root: true, Regular: true, Mode: 0666}} {
 		h := &fakeHost{files: map[string]hostFile{policyTarget: f}}

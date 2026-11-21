@@ -57,6 +57,7 @@ func intentFixture(t *testing.T, v *Vault, sequence uint64) update.IntentRequest
 }
 
 func TestUpdateIntentPreservesUnknownAndSpentAcrossRestartAbort(t *testing.T) {
+	t.Parallel()
 	dir := fixtureDir(t)
 	v, _, g := configuredFixture(t, dir)
 	paid := intentFor(g, 5)
@@ -166,6 +167,7 @@ func TestUpdateIntentPreservesUnknownAndSpentAcrossRestartAbort(t *testing.T) {
 }
 
 func TestUpdateSnapshotsRejectStaleBootEpochFloorAndTampering(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []string{"boot", "epoch", "floor", "head", "signature"} {
 		t.Run(tc, func(t *testing.T) {
 			v, _, _ := configuredFixture(t, fixtureDir(t))
@@ -191,6 +193,7 @@ func TestUpdateSnapshotsRejectStaleBootEpochFloorAndTampering(t *testing.T) {
 }
 
 func TestUpdateIntentConcurrentPreparationHasOneWinner(t *testing.T) {
+	t.Parallel()
 	v, _, _ := configuredFixture(t, fixtureDir(t))
 	r := intentFixture(t, v, 1)
 	seq := v.ledger.main.seq
@@ -215,6 +218,7 @@ func TestUpdateIntentConcurrentPreparationHasOneWinner(t *testing.T) {
 }
 
 func TestUpdateUncertainDurableAppendRecoversExclusiveSlot(t *testing.T) {
+	t.Parallel()
 	dir := fixtureDir(t)
 	v, _, _ := configuredFixture(t, dir)
 	r := intentFixture(t, v, 1)
@@ -262,6 +266,7 @@ func TestUpdateUncertainDurableAppendRecoversExclusiveSlot(t *testing.T) {
 }
 
 func TestUpdateKeyOnlyRecoveryCannotResetFloorAuthority(t *testing.T) {
+	t.Parallel()
 	v, _, _ := configuredFixture(t, fixtureDir(t))
 	backup, e := v.Backup(backupPassword)
 	if e != nil {
@@ -281,6 +286,7 @@ func TestUpdateKeyOnlyRecoveryCannotResetFloorAuthority(t *testing.T) {
 }
 
 func TestUpdateUncertainAbortRetainsFloorAfterRestart(t *testing.T) {
+	t.Parallel()
 	dir := fixtureDir(t)
 	v, _, _ := configuredFixture(t, dir)
 	r := intentFixture(t, v, 1)

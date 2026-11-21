@@ -10,6 +10,7 @@ import (
 )
 
 func TestQwenRetiredPortalSignInPreservesAccountsAndWork(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	account := addNativeAccount(t, s, "qwen", false)
 	agentApply(t, s, AgentCommand{Action: "session-create", ProfileID: "trading-analyst", Name: "Keep this Qwen draft"})

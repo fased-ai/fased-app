@@ -6,6 +6,7 @@ import (
 )
 
 func TestInstalledProviderFixtureRemoteIdentity(t *testing.T) {
+	t.Parallel()
 	h, o, opt := fixtureHost()
 	opt.ProviderFixture = true
 	if _, err := install(t.Context(), opt, o); err == nil || len(h.calls) != 0 {

@@ -70,6 +70,7 @@ func TestFixtureTransportBindings(t *testing.T) {
 	})
 }
 func TestFixtureTransportFraming(t *testing.T) {
+	t.Parallel()
 	binding := FixtureBinding{true, RehearsalPurpose, NewProbe(), "development"}
 	frame := transportFrame(binding, "hello", "", fixtureHello{NewProbe(), NewProbe(), "inspect", "", ""})
 	valid, _ := json.Marshal(frame)

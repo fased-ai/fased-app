@@ -53,6 +53,7 @@ func completeSignInFixture(t *testing.T, s *Store, remote bool) AIConnectionView
 }
 
 func TestProviderSignInLocalRemoteStorageAndNoGeneration(t *testing.T) {
+	t.Parallel()
 	for _, remote := range []bool{false, true} {
 		t.Run(map[bool]string{false: "Local", true: "Remote"}[remote], func(t *testing.T) {
 			s := fixtureStore(t)
@@ -119,6 +120,7 @@ func TestProviderSignInLocalRemoteStorageAndNoGeneration(t *testing.T) {
 }
 
 func TestProviderSignInRefreshRestartAndDisconnect(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	v := completeSignInFixture(t, s, true)
 	readCredential := func() providerSignInCredential {
@@ -199,6 +201,7 @@ func TestProviderSignInRefreshRestartAndDisconnect(t *testing.T) {
 }
 
 func TestProviderSignInRefusesCallbackReplayExpiryAndDowngrade(t *testing.T) {
+	t.Parallel()
 	for _, kind := range []string{"state", "host", "duplicate", "missing-client", "expiry", "cancel", "logout"} {
 		t.Run(kind, func(t *testing.T) {
 			s := fixtureStore(t)
@@ -263,6 +266,7 @@ func TestProviderSignInRefusesCallbackReplayExpiryAndDowngrade(t *testing.T) {
 // The official origin is retained at the interface; this test-only transport
 // rewrites the physical destination to a trusted HTTPS fixture, never runtime.
 func TestProviderSignInControlledHTTPSAndTokenScope(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	v, err := s.ChangeAIConnection(t.Context(), AIConnectionCommand{Action: "sign-in-start", Provider: "openai", Remote: true})
 	if err != nil {
@@ -334,6 +338,7 @@ func TestProviderSignInControlledHTTPSAndTokenScope(t *testing.T) {
 }
 
 func TestProviderSignInIdentityAndPlanPermissionRefusals(t *testing.T) {
+	t.Parallel()
 	for _, kind := range []string{"nonce", "subject", "plan"} {
 		t.Run(kind, func(t *testing.T) {
 			s := fixtureStore(t)
@@ -369,6 +374,7 @@ func TestProviderSignInIdentityAndPlanPermissionRefusals(t *testing.T) {
 }
 
 func TestProviderSignInVaultMaximumAccountsAndOversizePreservation(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	credential := providerSignInCredential{Version: 1, Issuer: signInIssuer, Subject: "disposable-max-user", ClientID: "oaiapp_disposable_max", AccessToken: strings.Repeat("a", 4096), RefreshToken: strings.Repeat("r", 4096), IDToken: "i", Scope: signInScope, ExpiresAt: s.now().Add(time.Hour).Unix()}
 	raw, _ := json.Marshal(credential)
@@ -454,6 +460,7 @@ func TestProviderSignInVaultMaximumAccountsAndOversizePreservation(t *testing.T)
 }
 
 func TestProviderSignInLiveCallbackIssWhitespaceReconnectRefModelsAndOIDC(t *testing.T) {
+	t.Parallel()
 	t.Run("iss-and-whitespace-remote-and-reconnect-ref", func(t *testing.T) {
 		s := fixtureStore(t)
 		start, err := s.ChangeAIConnection(t.Context(), AIConnectionCommand{Action: "sign-in-start", Provider: "openai", Remote: true, Name: "Live SIWC"})

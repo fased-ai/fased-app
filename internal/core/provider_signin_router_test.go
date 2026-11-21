@@ -13,6 +13,7 @@ import (
 )
 
 func TestRouterSignInLocalRemoteUsesExistingAPIAccounts(t *testing.T) {
+	t.Parallel()
 	for _, remote := range []bool{false, true} {
 		t.Run(map[bool]string{false: "Local", true: "Remote"}[remote], func(t *testing.T) {
 			s := fixtureStore(t)
@@ -73,6 +74,7 @@ func TestRouterSignInLocalRemoteUsesExistingAPIAccounts(t *testing.T) {
 	}
 }
 func TestRouterSignInPKCECancelExpiryAndCallbackIsolation(t *testing.T) {
+	t.Parallel()
 	for _, remote := range []bool{false, true} {
 		s := fixtureStore(t)
 		s.providerFixture = false

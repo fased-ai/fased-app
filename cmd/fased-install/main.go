@@ -43,6 +43,7 @@ var compiledFirstInstallBinding *firstInstallBinding
 var candidateMaintenanceStage = stageAttestedCandidate
 var packageCandidateUpdateBaseline = candidatePackageUpdateBaseline
 var packageCandidateMaintenanceStage = stageAttestedPackageCandidate
+var readPackageParentDir = os.ReadDir
 var compiledFixturePackageInstance func(int) (string, error)
 
 func retailInstallerOptions(binding *firstInstallBinding, cache string) (bootstrap.Options, error) {
@@ -243,7 +244,7 @@ func run(args []string, in io.Reader, out, errOut io.Writer) error {
 		if _, err := maintenance.DecodePackageRequest(request); err != nil {
 			return err
 		}
-		entries, err := os.ReadDir(filepath.Dir(root))
+		entries, err := readPackageParentDir(filepath.Dir(root))
 		if err != nil && !errors.Is(err, os.ErrNotExist) {
 			return err
 		}

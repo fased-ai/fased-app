@@ -15,6 +15,7 @@ import (
 )
 
 func TestIndependentHistoryRecovery(t *testing.T) {
+	t.Parallel()
 	dir, id := portableFixture(t)
 	source, err := Open(dir, id)
 	if err != nil {
@@ -86,6 +87,7 @@ func nextGrant(v *Vault) string {
 }
 
 func TestHistoryRecoveryInterruption(t *testing.T) {
+	t.Parallel()
 	dir, id := portableFixture(t)
 	source, err := Open(dir, id)
 	if err != nil {
@@ -149,6 +151,7 @@ func TestHistoryRecoveryInterruption(t *testing.T) {
 	}
 }
 func TestHistoryRecoveryInvalidAndForeignInputs(t *testing.T) {
+	t.Parallel()
 	dir, id := portableFixture(t)
 	v, err := Open(dir, id)
 	if err != nil {
@@ -225,6 +228,7 @@ func TestHistoryRecoveryInvalidAndForeignInputs(t *testing.T) {
 	}
 }
 func TestHistoryRecoveryNetworkCustody(t *testing.T) {
+	t.Parallel()
 	for _, ordinary := range []bool{false, true} {
 		t.Run(fmt.Sprint(ordinary), func(t *testing.T) {
 			open := func(dir, id string) (*Vault, error) {
@@ -294,6 +298,7 @@ func TestHistoryRecoveryNetworkCustody(t *testing.T) {
 }
 
 func TestHistoryRecoveryManagedRecordedSwap(t *testing.T) {
+	t.Parallel()
 	dir := fixtureDir(t)
 	source := managedFixture(t, dir, "mainnet-beta")
 	if err := source.Create(fixturePassword); err != nil {
@@ -380,6 +385,7 @@ func TestHistoryRecoveryManagedRecordedSwap(t *testing.T) {
 }
 
 func TestHistoryRecoveryManagedCredentialStaysLocked(t *testing.T) {
+	t.Parallel()
 	factory := func(onchain.CredentialAccess) (SwapObserver, error) {
 		t.Fatal("historical credential was borrowed")
 		return nil, ErrUnavailable
@@ -423,6 +429,7 @@ func TestHistoryRecoveryManagedCredentialStaysLocked(t *testing.T) {
 }
 
 func TestHistoryRecoveryPreservesNewerRetainedJournals(t *testing.T) {
+	t.Parallel()
 	dir := fixtureDir(t)
 	source, _, grant := configuredFixture(t, dir)
 	doc, err := source.BackupHistory(backupPassword)
@@ -483,6 +490,7 @@ func TestHistoryRecoveryPreservesNewerRetainedJournals(t *testing.T) {
 }
 
 func TestHistoryVerificationRefusesTornRetainedTail(t *testing.T) {
+	t.Parallel()
 	dir, id := portableFixture(t)
 	source, err := Open(dir, id)
 	if err != nil {

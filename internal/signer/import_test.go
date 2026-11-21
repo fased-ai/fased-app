@@ -11,6 +11,7 @@ import (
 )
 
 func TestDisposableImportIdentityRecoveryAndRefusal(t *testing.T) {
+	t.Parallel()
 	dir := fixtureDir(t)
 	v := openFixture(t, dir)
 	seed := bytes.Repeat([]byte{0x42}, 32)
@@ -63,6 +64,7 @@ func TestDisposableImportIdentityRecoveryAndRefusal(t *testing.T) {
 }
 
 func TestDisposableImportRPCBoundary(t *testing.T) {
+	t.Parallel()
 	v := openFixture(t, fixtureDir(t))
 	for _, owner := range []bool{false, true} {
 		seed := bytes.Repeat([]byte{3}, 32)

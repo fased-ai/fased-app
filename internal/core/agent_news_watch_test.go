@@ -28,6 +28,7 @@ func watchReview(t *testing.T, s *Store, v AgentView, runs int) AgentCommand {
 }
 
 func TestNewsWatchReviewedRunDedupAndNoAI(t *testing.T) {
+	t.Parallel()
 	s := newsTestStore(t)
 	v := newsAdd(t, s, "trading-analyst")
 	c := watchReview(t, s, v, 3)
@@ -95,6 +96,7 @@ func reviewedWatch(t *testing.T, s *Store, c AgentCommand) AgentView {
 	return agentApply(t, s, c)
 }
 func TestNewsWatchReviewRuleScopeAndTamper(t *testing.T) {
+	t.Parallel()
 	s := newsTestStore(t)
 	v := newsAdd(t, s, "trading-analyst")
 	c := watchReview(t, s, v, 3)
@@ -147,6 +149,7 @@ func TestNewsWatchReviewRuleScopeAndTamper(t *testing.T) {
 	}
 }
 func TestNewsWatchRestartLockedProviderDiscussAndMemory(t *testing.T) {
+	t.Parallel()
 	s := newsTestStore(t)
 	fixtureProfileProvider(t, s, AgentCommand{Action: "profile-update", ProfileID: "trading-analyst", Name: "Analyst", Provider: "xai"})
 	v := newsAdd(t, s, "trading-analyst")
@@ -207,6 +210,7 @@ func TestNewsWatchRestartLockedProviderDiscussAndMemory(t *testing.T) {
 	}
 }
 func TestNewsWatchFailureAndInterruptedFetchHoldOnlyDependent(t *testing.T) {
+	t.Parallel()
 	for _, mode := range []string{"failed", "stale", "interrupted", "cancelled"} {
 		t.Run(mode, func(t *testing.T) {
 			s := newsTestStore(t)
@@ -260,6 +264,7 @@ func TestNewsWatchFailureAndInterruptedFetchHoldOnlyDependent(t *testing.T) {
 	}
 }
 func TestNewsWatchCalendarAndCronSharedWorker(t *testing.T) {
+	t.Parallel()
 	for _, version := range []string{"once-at-v1", "cron-v1"} {
 		t.Run(version, func(t *testing.T) {
 			s := newsTestStore(t)
@@ -315,6 +320,7 @@ func TestNewsWatchCalendarAndCronSharedWorker(t *testing.T) {
 	}
 }
 func TestNewsWatchStorageAndMigrationProtectOriginals(t *testing.T) {
+	t.Parallel()
 	contract, _ := json.Marshal(UpdateContract())
 	if !strings.Contains(string(contract), "agents-news-watch-v1") {
 		t.Fatal("watch feature floor missing")
@@ -414,6 +420,7 @@ func TestNewsWatchStorageAndMigrationProtectOriginals(t *testing.T) {
 }
 
 func TestNewsWatchConcurrentTicksAndFetchCommitOnce(t *testing.T) {
+	t.Parallel()
 	s := newsTestStore(t)
 	v := newsAdd(t, s, "trading-analyst")
 	v = agentApply(t, s, watchReview(t, s, v, 2))
@@ -444,6 +451,7 @@ func TestNewsWatchConcurrentTicksAndFetchCommitOnce(t *testing.T) {
 }
 
 func TestNewsWatchRejectsDuplicateCursorWithoutErasingRecords(t *testing.T) {
+	t.Parallel()
 	s := newsTestStore(t)
 	v := newsAdd(t, s, "trading-analyst")
 	v = agentApply(t, s, watchReview(t, s, v, 3))

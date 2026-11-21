@@ -64,6 +64,7 @@ type executableReadError struct{}
 func (executableReadError) Read([]byte) (int, error) { return 0, io.ErrUnexpectedEOF }
 
 func TestExecutableVerificationRefusesChangedContents(t *testing.T) {
+	t.Parallel()
 	data := []byte("installed binary")
 	for _, tc := range []struct {
 		name string
@@ -106,6 +107,7 @@ func (m executableMetadata) IsDir() bool        { return m.mode.IsDir() }
 func (m executableMetadata) Sys() any           { return &m.stat }
 
 func TestExecutableVerificationMetadataAndReplacement(t *testing.T) {
+	t.Parallel()
 	good := executableMetadata{mode: 0755, size: 123, stat: syscall.Stat_t{Uid: 0, Gid: 0, Dev: 1, Ino: 2}}
 	if err := executableInfo(good); err != nil || !sameExecutable(good, good) {
 		t.Fatal("valid root executable", err)
@@ -152,6 +154,7 @@ func TestExecutableVerificationMetadataAndReplacement(t *testing.T) {
 }
 
 func TestExecutableVerificationRejectsSpecialModeAndForeignGroup(t *testing.T) {
+	t.Parallel()
 	good := executableMetadata{mode: 0755, size: 123, stat: syscall.Stat_t{Uid: 0, Gid: 0}}
 	for _, mode := range []os.FileMode{0755 | os.ModeSetuid, 0755 | os.ModeSetgid, 0755 | os.ModeSticky} {
 		bad := good
@@ -168,6 +171,7 @@ func TestExecutableVerificationRejectsSpecialModeAndForeignGroup(t *testing.T) {
 }
 
 func TestExecutableVerificationRefusesUntrustedPath(t *testing.T) {
+	t.Parallel()
 	p := filepath.Join(t.TempDir(), "fased-app")
 	data := []byte("not a root installation")
 	if err := os.WriteFile(p, data, 0755); err != nil {

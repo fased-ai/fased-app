@@ -16,6 +16,7 @@ import (
 )
 
 func TestBoundUnitWriteBindsBytesAndOwnedDestination(t *testing.T) {
+	t.Parallel()
 	id := strings.Repeat("a", 32)
 	stage := "/etc/systemd/system/.fased-custody-1900-app.service-" + id + ".pending"
 	body := []byte("[Service]\nUser=991\nNoNewPrivileges=yes\n")
@@ -63,6 +64,7 @@ func TestBoundUnitWriteBindsBytesAndOwnedDestination(t *testing.T) {
 }
 
 func TestBoundPolicyWriteBindsBytesAndOwner(t *testing.T) {
+	t.Parallel()
 	id := strings.Repeat("a", 32)
 	stage := "/etc/sudoers.d/.fased-remote-proof-1900-" + id + ".pending"
 	body := []byte("# fixed policy\n#1900 ALL=(root) NOPASSWD: /usr/bin/true\n")
@@ -86,6 +88,7 @@ func TestBoundPolicyWriteBindsBytesAndOwner(t *testing.T) {
 }
 
 func TestBoundReusableSetupRejectsForeignTargetsAndBytes(t *testing.T) {
+	t.Parallel()
 	body := []byte("fixed reusable setup")
 	for _, name := range []string{"stage-image-retry@.service", "stage-meta-retry@.service", "stage-unit-retry@.service"} {
 		for _, path := range []string{
@@ -127,6 +130,7 @@ func TestBoundReusableSetupRejectsForeignTargetsAndBytes(t *testing.T) {
 }
 
 func TestBoundReusableSetupNeverOverwritesExistingInboxOrImage(t *testing.T) {
+	t.Parallel()
 	owner, id := 1900, strings.Repeat("a", 32)
 	inbox, err := boundReusableInboxCreateArgs(owner, 997, id)
 	if err != nil || !allowedBoundReusableInboxCreate(owner, inbox) || !strings.Contains(inbox[6], "ConditionPathExists=!") {
@@ -151,6 +155,7 @@ func TestBoundReusableSetupNeverOverwritesExistingInboxOrImage(t *testing.T) {
 }
 
 func TestReusableSetupPublicationRecoversOnlyItsOwnPartialCopy(t *testing.T) {
+	t.Parallel()
 	owner := os.Getuid()
 	id := strings.Repeat("a", 32)
 	body := []byte("exact reusable protected file")
@@ -187,6 +192,7 @@ func TestReusableSetupPublicationRecoversOnlyItsOwnPartialCopy(t *testing.T) {
 }
 
 func TestReusablePublicationUsesGuardedOSOperation(t *testing.T) {
+	t.Parallel()
 	owner := os.Getuid()
 	id := strings.Repeat("a", 32)
 	target := Root(owner) + "/maintenance/authority.json"
@@ -207,6 +213,7 @@ func TestReusablePublicationUsesGuardedOSOperation(t *testing.T) {
 }
 
 func TestReusableCompletedCleanupUsesGuardedOSOperation(t *testing.T) {
+	t.Parallel()
 	owner := os.Getuid()
 	id := strings.Repeat("a", 32)
 	target := Root(owner) + "/maintenance/authority.json"
@@ -228,6 +235,7 @@ func TestReusableCompletedCleanupUsesGuardedOSOperation(t *testing.T) {
 }
 
 func TestBoundReusablePublicationBindsOwnerDestinationAndBytes(t *testing.T) {
+	t.Parallel()
 	owner, id := 1900, strings.Repeat("a", 32)
 	target := Root(owner) + "/maintenance/authority.json"
 	pending := filepath.Join(filepath.Dir(target), "."+filepath.Base(target)+"-"+id+".pending")
@@ -255,6 +263,7 @@ func TestBoundReusablePublicationBindsOwnerDestinationAndBytes(t *testing.T) {
 }
 
 func TestBoundReusableCompletedCleanupBindsInodeAndBytes(t *testing.T) {
+	t.Parallel()
 	owner, id := 1900, strings.Repeat("a", 32)
 	target := Root(owner) + "/maintenance/authority.json"
 	pending := filepath.Join(filepath.Dir(target), "."+filepath.Base(target)+"-"+id+".pending")
@@ -275,6 +284,7 @@ func TestBoundReusableCompletedCleanupBindsInodeAndBytes(t *testing.T) {
 }
 
 func TestReusablePendingCleanupRefusesDirectRemoval(t *testing.T) {
+	t.Parallel()
 	owner, id := 1900, strings.Repeat("a", 32)
 	for _, pending := range []string{
 		Root(owner) + "/maintenance/.authority.json-" + id + ".pending",
@@ -294,6 +304,7 @@ func TestReusablePendingCleanupRefusesDirectRemoval(t *testing.T) {
 }
 
 func TestSystemRunRefusesDirectReusablePendingRemoval(t *testing.T) {
+	t.Parallel()
 	owner := os.Getuid()
 	if owner <= 0 {
 		t.Skip("ordinary installation owner required")
@@ -306,6 +317,7 @@ func TestSystemRunRefusesDirectReusablePendingRemoval(t *testing.T) {
 }
 
 func TestBoundReusableImagePublicationChecksApprovedDigest(t *testing.T) {
+	t.Parallel()
 	owner, id, digest := 1900, strings.Repeat("a", 32), strings.Repeat("b", 64)
 	for _, component := range []string{"runner", "guard"} {
 		args, err := boundReusableImageLinkArgs(owner, id, component, digest)
@@ -324,6 +336,7 @@ func TestBoundReusableImagePublicationChecksApprovedDigest(t *testing.T) {
 }
 
 func TestBoundReusableImageCleanupChecksInodeAndDigest(t *testing.T) {
+	t.Parallel()
 	owner, id, digest := 1900, strings.Repeat("a", 32), strings.Repeat("b", 64)
 	for _, component := range []string{"runner", "guard"} {
 		args, err := boundReusableImageCleanupArgs(owner, id, component, digest)
@@ -343,6 +356,7 @@ func TestBoundReusableImageCleanupChecksInodeAndDigest(t *testing.T) {
 }
 
 func TestReusableSetupSerializesWriterAndPublicationPerPendingFile(t *testing.T) {
+	t.Parallel()
 	owner, id := 1900, strings.Repeat("a", 32)
 	body := []byte("exact reusable protected file")
 	for _, item := range []struct {
@@ -375,6 +389,7 @@ func TestReusableSetupSerializesWriterAndPublicationPerPendingFile(t *testing.T)
 }
 
 func TestReusableRestartAssertionStageIsNoClobber(t *testing.T) {
+	t.Parallel()
 	id := strings.Repeat("a", 32)
 	body := []byte("[Unit]\nAssertPathExists=!" + Root(1900) + "/update-start-blocked.json\n")
 	for _, role := range []string{"app", "signer"} {
@@ -396,6 +411,7 @@ func TestReusableRestartAssertionStageIsNoClobber(t *testing.T) {
 }
 
 func TestBoundRestartAssertionOnlyAllowsExactOwnerAndContent(t *testing.T) {
+	t.Parallel()
 	id := strings.Repeat("a", 32)
 	body := []byte("[Unit]\nAssertPathExists=!/var/lib/fased-app-custody-1900/update-start-blocked.json\n")
 	for _, role := range []string{"app", "signer"} {
@@ -414,6 +430,7 @@ func TestBoundRestartAssertionOnlyAllowsExactOwnerAndContent(t *testing.T) {
 }
 
 func TestRestartAssertionPublicationResumesAfterInterruption(t *testing.T) {
+	t.Parallel()
 	owner := os.Getuid()
 	id := strings.Repeat("a", 32)
 	body := []byte("[Unit]\nAssertPathExists=!" + Root(owner) + "/update-start-blocked.json\n")

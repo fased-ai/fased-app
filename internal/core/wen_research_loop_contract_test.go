@@ -76,6 +76,7 @@ func loopNextInput(r WENResearchAIReview) WENResearchAINextInput {
 }
 
 func TestWENResearchLoopScope(t *testing.T) {
+	t.Parallel()
 	s, h, token, c := readBatchFixture(t)
 	r := loopPrepared(t, s, c, 2, 3)
 	good := researchLoopFrame{"wen-research-step/1", r.Turn.ID, r.Turn.RootSHA256, 1, "read", []string{"read-1"}, "Review the selected record.", []researchLoopCard{}}
@@ -149,6 +150,7 @@ func TestWENResearchLoopScope(t *testing.T) {
 }
 
 func TestWENResearchLoopTranscriptBatch(t *testing.T) {
+	t.Parallel()
 	s, _, _, c := readBatchFixture(t)
 	r := loopPrepared(t, s, c, 2, 2)
 	sequence := []string{}
@@ -198,6 +200,7 @@ func TestWENResearchLoopTranscriptBatch(t *testing.T) {
 }
 
 func TestWENResearchLoopBudget(t *testing.T) {
+	t.Parallel()
 	t.Run("frame-bytes", func(t *testing.T) {
 		s, _, _, c := readBatchFixture(t)
 		r := loopPrepared(t, s, c, 1, 1)
@@ -322,6 +325,7 @@ func TestWENResearchLoopBudget(t *testing.T) {
 }
 
 func TestWENResearchLoopRecovery(t *testing.T) {
+	t.Parallel()
 	for _, mode := range []string{"read-cancel", "read-source", "read-deadline", "read-pause", "cached-altered", "local-error", "awaiting-cancel", "queued-restart", "prepared-restart", "awaiting-restart", "read-interrupted", "read-queued-restart"} {
 		t.Run(mode, func(t *testing.T) {
 			s, _, _, c := readBatchFixture(t)
@@ -440,6 +444,7 @@ func TestWENResearchLoopRecovery(t *testing.T) {
 }
 
 func TestWENResearchLoopByteBoundaries(t *testing.T) {
+	t.Parallel()
 	t.Run("complete-context-8000-8001", func(t *testing.T) {
 		s, _, _, c := readBatchFixture(t)
 		in := researchInput(t, c)
@@ -513,6 +518,7 @@ func TestWENResearchLoopByteBoundaries(t *testing.T) {
 }
 
 func TestWENResearchLoopCompatibility(t *testing.T) {
+	t.Parallel()
 	for _, mode := range []string{"v1-raw-preservation", "paused-12", "unsupported", "v2-record-discriminator", "transcript-tamper"} {
 		t.Run(mode, func(t *testing.T) {
 			s, _, _, c := readBatchFixture(t)
@@ -585,6 +591,7 @@ func TestWENResearchLoopCompatibility(t *testing.T) {
 }
 
 func TestWENResearchLoopLaterQueuedRestart(t *testing.T) {
+	t.Parallel()
 	s, _, _, c := readBatchFixture(t)
 	r := loopPrepared(t, s, c, 2, 3)
 	r = loopAdvance(t, s, r, fixtureAITransport{})
@@ -606,6 +613,7 @@ func TestWENResearchLoopLaterQueuedRestart(t *testing.T) {
 	}
 }
 func TestWENResearchLoopStorageLimits(t *testing.T) {
+	t.Parallel()
 	s, _, _, c := readBatchFixture(t)
 	r := loopPrepared(t, s, c, 1, 1)
 	in := researchInput(t, r.Turn.Selection)

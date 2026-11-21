@@ -9,6 +9,7 @@ import (
 )
 
 func TestMaintenanceSessionNeverMigratesPredecessorOrOwner(t *testing.T) {
+	t.Parallel()
 	for _, version := range []int{33, 35, 36, 37, 38} {
 		t.Run(fmt.Sprint(version), func(t *testing.T) {
 			dir := filepath.Join(t.TempDir(), "fased")
@@ -45,6 +46,7 @@ func TestMaintenanceSessionNeverMigratesPredecessorOrOwner(t *testing.T) {
 	}
 }
 func TestMaintenanceSessionDoesNotCreateMissingDatabase(t *testing.T) {
+	t.Parallel()
 	dir := filepath.Join(t.TempDir(), "fased")
 	if _, err := IssueMaintenanceSession(t.Context(), dir, "unknown"); err == nil {
 		t.Fatal("missing database accepted")

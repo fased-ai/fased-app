@@ -35,6 +35,7 @@ func newsChatFixture(t *testing.T) (*Store, AgentView, *atomic.Int32) {
 }
 
 func TestNewsChatCaptureHistoryRestartAndMemory(t *testing.T) {
+	t.Parallel()
 	s, v, calls := newsChatFixture(t)
 	f := v.NewsFetches[0]
 	before, _, _ := readAgents(t.Context(), s.db)
@@ -91,6 +92,7 @@ func TestNewsChatCaptureHistoryRestartAndMemory(t *testing.T) {
 }
 
 func TestNewsChatRefusals(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name string
 		doc  func(*agentDocument)
@@ -171,6 +173,7 @@ func TestNewsChatRefusals(t *testing.T) {
 }
 
 func TestNewsChatFreshnessAtCapture(t *testing.T) {
+	t.Parallel()
 	for _, offset := range []int64{0, 540, 541, 601} {
 		t.Run(fmt.Sprint(offset), func(t *testing.T) {
 			s, v, calls := newsChatFixture(t)
@@ -191,6 +194,7 @@ func TestNewsChatFreshnessAtCapture(t *testing.T) {
 }
 
 func TestNewsChatExplicitFixtureExplanation(t *testing.T) {
+	t.Parallel()
 	s, v, calls := newsChatFixture(t)
 	f := v.NewsFetches[0]
 	rewriteReminderFixture(t, s, func(d *agentDocument) { d.NewsFetches[0].Failure = "PRIVATE-RAW-BODY" })
@@ -227,6 +231,7 @@ func TestNewsChatExplicitFixtureExplanation(t *testing.T) {
 }
 
 func TestNewsFreshnessAndProvenance(t *testing.T) {
+	t.Parallel()
 	now := int64(1800000000)
 	f, e := parseNewsRSS([]byte(`<rss version="2.0"><channel><item><title>Paper headline</title><link>https://example.com/story</link><pubDate>2027-01-15T07:59:00Z</pubDate></item></channel></rss>`), NewsFetch{ID: "test-fetch", SourceID: "test-source", URL: fixtureNewsURL, MaxAgeSeconds: 300}, now)
 	if e != nil || f.State != "completed" || f.FetchedAt != now || len(f.BodySHA256) != 64 || len(f.Items) != 1 || f.Items[0].PublishedAt != now-60 {
@@ -241,6 +246,7 @@ func newsTestStore(t *testing.T) *Store {
 }
 
 func TestNewsResumeCapacityPreservesIndependentWork(t *testing.T) {
+	t.Parallel()
 	s := newsTestStore(t)
 	v := newsRun(t, s, newsPlan(t, s, newsAdd(t, s, "wen-operator"), "", 2))
 	taskID := v.Tasks[0].ID
@@ -315,6 +321,7 @@ func rssHandler(body string, calls *atomic.Int32) http.HandlerFunc {
 	}
 }
 func TestNewsRSSBoundsDatesAndUntrustedContent(t *testing.T) {
+	t.Parallel()
 	now := int64(1800000000)
 	base := newsRSS(now)
 	f := NewsFetch{ID: "fetch", SourceID: "source", URL: fixtureNewsURL, MaxAgeSeconds: 300}
@@ -341,6 +348,7 @@ func TestNewsRSSBoundsDatesAndUntrustedContent(t *testing.T) {
 	}
 }
 func TestNewsHTTPSProvenanceIsolationRestartAndManualAI(t *testing.T) {
+	t.Parallel()
 	s := newsTestStore(t)
 	v := newsAdd(t, s, "trading-analyst")
 	source := v.NewsSources[0]
@@ -466,6 +474,7 @@ func TestNewsTaskHTTPSFailureIsolationAndRecovery(t *testing.T) {
 	}
 }
 func TestNewsNoCacheFallbackQueuedCancelAndRestartHold(t *testing.T) {
+	t.Parallel()
 	s := newsTestStore(t)
 	v := newsAdd(t, s, "trading-analyst")
 	source := v.NewsSources[0]
@@ -520,6 +529,7 @@ func TestNewsNoCacheFallbackQueuedCancelAndRestartHold(t *testing.T) {
 	}
 }
 func TestNewsScheduledAIConsentAndExpiry(t *testing.T) {
+	t.Parallel()
 	s := newsTestStore(t)
 	v := newsAdd(t, s, "trading-analyst")
 	v = taskAIPlan(t, s, 1)
@@ -564,6 +574,7 @@ func TestNewsScheduledAIConsentAndExpiry(t *testing.T) {
 	}
 }
 func TestNewsURLsPublicDialTLSAndCapacity(t *testing.T) {
+	t.Parallel()
 	for _, raw := range []string{"http://example.com/rss", "https://user:pass@example.com/rss", "https://example.com/rss?key=secret", "https://example.com/#fragment", "https://127.0.0.1/rss", "https://[::1]/rss", "https://metadata.internal/rss", "https://example.com:8443/rss", "https://localhost/rss"} {
 		if _, e := newsURL(raw); e == nil {
 			t.Fatal("unsafe URL accepted", raw)
@@ -610,6 +621,7 @@ func TestNewsURLsPublicDialTLSAndCapacity(t *testing.T) {
 	}
 }
 func TestNewsPauseCancellationAndSchema7(t *testing.T) {
+	t.Parallel()
 	for _, action := range []string{"cancel", "pause"} {
 		t.Run(action, func(t *testing.T) {
 			s := newsTestStore(t)
@@ -693,6 +705,7 @@ func TestNewsPauseCancellationAndSchema7(t *testing.T) {
 }
 
 func TestNewsBoundedRunsAndAINewsSuccess(t *testing.T) {
+	t.Parallel()
 	s := newsTestStore(t)
 	v := newsAdd(t, s, "trading-analyst")
 	v = taskAIPlan(t, s, 1)
@@ -732,6 +745,7 @@ func TestNewsBoundedRunsAndAINewsSuccess(t *testing.T) {
 }
 
 func TestTaskHeadlineStricterFreshnessEvidence(t *testing.T) {
+	t.Parallel()
 	s := newsTestStore(t)
 	v := newsPlan(t, s, newsAdd(t, s, "trading-analyst"), "", 1)
 	v = newsRun(t, s, v)

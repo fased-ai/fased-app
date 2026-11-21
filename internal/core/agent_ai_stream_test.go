@@ -23,6 +23,7 @@ func streamFixtureFrames(t *testing.T) string {
 	return b.String()
 }
 func TestAIStreamRejectsMalformedAndIncompleteEvents(t *testing.T) {
+	t.Parallel()
 	good := streamFixtureFrames(t)
 	cases := map[string]string{
 		"valid":            good,
@@ -49,6 +50,7 @@ func TestAIStreamRejectsMalformedAndIncompleteEvents(t *testing.T) {
 	}
 }
 func TestAIStreamPartialEscapesAndCredentialGuard(t *testing.T) {
+	t.Parallel()
 	for raw, want := range map[string]string{`{"answer":"hello`: "hello", `{"answer":"line\nnext`: "line\nnext", `{"answer":"quoted\"`: "quoted\"", `{"answer":"backslash\`: "backslash", `{"cards":[],"answer":"later"}`: ""} {
 		if got := partialAIAnswer(raw); got != want {
 			t.Fatalf("%q => %q; want %q", raw, got, want)
@@ -63,6 +65,7 @@ func TestAIStreamPartialEscapesAndCredentialGuard(t *testing.T) {
 	}
 }
 func TestAdmittedChatStreamsThroughControlledHTTPS(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	connection := saveTestConnection(t, s)
 	v := agentApply(t, s, AgentCommand{Action: "session-create", Name: "Admitted stream"})
@@ -119,6 +122,7 @@ func TestAdmittedChatStreamsThroughControlledHTTPS(t *testing.T) {
 }
 
 func TestAIStreamAcceptsReasoningEventsWithoutLeakingReasoningIntoAnswer(t *testing.T) {
+	t.Parallel()
 	text := `{"answer":"Final non-reasoning answer","cards":[]}`
 	response := map[string]any{
 		"id":           "reasoning-response",

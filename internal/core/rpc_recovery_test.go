@@ -11,6 +11,7 @@ import (
 )
 
 func TestRPCRecoveryBackupRestoreAndRefusals(t *testing.T) {
+	t.Parallel()
 	dir := fixtureDir(t)
 	s, e := OpenStore(dir)
 	if e != nil {
@@ -125,6 +126,7 @@ func TestRPCRecoveryBackupRestoreAndRefusals(t *testing.T) {
 }
 
 func TestRPCRecoveryPrivateExport(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	c := rpcSecretSetup(t, s)
 	v, e := s.RPCCredential(t.Context(), c)

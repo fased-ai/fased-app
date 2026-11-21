@@ -12,6 +12,7 @@ import (
 )
 
 func TestTrustRehearsalStrictExpiry(t *testing.T) {
+	t.Parallel()
 	for _, role := range []string{"root", "timestamp", "snapshot", "targets"} {
 		t.Run(role, func(t *testing.T) {
 			f := newTrustFixture(t)
@@ -57,6 +58,7 @@ func fixtureStore(t *testing.T) (*FixtureTrustStore, string) {
 }
 
 func TestTrustRehearsalStoreInterruption(t *testing.T) {
+	t.Parallel()
 	for _, point := range []string{"before-snapshot", "partial-snapshot", "after-snapshot", "partial-head", "before-head", "after-head"} {
 		t.Run(point, func(t *testing.T) {
 			f := newTrustFixture(t)
@@ -99,6 +101,7 @@ func TestTrustRehearsalStoreInterruption(t *testing.T) {
 }
 
 func TestTrustRehearsalStoreCASAndPreservation(t *testing.T) {
+	t.Parallel()
 	f := newTrustFixture(t)
 	first := f.run(nil)
 	s, dir := fixtureStore(t)
@@ -172,6 +175,7 @@ func TestTrustRehearsalStoreCASAndPreservation(t *testing.T) {
 }
 
 func TestTrustRehearsalStoreForeignAndCorrupt(t *testing.T) {
+	t.Parallel()
 	for _, kind := range []string{"foreign", "symlink", "corrupt", "missing-blob"} {
 		t.Run(kind, func(t *testing.T) {
 			f := newTrustFixture(t)

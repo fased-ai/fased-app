@@ -115,6 +115,7 @@ func loopbackSolanaRPCServer(t *testing.T, network, expectedHost, expectedQueryK
 }
 
 func TestRPCActivationDefaultsAndSafetyBoundaries(t *testing.T) {
+	t.Parallel()
 	if !rpcActivationEnabled {
 		t.Fatal("rpcActivationEnabled must be true")
 	}
@@ -153,6 +154,7 @@ func TestRPCActivationDefaultsAndSafetyBoundaries(t *testing.T) {
 }
 
 func TestSolanaPublicRPCLiveCheckAndKeylessReadWallet(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		network, endpoint, host string
 	}{
@@ -244,6 +246,7 @@ func TestSolanaPublicRPCLiveCheckAndKeylessReadWallet(t *testing.T) {
 }
 
 func TestOSProtectedRPCCredentialVaultLifecycle(t *testing.T) {
+	t.Parallel()
 	dir := fixtureDir(t)
 	osSecrets := &testTaskSecrets{key: bytes.Repeat([]byte{91}, 32)}
 	s, err := openStoreWithTaskSecrets(dir, osSecrets)

@@ -16,6 +16,7 @@ func (f clientAuthTransport) RoundTrip(request *http.Request) (*http.Response, e
 }
 
 func TestClientAuthenticationPreservesSafeHTTPFailure(t *testing.T) {
+	t.Parallel()
 	for _, status := range []int{http.StatusUnauthorized, http.StatusForbidden, http.StatusTooManyRequests, http.StatusInternalServerError, http.StatusServiceUnavailable} {
 		t.Run(http.StatusText(status), func(t *testing.T) {
 			const secret = "disposable-credential-in-untrusted-response"
@@ -52,6 +53,7 @@ func TestClientAuthenticationPreservesSafeHTTPFailure(t *testing.T) {
 const clientAuthOrigin = "http://127.0.0.1:7332"
 
 func TestClientAuthenticationSuccessStillAcceptsSession(t *testing.T) {
+	t.Parallel()
 	client := Client{
 		Endpoint: Endpoint{URL: clientAuthOrigin},
 		HTTP: &http.Client{Transport: clientAuthTransport(func(request *http.Request) (*http.Response, error) {

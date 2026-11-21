@@ -33,6 +33,7 @@ func bootstrapFixture(t *testing.T) (update.BootstrapBundle, []byte) {
 	return update.BootstrapBundle{Version: 1, Maintenance: signed(source, trust, key), Target: signed(target, trust, key)}, j(trust)
 }
 func TestSignedBootstrapBindingAndOrdinaryAdmission(t *testing.T) {
+	t.Parallel()
 	bundle, trust := bootstrapFixture(t)
 	plan, e := update.VerifyBootstrap(bundle, trust, now)
 	if e != nil {
@@ -72,6 +73,7 @@ func TestSignedBootstrapBindingAndOrdinaryAdmission(t *testing.T) {
 	}
 }
 func TestBootstrapFinancialComparison(t *testing.T) {
+	t.Parallel()
 	before := update.SignerSnapshot{ActiveIntentID: "held", SequenceFloor: 4, Spent: 70, Held: 30, Unknown: 1, RecoveryHold: true, States: []update.State{{Name: "operations", Features: []string{"install-controller-v1"}, Anchor: "head"}, {Name: "vault", Anchor: "key"}}}
 	copySnapshot := func() update.SignerSnapshot {
 		var s update.SignerSnapshot

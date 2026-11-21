@@ -12,6 +12,7 @@ import (
 )
 
 func TestProtectedEnrollmentIngressPreservesForeignFilesAndRetries(t *testing.T) {
+	t.Parallel()
 	m := fixtureManifest()
 	m.Location, m.PublicOrigin = "remote", "https://fixture.example.ts.net"
 	files := map[string]hostFile{}

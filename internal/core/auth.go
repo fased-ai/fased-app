@@ -21,8 +21,20 @@ import (
 const SessionLifetime = 12 * time.Hour
 const ClaimLifetime = 15 * time.Minute
 
+const (
+	prodKDFTime    uint32 = 3
+	prodKDFMemory  uint32 = 64 * 1024
+	prodKDFThreads uint8  = 2
+)
+
+var (
+	kdfTime    = prodKDFTime
+	kdfMemory  = prodKDFMemory
+	kdfThreads = prodKDFThreads
+)
+
 func passwordHash(password string, salt []byte) []byte {
-	return argon2.IDKey([]byte(password), salt, 3, 64*1024, 2, 32)
+	return argon2.IDKey([]byte(password), salt, kdfTime, kdfMemory, kdfThreads, 32)
 }
 func validPassword(password string) bool {
 	return utf8.RuneCountInString(password) >= 12 && len(password) <= 1024

@@ -32,18 +32,8 @@ func TestInstallChoiceExplicitAndCancelled(t *testing.T) {
 	}
 }
 func TestConnectDoesNotCreateLocalState(t *testing.T) {
-	root, e := filepath.Abs("../../.evidence/connect-fixtures")
-	if e != nil {
-		t.Fatal(e)
-	}
-	if e = os.MkdirAll(root, 0700); e != nil {
-		t.Fatal(e)
-	}
-	dir, e := os.MkdirTemp(root, "cli-")
-	if e != nil {
-		t.Fatal(e)
-	}
-	defer os.RemoveAll(dir)
+	dir := shortFixtureDir(t, "cli-")
+	var e error
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(dir, "absent"))
 	id := strings.Repeat("a", 43)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -88,18 +78,7 @@ func TestInteractiveConnectUsesTTYWithoutInstallation(t *testing.T) {
 	if err != nil {
 		t.Fatal("Python standard-library PTY harness unavailable")
 	}
-	root, err := filepath.Abs("../../.evidence/connect-fixtures")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err = os.MkdirAll(root, 0700); err != nil {
-		t.Fatal(err)
-	}
-	dir, err := os.MkdirTemp(root, "tty-")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer os.RemoveAll(dir)
+	dir := shortFixtureDir(t, "tty-")
 	id := strings.Repeat("t", 43)
 	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/api/v1/health" || r.Header.Get("Authorization") != "" {

@@ -27,6 +27,7 @@ func rpcSecretSetup(t *testing.T, s *Store) RPCCredentialCommand {
 	return RPCCredentialCommand{AccountID: r.Accounts[0].ID, Revision: v.Record.Revision, Action: "save", Key: "fased-rpc-test-disposable-secret-012345", Passphrase: "Disposable RPC vault password 123"}
 }
 func TestRPCCredentialPersistenceRedactionAndRemoval(t *testing.T) {
+	t.Parallel()
 	dir := fixtureDir(t)
 	s, e := OpenStore(dir)
 	if e != nil {
@@ -91,6 +92,7 @@ func TestRPCCredentialPersistenceRedactionAndRemoval(t *testing.T) {
 	}
 }
 func TestRPCCredentialBindingTamperPauseAndBackup(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	c := rpcSecretSetup(t, s)
 	bad := c
@@ -161,6 +163,7 @@ func TestRPCCredentialBindingTamperPauseAndBackup(t *testing.T) {
 }
 
 func TestRPCCredentialCorruptVaultPreserved(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	c := rpcSecretSetup(t, s)
 	path := s.rpcVaultPath(c.AccountID)
@@ -178,6 +181,7 @@ func TestRPCCredentialCorruptVaultPreserved(t *testing.T) {
 }
 
 func TestRPCCredentialManagedReference(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	c := rpcSecretSetup(t, s)
 	ref := testRef()
@@ -228,6 +232,7 @@ func TestRPCCredentialManagedReference(t *testing.T) {
 }
 
 func TestRPCCredentialActionCapabilities(t *testing.T) {
+	t.Parallel()
 	s, err := OpenStore(fixtureDir(t))
 	if err != nil {
 		t.Fatal(err)

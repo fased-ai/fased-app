@@ -16,6 +16,7 @@ func (v checkedJSON) MarshalJSON() ([]byte, error) {
 	return []byte(`{"complete":true}`), nil
 }
 func TestPrivateJSONPublishesOnlyCompleteDocuments(t *testing.T) {
+	t.Parallel()
 	path := filepath.Join(fixtureDir(t), "endpoint.json")
 	if e := WritePrivateJSON(path, checkedJSON{func() error {
 		if _, e := os.Lstat(path); !errors.Is(e, os.ErrNotExist) {

@@ -37,6 +37,7 @@ func assertSignInJourneyDisclosure(t *testing.T, q AgentAIRequest, stream bool) 
 }
 
 func TestProviderSignInConnectedJourney(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	account := completeSignInFixture(t, s, true)
 	v := agentApply(t, s, AgentCommand{Action: "profile-create", Name: "Plan analyst", Text: "Use only retained synthetic sources", Provider: "openai", AccountRef: &account.Ref, Model: admittedOpenAIModel})
@@ -167,6 +168,7 @@ func TestProviderSignInConnectedJourney(t *testing.T) {
 }
 
 func TestProviderSignInAdmissionRejectsRawFixtureAndWrongMethodTransport(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	account := completeSignInFixture(t, s, true)
 	v := agentApply(t, s, AgentCommand{Action: "profile-create", Name: "Route isolation", Provider: "openai", AccountRef: &account.Ref, Model: admittedOpenAIModel})

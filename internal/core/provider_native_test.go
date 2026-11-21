@@ -37,6 +37,7 @@ func addNativeAccount(t *testing.T, s *Store, provider string, api bool) AIConne
 // Account setup is discovery/credential management. It must never authorize or
 // queue generation; only an explicit Chat/task action may do that.
 func TestProviderSetupNeverQueuesGeneration(t *testing.T) {
+	t.Parallel()
 	for _, provider := range []string{"openai", "anthropic", "xai", "moonshot", "google", "openrouter", "qwen", "opencode"} {
 		t.Run(provider, func(t *testing.T) {
 			s := fixtureStore(t)
@@ -132,6 +133,7 @@ func nativePermission(t *testing.T, s *Store, account AIConnectionView, model st
 	return v, p
 }
 func TestNativeProvidersEveryCurrentModelUsesSharedChat(t *testing.T) {
+	t.Parallel()
 	for _, provider := range []string{"anthropic", "xai"} {
 		for _, model := range registryForProvider(provider).Models {
 			t.Run(model.ID, func(t *testing.T) {
@@ -165,6 +167,7 @@ func TestNativeProvidersEveryCurrentModelUsesSharedChat(t *testing.T) {
 	}
 }
 func TestNativeProvidersControlledHTTPSAndTaskGrant(t *testing.T) {
+	t.Parallel()
 	for _, provider := range []string{"anthropic", "xai", "google", "openrouter", "qwen", "opencode", "moonshot-intl"} {
 		t.Run(provider, func(t *testing.T) {
 			s := fixtureStore(t)
@@ -278,6 +281,7 @@ func TestNativeProvidersControlledHTTPSAndTaskGrant(t *testing.T) {
 	}
 }
 func TestNativeProvidersVaultBindingRestartAndClosedGate(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	legacy := saveTestConnection(t, s)
 	before, _ := s.readAIVault(legacy.Ref)
@@ -364,6 +368,7 @@ func nativeResponseBytes(t *testing.T, provider string, q AgentAIRequest) []byte
 	return raw
 }
 func TestNativeProvidersUsageAndStreamRefusals(t *testing.T) {
+	t.Parallel()
 	for _, provider := range []string{"anthropic", "xai"} {
 		model := registryForProvider(provider).Models[0].ID
 		policy := openAIModelPolicy(model)
@@ -495,6 +500,7 @@ func TestNativeProvidersSchema24ReaderAndMigration(t *testing.T) {
 }
 
 func TestNativeProvidersDiscoveryPaginationAndSupersession(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	a := addNativeAccount(t, s, "anthropic", false)
 	pages := 0
@@ -536,6 +542,7 @@ func TestNativeProvidersDiscoveryPaginationAndSupersession(t *testing.T) {
 	}
 }
 func TestNativeProvidersAdmissionAndUnknownUsageHold(t *testing.T) {
+	t.Parallel()
 	for _, provider := range []string{"anthropic", "xai"} {
 		t.Run(provider, func(t *testing.T) {
 			s := fixtureStore(t)
@@ -586,6 +593,7 @@ func TestNativeProvidersAdmissionAndUnknownUsageHold(t *testing.T) {
 }
 
 func TestNativeProvidersAnthropicNullableStreamAndNullMaps(t *testing.T) {
+	t.Parallel()
 	p := openAIModelPolicy("claude-sonnet-5-5")
 	q := AgentAIRequest{Model: p.Model, Policy: &p, Stream: true, Limits: AILimits{MaxInputTokens: 24000, MaxOutputTokens: 1024}}
 	wire, _ := aiWire(q)

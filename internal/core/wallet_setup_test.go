@@ -10,6 +10,7 @@ import (
 )
 
 func TestUnconfiguredPackageWalletOnlyOffersControlledOwnerSetup(t *testing.T) {
+	t.Parallel()
 	s, err := OpenStore(fixtureDir(t))
 	if err != nil {
 		t.Fatal(err)
@@ -59,6 +60,7 @@ func TestUnconfiguredPackageWalletOnlyOffersControlledOwnerSetup(t *testing.T) {
 }
 
 func TestWalletSetupWatchAddressAndPreservation(t *testing.T) {
+	t.Parallel()
 	s, err := OpenStore(fixtureDir(t))
 	if err != nil {
 		t.Fatal(err)
@@ -105,6 +107,7 @@ func TestWalletSetupWatchAddressAndPreservation(t *testing.T) {
 }
 
 func TestWalletSetupAttachRequiresCurrentOwnerReference(t *testing.T) {
+	t.Parallel()
 	s, err := OpenStore(fixtureDir(t))
 	if err != nil {
 		t.Fatal(err)
@@ -152,6 +155,7 @@ func TestWalletSetupAttachRequiresCurrentOwnerReference(t *testing.T) {
 }
 
 func TestWalletSetupInvalidInputsNeverWrite(t *testing.T) {
+	t.Parallel()
 	s, err := OpenStore(fixtureDir(t))
 	if err != nil {
 		t.Fatal(err)
@@ -183,6 +187,7 @@ func TestWalletSetupInvalidInputsNeverWrite(t *testing.T) {
 }
 
 func TestWalletSetupMetadataIsReadOnlyAndNoSecret(t *testing.T) {
+	t.Parallel()
 	s, err := OpenStore(fixtureDir(t))
 	if err != nil {
 		t.Fatal(err)
@@ -216,6 +221,7 @@ func TestWalletSetupMetadataIsReadOnlyAndNoSecret(t *testing.T) {
 }
 
 func TestWalletSetupRecoveredEpochPreservesOriginalRecord(t *testing.T) {
+	t.Parallel()
 	s, err := OpenStore(fixtureDir(t))
 	if err != nil {
 		t.Fatal(err)
@@ -251,6 +257,7 @@ func TestWalletSetupRecoveredEpochPreservesOriginalRecord(t *testing.T) {
 }
 
 func TestWalletSetupHoldBeforeCommitRefusesWithoutWrite(t *testing.T) {
+	t.Parallel()
 	s, err := OpenStore(fixtureDir(t))
 	if err != nil {
 		t.Fatal(err)
@@ -276,6 +283,7 @@ func TestWalletSetupHoldBeforeCommitRefusesWithoutWrite(t *testing.T) {
 }
 
 func TestWalletSetupRecoveredSignerMarksRPCCredentialStale(t *testing.T) {
+	t.Parallel()
 	s, err := OpenStore(fixtureDir(t))
 	if err != nil {
 		t.Fatal(err)

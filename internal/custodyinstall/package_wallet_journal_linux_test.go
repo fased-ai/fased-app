@@ -14,6 +14,7 @@ import (
 )
 
 func TestPackageWalletMetadataResumesWithoutReplacingForeignState(t *testing.T) {
+	t.Parallel()
 	_, base := packageGateInitialRecord(t)
 	target := base
 	target.Network = "devnet"
@@ -88,6 +89,7 @@ func TestPackageWalletMetadataResumesWithoutReplacingForeignState(t *testing.T) 
 }
 
 func TestPackageWalletInitializationKeepsOriginalJournal(t *testing.T) {
+	t.Parallel()
 	r, original := packageGateInitialRecord(t)
 	request := update.WalletInitialization{Version: 1, OperationID: update.NewProbe(), InstanceID: base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{7}, 32)), Network: "devnet"}
 	r.Phase, r.Start, r.Wallet = "wallet-initializing", "", &request
@@ -127,6 +129,7 @@ func TestPackageWalletInitializationKeepsOriginalJournal(t *testing.T) {
 }
 
 func TestPackageSignerServiceDoesNotChangeWhenWalletIsConfigured(t *testing.T) {
+	t.Parallel()
 	_, before := packageGateInitialRecord(t)
 	after := before
 	after.Network = "devnet"
@@ -138,6 +141,7 @@ func TestPackageSignerServiceDoesNotChangeWhenWalletIsConfigured(t *testing.T) {
 }
 
 func TestConfiguredPackageWalletUsesOriginalIdleJournal(t *testing.T) {
+	t.Parallel()
 	for _, network := range []string{"devnet", "mainnet-beta"} {
 		t.Run(network, func(t *testing.T) {
 			r, original := packageGateInitialRecord(t)

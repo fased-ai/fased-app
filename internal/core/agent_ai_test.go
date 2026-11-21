@@ -16,6 +16,7 @@ import (
 )
 
 func TestAgentRunChatAIHistoryAndExplicitExplanation(t *testing.T) {
+	t.Parallel()
 	for _, mode := range []string{"completed", "unknown", "disabled"} {
 		t.Run(mode, func(t *testing.T) {
 			s := fixtureStore(t)
@@ -82,6 +83,7 @@ func TestAgentRunChatAIHistoryAndExplicitExplanation(t *testing.T) {
 }
 
 func TestAgentRunChatAIReferenceRefusals(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name   string
 		change func(*agentDocument)
@@ -138,6 +140,7 @@ func aiStart(t *testing.T, s *Store, v AgentView) AgentView {
 	return n
 }
 func TestAgentAIConsentContextRoundTripAndReview(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	agentApply(t, s, AgentCommand{Action: "memory-put", ProfileID: "news-researcher", Text: "other-profile-secret", Source: "private"})
 	agentApply(t, s, AgentCommand{Action: "memory-put", ProfileID: "trading-analyst", Text: "expired-note", Source: "old", ExpiresAt: 1})
@@ -210,6 +213,7 @@ func TestAgentAIConsentContextRoundTripAndReview(t *testing.T) {
 	}
 }
 func TestAgentAIBudgetsStaleConsentCancellationAndRestart(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	v := aiPrepare(t, s)
 	q := v.AIRequests[0]
@@ -267,6 +271,7 @@ func TestAgentAIBudgetsStaleConsentCancellationAndRestart(t *testing.T) {
 	}
 }
 func TestAgentAIActiveCancellationDeadlineAndPause(t *testing.T) {
+	t.Parallel()
 	for _, mode := range []string{"cancel", "deadline", "pause"} {
 		t.Run(mode, func(t *testing.T) {
 			s := fixtureStore(t)
@@ -316,6 +321,7 @@ func TestAgentAIActiveCancellationDeadlineAndPause(t *testing.T) {
 }
 
 func TestAgentAIValidationAndKnownUsageFailures(t *testing.T) {
+	t.Parallel()
 	for _, mode := range []string{"refusal", "incomplete", "tool", "malformed", "usage", "identity", "large", "redirect"} {
 		t.Run(mode, func(t *testing.T) {
 			s := fixtureStore(t)
@@ -373,6 +379,7 @@ func TestAgentAIValidationAndKnownUsageFailures(t *testing.T) {
 	}
 }
 func TestAgentAIInputBoundsExpiryMigrationAndCapacity(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	v := aiPrepare(t, s)
 	q := v.AIRequests[0]
@@ -422,6 +429,7 @@ func TestAgentAIInputBoundsExpiryMigrationAndCapacity(t *testing.T) {
 }
 
 func TestAgentAISnapshotDispatchFreshnessAndRestart(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	v := aiStart(t, s, aiPrepare(t, s))
 	q := v.AIRequests[0]
@@ -499,6 +507,7 @@ func TestAgentAISnapshotDispatchFreshnessAndRestart(t *testing.T) {
 }
 
 func TestAgentAIRequiredFieldsAndEscapedResultCapacity(t *testing.T) {
+	t.Parallel()
 	for _, mode := range []string{"missing-input-usage", "null-output-usage", "missing-cards", "null-cards"} {
 		t.Run(mode, func(t *testing.T) {
 			s := fixtureStore(t)
@@ -576,6 +585,7 @@ func TestAgentAIRequiredFieldsAndEscapedResultCapacity(t *testing.T) {
 }
 
 func TestAgentAISearchHistorySurvivesProviderChangesAndRestart(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	v := aiStart(t, s, aiPrepare(t, s))
 	profile, session := v.ProfileID, v.AIRequests[0].SessionID
@@ -611,6 +621,7 @@ func TestAgentAISearchHistorySurvivesProviderChangesAndRestart(t *testing.T) {
 }
 
 func TestAgentAISearchScopeAndCompletedManualHistory(t *testing.T) {
+	t.Parallel()
 	d := initialAgents()
 	d.Sessions = []AgentSession{{ID: "own", ProfileID: "trading-analyst", Name: "Own"}, {ID: "other", ProfileID: "news-researcher", Name: "Other"}}
 	d.AIRequests = []AgentAIRequest{
@@ -640,6 +651,7 @@ func TestAgentAISearchScopeAndCompletedManualHistory(t *testing.T) {
 }
 
 func TestChatMemoryFixtureContextCorrectionExpiryAndDeletion(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	now := time.Unix(1800000000, 0)
 	s.now = func() time.Time { return now }
@@ -719,6 +731,7 @@ func memorySelectionCommand(t *testing.T, session string, selection any) AgentCo
 	return c
 }
 func TestAgentAIMemorySelectionDisclosure(t *testing.T) {
+	t.Parallel()
 	for _, mode := range []string{"all", "none", "selected"} {
 		t.Run(mode, func(t *testing.T) {
 			s := fixtureStore(t)
@@ -821,6 +834,7 @@ func selectionRefused(t *testing.T, s *Store, c AgentCommand, fixture bool) {
 	}
 }
 func TestAgentAIMemorySelectionRefusals(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name    string
 		choice  func(string, string) any
@@ -858,6 +872,7 @@ func TestAgentAIMemorySelectionRefusals(t *testing.T) {
 	}
 }
 func TestAgentAIMemorySelectionRevalidation(t *testing.T) {
+	t.Parallel()
 	mutations := []struct {
 		name   string
 		change func(*agentDocument)
@@ -908,6 +923,7 @@ func TestAgentAIMemorySelectionRevalidation(t *testing.T) {
 	})
 }
 func TestAgentAIMemorySelectionPrivacyRestartAndProvider(t *testing.T) {
+	t.Parallel()
 	for _, mode := range []string{"none", "selected"} {
 		t.Run(mode, func(t *testing.T) {
 			s := fixtureStore(t)
@@ -955,6 +971,7 @@ func TestAgentAIMemorySelectionPrivacyRestartAndProvider(t *testing.T) {
 	}
 }
 func TestAgentAIMemorySelectionLegacyBoundsAndUnsupported(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	v, note := selectionFixture(t, s, "selected")
 	q := v.AIRequests[0]
@@ -1004,6 +1021,7 @@ func TestAgentAIMemorySelectionLegacyBoundsAndUnsupported(t *testing.T) {
 }
 
 func TestAgentAIMemorySelectionAdmissionAndCompletion(t *testing.T) {
+	t.Parallel()
 	for _, boundary := range []string{"access", "count", "create", "inflight"} {
 		t.Run(boundary, func(t *testing.T) {
 			s, connection := admissionStore(t)
@@ -1052,6 +1070,7 @@ func TestAgentAIMemorySelectionAdmissionAndCompletion(t *testing.T) {
 }
 
 func TestAgentAIMemorySelectionNewsRoundTrip(t *testing.T) {
+	t.Parallel()
 	s := newsTestStore(t)
 	v := newsAdd(t, s, "trading-analyst")
 	source := v.NewsSources[0]
@@ -1089,6 +1108,7 @@ func TestAgentAIMemorySelectionNewsRoundTrip(t *testing.T) {
 }
 
 func TestAgentAIRequestDraftHTTPReadOnly(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	token := claimFixture(t, s)
 	v := aiPrepare(t, s)
@@ -1123,6 +1143,7 @@ func draftCommand(v AgentAIRequestDraft) AgentCommand {
 	return AgentCommand{Action: "ai-prepare", ProfileID: v.ProfileID, ID: v.SessionID, Text: v.Prompt, Model: v.Model, ConnectionRef: v.ConnectionRef, Limits: &v.Limits, MemorySelection: v.MemorySelection, NewsSourceID: v.NewsSourceID, NewsMaxAgeSeconds: v.NewsMaxAgeSeconds}
 }
 func TestAgentAIRequestDraftModesFreshReviewAndReadOnly(t *testing.T) {
+	t.Parallel()
 	for _, mode := range []string{"legacy", "all", "none", "selected"} {
 		t.Run(mode, func(t *testing.T) {
 			s := fixtureStore(t)
@@ -1184,6 +1205,7 @@ func TestAgentAIRequestDraftModesFreshReviewAndReadOnly(t *testing.T) {
 }
 
 func TestAgentAIRequestDraftIntegrityAndIsolation(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name   string
 		change func(*agentDocument)
@@ -1251,6 +1273,7 @@ func TestAgentAIRequestDraftIntegrityAndIsolation(t *testing.T) {
 }
 
 func TestAgentAIRequestDraftStaleMemoryAndHolds(t *testing.T) {
+	t.Parallel()
 	for _, kind := range []string{"deleted", "expired", "foreign", "ambiguous"} {
 		t.Run(kind, func(t *testing.T) {
 			s := fixtureStore(t)
@@ -1314,6 +1337,7 @@ func TestAgentAIRequestDraftStaleMemoryAndHolds(t *testing.T) {
 }
 
 func TestAgentAIRequestDraftNewsConnectionAndRestart(t *testing.T) {
+	t.Parallel()
 	s, conn := admissionStore(t)
 	v := newsAdd(t, s, "trading-analyst")
 	source := v.NewsSources[0]
@@ -1379,6 +1403,7 @@ func TestAgentAIRequestDraftNewsConnectionAndRestart(t *testing.T) {
 }
 
 func TestAgentAIRequestDraftHTTPStrict(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	v := aiPrepare(t, s)
 	token := claimFixture(t, s)

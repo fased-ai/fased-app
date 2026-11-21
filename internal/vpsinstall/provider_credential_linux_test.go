@@ -15,6 +15,7 @@ import (
 )
 
 func TestRemoteAcceptsOnlyExactProtectedIngressDropIn(t *testing.T) {
+	t.Parallel()
 	h, o, m, _ := credentialFixture(t)
 	m.PublicOrigin = "https://fixture.example.ts.net"
 	path, body, err := tailnet.ProtectedSocketDropIn("vps", m.OwnerUID)
@@ -41,6 +42,7 @@ func TestRemoteAcceptsOnlyExactProtectedIngressDropIn(t *testing.T) {
 }
 
 func TestLoadedProtectedIngressRequiresReloadedSystemd(t *testing.T) {
+	t.Parallel()
 	h, o, m, _ := credentialFixture(t)
 	m.PublicOrigin = "https://fixture.example.ts.net"
 	h.files[m.UnitPath] = hostFile{UID: 0, GID: 0, Mode: 0644, Regular: true, Data: unit(m)}
@@ -72,6 +74,7 @@ func TestLoadedProtectedIngressRequiresReloadedSystemd(t *testing.T) {
 }
 
 func TestProtectedIngressProvisionPreservesForeignAndRetries(t *testing.T) {
+	t.Parallel()
 	h, o, m, _ := credentialFixture(t)
 	m.PublicOrigin = "https://fixture.example.ts.net"
 	probeCalls := 0
@@ -112,6 +115,7 @@ func TestProtectedIngressProvisionPreservesForeignAndRetries(t *testing.T) {
 }
 
 func TestProtectedRemoteInstallProvisionsIngressBeforeService(t *testing.T) {
+	t.Parallel()
 	h, o, options := fixtureHost()
 	options.PublicOrigin = "https://fixture.example.ts.net"
 	var published []string
@@ -191,6 +195,7 @@ func credentialFixture(t *testing.T) (*memoryHost, hostOps, Manifest, *int) {
 }
 
 func TestProtectedProviderCredentialInstallRetryRemove(t *testing.T) {
+	t.Parallel()
 	h, o, m, count := credentialFixture(t)
 	ctx := context.Background()
 	for range 2 {
@@ -227,6 +232,7 @@ func TestProtectedProviderCredentialInstallRetryRemove(t *testing.T) {
 }
 
 func TestProviderCredentialOverrideUsesBoundPrivilegedWrite(t *testing.T) {
+	t.Parallel()
 	h, o, m, _ := credentialFixture(t)
 	if err := prepareTaskCredentialDropIn(t.Context(), o, m); err != nil {
 		t.Fatal(err)
@@ -240,6 +246,7 @@ func TestProviderCredentialOverrideUsesBoundPrivilegedWrite(t *testing.T) {
 }
 
 func TestProtectedProviderCredentialOrdinaryReader(t *testing.T) {
+	t.Parallel()
 	h, o, m, count := credentialFixture(t)
 	read := o.read
 	o.read = func(p string) (hostFile, error) {
@@ -265,6 +272,7 @@ func TestProtectedProviderCredentialOrdinaryReader(t *testing.T) {
 }
 
 func TestProtectedProviderCredentialRefusesForeignState(t *testing.T) {
+	t.Parallel()
 	for _, fault := range []string{"oversized-target", "oversized-stage", "foreign-dropin", "replaceable-tool-parent", "foreign-directory", "private-directory", "foreign-file", "wrong-file-mode"} {
 		t.Run(fault, func(t *testing.T) {
 			h, o, m, _ := credentialFixture(t)

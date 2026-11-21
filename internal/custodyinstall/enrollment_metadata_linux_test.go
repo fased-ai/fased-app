@@ -16,6 +16,7 @@ import (
 // Continue the real recovery conductor into the next maintenance guard. Merely
 // accepting the new manifest does not establish a coherent installed generation.
 func TestEnrollmentRecoveryInstallerIntentBeforeHandoff(t *testing.T) {
+	t.Parallel()
 	r, dir, o, owner := recoveryModel(t)
 	if err := os.WriteFile(dir+"/intent.json", mustJSON(installerIntent(r.Base)), 0644); err != nil {
 		t.Fatal(err)
@@ -90,6 +91,7 @@ func assertHistoricalEnrollmentPreserved(t *testing.T, dir string) {
 }
 
 func TestHistoricalEnrollmentIntentThroughOrdinaryHandoff(t *testing.T) {
+	t.Parallel()
 	tx, dir, o, c := historicalEnrollmentBootstrapModel(t)
 	if err := ordinaryBaseExact(tx, o); err == nil {
 		t.Fatal("stale predecessor unexpectedly exact")
@@ -111,6 +113,7 @@ func TestHistoricalEnrollmentIntentThroughOrdinaryHandoff(t *testing.T) {
 }
 
 func TestHistoricalEnrollmentIntentEveryOSInterruption(t *testing.T) {
+	t.Parallel()
 	tx, _, o, _ := historicalEnrollmentBootstrapModel(t)
 	count := 0
 	execute := o.run
@@ -161,6 +164,7 @@ func TestHistoricalEnrollmentIntentEveryOSInterruption(t *testing.T) {
 }
 
 func TestHistoricalEnrollmentIntentRefusesForeignEvidence(t *testing.T) {
+	t.Parallel()
 	for _, mode := range []string{"receipt", "phase", "previous-core", "previous-owner", "root-intent", "ready", "owner", "missing", "duplicates", "unsafe-directory", "active-controller", "enrollment-binding", "missing-enrollment"} {
 		t.Run(mode, func(t *testing.T) {
 			tx, dir, o, c := historicalEnrollmentBootstrapModel(t)

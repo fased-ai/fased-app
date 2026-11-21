@@ -50,6 +50,7 @@ func rebindProof(p update.Preflight) update.Preflight {
 }
 
 func TestColdRecoveryChecksOriginalBackup(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	p := pausedBackup(t, s)
 	index, err := s.BackupMetadata(t.Context(), p)
@@ -113,6 +114,7 @@ func TestColdRecoveryChecksOriginalBackup(t *testing.T) {
 }
 
 func TestMetadataDirectoryRefusesFIFOWithoutBlocking(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	if err := os.Chmod(dir, 0700); err != nil {
 		t.Fatal(err)
@@ -143,6 +145,7 @@ func TestMetadataDirectoryRefusesFIFOWithoutBlocking(t *testing.T) {
 }
 
 func TestMetadataBackupConsistentPrivateAndNoRestore(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	token := claimFixture(t, s)
 	p := pausedBackup(t, s)
@@ -193,6 +196,7 @@ func TestMetadataBackupConsistentPrivateAndNoRestore(t *testing.T) {
 }
 
 func TestMetadataBackupRecoverableFaultsAndRestart(t *testing.T) {
+	t.Parallel()
 	for _, step := range []string{"write:request.json", "publish:request.json", "backup:request", "write:metadata.sqlite", "publish:metadata.sqlite", "backup:snapshot", "backup:verified", "write:recovery.json", "publish:recovery.json", "backup:durable"} {
 		t.Run(step, func(t *testing.T) {
 			s := fixtureStore(t)
@@ -230,6 +234,7 @@ func TestMetadataBackupRecoverableFaultsAndRestart(t *testing.T) {
 }
 
 func TestMetadataBackupRejectsStaleConflictingAndUnsafeState(t *testing.T) {
+	t.Parallel()
 	for _, kind := range []string{"boot", "floor", "artifact", "released", "corrupt", "symlink", "hardlink", "directory", "partial"} {
 		t.Run(kind, func(t *testing.T) {
 			s := fixtureStore(t)
@@ -285,6 +290,7 @@ func TestMetadataBackupRejectsStaleConflictingAndUnsafeState(t *testing.T) {
 }
 
 func TestMetadataBackupConcurrentAndChangedSource(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	claimFixture(t, s)
 	p := pausedBackup(t, s)
@@ -373,6 +379,7 @@ func TestMetadataBackupActualChildDeath(t *testing.T) {
 }
 
 func TestMetadataBackupPrivateTransportAndChangedEphemeralSource(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	token := claimFixture(t, s)
 	p := pausedBackup(t, s)
@@ -438,6 +445,7 @@ func TestMetadataBackupPrivateTransportAndChangedEphemeralSource(t *testing.T) {
 }
 
 func TestMetadataBackupRequiresPausedOwner(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	if _, e := s.BackupMetadata(t.Context(), backupProof(t, s)); e == nil {
 		t.Fatal("unpaused backup accepted")
@@ -445,6 +453,7 @@ func TestMetadataBackupRequiresPausedOwner(t *testing.T) {
 }
 
 func TestRecoveryRevalidatesOriginalImageAcrossInstallBookkeeping(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	claimFixture(t, s)
 	p := pausedBackup(t, s)

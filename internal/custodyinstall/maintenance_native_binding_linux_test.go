@@ -17,6 +17,7 @@ import (
 // Exercise the same pair description used immediately before the protected
 // worker stages an update, with only the OS identities and files substituted.
 func TestProtectedPairChecksNativeReleaseBinding(t *testing.T) {
+	t.Parallel()
 	source := strings.Repeat("a", 40)
 	coreHash, signerHash, desktopHash := strings.Repeat("b", 64), strings.Repeat("c", 64), strings.Repeat("d", 64)
 	for _, tc := range []struct {
@@ -92,6 +93,7 @@ func TestProtectedPairChecksNativeReleaseBinding(t *testing.T) {
 // A Local custody update cannot claim that its native client was updated just
 // because the target core contains a syntactically valid desktop hash.
 func TestProtectedLocalPairRequiresMatchingDesktopBytes(t *testing.T) {
+	t.Parallel()
 	source := strings.Repeat("a", 40)
 	coreHash, signerHash, desktopHash := strings.Repeat("b", 64), strings.Repeat("c", 64), strings.Repeat("d", 64)
 	dir := filepath.Join(t.TempDir(), "operation")

@@ -58,6 +58,7 @@ func recoveryModel(t *testing.T) (enrollmentCoreRecovery, string, installOps, fu
 }
 
 func TestEnrollmentCoreRecoveryEveryOSInterruption(t *testing.T) {
+	t.Parallel()
 	r, _, o, owner := recoveryModel(t)
 	count := 0
 	execute := o.run
@@ -115,6 +116,7 @@ func TestEnrollmentCoreRecoveryEveryOSInterruption(t *testing.T) {
 }
 
 func TestEnrollmentCoreRecoveryRefusesForeignAndHeldState(t *testing.T) {
+	t.Parallel()
 	for _, mode := range []string{"core", "signer", "inventory", "update-active.json", "enrollment-ready.json", "ready.json", "receipt", "phase", "post-import-profile", "local", "changed-signer", "installer-intent", "premature-installer-intent"} {
 		t.Run(mode, func(t *testing.T) {
 			r, dir, o, owner := recoveryModel(t)
@@ -173,6 +175,7 @@ func TestEnrollmentCoreRecoveryRefusesForeignAndHeldState(t *testing.T) {
 }
 
 func TestEnrollmentCoreRecoveryOwnerIntentInterruption(t *testing.T) {
+	t.Parallel()
 	for _, after := range []bool{false, true} {
 		t.Run(fmt.Sprint("after-", after), func(t *testing.T) {
 			r, dir, o, write := recoveryModel(t)
@@ -200,6 +203,7 @@ func TestEnrollmentCoreRecoveryOwnerIntentInterruption(t *testing.T) {
 }
 
 func TestEnrollmentRecoveryKernelGuards(t *testing.T) {
+	t.Parallel()
 	m := Manifest{Owner: os.Getuid(), Root: Root(os.Getuid())}
 	absent := []byte("LoadState=not-found\nActiveState=inactive\nMainPID=0\nUnitFileState=\nFragmentPath=\n")
 	read := func(string) (hostFile, error) { return hostFile{}, os.ErrNotExist }

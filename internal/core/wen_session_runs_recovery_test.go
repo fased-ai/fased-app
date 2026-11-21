@@ -15,6 +15,7 @@ import (
 )
 
 func TestWENFixtureRunStopBeforeUncertainty(t *testing.T) {
+	t.Parallel()
 	s, h, in := runFixture(t, "fixture-4h-unknown", nil)
 	v, _ := startRun(t, h, in)
 	v = runWake(t, s)
@@ -37,6 +38,7 @@ func TestWENFixtureRunStopBeforeUncertainty(t *testing.T) {
 }
 
 func TestWENFixtureRunSourceAndClockFences(t *testing.T) {
+	t.Parallel()
 	for _, cause := range []string{"source-missing", "clock-backward"} {
 		t.Run(cause, func(t *testing.T) {
 			s, h, in := runFixture(t, "fixture-4h", nil)
@@ -69,6 +71,7 @@ func TestWENFixtureRunSourceAndClockFences(t *testing.T) {
 }
 
 func TestWENFixtureRunManualContention(t *testing.T) {
+	t.Parallel()
 	s, h, in := runFixture(t, "fixture-4h", func(d *wenstrategy.Document) {
 		d.Limits.PerRoundLamports = "12000000000"
 		d.Limits.MaxUnsettledLamports = "20000000000"
@@ -117,6 +120,7 @@ func TestWENFixtureRunManualContention(t *testing.T) {
 }
 
 func TestWENFixtureRunMigration(t *testing.T) {
+	t.Parallel()
 	for _, mode := range []string{"original", "paused", "unprotected-runs"} {
 		t.Run(mode, func(t *testing.T) {
 			s, h, _, r := sessionFixture(t, "review", "fixture-4h")
@@ -181,6 +185,7 @@ func TestWENFixtureRunMigration(t *testing.T) {
 }
 
 func TestWENFixtureRunStrictWire(t *testing.T) {
+	t.Parallel()
 	_, h, in := runFixture(t, "fixture-4h", nil)
 	r, e := h.ReviewWENFixtureRun(t.Context(), in)
 	if e != nil {
@@ -214,6 +219,7 @@ func TestWENFixtureRunStrictWire(t *testing.T) {
 }
 
 func TestWENFixtureRunStorageSnapshot(t *testing.T) {
+	t.Parallel()
 	s, h, in := runFixture(t, "fixture-4h-unknown", nil)
 	_, _ = startRun(t, h, in)
 	_ = runWake(t, s)
@@ -240,6 +246,7 @@ func TestWENFixtureRunStorageSnapshot(t *testing.T) {
 }
 
 func TestWENFixtureRunPrecommitFence(t *testing.T) {
+	t.Parallel()
 	s, h, in := runFixture(t, "fixture-4h", nil)
 	v, _ := startRun(t, h, in)
 	before := retainedRevisionState(t, s)
@@ -261,6 +268,7 @@ func TestWENFixtureRunPrecommitFence(t *testing.T) {
 }
 
 func TestWENFixtureRunCombinedCapacity(t *testing.T) {
+	t.Parallel()
 	s, h, in := runFixture(t, "fixture-4h-stale", nil)
 	lib, e := s.WENResearch(t.Context(), in.Profile)
 	if e != nil {

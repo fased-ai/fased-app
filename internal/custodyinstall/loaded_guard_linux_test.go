@@ -13,6 +13,7 @@ import (
 )
 
 func TestPackageRuntimeRejectsLegacyUnitAndUnverifiedOverrides(t *testing.T) {
+	t.Parallel()
 	m := Manifest{Layout: PackageLayout, Owner: 1000, Location: "local", ID: strings.Repeat("a", 32), Root: "/var/lib/example", App: Identity{UID: 1201, GID: 1201}}
 	fields := map[string]string{
 		"FragmentPath": "/etc/systemd/system/" + instanceUnit(m, "app"),
@@ -65,6 +66,7 @@ func TestPackageRuntimeRejectsLegacyUnitAndUnverifiedOverrides(t *testing.T) {
 }
 
 func TestLoadedRemoteUnitRequiresExactProtectedIngressAndGuard(t *testing.T) {
+	t.Parallel()
 	m := fixtureManifest()
 	m.Location, m.PublicOrigin = "remote", "https://owner.example.ts.net"
 	guard := "/etc/systemd/system/" + Unit(m.Owner, "app") + ".d/20-fased-update-guard.conf"
@@ -116,6 +118,7 @@ func TestLoadedRemoteUnitRequiresExactProtectedIngressAndGuard(t *testing.T) {
 }
 
 func TestLoadedUnitAdmitsOnlyExactRootManagedRestartGuard(t *testing.T) {
+	t.Parallel()
 	m := fixtureManifest()
 	path := "/etc/systemd/system/" + Unit(m.Owner, "app") + ".d/20-fased-update-guard.conf"
 	body := []byte("[Unit]\nAssertPathExists=!" + m.Root + "/update-start-blocked.json\n")

@@ -54,6 +54,7 @@ func TestRootFileDigestStreamsExecutableWithoutSizeAllocation(t *testing.T) {
 }
 
 func TestFileContentRejectsSymlinkAndConcurrentChange(t *testing.T) {
+	t.Parallel()
 	path := filepath.Join(t.TempDir(), "core")
 	if err := os.WriteFile(path, []byte("original"), 0755); err != nil {
 		t.Fatal(err)
@@ -76,6 +77,7 @@ func TestFileContentRejectsSymlinkAndConcurrentChange(t *testing.T) {
 }
 
 func TestApplicationOwnerRetainedStreamsAndPreservesPendingRules(t *testing.T) {
+	t.Parallel()
 	for _, kind := range []string{"none", "empty", "prefix", "complete", "corrupt", "overlong", "mode", "owner", "missing"} {
 		t.Run(kind, func(t *testing.T) {
 			f, j, image := retainedOwnerFixture(t)

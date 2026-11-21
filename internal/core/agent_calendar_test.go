@@ -12,6 +12,7 @@ import (
 // The wire test fails on the interval-only reader instead of requiring the new
 // Go type, so it exercises the actual shared command contract.
 func TestCalendarReviewedRestartExactlyOnce(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	now := time.Date(2026, 10, 25, 12, 0, 0, 0, time.UTC)
 	s.now = func() time.Time { return now }
@@ -86,6 +87,7 @@ func createCalendar(t *testing.T, s *Store, c AgentCommand) AgentView {
 	return agentApply(t, s, c)
 }
 func TestCalendarReviewBindingsAndAdmission(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	now := time.Date(2026, 10, 25, 12, 0, 0, 0, time.UTC)
 	s.now = func() time.Time { return now }
@@ -140,6 +142,7 @@ func TestCalendarReviewBindingsAndAdmission(t *testing.T) {
 }
 
 func TestCalendarPauseResumeKeepsInstantAndManualRunCompletes(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	now := time.Date(2026, 10, 25, 12, 0, 0, 0, time.UTC)
 	s.now = func() time.Time { return now }
@@ -187,6 +190,7 @@ func TestCalendarPauseResumeKeepsInstantAndManualRunCompletes(t *testing.T) {
 }
 
 func TestCalendarMigrationPreservesOriginalsAndRefusesUnprotectedFields(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	agentApply(t, s, AgentCommand{Action: "task-create", ProfileID: "trading-analyst", Name: "Old interval", Text: "Retain this schedule", IntervalSeconds: 300, MaxRuns: 2})
 	before := retainedRevisionState(t, s)
@@ -234,6 +238,7 @@ func TestCalendarMigrationPreservesOriginalsAndRefusesUnprotectedFields(t *testi
 }
 
 func TestCalendarPausedMigrationAndUnknownStorageRefused(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	p := pauseCommand(t, s, 1)
 	if _, err := s.UpdatePause(t.Context(), p); err != nil {

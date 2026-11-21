@@ -7,6 +7,7 @@ import (
 )
 
 func TestChatSchemaMigrationPreservesOriginalsAndRejectsUnprotectedAuthority(t *testing.T) {
+	t.Parallel()
 	for _, mode := range []string{"plain", "paused", "chat", "case", "stream"} {
 		t.Run(mode, func(t *testing.T) {
 			s := fixtureStore(t)
@@ -66,6 +67,7 @@ func TestChatSchemaMigrationPreservesOriginalsAndRejectsUnprotectedAuthority(t *
 	}
 }
 func TestChatSettledHistoryReleasesCapacityWithoutPruningSources(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	v, p := chatPermission(t, s)
 	v = chatSend(t, s, v, p, "Preserve this answer as a source")

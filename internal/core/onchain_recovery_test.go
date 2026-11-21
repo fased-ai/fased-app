@@ -15,6 +15,7 @@ import (
 )
 
 func TestSwapRecoveryExpiredUnsignedCancellation(t *testing.T) {
+	t.Parallel()
 	h := newSwapHarness(t)
 	p := h.quote(t)
 	h.submit(t, p)
@@ -36,6 +37,7 @@ func TestSwapRecoveryExpiredUnsignedCancellation(t *testing.T) {
 }
 
 func TestSwapRecoveryUnsignedRestartAndSimulationFailure(t *testing.T) {
+	t.Parallel()
 	for _, mode := range []string{"restart", "simulation"} {
 		t.Run(mode, func(t *testing.T) {
 			h := newSwapHarness(t)
@@ -158,6 +160,7 @@ func TestSwapRecoveryHTTPSLockedRestartRestoresIndependentReceipt(t *testing.T) 
 }
 
 func TestSwapRecoveryRejectsConflictingStoredProof(t *testing.T) {
+	t.Parallel()
 	for _, mode := range []string{"proposal", "packet", "observation", "wallet"} {
 		t.Run(mode, func(t *testing.T) {
 			h := newSwapHarness(t)
@@ -209,6 +212,7 @@ func TestSwapRecoveryRejectsConflictingStoredProof(t *testing.T) {
 }
 
 func TestSwapRecoverySchema33PreservesOldCancelledRecord(t *testing.T) {
+	t.Parallel()
 	h := newSwapHarness(t)
 	p := h.quote(t)
 	v := h.submit(t, p)
@@ -246,6 +250,7 @@ func TestSwapRecoverySchema33PreservesOldCancelledRecord(t *testing.T) {
 }
 
 func TestSwapRecoveryPausedResumeEligibility(t *testing.T) {
+	t.Parallel()
 	for _, mode := range []string{"restart", "expiry"} {
 		t.Run(mode, func(t *testing.T) {
 			h := newSwapHarness(t)
@@ -284,6 +289,7 @@ func TestSwapRecoveryPausedResumeEligibility(t *testing.T) {
 }
 
 func TestSwapRecoveryInterruptedSigningNeedsSignerProof(t *testing.T) {
+	t.Parallel()
 	for _, signed := range []bool{false, true} {
 		t.Run(map[bool]string{false: "before-signing", true: "after-signing"}[signed], func(t *testing.T) {
 			h := newSwapHarness(t)
@@ -334,6 +340,7 @@ func TestSwapRecoveryInterruptedSigningNeedsSignerProof(t *testing.T) {
 }
 
 func TestSwapRecoverySchema33RefusesUnprotectedSemantics(t *testing.T) {
+	t.Parallel()
 	for _, mode := range []string{"completion", "transition", "paused"} {
 		t.Run(mode, func(t *testing.T) {
 			h := newSwapHarness(t)
@@ -375,6 +382,7 @@ func TestSwapRecoverySchema33RefusesUnprotectedSemantics(t *testing.T) {
 }
 
 func TestSwapRecoveryStoredSignerSettlementWithoutNewRPC(t *testing.T) {
+	t.Parallel()
 	h := newSwapHarness(t)
 	p := h.quote(t)
 	h.submit(t, p)
@@ -404,6 +412,7 @@ func TestSwapRecoveryStoredSignerSettlementWithoutNewRPC(t *testing.T) {
 }
 
 func TestSwapRecoveryRecordVersionPreservesOwnerAndRefusesPredecessor(t *testing.T) {
+	t.Parallel()
 	for _, owner := range []string{"password", "local", "remote"} {
 		t.Run(owner, func(t *testing.T) {
 			h := newSwapHarness(t)

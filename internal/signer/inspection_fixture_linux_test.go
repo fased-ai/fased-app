@@ -9,6 +9,7 @@ import (
 )
 
 func TestColdInspectionNoCreateRepairOrAppend(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	os.Chmod(dir, 0700)
 	if _, e := openStorageReadonly(dir); e == nil {

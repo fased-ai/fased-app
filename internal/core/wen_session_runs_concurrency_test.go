@@ -8,6 +8,7 @@ import (
 )
 
 func TestWENFixtureRunStopCommitOrder(t *testing.T) {
+	t.Parallel()
 	for _, order := range []string{"stop-first", "accept-first", "concurrent"} {
 		t.Run(order, func(t *testing.T) {
 			s, h, in := runFixture(t, "fixture-4h", nil)
@@ -79,6 +80,7 @@ func TestWENFixtureRunStopCommitOrder(t *testing.T) {
 }
 
 func TestWENFixtureRunCancelledPreparation(t *testing.T) {
+	t.Parallel()
 	s, h, in := runFixture(t, "fixture-4h", nil)
 	_, _ = startRun(t, h, in)
 	before := retainedRevisionState(t, s)

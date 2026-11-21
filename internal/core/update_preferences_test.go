@@ -20,6 +20,7 @@ func candidateFixture() UpdateCandidate {
 	return UpdateCandidate{Release: "0.0.0-disposable", Sequence: "7", ManifestSHA256: strings.Repeat("a", 64), Target: update.Target{OS: "linux", Arch: "amd64"}}
 }
 func TestUpdatePreferencesPersistFenceAndPreserveOlderSetup(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	v, e := s.UpdatePreferences(t.Context())
 	if e != nil {
@@ -82,6 +83,7 @@ func reflectJSON(a, b any) bool {
 }
 
 func TestReviewOnlyProposalsDeduplicateBindDigestAndNeverCallSigner(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	s.fixture = func(context.Context, signer.Request) (signer.Response, error) {
 		t.Fatal("preferences called signer")
@@ -129,6 +131,7 @@ func TestReviewOnlyProposalsDeduplicateBindDigestAndNeverCallSigner(t *testing.T
 }
 
 func TestMaintenanceWindowTimezoneOvernightAndDST(t *testing.T) {
+	t.Parallel()
 	w := MaintenanceWindow{TimeZone: "America/New_York", Days: []int{0}, Start: "01:00", End: "02:00"}
 	for _, tc := range []struct {
 		date   string
@@ -160,6 +163,7 @@ func TestMaintenanceWindowTimezoneOvernightAndDST(t *testing.T) {
 }
 
 func TestUpdatePreferencesNotifyPinBoundsAndSetupCannotForgeReview(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	before, e := s.UpdateSnapshot(t.Context(), update.NewProbe())
 	if e != nil {
@@ -215,6 +219,7 @@ func TestUpdatePreferencesNotifyPinBoundsAndSetupCannotForgeReview(t *testing.T)
 }
 
 func TestUpdatePreferencesHTTPClosedAuthenticatedRevisionChecked(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	token := claimFixture(t, s)
 	h, e := NewHTTPHandler(s, "http://127.0.0.1:7331", "", nil)

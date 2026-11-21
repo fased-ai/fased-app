@@ -13,6 +13,7 @@ import (
 )
 
 func TestNativeSignerInventoryIsOptionalVerifiedAndLinuxOnly(t *testing.T) {
+	t.Parallel()
 	if runtime.GOOS != "linux" {
 		t.Skip("Linux native signer")
 	}
@@ -39,6 +40,7 @@ func TestNativeSignerInventoryIsOptionalVerifiedAndLinuxOnly(t *testing.T) {
 }
 
 func TestBundlePinnedManifestAndGuideCompatibility(t *testing.T) {
+	t.Parallel()
 	dir, m := bundleFixture(t)
 	b := writeBundleManifest(t, dir, m)
 	sum := sha256.Sum256(b)
@@ -114,6 +116,7 @@ func writeBundleManifest(t *testing.T, dir string, m Manifest) []byte {
 }
 
 func TestBundleRejectsAmbiguousManifest(t *testing.T) {
+	t.Parallel()
 	for name, change := range map[string]func([]byte) []byte{
 		"duplicate identity": func(b []byte) []byte { return append([]byte(`{"schema":0,`), b[1:]...) },
 		"escaped alias":      func(b []byte) []byte { return append([]byte(`{"schem\u0061":0,`), b[1:]...) },
@@ -139,6 +142,7 @@ func TestBundleRejectsAmbiguousManifest(t *testing.T) {
 }
 
 func TestBundleRejectsUnclassifiedEntries(t *testing.T) {
+	t.Parallel()
 	for _, name := range []string{"unexpected.sh", "unexpected-directory", "INSTALL.txt"} {
 		t.Run(name, func(t *testing.T) {
 			dir, _ := bundleFixture(t)
@@ -165,15 +169,9 @@ func TestBundleRejectsUnclassifiedEntries(t *testing.T) {
 }
 
 func TestBundleRejectsMixedOrUnexpectedFiles(t *testing.T) {
-	root, _ := filepath.Abs("../../.evidence/bundle-fixtures")
-	if e := os.MkdirAll(root, 0700); e != nil {
-		t.Fatal(e)
-	}
-	p, e := os.MkdirTemp(root, "f-")
-	if e != nil {
-		t.Fatal(e)
-	}
-	t.Cleanup(func() { os.RemoveAll(p) })
+	t.Parallel()
+	p := t.TempDir()
+	var e error
 	en, _ := Names()
 	m := Manifest{Schema: 1, Platform: runtime.GOOS, Arch: runtime.GOARCH, Version: "fixture", UnsignedEngineering: true, Files: map[string]File{}}
 	names := []string{en, "LICENSE", "NOTICE"}

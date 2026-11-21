@@ -56,14 +56,8 @@ func TestNativeWalletResponseFitsBoundedCoreProjection(t *testing.T) {
 }
 
 func TestNativeTransportDoesNotSupplyAuthority(t *testing.T) {
-	root, err := filepath.Abs("../../.evidence/desktop-fixtures")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err = os.MkdirAll(root, 0700); err != nil {
-		t.Fatal(err)
-	}
-	dir, err := os.MkdirTemp(root, "f-")
+	t.Parallel()
+	dir, err := os.MkdirTemp("", "fd-")
 	if err != nil {
 		t.Fatal(err)
 	}

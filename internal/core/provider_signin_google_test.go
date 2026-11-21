@@ -22,6 +22,7 @@ func googleStartCommand(t *testing.T, remote bool) AIConnectionCommand {
 }
 
 func TestGoogleAPIOAuthUsesSharedAccountAndModels(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	old := addNativeAccount(t, s, "google", false)
 	env, _ := s.readAIVault(old.Ref)
@@ -77,6 +78,7 @@ func connectGoogleFixture(t *testing.T, s *Store, remote bool) AIConnectionView 
 	return a
 }
 func TestGoogleOAuthChatTaskRefreshResultMemoryAndRestart(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	account := connectGoogleFixture(t, s, true)
 	s.provider.apiCredentials = true
@@ -161,6 +163,7 @@ func TestGoogleOAuthChatTaskRefreshResultMemoryAndRestart(t *testing.T) {
 	}
 }
 func TestGoogleOAuthRefreshDisconnectAndEncryptedBinding(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	a := connectGoogleFixture(t, s, false)
 	env, _ := s.readAIVault(a.Ref)
@@ -200,6 +203,7 @@ func TestGoogleOAuthRefreshDisconnectAndEncryptedBinding(t *testing.T) {
 	}
 }
 func TestGoogleOAuthReconnectAndExpiredAccessNeedsPermission(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	a := connectGoogleFixture(t, s, false)
 	_, err := s.ChangeAIConnection(t.Context(), AIConnectionCommand{Action: "sign-in-disconnect", Ref: a.Ref, Passphrase: testVaultPassword})
@@ -236,6 +240,7 @@ func TestGoogleOAuthReconnectAndExpiredAccessNeedsPermission(t *testing.T) {
 }
 
 func TestGoogleOAuthCallbackOriginScopeAndCancellation(t *testing.T) {
+	t.Parallel()
 	for _, mode := range []string{"wrong-state", "foreign-origin", "raw-code", "cancel", "expired"} {
 		t.Run(mode, func(t *testing.T) {
 			s := fixtureStore(t)
@@ -290,6 +295,7 @@ func TestGoogleOAuthCallbackOriginScopeAndCancellation(t *testing.T) {
 }
 
 func TestGoogleOAuthCallbackAcceptsIssAndWorkspaceHdAndRejectsWrongIssuer(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	start, err := s.ChangeAIConnection(t.Context(), googleStartCommand(t, true))
 	if err != nil {

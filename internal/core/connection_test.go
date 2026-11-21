@@ -4,23 +4,15 @@ import (
 	"encoding/json"
 	"net/http/httptest"
 	"os"
-	"path/filepath"
 	"testing"
 )
 
 func TestConnectionHealthUsesRuntimeOrigin(t *testing.T) {
-	root, err := filepath.Abs("../../.evidence/connection-fixtures")
-	if err != nil {
+	t.Parallel()
+	dir := t.TempDir()
+	if err := os.Chmod(dir, 0700); err != nil {
 		t.Fatal(err)
 	}
-	if err = os.MkdirAll(root, 0700); err != nil {
-		t.Fatal(err)
-	}
-	dir, err := os.MkdirTemp(root, "runtime-")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { os.RemoveAll(dir) })
 	store, err := OpenStore(dir)
 	if err != nil {
 		t.Fatal(err)

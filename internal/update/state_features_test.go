@@ -6,6 +6,7 @@ import (
 )
 
 func TestStateFeatureGrowthKeepsProtocolBoundsAndDuplicateRefusal(t *testing.T) {
+	t.Parallel()
 	features := []string{}
 	for i := 0; i < 64; i++ {
 		features = append(features, fmt.Sprintf("state-feature-%d", i))

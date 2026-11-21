@@ -19,6 +19,7 @@ import (
 )
 
 func TestRemoteCustodyAccountsPrivateNoSession(t *testing.T) {
+	t.Parallel()
 	s, err := OpenStore(filepath.Join(t.TempDir(), "state"))
 	if err != nil {
 		t.Fatal(err)
@@ -124,6 +125,7 @@ func TestRemoteCustodyAccountsPrivateNoSession(t *testing.T) {
 }
 
 func TestRemoteCustodyAccountsClientAcrossRestart(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	dir := filepath.Join(root, "state")
 	keydir := filepath.Join(root, "keys")

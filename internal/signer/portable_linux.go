@@ -20,7 +20,6 @@ import (
 	"time"
 
 	"github.com/fased-ai/fased-app/internal/update"
-	"golang.org/x/crypto/argon2"
 	"golang.org/x/sys/unix"
 )
 
@@ -171,7 +170,7 @@ func portableCipher(password, salt []byte) (cipher.AEAD, error) {
 	if !validPassword(password) {
 		return nil, ErrCredential
 	}
-	k := argon2.IDKey(password, salt, 3, 64*1024, 2, 32)
+	k := deriveVaultKey(password, salt)
 	defer wipe(k)
 	b, e := aes.NewCipher(k)
 	if e != nil {

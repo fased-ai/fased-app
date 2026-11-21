@@ -8,6 +8,7 @@ import (
 )
 
 func TestTaskReviewIsReadOnlyAndBounded(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	c := AgentCommand{Action: "task-review", ProfileID: "trading-analyst", Name: "Journal review", Text: "Review saved results", IntervalSeconds: 3600, MaxRuns: 3}
 	before, _ := s.Agents(t.Context(), c.ProfileID, "")
@@ -29,6 +30,7 @@ func TestTaskReviewIsReadOnlyAndBounded(t *testing.T) {
 }
 
 func TestTaskReviewedCreateRejectsChangedExpiredAndForeignPlans(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	now := time.Date(2026, 10, 25, 12, 0, 0, 0, time.UTC)
 	s.now = func() time.Time { return now }
@@ -82,6 +84,7 @@ func TestTaskReviewedCreateRejectsChangedExpiredAndForeignPlans(t *testing.T) {
 }
 
 func TestTaskReviewCapacityExpiryAndExecutionBindings(t *testing.T) {
+	t.Parallel()
 	d := initialAgents()
 	c := AgentCommand{Action: "task-review", ProfileID: "trading-analyst", Name: "Fixture reminder", Text: "Review result", IntervalSeconds: 60, MaxRuns: 1}
 	r, err := reviewAgentTask(d, c, c.ProfileID, 7, 1000)

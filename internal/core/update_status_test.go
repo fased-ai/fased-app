@@ -14,6 +14,7 @@ import (
 )
 
 func TestUpdateStatusObservationsNeverGrantAuthority(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	before, e := s.UpdateSnapshot(t.Context(), update.NewProbe())
 	if e != nil {
@@ -67,6 +68,7 @@ func TestUpdateStatusObservationsNeverGrantAuthority(t *testing.T) {
 }
 
 func TestUpdateStatusPauseReleaseRestartAndDamagedMetadata(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	c := pauseCommand(t, s, 1)
 	if _, e := s.UpdatePause(t.Context(), c); e != nil {
@@ -109,6 +111,7 @@ func TestUpdateStatusPauseReleaseRestartAndDamagedMetadata(t *testing.T) {
 }
 
 func TestUpdateStatusHTTPAuthenticatedReadOnlyAndRedacted(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	token := claimFixture(t, s)
 	h, e := NewHTTPHandler(s, "http://127.0.0.1:7331", "", nil)

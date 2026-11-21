@@ -45,6 +45,7 @@ func (t testOpenAITransport) RoundTrip(r *http.Request) (*http.Response, error) 
 }
 
 func TestOpenAIProductionTransportDisabled(t *testing.T) {
+	t.Parallel()
 	tr := newOpenAITransport()
 	if tr.enabled != providerActivationEnabled {
 		t.Fatal("transport activation mismatch")
@@ -65,6 +66,7 @@ func TestOpenAIProductionTransportDisabled(t *testing.T) {
 }
 
 func TestOpenAITransportRejectsBeforeDial(t *testing.T) {
+	t.Parallel()
 	tr := newOpenAITransport()
 	tr.enabled = true
 	tr.wire.DialContext = func(context.Context, string, string) (net.Conn, error) {
@@ -90,6 +92,7 @@ func TestOpenAITransportRejectsBeforeDial(t *testing.T) {
 }
 
 func TestOpenAITransportChatCompletion(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	connection := saveTestConnection(t, s)
 	v, permission := chatPermission(t, s, connection.Ref)

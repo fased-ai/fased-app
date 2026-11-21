@@ -8,6 +8,7 @@ import (
 )
 
 func TestPreWalletIdentityDoesNotAdmitSignerOperations(t *testing.T) {
+	t.Parallel()
 	c := Config{Version: 3, Mode: OrdinaryCustodyMode, Profile: OwnerCustodyProfile, Provenance: OwnerKeyProvenance, SignerID: strings.Repeat("a", 32), OwnerUID: 1000, AppUID: 1001, SignerUID: 1002, StateDir: "/var/lib/fased-test/signer-state", SocketDir: "/var/lib/fased-test/signer-ipc"}
 	if err := c.Validate(); err != nil {
 		t.Fatal("pre-wallet identity rejected:", err)

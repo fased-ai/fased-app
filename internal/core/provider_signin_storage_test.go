@@ -11,6 +11,7 @@ import (
 )
 
 func TestSignInPlanSchemaMigrationPreservesRecordsAndHolds(t *testing.T) {
+	t.Parallel()
 	for _, phase := range []string{"idle", "paused"} {
 		t.Run(phase, func(t *testing.T) {
 			s := fixtureStore(t)

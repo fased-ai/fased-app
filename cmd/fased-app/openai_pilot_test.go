@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"io"
 	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -15,19 +14,8 @@ import (
 )
 
 func TestOpenAIPilotCLIClosedAndStrict(t *testing.T) {
-	root := filepath.Join(".evidence", "pilot-cli")
-	if e := os.MkdirAll(root, 0700); e != nil {
-		t.Fatal(e)
-	}
-	dir, e := os.MkdirTemp(root, "f-")
-	if e != nil {
-		t.Fatal(e)
-	}
-	t.Cleanup(func() {
-		if e := os.RemoveAll(dir); e != nil {
-			t.Error(e)
-		}
-	})
+	dir := shortFixtureDir(t, "fa-")
+	var e error
 	server, e := core.StartAgentFixture(t.Context(), dir, "127.0.0.1:0", "", nil)
 	if e != nil {
 		t.Fatal(e)

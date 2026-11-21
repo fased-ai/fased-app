@@ -51,6 +51,7 @@ func (d *pendingOwnerCompletionController) Recover(_ context.Context, o Applicat
 }
 
 func TestApplicationUpdateOwnerCompletionRemainsRecoverableThroughUserEntry(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	token := claimFixture(t, s)
 	d := &pendingOwnerCompletionController{updateControllerFixture: fixtureUpdateController()}
@@ -151,6 +152,7 @@ func TestApplicationUpdateOwnerCompletionRemainsRecoverableThroughUserEntry(t *t
 }
 
 func TestApplicationUpdateDoesNotReplaceOwnerOperationBeforeProtectedCompletion(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	d := &pendingOwnerCompletionController{updateControllerFixture: fixtureUpdateController()}
 	if err := s.BindApplicationUpdateController(d); err != nil {

@@ -22,6 +22,7 @@ import (
 )
 
 func TestReusablePreparationInspectsEveryPermittedStageInstance(t *testing.T) {
+	t.Parallel()
 	m := fixtureManifest()
 	for _, kind := range reusableStageKinds {
 		base, _, err := reusableStageClass(kind)
@@ -57,6 +58,7 @@ func TestReusablePreparationInspectsEveryPermittedStageInstance(t *testing.T) {
 }
 
 func TestReusableSetupActivatesOnlyAfterVerifiedConfigurationAndPolicy(t *testing.T) {
+	t.Parallel()
 	m := fixtureManifest()
 	pin := reusableMaintenanceAuthority{Version: 1, Owner: m.Owner, InstallationID: m.ID, RunnerSHA256: strings.Repeat("e", 64), GuardSHA256: strings.Repeat("d", 64)}
 	unit, checksum, err := reusableAtomicSetup(m, pin, "fased_owner")
@@ -99,6 +101,7 @@ func TestReusableSetupActivatesOnlyAfterVerifiedConfigurationAndPolicy(t *testin
 }
 
 func TestReusableSetupSelectionCommandsRemainInspectable(t *testing.T) {
+	t.Parallel()
 	m := fixtureManifest()
 	pin := reusableMaintenanceAuthority{Version: 1, Owner: m.Owner, InstallationID: m.ID, RunnerSHA256: strings.Repeat("e", 64), GuardSHA256: strings.Repeat("d", 64)}
 	body, _, err := reusableAtomicSetup(m, pin, "fased_owner")
@@ -114,6 +117,7 @@ func TestReusableSetupSelectionCommandsRemainInspectable(t *testing.T) {
 }
 
 func TestReusableTemporaryPolicyBindsSetupAndHasValidSyntax(t *testing.T) {
+	t.Parallel()
 	m := fixtureManifest()
 	pin := reusableMaintenanceAuthority{Version: 1, Owner: m.Owner, InstallationID: m.ID, RunnerSHA256: strings.Repeat("e", 64), GuardSHA256: strings.Repeat("d", 64)}
 	policy, err := draftReusableSetupTemporaryPolicy(m, pin, 1000, "fased_owner", 100, 200, 1893456000)
@@ -148,6 +152,7 @@ func TestReusableTemporaryPolicyBindsSetupAndHasValidSyntax(t *testing.T) {
 }
 
 func TestReusableCompatibilityRefusesUnrecoverablePair(t *testing.T) {
+	t.Parallel()
 	tx, _ := modelTransaction(t)
 	coreContract, signerContract := core.UpdateContract(), signer.UpdateContract()
 	responses := func(bad string) func(string, bool) ([]byte, error) {
@@ -185,6 +190,7 @@ func TestReusableCompatibilityRefusesUnrecoverablePair(t *testing.T) {
 }
 
 func TestReusableProvisionPublishesTransactionAfterDependencies(t *testing.T) {
+	t.Parallel()
 	m := fixtureManifest()
 	a := reusableMaintenanceAuthority{Version: 1, Owner: m.Owner, InstallationID: m.ID, RunnerSHA256: strings.Repeat("e", 64), GuardSHA256: strings.Repeat("d", 64)}
 	body, err := reusableAtomicProvision(m, a)
@@ -218,6 +224,7 @@ func TestReusableProvisionPublishesTransactionAfterDependencies(t *testing.T) {
 }
 
 func TestReusablePreparationFenceUsesFixedSentinelAndColdGuard(t *testing.T) {
+	t.Parallel()
 	m := fixtureManifest()
 	a := reusableMaintenanceAuthority{Version: 1, Owner: m.Owner, InstallationID: m.ID, RunnerSHA256: strings.Repeat("e", 64), GuardSHA256: strings.Repeat("d", 64)}
 	body, err := reusablePreparationFenceUnit(m, a)
@@ -239,6 +246,7 @@ func TestReusablePreparationFenceUsesFixedSentinelAndColdGuard(t *testing.T) {
 }
 
 func TestReusablePreparationMarkerSwapPreservesFence(t *testing.T) {
+	t.Parallel()
 	m := fixtureManifest()
 	a := reusableMaintenanceAuthority{Version: 1, Owner: m.Owner, InstallationID: m.ID, RunnerSHA256: strings.Repeat("e", 64), GuardSHA256: strings.Repeat("d", 64)}
 	body, err := reusableAtomicProvision(m, a)
@@ -295,6 +303,7 @@ func TestReusablePreparationMarkerSwapPreservesFence(t *testing.T) {
 }
 
 func TestReusableCompatibilityPreservesForeignOutput(t *testing.T) {
+	t.Parallel()
 	m := fixtureManifest()
 	a := reusableMaintenanceAuthority{Version: 1, Owner: m.Owner, InstallationID: m.ID, RunnerSHA256: strings.Repeat("e", 64), GuardSHA256: strings.Repeat("d", 64)}
 	files, _, err := reusableSetupFiles(m, a, 1000, "fased_owner", 100, 200)
@@ -334,6 +343,7 @@ func TestReusableCompatibilityPreservesForeignOutput(t *testing.T) {
 }
 
 func TestReusableLauncherValidatesWorkerStartAndStop(t *testing.T) {
+	t.Parallel()
 	m := fixtureManifest()
 	a := reusableMaintenanceAuthority{Version: 1, Owner: m.Owner, InstallationID: m.ID, RunnerSHA256: strings.Repeat("e", 64), GuardSHA256: strings.Repeat("d", 64)}
 	body, checksum, err := reusableAtomicLauncher(m, a)
@@ -466,6 +476,7 @@ func TestReusableLauncherValidatesWorkerStartAndStop(t *testing.T) {
 }
 
 func TestReusableProvisionIsNotDirectlyGranted(t *testing.T) {
+	t.Parallel()
 	m := fixtureManifest()
 	policy, err := reusableAtomicPolicy(m, "fased_owner")
 	if err != nil {
@@ -507,6 +518,7 @@ func TestReusableProvisionIsNotDirectlyGranted(t *testing.T) {
 }
 
 func TestReusableWorkerCompletionBindsFinishedRequest(t *testing.T) {
+	t.Parallel()
 	m := fixtureManifest()
 	requestID := strings.Repeat("a", 32)
 	worker := fmt.Sprintf("fased-custody-%d-atomic-%s-forward.service", m.Owner, strings.Repeat("b", 32))
@@ -551,6 +563,7 @@ func TestReusableWorkerCompletionBindsFinishedRequest(t *testing.T) {
 }
 
 func TestReusableWorkerCompletionReadsStableOwnedFile(t *testing.T) {
+	t.Parallel()
 	path := filepath.Join(t.TempDir(), "worker.env")
 	data := []byte("completed output")
 	if err := os.WriteFile(path, data, 0644); err != nil {
@@ -586,6 +599,7 @@ func TestReusableWorkerCompletionReadsStableOwnedFile(t *testing.T) {
 }
 
 func TestReusableCompatibilityOutputIsBoundedAndAnchored(t *testing.T) {
+	t.Parallel()
 	path := filepath.Join(t.TempDir(), "compat-runner.out")
 	if err := os.WriteFile(path, bytes.Repeat([]byte("x"), 65536), 0644); err != nil {
 		t.Fatal(err)
@@ -615,6 +629,7 @@ func TestReusableCompatibilityOutputIsBoundedAndAnchored(t *testing.T) {
 }
 
 func TestReusableLauncherRecordsCompletionAfterWorker(t *testing.T) {
+	t.Parallel()
 	m := fixtureManifest()
 	a := reusableMaintenanceAuthority{Version: 1, Owner: m.Owner, InstallationID: m.ID, RunnerSHA256: strings.Repeat("e", 64), GuardSHA256: strings.Repeat("d", 64)}
 	body, _, err := reusableAtomicLauncher(m, a)
@@ -629,6 +644,7 @@ func TestReusableLauncherRecordsCompletionAfterWorker(t *testing.T) {
 }
 
 func TestReusablePolicySerializesPreparationWorkers(t *testing.T) {
+	t.Parallel()
 	m := fixtureManifest()
 	policy, err := reusableAtomicPolicy(m, "fased_owner")
 	if err != nil {
@@ -642,6 +658,7 @@ func TestReusablePolicySerializesPreparationWorkers(t *testing.T) {
 }
 
 func TestReusableProvisionDispatchBindsIntentAndRefusesFailures(t *testing.T) {
+	t.Parallel()
 	owner := 1000
 	r := reusableAtomicRequest{Version: 1, Owner: owner, InstallationID: strings.Repeat("a", 32), IntentID: strings.Repeat("b", 32), Direction: "prepare"}
 	var provisionCalls, workerCalls int
@@ -718,6 +735,7 @@ func TestReusableProvisionDispatchBindsIntentAndRefusesFailures(t *testing.T) {
 }
 
 func TestReusableStageIsBoundedAndPublishesIndependentInode(t *testing.T) {
+	t.Parallel()
 	m := fixtureManifest()
 	tool, _ := exec.LookPath("systemd-analyze")
 	for _, kind := range reusableStageKinds {
@@ -786,6 +804,7 @@ func TestReusableStageIsBoundedAndPublishesIndependentInode(t *testing.T) {
 }
 
 func TestReusableAtomicRequestRejectsForeignFilesAndPaths(t *testing.T) {
+	t.Parallel()
 	owner, group := os.Getuid(), os.Getgid()
 	if owner <= 0 || group <= 0 {
 		t.Skip("ordinary unprivileged owner required")
@@ -853,6 +872,7 @@ func TestReusableAtomicRequestRejectsForeignFilesAndPaths(t *testing.T) {
 }
 
 func TestReusableAtomicRequestRequiresExactActionAndIdentity(t *testing.T) {
+	t.Parallel()
 	r := reusableAtomicRequest{Version: 1, Owner: os.Getuid(), InstallationID: strings.Repeat("a", 32), IntentID: strings.Repeat("b", 32), Direction: "forward"}
 	if r.Owner <= 0 {
 		t.Skip("ordinary owner required")
@@ -881,6 +901,7 @@ func TestReusableAtomicRequestRequiresExactActionAndIdentity(t *testing.T) {
 }
 
 func TestReusableAtomicRequestWriterPreservesForeignInput(t *testing.T) {
+	t.Parallel()
 	owner, group := os.Getuid(), os.Getgid()
 	if owner <= 0 || group <= 0 {
 		t.Skip("ordinary unprivileged owner required")
@@ -926,6 +947,7 @@ func TestReusableAtomicRequestWriterPreservesForeignInput(t *testing.T) {
 }
 
 func TestReusableOwnerStagePreservesForeignInput(t *testing.T) {
+	t.Parallel()
 	owner, group := os.Getuid(), os.Getgid()
 	if owner <= 0 || group <= 0 {
 		t.Skip("ordinary unprivileged owner required")
@@ -971,6 +993,7 @@ func TestReusableOwnerStagePreservesForeignInput(t *testing.T) {
 }
 
 func TestProtectedUpdateFileRequiresSameInode(t *testing.T) {
+	t.Parallel()
 	if os.Getuid() == 0 || os.Getgid() == 0 {
 		t.Fatal("the inode regression must run as an ordinary user")
 	}
@@ -1022,6 +1045,7 @@ func TestProtectedUpdateFileRequiresSameInode(t *testing.T) {
 }
 
 func TestReusableProtectedCandidatePreservesPublishedPredecessor(t *testing.T) {
+	t.Parallel()
 	tx, _ := modelTransaction(t)
 	stage := reusableMaintenancePath(tx.Base, "staging") + "/next-core"
 	original := tx.dir() + "/next-core"
@@ -1073,6 +1097,7 @@ func TestReusableProtectedCandidatePreservesPublishedPredecessor(t *testing.T) {
 }
 
 func TestPublishedPredecessorRequiresOriginalStagedInodes(t *testing.T) {
+	t.Parallel()
 	tx, _ := modelTransaction(t)
 	stage := reusableMaintenancePath(tx.Base, "staging")
 	for _, missing := range []string{"", "transaction", "runner", "previous-signer", "next-core", "next-signer"} {
@@ -1205,6 +1230,7 @@ func TestPublishedPredecessorRequiresOriginalStagedInodes(t *testing.T) {
 }
 
 func TestReusableControllerInputsBindPairAndWorkers(t *testing.T) {
+	t.Parallel()
 	tx, installed := modelTransaction(t)
 	c := signer.Config{Version: 1, Mode: signer.FixtureNetwork, SignerID: tx.Base.ID, OwnerUID: tx.Base.Owner, AppUID: tx.Base.App.UID, SignerUID: tx.Base.Signer.UID, StateDir: tx.Base.Root + "/signer-state", SocketDir: tx.Base.Root + "/signer-ipc"}
 	pin := &reusableMaintenanceAuthority{Version: 1, Owner: tx.Base.Owner, InstallationID: tx.Base.ID, RunnerSHA256: strings.Repeat("e", 64), GuardSHA256: strings.Repeat("d", 64)}

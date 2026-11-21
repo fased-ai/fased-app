@@ -28,6 +28,7 @@ func researchPrepareBody(t *testing.T, c WENResearchReadInput) []byte {
 }
 
 func TestWENResearchAIPrepare(t *testing.T) {
+	t.Parallel()
 	s, h, token, c := readBatchFixture(t)
 	w := apiRequest(h, "POST", "/api/v1/wen/research/ai-prepare", string(researchPrepareBody(t, c)), token, "http://127.0.0.1:7331", csrfToken(token))
 	if w.Code != 200 {
@@ -84,6 +85,7 @@ func (r *researchNoTransport) RoundTrip(*http.Request) (*http.Response, error) {
 }
 
 func TestWENResearchAIContext(t *testing.T) {
+	t.Parallel()
 	t.Run("semantic-facts-reproducible-and-root-exact", func(t *testing.T) {
 		s, _, _, c := readBatchFixture(t)
 		in := researchInput(t, c)
@@ -171,6 +173,7 @@ func TestWENResearchAIContext(t *testing.T) {
 }
 
 func TestWENResearchAIRefusals(t *testing.T) {
+	t.Parallel()
 	for _, name := range []string{"unknown", "duplicate", "missing-model", "null-bounds", "bad-limit", "aggregate-budget", "model-cap", "tool-cap", "wall-cap", "foreign", "stale", "oversized-context", "request-slots", "storage", "cancelled-context"} {
 		t.Run(name, func(t *testing.T) {
 			s, h, token, c := readBatchFixture(t)
@@ -253,6 +256,7 @@ func TestWENResearchAIRefusals(t *testing.T) {
 }
 
 func TestWENResearchAIRecovery(t *testing.T) {
+	t.Parallel()
 	t.Run("no-provider-route-including-fixture", func(t *testing.T) {
 		s, _, _, c := readBatchFixture(t)
 		r := preparedResearch(t, s, researchInput(t, c))
@@ -341,6 +345,7 @@ func TestWENResearchAIRecovery(t *testing.T) {
 }
 
 func TestWENResearchAIMigration(t *testing.T) {
+	t.Parallel()
 	t.Run("schema-11-records-preserved", func(t *testing.T) {
 		s, _, _, _ := readBatchFixture(t)
 		var raw string
@@ -406,6 +411,7 @@ func TestWENResearchAIMigration(t *testing.T) {
 }
 
 func TestWENResearchAIExactDisclosureBoundary(t *testing.T) {
+	t.Parallel()
 	s, _, _, c := readBatchFixture(t)
 	in := researchInput(t, c)
 	in.Prompt = "p"
@@ -459,6 +465,7 @@ func TestWENResearchAIExactDisclosureBoundary(t *testing.T) {
 }
 
 func TestWENResearchAIHTTPAuthority(t *testing.T) {
+	t.Parallel()
 	s, h, token, c := readBatchFixture(t)
 	for _, action := range []string{"prepare", "inspect", "cancel"} {
 		for _, mode := range []string{"auth", "csrf", "origin", "query", "method"} {

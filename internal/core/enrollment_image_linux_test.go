@@ -22,6 +22,7 @@ import (
 )
 
 func TestEnrollmentImagePreservesOSAndDeviceOwner(t *testing.T) {
+	t.Parallel()
 	for _, profile := range []string{"local", "remote", "remote-password"} {
 		t.Run(profile, func(t *testing.T) {
 			s := fixtureStore(t)
@@ -92,6 +93,7 @@ func TestEnrollmentImagePreservesOSAndDeviceOwner(t *testing.T) {
 }
 
 func TestEnrollmentImageClassifiesEmptyUpdateChannel(t *testing.T) {
+	t.Parallel()
 	for _, populated := range []bool{false, true} {
 		t.Run(fmt.Sprint(populated), func(t *testing.T) {
 			s := fixtureStore(t)
@@ -140,6 +142,7 @@ func TestEnrollmentImageClassifiesEmptyUpdateChannel(t *testing.T) {
 }
 
 func TestEnrollmentImagePreservesSameInstance(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	claimFixture(t, s)
 	agentApply(t, s, AgentCommand{Action: "session-create", Name: "Enrollment context"})
@@ -190,6 +193,7 @@ func TestEnrollmentImagePreservesSameInstance(t *testing.T) {
 }
 
 func TestEnrollmentImageReacquisitionDetectsSourceChanges(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	claimFixture(t, s)
 	dir := s.dir
@@ -232,6 +236,7 @@ func TestEnrollmentImageReacquisitionDetectsSourceChanges(t *testing.T) {
 }
 
 func TestEnrollmentImageApplicationUpdateQuiescentRowPreserved(t *testing.T) {
+	t.Parallel()
 	for _, raw := range []string{`{"phase":"idle", "id":""}`, `{"id":"ed4e62f092e9658589ca0fcf8f538beb","phase":"current","checkedAt":1793995915,"finishedAt":1793995915}`} {
 		t.Run(raw, func(t *testing.T) {
 			s := fixtureStore(t)
@@ -282,6 +287,7 @@ func TestEnrollmentImageApplicationUpdateQuiescentRowPreserved(t *testing.T) {
 }
 
 func TestEnrollmentImageApplicationUpdateSettledHistory(t *testing.T) {
+	t.Parallel()
 	for _, phase := range []string{"completed", "rolled-back"} {
 		t.Run(phase, func(t *testing.T) {
 			s := fixtureStore(t)
@@ -379,6 +385,7 @@ func TestEnrollmentImageApplicationUpdateSettledHistory(t *testing.T) {
 }
 
 func TestEnrollmentImageApplicationUpdateAuthorityRefused(t *testing.T) {
+	t.Parallel()
 	for _, mode := range []string{"queued", "applying", "recovery", "checking", "available", "current", "current-lease", "current-unfinished", "unknown", "idle-lease", "unknown-field", "negative-revision", "extra-row", "schema34"} {
 		t.Run(mode, func(t *testing.T) {
 			s := fixtureStore(t)
@@ -463,6 +470,7 @@ func enrollmentStage(t *testing.T) string {
 }
 
 func TestEnrollmentImageLockAndRefusal(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	if err := s.Close(); err != nil {
 		t.Fatal(err)
@@ -499,6 +507,7 @@ func TestEnrollmentImageLockAndRefusal(t *testing.T) {
 }
 
 func TestEnrollmentImageWALCiphertextAndHolds(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	claimFixture(t, s)
 	v := agentApply(t, s, AgentCommand{Action: "session-create", Name: "Retained enrollment"})
@@ -589,6 +598,7 @@ func TestEnrollmentImageWALCiphertextAndHolds(t *testing.T) {
 }
 
 func TestEnrollmentImageRejectsUnsafeSource(t *testing.T) {
+	t.Parallel()
 	for _, mode := range []string{"unknown", "signer-directory", "symlink", "hardlink", "future", "older", "paused", "damaged"} {
 		t.Run(mode, func(t *testing.T) {
 			s := fixtureStore(t)
@@ -643,6 +653,7 @@ func TestEnrollmentImageRejectsUnsafeSource(t *testing.T) {
 }
 
 func TestEnrollmentImageStageRetryAndConflict(t *testing.T) {
+	t.Parallel()
 	image := enrollmentFixtureImage(t)
 	stage := enrollmentStage(t)
 	first := image.Files[0]
@@ -700,6 +711,7 @@ func TestEnrollmentImageStageRetryAndConflict(t *testing.T) {
 }
 
 func TestEnrollmentImageIdentityAndPathAdmission(t *testing.T) {
+	t.Parallel()
 	base := enrollmentFixtureImage(t)
 	for _, mode := range []string{"identity", "schema", "version", "duplicate", "transient", "traversal", "credential", "oversize"} {
 		t.Run(mode, func(t *testing.T) {
@@ -749,6 +761,7 @@ func TestEnrollmentImageIdentityAndPathAdmission(t *testing.T) {
 }
 
 func TestEnrollmentImageRejectsUnclassifiedDatabaseState(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	if _, err := s.db.ExecContext(t.Context(), "CREATE TABLE unclassified_fixture_state(value TEXT)"); err != nil {
 		t.Fatal(err)
@@ -763,6 +776,7 @@ func TestEnrollmentImageRejectsUnclassifiedDatabaseState(t *testing.T) {
 }
 
 func TestEnrollmentImageRetainsOnlyReadyOwnerHostPreparation(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	if err := s.Close(); err != nil {
 		t.Fatal(err)
@@ -791,6 +805,7 @@ func TestEnrollmentImageRetainsOnlyReadyOwnerHostPreparation(t *testing.T) {
 }
 
 func TestEnrollmentImageRejectsUnfinishedOrBusyHostPreparation(t *testing.T) {
+	t.Parallel()
 	for _, mode := range []string{"staging", "published", "foreign-owner", "unknown-schema", "extra-field", "receipt-only", "lock-only", "busy"} {
 		t.Run(mode, func(t *testing.T) {
 			s := fixtureStore(t)
@@ -846,6 +861,7 @@ func TestEnrollmentImageRejectsUnfinishedOrBusyHostPreparation(t *testing.T) {
 }
 
 func TestEnrollmentImageKeepsHostPreparationLeaseUntilFence(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	if err := s.Close(); err != nil {
 		t.Fatal(err)
@@ -878,6 +894,7 @@ func TestEnrollmentImageKeepsHostPreparationLeaseUntilFence(t *testing.T) {
 }
 
 func TestEnrollmentImageRejectsChangedHostPreparationLock(t *testing.T) {
+	t.Parallel()
 	for _, mode := range []string{"created-after-lock", "replaced-lock"} {
 		t.Run(mode, func(t *testing.T) {
 			s := fixtureStore(t)
@@ -919,6 +936,7 @@ func TestEnrollmentImageRejectsChangedHostPreparationLock(t *testing.T) {
 }
 
 func TestEnrollmentImagePreservesLargeEncryptedVault(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	credential := providerSignInCredential{Version: 1, Issuer: signInIssuer, Subject: "disposable-enrollment-user", ClientID: "oaiapp_disposable_enrollment", AccessToken: strings.Repeat("a", 4096), RefreshToken: strings.Repeat("r", 4096), IDToken: strings.Repeat("i", 4000), Scope: signInScope, ExpiresAt: s.now().Add(time.Hour).Unix()}
 	raw, err := json.Marshal(credential)
@@ -996,6 +1014,7 @@ func TestEnrollmentImagePreservesLargeEncryptedVault(t *testing.T) {
 }
 
 func TestEnrollmentImageRejectsCorruptDeviceOwner(t *testing.T) {
+	t.Parallel()
 	for _, mode := range []string{"owner-json", "foreign-device", "duplicate-device", "invite", "orphan-session", "foreign-session", "marker", "owner-view", "session-view"} {
 		t.Run(mode, func(t *testing.T) {
 			s := fixtureStore(t)

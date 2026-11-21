@@ -9,6 +9,7 @@ import (
 )
 
 func TestWalletReadClientPreservesBoundedProjection(t *testing.T) {
+	t.Parallel()
 	key, amount := strings.Repeat("1", 44), "18446744073709551615"
 	want := WalletSnapshot{Address: key, Network: "devnet", Lamports: amount, Transaction: &WalletTransaction{Payer: key}}
 	for i := 0; i < 128; i++ {
@@ -44,6 +45,7 @@ func TestWalletReadClientPreservesBoundedProjection(t *testing.T) {
 }
 
 func TestWalletReadClientRefusesOversizedProjection(t *testing.T) {
+	t.Parallel()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_ = json.NewEncoder(w).Encode(map[string]string{"value": strings.Repeat("x", 256*1024)})
 	}))

@@ -7,6 +7,7 @@ import (
 )
 
 func TestUpdateContractMatchesDurableCore(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	var schema int
 	if err := s.db.QueryRowContext(context.Background(), "PRAGMA user_version").Scan(&schema); err != nil {

@@ -6,6 +6,7 @@ import (
 )
 
 func TestOwnerRecoveryRevokesSessionsAndPreservesIdentity(t *testing.T) {
+	t.Parallel()
 	dir := fixtureDir(t)
 	s, e := OpenStore(dir)
 	if e != nil {

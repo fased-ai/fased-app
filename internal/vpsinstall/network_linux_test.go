@@ -322,6 +322,7 @@ func networkBegin(t *testing.T) (*networkMemory, networkController, Manifest, Ne
 	return h, n, m, s
 }
 func TestNetworkControllerFinitePolicyAndBootOrdering(t *testing.T) {
+	t.Parallel()
 	h, n, m, s := networkBegin(t)
 	a, e := n.load(m)
 	if e != nil {
@@ -386,6 +387,7 @@ func TestNetworkControllerFinitePolicyAndBootOrdering(t *testing.T) {
 	}
 }
 func TestNetworkControllerForeignEditsAndRemovedAppRecovery(t *testing.T) {
+	t.Parallel()
 	for _, change := range []string{"firewall", "ssh", "app-removed"} {
 		t.Run(change, func(t *testing.T) {
 			h, n, m, s := networkBegin(t)
@@ -429,6 +431,7 @@ func TestNetworkControllerForeignEditsAndRemovedAppRecovery(t *testing.T) {
 	}
 }
 func TestNetworkControllerRollbackWinsApplyAndCommitRaces(t *testing.T) {
+	t.Parallel()
 	for _, which := range []string{"apply", "commit"} {
 		t.Run(which, func(t *testing.T) {
 			h, n, m := networkFixture(t)
@@ -473,6 +476,7 @@ func TestNetworkControllerRollbackWinsApplyAndCommitRaces(t *testing.T) {
 	}
 }
 func TestNetworkControllerDeadlineClockAndPendingBoot(t *testing.T) {
+	t.Parallel()
 	for _, which := range []string{"forward", "backward", "boot"} {
 		t.Run(which, func(t *testing.T) {
 			h, n, m, s := networkBegin(t)
@@ -505,6 +509,7 @@ func TestNetworkControllerDeadlineClockAndPendingBoot(t *testing.T) {
 	}
 }
 func TestNetworkControllerInterruptedClientResumesSameAttempt(t *testing.T) {
+	t.Parallel()
 	h, n, m := networkFixture(t)
 	h.fault = "after-apply"
 	failed, e := n.begin(context.Background(), m, NetworkApproval{true, true})
@@ -517,6 +522,7 @@ func TestNetworkControllerInterruptedClientResumesSameAttempt(t *testing.T) {
 	}
 }
 func TestNetworkControllerSSHProfileRefusesConditionalOrForeignInputs(t *testing.T) {
+	t.Parallel()
 	for _, change := range []string{"match", "include", "foreign", "no-approval", "ssh-only"} {
 		t.Run(change, func(t *testing.T) {
 			h, n, m := networkFixture(t)
@@ -552,6 +558,7 @@ func TestNetworkControllerSSHProfileRefusesConditionalOrForeignInputs(t *testing
 	}
 }
 func TestNetworkTrustedUtilityFormsRefuseMutationEscapes(t *testing.T) {
+	t.Parallel()
 	for _, args := range [][]string{{"/usr/sbin/nft", "flush", "ruleset"}, {"/usr/sbin/nft", "--file", "/tmp/foreign.nft"}, {"/usr/sbin/sshd", "-D"}, {"/usr/sbin/sshd", "-T", "-f", "/foreign"}, {"/usr/bin/cmp", "--silent", "--", "/etc/shadow", "/tmp/outcome"}, {"/usr/bin/flock", "/tmp/foreign", "/bin/sh"}} {
 		if _, e := (&custodyinstall.System{}).Run(context.Background(), nil, args...); e == nil {
 			t.Fatal("unsafe OS form admitted", args)
@@ -560,6 +567,7 @@ func TestNetworkTrustedUtilityFormsRefuseMutationEscapes(t *testing.T) {
 }
 
 func TestNetworkControllerLostPointersDoNotOrphanPolicy(t *testing.T) {
+	t.Parallel()
 	for _, which := range []string{"pointer", "attempt"} {
 		t.Run(which, func(t *testing.T) {
 			h, n, m, s := networkBegin(t)
@@ -589,6 +597,7 @@ func TestNetworkControllerLostPointersDoNotOrphanPolicy(t *testing.T) {
 	}
 }
 func TestNetworkControllerFirstPreparationRetryKeepsAttempt(t *testing.T) {
+	t.Parallel()
 	h, n, m := networkFixture(t)
 	h.base.fail = len(h.base.calls) + 2
 	first, e := n.begin(context.Background(), m, NetworkApproval{true, true})
@@ -603,6 +612,7 @@ func TestNetworkControllerFirstPreparationRetryKeepsAttempt(t *testing.T) {
 }
 
 func TestNetworkControllerSSHVendorInvocation(t *testing.T) {
+	t.Parallel()
 	for _, change := range []string{"vendor", "options-o", "custom-f", "loaded-o", "changed-after-begin"} {
 		t.Run(change, func(t *testing.T) {
 			h, n, m := networkFixture(t)
@@ -664,6 +674,7 @@ func (h *networkMemory) bootProtectedSSH(ctx context.Context, unit string) error
 	return nil
 }
 func TestNetworkPersistRequirementsAndManualRollback(t *testing.T) {
+	t.Parallel()
 	h, n, m, s := networkBegin(t)
 	a, _ := n.load(m)
 	if !strings.Contains(string(networkUnits(m, a)["persist"]), "RequiredBy=ssh.socket ssh.service") {
@@ -714,6 +725,7 @@ func TestNetworkPersistRequirementsAndManualRollback(t *testing.T) {
 	}
 }
 func TestNetworkPersistForeignRequirementsRefused(t *testing.T) {
+	t.Parallel()
 	for _, when := range []string{"enable", "rollback"} {
 		for _, index := range []int{0, 1} {
 			t.Run(fmt.Sprintf("%s-%d", when, index), func(t *testing.T) {
@@ -746,6 +758,7 @@ func TestNetworkPersistForeignRequirementsRefused(t *testing.T) {
 	}
 }
 func TestNetworkBootPersistFailureDependencyModel(t *testing.T) {
+	t.Parallel()
 	h, n, m, s := networkBegin(t)
 	a, _ := n.load(m)
 	h.proof.SessionID = "second-private-connection"
@@ -771,6 +784,7 @@ func TestNetworkBootPersistFailureDependencyModel(t *testing.T) {
 }
 
 func TestNetworkSSHRuntimePrerequisiteConditionsAndOrdering(t *testing.T) {
+	t.Parallel()
 	for _, variant := range []string{"missing", "owned", "foreign-dir", "foreign-file", "foreign-symlink", "dangling-symlink"} {
 		t.Run(variant, func(t *testing.T) {
 			h, n, m, _ := networkBegin(t)

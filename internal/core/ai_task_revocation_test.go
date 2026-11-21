@@ -56,6 +56,7 @@ func sealedSignInRecord(t *testing.T, provider string) (*Store, AIConnectionView
 }
 
 func TestDurableTokenOperationsRevokeBeforeIO(t *testing.T) {
+	t.Parallel()
 	for _, provider := range []string{"openai", "google"} {
 		for _, action := range []string{"sign-in-refresh", "sign-in-disconnect"} {
 			for _, writeFailure := range []bool{false, true} {
@@ -96,6 +97,7 @@ func TestDurableTokenOperationsRevokeBeforeIO(t *testing.T) {
 }
 
 func TestDurableReloadNeverKeepsAnOldKey(t *testing.T) {
+	t.Parallel()
 	for _, unavailable := range []bool{false, true} {
 		t.Run(map[bool]string{false: "changed-key", true: "unavailable"}[unavailable], func(t *testing.T) {
 			s, c, _, key := durableTask(t)
@@ -112,6 +114,7 @@ func TestDurableReloadNeverKeepsAnOldKey(t *testing.T) {
 }
 
 func TestDurableInteractiveUnlockPreservesTaskScope(t *testing.T) {
+	t.Parallel()
 	s, c, _, _ := durableTask(t)
 	before, e := s.AIConnection(c.Ref)
 	if e != nil {

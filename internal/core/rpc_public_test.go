@@ -17,6 +17,7 @@ import (
 )
 
 func TestPublicRPCAdmissionClosed(t *testing.T) {
+	t.Parallel()
 	for _, raw := range []string{"https://example.com", "https://api.devnet.solana.com/"} {
 		if _, err := publicRPCURL(raw); err != nil {
 			t.Fatal(err)
@@ -50,6 +51,7 @@ func TestPublicRPCAdmissionClosed(t *testing.T) {
 }
 
 func TestPublicRPCPinnedDNS(t *testing.T) {
+	t.Parallel()
 	for _, bad := range []string{"127.0.0.1", "10.0.0.1", "169.254.169.254", "100.64.0.1", "192.0.2.1", "::1", "::ffff:127.0.0.1", "fc00::1", "fe80::1", "64:ff9b::a00:1", "2001:db8::1", "2002:7f00:1::"} {
 		calls := 0
 		_, err := dialPublicRPC(context.Background(), "tcp", "example.com:443", func(context.Context, string, string) ([]netip.Addr, error) {
@@ -88,6 +90,7 @@ func TestPublicRPCPinnedDNS(t *testing.T) {
 }
 
 func TestPublicRPCControlledTLS(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name, network, body string
 		status, want        int
@@ -163,6 +166,7 @@ func TestPublicRPCControlledTLS(t *testing.T) {
 }
 
 func TestPublicRPCMultiIPFallback(t *testing.T) {
+	t.Parallel()
 	t.Run("ipv6 fallback to ipv4 on single lookup", func(t *testing.T) {
 		lookups := 0
 		var dialed []string

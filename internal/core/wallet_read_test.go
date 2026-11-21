@@ -205,6 +205,7 @@ func walletReadAccount(t *testing.T, s *Store) WalletReadCommand {
 }
 
 func TestWalletReadHTTPSAndPreservation(t *testing.T) {
+	t.Parallel()
 	dir := fixtureDir(t)
 	s, err := OpenStore(dir)
 	if err != nil {
@@ -246,6 +247,7 @@ func TestWalletReadHTTPSAndPreservation(t *testing.T) {
 	}
 }
 func TestWalletReadLocksRestartAndRevocation(t *testing.T) {
+	t.Parallel()
 	dir := fixtureDir(t)
 	s, err := OpenStore(dir)
 	if err != nil {
@@ -303,6 +305,7 @@ func TestWalletReadLocksRestartAndRevocation(t *testing.T) {
 }
 
 func TestWalletReadCredentialRotationPauseAndCancellation(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	defer s.Close()
 	in := walletReadAccount(t, s)
@@ -337,6 +340,7 @@ func TestWalletReadCredentialRotationPauseAndCancellation(t *testing.T) {
 }
 
 func TestWalletReadRejectsRecoveredSignerEpoch(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	defer s.Close()
 	claimFixture(t, s)
@@ -392,6 +396,7 @@ func TestWalletReadRejectsRecoveredSignerEpoch(t *testing.T) {
 }
 
 func TestWalletReadRejectsInterveningPauseRelease(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	defer s.Close()
 	in := walletReadAccount(t, s)

@@ -10,6 +10,7 @@ import (
 )
 
 func TestClientAvailabilityIsNotAuthenticationOrUnsafeFiles(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	if e := os.Chmod(dir, 0700); e != nil {
 		t.Fatal(e)

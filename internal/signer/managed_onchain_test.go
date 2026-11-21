@@ -30,6 +30,7 @@ func managedSwapQuote(t *testing.T, v *Vault, chain *onchaintest.Chain) SwapProp
 	return NewSwapProposal(ref, q)
 }
 func TestManagedSwapCreatedWalletBoundedApproval(t *testing.T) {
+	t.Parallel()
 	dir := fixtureDir(t)
 	v := managedFixture(t, dir, "mainnet-beta")
 	if e := v.Create(fixturePassword); e != nil {
@@ -91,6 +92,7 @@ func TestManagedSwapCreatedWalletBoundedApproval(t *testing.T) {
 	}
 }
 func TestManagedSwapImportsAndKeyOnlyRestoreRemainHeld(t *testing.T) {
+	t.Parallel()
 	fresh := managedFixture(t, fixtureDir(t), "mainnet-beta")
 	if e := fresh.Create(fixturePassword); e != nil {
 		t.Fatal(e)
@@ -143,6 +145,7 @@ func TestManagedSwapImportsAndKeyOnlyRestoreRemainHeld(t *testing.T) {
 }
 
 func TestManagedSwapRecoveryKeepsOriginalWithoutRestoringAuthority(t *testing.T) {
+	t.Parallel()
 	dir := fixtureDir(t)
 	v := managedFixture(t, dir, "mainnet-beta")
 	if e := v.Create(fixturePassword); e != nil {
@@ -209,6 +212,7 @@ func TestManagedSwapRecoveryKeepsOriginalWithoutRestoringAuthority(t *testing.T)
 	}
 }
 func TestManagedSwapNetworkEpochBoundsAndInterruption(t *testing.T) {
+	t.Parallel()
 	dir := fixtureDir(t)
 	v := managedFixture(t, dir, "mainnet-beta")
 	if e := v.Create(fixturePassword); e != nil {
@@ -267,6 +271,7 @@ func TestManagedSwapNetworkEpochBoundsAndInterruption(t *testing.T) {
 }
 
 func TestManagedSwapInstalledConstructorRejectsUntrustedIdentity(t *testing.T) {
+	t.Parallel()
 	c := Config{Version: 2, Mode: ManagedFixtureMode, Network: "mainnet-beta", SignerID: randomID(), OwnerUID: os.Getuid() + 1, AppUID: os.Getuid() + 2, SignerUID: os.Getuid(), StateDir: fixtureDir(t), SocketDir: fixtureDir(t)}
 	if server, e := ServeControlledSwapFixture(t.Context(), c, onchaintest.Client(&onchaintest.Chain{})); e == nil {
 		server.Close()

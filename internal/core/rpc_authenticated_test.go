@@ -17,6 +17,7 @@ import (
 )
 
 func TestRPCAuthenticatedHTTPS(t *testing.T) {
+	t.Parallel()
 	for _, mode := range []string{"ok", "unauthorized", "redirect", "oversize", "genesis", "health", "malformed"} {
 		t.Run(mode, func(t *testing.T) {
 			s := fixtureStore(t)
@@ -117,6 +118,7 @@ func TestRPCAuthenticatedHTTPS(t *testing.T) {
 }
 
 func TestRPCAuthenticatedAdmissionCancellationAndBinding(t *testing.T) {
+	t.Parallel()
 	key := []byte("fased-rpc-test-controlled-check-123456")
 	roots := x509.NewCertPool()
 	for _, u := range []string{"http://127.0.0.1:1", "https://example.com:443", "https://127.0.0.1:1/path", "https://user@127.0.0.1:1", "https://127.0.0.1:1?key=secret"} {
@@ -162,6 +164,7 @@ func TestRPCAuthenticatedAdmissionCancellationAndBinding(t *testing.T) {
 }
 
 func TestRPCAuthenticatedCredentialChangeStopsSecondRequest(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	c := rpcSecretSetup(t, s)
 	v, e := s.RPCCredential(t.Context(), c)

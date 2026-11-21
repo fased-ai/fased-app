@@ -5,6 +5,7 @@ package custodyinstall
 import "testing"
 
 func TestRemoteAccountsIdentityExactOwnerAndInstallation(t *testing.T) {
+	t.Parallel()
 	tx, _, _, _ := ordinaryBootstrapModel(t, true)
 	m := tx.Base
 	for _, bad := range []string{"", "owner-uid", "root", "gid", "local", "no-enrollment", "version", "image", "data", "foreign-root"} {

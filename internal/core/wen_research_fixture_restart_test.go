@@ -6,6 +6,7 @@ import (
 )
 
 func TestWENResearchFixtureQueuedRestart(t *testing.T) {
+	t.Parallel()
 	s, _, _, selection := readBatchFixture(t)
 	r := preparedResearch(t, s, researchInput(t, selection))
 	if _, err := s.StartWENResearchAI(t.Context(), fixtureResearchConsent(t, s, r), true); err != nil {

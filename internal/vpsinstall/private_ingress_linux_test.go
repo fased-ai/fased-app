@@ -16,6 +16,7 @@ import (
 )
 
 func TestProtectedIngressProbeBindsTheRunningInstance(t *testing.T) {
+	t.Parallel()
 	_, _, m, _ := credentialFixture(t)
 	m.PublicOrigin = "https://fixture.example.ts.net"
 	const instance = "fixture-instance"

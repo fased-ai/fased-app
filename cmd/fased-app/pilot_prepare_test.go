@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"encoding/json"
 	"io"
-	"os"
 	"path/filepath"
 	"testing"
 
@@ -12,19 +11,8 @@ import (
 )
 
 func TestOpenAIPilotPreparationCLI(t *testing.T) {
-	root := filepath.Join(".evidence", "pilot-preparation-cli")
-	if e := os.MkdirAll(root, 0700); e != nil {
-		t.Fatal(e)
-	}
-	dir, e := os.MkdirTemp(root, "f-")
-	if e != nil {
-		t.Fatal(e)
-	}
-	t.Cleanup(func() {
-		if e := os.RemoveAll(dir); e != nil {
-			t.Error(e)
-		}
-	})
+	dir := shortFixtureDir(t, "fa-")
+	var e error
 	instance, review := filepath.Join(dir, "instance"), filepath.Join(dir, "review")
 	var out bytes.Buffer
 	if e = run([]string{"pilot", "prepare", "--instance-dir", instance, "--review-dir", review}, nil, &out, io.Discard); e != nil {

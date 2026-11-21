@@ -11,6 +11,7 @@ import (
 )
 
 func TestOrdinaryInstalledContextAndLegacyRefusal(t *testing.T) {
+	t.Parallel()
 	legacy := fixtureManifest()
 	before := mustJSON(legacy)
 	if bytes.Contains(before, []byte("profile")) || bytes.Contains(before, []byte("provenance")) {
@@ -52,6 +53,7 @@ func TestOrdinaryInstalledContextAndLegacyRefusal(t *testing.T) {
 	}
 }
 func TestOrdinaryInstalledReadyRejectsForeignClass(t *testing.T) {
+	t.Parallel()
 	m := fixtureManifest()
 	m.Version = 3
 	m.Mode = signer.OrdinaryCustodyMode

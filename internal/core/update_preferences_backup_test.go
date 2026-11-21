@@ -10,6 +10,7 @@ import (
 )
 
 func TestUpdatePreferencesIncludedInPrivateMetadataBackup(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	c := candidateFixture()
 	v, e := s.ChangeUpdatePreferences(t.Context(), UpdatePreferencesRequest{Revision: 0, Action: "propose", Candidate: &c})

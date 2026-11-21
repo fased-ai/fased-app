@@ -77,6 +77,7 @@ func installationFixtureWithContract(t *testing.T, v *Vault, sequence uint64, ad
 func metadataFixtureHash(b []byte) string { h := sha256.Sum256(b); return hex.EncodeToString(h[:]) }
 
 func TestReplacementGuardUsesSignerOwnedHold(t *testing.T) {
+	t.Parallel()
 	dir := fixtureDir(t)
 	v, _, _ := configuredFixture(t, dir)
 	defer v.Close()
@@ -118,6 +119,7 @@ func TestReplacementGuardUsesSignerOwnedHold(t *testing.T) {
 }
 
 func TestReplacementGuardColdReaderPreservesPendingPublication(t *testing.T) {
+	t.Parallel()
 	dir := fixtureDir(t)
 	v, _, _ := configuredFixture(t, dir)
 	i, binding := installationFixture(t, v)
@@ -194,6 +196,7 @@ func installCommand(t *testing.T, v *Vault, i update.Intent, b update.InstallBin
 	return update.InstallRequest{Action: phase, IntentID: i.ID, Binding: &b, Preflight: &update.PreflightRequest{IntentID: i.ID, Sequence: i.Sequence, ManifestSHA256: i.ManifestSHA256, ProbeID: p.Pause.Core.ProbeID, Pause: p.Pause, ExpectedSigner: p.Signer}}
 }
 func TestInstallationHoldRestartRollbackAndFinancialHistory(t *testing.T) {
+	t.Parallel()
 	dir := fixtureDir(t)
 	v, _, g := configuredFixture(t, dir)
 	paid := intentFor(g, 5)
@@ -253,6 +256,7 @@ func TestInstallationHoldRestartRollbackAndFinancialHistory(t *testing.T) {
 	}
 }
 func TestInstallationHoldPersistenceFaultAndConcurrency(t *testing.T) {
+	t.Parallel()
 	for _, step := range []string{"journal:update-install:before", "journal:update-install:written", "journal:update-install:durable"} {
 		t.Run(step, func(t *testing.T) {
 			dir := fixtureDir(t)
@@ -300,6 +304,7 @@ func TestInstallationHoldPersistenceFaultAndConcurrency(t *testing.T) {
 }
 
 func TestInstallationRejectsRebindingAndExpiredAdmission(t *testing.T) {
+	t.Parallel()
 	dir := fixtureDir(t)
 	v, _, _ := configuredFixture(t, dir)
 	defer v.Close()

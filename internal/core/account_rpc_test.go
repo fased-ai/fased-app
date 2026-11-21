@@ -11,6 +11,7 @@ import (
 )
 
 func TestAccountRPCBindings(t *testing.T) {
+	t.Parallel()
 	for _, kind := range []string{"current", "held", "watch", "stale", "unavailable", "missing", "revision", "network", "changed-during-check", "epoch-during-check"} {
 		t.Run(kind, func(t *testing.T) {
 			s := fixtureStore(t)
@@ -104,6 +105,7 @@ func TestAccountRPCBindings(t *testing.T) {
 }
 
 func TestAccountRPCPartialBindingAndRestart(t *testing.T) {
+	t.Parallel()
 	dir := fixtureDir(t)
 	s, err := OpenStore(dir)
 	if err != nil {

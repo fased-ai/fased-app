@@ -18,6 +18,7 @@ import (
 )
 
 func TestLocalBootstrapInventoryStagesOnlySignedCore(t *testing.T) {
+	t.Parallel()
 	for _, scenario := range []string{"ok", "tampered-source", "foreign-staged", "wrong-contract", "refused-auth", "remote", "managed", "no-native"} {
 		t.Run(scenario, func(t *testing.T) {
 			tx, dir, _, _ := ordinaryBootstrapModel(t)
@@ -113,6 +114,7 @@ func TestLocalBootstrapInventoryStagesOnlySignedCore(t *testing.T) {
 }
 
 func TestLocalBootstrapInventoryOSBindings(t *testing.T) {
+	t.Parallel()
 	tx, _, _, _ := ordinaryBootstrapModel(t)
 	for _, bad := range []string{"", "owner-as-app", "root-euid", "wrong-gid", "remote", "no-native", "no-enrollment", "managed", "foreign-owner", "data", "image", "id", "hash"} {
 		t.Run(bad, func(t *testing.T) {
@@ -154,6 +156,7 @@ func TestLocalBootstrapInventoryOSBindings(t *testing.T) {
 }
 
 func TestLocalBootstrapPairDoesNotMakeSnapshotOptional(t *testing.T) {
+	t.Parallel()
 	tx, _, _, _ := ordinaryBootstrapModel(t)
 	tx.Core.Version = 0
 	if _, err := tx.pairPlan(); err != nil {
@@ -171,6 +174,7 @@ func TestLocalBootstrapPairDoesNotMakeSnapshotOptional(t *testing.T) {
 // The installed Remote custody app and ordinary VPS app are separate identities.
 // Source regression: the exact custody pair must not require the VPS app session.
 func TestRemoteBootstrapInventoryUsesCustodyIdentityWithoutSession(t *testing.T) {
+	t.Parallel()
 	tx, dir, _, _ := ordinaryBootstrapModel(t)
 	tx.Base.Location, tx.Target.Location = "remote", "remote"
 	tx.Base.NativeOwnerAccess, tx.Target.NativeOwnerAccess = false, false
@@ -222,6 +226,7 @@ func TestRemoteBootstrapInventoryUsesCustodyIdentityWithoutSession(t *testing.T)
 }
 
 func TestRemoteBootstrapInventoryOSBindings(t *testing.T) {
+	t.Parallel()
 	tx, _, _, _ := ordinaryBootstrapModel(t)
 	tx.Base.Location = "remote"
 	tx.Base.NativeOwnerAccess = false
@@ -272,6 +277,7 @@ func TestRemoteBootstrapInventoryOSBindings(t *testing.T) {
 }
 
 func TestBootstrapInventoryBindsApprovedReader(t *testing.T) {
+	t.Parallel()
 	for _, approved := range []bool{false, true} {
 		t.Run(strconv.FormatBool(approved), func(t *testing.T) {
 			tx, dir, _, _ := ordinaryBootstrapModel(t)

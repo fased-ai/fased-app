@@ -71,6 +71,7 @@ func writeStage(t *testing.T, v *Vault, i update.Intent, data []byte) {
 }
 
 func TestStagingRecoveryConcurrencyAndFinancialPreservation(t *testing.T) {
+	t.Parallel()
 	dir := fixtureDir(t)
 	v, _, g := configuredFixture(t, dir)
 	op := intentFor(g, 7)
@@ -201,6 +202,7 @@ func TestStagingRecoveryConcurrencyAndFinancialPreservation(t *testing.T) {
 }
 
 func TestStagingStorageFailureAndTampering(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []string{"disk-full", "partial-write", "reply-loss", "journal-reply-loss", "symlink", "hardlink", "corrupt"} {
 		t.Run(tc, func(t *testing.T) {
 			dir := fixtureDir(t)

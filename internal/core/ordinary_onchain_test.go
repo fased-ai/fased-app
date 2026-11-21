@@ -14,6 +14,7 @@ import (
 )
 
 func TestOrdinaryOnchainReviewedTaskReceiptAndRestart(t *testing.T) {
+	t.Parallel()
 	if runtime.GOOS != "linux" {
 		t.Skip("ordinary owner custody is Linux-only")
 	}

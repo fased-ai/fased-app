@@ -13,6 +13,7 @@ import (
 )
 
 func TestReusableSetupPartialRetriesWithoutDirectRemoval(t *testing.T) {
+	t.Parallel()
 	owner, id := os.Getuid(), strings.Repeat("a", 32)
 	if owner <= 0 {
 		t.Skip("ordinary installation owner required")
@@ -40,6 +41,7 @@ func TestReusableSetupPartialRetriesWithoutDirectRemoval(t *testing.T) {
 }
 
 func TestReusableTemporaryPolicyDoesNotGrantDirectPendingRemoval(t *testing.T) {
+	t.Parallel()
 	m := fixtureManifest()
 	for _, slot := range reusableSetupSlotIDs(m.ID) {
 		if _, err := BoundReusablePolicyWriteArgs(m.Owner, reusablePolicyCandidate(m, slot), []byte("test")); err != nil {
@@ -62,6 +64,7 @@ func TestReusableTemporaryPolicyDoesNotGrantDirectPendingRemoval(t *testing.T) {
 }
 
 func TestReusableTemporaryPolicyRefusesDirectStagingOperations(t *testing.T) {
+	t.Parallel()
 	m := fixtureManifest()
 	pin := reusableMaintenanceAuthority{Version: 1, Owner: m.Owner, InstallationID: m.ID, RunnerSHA256: strings.Repeat("e", 64), GuardSHA256: strings.Repeat("d", 64)}
 	policy, err := draftReusableSetupTemporaryPolicy(m, pin, 1000, "fased_owner", 100, 200, 1893456000)
@@ -85,6 +88,7 @@ func TestReusableTemporaryPolicyRefusesDirectStagingOperations(t *testing.T) {
 }
 
 func TestReusableImageCopyRetryPreservesForeignData(t *testing.T) {
+	t.Parallel()
 	uid, gid := os.Getuid(), os.Getgid()
 	if uid <= 0 || gid <= 0 {
 		t.Skip("ordinary test owner required")
@@ -132,6 +136,7 @@ func TestReusableImageCopyRetryPreservesForeignData(t *testing.T) {
 }
 
 func TestReusableImageCopyRefusesUnmarkedMatchingPrefix(t *testing.T) {
+	t.Parallel()
 	uid, gid := os.Getuid(), os.Getgid()
 	if uid <= 0 || gid <= 0 {
 		t.Skip("ordinary test owner required")
@@ -168,6 +173,7 @@ func TestReusableImageCopyRefusesUnmarkedMatchingPrefix(t *testing.T) {
 }
 
 func TestReusableImageCopyRefusesUnexpectedMarkedMode(t *testing.T) {
+	t.Parallel()
 	uid, gid := os.Getuid(), os.Getgid()
 	if uid <= 0 || gid <= 0 {
 		t.Skip("ordinary test owner required")
@@ -195,6 +201,7 @@ func TestReusableImageCopyRefusesUnexpectedMarkedMode(t *testing.T) {
 }
 
 func TestReusableSetupLauncherRequiresApprovedRunningBytes(t *testing.T) {
+	t.Parallel()
 	path := "/usr/bin/true"
 	approved, err := os.ReadFile(path)
 	if err != nil {
@@ -224,6 +231,7 @@ func TestReusableSetupLauncherRequiresApprovedRunningBytes(t *testing.T) {
 }
 
 func TestReusableSetupLauncherLocationBindsRunningInode(t *testing.T) {
+	t.Parallel()
 	path := "/usr/bin/true"
 	f, err := os.Open(path)
 	if err != nil {
@@ -247,6 +255,7 @@ func TestReusableSetupLauncherLocationBindsRunningInode(t *testing.T) {
 }
 
 func TestReusableSetupLauncherRejectsOwnerWritableExecutable(t *testing.T) {
+	t.Parallel()
 	if os.Getuid() == 0 {
 		t.Fatal("the maintenance launcher regression must run as an ordinary user")
 	}
@@ -266,6 +275,7 @@ func TestReusableSetupLauncherRejectsOwnerWritableExecutable(t *testing.T) {
 }
 
 func TestReusableOutputRequiresOwnedHardlinkBeforeTruncation(t *testing.T) {
+	t.Parallel()
 	path := filepath.Join(t.TempDir(), "worker.env")
 	if err := os.WriteFile(path, []byte("previous output"), 0644); err != nil {
 		t.Fatal(err)

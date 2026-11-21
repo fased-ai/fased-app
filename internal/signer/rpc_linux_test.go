@@ -15,6 +15,7 @@ import (
 )
 
 func TestPreWalletOfflineInspectionDoesNotOpenSignerState(t *testing.T) {
+	t.Parallel()
 	c := Config{Version: 3, StateDir: filepath.Join(t.TempDir(), "must-not-be-created")}
 	if _, err := inspectVaultMode(c, false); !errors.Is(err, ErrUnavailable) {
 		t.Fatal("pre-wallet inspection was not refused", err)
@@ -25,6 +26,7 @@ func TestPreWalletOfflineInspectionDoesNotOpenSignerState(t *testing.T) {
 }
 
 func TestIdentityConfigurationRejectsSameUIDAndUntrustedSource(t *testing.T) {
+	t.Parallel()
 	c := Config{Version: 1, Mode: FixtureNetwork, SignerID: randomID(), OwnerUID: 1001, AppUID: 1002, SignerUID: 1003, StateDir: "/one", SocketDir: "/two"}
 	if err := c.Validate(); err != nil {
 		t.Fatal(err)
@@ -95,6 +97,7 @@ func protocolRequest(t *testing.T, c Config, owner bool, r Request) Response {
 }
 
 func TestOwnerAndAppProtocolBoundaries(t *testing.T) {
+	t.Parallel()
 	c, v := protocolFixture(t, os.Geteuid(), os.Geteuid())
 	for _, action := range []string{"import-fixture-seed", "create", "unlock", "lock", "backup", "verify-backup", "restore", "export-fixture-seed", "sign", "submit", "grant"} {
 		r := protocolRequest(t, c, false, Request{Action: action, Password: []byte("Disposable RPC password")})
@@ -117,6 +120,7 @@ func TestOwnerAndAppProtocolBoundaries(t *testing.T) {
 }
 
 func TestNonceReplayIdentityAndMalformedRequests(t *testing.T) {
+	t.Parallel()
 	c, _ := protocolFixture(t, os.Geteuid(), os.Geteuid())
 	first, old := protocolConnect(t, c, true)
 	first.Close()
@@ -149,6 +153,7 @@ func TestNonceReplayIdentityAndMalformedRequests(t *testing.T) {
 }
 
 func TestKernelPeerUIDDenialBeforeHandshake(t *testing.T) {
+	t.Parallel()
 	c, _ := protocolFixture(t, os.Geteuid()+100, os.Geteuid()+101)
 	for _, owner := range []bool{true, false} {
 		conn, err := net.DialUnix("unix", nil, &net.UnixAddr{Name: socketPath(c, owner), Net: "unix"})
@@ -164,6 +169,7 @@ func TestKernelPeerUIDDenialBeforeHandshake(t *testing.T) {
 }
 
 func TestOwnerRecoveryWireBoundDoesNotExpandApp(t *testing.T) {
+	t.Parallel()
 	payload, _ := json.Marshal(Request{Action: "restore", Document: bytes.Repeat([]byte{'x'}, 70*1024)})
 	payload = append(payload, '\n')
 	for _, owner := range []bool{false, true} {

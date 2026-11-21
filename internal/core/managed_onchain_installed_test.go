@@ -189,6 +189,7 @@ func installedSwapRPCEndpoint(network string) string {
 	return "https://mainnet.helius-rpc.com"
 }
 func TestInstalledSwapRPCSelectionUsesAdmittedProviders(t *testing.T) {
+	t.Parallel()
 	for _, network := range []string{"devnet", "mainnet-beta"} {
 		t.Run(network, func(t *testing.T) {
 			s := fixtureStore(t)

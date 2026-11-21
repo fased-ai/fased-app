@@ -19,10 +19,12 @@ import (
 )
 
 func TestOrdinaryOnchainHTTPApprovalLockResultRecovery(t *testing.T) {
+	t.Parallel()
 	testOrdinaryOnchainHTTPApprovalLockResultRecovery(t, false)
 }
 
 func TestRemoteCustodyOnchainHTTPApprovalLockResultRecovery(t *testing.T) {
+	t.Parallel()
 	testOrdinaryOnchainHTTPApprovalLockResultRecovery(t, true)
 }
 

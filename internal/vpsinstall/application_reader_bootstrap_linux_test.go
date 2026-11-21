@@ -13,6 +13,7 @@ import (
 )
 
 func TestRemoteApplicationReaderAfterStopHookAndHeldFailure(t *testing.T) {
+	t.Parallel()
 	f := remoteApplicationFixture(t)
 	f.c.ReaderBootstrap = true
 	f.cb.AfterStop = func(_ context.Context, a, b Manifest) error {
@@ -34,6 +35,7 @@ func TestRemoteApplicationReaderAfterStopHookAndHeldFailure(t *testing.T) {
 }
 
 func TestRemoteApplicationReaderSourceInventoryUsesOriginalFixedCommand(t *testing.T) {
+	t.Parallel()
 	_, o, m, c := ownerCallFixture(t)
 	got, e := applicationReaderInventory(t.Context(), m, c.ID, o, func(_ context.Context, args []string) ([]byte, error) {
 		base := applicationOwnerHelperArgs(m, m.Core)
@@ -57,6 +59,7 @@ func TestRemoteApplicationReaderSourceInventoryUsesOriginalFixedCommand(t *testi
 }
 
 func TestRemoteApplicationReaderAdmitsOnlyExactStagedTarget(t *testing.T) {
+	t.Parallel()
 	f := remoteApplicationFixture(t)
 	f.c.ReaderBootstrap = true
 	f.cb.AfterStop = func(context.Context, Manifest, Manifest) error { return nil }
@@ -96,6 +99,7 @@ func TestRemoteApplicationReaderAdmitsOnlyExactStagedTarget(t *testing.T) {
 }
 
 func TestRemoteApplicationReaderFlagBoundAcrossInterruptedResume(t *testing.T) {
+	t.Parallel()
 	f := remoteApplicationFixture(t)
 	f.c.ReaderBootstrap = true
 	hook := func(context.Context, Manifest, Manifest) error { return nil }
@@ -126,6 +130,7 @@ func TestRemoteApplicationReaderFlagBoundAcrossInterruptedResume(t *testing.T) {
 }
 
 func TestRemoteApplicationReaderFlagPreventsOldCodeRollback(t *testing.T) {
+	t.Parallel()
 	f := remoteApplicationFixture(t)
 	f.c.ReaderBootstrap = true
 	f.cb.AfterStop = func(context.Context, Manifest, Manifest) error { return nil }

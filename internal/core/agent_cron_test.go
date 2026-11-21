@@ -8,6 +8,7 @@ import (
 )
 
 func TestCronReviewedWireJourney(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	now := time.Date(2026, 10, 25, 12, 0, 0, 0, time.UTC)
 	s.now = func() time.Time { return now }
@@ -66,6 +67,7 @@ func cronInstant(t *testing.T, value string) int64 {
 	return v.Unix()
 }
 func TestCronParserDSTAndCalendarSemantics(t *testing.T) {
+	t.Parallel()
 	for _, expr := range []string{"* * * * *", "*/15 9-17 * * 1-5", "0 9 1 * 1", "0 0 * * 7", "1,31 0/6 * 1,6,12 *"} {
 		if _, e := parseCron(expr); e != nil {
 			t.Fatal(expr, e)
@@ -101,6 +103,7 @@ func cronCommand(now time.Time) AgentCommand {
 	return AgentCommand{Action: "task-review", ProfileID: "trading-analyst", Name: "Cron journal", Text: "Review retained results", MaxRuns: 3, Calendar: &TaskCalendar{Version: "cron-v1", Expression: "0 13 * * *", TimeZone: "UTC", Until: now.Add(7 * 24 * time.Hour).Unix()}}
 }
 func TestCronPauseRestartManualExpiryAndConcurrentTick(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	now := time.Date(2026, 10, 25, 12, 0, 0, 0, time.UTC)
 	s.now = func() time.Time { return now }
@@ -174,6 +177,7 @@ func TestCronPauseRestartManualExpiryAndConcurrentTick(t *testing.T) {
 	}
 }
 func TestCronReviewRefusalsAndSchemaPreservation(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	now := time.Date(2026, 10, 25, 12, 0, 0, 0, time.UTC)
 	s.now = func() time.Time { return now }
@@ -238,6 +242,7 @@ func TestCronReviewRefusalsAndSchemaPreservation(t *testing.T) {
 }
 
 func TestCronMigrationRejectsUnprotectedMemoryArchive(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	agentApply(t, s, AgentCommand{Action: "memory-put", ProfileID: "trading-analyst", Text: "Preserve this note", Source: "Owner"})
 	dropEmptyHistoryFixture(t, s)

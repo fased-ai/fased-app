@@ -10,6 +10,7 @@ import (
 )
 
 func TestNewsWatchProtectedMetadataBackupKeepsCursorAndResults(t *testing.T) {
+	t.Parallel()
 	s := newsTestStore(t)
 	v := newsAdd(t, s, "trading-analyst")
 	v = agentApply(t, s, watchReview(t, s, v, 3))

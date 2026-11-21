@@ -13,6 +13,7 @@ import (
 )
 
 func TestInstalledSequenceCompletion(t *testing.T) {
+	t.Parallel()
 	dir := fixtureDir(t)
 	v, _, _ := configuredFixture(t, dir)
 	i, b := installationFixture(t, v)
@@ -80,6 +81,7 @@ func TestInstalledSequenceCompletion(t *testing.T) {
 	}
 }
 func TestInstalledSequencePersistenceFaultAndConcurrentRetry(t *testing.T) {
+	t.Parallel()
 	for _, phase := range []string{"committed-held", "completed"} {
 		for _, step := range []string{"before", "written", "durable"} {
 			t.Run(phase+"/"+step, func(t *testing.T) {

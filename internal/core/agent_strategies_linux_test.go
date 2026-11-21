@@ -10,6 +10,7 @@ import (
 )
 
 func TestStrategyEnrollmentImagePreservesVersionAndPaperLedger(t *testing.T) {
+	t.Parallel()
 	s, p := strategyFixture(t)
 	strategy := saveStrategyFixture(t, s, p)
 	task := strategyTaskFixture(t, s, strategy, 2)

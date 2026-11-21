@@ -12,6 +12,7 @@ import (
 )
 
 func TestWENPaperContextCapture(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	now := time.Unix(1800000000, 0)
 	s.now = func() time.Time { return now }
@@ -60,6 +61,7 @@ func mustAgents(t *testing.T, s *Store) agentDocument {
 }
 
 func TestWENPaperContextReceiptIsolationRevisionAndBounds(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	now := time.Unix(1800000000, 0)
 	s.now = func() time.Time { return now }
@@ -126,6 +128,7 @@ func TestWENPaperContextReceiptIsolationRevisionAndBounds(t *testing.T) {
 }
 
 func TestWENPaperContextFixtureAIConsentAndCancellation(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	v := agentApply(t, s, AgentCommand{Action: "wen-paper-prepare", Name: "Manual explanation", WEN: &WENPaperInput{BudgetSOL: "0.01", Selection: "4", ValidForSeconds: 300}})
 	task := v.Tasks[0]

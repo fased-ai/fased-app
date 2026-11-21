@@ -33,6 +33,7 @@ func appOwnerOps(f *remoteUpdateFixture, image string) hostOps {
 }
 
 func TestApplicationOwnerRetainedHelperAcrossGenerationSwap(t *testing.T) {
+	t.Parallel()
 	for _, kind := range []string{"original", "new-code-old-config", "old-code-new-config", "target", "rolling-back"} {
 		t.Run(kind, func(t *testing.T) {
 			f, j, image := retainedOwnerFixture(t)
@@ -63,6 +64,7 @@ func TestApplicationOwnerRetainedHelperAcrossGenerationSwap(t *testing.T) {
 }
 
 func TestApplicationOwnerRetainedRefusesForeignState(t *testing.T) {
+	t.Parallel()
 	for _, kind := range []string{"private-journal", "public-journal", "missing-public", "foreign-id", "code", "root-role", "data", "extra-secret", "symlink", "foreign-owner", "app-identity", "actual-image", "groups", "terminal"} {
 		t.Run(kind, func(t *testing.T) {
 			f, j, image := retainedOwnerFixture(t)
@@ -136,6 +138,7 @@ func TestApplicationOwnerRetainedRefusesForeignState(t *testing.T) {
 }
 
 func TestApplicationOwnerRetainedBridgeFixedOriginalArguments(t *testing.T) {
+	t.Parallel()
 	f, _, image := retainedOwnerFixture(t)
 	for _, p := range []string{"/usr", "/usr/bin"} {
 		f.h.files[p] = hostFile{UID: 0, GID: 0, Mode: os.ModeDir | 0755, Directory: true}
@@ -163,6 +166,7 @@ func TestApplicationOwnerRetainedBridgeFixedOriginalArguments(t *testing.T) {
 }
 
 func TestApplicationMaintenanceLoadExactMixedGeneration(t *testing.T) {
+	t.Parallel()
 	for _, kind := range []string{"new-code", "new-config", "new-intent", "new-code-intent"} {
 		t.Run(kind, func(t *testing.T) {
 			f, j, image := retainedOwnerFixture(t)
@@ -193,6 +197,7 @@ func TestApplicationMaintenanceLoadExactMixedGeneration(t *testing.T) {
 }
 
 func TestApplicationMaintenanceLoadRefusesForeignOrMissingTransaction(t *testing.T) {
+	t.Parallel()
 	for _, kind := range []string{"missing", "different-id", "malformed-id", "foreign-owner", "root", "terminal", "public-record", "foreign-config", "foreign-code"} {
 		t.Run(kind, func(t *testing.T) {
 			f, j, image := retainedOwnerFixture(t)

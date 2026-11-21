@@ -9,6 +9,7 @@ import (
 )
 
 func TestManagedNetworkAccountRPCLifecycle(t *testing.T) {
+	t.Parallel()
 	dir := fixtureDir(t)
 	s, e := OpenStore(dir)
 	if e != nil {
@@ -121,6 +122,7 @@ func TestManagedNetworkAccountRPCLifecycle(t *testing.T) {
 	}
 }
 func TestManagedKeyMigrationPreservesAndRejectsUnprotectedState(t *testing.T) {
+	t.Parallel()
 	for _, variant := range []string{"preserve", "paused", "unprotected"} {
 		t.Run(variant, func(t *testing.T) {
 			dir := fixtureDir(t)

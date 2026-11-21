@@ -10,6 +10,7 @@ import (
 )
 
 func TestSignerResponseClassifiesOnlyOwnerInstallationStatusAbsence(t *testing.T) {
+	t.Parallel()
 	status := Request{Action: "fixture-install-controller", Install: &update.InstallRequest{Action: "status"}}
 	for _, tc := range []struct {
 		name     string

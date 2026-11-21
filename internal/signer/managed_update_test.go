@@ -13,6 +13,7 @@ import (
 )
 
 func TestManagedUpdateRestartCompletionAndRollback(t *testing.T) {
+	t.Parallel()
 	for _, rollback := range []bool{false, true} {
 		t.Run(map[bool]string{false: "complete", true: "rollback"}[rollback], func(t *testing.T) {
 			dir := fixtureDir(t)

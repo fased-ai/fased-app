@@ -9,6 +9,7 @@ import (
 )
 
 func TestReleaseBundleFormatKeepsEngineeringBoundary(t *testing.T) {
+	t.Parallel()
 	if runtime.GOOS != "linux" || runtime.GOARCH != "amd64" {
 		t.Skip("Ubuntu release format")
 	}
@@ -44,6 +45,7 @@ func TestReleaseBundleFormatKeepsEngineeringBoundary(t *testing.T) {
 }
 
 func TestComposedNativeBundleRequiresCompleteReleasePair(t *testing.T) {
+	t.Parallel()
 	if runtime.GOOS != "linux" || runtime.GOARCH != "amd64" {
 		t.Skip("Linux native bundle")
 	}

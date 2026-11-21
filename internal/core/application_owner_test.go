@@ -13,6 +13,7 @@ import (
 )
 
 func TestApplicationOwnerLaunchLeasePrivateIPCAndOutcome(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	fixture := fixtureUpdateController()
 	launched := 0
@@ -105,6 +106,7 @@ func TestApplicationOwnerLaunchLeasePrivateIPCAndOutcome(t *testing.T) {
 }
 
 func TestApplicationOwnerClaimsOriginalUnsentRecovery(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	d := &recoverableUpdateFixture{updateControllerFixture: fixtureUpdateController()}
 	if err := s.BindApplicationUpdateController(d); err != nil {
@@ -134,6 +136,7 @@ func TestApplicationOwnerClaimsOriginalUnsentRecovery(t *testing.T) {
 }
 
 func TestApplicationOwnerReleaseAndOutcomeCommitAtomically(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	fixture := fixtureUpdateController()
 	if e := s.BindApplicationMaintenance(fixture.Check, func(context.Context, string) error { return nil }); e != nil {

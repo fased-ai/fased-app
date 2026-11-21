@@ -15,6 +15,7 @@ import (
 )
 
 func TestWENSessionRehearsalAdmission(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	token := claimFixture(t, s)
 	h, err := NewHTTPHandler(s, "http://127.0.0.1:7331", "", nil)
@@ -35,6 +36,7 @@ func TestWENSessionRehearsalAdmission(t *testing.T) {
 }
 
 func TestWENSessionLifecycleSharedPool(t *testing.T) {
+	t.Parallel()
 	s, h, _, r := sessionFixture(t, "review", "fixture-4h")
 	var doc wenstrategy.Document
 	json.Unmarshal([]byte(r.Source.Raw), &doc)
@@ -119,6 +121,7 @@ func TestWENSessionLifecycleSharedPool(t *testing.T) {
 }
 
 func TestWENSessionRehearsalF1Parity(t *testing.T) {
+	t.Parallel()
 	var doc wenstrategy.Document
 	json.Unmarshal([]byte(researchRaw(t)), &doc)
 	doc.Execution = wenstrategy.Execution{Mode: "review", Runner: "fased"}
@@ -153,10 +156,7 @@ func TestWENSessionRehearsalF1Parity(t *testing.T) {
 			cases = append(cases, vector{string(raw), book.Slots[i], wenstrategy.ScheduleState{}, []string{}, metrics, at.Format(time.RFC3339), budget, reservation, expected})
 		}
 	}
-	root := filepath.Join("..", "..", ".evidence", "f4-rehearsal")
-	if e := os.MkdirAll(root, 0700); e != nil {
-		t.Fatal(e)
-	}
+	root := t.TempDir()
 	raw, _ := json.MarshalIndent(cases, "", "  ")
 	if e := os.WriteFile(filepath.Join(root, "f1-vectors.json"), raw, 0600); e != nil {
 		t.Fatal(e)
@@ -253,6 +253,7 @@ func sessionAcceptance(t *testing.T, h *HTTPHandler, v WENSessionView, id string
 	return out, c
 }
 func TestWENSessionRehearsalSchedules(t *testing.T) {
+	t.Parallel()
 	for _, hours := range []int{4, 12} {
 		for _, mode := range []string{"notify", "review"} {
 			t.Run(fmt.Sprintf("%dh-%s", hours, mode), func(t *testing.T) {
@@ -309,6 +310,7 @@ func TestWENSessionRehearsalSchedules(t *testing.T) {
 	}
 }
 func TestWENSessionLifecycleIdentityAndHolds(t *testing.T) {
+	t.Parallel()
 	s, h, _, review := sessionFixture(t, "review", "fixture-4h-unknown")
 	v, e := h.CreateWENSession(t.Context(), review)
 	if e != nil {
@@ -369,6 +371,7 @@ func TestWENSessionLifecycleIdentityAndHolds(t *testing.T) {
 	}
 }
 func TestWENSessionStorageMigration(t *testing.T) {
+	t.Parallel()
 	t.Run("format-only-and-paused", func(t *testing.T) {
 		s := fixtureStore(t)
 		dropEmptyHistoryFixture(t, s)
@@ -412,6 +415,7 @@ func TestWENSessionStorageMigration(t *testing.T) {
 }
 
 func TestWENSessionRehearsalGuards(t *testing.T) {
+	t.Parallel()
 	for _, mode := range []string{"witness", "expired-create", "source", "pool-reset", "pause", "action-expiry", "backward-clock", "exact-cutoff", "foreign", "strict-null", "strict-unknown", "auth", "capacity"} {
 		t.Run(mode, func(t *testing.T) {
 			s, h, token, review := sessionFixture(t, "review", "fixture-4h")
@@ -544,6 +548,7 @@ func TestWENSessionRehearsalGuards(t *testing.T) {
 }
 
 func TestWENSessionLifecycleSourceHoldCanStop(t *testing.T) {
+	t.Parallel()
 	s, h, _, review := sessionFixture(t, "review", "fixture-4h")
 	v, e := h.CreateWENSession(t.Context(), review)
 	if e != nil {
@@ -576,6 +581,7 @@ func TestWENSessionLifecycleSourceHoldCanStop(t *testing.T) {
 }
 
 func TestWENSessionLifecycleBackwardAckDoesNotRenew(t *testing.T) {
+	t.Parallel()
 	s, h, _, review := sessionFixture(t, "review", "fixture-4h")
 	// Bind the stored guard and rollback to one controlled clock, rather than
 	// sampling wall time after a potentially second-crossing store operation.
@@ -608,6 +614,7 @@ func TestWENSessionLifecycleBackwardAckDoesNotRenew(t *testing.T) {
 // Session-only constructors retain their test views without enabling AI or
 // exposing them to ordinary owners; a normal command must preserve that view.
 func TestSessionFixtureUICapabilityIsIndependentOfAI(t *testing.T) {
+	t.Parallel()
 	for _, enabled := range []bool{false, true} {
 		t.Run(fmt.Sprint(enabled), func(t *testing.T) {
 			s := fixtureStore(t)

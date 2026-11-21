@@ -42,6 +42,7 @@ func providerAccount(t *testing.T, s *Store, endpoint, network string) RPCCreden
 	return RPCCredentialCommand{AccountID: a.ID, Revision: v.Record.Revision, Action: "save", Key: disposableProviderKey, Passphrase: "Disposable provider vault password 123"}
 }
 func TestProviderRPCVaultLifecycle(t *testing.T) {
+	t.Parallel()
 	dir := fixtureDir(t)
 	s, e := OpenStore(dir)
 	if e != nil {
@@ -154,6 +155,7 @@ func TestProviderRPCVaultLifecycle(t *testing.T) {
 }
 
 func TestProviderRPCControlledHTTPS(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct{ origin, network, path string }{
 		{"https://mainnet.helius-rpc.com", "mainnet-beta", "/"},
 		{"https://devnet.helius-rpc.com", "devnet", "/"},
@@ -255,6 +257,7 @@ func mustReadDir(t *testing.T, path string) []os.DirEntry {
 }
 
 func TestProviderRPCMigrationPreservesAndRefuses(t *testing.T) {
+	t.Parallel()
 	for _, kind := range []string{"normal", "paused", "unprotected"} {
 		t.Run(kind, func(t *testing.T) {
 			dir := fixtureDir(t)

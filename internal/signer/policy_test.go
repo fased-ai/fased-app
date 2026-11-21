@@ -47,6 +47,7 @@ func requireSummary(t *testing.T, v *Vault, spent, held uint64) {
 }
 
 func TestFixtureAuthorityAndImmutableOperations(t *testing.T) {
+	t.Parallel()
 	v, p, g := configuredFixture(t, fixtureDir(t))
 	base := intentFor(g, 20)
 	for name, mutate := range map[string]func(*FixtureIntent){
@@ -105,6 +106,7 @@ func TestFixtureAuthorityAndImmutableOperations(t *testing.T) {
 }
 
 func TestFixtureCrossBotReservationsAndRevocation(t *testing.T) {
+	t.Parallel()
 	v, _, g := configuredFixture(t, fixtureDir(t))
 	other := g
 	other.ID = randomID()
@@ -160,6 +162,7 @@ func TestFixtureCrossBotReservationsAndRevocation(t *testing.T) {
 }
 
 func TestFixtureExpiryOverflowAndRejectedProof(t *testing.T) {
+	t.Parallel()
 	v, p, g := configuredFixture(t, fixtureDir(t))
 	i := intentFor(g, 10)
 	if _, e := v.ReserveFixture(i); e != nil {
@@ -216,7 +219,10 @@ func TestFixtureExpiryOverflowAndRejectedProof(t *testing.T) {
 // runtime flag or RPC enables these package-private injection hooks.
 func TestFixtureProcessCrashAndReconciliation(t *testing.T) {
 	if dir := os.Getenv("FASED_POLICY_CRASH_DIR"); dir != "" {
-		if os.Geteuid() == 0 || !strings.Contains(dir, "/.evidence/p3-signer/unit-") {
+		cleanDir := filepath.Clean(dir)
+		tempRoot := filepath.Clean(os.TempDir()) + string(os.PathSeparator)
+		allowedTemp := strings.HasPrefix(cleanDir, tempRoot) && strings.Contains(cleanDir, string(os.PathSeparator)+"unit-")
+		if os.Geteuid() == 0 || (!strings.Contains(cleanDir, "/.evidence/p3-signer/unit-") && !allowedTemp) {
 			os.Exit(90)
 		}
 		v, e := Open(dir, "11111111111111111111111111111111")
@@ -245,6 +251,7 @@ func TestFixtureProcessCrashAndReconciliation(t *testing.T) {
 	}
 	for _, phase := range []string{"journal:reserve:before", "journal:reserve:durable", "journal:prepare:before", "journal:prepare:written", "journal:prepare:durable", "journal:sending:durable", "mock:before-send", "journal:mock-receipt:durable", "mock:after-send", "journal:outcome:before", "journal:outcome:durable"} {
 		t.Run(phase, func(t *testing.T) {
+			t.Parallel()
 			dir := fixtureDir(t)
 			v, _, g := configuredFixture(t, dir)
 			i := intentFor(g, 70)
@@ -318,6 +325,7 @@ func TestFixtureProcessCrashAndReconciliation(t *testing.T) {
 }
 
 func TestFixtureRecoveryRetainsLifetimeBudgetAndRevokesGrants(t *testing.T) {
+	t.Parallel()
 	dir := fixtureDir(t)
 	v, p, g := configuredFixture(t, dir)
 	backup, e := v.Backup(backupPassword)
@@ -399,6 +407,7 @@ func TestFixtureRecoveryRetainsLifetimeBudgetAndRevokesGrants(t *testing.T) {
 }
 
 func TestFixtureHistoryDamageMissingFilesAndUncertainWrites(t *testing.T) {
+	t.Parallel()
 	for _, which := range []string{"operations.log", "mock-receipts.log"} {
 		for _, damage := range []string{"missing", "torn", "corrupt", "symlink", "hardlink"} {
 			t.Run(which+"/"+damage, func(t *testing.T) {
@@ -451,6 +460,7 @@ func TestFixtureHistoryDamageMissingFilesAndUncertainWrites(t *testing.T) {
 }
 
 func TestFixtureRPCSeparatesOwnerAuthorityFromAppRequests(t *testing.T) {
+	t.Parallel()
 	c, v := protocolFixture(t, os.Geteuid(), os.Geteuid())
 	if e := v.Create(fixturePassword); e != nil {
 		t.Fatal(e)
@@ -491,6 +501,7 @@ func TestFixtureRPCSeparatesOwnerAuthorityFromAppRequests(t *testing.T) {
 }
 
 func TestFixtureInitializationResumesSameEncryptedKey(t *testing.T) {
+	t.Parallel()
 	for _, phase := range []string{"journal:mock-init:before", "journal:mock-init:durable", "journal:init:before", "journal:init:durable"} {
 		t.Run(phase, func(t *testing.T) {
 			dir := fixtureDir(t)
@@ -524,6 +535,7 @@ func TestFixtureInitializationResumesSameEncryptedKey(t *testing.T) {
 }
 
 func TestPublicFixtureInputRejectsCredentialsAndLossyAmounts(t *testing.T) {
+	t.Parallel()
 	for _, document := range []string{`{"password":"never forwarded"}`, `{"document":"never imported"}`, `{"owner":true}`, `{} {}`, strings.Repeat(" ", maxDocument+1), `{"intent":{"units":1}}`, `{"intent":{"units":"1.5"}}`, `{"intent":{"units":"-1"}}`, `{"intent":{"units":"18446744073709551616"}}`} {
 		_, e := ParsePublicInput([]byte(document))
 		requireError(t, e)

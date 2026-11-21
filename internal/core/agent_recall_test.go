@@ -9,6 +9,7 @@ import (
 )
 
 func TestRelevantRecallCurrentScopedBoundedAndFrozen(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	now := time.Now()
 	s.now = func() time.Time { return now }
@@ -59,6 +60,7 @@ func TestRelevantRecallCurrentScopedBoundedAndFrozen(t *testing.T) {
 	}
 }
 func TestRememberOwnerCommandCapturesOnceWithoutAIAndFailsAtomically(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	p := "trading-analyst"
 	v := agentApply(t, s, AgentCommand{Action: "session-create", ProfileID: p, Name: "Owner preferences"})
@@ -92,6 +94,7 @@ func TestRememberOwnerCommandCapturesOnceWithoutAIAndFailsAtomically(t *testing.
 	}
 }
 func TestMemoryHistoryOverflowRetainsAllRevisionsAndFreshReview(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	p := "trading-analyst"
 	v := agentApply(t, s, AgentCommand{Action: "memory-put", ProfileID: p, Text: "Original fact", Source: "Owner"})

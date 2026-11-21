@@ -15,6 +15,7 @@ import (
 )
 
 func TestRPCConfigPersistenceAndExplicitMutation(t *testing.T) {
+	t.Parallel()
 	dir := fixtureDir(t)
 	s, err := OpenStore(dir)
 	if err != nil {
@@ -89,6 +90,7 @@ func TestRPCConfigPersistenceAndExplicitMutation(t *testing.T) {
 }
 
 func TestRPCConfigManagedIdentityAndClear(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	claimFixture(t, s)
 	ref := testRef()
@@ -144,6 +146,7 @@ func TestRPCConfigManagedIdentityAndClear(t *testing.T) {
 }
 
 func TestRPCSchemaMigrationPreservesAndRefuses(t *testing.T) {
+	t.Parallel()
 	for _, kind := range []string{"normal", "paused", "unprotected"} {
 		t.Run(kind, func(t *testing.T) {
 			dir := fixtureDir(t)
@@ -204,6 +207,7 @@ func TestRPCSchemaMigrationPreservesAndRefuses(t *testing.T) {
 }
 
 func TestRPCConfigBackup(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	claimFixture(t, s)
 	r := defaultAccounts()

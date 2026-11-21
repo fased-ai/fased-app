@@ -22,6 +22,7 @@ import (
 )
 
 func TestAtomicPairPlanBindsGuardAndSerializesDirections(t *testing.T) {
+	t.Parallel()
 	tx, _ := modelTransaction(t)
 	c := signer.Config{Version: 1, Mode: signer.FixtureNetwork, SignerID: tx.Base.ID, OwnerUID: tx.Base.Owner, AppUID: tx.Base.App.UID, SignerUID: tx.Base.Signer.UID, StateDir: tx.Base.Root + "/signer-state", SocketDir: tx.Base.Root + "/signer-ipc"}
 	guard := strings.Repeat("d", 64)
@@ -117,6 +118,7 @@ func TestAtomicPairPlanBindsGuardAndSerializesDirections(t *testing.T) {
 }
 
 func TestAtomicWorkerChecksSignerHoldBeforeBlockingServices(t *testing.T) {
+	t.Parallel()
 	tx, _ := modelTransaction(t)
 	c := signer.Config{Version: 1, Mode: signer.FixtureNetwork, SignerID: tx.Base.ID, OwnerUID: tx.Base.Owner, AppUID: tx.Base.App.UID, SignerUID: tx.Base.Signer.UID, StateDir: tx.Base.Root + "/signer-state", SocketDir: tx.Base.Root + "/signer-ipc"}
 	plan, err := makeAtomicPairPlan(tx, c, strings.Repeat("d", 64), strings.Repeat("e", 64))
@@ -138,6 +140,7 @@ func TestAtomicWorkerChecksSignerHoldBeforeBlockingServices(t *testing.T) {
 }
 
 func TestAtomicPairRejectsUntrustedPauseIdentifierBeforeUnitGeneration(t *testing.T) {
+	t.Parallel()
 	for _, field := range []string{"pause", "intent"} {
 		t.Run(field, func(t *testing.T) {
 			tx, _ := modelTransaction(t)
@@ -162,6 +165,7 @@ func TestAtomicPairRejectsUntrustedPauseIdentifierBeforeUnitGeneration(t *testin
 }
 
 func TestAtomicPairRejectsUnreviewedExecutionSections(t *testing.T) {
+	t.Parallel()
 	for _, property := range []string{"ExecCondition", "ExecStartPre", "ExecStartPost", "ExecStop", "ExecStopPost", "ExecReload", "ExecReloadPost"} {
 		body := []byte("[Service]\nExecStart=/usr/bin/true\n" + property + "=/usr/bin/true\n")
 		if _, err := parseAtomicPairCommands(body); err == nil {
@@ -171,6 +175,7 @@ func TestAtomicPairRejectsUnreviewedExecutionSections(t *testing.T) {
 }
 
 func TestAtomicServicePropertySnapshotRejectsHiddenCommands(t *testing.T) {
+	t.Parallel()
 	properties := map[string]any{}
 	empty := func() any { return map[string]any{"type": "a(sasbttttuii)", "data": []any{}} }
 	properties["ExecStart"] = empty()
@@ -205,6 +210,7 @@ func TestAtomicServicePropertySnapshotRejectsHiddenCommands(t *testing.T) {
 }
 
 func TestAtomicPairUnitSyntax(t *testing.T) {
+	t.Parallel()
 	tool, err := exec.LookPath("systemd-analyze")
 	if err != nil {
 		t.Skip("systemd-analyze unavailable")
@@ -257,6 +263,7 @@ func TestAtomicPairUnitSyntax(t *testing.T) {
 }
 
 func TestLoadedAtomicUnitRequiresExactSystemdCommands(t *testing.T) {
+	t.Parallel()
 	tx, _ := modelTransaction(t)
 	c := signer.Config{Version: 1, Mode: signer.FixtureNetwork, SignerID: tx.Base.ID, OwnerUID: tx.Base.Owner, AppUID: tx.Base.App.UID, SignerUID: tx.Base.Signer.UID, StateDir: tx.Base.Root + "/signer-state", SocketDir: tx.Base.Root + "/signer-ipc"}
 	plan, err := makeAtomicPairPlan(tx, c, strings.Repeat("d", 64), strings.Repeat("e", 64))
@@ -303,6 +310,7 @@ func TestLoadedAtomicUnitRequiresExactSystemdCommands(t *testing.T) {
 }
 
 func TestReusableWorkerAdmissionRejectsAlteredOSExecution(t *testing.T) {
+	t.Parallel()
 	tx, _ := modelTransaction(t)
 	c := signer.Config{Version: 1, Mode: signer.FixtureNetwork, SignerID: tx.Base.ID, OwnerUID: tx.Base.Owner, AppUID: tx.Base.App.UID, SignerUID: tx.Base.Signer.UID, StateDir: tx.Base.Root + "/signer-state", SocketDir: tx.Base.Root + "/signer-ipc"}
 	pin := reusableMaintenanceAuthority{Version: 1, Owner: tx.Base.Owner, InstallationID: tx.Base.ID, RunnerSHA256: strings.Repeat("e", 64), GuardSHA256: strings.Repeat("d", 64)}
@@ -380,6 +388,7 @@ func TestReusableWorkerAdmissionRejectsAlteredOSExecution(t *testing.T) {
 }
 
 func TestReusableProvisionRejectsForeignStagedTransaction(t *testing.T) {
+	t.Parallel()
 	tx, _ := modelTransaction(t)
 	c := signer.Config{Version: 1, Mode: signer.FixtureNetwork, SignerID: tx.Base.ID, OwnerUID: tx.Base.Owner, AppUID: tx.Base.App.UID, SignerUID: tx.Base.Signer.UID, StateDir: tx.Base.Root + "/signer-state", SocketDir: tx.Base.Root + "/signer-ipc"}
 	pin := reusableMaintenanceAuthority{Version: 1, Owner: tx.Base.Owner, InstallationID: tx.Base.ID, RunnerSHA256: strings.Repeat("e", 64), GuardSHA256: strings.Repeat("d", 64)}
@@ -567,6 +576,7 @@ func TestReusableProvisionRequiresSystemdInvocation(t *testing.T) {
 }
 
 func TestReusableProvisionVerifiesOriginalBackupBeforePublication(t *testing.T) {
+	t.Parallel()
 	m := fixtureManifest()
 	pin := reusableMaintenanceAuthority{Version: 1, Owner: m.Owner, InstallationID: m.ID, RunnerSHA256: strings.Repeat("e", 64), GuardSHA256: strings.Repeat("d", 64)}
 	body, err := reusableAtomicProvision(m, pin)
@@ -584,6 +594,7 @@ func TestReusableProvisionVerifiesOriginalBackupBeforePublication(t *testing.T) 
 }
 
 func TestStagedRecoveryRequiresExactTransactionAndForwardFence(t *testing.T) {
+	t.Parallel()
 	tx, _ := modelTransaction(t)
 	stage := reusableMaintenancePath(tx.Base, "staging") + "/transaction"
 	markerPath := tx.Base.Root + "/update-start-blocked.json"
@@ -646,6 +657,7 @@ func TestStagedRecoveryRequiresExactTransactionAndForwardFence(t *testing.T) {
 // Exercise the generated provision commands with ordinary-user OS tools. The
 // owner flags are omitted only because this isolated fixture is not root.
 func TestReusableProvisionPreservesInterruptedWorkerCopies(t *testing.T) {
+	t.Parallel()
 	m := fixtureManifest()
 	pin := reusableMaintenanceAuthority{Version: 1, Owner: m.Owner, InstallationID: m.ID, RunnerSHA256: strings.Repeat("e", 64), GuardSHA256: strings.Repeat("d", 64)}
 	body, err := reusableAtomicProvision(m, pin)
@@ -856,6 +868,7 @@ func TestReusableProvisionPreservesInterruptedWorkerCopies(t *testing.T) {
 }
 
 func TestReusableCleanupOnlyRemovesMatchingStagingLinks(t *testing.T) {
+	t.Parallel()
 	tx, _ := modelTransaction(t)
 	c := signer.Config{Version: 1, Mode: signer.FixtureNetwork, SignerID: tx.Base.ID, OwnerUID: tx.Base.Owner, AppUID: tx.Base.App.UID, SignerUID: tx.Base.Signer.UID, StateDir: tx.Base.Root + "/signer-state", SocketDir: tx.Base.Root + "/signer-ipc"}
 	plan, err := makeReusableAtomicPairPlan(tx, c, strings.Repeat("d", 64), strings.Repeat("e", 64))
@@ -917,6 +930,7 @@ func TestReusableCleanupOnlyRemovesMatchingStagingLinks(t *testing.T) {
 }
 
 func TestReusableProofCleanupPreservesRecoveryOnRefusal(t *testing.T) {
+	t.Parallel()
 	tx, _ := modelTransaction(t)
 	c := signer.Config{Version: 1, Mode: signer.FixtureNetwork, SignerID: tx.Base.ID, OwnerUID: tx.Base.Owner, AppUID: tx.Base.App.UID, SignerUID: tx.Base.Signer.UID, StateDir: tx.Base.Root + "/signer-state", SocketDir: tx.Base.Root + "/signer-ipc"}
 	plan, err := makeReusableAtomicPairPlan(tx, c, strings.Repeat("d", 64), strings.Repeat("e", 64))
@@ -1010,6 +1024,7 @@ func TestReusableProofCleanupPreservesRecoveryOnRefusal(t *testing.T) {
 }
 
 func TestAtomicPolicyIsExactAndHasValidSudoersSyntax(t *testing.T) {
+	t.Parallel()
 	tx, _ := modelTransaction(t)
 	c := signer.Config{Version: 1, Mode: signer.FixtureNetwork, SignerID: tx.Base.ID, OwnerUID: tx.Base.Owner, AppUID: tx.Base.App.UID, SignerUID: tx.Base.Signer.UID, StateDir: tx.Base.Root + "/signer-state", SocketDir: tx.Base.Root + "/signer-ipc"}
 	plan, err := makeAtomicPairPlan(tx, c, strings.Repeat("d", 64), strings.Repeat("e", 64))
@@ -1042,6 +1057,7 @@ func TestAtomicPolicyIsExactAndHasValidSudoersSyntax(t *testing.T) {
 }
 
 func TestPasswordFreeSudoInventoryRejectsUnclassifiedAuthority(t *testing.T) {
+	t.Parallel()
 	listing := []byte("Sudoers entry: /etc/sudoers\n    RunAsUsers: ALL\n    Commands:\n\tALL\n\nSudoers entry: /etc/sudoers.d/fased-native-1800\n    RunAsUsers: root\n    Options: !authenticate\n    Commands:\n\t/usr/bin/systemctl start fased-custody-1800-app.service\n")
 	paths, err := passwordFreeSudoPaths(listing)
 	if err != nil || len(paths) != 1 || paths[0] != "/etc/sudoers.d/fased-native-1800" {
@@ -1060,6 +1076,7 @@ func TestPasswordFreeSudoInventoryRejectsUnclassifiedAuthority(t *testing.T) {
 }
 
 func TestAtomicUnitCreationBindsBytesAndPreservesInterruptedFile(t *testing.T) {
+	t.Parallel()
 	owner := os.Getuid()
 	target := fmt.Sprintf("/etc/systemd/system/fased-custody-%d-atomic-%s-forward.service", owner, strings.Repeat("a", 32))
 	body := []byte("[Service]\nType=oneshot\nExecStart=/usr/bin/true\n")
@@ -1090,6 +1107,7 @@ func TestAtomicUnitCreationBindsBytesAndPreservesInterruptedFile(t *testing.T) {
 }
 
 func TestPrepareAtomicPairPreflightsAndResumesWithoutReplacingActiveInputs(t *testing.T) {
+	t.Parallel()
 	tx, _ := modelTransaction(t)
 	if tx.Base.Owner != os.Getuid() {
 		t.Skip("model requires its ordinary fixture owner")
@@ -1143,6 +1161,7 @@ func TestPrepareAtomicPairPreflightsAndResumesWithoutReplacingActiveInputs(t *te
 }
 
 func TestApprovedAtomicInputsAreBoundAndNeverOverwritePartialFiles(t *testing.T) {
+	t.Parallel()
 	tx, _ := modelTransaction(t)
 	if tx.Base.Owner != os.Getuid() {
 		t.Skip("model requires its ordinary fixture owner")
@@ -1179,6 +1198,7 @@ func TestApprovedAtomicInputsAreBoundAndNeverOverwritePartialFiles(t *testing.T)
 }
 
 func TestRestartGuardsPreserveForeignFilesAndResumeProvisioning(t *testing.T) {
+	t.Parallel()
 	m := fixtureManifest()
 	if m.Owner != os.Getuid() {
 		t.Skip("model requires its ordinary fixture owner")

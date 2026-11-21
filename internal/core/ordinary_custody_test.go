@@ -15,6 +15,7 @@ import (
 )
 
 func TestOrdinaryCustodyAccountRPCRestartAndRecovery(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	keydir := t.TempDir()
 	if err := os.Chmod(keydir, 0700); err != nil {
@@ -167,6 +168,7 @@ func TestOrdinaryCustodyAccountRPCRestartAndRecovery(t *testing.T) {
 }
 
 func TestOrdinaryCustodySchemaMigrationAndErasureRefusal(t *testing.T) {
+	t.Parallel()
 	for _, test := range []string{"valid", "current", "check-failed", "available", "paused", "unprotected"} {
 		t.Run(test, func(t *testing.T) {
 			dir := fixtureDir(t)
@@ -237,6 +239,7 @@ func TestOrdinaryCustodySchemaMigrationAndErasureRefusal(t *testing.T) {
 
 // Synthetic schema35 fixtures exercise the settled proof, not historical host acceptance.
 func TestOrdinaryCustodyMigrationSettledHistory(t *testing.T) {
+	t.Parallel()
 	for _, phase := range []string{"completed", "rolled-back"} {
 		for _, tamper := range []bool{false, true} {
 			t.Run(phase+map[bool]string{false: "-preserved", true: "-tampered"}[tamper], func(t *testing.T) {
@@ -317,6 +320,7 @@ func TestOrdinaryCustodyMigrationSettledHistory(t *testing.T) {
 }
 
 func TestOrdinaryCustodyMigrationRetiredLease(t *testing.T) {
+	t.Parallel()
 	for _, checkpoint := range []bool{false, true} {
 		t.Run(map[bool]string{false: "unsent-preserved", true: "unknown-checkpoint-held"}[checkpoint], func(t *testing.T) {
 			s := fixtureStore(t)
@@ -385,6 +389,7 @@ func TestOrdinaryCustodyMigrationRetiredLease(t *testing.T) {
 }
 
 func TestOrdinaryCustodyEmptyProjectionDoesNotOfferLegacySetup(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	if err := os.Chmod(dir, 0700); err != nil {
 		t.Fatal(err)

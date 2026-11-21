@@ -19,6 +19,7 @@ func qwenModelPage(page, total int, models ...string) map[string]any {
 }
 
 func TestQwenDocumentedModelDiscovery(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	calls := 0
 	rt := aiTestTransport(func(r *http.Request) (*http.Response, error) {
@@ -41,6 +42,7 @@ func TestQwenDocumentedModelDiscovery(t *testing.T) {
 }
 
 func TestQwenSubscriptionKeysCannotReplaceAPIAccount(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	a := addNativeAccount(t, s, "qwen", true)
 	agentApply(t, s, AgentCommand{Action: "session-create", ProfileID: "trading-analyst", Name: "Preserved Qwen work"})
@@ -69,6 +71,7 @@ func TestQwenSubscriptionKeysCannotReplaceAPIAccount(t *testing.T) {
 }
 
 func TestQwenNativePagesFailClosed(t *testing.T) {
+	t.Parallel()
 	first := []string{}
 	for i := 0; i < 100; i++ {
 		first = append(first, fmt.Sprintf("qwen-unreviewed-%03d", i))
@@ -129,6 +132,7 @@ func TestQwenNativePagesFailClosed(t *testing.T) {
 }
 
 func TestQwenMissingModelRefusesGeneration(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	p := openAIModelPolicy("qwen3.8-flash")
 	q := AgentAIRequest{Model: p.Model, Policy: &p, ConnectionRef: "disposable-qwen-account", Context: "synthetic", Limits: AILimits{MaxInputTokens: 24000, MaxOutputTokens: 1024, BudgetMicrousd: 1000000}}
@@ -146,6 +150,7 @@ func TestQwenMissingModelRefusesGeneration(t *testing.T) {
 }
 
 func TestQwenLegacySubscriptionKeyNeverLeavesVault(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	s.provider.apiCredentials = true
 	// Reconstruct a formerly accepted v4 record without weakening the public

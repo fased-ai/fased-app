@@ -15,6 +15,7 @@ func connectedTask(t *testing.T, s *Store, ref string) AgentView {
 	return taskAIAuthorize(t, s, v)
 }
 func TestTaskAccessRemainsScopedAfterInteractiveExpiry(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	connection := saveTestConnection(t, s)
 	v := connectedTask(t, s, connection.Ref)
@@ -80,6 +81,7 @@ func TestTaskAccessRemainsScopedAfterInteractiveExpiry(t *testing.T) {
 }
 
 func TestTaskAccessLogoutPolicy(t *testing.T) {
+	t.Parallel()
 	for _, keep := range []bool{false, true} {
 		t.Run(map[bool]string{false: "default-lock", true: "explicit-background"}[keep], func(t *testing.T) {
 			s := fixtureStore(t)
@@ -151,6 +153,7 @@ func TestTaskAccessLogoutPolicy(t *testing.T) {
 }
 
 func TestTaskAccessLogoutPolicyRejectsOtherOperations(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	for _, action := range []string{"models-refresh", "sign-in-start", "pilot-review", "lock", "unlock", "task-access-allow", "task-access-revoke"} {
 		if _, e := s.ChangeAIConnection(t.Context(), AIConnectionCommand{Action: action, ContinueOnSignOut: true}); e == nil {
@@ -165,6 +168,7 @@ func TestTaskAccessLogoutPolicyRejectsOtherOperations(t *testing.T) {
 }
 
 func TestTaskAccessLogoutPolicyEnds(t *testing.T) {
+	t.Parallel()
 	for _, end := range []string{"revoke", "expiry", "restart"} {
 		t.Run(end, func(t *testing.T) {
 			s := fixtureStore(t)

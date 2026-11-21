@@ -14,6 +14,7 @@ import (
 )
 
 func TestNativeOwnerSessionIsPrivateAndPreservesRecoveryFence(t *testing.T) {
+	t.Parallel()
 	s, err := OpenStore(filepath.Join(t.TempDir(), "state"))
 	if err != nil {
 		t.Fatal(err)
@@ -96,6 +97,7 @@ func TestNativeOwnerSessionIsPrivateAndPreservesRecoveryFence(t *testing.T) {
 }
 
 func TestProtectedLocalOwnerCanOpenBrowserWithoutWalletAuthority(t *testing.T) {
+	t.Parallel()
 	s, err := OpenStore(filepath.Join(t.TempDir(), "state"))
 	if err != nil {
 		t.Fatal(err)

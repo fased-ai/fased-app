@@ -18,6 +18,7 @@ func analysisCommand(v AgentView) AgentCommand {
 	return AgentCommand{Action: "task-review", ProfileID: v.ProfileID, Revision: v.Revision, Name: "News analysis", Text: "Summarize the selected evidence without proposing actions", Analysis: &TaskAnalysisPolicy{Version: "task-analysis-v1", Failure: "required"}, IntervalSeconds: 60, MaxRuns: 2, Limits: &AILimits{MaxInputTokens: 24000, MaxOutputTokens: 1024, DeadlineSeconds: 1, BudgetMicrousd: 30000}, TotalBudgetMicrousd: 60000, AuthorizationSeconds: 3600}
 }
 func TestTaskAnalysisReviewCreatesNothingAndCompletesWithoutReminder(t *testing.T) {
+	t.Parallel()
 	s := newsTestStore(t)
 	v, err := s.Agents(t.Context(), "trading-analyst", "")
 	if err != nil {
@@ -120,6 +121,7 @@ func fetchAnalysisWatch(t *testing.T, s *Store, v AgentView, body string, enable
 	return v
 }
 func TestTaskAnalysisWatchSuccessThenNoNewMatchDoesNotCallAI(t *testing.T) {
+	t.Parallel()
 	s, v := analysisWatchFixture(t, "required")
 	body := watchBody(s.now().Unix())
 	v = fetchAnalysisWatch(t, s, v, body, true)
@@ -147,6 +149,7 @@ func TestTaskAnalysisWatchSuccessThenNoNewMatchDoesNotCallAI(t *testing.T) {
 	}
 }
 func TestTaskAnalysisRequiredVersusOptionalFailureAndUnknownHolds(t *testing.T) {
+	t.Parallel()
 	for _, policy := range []string{"required", "optional"} {
 		for _, failure := range []string{"known", "unknown", "disabled"} {
 			t.Run(policy+"/"+failure, func(t *testing.T) {
@@ -207,6 +210,7 @@ func TestTaskAnalysisRequiredVersusOptionalFailureAndUnknownHolds(t *testing.T) 
 	}
 }
 func TestTaskAnalysisExplicitPauseDoesNotContinueOptionalWatch(t *testing.T) {
+	t.Parallel()
 	s, v := analysisWatchFixture(t, "optional")
 	v = fetchAnalysisWatch(t, s, v, watchBody(s.now().Unix()), true)
 	v = agentApply(t, s, AgentCommand{Action: "task-pause", ProfileID: v.ProfileID, ID: v.Tasks[0].ID})
@@ -223,6 +227,7 @@ func TestTaskAnalysisExplicitPauseDoesNotContinueOptionalWatch(t *testing.T) {
 	}
 }
 func TestTaskAnalysisInterruptedWatchRecordsOmissionOnce(t *testing.T) {
+	t.Parallel()
 	s, v := analysisWatchFixture(t, "optional")
 	v = fetchAnalysisWatch(t, s, v, watchBody(s.now().Unix()), true)
 	rewriteReminderFixture(t, s, func(d *agentDocument) { d.AIRequests[0].State = "running"; d.AIRequests[0].DispatchBoot = s.bootID })
@@ -257,6 +262,7 @@ func TestTaskAnalysisInterruptedWatchRecordsOmissionOnce(t *testing.T) {
 	}
 }
 func TestTaskAnalysisReviewBindingAndScope(t *testing.T) {
+	t.Parallel()
 	s := newsTestStore(t)
 	v := newsAdd(t, s, "trading-analyst")
 	c := analysisCommand(v)
@@ -307,6 +313,7 @@ func TestTaskAnalysisReviewBindingAndScope(t *testing.T) {
 	}
 }
 func TestTaskAnalysisCalendarAndFreshNewsThroughSharedWorker(t *testing.T) {
+	t.Parallel()
 	for _, version := range []string{"once-at-v1", "cron-v1"} {
 		t.Run(version, func(t *testing.T) {
 			s := newsTestStore(t)
@@ -353,6 +360,7 @@ func TestTaskAnalysisCalendarAndFreshNewsThroughSharedWorker(t *testing.T) {
 }
 
 func TestTaskAnalysisNativeGrantAndSourceUseExistingCredentialBoundary(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	a := addNativeAccount(t, s, "anthropic", true)
 	rt := nativeHTTPSFixture(t, "anthropic", func(w http.ResponseWriter, r *http.Request) {
@@ -426,6 +434,7 @@ func TestTaskAnalysisNativeGrantAndSourceUseExistingCredentialBoundary(t *testin
 }
 
 func TestTaskAnalysisMigrationAndTamperPreserveOriginalRecords(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	a := addNativeAccount(t, s, "anthropic", true)
 	v := agentApply(t, s, AgentCommand{Action: "session-create", ProfileID: "trading-analyst", Name: "Old draft context"})
@@ -537,6 +546,7 @@ func TestTaskAnalysisMigrationAndTamperPreserveOriginalRecords(t *testing.T) {
 	}
 }
 func TestTaskAnalysisProfileAndAccountChangesCannotRewriteSavedWork(t *testing.T) {
+	t.Parallel()
 	s := newsTestStore(t)
 	v, err := s.Agents(t.Context(), "trading-analyst", "")
 	if err != nil {
@@ -566,6 +576,7 @@ func TestTaskAnalysisProfileAndAccountChangesCannotRewriteSavedWork(t *testing.T
 }
 
 func TestTaskAnalysisResultCannotBeReplayedOrChanged(t *testing.T) {
+	t.Parallel()
 	s := newsTestStore(t)
 	v, _ := s.Agents(t.Context(), "trading-analyst", "")
 	v = createAnalysisFixture(t, s, analysisCommand(v))
@@ -623,6 +634,7 @@ func TestTaskAnalysisResultCannotBeReplayedOrChanged(t *testing.T) {
 }
 
 func TestTaskAnalysisOptionalExpiryDuringCompletedCallPreservesKnownUsage(t *testing.T) {
+	t.Parallel()
 	s := newsTestStore(t)
 	v := newsAdd(t, s, "trading-analyst")
 	c := analysisCommand(v)
@@ -662,6 +674,7 @@ func TestTaskAnalysisOptionalExpiryDuringCompletedCallPreservesKnownUsage(t *tes
 }
 
 func TestTaskAnalysisPausedOptionalWatchResumesWithoutAIGrant(t *testing.T) {
+	t.Parallel()
 	s, v := analysisWatchFixture(t, "optional")
 	v = fetchAnalysisWatch(t, s, v, watchBody(s.now().Unix()), false)
 	v = agentApply(t, s, AgentCommand{Action: "task-pause", ProfileID: v.ProfileID, ID: v.Tasks[0].ID})

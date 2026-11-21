@@ -12,6 +12,7 @@ import (
 )
 
 func TestCurrentInstallationPreservesConfirmedAbsentHold(t *testing.T) {
+	t.Parallel()
 	got, err := currentInstallation(t.Context(), InstallTransaction{}, nil, func(context.Context) (*update.Installation, error) {
 		return nil, signer.ErrNoInstallationHold
 	})

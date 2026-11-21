@@ -34,6 +34,7 @@ func currentRemoteAdmissionFixture(t *testing.T) (*Store, ApplicationReaderBoots
 }
 
 func TestCurrentRemoteAdmissionPreservesFormatAndIdentity(t *testing.T) {
+	t.Parallel()
 	for _, point := range []string{"", "reader:before-commit", "reader:after-commit"} {
 		t.Run(point, func(t *testing.T) {
 			s, r, legacyToken, token := currentRemoteAdmissionFixture(t)
@@ -91,6 +92,7 @@ func TestCurrentRemoteAdmissionPreservesFormatAndIdentity(t *testing.T) {
 }
 
 func TestCurrentRemoteAdmissionRejectsHeldAndChangedAuthority(t *testing.T) {
+	t.Parallel()
 	t.Run("held operation", func(t *testing.T) {
 		s, r, _, _ := currentRemoteAdmissionFixture(t)
 		op := ApplicationUpdateOperation{ID: update.NewProbe(), Phase: "recovery", OwnerLease: update.NewProbe(), Release: &r.Release}
@@ -126,6 +128,7 @@ func TestCurrentRemoteAdmissionRejectsHeldAndChangedAuthority(t *testing.T) {
 }
 
 func TestCurrentRemoteAdmissionVersionAndTarget(t *testing.T) {
+	t.Parallel()
 	for _, schema := range []int{33, 35, 36, 38} {
 		version, err := ApplicationReaderRequestVersion(schema)
 		if err != nil {
@@ -144,6 +147,7 @@ func TestCurrentRemoteAdmissionVersionAndTarget(t *testing.T) {
 }
 
 func TestCurrentRemoteAdmissionRejectsChangedOwnerAndOldRequest(t *testing.T) {
+	t.Parallel()
 	s, r, _, _ := currentRemoteAdmissionFixture(t)
 	old := r
 	old.Version = 3

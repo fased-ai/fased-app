@@ -19,6 +19,7 @@ import (
 )
 
 func TestReusableControllerRefusesFreshFenceBeforeHold(t *testing.T) {
+	t.Parallel()
 	tx, _ := modelTransaction(t)
 	m := tx.Base
 	m.Owner = 2140000000
@@ -39,6 +40,7 @@ func TestReusableControllerRefusesFreshFenceBeforeHold(t *testing.T) {
 }
 
 func TestReadOnlyPreparationFenceClassification(t *testing.T) {
+	t.Parallel()
 	tx, _ := modelTransaction(t)
 	m, id := tx.Base, tx.Binding.Index.Binding.Pause.Request.IntentID
 	digest := update.InstallDigest(tx.Binding)
@@ -81,6 +83,7 @@ func TestReadOnlyPreparationFenceClassification(t *testing.T) {
 }
 
 func TestReusablePreparationStartPreservesOtherUpdatePhases(t *testing.T) {
+	t.Parallel()
 	tx, _ := modelTransaction(t)
 	m := tx.Base
 	r := reusableAtomicRequest{Version: 1, Owner: m.Owner, InstallationID: m.ID, IntentID: tx.Binding.Index.Binding.Pause.Request.IntentID, Direction: "fence", RequestID: strings.Repeat("d", 32)}
@@ -150,6 +153,7 @@ func TestReusablePreparationStartPreservesOtherUpdatePhases(t *testing.T) {
 }
 
 func TestReusablePreparationRefusesQuarantinedPredecessor(t *testing.T) {
+	t.Parallel()
 	repair, dir, ops, _ := ordinaryRepairModel(t)
 	tx := *repair.Repair
 	m := tx.Base
@@ -208,6 +212,7 @@ func TestReusablePreparationRefusesQuarantinedPredecessor(t *testing.T) {
 }
 
 func TestReusableStageRetainedEntryLimit(t *testing.T) {
+	t.Parallel()
 	owner, group := os.Getuid(), os.Getgid()
 	if owner <= 0 || group <= 0 {
 		t.Skip("ordinary unprivileged user required")
@@ -253,6 +258,7 @@ func TestReusableStageRetainedEntryLimit(t *testing.T) {
 // Run the generated OS copy commands as an ordinary user. This exercises
 // retry and preservation without claiming root/systemd or signer acceptance.
 func TestReusableStageInvocationRetriesPreserveInterruptedCopies(t *testing.T) {
+	t.Parallel()
 	if os.Getuid() <= 0 || os.Getgid() <= 0 {
 		t.Skip("ordinary unprivileged user required")
 	}
@@ -475,6 +481,7 @@ func TestReusableStageInvocationRetriesPreserveInterruptedCopies(t *testing.T) {
 }
 
 func TestReusableStageManifestMatchesProtectedBytes(t *testing.T) {
+	t.Parallel()
 	m := fixtureManifest()
 	f := hostFile{UID: 0, Regular: true, Mode: 0644, Data: mustJSON(m)}
 	read := func(path string) (hostFile, error) {
@@ -497,6 +504,7 @@ func TestReusableStageManifestMatchesProtectedBytes(t *testing.T) {
 }
 
 func TestReusableStageAdmissionRequiresTheActualHeldIntent(t *testing.T) {
+	t.Parallel()
 	tx, _ := modelTransaction(t)
 	m, c := tx.Base, identityConfig(tx.Base)
 	pin := &reusableMaintenanceAuthority{Version: 1, Owner: m.Owner, InstallationID: m.ID, RunnerSHA256: strings.Repeat("e", 64), GuardSHA256: strings.Repeat("d", 64)}
@@ -581,6 +589,7 @@ func TestReusableStageAdmissionRequiresTheActualHeldIntent(t *testing.T) {
 }
 
 func TestReusableStageCopyMatchesSignerHold(t *testing.T) {
+	t.Parallel()
 	tx, installed := modelTransaction(t)
 	c := signer.Config{Version: 1, Mode: signer.FixtureNetwork, SignerID: tx.Base.ID, OwnerUID: tx.Base.Owner, AppUID: tx.Base.App.UID, SignerUID: tx.Base.Signer.UID, StateDir: tx.Base.Root + "/signer-state", SocketDir: tx.Base.Root + "/signer-ipc"}
 	pin := &reusableMaintenanceAuthority{Version: 1, Owner: tx.Base.Owner, InstallationID: tx.Base.ID, RunnerSHA256: strings.Repeat("e", 64), GuardSHA256: strings.Repeat("d", 64)}
@@ -648,6 +657,7 @@ func TestReusableStageCopyMatchesSignerHold(t *testing.T) {
 }
 
 func TestReusableStageRecoveryPreservesEveryPreexistingCopy(t *testing.T) {
+	t.Parallel()
 	owner, group := os.Getuid(), os.Getgid()
 	if owner <= 0 || group <= 0 {
 		t.Skip("ordinary unprivileged owner required")
@@ -724,6 +734,7 @@ func TestReusableStageRecoveryPreservesEveryPreexistingCopy(t *testing.T) {
 }
 
 func TestReusableStageRetryUsesSeparatePaths(t *testing.T) {
+	t.Parallel()
 	owner, group := os.Getuid(), os.Getgid()
 	if owner <= 0 || group <= 0 {
 		t.Skip("ordinary unprivileged owner required")

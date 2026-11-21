@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/fased-ai/fased-app/internal/core"
+	"github.com/fased-ai/fased-app/internal/custodyinstall"
 	"github.com/fased-ai/fased-app/internal/localinstall"
 	"github.com/fased-ai/fased-app/internal/update"
 )
@@ -74,6 +75,11 @@ func upgradeEntryFixture(t *testing.T, f *firstFixture) UpgradeOptions {
 }
 
 func TestApplicationUpgradeEntryUsesHeldVerifiedMaintenanceArgv(t *testing.T) {
+	previousCustodyLoader := loadCustodyManifest
+	loadCustodyManifest = func(int) (custodyinstall.Manifest, error) {
+		return custodyinstall.Manifest{}, os.ErrNotExist
+	}
+	t.Cleanup(func() { loadCustodyManifest = previousCustodyLoader })
 	f := newFirstFixture(t)
 	p, e := Prepare(t.Context(), f.options())
 	if e != nil {
@@ -101,6 +107,11 @@ func TestApplicationUpgradeEntryUsesHeldVerifiedMaintenanceArgv(t *testing.T) {
 }
 
 func TestApplicationUpgradeEntryRefusesTamperAndProfileOverrides(t *testing.T) {
+	previousCustodyLoader := loadCustodyManifest
+	loadCustodyManifest = func(int) (custodyinstall.Manifest, error) {
+		return custodyinstall.Manifest{}, os.ErrNotExist
+	}
+	t.Cleanup(func() { loadCustodyManifest = previousCustodyLoader })
 	for _, kind := range []string{"tampered-code", "remote-paths", "overlap"} {
 		t.Run(kind, func(t *testing.T) {
 			f := newFirstFixture(t)

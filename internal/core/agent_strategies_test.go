@@ -64,6 +64,7 @@ func strategyTaskFixture(t *testing.T, s *Store, strategy AgentStrategy, runs in
 	return v.Tasks[len(v.Tasks)-1]
 }
 func TestStrategyReviewedTaskRunPauseBudgetAndDiscuss(t *testing.T) {
+	t.Parallel()
 	s, p := strategyFixture(t)
 	strategy := saveStrategyFixture(t, s, p)
 	task := strategyTaskFixture(t, s, strategy, 4)
@@ -95,6 +96,7 @@ func TestStrategyReviewedTaskRunPauseBudgetAndDiscuss(t *testing.T) {
 	}
 }
 func TestStrategyVersionsRevokeOldTaskAndConsent(t *testing.T) {
+	t.Parallel()
 	s, p := strategyFixture(t)
 	strategy := saveStrategyFixture(t, s, p)
 	task := strategyTaskFixture(t, s, strategy, 2)
@@ -126,6 +128,7 @@ func TestStrategyVersionsRevokeOldTaskAndConsent(t *testing.T) {
 	}
 }
 func TestStrategyPriceCapAndOrdinaryAdmission(t *testing.T) {
+	t.Parallel()
 	for _, mode := range []string{"price", "cap", "disabled", "wallet", "expiry"} {
 		t.Run(mode, func(t *testing.T) {
 			s, p := strategyFixture(t)
@@ -174,6 +177,7 @@ func TestStrategyPriceCapAndOrdinaryAdmission(t *testing.T) {
 	}
 }
 func TestStrategySharedAllocationConcurrentTicksAndRestart(t *testing.T) {
+	t.Parallel()
 	s, p := strategyFixture(t)
 	p.TotalBudgetMicros = 20_000_000
 	strategy := saveStrategyFixture(t, s, p)
@@ -233,6 +237,7 @@ func TestStrategySharedAllocationConcurrentTicksAndRestart(t *testing.T) {
 	}
 }
 func TestStrategyStoragePreservesLedgerAndCannotBecomeReminder(t *testing.T) {
+	t.Parallel()
 	s, p := strategyFixture(t)
 	strategy := saveStrategyFixture(t, s, p)
 	task := strategyTaskFixture(t, s, strategy, 1)
@@ -261,6 +266,7 @@ func TestStrategyStoragePreservesLedgerAndCannotBecomeReminder(t *testing.T) {
 	}
 }
 func TestStrategyMigrationPreserves29AndRefusesUnprotectedState(t *testing.T) {
+	t.Parallel()
 	for _, mode := range []string{"normal", "unprotected", "paused"} {
 		t.Run(mode, func(t *testing.T) {
 			s, _ := strategyFixture(t)
@@ -318,6 +324,7 @@ func TestStrategyMigrationPreserves29AndRefusesUnprotectedState(t *testing.T) {
 	}
 }
 func TestStrategyQuoteProvenanceAndInputLimits(t *testing.T) {
+	t.Parallel()
 	for _, mode := range []string{"stale", "future", "network", "market", "source", "price"} {
 		t.Run(mode, func(t *testing.T) {
 			s, p := strategyFixture(t)
@@ -402,6 +409,7 @@ func TestStrategyBrowserSeed(t *testing.T) {
 }
 
 func TestStrategyPolicyErasureRefusesFallbackAndPreservesRaw(t *testing.T) {
+	t.Parallel()
 	s, p := strategyFixture(t)
 	strategy := saveStrategyFixture(t, s, p)
 	task := strategyTaskFixture(t, s, strategy, 1)
@@ -444,6 +452,7 @@ func TestStrategyPolicyErasureRefusesFallbackAndPreservesRaw(t *testing.T) {
 }
 
 func TestStrategyAliasedContainerRefusesAndKeepsSchema(t *testing.T) {
+	t.Parallel()
 	s, p := strategyFixture(t)
 	strategy := saveStrategyFixture(t, s, p)
 	strategyTaskFixture(t, s, strategy, 1)
@@ -484,6 +493,7 @@ func TestStrategyAliasedContainerRefusesAndKeepsSchema(t *testing.T) {
 }
 
 func TestStrategyWorkspaceRejectsAmbiguousProtectedContainers(t *testing.T) {
+	t.Parallel()
 	for _, raw := range []string{
 		`{"tasks":[],"tasks":[]}`,
 		`{"strategies":[],"\u0073trategies":[]}`,

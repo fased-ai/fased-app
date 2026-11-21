@@ -17,6 +17,7 @@ import (
 )
 
 func TestRecoveredOrdinaryPairedMaintenanceRestart(t *testing.T) {
+	t.Parallel()
 	sourceDir := fixtureDir(t)
 	source := ordinaryVault(t, sourceDir)
 	if err := source.Create(fixturePassword); err != nil {
@@ -161,6 +162,7 @@ func TestRecoveredOrdinaryPairedMaintenanceRestart(t *testing.T) {
 }
 
 func TestOrdinaryMaintenanceInventoryAndFinancialRefusal(t *testing.T) {
+	t.Parallel()
 	dir := fixtureDir(t)
 	v := ordinaryVault(t, dir)
 	if err := v.Create(fixturePassword); err != nil {
@@ -190,6 +192,7 @@ func TestOrdinaryMaintenanceInventoryAndFinancialRefusal(t *testing.T) {
 }
 
 func TestOrdinaryPairedMaintenanceRestartRecovery(t *testing.T) {
+	t.Parallel()
 	for _, rollback := range []bool{false, true} {
 		t.Run(map[bool]string{false: "complete", true: "rollback"}[rollback], func(t *testing.T) {
 			dir := fixtureDir(t)
@@ -278,6 +281,7 @@ func TestOrdinaryPairedMaintenanceRestartRecovery(t *testing.T) {
 }
 
 func TestOrdinaryOwnerHandoffAndConsecutiveMaintenance(t *testing.T) {
+	t.Parallel()
 	dir := fixtureDir(t)
 	open := func() *Vault {
 		t.Helper()
@@ -376,6 +380,7 @@ func TestOrdinaryOwnerHandoffAndConsecutiveMaintenance(t *testing.T) {
 }
 
 func TestOrdinaryMaintenanceRejectsForeignJournalFields(t *testing.T) {
+	t.Parallel()
 	v := ordinaryVault(t, fixtureDir(t))
 	defer v.Close()
 	if e := v.Create(fixturePassword); e != nil {
@@ -394,6 +399,7 @@ func TestOrdinaryMaintenanceRejectsForeignJournalFields(t *testing.T) {
 }
 
 func TestOrdinaryHandoffJournalInterruptionDoesNotDuplicate(t *testing.T) {
+	t.Parallel()
 	for _, phase := range []string{"before", "written", "durable"} {
 		t.Run(phase, func(t *testing.T) {
 			dir := fixtureDir(t)
@@ -430,6 +436,7 @@ func TestOrdinaryHandoffJournalInterruptionDoesNotDuplicate(t *testing.T) {
 }
 
 func TestOrdinaryHandoffMissingMetadataBlocksMutation(t *testing.T) {
+	t.Parallel()
 	dir := fixtureDir(t)
 	c := Config{Version: 3, StateDir: filepath.Join(dir, "signer-state")}
 	if !ordinaryHandoffRPCAllowed(c, "unlock") {
@@ -457,6 +464,7 @@ func TestOrdinaryHandoffMissingMetadataBlocksMutation(t *testing.T) {
 }
 
 func TestOrdinaryRPCMaintenanceUsesActualSignerHold(t *testing.T) {
+	t.Parallel()
 	dir := fixtureDir(t)
 	state := filepath.Join(dir, "signer-state")
 	os.Mkdir(state, 0700)
@@ -528,6 +536,7 @@ func TestOrdinaryRPCMaintenanceUsesActualSignerHold(t *testing.T) {
 // passing through any corrected CLI/router. A repair fence is a denial, not a
 // new grant, and must survive signer reopen while leaving the staged slot intact.
 func TestRecoveredRepairRejectsLegacyRunnerAndPreservesStagedIntent(t *testing.T) {
+	t.Parallel()
 	source := ordinaryVault(t, fixtureDir(t))
 	if e := source.Create(fixturePassword); e != nil {
 		t.Fatal(e)
@@ -616,6 +625,7 @@ func TestRecoveredRepairRejectsLegacyRunnerAndPreservesStagedIntent(t *testing.T
 }
 
 func TestOrdinaryRepairObservationNeverAuthorizesMutation(t *testing.T) {
+	t.Parallel()
 	v := ordinaryVault(t, fixtureDir(t))
 	if e := v.Create(fixturePassword); e != nil {
 		t.Fatal(e)

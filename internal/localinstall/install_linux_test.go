@@ -13,14 +13,7 @@ import (
 
 func installFixture(t *testing.T) (Paths, string) {
 	t.Helper()
-	root, err := filepath.Abs("../../.evidence/install-fixtures")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err = os.MkdirAll(root, 0700); err != nil {
-		t.Fatal(err)
-	}
-	dir, err := os.MkdirTemp(root, "f-")
+	dir, err := os.MkdirTemp("", "li-")
 	if err != nil {
 		t.Fatal(err)
 	}

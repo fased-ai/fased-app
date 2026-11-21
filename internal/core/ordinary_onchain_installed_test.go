@@ -14,6 +14,7 @@ import (
 )
 
 func TestInstalledOrdinarySwapAccountUsesAuthoritativeCustody(t *testing.T) {
+	t.Parallel()
 	dir := filepath.Join(t.TempDir(), "signer")
 	if err := os.Mkdir(dir, 0700); err != nil {
 		t.Fatal(err)
@@ -96,6 +97,7 @@ func TestInstalledOrdinarySwapAccountUsesAuthoritativeCustody(t *testing.T) {
 }
 
 func TestInstalledSwapConsumerPreservesLegacyAndMarkerlessRefusal(t *testing.T) {
+	t.Parallel()
 	legacyDir := filepath.Join(t.TempDir(), "legacy")
 	if err := os.Mkdir(legacyDir, 0700); err != nil {
 		t.Fatal(err)

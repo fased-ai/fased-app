@@ -12,6 +12,7 @@ import (
 )
 
 func TestWENResearchFixtureAdmission(t *testing.T) {
+	t.Parallel()
 	s, h, token, selection := readBatchFixture(t)
 	r := preparedResearch(t, s, researchInput(t, selection))
 	h.agentFixture = true
@@ -102,6 +103,7 @@ func startFixtureResearch(t *testing.T, s *Store, r WENResearchAIReview) WENRese
 }
 
 func TestWENResearchFixtureSourceChanges(t *testing.T) {
+	t.Parallel()
 	for _, phase := range []string{"before-dispatch", "before-count", "before-create", "in-flight", "completion", "library-completion", "deadline-completion", "clock-completion"} {
 		t.Run(phase, func(t *testing.T) {
 			s, _, _, selection := readBatchFixture(t)
@@ -194,6 +196,7 @@ func TestWENResearchFixtureSourceChanges(t *testing.T) {
 }
 
 func TestWENResearchFixtureUnknownUsage(t *testing.T) {
+	t.Parallel()
 	for _, mode := range []string{"transport", "cancel-unknown", "cancel-known", "restart-running", "queued-cancel", "disabled-worker", "queued-expiry", "paused-completion"} {
 		t.Run(mode, func(t *testing.T) {
 			s, _, _, selection := readBatchFixture(t)
@@ -292,6 +295,7 @@ func TestWENResearchFixtureUnknownUsage(t *testing.T) {
 
 // Keep context cancellation covered without any socket, provider or sleep.
 func TestWENResearchFixtureCancelledAdmission(t *testing.T) {
+	t.Parallel()
 	s, _, _, selection := readBatchFixture(t)
 	r := preparedResearch(t, s, researchInput(t, selection))
 	c := fixtureResearchConsent(t, s, r)
@@ -304,6 +308,7 @@ func TestWENResearchFixtureCancelledAdmission(t *testing.T) {
 }
 
 func TestWENResearchFixtureHTTPAuthority(t *testing.T) {
+	t.Parallel()
 	s, h, token, selection := readBatchFixture(t)
 	r := preparedResearch(t, s, researchInput(t, selection))
 	h.agentFixture = true

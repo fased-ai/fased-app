@@ -14,6 +14,7 @@ import (
 )
 
 func TestInstallationGuardChecksActualPairAndRecoveryInputs(t *testing.T) {
+	t.Parallel()
 	v, _, _ := configuredFixture(t, fixtureDir(t))
 	defer v.Close()
 	intent, binding := installationFixture(t, v)
