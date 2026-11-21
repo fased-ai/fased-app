@@ -3,6 +3,8 @@ import {
   accountAddress,
   fixtureNetwork,
   rpcEndpoint,
+  rpcPresets,
+  rpcRequiresKey,
   remoteWalletOwnerCommand,
   walletOwnerCommands,
   walletOwnerLink,
@@ -420,4 +422,36 @@ it("builds a Remote Wallets command from public, shell-safe inputs", () => {
   expect(command("owner;exit", id, origin)).toBe("");
   expect(command("owner", "../fased-app", origin)).toBe("");
   expect(command("owner", id, "https://public.example")).toBe("");
+});
+
+it("provides Solana public and keyed RPC presets by network", () => {
+  expect(rpcPresets("devnet")).toEqual([
+    {
+      id: "solana",
+      label: "Solana",
+      endpoint: "https://api.devnet.solana.com",
+      requiresKey: false,
+    },
+    {
+      id: "helius",
+      label: "Helius",
+      endpoint: "https://devnet.helius-rpc.com",
+      requiresKey: true,
+    },
+    {
+      id: "alchemy",
+      label: "Alchemy",
+      endpoint: "https://solana-devnet.g.alchemy.com",
+      requiresKey: true,
+    },
+  ]);
+  expect(rpcPresets("mainnet-beta")[0].endpoint).toBe(
+    "https://api.mainnet-beta.solana.com",
+  );
+  expect(rpcPresets(fixtureNetwork)).toEqual([]);
+  expect(rpcRequiresKey("https://api.devnet.solana.com", "devnet")).toBe(false);
+  expect(
+    rpcRequiresKey("https://api.mainnet-beta.solana.com", "mainnet-beta"),
+  ).toBe(false);
+  expect(rpcRequiresKey("https://devnet.helius-rpc.com", "devnet")).toBe(true);
 });

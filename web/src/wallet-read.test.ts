@@ -90,6 +90,39 @@ describe("wallet read disclosure", () => {
         1001,
       ),
     ).toBe(true);
+    expect(
+      currentWalletSnapshot(
+        {
+          ...snapshot(),
+          endpoint: "https://api.devnet.solana.com",
+          credentialRef: "",
+          fixtureOnly: false,
+          liveRPC: true,
+        },
+        {
+          ...a,
+          rpc: {
+            version: 2,
+            network: "devnet",
+            endpoint: "https://api.devnet.solana.com",
+          },
+        },
+        3,
+        "",
+        address,
+        1001,
+      ),
+    ).toBe(true);
+    expect(
+      currentWalletSnapshot(
+        { ...snapshot(), fixtureOnly: false, liveRPC: false },
+        a,
+        3,
+        "ref",
+        address,
+        1001,
+      ),
+    ).toBe(false);
   });
   it("rejects malformed and unbounded arrays", () => {
     const token = {

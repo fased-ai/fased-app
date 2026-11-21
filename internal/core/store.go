@@ -328,7 +328,7 @@ PRAGMA user_version=1;`)
 	if _, _, err = readAgents(ctx, db); err != nil {
 		return nil, err
 	}
-	store := &Store{db: db, dir: dir, now: time.Now, bootID: update.NewProbe(), provider: providerState{apiCredentials: providerActivationEnabled}, taskSecrets: secrets}
+	store := &Store{db: db, dir: dir, now: time.Now, bootID: update.NewProbe(), rpcAdmission: rpcActivationEnabled, provider: providerState{apiCredentials: providerActivationEnabled}, taskSecrets: secrets}
 	if err = store.recoverOnchain(ctx); err != nil {
 		return nil, err
 	}

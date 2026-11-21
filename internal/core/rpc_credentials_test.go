@@ -238,8 +238,8 @@ func TestRPCCredentialActionCapabilities(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !saved.CanVerify || saved.CanCheck {
-		t.Fatal("local verification and disabled network check conflated", saved)
+	if !saved.CanVerify || saved.CanCheck != rpcActivationEnabled {
+		t.Fatal("local verification and network check capability mismatch", saved)
 	}
 	original, err := os.ReadFile(s.rpcVaultPath(c.AccountID))
 	if err != nil {
@@ -269,7 +269,7 @@ func TestRPCCredentialActionCapabilities(t *testing.T) {
 	}
 	c.Passphrase = "Disposable provider vault password 123"
 	verified, err := s.RPCCredential(t.Context(), c)
-	if err != nil || !verified.CanVerify || verified.CanCheck {
+	if err != nil || !verified.CanVerify || verified.CanCheck != rpcActivationEnabled {
 		t.Fatal(verified, err)
 	}
 	after, err := os.ReadFile(s.rpcVaultPath(c.AccountID))

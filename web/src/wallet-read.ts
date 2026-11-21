@@ -135,8 +135,9 @@ export function currentWalletSnapshot(
     value.endpoint === a.rpc?.endpoint &&
     value.credentialRef === ref &&
     /^[a-f0-9]{64}$/.test(value.binding) &&
-    value.fixtureOnly === true &&
-    value.liveRPC === false &&
+    typeof value.fixtureOnly === "boolean" &&
+    typeof value.liveRPC === "boolean" &&
+    value.fixtureOnly !== value.liveRPC &&
     value.commitment === "finalized" &&
     uint(value.lamports) &&
     BigInt(value.lamports) <= 18446744073709551615n &&

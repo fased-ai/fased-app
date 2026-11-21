@@ -20,9 +20,10 @@ func (s *Server) ConfigureControlledWalletReads(next *http.Transport) error {
 		return signer.ErrUnavailable
 	}
 	defer store.walletReadMu.Unlock()
-	if !store.custodyOwnerSupported || solanaGenesis(store.custodyNetwork) == "" || store.rpcAdmission || store.providerFixture || store.sessionFixture || store.walletReadFixture != nil {
+	if !store.custodyOwnerSupported || solanaGenesis(store.custodyNetwork) == "" || store.providerFixture || store.sessionFixture || store.walletReadFixture != nil {
 		return signer.ErrUnavailable
 	}
+	store.rpcAdmission = false
 	public := &publicRPCTransport{enabled: true, transport: next}
 	store.walletReadFixture = func(ctx context.Context, a Account, address string, key []byte, valid func() error, selection *WalletSelection) (WalletSnapshot, error) {
 		transport := &providerRPCTransport{origin: a.RPC.Endpoint, provider: rpcProvider(a.RPC.Endpoint, a.Network), key: key, valid: valid, next: public}

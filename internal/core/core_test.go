@@ -47,6 +47,7 @@ func fixtureStore(t *testing.T) *Store {
 	}
 	t.Cleanup(func() { _ = s.Close() })
 	s.providerFixture = true
+	s.rpcAdmission = false
 	s.provider.apiCredentials = false
 	return s
 }
@@ -58,6 +59,7 @@ func reopenFixtureStore(t *testing.T, dir string) *Store {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = s.Close() })
+	s.rpcAdmission = false
 	s.provider.apiCredentials = false
 	return s
 }

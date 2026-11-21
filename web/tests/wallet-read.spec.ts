@@ -323,10 +323,8 @@ test("wallet Refresh joins encrypted RPC and CLI without changing saved data", a
     expect(resumedDetails.code, resumedDetails.err).toBe(0);
     expect(JSON.parse(resumedDetails.out).transaction).toEqual(detail);
     const initialAccounts = JSON.parse(saved);
-    expect(JSON.parse((await run(["accounts"])).out)).toEqual({
-      ...initialAccounts,
-      setup: { ...initialAccounts.setup, networkWatchEnabled: false },
-    });
+    expect(initialAccounts.setup.networkWatchEnabled).toBe(true);
+    expect(JSON.parse((await run(["accounts"])).out)).toEqual(initialAccounts);
 
     expect(await hash()).toBe(original);
     await writeFile(

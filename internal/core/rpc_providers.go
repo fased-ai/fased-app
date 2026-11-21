@@ -20,12 +20,17 @@ func rpcProvider(endpoint, network string) string {
 		return ""
 	}
 	switch endpoint {
+	case "https://api." + network + ".solana.com":
+		return "solana"
 	case "https://" + prefix + ".helius-rpc.com":
 		return "helius"
 	case "https://solana-" + prefix + ".g.alchemy.com":
 		return "alchemy"
 	}
 	return ""
+}
+func rpcProviderRequiresKey(provider string) bool {
+	return provider == "helius" || provider == "alchemy"
 }
 func validRPCSecret(version int, key string) bool {
 	if version == 1 {
@@ -79,7 +84,7 @@ func (t *providerRPCTransport) RoundTrip(r *http.Request) (*http.Response, error
 }
 func checkProviderRPC(ctx context.Context, in RPCCheckRequest, key []byte, valid func() error, t *publicRPCTransport) (RPCCheckResult, error) {
 	provider := rpcProvider(in.Endpoint, in.Network)
-	if provider == "" || !validRPCSecret(2, string(key)) || valid == nil || t == nil || !t.enabled {
+	if !rpcProviderRequiresKey(provider) || !validRPCSecret(2, string(key)) || valid == nil || t == nil || !t.enabled {
 		return RPCCheckResult{}, errors.New("RPC provider unavailable")
 	}
 	return checkRPCProtocol(ctx, in, &providerRPCTransport{origin: in.Endpoint, provider: provider, key: key, valid: valid, next: t}, solanaGenesis(in.Network), false)

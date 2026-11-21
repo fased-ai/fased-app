@@ -44,6 +44,7 @@ func TestManagedNetworkAccountRPCLifecycle(t *testing.T) {
 		t.Fatal("public view mismatch")
 	}
 	config := RPCConfigInput{AccountID: a.ID, Revision: v.Record.Revision, Endpoint: "https://devnet.helius-rpc.com", Network: "devnet"}
+	s.rpcAdmission = false
 	if _, e = s.ConfigureAccountRPC(t.Context(), config); e == nil {
 		t.Fatal("ordinary RPC admission opened")
 	}
@@ -110,8 +111,9 @@ func TestManagedNetworkAccountRPCLifecycle(t *testing.T) {
 		t.Fatal("restart rewrote record or trusted missing signer")
 	}
 	connect()
+	s.rpcAdmission = false
 	if _, e = s.RPCCredential(t.Context(), c); e == nil {
-		t.Fatal("restart reopened RPC admission")
+		t.Fatal("closed admission accepted RPC credential verify")
 	}
 	s.rpcAdmission = true
 	if _, e = s.RPCCredential(t.Context(), c); e != nil {

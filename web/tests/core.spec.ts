@@ -17686,3 +17686,279 @@ test("passwordless OS-protected providers and task access work without a vault p
     .poll(() => postedActions.some((a) => a.action === "remove"))
     .toBe(true);
 });
+
+test("live read-only Solana RPC presets and OS-protected RPC keys work without password prompts", async ({
+  page,
+}) => {
+  await page.goto(url);
+  const claim = JSON.parse(
+    await readFile(join(dir, "claim-code.json"), "utf8"),
+  );
+  await openOwnerSetup(page, claim.code);
+  await page.getByLabel("Create owner password").fill(fixturePassword);
+  await page
+    .getByRole("button", { name: "Claim workspace", exact: true })
+    .click();
+  await expect(
+    page.getByRole("heading", { name: "Dashboard", exact: true }),
+  ).toBeVisible();
+
+  const pubAddress = "11111111111111111111111111111111";
+  const txSig = "4".repeat(88);
+  let revision = 0;
+  let savedAcct: any;
+  let credRef = "";
+  let credCheck: { fixtureOnly: boolean; liveRPC: boolean } | undefined;
+  const postedCredActions: { action: string; passphrase?: string }[] = [];
+
+  const accountsPayload = () => ({
+    setup: {
+      version: 1,
+      instanceId: "inst-live-rpc-check",
+      source: "local",
+      network: "devnet",
+      state: "not-installed",
+      fixtureOnly: false,
+      networkWatchEnabled: true,
+      ownerSupported: true,
+    },
+    addresses: savedAcct ? { [savedAcct.id]: pubAddress } : {},
+    record: {
+      version: 1,
+      revision,
+      accounts: savedAcct ? [savedAcct] : [],
+      proposals: [],
+    },
+    fixture: { available: false },
+    accountStates: savedAcct ? { [savedAcct.id]: "public-record-only" } : {},
+    proposals: [],
+  });
+  const credPayload = () => ({
+    canVerify: true,
+    canCheck: true,
+    ref: credRef,
+    saved: credRef !== "",
+    stale: false,
+    locked: true,
+    osVaultAvailable: true,
+    osProtected: credRef !== "",
+    testOnly: false,
+    liveRPC: true,
+    ...(credCheck ? { check: credCheck } : {}),
+  });
+
+  await page.route("**/api/v1/accounts", async (route) => {
+    if (route.request().method() === "GET")
+      await route.fulfill({ json: accountsPayload() });
+    else await route.continue();
+  });
+  await page.route("**/api/v1/accounts/setup", async (route) => {
+    const body = route.request().postDataJSON();
+    revision++;
+    savedAcct = {
+      version: 2,
+      id: "a".repeat(32),
+      name: body.name,
+      mode: "watch",
+      network: body.network,
+      publicKey: "00".repeat(32),
+    };
+    await route.fulfill({ json: accountsPayload() });
+  });
+  await page.route("**/api/v1/accounts/rpc-check", async (route) => {
+    const body = route.request().postDataJSON();
+    await route.fulfill({
+      json: {
+        account: savedAcct,
+        accountRevision: revision,
+        accountState: "public-record-only",
+        endpoint: body.endpoint,
+        network: body.network,
+        genesisHash: "EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG",
+        checkedAt: new Date().toISOString(),
+        fixtureOnly: false,
+        liveRPC: true,
+      },
+    });
+  });
+  await page.route("**/api/v1/accounts/rpc", async (route) => {
+    const body = route.request().postDataJSON();
+    revision++;
+    savedAcct = {
+      ...savedAcct,
+      rpc: body.remove
+        ? undefined
+        : { version: 2, endpoint: body.endpoint, network: body.network },
+    };
+    await route.fulfill({ json: accountsPayload() });
+  });
+  await page.route("**/api/v1/accounts/rpc-credential", async (route) => {
+    const body = route.request().postDataJSON();
+    postedCredActions.push({
+      action: body.action,
+      passphrase: body.passphrase,
+    });
+    credCheck = undefined;
+    if (body.action === "save") {
+      expect(body.passphrase ?? "").toBe("");
+      credRef = "os-rpc-ref-1";
+    } else if (body.action === "check") {
+      expect(body.passphrase ?? "").toBe("");
+      credCheck = { fixtureOnly: false, liveRPC: true };
+    } else if (body.action === "remove") {
+      expect(body.passphrase ?? "").toBe("");
+      credRef = "";
+    }
+    await route.fulfill({ json: credPayload() });
+  });
+  await page.route("**/api/v1/accounts/read", async (route) => {
+    const body = route.request().postDataJSON();
+    expect(body.passphrase ?? "").toBe("");
+    const now = Math.floor(Date.now() / 1000);
+    await route.fulfill({
+      json: {
+        version: 1,
+        accountId: savedAcct.id,
+        revision,
+        binding: "b".repeat(64),
+        credentialRef: credRef,
+        address: pubAddress,
+        network: "devnet",
+        endpoint: savedAcct.rpc.endpoint,
+        commitment: "finalized",
+        slot: "100",
+        lamports: "123456789",
+        tokens: [],
+        activity: [
+          { signature: txSig, slot: "99", blockTime: null, failed: false },
+        ],
+        activityLimit: 20,
+        fetchedAt: now,
+        expiresAt: now + 60,
+        fixtureOnly: false,
+        liveRPC: true,
+        ...(body.selection
+          ? {
+              transaction: {
+                ...body.selection,
+                feeLamports: "5000",
+                payer: pubAddress,
+                nativeBefore: "200005000",
+                nativeAfter: "123456789",
+                nativeChange: "-76548211",
+                tokens: [],
+                tokenChangesComplete: true,
+              },
+            }
+          : {}),
+      },
+    });
+  });
+
+  await page.goto(url + "/#wallets/accounts");
+  await page.getByRole("button", { name: "Add wallet", exact: true }).click();
+  const addDialog = page.getByRole("dialog", {
+    name: "Add wallet",
+    exact: true,
+  });
+  await addDialog.getByLabel("Wallet name").fill("Solana Watch");
+  await addDialog.getByLabel("Network", { exact: true }).selectOption("devnet");
+  await addDialog.getByLabel("Public address").fill(pubAddress);
+  await addDialog.getByRole("button", { name: "Save", exact: true }).click();
+  await expect(addDialog).toHaveCount(0);
+
+  await page.getByRole("button", { name: "RPC", exact: true }).click();
+  let rpcDialog = page.getByRole("dialog", {
+    name: "RPC · Solana Watch",
+    exact: true,
+  });
+  await rpcDialog.getByRole("button", { name: "Solana", exact: true }).click();
+  await expect(rpcDialog.getByLabel("RPC URL", { exact: true })).toHaveValue(
+    "https://api.devnet.solana.com",
+  );
+  await expect(rpcDialog.getByText("API key", { exact: true })).toHaveCount(0);
+  await rpcDialog.getByRole("button", { name: "Check", exact: true }).click();
+  await expect(rpcDialog.getByText("Verified", { exact: true })).toBeVisible();
+  await rpcDialog.getByRole("button", { name: "Save", exact: true }).click();
+  await expect(
+    rpcDialog.getByRole("button", { name: "Remove", exact: true }),
+  ).toBeVisible();
+  await rpcDialog.getByRole("button", { name: "Close dialog" }).click();
+
+  // Keyless balance + activity + transaction detail with zero Vault password prompts.
+  const balanceRegion = page.getByRole("region", {
+    name: "Balance",
+    exact: true,
+  });
+  await balanceRegion
+    .getByRole("button", { name: "Refresh", exact: true })
+    .click();
+  await expect(page.getByText("0.123456789 SOL")).toBeVisible();
+  await expect(page.getByRole("dialog", { name: "Unlock RPC" })).toHaveCount(0);
+  await page.getByText("Activity", { exact: true }).click();
+  await page.getByRole("button", { name: /^Transaction / }).click();
+  const txDialog = page.getByRole("dialog", {
+    name: "Transaction",
+    exact: true,
+  });
+  await expect(txDialog.getByText("-0.076548211")).toBeVisible();
+  await expect(txDialog.getByLabel("Vault password")).toHaveCount(0);
+  await txDialog.getByRole("button", { name: "Close", exact: true }).click();
+
+  // Switch to Helius with OS-protected passwordless credential save, live Connected check, Refresh & Remove key.
+  await page.getByRole("button", { name: "RPC", exact: true }).click();
+  rpcDialog = page.getByRole("dialog", {
+    name: "RPC · Solana Watch",
+    exact: true,
+  });
+  await rpcDialog.getByRole("button", { name: "Helius", exact: true }).click();
+  await expect(rpcDialog.getByLabel("RPC URL", { exact: true })).toHaveValue(
+    "https://devnet.helius-rpc.com",
+  );
+  await rpcDialog.getByRole("button", { name: "Save", exact: true }).click();
+  await rpcDialog
+    .locator("summary")
+    .filter({ hasText: /^API key$/ })
+    .click();
+  await expect(rpcDialog.getByLabel("Vault password")).toHaveCount(0);
+  await rpcDialog
+    .getByLabel("RPC API key", { exact: true })
+    .fill("disposable-os-rpc-input-not-issued-12345");
+  await rpcDialog
+    .getByRole("button", { name: "Save key", exact: true })
+    .click();
+  await expect(
+    rpcDialog.getByRole("button", { name: "Remove key", exact: true }),
+  ).toBeVisible();
+  await rpcDialog
+    .getByRole("button", { name: "Check connection", exact: true })
+    .click();
+  await expect(rpcDialog.getByText("Connected", { exact: true })).toBeVisible();
+  await rpcDialog.getByRole("button", { name: "Close dialog" }).click();
+
+  await balanceRegion
+    .getByRole("button", { name: "Refresh", exact: true })
+    .click();
+  await expect(page.getByText("0.123456789 SOL")).toBeVisible();
+  await expect(page.getByRole("dialog", { name: "Unlock RPC" })).toHaveCount(0);
+
+  await page.getByRole("button", { name: "RPC", exact: true }).click();
+  rpcDialog = page.getByRole("dialog", {
+    name: "RPC · Solana Watch",
+    exact: true,
+  });
+  await rpcDialog
+    .locator("summary")
+    .filter({ hasText: /^API key$/ })
+    .click();
+  await rpcDialog
+    .getByRole("button", { name: "Remove key", exact: true })
+    .click();
+  await expect(
+    rpcDialog.getByRole("button", { name: "Remove key", exact: true }),
+  ).toHaveCount(0);
+  expect(
+    postedCredActions.some((a) => a.action === "save") &&
+      postedCredActions.some((a) => a.action === "remove"),
+  ).toBe(true);
+});

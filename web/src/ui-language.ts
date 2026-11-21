@@ -126,6 +126,15 @@ const rows = {
     "已连接（演示）",
     "연결됨 (데모)",
   ],
+  Connected: ["Подключено", "Conectado", "已连接", "연결됨"],
+  Verified: ["Проверено", "Verificado", "已验证", "확인됨"],
+  "Backup password": [
+    "Пароль резервной копии",
+    "Contraseña de respaldo",
+    "备份密码",
+    "백업 비밀번호",
+  ],
+  Retry: ["Повторить", "Reintentar", "重试", "다시 시도"],
   "API key": ["API-ключ", "Clave API", "API 密钥", "API 키"],
   "RPC API key": ["Ключ RPC", "Clave RPC", "RPC 密钥", "RPC 키"],
   "Vault password": [

@@ -292,7 +292,7 @@ func TestControlledWalletReadConstructorBoundary(t *testing.T) {
 	if err := server.ConfigureControlledWalletReads(transport); err == nil {
 		t.Fatal("standalone constructor admitted installed wallet reads")
 	}
-	if s.rpcAdmission || s.walletReadFixture != nil {
+	if s.walletReadFixture != nil {
 		t.Fatal("refused constructor changed admission")
 	}
 	if err := server.ConfigureControlledWalletReads(nil); err == nil {

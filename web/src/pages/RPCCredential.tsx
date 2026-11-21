@@ -10,6 +10,8 @@ type Status = {
   saved: boolean;
   stale: boolean;
   locked: boolean;
+  osVaultAvailable?: boolean;
+  osProtected?: boolean;
   testOnly: boolean;
   liveRPC: boolean;
   check?: { fixtureOnly: boolean; liveRPC: boolean };
@@ -18,27 +20,35 @@ export function RPCCredential({
   accountId,
   revision,
   configured,
+  keyless = false,
 }: {
   accountId: string;
   revision: number;
   configured: boolean;
+  keyless?: boolean;
 }) {
   const core = useCore(),
     { t } = useUI();
   const [status, setStatus] = useState<Status>();
   const [key, setKey] = useState(""),
     [password, setPassword] = useState(""),
+    [backupPassword, setBackupPassword] = useState(""),
     [error, setError] = useState(""),
     [busy, setBusy] = useState(false),
     [verified, setVerified] = useState(false);
   const [backup, setBackup] = useState<unknown>();
   const generation = useRef(0);
+  const needsPassphrase = status?.saved
+    ? !status.osProtected
+    : !status?.osVaultAvailable;
+  const backupSecret = needsPassphrase ? password : backupPassword;
   useEffect(() => {
     const epoch = ++generation.current;
     setStatus(undefined);
     setBackup(undefined);
     setKey("");
     setPassword("");
+    setBackupPassword("");
     setError("");
     setVerified(false);
     core
@@ -67,6 +77,14 @@ export function RPCCredential({
     )
       return;
     const epoch = ++generation.current;
+    const isRecoveryAction = ["backup", "verify-backup", "restore"].includes(
+      action,
+    );
+    const secret = isRecoveryAction
+      ? backupSecret
+      : needsPassphrase
+        ? password
+        : "";
     setBusy(true);
     setError("");
     setVerified(false);
@@ -77,12 +95,18 @@ export function RPCCredential({
         revision,
         ref: status.ref,
         action,
-        passphrase: password,
+        ...(secret ? { passphrase: secret } : {}),
         ...(action === "save" ? { key } : {}),
         ...(["restore", "verify-backup"].includes(action) ? { backup } : {}),
       });
       if (epoch === generation.current) {
-        if (action === "check" && (!v.check?.fixtureOnly || v.check.liveRPC))
+        if (
+          action === "check" &&
+          (!v.check ||
+            typeof v.check.fixtureOnly !== "boolean" ||
+            typeof v.check.liveRPC !== "boolean" ||
+            v.check.fixtureOnly === v.check.liveRPC)
+        )
           throw new Error("Unexpected RPC capability");
         if (action === "backup") {
           if (
@@ -114,10 +138,12 @@ export function RPCCredential({
       if (epoch === generation.current) {
         setKey("");
         setPassword("");
+        setBackupPassword("");
         setBusy(false);
       }
     }
   }
+  if (keyless && !status?.saved) return null;
   return (
     <details name={`wallet-connection-${accountId}`}>
       <summary>{t("API key")}</summary>
@@ -140,21 +166,29 @@ export function RPCCredential({
             onChange={(e) => setKey(e.target.value)}
           />
         </label>
-        <label>
-          {t("Vault password")}
-          <input
-            aria-label={t("Vault password")}
-            type="password"
-            autoComplete="off"
-            maxLength={256}
-            value={password}
-            disabled={busy}
-            onChange={(e) => setPassword(e.target.value)}
-          />
-        </label>
+        {needsPassphrase && (
+          <label>
+            {t("Vault password")}
+            <input
+              aria-label={t("Vault password")}
+              type="password"
+              autoComplete="off"
+              maxLength={256}
+              value={password}
+              disabled={busy}
+              onChange={(e) => setPassword(e.target.value)}
+            />
+          </label>
+        )}
         <div className="account-actions">
           <button
-            disabled={busy || !status || !key || !password || !configured}
+            disabled={
+              busy ||
+              !status ||
+              !key ||
+              (needsPassphrase && !password) ||
+              !configured
+            }
           >
             {t("Save key")}
           </button>
@@ -163,7 +197,9 @@ export function RPCCredential({
               {status.canVerify && (
                 <button
                   type="button"
-                  disabled={busy || !password || status.stale}
+                  disabled={
+                    busy || (needsPassphrase && !password) || status.stale
+                  }
                   onClick={() => void change("verify")}
                 >
                   {t("Verify key")}
@@ -172,7 +208,12 @@ export function RPCCredential({
               {status.canCheck && (
                 <button
                   type="button"
-                  disabled={busy || !password || status.stale || !configured}
+                  disabled={
+                    busy ||
+                    (needsPassphrase && !password) ||
+                    status.stale ||
+                    !configured
+                  }
                   onClick={() => void change("check")}
                 >
                   {t("Check connection")}
@@ -180,7 +221,7 @@ export function RPCCredential({
               )}
               <button
                 type="button"
-                disabled={busy || !password}
+                disabled={busy || (needsPassphrase && !password)}
                 onClick={() => void change("remove")}
               >
                 {t("Remove key")}
@@ -190,9 +231,23 @@ export function RPCCredential({
         </div>
         <details>
           <summary>{t("Recovery")}</summary>
+          {!needsPassphrase && (
+            <label>
+              {t("Backup password")}
+              <input
+                aria-label={t("Backup password")}
+                type="password"
+                autoComplete="off"
+                maxLength={256}
+                value={backupPassword}
+                disabled={busy}
+                onChange={(e) => setBackupPassword(e.target.value)}
+              />
+            </label>
+          )}
           <button
             type="button"
-            disabled={busy || !status?.saved || status.stale || !password}
+            disabled={busy || !status?.saved || status.stale || !backupSecret}
             onClick={() => void change("backup")}
           >
             {t("Download backup")}
@@ -226,7 +281,7 @@ export function RPCCredential({
           </label>
           <button
             type="button"
-            disabled={busy || !backup || !password || !status}
+            disabled={busy || !backup || !backupSecret || !status}
             onClick={() => void change("verify-backup")}
           >
             {t("Verify backup")}
@@ -236,7 +291,7 @@ export function RPCCredential({
             disabled={
               busy ||
               !backup ||
-              !password ||
+              !backupSecret ||
               !status ||
               status.saved ||
               !configured
@@ -252,7 +307,11 @@ export function RPCCredential({
         {status?.saved && (
           <span>{t(status.stale ? "Reconnect" : "Saved")}</span>
         )}
-        {status?.check && <span role="status">{t("Connected (demo)")}</span>}
+        {status?.check && (
+          <span role="status">
+            {t(status.check.liveRPC ? "Connected" : "Connected (demo)")}
+          </span>
+        )}
         {verified && <span role="status">{t("Key verified")}</span>}
         {error && <p role="alert">{error}</p>}
       </form>
