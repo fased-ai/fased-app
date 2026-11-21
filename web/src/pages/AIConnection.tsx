@@ -27,6 +27,7 @@ export type Connection = {
   signInAvailable?: boolean;
   signIn?: {
     id: string;
+    ref?: string;
     provider: string;
     state: "waiting" | "callback-ready";
     url: string;
@@ -209,6 +210,17 @@ export function AIConnectionSettings({
   const [newProvider, setNewProvider] = useState("openai");
   const [newMethod, setNewMethod] = useState("api-key");
   const [callback, setCallback] = useState("");
+  useEffect(() => {
+    if (!root?.signIn) return;
+    selectionChosen.current = true;
+    if (root.signIn.ref) {
+      setSelected(root.signIn.ref);
+    } else {
+      setSelected("new");
+      setNewProvider(root.signIn.provider);
+      setNewMethod("sign-in");
+    }
+  }, [root?.signIn?.id, root?.signIn?.provider, root?.signIn?.ref]);
   const [googleProject, setGoogleProject] = useState("");
   useEffect(() => {
     if (selected && selected !== "new")
@@ -319,7 +331,7 @@ export function AIConnectionSettings({
     : !root?.osVaultAvailable;
   const signInReady = signIn
     ? signIn.remote && signIn.provider !== "google"
-      ? !!callback
+      ? !!callback.trim()
       : signIn.state === "callback-ready"
     : false;
   async function change(action: string) {
@@ -372,7 +384,7 @@ export function AIConnectionSettings({
             ? {
                 action,
                 signInId: signIn?.id,
-                callback: callback || undefined,
+                callback: callback.trim() || undefined,
                 ...(needsPassphrase ? { passphrase: secret } : {}),
               }
             : action === "sign-in-cancel"
@@ -395,6 +407,11 @@ export function AIConnectionSettings({
       window.dispatchEvent(new Event("ai-connection-changed"));
     } catch (e) {
       setError(e instanceof Error ? e.message : "Credential operation failed");
+      if (action === "sign-in-complete") {
+        try {
+          setView(await core.request<Connection>("ai/connection"));
+        } catch {}
+      }
     } finally {
       setBusy(false);
     }
@@ -685,7 +702,7 @@ export function AIConnectionSettings({
             <details
               className="connection-options"
               key={selected || view?.ref || "new"}
-              open={startNew || selected === "new" || !view?.ref}
+              open={startNew || selected === "new" || !view?.ref || !!signIn}
             >
               <summary>{uiText(view?.ref ? "Edit" : "Connect")}</summary>
               <form
@@ -792,9 +809,15 @@ export function AIConnectionSettings({
                               ? "Code"
                               : "Redirect URL",
                           )}
+                          placeholder={
+                            signIn.provider === "openrouter"
+                              ? undefined
+                              : "http://127.0.0.1:.../auth/callback?..."
+                          }
                           value={callback}
                           maxLength={4096}
                           autoComplete="off"
+                          spellCheck={false}
                           onChange={(e) => setCallback(e.target.value)}
                         />
                       </label>
