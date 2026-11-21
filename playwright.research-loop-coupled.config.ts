@@ -2,7 +2,7 @@ import { defineConfig } from "@playwright/test";
 import prototype from "./playwright.config";
 export default defineConfig({
   ...prototype,
-  testMatch: ["core.spec.ts", "research-fixture.spec.ts"],
+  testMatch: ["core-*.spec.ts", "research-fixture.spec.ts"],
   grep: /one consented research fixture|saved AI request draft shares/,
   outputDir: ".evidence/f3-research-loop/coupled-browser",
   reporter: [

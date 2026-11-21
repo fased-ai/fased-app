@@ -136,6 +136,11 @@ export function verifyGate(needs) {
   )
     throw new Error("required result missing: core-scenarios");
   if (
+    needs["core-packages"]?.result !==
+    (outputs.scope === "full" ? "success" : "skipped")
+  )
+    throw new Error("required result missing: core-packages");
+  if (
     needs["build-artifacts"]?.result !==
     (outputs.core === "true" ||
     outputs.signer === "true" ||

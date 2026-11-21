@@ -88,6 +88,10 @@ test("full race groups retain every package and require parallel scenarios and d
   );
   const scenarios = workflow.slice(
     workflow.indexOf("  core-scenarios:\n"),
+    workflow.indexOf("  core-packages:\n"),
+  );
+  const corePackages = workflow.slice(
+    workflow.indexOf("  core-packages:\n"),
     workflow.indexOf("  browser:\n"),
   );
   const handoff = workflow.slice(
@@ -109,11 +113,15 @@ test("full race groups retain every package and require parallel scenarios and d
       ),
     );
   assert.match(
-    core,
+    corePackages,
     /go list \.\/internal\/\.\.\. \.\/cmd\/fased-app \.\/cmd\/fased-signer \.\/cmd\/fased-install \.\/cmd\/fased-package/,
   );
-  assert.match(core, /grep -vE '\/internal\/\(core\|update\)\$'/);
-  assert.match(core, /go test -race "\$\{fased_other_packages\[@\]\}"/);
+  assert.match(corePackages, /grep -vE '\/internal\/\(core\|update\)\$'/);
+  assert.match(corePackages, /go test -race "\$\{fased_other_packages\[@\]\}"/);
+  assert.match(
+    corePackages,
+    /needs: \[classify, build-artifacts\]\n\s+if: needs\.classify\.outputs\.scope == 'full'/,
+  );
   const skip = core.match(/go test -race \.\/internal\/core -skip '([^']+)'/);
   const run = scenarios.match(
     /go test -race \.\/internal\/core -run '([^']+)'/,
@@ -166,6 +174,7 @@ test("full race groups retain every package and require parallel scenarios and d
     );
   const aggregate = workflow.slice(workflow.indexOf("  prototype:\n"));
   assert.match(aggregate, /\n\s+build-artifacts,/);
+  assert.match(aggregate, /\n\s+core-packages,/);
   assert.match(aggregate, /\n\s+core-scenarios,/);
   assert.match(
     handoff,
@@ -176,6 +185,7 @@ test("full race groups retain every package and require parallel scenarios and d
     documentation: 3,
     "build-artifacts": 8,
     core: 20,
+    "core-packages": 10,
     "core-scenarios": 10,
     browser: 15,
     signer: 5,
@@ -212,6 +222,7 @@ test("full race groups retain every package and require parallel scenarios and d
     for (const name of [
       "build-artifacts",
       "core",
+      "core-packages",
       "core-scenarios",
       "browser",
       "signer",
@@ -237,7 +248,7 @@ test("ordinary admission checks run once in parallel without consuming the manag
   );
   const scenarios = workflow.slice(
     workflow.indexOf("  core-scenarios:\n"),
-    workflow.indexOf("  browser:\n"),
+    workflow.indexOf("  core-packages:\n"),
   );
   const signer = workflow.slice(
     workflow.indexOf("  signer:\n"),
@@ -346,6 +357,8 @@ test("browser coverage runs once for every selected core path", async () => {
   );
   const browser = workflow.split("\n  browser:\n")[1].split("\n  signer:\n")[0];
   assert.equal(workflow.match(/run: npm run test:ui(?:\n|$)/g)?.length, 1);
+  assert.match(browser, /matrix:\n\s+shard: \[1, 2\]/);
+  assert.match(browser, /if: matrix\.shard == 1\n\s+run: npm run test:ui/);
   assert.match(browser, /needs.classify.outputs.core == 'true'/);
   assert.ok(
     browser.indexOf("npx playwright install") <
@@ -359,4 +372,15 @@ test("browser coverage runs once for every selected core path", async () => {
     assert.equal(classify(paths).core, true);
   assert.match(browser, /timeout-minutes: 15/);
   assert.ok(browser.includes("            .evidence/browser/\n"));
+  const inspection = workflow
+    .split("\n  inspection-installed:\n")[1]
+    .split("\n  prototype:\n")[0];
+  assert.match(inspection, /leg: \[fixture, network, enrollment\]/);
+  assert.match(
+    inspection,
+    /if: matrix\.leg == 'fixture' \|\| matrix\.leg == 'network'\n\s+run: go test -c -o \.evidence\/bin\/wallet-core\.test \.\/internal\/core/,
+  );
+  for (const leg of ["fixture", "network", "enrollment"]) {
+    assert.match(inspection, new RegExp(`if: matrix\\.leg == '${leg}'`));
+  }
 });
