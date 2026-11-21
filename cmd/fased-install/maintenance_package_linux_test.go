@@ -511,3 +511,75 @@ func TestPackageCandidateRequiresAnOriginalReservation(t *testing.T) {
 		t.Fatal("reserved retry was refused before protected reservation validation", err)
 	}
 }
+
+func TestPackageWorkerGeneralAutomaticRequiresAllowAutomaticAndPin(t *testing.T) {
+	const owner = 1400
+	instance, operation := strings.Repeat("1", 32), strings.Repeat("2", 32)
+	target := update.Target{OS: "linux", Arch: runtime.GOARCH}
+	installed := update.MaintenancePackage{Version: "0.1.24", Sequence: 1000025, ReleaseSHA256: strings.Repeat("a", 64)}
+	release := core.ApplicationRelease{
+		EngineSHA256:   strings.Repeat("b", 64),
+		Version:        "0.1.25",
+		Sequence:       1000026,
+		ManifestSHA256: strings.Repeat("c", 64),
+		Target:         target,
+	}
+	policy := core.UpdatePolicy{
+		Mode: "automatic",
+		Pin:  &core.UpdatePin{Sequence: "1000026", ManifestSHA256: release.ManifestSHA256},
+	}
+	for _, location := range []string{"local", "remote"} {
+		t.Run(location, func(t *testing.T) {
+			manifest := custodyinstall.Manifest{Layout: custodyinstall.PackageLayout, Owner: owner, ID: instance, Location: location}
+			view := core.ApplicationOwnerView{
+				View: core.ApplicationUpdateView{
+					Policy: policy,
+					Operation: core.ApplicationUpdateOperation{
+						ID:           operation,
+						Phase:        "applying",
+						Release:      &release,
+						PolicySHA256: update.SnapshotDigest("application-update-policy", policy),
+						Automatic:    true,
+					},
+				},
+			}
+			candidate := maintenance.CandidateReceipt{
+				Version:           1,
+				Owner:             owner,
+				Scope:             "update",
+				AllowAutomatic:    false,
+				PacketSHA256:      release.ManifestSHA256,
+				InstallerSHA256:   strings.Repeat("d", 64),
+				EngineSHA256:      release.EngineSHA256,
+				ProductVersion:    release.Version,
+				Sequence:          release.Sequence,
+				ReleaseSHA256:     release.ManifestSHA256,
+				Target:            target,
+				BaseSequence:      installed.Sequence,
+				BaseReleaseSHA256: installed.ReleaseSHA256,
+				BaseInstallation:  instance,
+				BaseManifestSHA:   update.SnapshotDigest("candidate-base-manifest:v1", manifest),
+				ExpiresAt:         200,
+			}
+			if _, err := approvedPackageCandidate(view, operation, installed, manifest, candidate, nil, time.Unix(100, 0)); err == nil {
+				t.Fatal("manual-only candidate was admitted for general Automatic")
+			}
+			candidate.AllowAutomatic = true
+			if q, err := approvedPackageCandidate(view, operation, installed, manifest, candidate, nil, time.Unix(100, 0)); err != nil || q.OperationID != operation {
+				t.Fatalf("allowAutomatic candidate was refused: %v", err)
+			}
+			wrongPin := view
+			wrongPin.View.Policy.Pin = &core.UpdatePin{Sequence: "1000099", ManifestSHA256: release.ManifestSHA256}
+			wrongPin.View.Operation.PolicySHA256 = update.SnapshotDigest("application-update-policy", wrongPin.View.Policy)
+			if _, err := approvedPackageCandidate(wrongPin, operation, installed, manifest, candidate, nil, time.Unix(100, 0)); err == nil {
+				t.Fatal("mismatched version pin was admitted")
+			}
+			wallet := manifest
+			wallet.Network = "devnet"
+			candidate.BaseManifestSHA = update.SnapshotDigest("candidate-base-manifest:v1", wallet)
+			if _, err := approvedPackageCandidate(view, operation, installed, wallet, candidate, nil, time.Unix(100, 0)); err == nil {
+				t.Fatal("wallet-configured package admitted Automatic")
+			}
+		})
+	}
+}

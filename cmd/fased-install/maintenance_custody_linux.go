@@ -534,6 +534,9 @@ func approvedCustodyOperation(v core.ApplicationOwnerView, id string, now time.T
 	if o.ID != id || o.Phase != "applying" || o.Release == nil || o.PolicySHA256 != update.SnapshotDigest("application-update-policy", v.View.Policy) || o.Automatic && (v.View.Policy.Mode != "automatic" || v.View.Policy.Window != nil && !v.View.Policy.Window.Contains(now)) {
 		return maintenance.CustodyUpdateRequest{}, nil, false, errors.New("current owner-approved application operation required")
 	}
+	if pin := v.View.Policy.Pin; pin != nil && (pin.Sequence != strconv.FormatUint(o.Release.Sequence, 10) || pin.ManifestSHA256 != o.Release.ManifestSHA256) {
+		return maintenance.CustodyUpdateRequest{}, nil, false, errors.New("current owner-approved release differs from saved version pin")
+	}
 	r := *o.Release
 	return maintenance.CustodyUpdateRequest{OperationID: id, Sequence: r.Sequence, ReleaseSHA256: r.ManifestSHA256}, &r, !o.Automatic, nil
 }

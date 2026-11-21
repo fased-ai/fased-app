@@ -249,11 +249,12 @@ export function ApplicationUpdatesPanel() {
                     <option value="automatic">{t("Automatic")}</option>
                   </select>
                 </label>
-                {!view.activationEnabled && (
-                  <p className="subtle">
-                    {t("Automatic installation is not active.")}
-                  </p>
-                )}
+                {view.policy.mode === "automatic" &&
+                  !view.activationEnabled && (
+                    <p className="subtle">
+                      {t("Automatic installation is not active.")}
+                    </p>
+                  )}
                 <label className="checkbox-row">
                   <input
                     type="checkbox"

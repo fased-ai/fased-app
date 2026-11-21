@@ -22,7 +22,7 @@ func candidatePackageUpdateBaseline(string, string) (string, error) {
 	return "", errors.New("protected package candidate staging requires Linux")
 }
 
-func stageAttestedPackageCandidate(context.Context, *bootstrap.Prepared, string, string, string, string, io.Writer) error {
+func stageAttestedPackageCandidate(context.Context, *bootstrap.Prepared, string, string, string, string, io.Writer, ...bool) error {
 	return errors.New("protected package candidate staging requires Linux")
 }
 

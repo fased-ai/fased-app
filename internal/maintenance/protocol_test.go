@@ -211,3 +211,26 @@ func TestEnrollmentCutoverAllowsOnlyFixedSteps(t *testing.T) {
 		}
 	}
 }
+
+func TestPackageCandidateStageAllowsAutomaticOnlyForUpdates(t *testing.T) {
+	packet := strings.Repeat("a", 64)
+	updatePlain := `{"version":1,"action":"candidate-stage","candidate":{"packetSha256":"` + packet + `","scope":"update"}}`
+	got, err := DecodePackageRequest([]byte(updatePlain))
+	if err != nil || got.Candidate == nil || got.Candidate.AllowAutomatic {
+		t.Fatalf("plain update candidate refused: got=%+v err=%v", got, err)
+	}
+	updateAuto := `{"version":1,"action":"candidate-stage","candidate":{"packetSha256":"` + packet + `","scope":"update","allowAutomatic":true}}`
+	got, err = DecodePackageRequest([]byte(updateAuto))
+	if err != nil || got.Candidate == nil || !got.Candidate.AllowAutomatic {
+		t.Fatalf("automatic update candidate refused: got=%+v err=%v", got, err)
+	}
+	for _, bad := range []string{
+		`{"version":1,"action":"candidate-stage","candidate":{"packetSha256":"` + packet + `","scope":"fresh","allowAutomatic":true}}`,
+		`{"version":1,"action":"candidate-stage","candidate":{"packetSha256":"` + packet + `","scope":"fresh","allowAutomatic":false}}`,
+		`{"version":1,"action":"candidate-stage","candidate":{"packetSha256":"` + packet + `","scope":"update","extra":true}}`,
+	} {
+		if _, err := DecodePackageRequest([]byte(bad)); err == nil {
+			t.Fatal("invalid package candidate automatic input admitted", bad)
+		}
+	}
+}

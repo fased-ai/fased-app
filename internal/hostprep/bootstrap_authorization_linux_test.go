@@ -19,22 +19,26 @@ func TestBootstrapAuthorizationDoesNotDependOnSudoDefaults(t *testing.T) {
 	}
 	for _, tc := range []struct {
 		name, rootEntry string
-		denyAt          int
+		denyAt          map[int]bool
 		untrustedProbe  bool
+		wantErr         bool
 		want            [][]string
 	}{
-		{"root entry", "1", 0, false, [][]string{{"-n", "--", "/usr/bin/true"}, {"-n", "--", "/usr/bin/cat", "--", "/dev/null"}}},
-		{"root entry without grant", "1", 1, false, [][]string{{"-n", "--", "/usr/bin/true"}}},
-		{"operation denied after probe", "1", 2, false, [][]string{{"-n", "--", "/usr/bin/true"}, {"-n", "--", "/usr/bin/cat", "--", "/dev/null"}}},
-		{"untrusted probe", "1", 0, true, nil},
-		{"ordinary user", "", 0, false, [][]string{{"-v"}, {"-n", "--", "/usr/bin/cat", "--", "/dev/null"}}},
+		{"root entry", "1", nil, false, false, [][]string{{"-n", "--", "/usr/bin/true"}, {"-n", "--", "/usr/bin/cat", "--", "/dev/null"}}},
+		{"root entry without grant", "1", map[int]bool{1: true}, false, true, [][]string{{"-n", "--", "/usr/bin/true"}}},
+		{"operation denied after probe", "1", map[int]bool{2: true}, false, true, [][]string{{"-n", "--", "/usr/bin/true"}, {"-n", "--", "/usr/bin/cat", "--", "/dev/null"}}},
+		{"untrusted probe", "1", nil, true, true, nil},
+		{"untrusted ordinary probe", "", nil, true, true, nil},
+		{"ordinary passwordless user", "", nil, false, false, [][]string{{"-n", "--", "/usr/bin/true"}, {"-n", "--", "/usr/bin/cat", "--", "/dev/null"}}},
+		{"ordinary passworded user", "", map[int]bool{1: true}, false, false, [][]string{{"-n", "--", "/usr/bin/true"}, {"-v"}, {"-n", "--", "/usr/bin/cat", "--", "/dev/null"}}},
+		{"ordinary passworded user cancelled", "", map[int]bool{1: true, 2: true}, false, true, [][]string{{"-n", "--", "/usr/bin/true"}, {"-v"}}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Setenv("FASED_INSTALL_ROOT_ENTRY", tc.rootEntry)
 			var calls [][]string
 			s := &System{Out: io.Discard, sudoCommand: func(ctx context.Context, args ...string) *exec.Cmd {
 				calls = append(calls, append([]string(nil), args...))
-				if len(calls) == tc.denyAt {
+				if tc.denyAt[len(calls)] {
 					return exec.CommandContext(ctx, "/usr/bin/false")
 				}
 				return exec.CommandContext(ctx, "/usr/bin/true")
@@ -48,9 +52,8 @@ func TestBootstrapAuthorizationDoesNotDependOnSudoDefaults(t *testing.T) {
 				}
 			}
 			_, err := s.Run(t.Context(), nil, "/usr/bin/cat", "--", "/dev/null")
-			wantError := tc.denyAt != 0 || tc.untrustedProbe
-			if (err != nil) != wantError || !reflect.DeepEqual(calls, tc.want) {
-				t.Fatalf("authorization calls=%q, err=%v; want %q, error=%t", calls, err, tc.want, wantError)
+			if (err != nil) != tc.wantErr || !reflect.DeepEqual(calls, tc.want) {
+				t.Fatalf("authorization calls=%q, err=%v; want %q, error=%t", calls, err, tc.want, tc.wantErr)
 			}
 		})
 	}

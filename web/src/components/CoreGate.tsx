@@ -256,24 +256,41 @@ export function CoreGate({ children }: { children: ReactNode }) {
             )}
           </div>
         ) : core.remoteAccess &&
-          (core.mode === "unclaimed" || core.remoteEnrolled) ? (
+          !passwordSignIn &&
+          (core.mode === "unclaimed" ||
+            core.remoteEnrolled ||
+            !core.passwordAvailable) ? (
           <div className="settings-body">
             <h1>{uiText("Open Fased")}</h1>
-            <button
-              className="button primary"
-              disabled={core.saving}
-              onClick={() => {
-                remoteAttempt = undefined;
-                void core
-                  .authenticate("", code || undefined, false, true)
-                  .catch(() =>
-                    setClaimError("Use an approved device or a setup link."),
-                  );
-              }}
-            >
-              {uiText("Connect")}
-            </button>
-            {claimError && <p role="alert">{uiText(claimError)}</p>}
+            {core.mode === "unclaimed" || core.remoteEnrolled || code ? (
+              <button
+                className="button primary"
+                disabled={core.saving}
+                onClick={() => {
+                  remoteAttempt = undefined;
+                  void core
+                    .authenticate("", code || undefined, false, true)
+                    .catch(() =>
+                      setClaimError("Use an approved device or a setup link."),
+                    );
+                }}
+              >
+                {uiText("Connect")}
+              </button>
+            ) : (
+              <p role={claimError ? "alert" : "status"}>
+                {uiText(
+                  claimError || "Use an approved device or a setup link.",
+                )}
+              </p>
+            )}
+            {(core.mode === "unclaimed" || core.remoteEnrolled || code) &&
+              claimError && <p role="alert">{uiText(claimError)}</p>}
+            {core.passwordAvailable && core.mode === "locked" && (
+              <button onClick={() => setPasswordSignIn(true)}>
+                {uiText("Use password")}
+              </button>
+            )}
           </div>
         ) : (
           <form onSubmit={submit}>

@@ -344,7 +344,7 @@ func (m Manager) ownTailscaleOrigin(ctx context.Context, origin string) (bool, s
 // A new Serve endpoint can take time to obtain its first certificate. Keep each
 // probe bounded, retry only transport startup, and never rewrite the route.
 func (m Manager) waitForPreparingEndpoint(ctx context.Context, p Plan, instanceID string) error {
-	ctx, cancel := context.WithTimeout(ctx, time.Minute)
+	ctx, cancel := context.WithTimeout(ctx, 3*time.Minute)
 	defer cancel()
 	for {
 		if err := ctx.Err(); err != nil {

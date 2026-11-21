@@ -76,11 +76,18 @@ func stageAttestedCandidate(ctx context.Context, p *bootstrap.Prepared, packetSH
 // stageAttestedPackageCandidate reaches only the original instance's fixed
 // helper. Both the caller and the helper verify the same candidate; the
 // helper also binds its receipt to the installed predecessor.
-func stageAttestedPackageCandidate(ctx context.Context, p *bootstrap.Prepared, packetSHA, location, instance, baseline string, diagnostics io.Writer) error {
-	return stageAttestedScopedPackageCandidate(ctx, p, packetSHA, location, instance, "update", baseline, diagnostics)
+func stageAttestedPackageCandidate(ctx context.Context, p *bootstrap.Prepared, packetSHA, location, instance, baseline string, diagnostics io.Writer, allowAutomatic ...bool) error {
+	return stageAttestedScopedPackageCandidate(ctx, p, packetSHA, location, instance, "update", baseline, diagnostics, allowAutomatic...)
 }
 
-func stageAttestedScopedPackageCandidate(ctx context.Context, p *bootstrap.Prepared, packetSHA, location, instance, scope, baseline string, diagnostics io.Writer) error {
+func stageAttestedScopedPackageCandidate(ctx context.Context, p *bootstrap.Prepared, packetSHA, location, instance, scope, baseline string, diagnostics io.Writer, allowAutomatic ...bool) error {
+	if len(allowAutomatic) > 1 {
+		return errors.New("single automatic admission flag required")
+	}
+	allowAuto := len(allowAutomatic) == 1 && allowAutomatic[0]
+	if allowAuto && scope != "update" {
+		return errors.New("only update candidates can admit automatic updates")
+	}
 	if p == nil {
 		return errors.New("verified native package candidate required")
 	}
@@ -101,10 +108,13 @@ func stageAttestedScopedPackageCandidate(ctx context.Context, p *bootstrap.Prepa
 		if err != nil {
 			return err
 		}
+		if reuse && scope == "update" && old.AllowAutomatic != allowAuto {
+			return errors.New("retained candidate differs in automatic admission; preserve its operation")
+		}
 	} else if !errors.Is(e, os.ErrNotExist) {
 		return e
 	}
-	q := maintenance.CandidateRequest{PacketSHA256: packetSHA, Scope: scope}
+	q := maintenance.CandidateRequest{PacketSHA256: packetSHA, Scope: scope, AllowAutomatic: allowAuto}
 	cmd, frame, err := packageCandidateCommandForStage(ctx, location, instance, q, diagnostics)
 	if err != nil {
 		return err

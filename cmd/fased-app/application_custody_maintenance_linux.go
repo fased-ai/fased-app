@@ -27,6 +27,7 @@ import (
 type custodyMaintenanceController struct {
 	owner                 int
 	manualOnly            bool
+	automaticAllowed      func(core.ApplicationUpdateOperation) bool
 	controlledAutomatic   func(core.ApplicationUpdateOperation) bool
 	check                 func(context.Context) (*core.ApplicationRelease, error)
 	readRecord            func(int) (update.MaintenanceRecord, error)
@@ -184,7 +185,8 @@ func (c *custodyMaintenanceController) Apply(ctx context.Context, o core.Applica
 		return core.ApplicationUpdateReceipt{}, errors.New("reviewed custody release required")
 	}
 	controlled := o.Automatic && c.controlledAutomatic != nil && c.controlledAutomatic(o)
-	if o.Automatic && c.manualOnly && !controlled {
+	general := o.Automatic && !c.manualOnly && (c.automaticAllowed == nil || c.automaticAllowed(o))
+	if o.Automatic && !general && !controlled {
 		return core.ApplicationUpdateReceipt{}, fmt.Errorf("%w: automatic updates are disabled", core.ErrApplicationUpdateNotStarted)
 	}
 	if o.Automatic {
@@ -203,7 +205,13 @@ func (c *custodyMaintenanceController) Apply(ctx context.Context, o core.Applica
 				return core.ApplicationUpdateReceipt{}, fmt.Errorf("%w: exact retained controlled candidate required", core.ErrApplicationUpdateNotStarted)
 			}
 		} else if matches {
-			return core.ApplicationUpdateReceipt{}, fmt.Errorf("%w: candidate requires a manual update", core.ErrApplicationUpdateNotStarted)
+			if !candidate.AllowAutomatic {
+				return core.ApplicationUpdateReceipt{}, fmt.Errorf("%w: candidate requires a manual update", core.ErrApplicationUpdateNotStarted)
+			}
+			if candidate.Owner != c.owner || candidate.PacketSHA256 != o.Release.ManifestSHA256 ||
+				candidate.EngineSHA256 != o.Release.EngineSHA256 {
+				return core.ApplicationUpdateReceipt{}, fmt.Errorf("%w: exact admitted candidate required", core.ErrApplicationUpdateNotStarted)
+			}
 		}
 	}
 	if err := c.launch(ctx, o.ID); err != nil {
@@ -526,7 +534,19 @@ func bindPackageMaintenance(store *core.Store, owner int, dir string) error {
 		return errors.New("the installed package differs from its recovery record")
 	}
 	c := packageMaintenanceWorker(owner, m.Location, m.ID)
-	c.manualOnly, c.readRecord, c.readCandidate = true, readRecord, readCandidate
+	c.readRecord, c.readCandidate = readRecord, readCandidate
+	c.automaticAllowed = func(o core.ApplicationUpdateOperation) bool {
+		rec, err := readRecord(owner)
+		if err != nil {
+			return false
+		}
+		current, err := custodyinstall.SelectProtectedPackageStart(rec, owner, m.Location, m.ID)
+		if err != nil {
+			return false
+		}
+		base, err := custodyInstalledPackage(rec)
+		return err == nil && custodyinstall.AutomaticPackageOperation(current, base, o)
+	}
 	c.controlledAutomatic = func(o core.ApplicationUpdateOperation) bool {
 		base, err := r.InstalledPackage()
 		return err == nil && custodyinstall.ControlledAutomaticOperation(m, base, o)

@@ -596,7 +596,7 @@ func (n networkController) begin(ctx context.Context, m Manifest, approval Netwo
 	})
 }
 func (n networkController) confirm(ctx context.Context, m Manifest, id string) (NetworkStatus, error) {
-	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, 90*time.Second)
 	defer cancel()
 	return n.withLock(ctx, m, func() (NetworkStatus, error) {
 		a, e := n.load(m)

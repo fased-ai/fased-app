@@ -173,6 +173,7 @@ func run(args []string, in io.Reader, out, errOut io.Writer) error {
 	installCandidate := f.String("install-candidate", "", "install one independently attested Local candidate")
 	installPublicPackage := f.Bool("install-public-package", false, "install the authenticated public Linux package")
 	stageCandidate := f.String("stage-candidate", "", "admit one independently attested manual update candidate")
+	allowAutomatic := f.Bool("allow-automatic", false, "admit this staged package update candidate for opt-in Automatic updates")
 	candidatePacket := f.String("candidate-packet-sha256", "", "exact reviewed candidate packet digest")
 	packageLocation := f.String("package-location", "", "installed package profile for candidate acceptance")
 	packageInstance := f.String("package-instance", "", "exact installed package instance for candidate acceptance")
@@ -282,7 +283,13 @@ func run(args []string, in io.Reader, out, errOut io.Writer) error {
 	if *stageCandidate != "" {
 		mixed := false
 		f.Visit(func(flag *flag.Flag) {
-			if flag.Name != "stage-candidate" && flag.Name != "candidate-packet-sha256" && flag.Name != "package-location" && flag.Name != "package-instance" {
+			switch flag.Name {
+			case "stage-candidate", "candidate-packet-sha256", "package-location", "package-instance":
+			case "allow-automatic":
+				if !packageFlags {
+					mixed = true
+				}
+			default:
 				mixed = true
 			}
 		})
@@ -319,7 +326,7 @@ func run(args []string, in io.Reader, out, errOut io.Writer) error {
 		}
 		defer p.Close()
 		if packageFlags {
-			e = packageCandidateMaintenanceStage(context.Background(), p, *candidatePacket, *packageLocation, *packageInstance, baseline, errOut)
+			e = packageCandidateMaintenanceStage(context.Background(), p, *candidatePacket, *packageLocation, *packageInstance, baseline, errOut, *allowAutomatic)
 		} else {
 			e = candidateMaintenanceStage(context.Background(), p, *candidatePacket, "update", errOut)
 		}

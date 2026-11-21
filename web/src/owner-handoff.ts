@@ -23,11 +23,10 @@ export function ownerHandoff(
 ): { claim: string; recovery: string[] } | undefined {
   if (!c || !validOwnerHandoff(c) || !c.ownerUid) return;
   if (c.ownerKind === "custody") {
-    const command = `/var/lib/fased-app-custody-${c.ownerUid}/fased-app custody`;
-    const flags = "--disposable-fixture --prepare-host";
+    const command = c.location === "remote" ? "fased vps access" : "fased open";
     return {
-      claim: `${command} claim-code ${flags}`,
-      recovery: [`${command} reset-app-password ${flags}`],
+      claim: command,
+      recovery: [command],
     };
   }
   const command = `/var/lib/fased-app-vps-${c.ownerUid}/fased-app vps`;
