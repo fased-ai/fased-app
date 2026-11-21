@@ -77,6 +77,7 @@ func runControl(t *testing.T, h *HTTPHandler, v WENFixtureRunView, action string
 	return out
 }
 func TestWENFixtureRunSchedules(t *testing.T) {
+	t.Parallel()
 	for _, scenario := range []string{"fixture-4h", "fixture-12h", "fixture-4h-stale", "fixture-4h-cutoff"} {
 		t.Run(scenario, func(t *testing.T) {
 			s, h, in := runFixture(t, scenario, func(d *wenstrategy.Document) {
@@ -123,6 +124,7 @@ func TestWENFixtureRunSchedules(t *testing.T) {
 	}
 }
 func TestWENFixtureRunNoGrantAndGuards(t *testing.T) {
+	t.Parallel()
 	s, h, in := runFixture(t, "fixture-4h", nil)
 	before := retainedRevisionState(t, s)
 	s.sessionFixture = false
@@ -168,6 +170,7 @@ func TestWENFixtureRunNoGrantAndGuards(t *testing.T) {
 	}
 }
 func TestWENFixtureRunSharedPool(t *testing.T) {
+	t.Parallel()
 	s, h, in := runFixture(t, "fixture-4h", func(d *wenstrategy.Document) {
 		d.Limits.PerRoundLamports = "12000000000"
 		d.Limits.MaxUnsettledLamports = "20000000000"
@@ -186,6 +189,7 @@ func TestWENFixtureRunSharedPool(t *testing.T) {
 	}
 }
 func TestWENFixtureRunUnknownRestart(t *testing.T) {
+	t.Parallel()
 	s, h, in := runFixture(t, "fixture-4h-unknown", nil)
 	v, review := startRun(t, h, in)
 	v = runWake(t, s)
@@ -242,6 +246,7 @@ func TestWENFixtureRunUnknownRestart(t *testing.T) {
 
 }
 func TestWENFixtureRunPauseEpochAndResume(t *testing.T) {
+	t.Parallel()
 	s, h, in := runFixture(t, "fixture-4h", nil)
 	v, _ := startRun(t, h, in)
 	c := pauseCommand(t, s, 1)
@@ -271,6 +276,7 @@ func TestWENFixtureRunPauseEpochAndResume(t *testing.T) {
 	}
 }
 func TestWENFixtureRunConsentCapacity(t *testing.T) {
+	t.Parallel()
 	_, h, in := runFixture(t, "fixture-4h", nil)
 	v, _ := startRun(t, h, in)
 	for i := 0; i < 7; i++ {

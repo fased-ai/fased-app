@@ -71,6 +71,36 @@ jobs:
           const missing = validateConfig(config);
           if (missing.length) throw Error(`Missing release inputs: ${missing.join(", ")}`);
           NODE
+  build-artifacts:
+    needs: classify
+    if: needs.classify.outputs.core == 'true' || needs.classify.outputs.signer == 'true' || needs.classify.outputs.inspection == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+      - run: npm ci
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.x"
+          cache: true
+      - run: npm run build
+      - run: npm run build:core
+      - run: go build -trimpath -o .evidence/bin/fased-signer ./cmd/fased-signer
+      - run: go build -trimpath -o .evidence/bin/fased-unhealthy-core ./internal/custodyinstall/testdata/unhealthy-core
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ci-built-binaries
+          include-hidden-files: true
+          path: |
+            dist/
+            .evidence/bin/fased-app
+            .evidence/bin/fased-signer
+            .evidence/bin/fased-unhealthy-core
+          retention-days: 1
   core:
     needs: classify
     if: needs.classify.outputs.core == 'true'
@@ -103,19 +133,25 @@ jobs:
       - run: test -z "$(gofmt -l cmd internal desktop ui.go)"
       - name: Full race coverage in bounded core groups
         if: needs.classify.outputs.scope == 'full'
+        env:
+          FASED_FAST_TEST_KDF: "1"
         run: |
           # Update unit coverage runs in the required handoff job on the same head.
           go list ./internal/... ./cmd/fased-app ./cmd/fased-signer ./cmd/fased-install ./cmd/fased-package ./cmd/fased-release-candidate > .evidence/core-test-packages.txt
           mapfile -t fased_other_packages < <(grep -vE '/internal/(core|update)$' .evidence/core-test-packages.txt)
           test "${#fased_other_packages[@]}" -gt 0
-          go test -race -p 1 "${fased_other_packages[@]}"
-          go test -race -p 1 ./internal/core -skip '^Test(SwapRecovery|VenueCredential|.*WEN)'
+          go test -race "${fased_other_packages[@]}"
+          go test -race ./internal/core -skip '^Test(SwapRecovery|VenueCredential|.*WEN)'
           # The exact complementary partition is required in core-scenarios.
       - if: needs.classify.outputs.scope == 'rpc'
+        env:
+          FASED_FAST_TEST_KDF: "1"
         run: go test -race ./internal/core -run 'Test(RPC|AccountRPC|PublicRPC|ProviderRPC)'
       - name: Agent and provider core race coverage
         if: needs.classify.outputs.scope == 'agent'
-        run: go test -race -p 1 ./internal/core -skip '^Test(SwapRecovery|VenueCredential|.*WEN)'
+        env:
+          FASED_FAST_TEST_KDF: "1"
+        run: go test -race ./internal/core -skip '^Test(SwapRecovery|VenueCredential|.*WEN)'
       - run: npm run build:core
       - name: Portable encrypted history and quarantined recovery checks
         if: needs.classify.outputs.signer == 'true'
@@ -157,7 +193,7 @@ jobs:
             .evidence/core-browser/
           retention-days: 7
   core-scenarios:
-    needs: classify
+    needs: [classify, build-artifacts]
     if: needs.classify.outputs.scope == 'full'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
@@ -166,18 +202,15 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "24"
-          cache: npm
-      - run: npm ci
       - uses: actions/setup-go@v5
         with:
           go-version: "1.26.x"
           cache: true
-      - run: npm run build
-      - name: Build ordinary admission CLI binaries
-        if: needs.classify.outputs.signer == 'true'
-        run: |
-          npm run build:core
-          go build -trimpath -o .evidence/bin/fased-signer ./cmd/fased-signer
+      - uses: actions/download-artifact@v4
+        with:
+          name: ci-built-binaries
+          path: .
+      - run: chmod +x .evidence/bin/*
       - name: Read-only signed development manifest and compatibility journey
         if: needs.classify.outputs.signer == 'true'
         env:
@@ -201,7 +234,9 @@ jobs:
           go test -v ./internal/update -run '^TestReleaseAdmissionCompiledCLI$' > .evidence/p4-release-admission/admission-cli.log 2>&1
           cat .evidence/p4-release-admission/admission-cli.log
       - name: Complementary core race scenarios
-        run: go test -race -p 1 ./internal/core -run '^Test(SwapRecovery|VenueCredential|.*WEN)'
+        env:
+          FASED_FAST_TEST_KDF: "1"
+        run: go test -race ./internal/core -run '^Test(SwapRecovery|VenueCredential|.*WEN)'
       - name: Retain ordinary admission evidence
         if: always() && needs.classify.outputs.signer == 'true'
         uses: actions/upload-artifact@v4
@@ -219,7 +254,7 @@ jobs:
             .evidence/p4-complete/core-cli.log
           retention-days: 7
   browser:
-    needs: classify
+    needs: [classify, build-artifacts]
     if: needs.classify.outputs.core == 'true'
     runs-on: ubuntu-24.04
     # The joined browser/CLI suite reached the ten-minute limit while tests
@@ -236,9 +271,18 @@ jobs:
           go-version: "1.26.x"
           cache: true
       - run: npm ci
-      - run: npm run build
-      - run: npm run build:core
-      - run: npx playwright install --only-shell chromium
+      - uses: actions/download-artifact@v4
+        with:
+          name: ci-built-binaries
+          path: .
+      - run: chmod +x .evidence/bin/*
+      - id: pw-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ runner.os }}-playwright-${{ hashFiles('package-lock.json') }}
+      - if: steps.pw-cache.outputs.cache-hit != 'true'
+        run: npx playwright install --only-shell chromium
       - name: Browser UI journey
         run: npm run test:ui
       - name: Build controlled Wallets browser adapters
@@ -270,7 +314,7 @@ jobs:
             .evidence/core-browser/
           retention-days: 7
   signer:
-    needs: classify
+    needs: [classify, build-artifacts]
     if: needs.classify.outputs.signer == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 5
@@ -284,17 +328,22 @@ jobs:
         with:
           go-version: "1.26.x"
           cache: true
-      - run: mkdir -p .evidence/bin && go build -trimpath -o .evidence/bin/fased-signer ./cmd/fased-signer
+      - uses: actions/download-artifact@v4
+        with:
+          name: ci-built-binaries
+          path: .
+      - run: chmod +x .evidence/bin/*
       - name: Disposable three-UID signer boundary and recovery
         run: node scripts/check-signer-isolation.mjs
-      - name: Build managed disposable core
-        run: |
-          npm ci --prefer-offline --no-audit --no-fund
-          npm run build
-          go build -trimpath -o .evidence/bin/fased-app ./cmd/fased-app
-      - name: Build deliberately unhealthy disposable candidate
-        run: go build -trimpath -o .evidence/bin/fased-unhealthy-core ./internal/custodyinstall/testdata/unhealthy-core
+      - run: npm ci --prefer-offline --no-audit --no-fund
       - name: Managed account UI browser prerequisite
+        id: pw-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ runner.os }}-playwright-${{ hashFiles('package-lock.json') }}
+      - name: Install Playwright browser
+        if: steps.pw-cache.outputs.cache-hit != 'true'
         # The Ubuntu runner supplies the shared libraries; actual browser launch checks them.
         run: npx playwright install --only-shell chromium
       - name: Installer-managed identities and protected owner recovery
@@ -382,7 +431,9 @@ jobs:
           cache: true
       - name: Update unit race coverage
         if: needs.classify.outputs.scope == 'full'
-        run: go test -race -p 1 ./internal/update
+        env:
+          FASED_FAST_TEST_KDF: "1"
+        run: go test -race ./internal/update
       - name: Fixture owner/signer handshake and combined checkpoints
         env:
           FASED_HANDOFF_EVIDENCE: .evidence/p4-handoff-model
@@ -434,7 +485,7 @@ jobs:
             .evidence/p4-handoff-uid/*.log
           retention-days: 7
   inspection-installed:
-    needs: classify
+    needs: [classify, build-artifacts]
     if: needs.classify.outputs.inspection == 'true'
     runs-on: ubuntu-24.04
     # Measured attempts: 8m04s / 7m56s, including successful test teardown.
@@ -449,18 +500,26 @@ jobs:
         with:
           go-version: "1.26.x"
           cache: true
+      - uses: actions/download-artifact@v4
+        with:
+          name: ci-built-binaries
+          path: .
+      - run: chmod +x .evidence/bin/*
       - name: Prepare signed Ubuntu sources for installed enrollment
         run: |
           node scripts/ci-ubuntu-mirror.mjs
           sudo install -m 0644 .evidence/ubuntu.sources /etc/apt/sources.list.d/ubuntu.sources
       - run: npm ci
-      - run: npm run build && npm run build:core
-      - run: go build -o .evidence/bin/fased-signer ./cmd/fased-signer
       - run: go test -c -o .evidence/bin/wallet-core.test ./internal/core
-      - run: go build -o .evidence/bin/fased-unhealthy-core ./internal/custodyinstall/testdata/unhealthy-core
       - run: node scripts/build-inspection-predecessor.mjs
+      - id: pw-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ runner.os }}-playwright-${{ hashFiles('package-lock.json') }}
       # Reuse the headless browser/runtime proven by the core job.
-      - run: npx playwright install --only-shell chromium
+      - if: steps.pw-cache.outputs.cache-hit != 'true'
+        run: npx playwright install --only-shell chromium
       - name: Actual disposable installed inspection and guarded bridge
         env:
           FASED_INSTALLED_INSPECTION_FIXTURE: "1"
@@ -509,6 +568,7 @@ jobs:
       [
         documentation,
         classify,
+        build-artifacts,
         core,
         core-scenarios,
         browser,

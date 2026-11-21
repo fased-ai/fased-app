@@ -15,6 +15,7 @@ import (
 )
 
 func TestAccountRegistryRequiresOwnerSession(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	token := claimFixture(t, s)
 	h, e := NewHTTPHandler(s, "http://127.0.0.1:7331", "", nil)
@@ -50,6 +51,7 @@ func testDraft(ref signer.AccountRef, id string) signer.FixtureProposal {
 	return signer.FixtureProposal{Version: 1, ID: id, Policy: p, Grant: g}
 }
 func TestPublicAccountsRevisionRestartAndMigration(t *testing.T) {
+	t.Parallel()
 	dir := fixtureDir(t)
 	s, e := OpenStore(dir)
 	if e != nil {
@@ -110,6 +112,7 @@ func TestPublicAccountsRevisionRestartAndMigration(t *testing.T) {
 	}
 }
 func TestAccountsBindLiveEpochAndNeverTrustAppApproval(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	ref := testRef()
 	calls := []string{}
@@ -176,6 +179,7 @@ func TestAccountsBindLiveEpochAndNeverTrustAppApproval(t *testing.T) {
 	}
 }
 func TestAccountsHTTPRejectsSecretsApprovalFlagsAndCSRF(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	token := claimFixture(t, s)
 	h, e := NewHTTPHandler(s, "http://127.0.0.1:7331", "", nil)

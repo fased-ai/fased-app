@@ -13,6 +13,7 @@ func proposalFor(p FixturePolicy, g FixtureGrant) FixtureProposal {
 	return FixtureProposal{Version: 1, ID: g.ID, Policy: p, Grant: g}
 }
 func TestProposalApprovalIsOwnerOnlyAtomicAndReplaySafe(t *testing.T) {
+	t.Parallel()
 	c, v := protocolFixture(t, os.Geteuid(), os.Geteuid())
 	if e := v.Create(fixturePassword); e != nil {
 		t.Fatal(e)
@@ -67,6 +68,7 @@ func TestProposalApprovalIsOwnerOnlyAtomicAndReplaySafe(t *testing.T) {
 	}
 }
 func TestApprovalJournalInterruptionAndExpiry(t *testing.T) {
+	t.Parallel()
 	dir := fixtureDir(t)
 	v, p, g := configuredFixture(t, dir)
 	g.ID = randomID()
@@ -97,6 +99,7 @@ func TestApprovalJournalInterruptionAndExpiry(t *testing.T) {
 }
 
 func TestApprovalGrantConflictDoesNotPartiallyChangePolicy(t *testing.T) {
+	t.Parallel()
 	v, p, g := configuredFixture(t, fixtureDir(t))
 	p.Budget = 101
 	if _, e := v.ApproveProposal(proposalFor(p, g)); e == nil {

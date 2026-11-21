@@ -18,21 +18,11 @@ var backupPassword = []byte("Disposable backup password")
 
 func fixtureDir(t *testing.T) string {
 	t.Helper()
-	root, err := filepath.Abs("../../.evidence/p3-signer")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err = os.MkdirAll(root, 0700); err != nil {
-		t.Fatal(err)
-	}
-	dir, err := os.MkdirTemp(root, "unit-")
+	dir, err := os.MkdirTemp("", "unit-")
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
-		if filepath.Dir(dir) != root {
-			t.Fatal("fixture cleanup escaped root")
-		}
 		if err := os.RemoveAll(dir); err != nil {
 			t.Fatal(err)
 		}
@@ -56,6 +46,7 @@ func requireError(t *testing.T, err error) {
 }
 
 func TestVaultBackupRecoveryAndRestart(t *testing.T) {
+	t.Parallel()
 	dir := fixtureDir(t)
 	v := openFixture(t, dir)
 	if err := v.Create(fixturePassword); err != nil {
@@ -145,6 +136,7 @@ func TestVaultBackupRecoveryAndRestart(t *testing.T) {
 }
 
 func TestCorruptBackupAndDomainSeparation(t *testing.T) {
+	t.Parallel()
 	v := openFixture(t, fixtureDir(t))
 	if err := v.Create(fixturePassword); err != nil {
 		t.Fatal(err)
@@ -208,6 +200,7 @@ func TestCorruptBackupAndDomainSeparation(t *testing.T) {
 }
 
 func TestManualUnlockBoundsExpiryAndConcurrency(t *testing.T) {
+	t.Parallel()
 	v := openFixture(t, fixtureDir(t))
 	if err := v.Create(fixturePassword); err != nil {
 		t.Fatal(err)
@@ -240,6 +233,7 @@ func TestManualUnlockBoundsExpiryAndConcurrency(t *testing.T) {
 }
 
 func TestUnlockTimerClearsKeyWithoutRequests(t *testing.T) {
+	t.Parallel()
 	v := openFixture(t, fixtureDir(t))
 	if err := v.Create(fixturePassword); err != nil {
 		t.Fatal(err)
@@ -264,6 +258,7 @@ func TestUnlockTimerClearsKeyWithoutRequests(t *testing.T) {
 }
 
 func TestInterruptedPublicationPreservesOriginal(t *testing.T) {
+	t.Parallel()
 	for _, phase := range []string{"staged", "published"} {
 		t.Run(phase, func(t *testing.T) {
 			dir := fixtureDir(t)
@@ -300,6 +295,7 @@ func TestInterruptedPublicationPreservesOriginal(t *testing.T) {
 }
 
 func TestStorageRefusesUnsafePathsAndConflicts(t *testing.T) {
+	t.Parallel()
 	dir := fixtureDir(t)
 	os.Chmod(dir, 0755)
 	if v, err := Open(dir, randomID()); err == nil {
@@ -338,6 +334,7 @@ func TestStorageRefusesUnsafePathsAndConflicts(t *testing.T) {
 }
 
 func TestOwnerBackupVerificationPreservesAuthority(t *testing.T) {
+	t.Parallel()
 	v := openFixture(t, fixtureDir(t))
 	if err := v.Create(fixturePassword); err != nil {
 		t.Fatal(err)

@@ -13,6 +13,7 @@ import (
 )
 
 func TestInitialMaintenanceJournalPreservesSignerFence(t *testing.T) {
+	t.Parallel()
 	const owner = 1800
 	id := strings.Repeat("a", 32)
 	root := "/var/lib/fased-app-custody-1800"
@@ -41,6 +42,7 @@ func TestInitialMaintenanceJournalPreservesSignerFence(t *testing.T) {
 }
 
 func TestCompletedMaintenanceFenceDeniesMutation(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name string
 	}{
@@ -65,6 +67,7 @@ func TestCompletedMaintenanceFenceDeniesMutation(t *testing.T) {
 }
 
 func TestMaintenanceFenceAbsenceRequiresSameExistingDirectory(t *testing.T) {
+	t.Parallel()
 	parent := t.TempDir()
 	root := filepath.Join(parent, "custody")
 	if err := os.Mkdir(root, 0700); err != nil {
@@ -103,6 +106,7 @@ func TestMaintenanceFenceAbsenceRequiresSameExistingDirectory(t *testing.T) {
 }
 
 func TestMissingCustodyRootDoesNotImplyNoMaintenance(t *testing.T) {
+	t.Parallel()
 	missingRoot := filepath.Join(t.TempDir(), "missing-installation")
 	c := Config{Version: 3, OwnerUID: 2147483000, StateDir: filepath.Join(missingRoot, "signer-state")}
 	if protectedMaintenanceRPCAllowed(c, Request{Action: "unlock"}, true) {
@@ -118,6 +122,7 @@ func TestMissingCustodyRootDoesNotImplyNoMaintenance(t *testing.T) {
 }
 
 func TestPackageSignerDoesNotAdoptOwnerWideMaintenanceJournal(t *testing.T) {
+	t.Parallel()
 	id := strings.Repeat("a", 32)
 	root := "/var/lib/fased-app-package/1800/local/" + id
 	c := Config{Version: 3, Mode: OrdinaryCustodyMode, Profile: OwnerCustodyProfile, Provenance: OwnerKeyProvenance, Network: "devnet", OwnerUID: 1800, AppUID: 1801, SignerUID: 1802, SignerID: id, StateDir: root + "/signer-state", SocketDir: root + "/signer-ipc"}
@@ -150,6 +155,7 @@ func TestPackageSignerDoesNotAdoptOwnerWideMaintenanceJournal(t *testing.T) {
 }
 
 func TestPackageSignerUsesOnlyMatchingInstanceJournal(t *testing.T) {
+	t.Parallel()
 	id, keyHash := strings.Repeat("a", 32), strings.Repeat("b", 64)
 	root := "/var/lib/fased-app-package/1800/local/" + id
 	c := Config{Version: 3, Mode: OrdinaryCustodyMode, Profile: OwnerCustodyProfile, Provenance: OwnerKeyProvenance, Network: "devnet", OwnerUID: 1800, AppUID: 1801, SignerUID: 1802, SignerID: id, StateDir: root + "/signer-state", SocketDir: root + "/signer-ipc"}

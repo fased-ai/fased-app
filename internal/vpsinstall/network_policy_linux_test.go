@@ -22,6 +22,7 @@ func networkPolicyFixture(m Manifest, a networkAttempt) []byte {
 	return encoded(map[string]any{"nftables": entries})
 }
 func TestNetworkPolicyRequiresKernelInputDropChainAndEightRules(t *testing.T) {
+	t.Parallel()
 	_, _, m := networkFixture(t)
 	a := networkAttempt{ID: "11111111111111111111111111111111", Access: nProof()}
 	for _, variant := range []string{"complete", "empty-table", "accept-policy", "no-rules", "wrong-table", "wrong-rule-table", "wrong-chain", "wrong-hook", "wrong-type", "wrong-priority", "missing-priority", "seven-rules", "nine-rules", "empty-rule"} {
@@ -71,6 +72,7 @@ func nProof() networkAccess {
 	return networkAccess{SessionID: "structural-fixture", PeerIP: "100.90.0.1", ServerIP: "100.90.0.2", SSHPort: 22}
 }
 func TestNetworkControllerSnapshotCannotBlessEmptyKernelTable(t *testing.T) {
+	t.Parallel()
 	h, n, m, s := networkBegin(t)
 	a, e := n.load(m)
 	if e != nil {

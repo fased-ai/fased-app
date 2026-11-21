@@ -14,6 +14,7 @@ import (
 )
 
 func TestWalletTransactionRejectsLateResults(t *testing.T) {
+	t.Parallel()
 	for _, kind := range []string{"pause cycle", "credential rotation", "sign out", "cancel"} {
 		t.Run(kind, func(t *testing.T) {
 			s := fixtureStore(t)
@@ -59,6 +60,7 @@ func TestWalletTransactionRejectsLateResults(t *testing.T) {
 }
 
 func TestWalletTransactionHTTPSSelectionAndPreservation(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	defer s.Close()
 	in := walletReadAccount(t, s)
@@ -156,6 +158,7 @@ func walletSelectionFixture() *WalletSelection {
 }
 
 func TestWalletTransactionParse(t *testing.T) {
+	t.Parallel()
 	address := onchain.Base58(bytes.Repeat([]byte{2}, 32))
 	parse := func(v map[string]any, selected *WalletSelection) (WalletTransaction, error) {
 		b, err := json.Marshal(v)

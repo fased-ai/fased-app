@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"io"
 	"os"
-	"path/filepath"
 	"testing"
 	"time"
 
@@ -19,15 +18,7 @@ func TestLocalProviderCLIPrivateRoundTrip(t *testing.T) {
 	}
 }
 func localProviderCLIPrivateRoundTrip(t *testing.T, preset, expectedModel string) {
-	root := filepath.Join(".evidence", "connected-agent-cli")
-	if err := os.MkdirAll(root, 0700); err != nil {
-		t.Fatal(err)
-	}
-	dir, err := os.MkdirTemp(root, "f-")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	dir := shortFixtureDir(t, "fa-")
 	server, err := core.StartAgentFixture(t.Context(), dir, "127.0.0.1:0", "", nil)
 	if err != nil {
 		t.Fatal(err)

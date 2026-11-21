@@ -32,6 +32,7 @@ func pausedFixture(t *testing.T, v *Vault) (update.Intent, update.PreflightReque
 }
 
 func TestPreflightPreservesAuthoritativeHistoryAndHold(t *testing.T) {
+	t.Parallel()
 	dir := fixtureDir(t)
 	v, _, g := configuredFixture(t, dir)
 	paid := intentFor(g, 5)
@@ -106,6 +107,7 @@ func TestPreflightPreservesAuthoritativeHistoryAndHold(t *testing.T) {
 }
 
 func TestPreflightRejectsStalePauseStateAndArtifactBytes(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []string{"unpaused", "pause-id", "intent", "digest", "metadata", "challenge", "floor", "signer-history", "corrupt-bytes"} {
 		t.Run(tc, func(t *testing.T) {
 			dir := fixtureDir(t)
@@ -142,6 +144,7 @@ func TestPreflightRejectsStalePauseStateAndArtifactBytes(t *testing.T) {
 }
 
 func TestLegacyLifecycleStagingJournalRemainsReadable(t *testing.T) {
+	t.Parallel()
 	for _, entry := range []int{1, 2, 3} {
 		t.Run(string(rune('0'+entry)), func(t *testing.T) {
 			dir := fixtureDir(t)

@@ -122,6 +122,22 @@ func decode(data []byte, out any) error {
 	return nil
 }
 
+const (
+	prodKDFTime    uint32 = 3
+	prodKDFMemory  uint32 = 64 * 1024
+	prodKDFThreads uint8  = 2
+)
+
+var (
+	kdfTime    = prodKDFTime
+	kdfMemory  = prodKDFMemory
+	kdfThreads = prodKDFThreads
+)
+
+func deriveVaultKey(password, salt []byte) []byte {
+	return argon2.IDKey(password, salt, kdfTime, kdfMemory, kdfThreads, 32)
+}
+
 func (e envelope) aad() []byte {
 	e.Ciphertext = nil
 	b, _ := json.Marshal(e)
@@ -179,7 +195,7 @@ func sealAdmissionHistory(seed, password []byte, ref AccountRef, purpose string,
 	if !validHistoryHold(e) {
 		return envelope{}, ErrUnavailable
 	}
-	key := argon2.IDKey(password, e.Salt, 3, 64*1024, 2, 32)
+	key := deriveVaultKey(password, e.Salt)
 	defer wipe(key)
 	block, err := aes.NewCipher(key)
 	if err != nil {
@@ -200,7 +216,7 @@ func unseal(e envelope, password []byte, purpose string) ([]byte, error) {
 	if !validPassword(password) {
 		return nil, ErrCredential
 	}
-	key := argon2.IDKey(password, e.Salt, 3, 64*1024, 2, 32)
+	key := deriveVaultKey(password, e.Salt)
 	defer wipe(key)
 	block, err := aes.NewCipher(key)
 	if err != nil {

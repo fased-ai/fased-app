@@ -11,6 +11,7 @@ import (
 )
 
 func TestPendingPackageProofBindsOriginalInstallation(t *testing.T) {
+	t.Parallel()
 	const owner = 1400
 	id := strings.Repeat("a", 32)
 	release, installer, coreHash := strings.Repeat("b", 64), strings.Repeat("c", 64), strings.Repeat("d", 64)

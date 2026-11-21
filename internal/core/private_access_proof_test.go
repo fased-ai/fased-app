@@ -14,6 +14,7 @@ import (
 )
 
 func TestPrivateAccessDeviceProof(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	h, err := NewHTTPHandler(s, "http://127.0.0.1:7331", "https://node.owner.ts.net:8443", nil)
 	if err != nil {
@@ -87,6 +88,7 @@ func TestPrivateAccessDeviceProof(t *testing.T) {
 }
 
 func TestPrivateAccessProofRejectsRevokedDevice(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	peer := tailnet.Identity{UserID: 7, NodeID: "owner-device", Login: "owner@example.test"}
 	claim, err := s.IssueRemoteClaim(t.Context(), peer)
@@ -133,6 +135,7 @@ func TestPrivateAccessProofRejectsRevokedDevice(t *testing.T) {
 }
 
 func TestPrivateAccessProofExpires(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	now := time.Now()
 	s.now = func() time.Time { return now }
@@ -160,6 +163,7 @@ func TestPrivateAccessProofExpires(t *testing.T) {
 }
 
 func TestPrivateAccessProofWaitResumesOnDeviceConfirmation(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	h, err := NewHTTPHandler(s, "http://127.0.0.1:7331", "https://node.owner.ts.net", nil)
 	if err != nil {

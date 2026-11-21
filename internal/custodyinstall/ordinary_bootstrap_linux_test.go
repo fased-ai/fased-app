@@ -145,6 +145,7 @@ func ordinaryBootstrapModel(t *testing.T, remote ...bool) (BootstrapTransaction,
 	return tx, dir, o, c
 }
 func TestOrdinaryBootstrapInterruptionForwardOnlyAndPreservation(t *testing.T) {
+	t.Parallel()
 	for _, phase := range []string{"ordinary-stopped", "ordinary-trial-verified", "forward-only", "ordinary-reader-reserved", "core-replaced", "pair-replaced", "inventory-replaced", "installer-intent.json", "installer-ready.json", "installer-owner", "started", "ordinary-healthy", "completed"} {
 		t.Run(phase, func(t *testing.T) {
 			tx, dir, o, c := ordinaryBootstrapModel(t)
@@ -190,6 +191,7 @@ func TestOrdinaryBootstrapInterruptionForwardOnlyAndPreservation(t *testing.T) {
 	}
 }
 func TestOrdinaryBootstrapRefusesForeignAndPostFenceHealthFailure(t *testing.T) {
+	t.Parallel()
 	for _, bad := range []string{"core-drift", "genesis-drift", "enrollment", "owner", "authority", "post-fence-health"} {
 		t.Run(bad, func(t *testing.T) {
 			tx, dir, o, c := ordinaryBootstrapModel(t)
@@ -240,6 +242,7 @@ func TestOrdinaryBootstrapRefusesForeignAndPostFenceHealthFailure(t *testing.T) 
 }
 
 func TestOrdinaryPairedControllerAndCompletionPreserveNativeOwnership(t *testing.T) {
+	t.Parallel()
 	for _, rollback := range []bool{false, true} {
 		t.Run(map[bool]string{false: "complete", true: "rollback"}[rollback], func(t *testing.T) {
 			tx, dir, _, cold := ordinaryBootstrapModel(t)
@@ -306,6 +309,7 @@ func TestOrdinaryPairedControllerAndCompletionPreserveNativeOwnership(t *testing
 }
 
 func TestOrdinaryHandoffAuthorityRejectsTampering(t *testing.T) {
+	t.Parallel()
 	tx, _, _, c := ordinaryBootstrapModel(t)
 	_, s, e := c.cold(t.Context())
 	if e != nil {
@@ -348,6 +352,7 @@ func TestOrdinaryHandoffAuthorityRejectsTampering(t *testing.T) {
 }
 
 func TestOrdinaryBootstrapCancellationOnlyBeforeForwardFence(t *testing.T) {
+	t.Parallel()
 	tx, dir, o, c := ordinaryBootstrapModel(t)
 	o.checkpoint = func(at string) error {
 		if at == "ordinary-trial-verified" {

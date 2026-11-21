@@ -26,6 +26,7 @@ func preparedPilot(t *testing.T) OpenAIPilotPreparation {
 }
 
 func TestOpenAIPilotPreparationInertAndExclusive(t *testing.T) {
+	t.Parallel()
 	p := preparedPilot(t)
 	root := filepath.Dir(p.Target.Directory)
 	if p.State != "review-required-not-applied" || p.RealAIEnabled || p.CredentialsCreated || p.PermitCreated || openAIPilotActivationEnabled || compiledOpenAIPilotBinding != (pilotActivationBinding{}) {
@@ -73,6 +74,7 @@ func TestOpenAIPilotPreparationInertAndExclusive(t *testing.T) {
 }
 
 func TestOpenAIPilotActivationPreflightPreservesWrongTarget(t *testing.T) {
+	t.Parallel()
 	p := preparedPilot(t)
 	dbPath := filepath.Join(p.Target.Directory, "core.sqlite")
 	before, _ := os.ReadFile(dbPath)
@@ -109,6 +111,7 @@ func TestOpenAIPilotActivationPreflightPreservesWrongTarget(t *testing.T) {
 }
 
 func TestOpenAIPilotActivationRuntimeOptions(t *testing.T) {
+	t.Parallel()
 	if !pilotStandaloneOptionsAllowed(false, false, "", nil) || !pilotStandaloneOptionsAllowed(false, false, "", []string{""}) {
 		t.Fatal("ordinary Local CLI empty optional signer was rejected")
 	}
@@ -140,6 +143,7 @@ func TestOpenAIPilotActivationRuntimeOptions(t *testing.T) {
 }
 
 func TestOpenAIPilotActivationSyntheticInputsOnly(t *testing.T) {
+	t.Parallel()
 	p := preparedPilot(t)
 	s, e := OpenStore(p.Target.Directory)
 	if e != nil {
@@ -196,6 +200,7 @@ func boundPilotFixture(t *testing.T, p OpenAIPilotPreparation, calls *atomic.Int
 }
 
 func TestOpenAIPilotActivationBootstrapUsesExistingCore(t *testing.T) {
+	t.Parallel()
 	p := preparedPilot(t)
 	var calls atomic.Int32
 	s := boundPilotFixture(t, p, &calls)
@@ -294,6 +299,7 @@ func TestOpenAIPilotActivationBootstrapUsesExistingCore(t *testing.T) {
 }
 
 func TestOpenAIPilotActivationInterruptedEnrollmentPreservesState(t *testing.T) {
+	t.Parallel()
 	p := preparedPilot(t)
 	var calls atomic.Int32
 	s := boundPilotFixture(t, p, &calls)
@@ -330,6 +336,7 @@ func TestOpenAIPilotActivationInterruptedEnrollmentPreservesState(t *testing.T) 
 }
 
 func TestOpenAIPilotActivationArchivedAttemptsCannotRearm(t *testing.T) {
+	t.Parallel()
 	for _, outcome := range []string{"completed", "zero-cost-failed"} {
 		t.Run(outcome, func(t *testing.T) {
 			p := preparedPilot(t)

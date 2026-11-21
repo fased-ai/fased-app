@@ -56,6 +56,7 @@ func portableFixture(t *testing.T) (string, string) {
 }
 
 func TestPortableSnapshotConcurrentDestinations(t *testing.T) {
+	t.Parallel()
 	dir, id := portableFixture(t)
 	a, ra, e := PackPortableSnapshot(dir, id, fixturePassword, backupPassword)
 	if e != nil {
@@ -113,6 +114,7 @@ func assertPortable(t *testing.T, r PortableReceipt) {
 	}
 }
 func TestPortableSnapshotColdRoundTrip(t *testing.T) {
+	t.Parallel()
 	dir, id := portableFixture(t)
 	originals := map[string][]byte{}
 	for _, name := range []string{"vault.json", "operations.log", "mock-receipts.log"} {
@@ -177,6 +179,7 @@ func TestPortableSnapshotColdRoundTrip(t *testing.T) {
 	t.Logf("public recovery inputs/receipt: %s", b)
 }
 func TestPortableSnapshotInvalidInputs(t *testing.T) {
+	t.Parallel()
 	dir, id := portableFixture(t)
 	doc, r, e := PackPortableSnapshot(dir, id, fixturePassword, backupPassword)
 	if e != nil {
@@ -238,6 +241,7 @@ func TestPortableSnapshotInvalidInputs(t *testing.T) {
 	}
 }
 func TestPortableSnapshotColdSourceRefusals(t *testing.T) {
+	t.Parallel()
 	for _, name := range []string{"running", "missing-lock", "missing-journal", "torn-journal", "symlink-journal", "active-update", "foreign-identity", "wrong-source-password", "damaged-vault"} {
 		t.Run(name, func(t *testing.T) {
 			dir := fixtureDir(t)
@@ -303,6 +307,7 @@ func TestPortableSnapshotColdSourceRefusals(t *testing.T) {
 	}
 }
 func TestPortableSnapshotQuarantineCuts(t *testing.T) {
+	t.Parallel()
 	dir, id := portableFixture(t)
 	doc, r, e := PackPortableSnapshot(dir, id, fixturePassword, backupPassword)
 	if e != nil {
@@ -333,6 +338,7 @@ func TestPortableSnapshotQuarantineCuts(t *testing.T) {
 	}
 }
 func TestPortableSnapshotQuarantineConflicts(t *testing.T) {
+	t.Parallel()
 	dir, id := portableFixture(t)
 	doc, r, e := PackPortableSnapshot(dir, id, fixturePassword, backupPassword)
 	if e != nil {

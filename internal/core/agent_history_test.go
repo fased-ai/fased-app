@@ -8,6 +8,7 @@ import (
 )
 
 func TestTaskHistoryArchiveWirePreservesResult(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	now := time.Date(2026, 10, 25, 12, 0, 0, 0, time.UTC)
 	s.now = func() time.Time { return now }
@@ -48,6 +49,7 @@ func completedHistoryTask(t *testing.T, s *Store, name string) (AgentView, strin
 	return agentApply(t, s, AgentCommand{Action: "task-run", ProfileID: v.ProfileID, ID: id}), id
 }
 func TestTaskHistoryPagingIsolationImmutabilityAndPause(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	for i := range 21 {
 		v, id := completedHistoryTask(t, s, fmt.Sprintf("Запись %d", i))
@@ -92,6 +94,7 @@ func TestTaskHistoryPagingIsolationImmutabilityAndPause(t *testing.T) {
 	}
 }
 func TestHistoryPolicyArchivesOnlyReadUnreferencedCompletedReminders(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	now := time.Date(2026, 10, 25, 12, 0, 0, 0, time.UTC)
 	s.now = func() time.Time { return now }
@@ -132,6 +135,7 @@ func TestHistoryPolicyArchivesOnlyReadUnreferencedCompletedReminders(t *testing.
 	}
 }
 func TestConversationHistoryPreservesAIJournalMemorySearchAndRestart(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	v := aiStart(t, s, aiPrepare(t, s))
 	if e := s.advanceAgentAI(t.Context(), fixtureAITransport{}, true); e != nil {
@@ -190,6 +194,7 @@ func TestConversationHistoryPreservesAIJournalMemorySearchAndRestart(t *testing.
 	}
 }
 func TestConversationHistoryPreservesExplicitRememberIdentity(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	p := "trading-analyst"
 	v := agentApply(t, s, AgentCommand{Action: "session-create", ProfileID: p, Name: "Remembered preferences"})
@@ -207,6 +212,7 @@ func TestConversationHistoryPreservesExplicitRememberIdentity(t *testing.T) {
 }
 
 func TestConversationHistoryRefusesPendingAndProtectsSnapshot(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	v := aiStart(t, s, aiPrepare(t, s))
 	q := v.AIRequests[0]

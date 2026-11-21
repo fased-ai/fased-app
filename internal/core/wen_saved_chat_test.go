@@ -51,6 +51,7 @@ func readSavedReview(t *testing.T, h *HTTPHandler, token string, selection WENSa
 }
 
 func TestWENSavedChatExactScopeReadOnlyAndRestart(t *testing.T) {
+	t.Parallel()
 	s, h, token, library := savedChatFixture(t)
 	before, revision, _ := readAgents(t.Context(), s.db)
 	review := readSavedReview(t, h, token, savedSelection(library))
@@ -100,6 +101,7 @@ func TestWENSavedChatExactScopeReadOnlyAndRestart(t *testing.T) {
 }
 
 func TestWENSavedChatSelectorsAndAuthority(t *testing.T) {
+	t.Parallel()
 	s, h, token, library := savedChatFixture(t)
 	base := savedSelection(library)
 	for _, tc := range []struct {
@@ -154,6 +156,7 @@ func TestWENSavedChatSelectorsAndAuthority(t *testing.T) {
 }
 
 func TestWENSavedChatStaleAndTamperedSave(t *testing.T) {
+	t.Parallel()
 	for _, kind := range []string{"text", "profile", "agent-revision", "library-revision", "expired", "core-restart", "extra-authority"} {
 		t.Run(kind, func(t *testing.T) {
 			s, h, token, l := savedChatFixture(t)
@@ -199,6 +202,7 @@ func TestWENSavedChatStaleAndTamperedSave(t *testing.T) {
 }
 
 func TestWENSavedChatCapacityPauseAndOversize(t *testing.T) {
+	t.Parallel()
 	for _, kind := range []string{"sessions", "messages", "paused", "oversize"} {
 		t.Run(kind, func(t *testing.T) {
 			s, h, token, l := savedChatFixture(t)
@@ -258,6 +262,7 @@ func TestWENSavedChatCapacityPauseAndOversize(t *testing.T) {
 }
 
 func TestWENSavedHistorySummaryParity(t *testing.T) {
+	t.Parallel()
 	raw, err := os.ReadFile("testdata/wen-saved-history.json")
 	if err != nil {
 		t.Fatal(err)

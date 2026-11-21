@@ -32,6 +32,7 @@ func TestRemotePackageDoesNotFallBackToAppWritableSocket(t *testing.T) {
 }
 
 func TestUnconfiguredProtectedSignerAllowsLocalOwnerAndApplicationCheckpoint(t *testing.T) {
+	t.Parallel()
 	uid := os.Getuid()
 	if uid <= 0 {
 		t.Skip("ordinary app identity required")
@@ -153,6 +154,7 @@ func TestUnconfiguredProtectedSignerAllowsLocalOwnerAndApplicationCheckpoint(t *
 }
 
 func TestUnconfiguredProtectedSignerCheckpointRefusesSignerBoundAccounts(t *testing.T) {
+	t.Parallel()
 	uid := os.Getuid()
 	if uid <= 0 {
 		t.Skip("ordinary app identity required")
@@ -229,6 +231,7 @@ func (d *checkpointController) Status(ctx context.Context, o ApplicationUpdateOp
 	return d.receipt, nil
 }
 func TestApplicationCheckpointFencesBacksUpAndRecoversWithoutWallet(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	d := &checkpointController{updateControllerFixture: fixtureUpdateController(), s: s, fail: true}
 	if e := s.BindApplicationUpdateController(d); e != nil {
@@ -294,6 +297,7 @@ func TestApplicationCheckpointFencesBacksUpAndRecoversWithoutWallet(t *testing.T
 }
 
 func TestApplicationCheckpointOwnerRetryAfterRestartReusesOriginalHold(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	fixture := fixtureUpdateController()
 	starts := 0
@@ -352,6 +356,7 @@ func TestApplicationCheckpointOwnerRetryAfterRestartReusesOriginalHold(t *testin
 }
 
 func TestApplicationCheckpointOfflineRetainsAutomaticPolicy(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	fixture := fixtureUpdateController()
 	starts := 0
@@ -389,6 +394,7 @@ func TestApplicationCheckpointOfflineRetainsAutomaticPolicy(t *testing.T) {
 }
 
 func TestApplicationCheckpointRetryRequiresExactRolledBackOutcome(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	fixture := fixtureUpdateController()
 	if err := s.BindApplicationMaintenance(fixture.Check, func(context.Context, string) error { return nil }); err != nil {
@@ -427,6 +433,7 @@ func TestApplicationCheckpointRetryRequiresExactRolledBackOutcome(t *testing.T) 
 }
 
 func TestApplicationCheckpointRefusesCustodyAndTamperedIndex(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	d := fixtureUpdateController()
 	if e := s.BindApplicationUpdateController(d); e != nil {
@@ -464,6 +471,7 @@ func TestApplicationCheckpointRefusesCustodyAndTamperedIndex(t *testing.T) {
 }
 
 func TestApplicationOwnerOfflineRefusesDamagedCheckpoint(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	fixture := fixtureUpdateController()
 	if err := s.BindApplicationMaintenance(fixture.Check, func(context.Context, string) error { return nil }); err != nil {

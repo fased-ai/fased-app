@@ -10,6 +10,7 @@ import (
 )
 
 func TestPackageHelperTransitionRecovery(t *testing.T) {
+	t.Parallel()
 	owner := 22000
 	instance := strings.Repeat("d", 32)
 	r := update.MaintenanceRecord{Version: 1, Owner: owner, OperationID: strings.Repeat("e", 32), Phase: "completed", Start: "target"}

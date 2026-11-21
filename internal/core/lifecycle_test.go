@@ -11,6 +11,7 @@ import (
 )
 
 func TestLifecycleSnapshotRequiresAuthenticatedCore(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	code, err := s.IssueClaimCode(t.Context())
 	if err != nil {
@@ -48,6 +49,7 @@ func TestLifecycleSnapshotRequiresAuthenticatedCore(t *testing.T) {
 }
 
 func TestLifecycleSnapshotBindsMetadataCredentialAndBoot(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	_ = claimFixture(t, s)
 	p := update.NewProbe()

@@ -17,6 +17,7 @@ func fixtureProfileProvider(t *testing.T, s *Store, c AgentCommand) AgentView {
 }
 
 func TestProviderCatalogTracksConnectionWithoutEntitlementClaims(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	v, err := s.AIConnection()
 	if err != nil || v.Catalog.Version != 1 || len(v.Catalog.Providers) != 12 || len(v.Catalog.Models) != 3 {
@@ -59,6 +60,7 @@ func TestProviderCatalogTracksConnectionWithoutEntitlementClaims(t *testing.T) {
 }
 
 func TestAgentProviderSharedReviewSelection(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	connection := saveTestConnection(t, s)
 	v := agentApply(t, s, AgentCommand{Action: "session-create", ProfileID: "trading-analyst", Name: "Provider review"})
@@ -137,6 +139,7 @@ func TestAgentProviderSharedReviewSelection(t *testing.T) {
 }
 
 func TestAICredentialModeCannotActivateOrAlterVault(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	v, err := s.ChangeAIConnection(t.Context(), AIConnectionCommand{Action: "save", CredentialMode: "test", Key: testAPIKey, Passphrase: testVaultPassword})
 	if err != nil || v.CredentialMode != "test" || !v.TestOnly || v.LiveCallsEnabled {

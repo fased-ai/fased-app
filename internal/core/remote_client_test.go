@@ -15,6 +15,7 @@ type remoteRoundTrip func(*http.Request) (*http.Response, error)
 func (f remoteRoundTrip) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
 
 func TestRemoteUpdateStatusGatewayErrorScope(t *testing.T) {
+	t.Parallel()
 	const statusRoute = "/api/v1/updates/application"
 	for _, tc := range []struct {
 		name, method, route string
@@ -45,6 +46,7 @@ func TestRemoteUpdateStatusGatewayErrorScope(t *testing.T) {
 }
 
 func TestRemoteClientUsesPinnedHTTPSAndNoPassword(t *testing.T) {
+	t.Parallel()
 	identity := strings.Repeat("a", 43)
 	for _, scenario := range []string{"good", "changed instance", "revoked"} {
 		t.Run(scenario, func(t *testing.T) {

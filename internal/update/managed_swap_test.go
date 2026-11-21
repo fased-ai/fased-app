@@ -6,6 +6,7 @@ import (
 )
 
 func TestManagedSwapSnapshotRetainsUnknownAndRejectsAmbiguousShape(t *testing.T) {
+	t.Parallel()
 	id := strings.Repeat("1", 32)
 	hash := strings.Repeat("a", 64)
 	c := CoreSnapshot{Version: 1, ProbeID: id, BootID: id, InstanceID: "fixture-core", State: State{Name: "core-db", Version: 32, Anchor: hash}}

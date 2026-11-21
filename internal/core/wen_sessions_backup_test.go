@@ -9,6 +9,7 @@ import (
 )
 
 func TestWENSessionStorageSnapshotBackup(t *testing.T) {
+	t.Parallel()
 	s, h, _, review := sessionFixture(t, "review", "fixture-4h-unknown")
 	v, e := h.CreateWENSession(t.Context(), review)
 	if e != nil {

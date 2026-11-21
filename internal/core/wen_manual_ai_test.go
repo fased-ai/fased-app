@@ -67,6 +67,7 @@ func wenManualAICommand(source AgentMessage) AgentCommand {
 }
 
 func TestWENManualAIExactSourceDisclosureAndFixture(t *testing.T) {
+	t.Parallel()
 	for _, kind := range []string{"research", "strategy", "history", "strategy-history", "revised-strategy"} {
 		t.Run(kind, func(t *testing.T) {
 			s, source := wenManualAISource(t, kind)
@@ -137,6 +138,7 @@ func TestWENManualAIExactSourceDisclosureAndFixture(t *testing.T) {
 }
 
 func TestWENManualAISourceRevalidation(t *testing.T) {
+	t.Parallel()
 	for _, stage := range []string{"consent", "dispatch"} {
 		for _, change := range []string{"source-text", "source-removed", "source-profile", "conversation-addition", "consent-expired", "clock-rollback"} {
 			t.Run(stage+"/"+change, func(t *testing.T) {
@@ -179,6 +181,7 @@ func TestWENManualAISourceRevalidation(t *testing.T) {
 }
 
 func TestWENManualAIBoundsAndFrozenRecovery(t *testing.T) {
+	t.Parallel()
 	for _, kind := range []string{"context-capacity", "input-budget", "request-capacity", "document-capacity", "paused", "stale-revision", "restart-frozen-source"} {
 		t.Run(kind, func(t *testing.T) {
 			s, source := wenManualAISource(t, "strategy-history")

@@ -23,6 +23,7 @@ import (
 )
 
 func TestRemotePreparedInventoryPreservesUnknownCustodyWork(t *testing.T) {
+	t.Parallel()
 	h, o, _ := fixtureHost()
 	root := maintenance.OwnerRoot(o.uid)
 	for _, path := range []string{root + "/remote", root + "/tailscale", root + "/fased-app", root + "/fased-app/install", root + "/fased-app/install/verified-" + strings.Repeat("a", 32)} {
@@ -73,6 +74,7 @@ func TestRemotePreparedInventoryPreservesUnknownCustodyWork(t *testing.T) {
 }
 
 func TestRemotePreparedJournalsPreserveInterruptedOperations(t *testing.T) {
+	t.Parallel()
 	f := remoteApplicationFixture(t)
 	m, err := f.apply(t, false)
 	if err != nil {
@@ -189,6 +191,7 @@ func attachEnrollmentFixture(h *memoryHost, o *hostOps, m Manifest, form string)
 }
 
 func TestProtectedRemoteAccountStatusIsFixedAndReadOnly(t *testing.T) {
+	t.Parallel()
 	if !fixedRemotePasswordProbe(1000, []string{"/usr/bin/passwd", "-S", accountName(1000)}) {
 		t.Fatal("the owned Remote password-status check was refused")
 	}
@@ -204,6 +207,7 @@ func TestProtectedRemoteAccountStatusIsFixedAndReadOnly(t *testing.T) {
 }
 
 func TestRemoteEnrollmentLeaseResumesOnlyBoundFences(t *testing.T) {
+	t.Parallel()
 	for _, form := range []string{"complete", "published", "sibling", "empty-sibling", "archived"} {
 		t.Run(form, func(t *testing.T) {
 			h, o, m := installFixture(t)
@@ -230,6 +234,7 @@ func TestRemoteEnrollmentLeaseResumesOnlyBoundFences(t *testing.T) {
 }
 
 func TestRemoteEnrollmentFactoryLoadAndStatus(t *testing.T) {
+	t.Parallel()
 	for _, form := range []string{"ordinary", "complete", "published", "sibling", "empty-sibling", "archived"} {
 		t.Run(form, func(t *testing.T) {
 			h, o, m := installFixture(t)
@@ -265,6 +270,7 @@ func TestRemoteEnrollmentFactoryLoadAndStatus(t *testing.T) {
 }
 
 func TestRemoteEnrollmentRefusesForeignMetadata(t *testing.T) {
+	t.Parallel()
 	for _, mode := range []string{"owner", "source-uid", "source-origin", "target-uid", "extra-sibling", "foreign-fence", "foreign-child", "missing-journal", "bad-phase", "unclassified-root", "bad-code"} {
 		t.Run(mode, func(t *testing.T) {
 			h, o, m := installFixture(t)
@@ -319,6 +325,7 @@ func TestRemoteEnrollmentRefusesForeignMetadata(t *testing.T) {
 }
 
 func TestRemoteEnrollmentNetworkMustBeSettled(t *testing.T) {
+	t.Parallel()
 	for _, mode := range []string{"none", "pending", "expired", "committed", "rolled-back", "pointer-only"} {
 		t.Run(mode, func(t *testing.T) {
 			h, n, m := networkFixture(t)
@@ -358,6 +365,7 @@ func TestRemoteEnrollmentNetworkMustBeSettled(t *testing.T) {
 }
 
 func TestRemoteEnrollmentNetworkRecoveryPreservesPolicyBinding(t *testing.T) {
+	t.Parallel()
 	for _, form := range []string{"complete", "published"} {
 		t.Run(form, func(t *testing.T) {
 			h, n, m := networkFixture(t)
@@ -388,6 +396,7 @@ func TestRemoteEnrollmentNetworkRecoveryPreservesPolicyBinding(t *testing.T) {
 }
 
 func TestRemoteEnrolledNetworkProofBindsInstanceAndOwner(t *testing.T) {
+	t.Parallel()
 	m := Manifest{OwnerUID: 1000, Listen: "127.0.0.1:17445", PublicOrigin: "https://controlled.owner.ts.net"}
 	identity := base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{9}, 32))
 	for _, mode := range []string{"good", "wrong-loopback", "wrong-private", "wrong-owner"} {
@@ -415,6 +424,7 @@ func TestRemoteEnrolledNetworkProofBindsInstanceAndOwner(t *testing.T) {
 }
 
 func TestRemoteEnrollmentLostLockKeepsOnlyNetworkRecovery(t *testing.T) {
+	t.Parallel()
 	h, o, m := installFixture(t)
 	j, _ := attachEnrollmentFixture(h, &o, m, "published")
 	j.Phase = "source-lock-lost"
@@ -432,6 +442,7 @@ func TestRemoteEnrollmentLostLockKeepsOnlyNetworkRecovery(t *testing.T) {
 }
 
 func TestRemoteEnrollmentStatusReadsOrdinaryJournalAndOriginalRelease(t *testing.T) {
+	t.Parallel()
 	for _, form := range []string{"published", "sibling", "complete"} {
 		t.Run(form, func(t *testing.T) {
 			h, o, m := installFixture(t)
@@ -476,6 +487,7 @@ func TestRemoteEnrollmentStatusReadsOrdinaryJournalAndOriginalRelease(t *testing
 }
 
 func TestRemoteEnrollmentAcceptsReservedRestrictedSibling(t *testing.T) {
+	t.Parallel()
 	h, o, m := installFixture(t)
 	j, _ := attachEnrollmentFixture(h, &o, m, "empty-sibling")
 	path := m.Root + "/.enrollment-" + j.ID

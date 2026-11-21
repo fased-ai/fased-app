@@ -17,18 +17,11 @@ import (
 
 const testPassword = "fixture-only-owner-password"
 
-// Reconstructible fixtures only; no owner state or signing material. Test results
-// are retained by the runner before these exact temporary directories are removed.
+// Reconstructible fixtures only; no owner state or signing material. Keeping temp
+// paths under os.TempDir keeps SQLite on tmpfs and socket paths short.
 func fixtureDir(t *testing.T) string {
 	t.Helper()
-	root, err := filepath.Abs("../../.evidence/core-fixtures")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err = os.MkdirAll(root, 0700); err != nil {
-		t.Fatal(err)
-	}
-	dir, err := os.MkdirTemp(root, "f-")
+	dir, err := os.MkdirTemp("", "fc-")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -77,6 +70,7 @@ func claimFixture(t *testing.T, s *Store) string {
 }
 
 func TestClaimSessionAndPasswordLifecycle(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	now := time.Date(2026, 10, 19, 12, 0, 0, 0, time.UTC)
 	s.now = func() time.Time { return now }
@@ -145,6 +139,7 @@ func TestClaimSessionAndPasswordLifecycle(t *testing.T) {
 }
 
 func TestSetupConflictPersistenceAndDowngrade(t *testing.T) {
+	t.Parallel()
 	dir := fixtureDir(t)
 	s, err := OpenStore(dir)
 	if err != nil {
@@ -203,6 +198,7 @@ func apiRequest(h http.Handler, method, route, body, token, origin, csrf string)
 }
 
 func TestHTTPBoundariesAndConflict(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	token := claimFixture(t, s)
 	h, err := NewHTTPHandler(s, "http://127.0.0.1:7331", "", fstest.MapFS{"index.html": {Data: []byte("<html>fixture</html>")}})
@@ -254,6 +250,7 @@ func TestHTTPBoundariesAndConflict(t *testing.T) {
 }
 
 func TestAuthTransportAndRateLimit(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	claimFixture(t, s)
 	for _, secure := range []bool{false, true} {
@@ -322,6 +319,7 @@ func TestAuthTransportAndRateLimit(t *testing.T) {
 }
 
 func TestIPCSharedStateAndSingleEngine(t *testing.T) {
+	t.Parallel()
 	dir := fixtureDir(t)
 	server, err := Start(t.Context(), dir, "127.0.0.1:0", "", nil)
 	if err != nil {
@@ -384,6 +382,7 @@ func TestIPCSharedStateAndSingleEngine(t *testing.T) {
 }
 
 func TestConcurrentSetupHasOneWinner(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	results := make(chan error, 2)
 	for _, host := range []string{"local", "vps"} {

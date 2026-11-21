@@ -12,6 +12,7 @@ import (
 )
 
 func TestWENPaperJourney(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	now := time.Unix(1800000000, 0)
 	s.now = func() time.Time { return now }
@@ -59,6 +60,7 @@ func TestWENPaperJourney(t *testing.T) {
 }
 
 func TestWENPaperRefusalsExpiryAndIsolation(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	now := time.Unix(1800000000, 0)
 	s.now = func() time.Time { return now }
@@ -114,6 +116,7 @@ func TestWENPaperRefusalsExpiryAndIsolation(t *testing.T) {
 }
 
 func TestWENPaperConcurrentScheduledOnceAndTamper(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	now := time.Unix(1800000000, 0)
 	s.now = func() time.Time { return now }
@@ -148,6 +151,7 @@ func TestWENPaperConcurrentScheduledOnceAndTamper(t *testing.T) {
 }
 
 func TestWENPaperCapacityAndPausedMigration(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	v := agentApply(t, s, AgentCommand{Action: "wen-paper-prepare", Name: "Retained", WEN: &WENPaperInput{BudgetSOL: "0.01", Selection: "2", ValidForSeconds: 300}})
 	d, revision, err := readAgents(t.Context(), s.db)
@@ -199,6 +203,7 @@ func TestWENPaperCapacityAndPausedMigration(t *testing.T) {
 }
 
 func TestWENPaperSnapshotBindsReviewAndReceipt(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	claimFixture(t, s)
 	snapshot := func() update.CoreSnapshot {

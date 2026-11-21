@@ -12,6 +12,7 @@ import (
 )
 
 func TestOpenAIAdmissionPolicyAndIntegerTariff(t *testing.T) {
+	t.Parallel()
 	p := openAIModelPolicy()
 	q := AgentAIRequest{Model: p.Model, Policy: &p, ConnectionRef: "disposable-connection", Limits: AILimits{MaxInputTokens: 24000, MaxOutputTokens: 1024}}
 	if e := validateAIModelPolicy(q, time.Unix(p.ReviewedAt, 0).UTC().Unix()); e != nil {
@@ -72,6 +73,7 @@ func admittedResult(input, cached int64) map[string]any {
 }
 
 func TestOpenAIAdmissionHTTPSJoinedTaskAndRestart(t *testing.T) {
+	t.Parallel()
 	s, connection := admissionStore(t)
 	v := admissionPlan(t, s, connection.Ref, true)
 	task := v.Tasks[len(v.Tasks)-1]
@@ -138,6 +140,7 @@ func TestOpenAIAdmissionHTTPSJoinedTaskAndRestart(t *testing.T) {
 }
 
 func TestOpenAIAdmissionHTTPSRefusalsAndDependentIsolation(t *testing.T) {
+	t.Parallel()
 	for _, mode := range []string{"401", "403", "429", "wrong-model", "shutdown", "missing-created", "count-null", "count-negative", "count-over", "count-fraction", "count-object", "count-duplicate", "redirect", "oversize", "reflection", "timeout"} {
 		t.Run(mode, func(t *testing.T) {
 			s, c := admissionStore(t)
@@ -227,6 +230,7 @@ func TestOpenAIAdmissionHTTPSRefusalsAndDependentIsolation(t *testing.T) {
 }
 
 func TestOpenAIAdmissionUsageMismatchKeepsReservation(t *testing.T) {
+	t.Parallel()
 	for _, mode := range []string{"tokens", "cache", "tier", "model", "duplicate", "lost-result"} {
 		t.Run(mode, func(t *testing.T) {
 			s, c := admissionStore(t)
@@ -274,6 +278,7 @@ func TestOpenAIAdmissionUsageMismatchKeepsReservation(t *testing.T) {
 }
 
 func TestOpenAIAdmissionConsentPolicyAndDefaultOff(t *testing.T) {
+	t.Parallel()
 	s, c := admissionStore(t)
 	v := admissionPlan(t, s, c.Ref, false)
 	q := v.AIRequests[0]
@@ -311,6 +316,7 @@ func TestOpenAIAdmissionConsentPolicyAndDefaultOff(t *testing.T) {
 }
 
 func TestOpenAIAdmissionOwnerCancelDuringCount(t *testing.T) {
+	t.Parallel()
 	s, c := admissionStore(t)
 	v := aiStart(t, s, admissionPlan(t, s, c.Ref, false))
 	started := make(chan struct{})
@@ -353,6 +359,7 @@ func TestOpenAIAdmissionOwnerCancelDuringCount(t *testing.T) {
 }
 
 func TestOpenAIAdmissionPauseRecoveryWithoutReplay(t *testing.T) {
+	t.Parallel()
 	s, c := admissionStore(t)
 	v := aiStart(t, s, admissionPlan(t, s, c.Ref, false))
 	started := make(chan struct{})

@@ -10,6 +10,7 @@ import (
 )
 
 func TestTrustRehearsalRefreshAndFloors(t *testing.T) {
+	t.Parallel()
 	f := newTrustFixture(t)
 	first := f.run(nil)
 	view := first.Report()
@@ -33,6 +34,7 @@ func TestTrustRehearsalRefreshAndFloors(t *testing.T) {
 }
 
 func TestTrustRehearsalRejectsUntrustedTransitions(t *testing.T) {
+	t.Parallel()
 	for _, name := range []string{"seed-substitution", "missing-state", "state-substitution", "backward-clock", "production-seed", "wrong-repository", "wrong-purpose", "one-root-key", "root-threshold-downgrade", "duplicate-root-signature", "one-target-key", "duplicate-target-signature", "wrong-role-signature", "timestamp-expired", "snapshot-expired", "targets-expired", "final-root-expired", "metadata-mix", "unsigned-descriptor-change", "metadata-rollback", "same-version-change", "lower-release", "same-sequence-change", "unknown-target", "oversize", "initial-with-state", "untrusted-tls", "metadata-redirect", "root-missing-old-quorum", "root-missing-new-quorum", "root-skipped-version", "revoked-target-key", "reset-cannot-lower-release"} {
 		t.Run(name, func(t *testing.T) {
 			f := newTrustFixture(t)
@@ -194,6 +196,7 @@ func firstDescriptor(t TrustTransition) []byte {
 }
 
 func TestTrustRehearsalRootAndOnlineRotation(t *testing.T) {
+	t.Parallel()
 	for _, name := range []string{"root-dual-quorum", "expired-intermediate", "online-cache-reset", "targets-key-replacement"} {
 		t.Run(name, func(t *testing.T) {
 			f := newTrustFixture(t)

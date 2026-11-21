@@ -17,6 +17,7 @@ import (
 
 // Exercise owner-provenance storage and recovery with disposable keys only.
 func TestOwnerHistoryBackupAndRecoveryPreservesProvenance(t *testing.T) {
+	t.Parallel()
 	const sourceID = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 	const targetID = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 	open := func(t *testing.T, dir, id string) *Vault {

@@ -17,6 +17,7 @@ import (
 )
 
 func TestNetworkRequiresOpenSSHAncestry(t *testing.T) {
+	t.Parallel()
 	for _, c := range []struct {
 		name    string
 		main    int
@@ -47,6 +48,7 @@ func TestNetworkRequiresOpenSSHAncestry(t *testing.T) {
 }
 
 func TestNetworkPrivateSession(t *testing.T) {
+	t.Parallel()
 	status := []byte(`{"BackendState":"Running","Self":{"Online":true,"DNSName":"vps.owner.ts.net.","TailscaleIPs":["100.90.0.2","fd7a:115c:a1e0::2"]}}`)
 	ipv4 := &net.IPNet{IP: net.ParseIP("100.90.0.2"), Mask: net.CIDRMask(32, 32)}
 	ipv6 := &net.IPNet{IP: net.ParseIP("fd7a:115c:a1e0::2"), Mask: net.CIDRMask(128, 128)}
@@ -95,6 +97,7 @@ func TestNetworkPrivateSession(t *testing.T) {
 }
 
 func TestNetworkLocalReadinessNeverSubstitutesForOwnerBinding(t *testing.T) {
+	t.Parallel()
 	m := Manifest{OwnerUID: 1000, Listen: "127.0.0.1:17445", PublicOrigin: "https://vps.owner.ts.net:8443"}
 	for _, scenario := range []string{"ready", "unclaimed", "wrong owner", "wrong profile"} {
 		t.Run(scenario, func(t *testing.T) {
@@ -127,6 +130,7 @@ type networkRoundTrip func(*http.Request) (*http.Response, error)
 func (r networkRoundTrip) RoundTrip(req *http.Request) (*http.Response, error) { return r(req) }
 
 func TestNetworkPrivateApplicationIdentityAndOwner(t *testing.T) {
+	t.Parallel()
 	m := Manifest{Listen: "127.0.0.1:17445", PublicOrigin: "https://vps.owner.ts.net"}
 	for _, scenario := range []string{"good", "different instance", "unclaimed", "owner failure", "huge owner", "local descriptor", "bad health"} {
 		t.Run(scenario, func(t *testing.T) {

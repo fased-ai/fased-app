@@ -65,6 +65,9 @@ func TestFreshCandidateRejectsUntrustedOrMixedModes(t *testing.T) {
 	previous := compiledFirstInstallBinding
 	compiledFirstInstallBinding = &firstInstallBinding{Seed: []byte("not read"), SHA256: strings.Repeat("a", 64)}
 	t.Cleanup(func() { compiledFirstInstallBinding = previous })
+	previousReadDir := readPackageParentDir
+	readPackageParentDir = func(string) ([]os.DirEntry, error) { return nil, os.ErrNotExist }
+	t.Cleanup(func() { readPackageParentDir = previousReadDir })
 	directory := filepath.Join(t.TempDir(), "candidate")
 	packet := strings.Repeat("a", 64)
 	for _, args := range [][]string{
@@ -91,6 +94,9 @@ func TestPublicPackageRequiresExactOwnerProfileAndRelease(t *testing.T) {
 	previous := compiledFirstInstallBinding
 	compiledFirstInstallBinding = &firstInstallBinding{Seed: []byte("not read"), SHA256: strings.Repeat("a", 64)}
 	t.Cleanup(func() { compiledFirstInstallBinding = previous })
+	previousReadDir := readPackageParentDir
+	readPackageParentDir = func(string) ([]os.DirEntry, error) { return nil, os.ErrNotExist }
+	t.Cleanup(func() { readPackageParentDir = previousReadDir })
 	packet := strings.Repeat("b", 64)
 	sum := sha256.Sum256([]byte(fmt.Sprintf("%d\x00%s\x00local", os.Getuid(), packet)))
 	instance := hex.EncodeToString(sum[:])[:32]
@@ -127,6 +133,9 @@ func TestFreshPackageCandidateRequiresItsExactProfileBeforeAcquisition(t *testin
 	previous := compiledFirstInstallBinding
 	compiledFirstInstallBinding = &firstInstallBinding{Seed: []byte("not read"), SHA256: strings.Repeat("a", 64)}
 	t.Cleanup(func() { compiledFirstInstallBinding = previous })
+	previousReadDir := readPackageParentDir
+	readPackageParentDir = func(string) ([]os.DirEntry, error) { return nil, os.ErrNotExist }
+	t.Cleanup(func() { readPackageParentDir = previousReadDir })
 	directory := filepath.Join(t.TempDir(), "candidate")
 	packet, instance := strings.Repeat("b", 64), strings.Repeat("c", 32)
 	args := []string{"--install-candidate", directory, "--candidate-packet-sha256", packet, "--package-location", "remote", "--package-instance", instance, "--profile", "remote"}
@@ -146,6 +155,9 @@ func TestUpdateCandidateRejectsMixedModesBeforeReadingInstallation(t *testing.T)
 	previous := compiledFirstInstallBinding
 	compiledFirstInstallBinding = &firstInstallBinding{Seed: []byte("not read"), SHA256: strings.Repeat("a", 64)}
 	t.Cleanup(func() { compiledFirstInstallBinding = previous })
+	previousReadDir := readPackageParentDir
+	readPackageParentDir = func(string) ([]os.DirEntry, error) { return nil, os.ErrNotExist }
+	t.Cleanup(func() { readPackageParentDir = previousReadDir })
 	directory := filepath.Join(t.TempDir(), "candidate")
 	packet := strings.Repeat("a", 64)
 	for _, args := range [][]string{

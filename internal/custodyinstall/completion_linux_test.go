@@ -71,6 +71,7 @@ func prepareCompletionModel(t *testing.T) (InstallTransaction, string) {
 	return x, dir
 }
 func TestCompletionInterruptionAndCurrentRetry(t *testing.T) {
+	t.Parallel()
 	for _, phase := range completionPhases {
 		t.Run(phase, func(t *testing.T) {
 			x, dir := prepareCompletionModel(t)
@@ -105,6 +106,7 @@ func TestCompletionInterruptionAndCurrentRetry(t *testing.T) {
 	}
 }
 func TestCompletionRejectsHealthForeignAndSuperseded(t *testing.T) {
+	t.Parallel()
 	for _, bad := range []string{"health", "owner", "ready", "active", "superseded"} {
 		t.Run(bad, func(t *testing.T) {
 			x, dir := prepareCompletionModel(t)
@@ -161,6 +163,7 @@ func TestCompletionActualChildDeath(t *testing.T) {
 }
 
 func TestCompletionFailedHealthAfterCommitRetainsState(t *testing.T) {
+	t.Parallel()
 	x, dir := prepareCompletionModel(t)
 	o := completionModel(t, x, dir)
 	o.checkpoint = func(at string) error {

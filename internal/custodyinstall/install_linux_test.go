@@ -22,6 +22,7 @@ func fixtureManifest() Manifest {
 }
 
 func TestManagedRuntimeSeparatesInactiveFromForeign(t *testing.T) {
+	t.Parallel()
 	m := fixtureManifest()
 	fragment := "/etc/systemd/system/" + Unit(m.Owner, "signer")
 	status := []byte(fmt.Sprintf("Uid:\t%d\t%d\t%d\t%d\nNoNewPrivs:\t1\n", m.Signer.UID, m.Signer.UID, m.Signer.UID, m.Signer.UID))
@@ -53,6 +54,7 @@ func TestManagedRuntimeSeparatesInactiveFromForeign(t *testing.T) {
 }
 
 func TestPackageRuntimeRequiresAnUnconfiguredSignerToStayStopped(t *testing.T) {
+	t.Parallel()
 	_, m := packageGateInitialRecord(t)
 	fragment := "/etc/systemd/system/" + instanceUnit(m, "signer")
 	inactive := []byte("ActiveState=inactive\nMainPID=0\nFragmentPath=" + fragment + "\n")
@@ -74,6 +76,7 @@ func TestPackageRuntimeRequiresAnUnconfiguredSignerToStayStopped(t *testing.T) {
 	}
 }
 func TestIdentityAndPrivateListenerContract(t *testing.T) {
+	t.Parallel()
 	m := fixtureManifest()
 	if e := m.validate(); e != nil {
 		t.Fatal(e)
@@ -96,6 +99,7 @@ func TestIdentityAndPrivateListenerContract(t *testing.T) {
 	}
 }
 func TestConsentFailsBeforeHostOrInputAccess(t *testing.T) {
+	t.Parallel()
 	for _, o := range []Options{{}, {Disposable: true}, {PrepareHost: true}} {
 		_, e := Install(context.Background(), o, &System{Out: io.Discard})
 		if e == nil || !strings.Contains(e.Error(), "consent") {
@@ -105,6 +109,7 @@ func TestConsentFailsBeforeHostOrInputAccess(t *testing.T) {
 }
 
 func TestCustodyHostPlatform(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name, release, arch, location string
 		wantOK                        bool
@@ -131,6 +136,7 @@ func TestCustodyHostPlatform(t *testing.T) {
 }
 
 func TestFedoraCustodyInstallReachesInputValidation(t *testing.T) {
+	t.Parallel()
 	release, err := os.ReadFile("/etc/os-release")
 	if err != nil || !bytes.Contains(release, []byte("ID=fedora\n")) {
 		t.Skip("real Fedora host required")
@@ -334,6 +340,7 @@ func (h *memoryHost) run(_ context.Context, input []byte, args ...string) ([]byt
 }
 
 func TestScopedUpdateExecutablesUseApprovedImmutableSource(t *testing.T) {
+	t.Parallel()
 	owner := os.Getuid()
 	id := strings.Repeat("a", 32)
 	intent := strings.Repeat("b", 32)
@@ -380,6 +387,7 @@ func TestScopedUpdateExecutablesUseApprovedImmutableSource(t *testing.T) {
 }
 
 func TestScopedExecutablePublicationUsesApprovedImmutableSource(t *testing.T) {
+	t.Parallel()
 	owner := os.Getuid()
 	id := strings.Repeat("a", 32)
 	target := fmt.Sprintf("/var/lib/.fased-custody-%d-%s.pending/fased-signer", owner, id)
@@ -418,6 +426,7 @@ func TestScopedExecutablePublicationUsesApprovedImmutableSource(t *testing.T) {
 }
 
 func TestBoundServicePublicationRecoversEachInterruptedStep(t *testing.T) {
+	t.Parallel()
 	target := fmt.Sprintf("/etc/systemd/system/%s", Unit(os.Getuid(), "app"))
 	id := strings.Repeat("a", 32)
 	data := []byte("[Service]\nUser=991\nNoNewPrivileges=yes\n")
@@ -433,6 +442,7 @@ func TestBoundServicePublicationRecoversEachInterruptedStep(t *testing.T) {
 	}
 }
 func TestExclusivePublicationRetryPreservesBytes(t *testing.T) {
+	t.Parallel()
 	for fail := 1; fail <= 6; fail++ {
 		h := &memoryHost{files: map[string]hostFile{}, failAfter: fail}
 		data := []byte("reconstructible fixed fixture input")
@@ -454,6 +464,7 @@ func TestExclusivePublicationRetryPreservesBytes(t *testing.T) {
 	}
 }
 func TestForeignTargetsAndStagesAreNeverMutated(t *testing.T) {
+	t.Parallel()
 	target := "/root-owned/fixture.json"
 	stage := "/root-owned/.fixture.json-fixture.pending"
 	for _, where := range []string{target, stage} {
@@ -467,6 +478,7 @@ func TestForeignTargetsAndStagesAreNeverMutated(t *testing.T) {
 }
 
 func TestNetworkInstallerIdentity(t *testing.T) {
+	t.Parallel()
 	for _, network := range []string{"devnet", "mainnet-beta"} {
 		m := fixtureManifest()
 		m.Version = 2
@@ -513,6 +525,7 @@ func TestNetworkInstallerIdentity(t *testing.T) {
 }
 
 func TestNetworkCustodyCannotUseLegacyControllers(t *testing.T) {
+	t.Parallel()
 	tx, _ := modelTransaction(t)
 	if !tx.valid() {
 		t.Fatal("invalid fixture baseline")

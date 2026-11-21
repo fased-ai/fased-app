@@ -12,6 +12,7 @@ import (
 )
 
 func TestWENResearchReadHTTPReadOnly(t *testing.T) {
+	t.Parallel()
 	s, h, token, c := revisionFixture(t)
 	d, _, _ := readAgents(t.Context(), s.db)
 	m := d.Messages[0]
@@ -56,6 +57,7 @@ func postRead(t *testing.T, h *HTTPHandler, token string, c WENResearchReadInput
 	return apiRequest(h, "POST", "/api/v1/wen/research/read", string(raw), token, "http://127.0.0.1:7331", csrfToken(token))
 }
 func TestWENResearchReadExactResultsNoWriteAndRestart(t *testing.T) {
+	t.Parallel()
 	s, h, token, c := readBatchFixture(t)
 	before := retainedRevisionState(t, s)
 	w := postRead(t, h, token, c)
@@ -128,6 +130,7 @@ func TestWENResearchReadExactResultsNoWriteAndRestart(t *testing.T) {
 	}
 }
 func TestWENResearchReadStrictSelectorsAndByteBound(t *testing.T) {
+	t.Parallel()
 	_, _, _, c := readBatchFixture(t)
 	raw, _ := json.Marshal(c)
 	cases := map[string]string{
@@ -195,6 +198,7 @@ func TestWENResearchReadStrictSelectorsAndByteBound(t *testing.T) {
 	})
 }
 func TestWENResearchReadSourceAdmissionAndNoDisclosure(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name   string
 		code   int
@@ -248,6 +252,7 @@ func TestWENResearchReadSourceAdmissionAndNoDisclosure(t *testing.T) {
 	}
 }
 func TestWENResearchReadHTTPAuthority(t *testing.T) {
+	t.Parallel()
 	s, h, token, c := readBatchFixture(t)
 	raw, _ := json.Marshal(c)
 	before := retainedRevisionState(t, s)
@@ -276,6 +281,7 @@ func TestWENResearchReadHTTPAuthority(t *testing.T) {
 	}
 }
 func TestWENResearchReadLimitsCancellationAndPartial(t *testing.T) {
+	t.Parallel()
 	s, _, _, c := readBatchFixture(t)
 	prov, sources, err := resolveWENRead(t.Context(), s.db, c)
 	if err != nil {
@@ -383,6 +389,7 @@ func TestWENResearchReadLimitsCancellationAndPartial(t *testing.T) {
 }
 
 func TestWENResearchReadCorruptionAndMetadataBounds(t *testing.T) {
+	t.Parallel()
 	for _, kind := range []string{"corrupt-strategy", "duplicate-strategy", "verified-import", "oversized-metadata"} {
 		t.Run(kind, func(t *testing.T) {
 			s, h, token, c := readBatchFixture(t)

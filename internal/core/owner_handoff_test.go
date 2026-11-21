@@ -10,6 +10,7 @@ import (
 )
 
 func TestInstalledOwnerHandoffIsMetadataNotAuthority(t *testing.T) {
+	t.Parallel()
 	store, err := OpenStore(fixtureDir(t))
 	if err != nil {
 		t.Fatal(err)
@@ -79,6 +80,7 @@ func TestInstalledOwnerHandoffIsMetadataNotAuthority(t *testing.T) {
 }
 
 func TestEnrollmentMetadataUsesVerifiedInstallerClass(t *testing.T) {
+	t.Parallel()
 	store, err := OpenStore(fixtureDir(t))
 	if err != nil {
 		t.Fatal(err)

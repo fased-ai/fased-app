@@ -16,6 +16,7 @@ import (
 )
 
 func TestLocalOwnerLaunchIsPrivateSingleUseAndPreservesPassword(t *testing.T) {
+	t.Parallel()
 	for _, existing := range []bool{false, true} {
 		t.Run(map[bool]string{false: "new", true: "existing"}[existing], func(t *testing.T) {
 			s, err := OpenStore(filepath.Join(t.TempDir(), "state"))
@@ -108,6 +109,7 @@ func TestLocalOwnerLaunchIsPrivateSingleUseAndPreservesPassword(t *testing.T) {
 }
 
 func TestLocalOwnerLaunchExpiresAndDoesNotCrossRestart(t *testing.T) {
+	t.Parallel()
 	dir := filepath.Join(t.TempDir(), "state")
 	s, err := OpenStore(dir)
 	if err != nil {
@@ -152,6 +154,7 @@ func TestLocalOwnerLaunchExpiresAndDoesNotCrossRestart(t *testing.T) {
 }
 
 func TestLocalOwnerCLIAndBrowserShareManualAndAutomaticUpdater(t *testing.T) {
+	t.Parallel()
 	dir := filepath.Join(t.TempDir(), "state")
 	srv, err := Start(t.Context(), dir, "127.0.0.1:0", "", nil)
 	if err != nil {

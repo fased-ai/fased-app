@@ -195,6 +195,7 @@ func TestOnchainUnknownSubmissionSurvivesRestartAndNeverResends(t *testing.T) {
 	saveSwapEvidence(t, "unknown-restart", final)
 }
 func TestOnchainRefusesUnapprovedWrongProfileChangedRPCAndExpiredQuote(t *testing.T) {
+	t.Parallel()
 	for _, mode := range []string{"approval", "profile", "rpc", "expiry"} {
 		t.Run(mode, func(t *testing.T) {
 			h := newSwapHarness(t)
@@ -304,6 +305,7 @@ func TestOnchainSchema30MigrationPreservesDocumentAndRejectsErasure(t *testing.T
 }
 
 func TestOnchainCancelRevokesUnsignedSignerApproval(t *testing.T) {
+	t.Parallel()
 	h := newSwapHarness(t)
 	p := h.quote(t)
 	v := h.submit(t, p)
@@ -362,6 +364,7 @@ func TestOnchainCancelledApprovalRecoversAfterCoreWriteInterruption(t *testing.T
 }
 
 func TestOnchainCancelledReceiptCannotEraseSignedOrSubmittedOriginal(t *testing.T) {
+	t.Parallel()
 	h := newSwapHarness(t)
 	p := h.quote(t)
 	v := h.submit(t, p)
@@ -397,6 +400,7 @@ func TestOnchainCancelledReceiptCannotEraseSignedOrSubmittedOriginal(t *testing.
 }
 
 func TestOnchainIncompleteSettlementKeepsBothOriginalsHeld(t *testing.T) {
+	t.Parallel()
 	h := newSwapHarness(t)
 	p := h.quote(t)
 	h.submit(t, p)
@@ -418,6 +422,7 @@ func TestOnchainIncompleteSettlementKeepsBothOriginalsHeld(t *testing.T) {
 }
 
 func TestOnchainProjectionOnlyAppearsForAvailableOrSavedSwaps(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	v, e := s.Agents(t.Context(), "trading-analyst", "")
 	if e != nil || v.Onchain != nil {

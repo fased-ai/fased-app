@@ -67,6 +67,7 @@ func readerSchema(t *testing.T, dir string) int {
 }
 
 func TestApplicationReader35RequestHasDistinctVersion(t *testing.T) {
+	t.Parallel()
 	_, r, _ := applicationReaderFixture(t)
 	r.Version = 2
 	r.Predecessor.Core.State.Version = 35
@@ -131,6 +132,7 @@ func preparedReaderFixture(t *testing.T, schema int, prepare bool) (string, Appl
 }
 
 func TestApplicationReader35PreparedHandoffRecovery(t *testing.T) {
+	t.Parallel()
 	for _, point := range []string{"", "reader:before-commit", "reader:after-commit"} {
 		t.Run(point, func(t *testing.T) {
 			dir, r, original := reader35Fixture(t, true)
@@ -172,6 +174,7 @@ func TestApplicationReader35PreparedHandoffRecovery(t *testing.T) {
 }
 
 func TestApplicationReader35DoesNotAdoptOldPauseOrLease(t *testing.T) {
+	t.Parallel()
 	dir, r, _ := reader35Fixture(t, false)
 	if err := PrepareApplicationReaderBootstrap(t.Context(), dir, readerIntent(r)); err == nil {
 		t.Fatal("prepared an already paused source")
@@ -193,6 +196,7 @@ func TestApplicationReader35DoesNotAdoptOldPauseOrLease(t *testing.T) {
 }
 
 func TestApplicationReaderBootstrapPreservesRawRecordsAndCompletes(t *testing.T) {
+	t.Parallel()
 	dir, r, original := applicationReaderFixture(t)
 	got, e := BootstrapApplicationReader(t.Context(), dir, r)
 	if e != nil || got.Phase != "reader-migrated-forward-only" || got.Checkpoint.PreviousEngineSHA256 != r.PreviousEngineSHA256 || got.Checkpoint.Pause.Core.State.Version != StateSchema || readerSchema(t, dir) != StateSchema {
@@ -229,6 +233,7 @@ func TestApplicationReaderBootstrapPreservesRawRecordsAndCompletes(t *testing.T)
 }
 
 func TestApplicationReaderBootstrapInterruptionKeepsOriginalAndResumes(t *testing.T) {
+	t.Parallel()
 	for _, point := range []string{"reader:before-commit", "reader:after-commit"} {
 		t.Run(point, func(t *testing.T) {
 			dir, r, _ := applicationReaderFixture(t)
@@ -259,6 +264,7 @@ func TestApplicationReaderBootstrapInterruptionKeepsOriginalAndResumes(t *testin
 }
 
 func TestApplicationReaderBootstrapRefusesWrongReaderAuthorityAndActiveEngine(t *testing.T) {
+	t.Parallel()
 	for _, kind := range []string{"schema34", "missing-lock", "active-lock", "source-sha", "lease", "fence", "records", "unprotected-table", "missing-resume"} {
 		t.Run(kind, func(t *testing.T) {
 			dir, r, _ := applicationReaderFixture(t)
@@ -316,6 +322,7 @@ func TestApplicationReaderBootstrapRefusesWrongReaderAuthorityAndActiveEngine(t 
 }
 
 func TestApplicationReaderBootstrapBindsRetrySourceAndBackup(t *testing.T) {
+	t.Parallel()
 	for _, kind := range []string{"source", "lease", "release", "backup"} {
 		t.Run(kind, func(t *testing.T) {
 			dir, r, _ := applicationReaderFixture(t)
@@ -359,6 +366,7 @@ func TestApplicationReaderBootstrapBindsRetrySourceAndBackup(t *testing.T) {
 }
 
 func TestApplicationReaderBootstrapStagesLeaseBeforeStopping(t *testing.T) {
+	t.Parallel()
 	dir, r, _ := applicationReaderFixture(t)
 	lock, e := LockInstance(filepath.Join(dir, "instance.lock"))
 	if e != nil {
@@ -390,6 +398,7 @@ func fmtReaderRecoveryPath(d int, name string) string {
 }
 
 func TestApplicationReader35LeaseFreeFailedCheck(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	defer s.Close()
 	if _, err := s.db.Exec("PRAGMA user_version=35"); err != nil {
@@ -413,6 +422,7 @@ func TestApplicationReader35LeaseFreeFailedCheck(t *testing.T) {
 }
 
 func TestApplicationReader36PreparedHandoffRecovery(t *testing.T) {
+	t.Parallel()
 	for _, point := range []string{"", "reader:before-commit", "reader:after-commit"} {
 		t.Run(point, func(t *testing.T) {
 			dir, request, original := preparedReaderFixture(t, 36, true)
@@ -458,6 +468,7 @@ func TestApplicationReader36PreparedHandoffRecovery(t *testing.T) {
 }
 
 func TestApplicationReader36RefusesBorrowedAuthority(t *testing.T) {
+	t.Parallel()
 	dir, request, _ := preparedReaderFixture(t, 36, false)
 	for _, version := range []int{1, 2, 4} {
 		changed := request
@@ -486,6 +497,7 @@ func TestApplicationReader36RefusesBorrowedAuthority(t *testing.T) {
 // Historical snapshots must reproduce the immutable reader's feature set,
 // rather than inherit a newly supported format from the current binary.
 func TestApplicationReaderHistoricalSnapshotExcludesRecoveryCapability(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	for _, schema := range []int{33, 35, 36} {
 		snapshot, err := applicationReaderSourceSnapshot(t.Context(), s.db, update.NewProbe(), s.bootID, schema)

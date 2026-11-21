@@ -49,6 +49,7 @@ func tradeCall(v *Vault, action string, p SwapProposal, owner bool) Response {
 	return execute(v, r, owner)
 }
 func TestOrdinaryTradeOwnerBindingReceiptRestartAndMaintenance(t *testing.T) {
+	t.Parallel()
 	v, p, chain, dir, pw := ordinaryTradeFixture(t, "generated")
 	before, _ := os.ReadFile(filepath.Join(dir, "vault.json"))
 	ref := *v.Status().Account
@@ -162,6 +163,7 @@ func TestOrdinaryTradeOwnerBindingReceiptRestartAndMaintenance(t *testing.T) {
 	}
 }
 func TestOrdinaryTradeRefusesImportedExpiredMixedAndRevoked(t *testing.T) {
+	t.Parallel()
 	for _, mode := range []string{"imported", "expired", "mixed", "network", "wallet", "rpc", "lock", "restart"} {
 		t.Run(mode, func(t *testing.T) {
 			origin := "generated"
@@ -228,6 +230,7 @@ func TestOrdinaryTradeRefusesImportedExpiredMixedAndRevoked(t *testing.T) {
 }
 
 func TestOrdinaryTradeUncertainAppendAndReaderNegotiation(t *testing.T) {
+	t.Parallel()
 	v, p, chain, dir, _ := ordinaryTradeFixture(t, "generated")
 	if r := tradeCall(v, "swap-approve", p, true); r.Error != "" {
 		t.Fatal(r.Error)
@@ -307,6 +310,7 @@ func TestOrdinaryTradeUncertainAppendAndReaderNegotiation(t *testing.T) {
 }
 
 func TestOrdinaryTradeExistingAndKeyOnlyRestoredRemainHeld(t *testing.T) {
+	t.Parallel()
 	for _, mode := range []string{"existing", "key-only-restored"} {
 		t.Run(mode, func(t *testing.T) {
 			dir := fixtureDir(t)

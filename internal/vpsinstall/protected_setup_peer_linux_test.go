@@ -13,6 +13,7 @@ import (
 )
 
 func TestProtectedSetupLinkUsesOnlyConfirmedDevice(t *testing.T) {
+	t.Parallel()
 	device := tailnet.Identity{UserID: 42, NodeID: "device", Login: "owner@example.com"}
 	m := Manifest{PublicOrigin: "https://node.owner.ts.net", Listen: "127.0.0.1:7332", ApplicationSequence: 8, ApplicationReleaseSHA256: strings.Repeat("a", 64), CoreSHA256: strings.Repeat("b", 64)}
 	a := privateaccess.ProtectedInitialApproval{Version: 1, Owner: 1300, Origin: m.PublicOrigin, Listen: m.Listen, Sequence: m.ApplicationSequence, ReleaseSHA256: m.ApplicationReleaseSHA256, CoreSHA256: m.CoreSHA256, Device: device}

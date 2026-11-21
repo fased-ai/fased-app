@@ -142,6 +142,7 @@ func installedProviderCredentialJourney(t *testing.T, start func(string) (*Serve
 }
 
 func TestInstalledProviderFixtureCredentialRestartWorker(t *testing.T) {
+	t.Parallel()
 	key := &testTaskSecrets{key: bytes.Repeat([]byte{71}, 32)}
 	installedProviderCredentialJourney(t, func(dir string) (*Server, error) {
 		return startModesWithTaskSecrets(t.Context(), dir, "127.0.0.1:0", "", nil, true, false, key, true)

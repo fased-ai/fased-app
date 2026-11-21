@@ -17,6 +17,7 @@ import (
 )
 
 func TestPackageUpdateCannotWriteAnotherInstancesBootstrap(t *testing.T) {
+	t.Parallel()
 	_, m := packageGateInitialRecord(t)
 	m.Owner = os.Getuid()
 	m.Root, _ = PackageRoot(m.Owner, m.Location, m.ID)
@@ -46,6 +47,7 @@ func TestPackageUpdateCannotWriteAnotherInstancesBootstrap(t *testing.T) {
 }
 
 func TestRemotePackageUnitsRequireTheirProtectedSocket(t *testing.T) {
+	t.Parallel()
 	_, m := packageGateInitialRecord(t)
 	m.Owner, m.Location, m.PublicOrigin = os.Getuid(), "remote", "https://node.example.ts.net"
 	if m.Owner <= 0 {
@@ -101,6 +103,7 @@ func TestRemotePackageUnitsRequireTheirProtectedSocket(t *testing.T) {
 }
 
 func TestPackageMaintenanceRecordUsesOnlyItsInstanceJournal(t *testing.T) {
+	t.Parallel()
 	r, m := packageGateInitialRecord(t)
 	root, err := update.PackageMaintenanceRoot(m.Owner, m.Location, m.ID)
 	if err != nil {
@@ -122,6 +125,7 @@ func TestPackageMaintenanceRecordUsesOnlyItsInstanceJournal(t *testing.T) {
 }
 
 func TestPackageMaintenanceChildrenUseTheSameInstance(t *testing.T) {
+	t.Parallel()
 	_, m := packageGateInitialRecord(t)
 	owner := strconv.Itoa(m.Owner)
 	for _, command := range []string{"custody-maintenance", "custody-maintenance-inventory", "custody-maintenance-status", "custody-maintenance-verify"} {
@@ -148,6 +152,7 @@ func TestPackageMaintenanceChildrenUseTheSameInstance(t *testing.T) {
 }
 
 func TestPackageMaintenanceUnitsAreInstanceScoped(t *testing.T) {
+	t.Parallel()
 	_, m := packageGateInitialRecord(t)
 	m.Owner = os.Getuid()
 	if m.Owner <= 0 {
@@ -198,6 +203,7 @@ func TestPackageMaintenanceUnitsAreInstanceScoped(t *testing.T) {
 }
 
 func TestPackageMaintenancePeersRejectForeignAuthority(t *testing.T) {
+	t.Parallel()
 	_, m := packageGateInitialRecord(t)
 	a := maintenance.Authority{Owner: m.Owner, Profile: m.Location}
 	for name, change := range map[string]func(*maintenance.Authority, *Manifest){

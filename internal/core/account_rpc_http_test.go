@@ -10,6 +10,7 @@ import (
 )
 
 func TestRPCConfigHTTPAuthorizationAndSecrets(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	token := claimFixture(t, s)
 	r := defaultAccounts()
@@ -56,6 +57,7 @@ func TestRPCConfigHTTPAuthorizationAndSecrets(t *testing.T) {
 }
 
 func TestRPCCredentialHTTPAuthorizationAndRedaction(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	c := rpcSecretSetup(t, s)
 	token, err := s.Login(t.Context(), testPassword)

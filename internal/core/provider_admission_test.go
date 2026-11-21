@@ -7,6 +7,7 @@ import (
 )
 
 func TestProviderAdmissionRemainsClosedAndReportsCapabilities(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	if !providerActivationEnabled || s.provider.apiCredentials || !newOpenAITransport().enabled {
 		t.Fatal("unexpected admission defaults")
@@ -61,6 +62,7 @@ func TestProviderAdmissionRemainsClosedAndReportsCapabilities(t *testing.T) {
 }
 
 func TestProviderAdmissionRejectsSyntheticAndResearchRequests(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	connection := admitDisposableAPI(t, s, "")
 	good := AgentAIRequest{ConnectionRef: connection.Ref, Model: admittedOpenAIModel, Policy: chatModelPolicy(admittedOpenAIModel)}

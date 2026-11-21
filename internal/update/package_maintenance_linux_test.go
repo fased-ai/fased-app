@@ -10,6 +10,7 @@ import (
 )
 
 func TestPackageMaintenanceRecordBindsBothDeployments(t *testing.T) {
+	t.Parallel()
 	owner, location, id := 1800, "local", strings.Repeat("a", 32)
 	root, err := PackageInstanceRoot(owner, location, id)
 	if err != nil {

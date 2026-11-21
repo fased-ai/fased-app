@@ -12,6 +12,7 @@ import (
 // A provider rejection or uncertain use must stop the shared account, including
 // permissions held by another profile. No monetary hold is required for quota.
 func TestQuotaAPIFailurePausesSharedAccount(t *testing.T) {
+	t.Parallel()
 	for _, provider := range []string{"kimi-code", "ollama-cloud"} {
 		for _, native := range []bool{false, true} {
 			for _, outcome := range []string{"quota", "unknown"} {

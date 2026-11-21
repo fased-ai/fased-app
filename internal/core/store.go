@@ -109,6 +109,9 @@ func openStoreWithTaskSecrets(dir string, secrets providersecrets.Source) (_ *St
 		return nil, errors.New("core state schema is newer than this binary; refusing downgrade")
 	}
 	if schema == 0 {
+		if _, err = db.ExecContext(ctx, "PRAGMA synchronous=OFF;"); err != nil {
+			return nil, err
+		}
 		tx, err := db.BeginTx(ctx, nil)
 		if err != nil {
 			return nil, err
@@ -322,6 +325,11 @@ PRAGMA user_version=1;`)
 	}
 	if schema <= 35 {
 		if err = migrateOrdinaryCustody(ctx, db, dir); err != nil {
+			return nil, err
+		}
+	}
+	if schema == 0 {
+		if _, err = db.ExecContext(ctx, "PRAGMA synchronous=FULL; PRAGMA wal_checkpoint(TRUNCATE);"); err != nil {
 			return nil, err
 		}
 	}

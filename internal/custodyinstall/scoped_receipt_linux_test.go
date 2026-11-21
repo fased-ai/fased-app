@@ -15,6 +15,7 @@ import (
 )
 
 func TestScopedSignerReceiptUsesApprovedSource(t *testing.T) {
+	t.Parallel()
 	owner := os.Getuid()
 	id := strings.Repeat("a", 32)
 	intent := strings.Repeat("b", 32)
@@ -49,6 +50,7 @@ func TestScopedSignerReceiptUsesApprovedSource(t *testing.T) {
 }
 
 func TestScopedReceiptPreservesRealHoldAcrossRefusalAndRetry(t *testing.T) {
+	t.Parallel()
 	tx, dir := modelTransaction(t)
 	o := modelOps(t, tx, dir)
 	var receipt []byte

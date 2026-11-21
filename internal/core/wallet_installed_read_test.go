@@ -18,6 +18,7 @@ import (
 )
 
 func TestOrdinaryWalletReadJoin(t *testing.T) {
+	t.Parallel()
 	for _, location := range []string{"local", "remote"} {
 		t.Run(location, func(t *testing.T) {
 			root := fixtureDir(t)
@@ -282,6 +283,7 @@ func TestOrdinaryWalletReadUIFixture(t *testing.T) {
 }
 
 func TestControlledWalletReadConstructorBoundary(t *testing.T) {
+	t.Parallel()
 	s, err := OpenStore(fixtureDir(t))
 	if err != nil {
 		t.Fatal(err)

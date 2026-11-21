@@ -16,6 +16,7 @@ import (
 )
 
 func TestPauseSchemaHasDurableWriteFence(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	var count int
 	if e := s.db.QueryRow("SELECT count(*) FROM sqlite_master WHERE type='trigger' AND name LIKE 'update_pause_%'").Scan(&count); e != nil {
@@ -44,6 +45,7 @@ func aborted(c update.CorePauseCommand) *update.Intent {
 	return &update.Intent{ID: r.IntentID, Sequence: r.Sequence, ManifestSHA256: r.ManifestSHA256, Core: r.Expected, State: "aborted"}
 }
 func TestCorePauseFencesMetadataAcrossRestartAndRecovery(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	token := claimFixture(t, s)
 	c := pauseCommand(t, s, 1)
@@ -115,6 +117,7 @@ func TestCorePauseFencesMetadataAcrossRestartAndRecovery(t *testing.T) {
 	}
 }
 func TestCorePauseConcurrentAndStaleRequests(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	_ = claimFixture(t, s)
 	base := pauseCommand(t, s, 1)
@@ -159,6 +162,7 @@ func TestCorePauseConcurrentAndStaleRequests(t *testing.T) {
 	}
 }
 func TestCorePauseRequiresPrivateAuthenticatedCSRFTransport(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	token := claimFixture(t, s)
 	h, e := NewHTTPHandler(s, "http://127.0.0.1:7331", "", nil)
@@ -192,6 +196,7 @@ func TestCorePauseRequiresPrivateAuthenticatedCSRFTransport(t *testing.T) {
 	}
 }
 func TestCorePauseCommitFailureRecovery(t *testing.T) {
+	t.Parallel()
 	for _, phase := range []string{"pause:before-commit", "pause:durable"} {
 		t.Run(phase, func(t *testing.T) {
 			s := fixtureStore(t)
@@ -272,6 +277,7 @@ func TestCorePauseActualProcessTermination(t *testing.T) {
 }
 
 func TestCorePauseSchemaTwoMigrationPreservesOwnerMetadata(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	token := claimFixture(t, s)
 	dropEmptyHistoryFixture(t, s)
@@ -300,6 +306,7 @@ func TestCorePauseSchemaTwoMigrationPreservesOwnerMetadata(t *testing.T) {
 }
 
 func TestCorePauseLostReleaseReplyKeepsTombstone(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	_ = claimFixture(t, s)
 	c := pauseCommand(t, s, 1)
@@ -333,6 +340,7 @@ func TestCorePauseLostReleaseReplyKeepsTombstone(t *testing.T) {
 }
 
 func TestCorePauseConcurrentAbortCannotLeaveLatePause(t *testing.T) {
+	t.Parallel()
 	for n := 0; n < 8; n++ {
 		t.Run(string(rune('a'+n)), func(t *testing.T) {
 			s := fixtureStore(t)

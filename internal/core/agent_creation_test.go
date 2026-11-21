@@ -6,6 +6,7 @@ import (
 )
 
 func TestConfiguredAgentCreation(t *testing.T) {
+	t.Parallel()
 	for _, provider := range []string{"openai", "anthropic", "xai"} {
 		t.Run(provider, func(t *testing.T) {
 			s := fixtureStore(t)
@@ -30,6 +31,7 @@ func TestConfiguredAgentCreation(t *testing.T) {
 }
 
 func TestConfiguredAgentCreationRefusalsAreAtomic(t *testing.T) {
+	t.Parallel()
 	for _, name := range []string{"missing-account", "stale-account", "wrong-provider", "old-model", "no-ai-model", "no-ai-account", "locked-account"} {
 		t.Run(name, func(t *testing.T) {
 			s := fixtureStore(t)
@@ -69,6 +71,7 @@ func TestConfiguredAgentCreationRefusalsAreAtomic(t *testing.T) {
 }
 
 func TestConfiguredAgentCreationPreservesProviderFreeAndRestart(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	legacy := agentApply(t, s, AgentCommand{Action: "profile-create", Name: "Legacy no AI"})
 	plain := agentApply(t, s, AgentCommand{Action: "profile-create", Name: "No AI", Provider: "none"})

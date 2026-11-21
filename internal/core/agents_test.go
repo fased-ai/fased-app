@@ -24,6 +24,7 @@ func agentRunChatFixture(t *testing.T, s *Store) AgentView {
 }
 
 func TestAgentRunChatCaptureRestartAndMemory(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	v := agentRunChatFixture(t, s)
 	before, rev, err := readAgents(t.Context(), s.db)
@@ -63,6 +64,7 @@ func TestAgentRunChatCaptureRestartAndMemory(t *testing.T) {
 }
 
 func TestAgentRunChatRefusals(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name string
 		doc  func(*agentDocument)
@@ -145,6 +147,7 @@ func agentApply(t *testing.T, s *Store, c AgentCommand) AgentView {
 }
 
 func TestAgentsDurableScopedConversationAndMemory(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	v := agentApply(t, s, AgentCommand{Action: "profile-create", Name: "Private researcher", Text: "Only local research"})
 	p := v.ProfileID
@@ -187,6 +190,7 @@ func TestAgentsDurableScopedConversationAndMemory(t *testing.T) {
 }
 
 func TestAgentsTasksAtomicBoundedAndRestartSafe(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	now := time.Date(2026, 10, 21, 12, 0, 0, 0, time.UTC)
 	s.now = func() time.Time { return now }
@@ -248,6 +252,7 @@ func TestAgentsTasksAtomicBoundedAndRestartSafe(t *testing.T) {
 }
 
 func TestAgentsPauseSnapshotAndValidation(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	before, e := s.UpdateSnapshot(t.Context(), update.NewProbe())
 	if e != nil {
@@ -286,6 +291,7 @@ func TestAgentsPauseSnapshotAndValidation(t *testing.T) {
 }
 
 func TestAgentsHTTPAuthenticationCSRFAndStrictInput(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	token := claimFixture(t, s)
 	h, e := NewHTTPHandler(s, "http://127.0.0.1:7331", "", nil)
@@ -322,6 +328,7 @@ func TestAgentsHTTPAuthenticationCSRFAndStrictInput(t *testing.T) {
 }
 
 func TestAgentsSchemaMigrationAndPausedPredecessor(t *testing.T) {
+	t.Parallel()
 	for _, paused := range []bool{false, true} {
 		t.Run(map[bool]string{false: "idle", true: "paused"}[paused], func(t *testing.T) {
 			s := fixtureStore(t)
@@ -367,6 +374,7 @@ func TestAgentsSchemaMigrationAndPausedPredecessor(t *testing.T) {
 }
 
 func TestAgentsReminderPauseReadDeleteAndLargeView(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	p := "news-researcher"
 	v := agentApply(t, s, AgentCommand{Action: "task-create", ProfileID: p, Name: "Reminder", Text: "Review source", IntervalSeconds: 60, MaxRuns: 1})
@@ -399,6 +407,7 @@ func TestAgentsReminderPauseReadDeleteAndLargeView(t *testing.T) {
 }
 
 func TestAgentsActualWorkerAndLargePrivateClient(t *testing.T) {
+	t.Parallel()
 	dir := fixtureDir(t)
 	server, e := Start(t.Context(), dir, "127.0.0.1:0", "", nil)
 	if e != nil {
@@ -465,6 +474,7 @@ func TestAgentsActualWorkerAndLargePrivateClient(t *testing.T) {
 }
 
 func TestChatMemoryFromMessage(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	v := agentApply(t, s, AgentCommand{Action: "session-create", ProfileID: "trading-analyst", Name: "Research preferences"})
 	v = agentApply(t, s, AgentCommand{Action: "message-add", ProfileID: v.ProfileID, ID: v.Sessions[0].ID, Text: "Original retained message"})
@@ -480,6 +490,7 @@ func TestChatMemoryFromMessage(t *testing.T) {
 }
 
 func TestChatMemoryRefusals(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name string
 		doc  func(*agentDocument)
@@ -548,6 +559,7 @@ func TestChatMemoryRefusals(t *testing.T) {
 }
 
 func TestChatMemoryCorrectionExpiryRestartAndDelete(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	now := time.Unix(1800000000, 0)
 	s.now = func() time.Time { return now }

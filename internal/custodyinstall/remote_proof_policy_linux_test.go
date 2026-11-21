@@ -17,6 +17,7 @@ import (
 )
 
 func TestRemoteProofPolicyPinsOwnerAndAppOnly(t *testing.T) {
+	t.Parallel()
 	tx, _, _, _ := ordinaryBootstrapModel(t, true)
 	m := tx.Base
 	p, err := remoteProofPolicy(m)
@@ -89,6 +90,7 @@ func TestRemoteProofPolicyPinsOwnerAndAppOnly(t *testing.T) {
 }
 
 func TestRemoteProofSetupRequiresCommittedIdleOwner(t *testing.T) {
+	t.Parallel()
 	tx, _, _, _ := ordinaryBootstrapModel(t, true)
 	m := tx.Base
 	for _, scenario := range []string{"ready", "wrong-owner", "root", "changed-manifest", "foreign-files", "missing-commit", "active-update", "local"} {
@@ -134,6 +136,7 @@ func TestRemoteProofSetupRequiresCommittedIdleOwner(t *testing.T) {
 }
 
 func TestRemoteProofSkipsOnlyTheRedundantOSPasswordProbe(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		action string
 		flags  []string
@@ -151,6 +154,7 @@ func TestRemoteProofSkipsOnlyTheRedundantOSPasswordProbe(t *testing.T) {
 }
 
 func TestRemoteProofPolicyPublicationPreservesAndRecovers(t *testing.T) {
+	t.Parallel()
 	tx, _, _, _ := ordinaryBootstrapModel(t, true)
 	m := tx.Base
 	policy, err := remoteProofPolicy(m)

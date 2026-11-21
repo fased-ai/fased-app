@@ -9,6 +9,7 @@ import (
 )
 
 func TestCompletionReleasesOnlyMatchingFenceAndRetries(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	p := pausedBackup(t, s)
 	p.Files[0].Artifact.File = "fased-app"

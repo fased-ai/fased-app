@@ -137,6 +137,7 @@ func ordinaryRepairModel(t *testing.T) (BootstrapTransaction, string, installOps
 }
 
 func TestOrdinaryRepairPreservesStagedIntentAndForwardRecovery(t *testing.T) {
+	t.Parallel()
 	for _, phase := range []string{"ordinary-stopped", "ordinary-trial-verified", "forward-only", "core-replaced", "pair-replaced", "inventory-replaced", "installer-intent.json", "installer-ready.json", "installer-owner", "started", "ordinary-healthy", "completed"} {
 		t.Run(phase, func(t *testing.T) {
 			tx, dir, o, c := ordinaryRepairModel(t)
@@ -182,6 +183,7 @@ func TestOrdinaryRepairPreservesStagedIntentAndForwardRecovery(t *testing.T) {
 	}
 }
 func TestOrdinaryRepairRefusesDriftAndCancellation(t *testing.T) {
+	t.Parallel()
 	for _, kind := range []string{"cancel", "snapshot", "raw-write", "intent", "held", "source-contract", "unsigned-target", "foreign-active", "startup-drift"} {
 		t.Run(kind, func(t *testing.T) {
 			tx, dir, o, c := ordinaryRepairModel(t)
@@ -248,6 +250,7 @@ func TestOrdinaryRepairRefusesDriftAndCancellation(t *testing.T) {
 }
 
 func TestOrdinaryRepairColdUsesExactPauseAndUID(t *testing.T) {
+	t.Parallel()
 	for _, kind := range []string{"ok", "pause-id", "request", "unpaused", "receiver", "unstaged", "signer-error"} {
 		t.Run(kind, func(t *testing.T) {
 			tx, _, _, _ := ordinaryRepairModel(t)
@@ -305,6 +308,7 @@ func TestOrdinaryRepairColdUsesExactPauseAndUID(t *testing.T) {
 }
 
 func TestOrdinaryRepairSignedContractAndFloorRefusals(t *testing.T) {
+	t.Parallel()
 	for _, kind := range []string{"schema", "same-signer", "expiry", "sequence", "predecessor", "floor", "pause", "foreign-owner", "legacy-v2"} {
 		t.Run(kind, func(t *testing.T) {
 			tx, _, _, _ := ordinaryRepairModel(t)
@@ -358,6 +362,7 @@ func TestOrdinaryRepairSignedContractAndFloorRefusals(t *testing.T) {
 }
 
 func TestOrdinaryRepairPostStartObservesActualTypedRecords(t *testing.T) {
+	t.Parallel()
 	for _, kind := range []string{"ok", "pause", "core", "floor", "journal", "receiver", "unlocked", "intent", "transport"} {
 		t.Run(kind, func(t *testing.T) {
 			tx, _, _, _ := ordinaryRepairModel(t)

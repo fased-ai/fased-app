@@ -11,6 +11,7 @@ import (
 )
 
 func TestKimiCodeInteractiveContract(t *testing.T) {
+	t.Parallel()
 	p, ok := providerDefinitionFor("kimi-code")
 	if !ok || p.Host != "api.kimi.ai" {
 		t.Fatal("missing distinct Kimi Code membership connector")
@@ -32,6 +33,7 @@ func TestKimiCodeInteractiveContract(t *testing.T) {
 }
 
 func TestKimiCodeAccountChatAndTaskBoundary(t *testing.T) {
+	t.Parallel()
 	for _, stream := range []bool{true} {
 		t.Run("stream", func(t *testing.T) {
 			s := fixtureStore(t)
@@ -158,6 +160,7 @@ func TestKimiCodeAccountChatAndTaskBoundary(t *testing.T) {
 }
 
 func TestKimiCodeReceiptAndDispatchRefusals(t *testing.T) {
+	t.Parallel()
 	policy := openAIModelPolicy("kimi-code/k3.1-pro")
 	q := AgentAIRequest{Model: policy.Model, Policy: &policy, ChatPermissionID: "disposable-explicit-chat", ConnectionRef: "disposable", State: "queued", Context: "synthetic", Limits: AILimits{MaxInputTokens: 24000, MaxOutputTokens: 1024, DeadlineSeconds: 5}, CreatedAt: policy.ReviewedAt}
 	for _, mode := range []string{"missing-usage", "wrong-model", "over-limit", "quota"} {

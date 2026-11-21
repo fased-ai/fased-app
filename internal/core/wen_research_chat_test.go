@@ -52,6 +52,7 @@ func postResearchChat(h *HTTPHandler, token string, c AgentCommand) *httptest.Re
 	return apiRequest(h, "POST", "/api/v1/agents", string(raw), token, "http://127.0.0.1:7331", csrfToken(token))
 }
 func TestWENResearchChatSaveExactContextAndRestart(t *testing.T) {
+	t.Parallel()
 	s, h, token := researchChatFixture(t)
 	before, _, err := readAgents(t.Context(), s.db)
 	if err != nil {
@@ -103,6 +104,7 @@ func TestWENResearchChatSaveExactContextAndRestart(t *testing.T) {
 	}
 }
 func TestWENResearchChatBindingRefusals(t *testing.T) {
+	t.Parallel()
 	s, h, token := researchChatFixture(t)
 	review := readResearchChatReview(t, h, token)
 	for _, tc := range []struct {
@@ -155,6 +157,7 @@ func TestWENResearchChatBindingRefusals(t *testing.T) {
 	}
 }
 func TestWENResearchChatRevisionPauseAndCapacity(t *testing.T) {
+	t.Parallel()
 	for _, condition := range []string{"revision", "paused", "sessions", "messages"} {
 		t.Run(condition, func(t *testing.T) {
 			s, h, token := researchChatFixture(t)
@@ -190,6 +193,7 @@ func TestWENResearchChatRevisionPauseAndCapacity(t *testing.T) {
 	}
 }
 func TestWENResearchChatMalformedAndStaleSources(t *testing.T) {
+	t.Parallel()
 	s, h, _ := researchChatFixture(t)
 	body := researchChatBody(s.now())
 	for _, tc := range []struct {
@@ -220,6 +224,7 @@ func TestWENResearchChatMalformedAndStaleSources(t *testing.T) {
 }
 
 func TestWENResearchChatResponseBounds(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct{ name, padding string }{
 		{"review-overhead", strings.Repeat("x", 262144-len(researchChatBody(time.Date(2026, 10, 22, 12, 0, 0, 0, time.UTC)))-len(`,"padding":""`))},
 		{"escaped-source", strings.Repeat("<", 60000)},
@@ -249,6 +254,7 @@ func researchChatBody(at time.Time) string {
 	return fmt.Sprintf(`{"schema":"wen-research-data/1","execution":"disabled","finality":"research","generatedAt":%q,"sourceCursor":"42","method":"wen-kraken-research/1","connection":"connected","data":{"method":"wen-kraken-research/1","quality":"valid","authoritative":false,"quote":101.25,"quoteEventAt":%q,"quoteReceivedAt":%q,"inputDigest":%q,"candles":[],"observationIds":["1:ticker:42"],"metrics":{"returnBps":"5","realizedVolatilityBps":"2"}},"nextCursor":null}`, stamp, stamp, stamp, strings.Repeat("a", 64))
 }
 func TestWENResearchChatReviewIsReadOnly(t *testing.T) {
+	t.Parallel()
 	s, h, token := researchChatFixture(t)
 	w := apiRequest(h, "GET", "/api/v1/wen/market-data?lookback=1&profile=wen-operator", "", token, "http://127.0.0.1:7331", "")
 	if w.Code != 200 || !strings.Contains(w.Body.String(), `"chatContext"`) {

@@ -13,6 +13,7 @@ import (
 )
 
 func TestAnthropicWorkspaceCredentialBinding(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	var c AIConnectionCommand
 	if err := json.Unmarshal([]byte(`{"action":"add","provider":"anthropic","name":"Personal API workspace","key":"fased-test-disposable-anthropic-key","workspace":"wrkspc_01JwQvzr7rXLA5AGx3HKfFUJ"}`), &c); err != nil {
@@ -30,6 +31,7 @@ func TestAnthropicWorkspaceCredentialBinding(t *testing.T) {
 }
 
 func TestAnthropicWorkspaceRejectsRetargetingAndPreservesLegacy(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	old := addNativeAccount(t, s, "anthropic", false)
 	retained, _ := ReadPrivateFile(s.aiVaultPath())
@@ -117,6 +119,7 @@ func TestAnthropicWorkspaceRejectsRetargetingAndPreservesLegacy(t *testing.T) {
 }
 
 func TestUnsupportedLegacySignInPreservesAccountsAndPendingFlow(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	addNativeAccount(t, s, "anthropic", false)
 	before, _ := ReadPrivateFile(s.aiVaultPath())
@@ -148,6 +151,7 @@ func TestUnsupportedLegacySignInPreservesAccountsAndPendingFlow(t *testing.T) {
 }
 
 func TestAnthropicWorkspaceControlledHTTPSChatTaskAndRestart(t *testing.T) {
+	t.Parallel()
 	for _, provider := range []string{"anthropic"} {
 		t.Run(provider, func(t *testing.T) {
 			s := fixtureStore(t)
@@ -270,6 +274,7 @@ func TestAnthropicWorkspaceControlledHTTPSChatTaskAndRestart(t *testing.T) {
 }
 
 func TestAnthropicWorkspaceHeaderCannotBeInjected(t *testing.T) {
+	t.Parallel()
 	calls := 0
 	rt := nativeHTTPSFixture(t, "anthropic", func(w http.ResponseWriter, r *http.Request) {
 		calls++

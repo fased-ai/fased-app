@@ -92,6 +92,7 @@ func (f *admissionFixture) admit(previous *TrustTransition) (TrustTransition, Re
 }
 
 func TestReleaseAdmissionRequiresExplicitPinnedInputs(t *testing.T) {
+	t.Parallel()
 	_, r, err := AdmitFixtureRelease(context.Background(), TrustRehearsalOptions{}, ReleaseAdmissionOptions{})
 	if err == nil || r.ReleaseUnitVerified || r.ProvenanceVerified || r.InstallAllowed || r.FinancialExecution {
 		t.Fatal("missing explicit fixture inputs admitted")
@@ -99,6 +100,7 @@ func TestReleaseAdmissionRequiresExplicitPinnedInputs(t *testing.T) {
 }
 
 func TestReleaseAdmissionCompleteUnitAndReadOnlyRestart(t *testing.T) {
+	t.Parallel()
 	f := newAdmissionFixture(t)
 	a, r, e := f.admit(nil)
 	if e != nil || !r.ReleaseUnitVerified || !r.ProvenanceVerified || !r.ArtifactsVerified || !r.MetadataVerified || r.ArtifactCount != 4 || !r.FixtureOnly || !r.ReadOnly || !admissionDisabled(r) || r.UnitSHA256 != digest(tj(f.unit)) {
@@ -118,6 +120,7 @@ func TestReleaseAdmissionCompleteUnitAndReadOnlyRestart(t *testing.T) {
 }
 
 func TestReleaseAdmissionRejectsUnitAndProvenanceSubstitution(t *testing.T) {
+	t.Parallel()
 	cases := map[string]func(*admissionFixture){
 		"missing-core":      func(f *admissionFixture) { f.unit.Subjects = f.unit.Subjects[1:] },
 		"missing-signer":    func(f *admissionFixture) { f.unit.Subjects = append(f.unit.Subjects[:1], f.unit.Subjects[2:]...) },
@@ -243,6 +246,7 @@ func TestReleaseAdmissionStrictEvidenceAndSignatures(t *testing.T) {
 }
 
 func TestReleaseAdmissionRejectsUnsafeArtifacts(t *testing.T) {
+	t.Parallel()
 	for _, name := range []string{"missing", "truncated", "changed", "executable", "non-inert", "extra-file", "directory", "symlink", "symlink-directory", "relative-directory"} {
 		t.Run(name, func(t *testing.T) {
 			f := newAdmissionFixture(t)
@@ -304,6 +308,7 @@ func TestReleaseAdmissionRejectsUnsafeArtifacts(t *testing.T) {
 }
 
 func TestReleaseAdmissionFailurePreservesTrustAndFixtureFloors(t *testing.T) {
+	t.Parallel()
 	f := newAdmissionFixture(t)
 	initial, _, e := f.admit(nil)
 	if e != nil {
@@ -362,6 +367,7 @@ func TestReleaseAdmissionFailurePreservesTrustAndFixtureFloors(t *testing.T) {
 }
 
 func TestReleaseAdmissionKeepsUpstreamTrustProgress(t *testing.T) {
+	t.Parallel()
 	f := newAdmissionFixture(t)
 	first, _, e := f.admit(nil)
 	if e != nil {
@@ -380,6 +386,7 @@ func TestReleaseAdmissionKeepsUpstreamTrustProgress(t *testing.T) {
 }
 
 func TestReleaseAdmissionBuilderCannotReuseMetadataKey(t *testing.T) {
+	t.Parallel()
 	f := newAdmissionFixture(t)
 	for _, key := range f.root.Signed.Keys {
 		b, e := hex.DecodeString(key.Value.PublicKey)

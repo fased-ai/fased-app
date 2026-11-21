@@ -50,6 +50,7 @@ func signed(m update.Manifest, tr update.Trust, key ed25519.PrivateKey) []byte {
 }
 
 func TestDevelopmentAuthenticationRejectsInvalidInputs(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name string
 		edit func(*update.Manifest, *update.Trust)
@@ -109,6 +110,7 @@ func TestDevelopmentAuthenticationRejectsInvalidInputs(t *testing.T) {
 }
 
 func TestCompatibilityRejectsUnsafeDowngrades(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name string
 		edit func(*update.Manifest, *update.Inventory)
@@ -156,6 +158,7 @@ func TestCompatibilityRejectsUnsafeDowngrades(t *testing.T) {
 }
 
 func TestHeldStateIsPreservedWithoutAuthorizingResume(t *testing.T) {
+	t.Parallel()
 	m, i, _, _ := fixture(t)
 	i.Pending = 3
 	i.Unknown = 2
@@ -175,19 +178,9 @@ func TestHeldStateIsPreservedWithoutAuthorizingResume(t *testing.T) {
 }
 
 func TestCompleteArtifactVerificationIsReadOnly(t *testing.T) {
-	root := filepath.Join("..", "..", ".evidence", "p4-updates", "unit-fixtures")
-	if e := os.MkdirAll(root, 0700); e != nil {
-		t.Fatal(e)
-	}
-	dir, e := os.MkdirTemp(root, "inspection-")
-	if e != nil {
-		t.Fatal(e)
-	}
-	t.Cleanup(func() {
-		if e := os.RemoveAll(dir); e != nil {
-			t.Error(e)
-		}
-	})
+	t.Parallel()
+	dir := t.TempDir()
+	var e error
 	m, i, tr, key := fixture(t)
 	for _, c := range m.Components {
 		if e = os.WriteFile(filepath.Join(dir, c.Artifact.File), []byte("abc"), 0600); e != nil {
@@ -234,6 +227,7 @@ func TestCompleteArtifactVerificationIsReadOnly(t *testing.T) {
 }
 
 func TestStrictJSONRejectsAmbiguity(t *testing.T) {
+	t.Parallel()
 	for _, s := range []string{`{"version":1,"\u0076ersion":1}`, `{"Version":1}`, `{"version":1,"version":2}`, `{"version":1,"evil":1}`, `{} {}`, `{"version":1,}`, `{"version":1.0}`, strings.Repeat("[", 22) + strings.Repeat("]", 22), "{\"version\":1,\"x\":\"\xff\"}"} {
 		var x struct {
 			Version int `json:"version"`
@@ -245,6 +239,7 @@ func TestStrictJSONRejectsAmbiguity(t *testing.T) {
 }
 
 func TestCandidateMustKeepLifecycleEntrypoint(t *testing.T) {
+	t.Parallel()
 	m, inv, _, _ := fixture(t)
 	// Runtime/state compatibility alone cannot admit a core which lost its
 	// protected owner lifecycle entrypoint.
@@ -269,6 +264,7 @@ func TestCandidateMustKeepLifecycleEntrypoint(t *testing.T) {
 }
 
 func TestLifecycleVersionsAndFeaturesAreIndependent(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []string{"entrypoint", "stage-format", "features", "journal"} {
 		t.Run(tc, func(t *testing.T) {
 			m, inv, _, _ := fixture(t)
@@ -300,6 +296,7 @@ func TestLifecycleVersionsAndFeaturesAreIndependent(t *testing.T) {
 }
 
 func TestLifecycleTwoIntentsRequireJournalReadFeature(t *testing.T) {
+	t.Parallel()
 	m, inv, _, _ := fixture(t)
 	for n := range m.Components {
 		c := &m.Components[n].Contract
@@ -323,6 +320,7 @@ func TestLifecycleTwoIntentsRequireJournalReadFeature(t *testing.T) {
 }
 
 func TestStrictStateJSONKeepsSignedDocumentBound(t *testing.T) {
+	t.Parallel()
 	var value struct {
 		Version int    `json:"version"`
 		Text    string `json:"text"`

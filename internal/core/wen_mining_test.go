@@ -260,6 +260,7 @@ func (h *wenMiningHarness) reviewAndSubmit(t *testing.T, amount, walletBudget, m
 }
 
 func TestWENMiningDisabledByDefault(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	claimFixture(t, s)
 	v, err := s.Agents(t.Context(), "wen-operator", "")
@@ -287,6 +288,7 @@ func TestWENMiningDisabledByDefault(t *testing.T) {
 }
 
 func TestWENMiningReviewedAuthorityOneOperationReceiptAndNoDuplicate(t *testing.T) {
+	t.Parallel()
 	h := setupWENMiningHarness(t, "500000000", "1000000000", "500000000")
 	submitted, taskID := h.reviewAndSubmit(t, "200000000", "1000000000", "500000000")
 
@@ -344,6 +346,7 @@ func TestWENMiningReviewedAuthorityOneOperationReceiptAndNoDuplicate(t *testing.
 }
 
 func TestWENMiningLimitsAndAuthorityRefusals(t *testing.T) {
+	t.Parallel()
 	h := setupWENMiningHarness(t, "500000000", "600000000", "500000000")
 	agents, _ := h.store.Agents(t.Context(), "wen-operator", "")
 
@@ -429,6 +432,7 @@ func TestWENMiningLimitsAndAuthorityRefusals(t *testing.T) {
 }
 
 func TestWENMiningUncertainReconciliationAndRestartWithoutDuplicate(t *testing.T) {
+	t.Parallel()
 	h := setupWENMiningHarness(t, "500000000", "1000000000", "500000000")
 	h.venue.submitUncertain = true
 	h.venue.reconcileState = "unknown"
@@ -516,6 +520,7 @@ func TestWENMiningUncertainReconciliationAndRestartWithoutDuplicate(t *testing.T
 }
 
 func TestWENMiningRestartRecoverInFlightQueuedAndSending(t *testing.T) {
+	t.Parallel()
 	// Case A: restart while queued -> expires cleanly, zero submissions.
 	h := setupWENMiningHarness(t, "500000000", "1000000000", "500000000")
 	_, _ = h.reviewAndSubmit(t, "200000000", "1000000000", "500000000")

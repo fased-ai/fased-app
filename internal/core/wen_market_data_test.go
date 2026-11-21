@@ -8,6 +8,7 @@ import (
 )
 
 func TestWENMarketDataReadBoundary(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	token := claimFixture(t, s)
 	h, e := NewHTTPHandler(s, "http://127.0.0.1:7331", "", nil)

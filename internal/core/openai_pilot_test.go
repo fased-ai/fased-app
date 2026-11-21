@@ -13,6 +13,7 @@ import (
 )
 
 func TestOpenAIPilotOrdinaryHold(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	if s.pilot.target != nil {
 		t.Fatal("ordinary runtime admitted a pilot")
@@ -94,6 +95,7 @@ func pilotHTTPS(t *testing.T, calls *atomic.Int32) http.RoundTripper {
 }
 
 func TestOpenAIPilotStopRetainsAttemptAndUnknownUsage(t *testing.T) {
+	t.Parallel()
 	for _, mode := range []string{"stop", "revoke", "lock", "expiry"} {
 		t.Run(mode, func(t *testing.T) {
 			s, c, p := pilotStore(t)
@@ -165,6 +167,7 @@ func TestOpenAIPilotStopRetainsAttemptAndUnknownUsage(t *testing.T) {
 }
 
 func TestOpenAIPilotReviewIsRevisionBound(t *testing.T) {
+	t.Parallel()
 	s, c, p := pilotStore(t)
 	agentApply(t, s, AgentCommand{Action: "session-create", ProfileID: p.ProfileID, Name: "Changed after review"})
 	if _, e := s.ChangeAIConnection(t.Context(), AIConnectionCommand{Action: "pilot-allow", Ref: c.Ref, Pilot: &p, ConsentDigest: p.ID, Passphrase: testVaultPassword}); e == nil {
@@ -173,6 +176,7 @@ func TestOpenAIPilotReviewIsRevisionBound(t *testing.T) {
 }
 
 func TestOpenAIPilotQueuedRevocationReleasesOnlyUnsentHold(t *testing.T) {
+	t.Parallel()
 	for _, mode := range []string{"revoke", "expiry", "restart"} {
 		t.Run(mode, func(t *testing.T) {
 			s, c, p := pilotStore(t)
@@ -224,6 +228,7 @@ func pilotRequest(p OpenAIPilotAllowance, id string, task bool) AgentAIRequest {
 	return q
 }
 func TestOpenAIPilotReviewScopeAndTamper(t *testing.T) {
+	t.Parallel()
 	s, c, p := pilotStore(t)
 	original, _ := os.ReadFile(s.aiVaultPath())
 	for _, mutate := range []func(*OpenAIPilotAllowance){
@@ -258,6 +263,7 @@ func TestOpenAIPilotReviewScopeAndTamper(t *testing.T) {
 	}
 }
 func TestOpenAIPilotSharedQuotaAndScope(t *testing.T) {
+	t.Parallel()
 	s, _, p := pilotStore(t)
 	allowPilot(t, s, p)
 	if s.providerActionAllowed(agentDocument{}, AgentCommand{Action: "ai-start"}, p.ProfileID, false) || s.providerActionAllowed(agentDocument{}, AgentCommand{Action: "ai-start"}, p.ProfileID, true) {
@@ -301,6 +307,7 @@ func TestOpenAIPilotSharedQuotaAndScope(t *testing.T) {
 	}
 }
 func TestOpenAIPilotExpiryLockAndRevocation(t *testing.T) {
+	t.Parallel()
 	for _, mode := range []string{"expiry", "rollback", "lock", "logout", "revoke", "foreign-instance", "foreign-boot"} {
 		t.Run(mode, func(t *testing.T) {
 			s, c, p := pilotStore(t)
@@ -340,6 +347,7 @@ func TestOpenAIPilotExpiryLockAndRevocation(t *testing.T) {
 	}
 }
 func TestOpenAIPilotBoundedHTTPSAndNoReplay(t *testing.T) {
+	t.Parallel()
 	s, c, p := pilotStore(t)
 	allowPilot(t, s, p)
 	var calls atomic.Int32
@@ -380,6 +388,7 @@ func TestOpenAIPilotBoundedHTTPSAndNoReplay(t *testing.T) {
 	}
 }
 func TestOpenAIPilotJoinedChatTaskMemoryAndRestart(t *testing.T) {
+	t.Parallel()
 	s, _, p := pilotStore(t)
 	allowPilot(t, s, p)
 	v, permission := pilotChat(t, s, p)
@@ -453,6 +462,7 @@ func TestOpenAIPilotJoinedChatTaskMemoryAndRestart(t *testing.T) {
 }
 
 func TestOpenAIPilotAuthenticatedHTTPReview(t *testing.T) {
+	t.Parallel()
 	s, c, p := pilotStore(t)
 	token := claimFixture(t, s)
 	h, e := NewHTTPHandler(s, "http://127.0.0.1:7331", "", nil)

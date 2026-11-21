@@ -12,6 +12,7 @@ import (
 )
 
 func TestAgentEvidenceHTTPReadOnly(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	token := claimFixture(t, s)
 	v := agentApply(t, s, AgentCommand{Action: "memory-put", ProfileID: "trading-analyst", Text: "Inspect this saved note", Source: "owner"})
@@ -50,6 +51,7 @@ func evidenceQueries(v AgentView) []struct{ kind, id, item string } {
 	return []struct{ kind, id, item string }{{"memory", v.Memories[0].ID, ""}, {"headline", v.NewsFetches[0].ID, v.NewsFetches[0].Items[0].ID}, {"reminder-run", v.Runs[0].ID, ""}}
 }
 func TestAgentEvidenceSources(t *testing.T) {
+	t.Parallel()
 	s, v, calls := evidenceFixture(t)
 	before, rev, _ := readAgents(t.Context(), s.db)
 	for _, q := range evidenceQueries(v) {
@@ -102,6 +104,7 @@ func TestAgentEvidenceSources(t *testing.T) {
 }
 
 func TestAgentEvidenceIsolation(t *testing.T) {
+	t.Parallel()
 	s, v, calls := evidenceFixture(t)
 	d, rev, _ := readAgents(t.Context(), s.db)
 	for _, q := range evidenceQueries(v) {
@@ -184,6 +187,7 @@ func TestAgentEvidenceIsolation(t *testing.T) {
 }
 
 func TestAgentEvidenceReadOnlyFreshnessAndRestart(t *testing.T) {
+	t.Parallel()
 	s, v, calls := evidenceFixture(t)
 	note := v.Memories[0]
 	v = agentApply(t, s, AgentCommand{Action: "memory-put", ProfileID: v.ProfileID, ID: note.ID, Text: note.Text, Source: note.Source, ExpiresAt: s.now().Unix() + 30})
@@ -235,6 +239,7 @@ func TestAgentEvidenceReadOnlyFreshnessAndRestart(t *testing.T) {
 }
 
 func TestAgentEvidenceBoundsAndCapacity(t *testing.T) {
+	t.Parallel()
 	base := AgentEvidenceView{Version: "agent-evidence-v1", ProfileID: "test-profile", Kind: "memory", ID: "test-memory", Data: json.RawMessage(`{"text":""}`), Untrusted: true, Freshness: "active"}
 	small, err := finishAgentEvidence(base)
 	if err != nil {
@@ -278,6 +283,7 @@ func TestAgentEvidenceBoundsAndCapacity(t *testing.T) {
 }
 
 func TestAgentEvidenceHTTPStrict(t *testing.T) {
+	t.Parallel()
 	s, v, _ := evidenceFixture(t)
 	token := claimFixture(t, s)
 	h, err := NewHTTPHandler(s, "http://127.0.0.1:7331", "", nil)

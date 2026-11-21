@@ -8,6 +8,7 @@ import (
 )
 
 func TestRecoveryBackupFileCompatibility(t *testing.T) {
+	t.Parallel()
 	raw := append([]byte(portableMagic), []byte("encrypted history supplied to the signer")...)
 	pin := BackupFingerprint(raw)
 	b := OwnerBackup{1, base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{8}, 32)), "devnet", pin, raw}

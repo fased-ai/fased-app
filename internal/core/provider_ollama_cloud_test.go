@@ -10,6 +10,7 @@ import (
 )
 
 func TestOllamaCloudSupportedAccountContract(t *testing.T) {
+	t.Parallel()
 	p, ok := providerDefinitionFor("ollama-cloud")
 	if !ok || p.Host != "ollama.com" {
 		t.Fatal("documented direct Ollama Cloud key route is missing")
@@ -21,6 +22,7 @@ func TestOllamaCloudSupportedAccountContract(t *testing.T) {
 }
 
 func TestOllamaCloudAccountChatTasksMemoryAndRestart(t *testing.T) {
+	t.Parallel()
 	for _, provider := range []string{"ollama-cloud"} {
 		t.Run(provider, func(t *testing.T) {
 			s := fixtureStore(t)
@@ -144,6 +146,7 @@ func TestOllamaCloudAccountChatTasksMemoryAndRestart(t *testing.T) {
 }
 
 func TestOllamaServerCloudReusesLocalEngine(t *testing.T) {
+	t.Parallel()
 	localProviderJoinedJourney(t, "ollama", "gemma4:cloud")
 	p := localModelPolicy("gemma4:cloud")
 	if !ollamaRelayPolicy(&p) || reportedUsageBasis(AgentAIRequest{Policy: &p}) != "ollama-cloud-reported-usage" {

@@ -17,6 +17,7 @@ import (
 )
 
 func TestOSProtectedVaultLifecycleAndRestartUnseal(t *testing.T) {
+	t.Parallel()
 	if runtime.GOOS != "linux" {
 		t.Skip("OS-protected provider vault targets Linux")
 	}
@@ -152,6 +153,7 @@ func TestOSProtectedVaultLifecycleAndRestartUnseal(t *testing.T) {
 }
 
 func TestOSProtectedVaultSignInOAuthAndTaskAccessWithoutPassphrase(t *testing.T) {
+	t.Parallel()
 	if runtime.GOOS != "linux" {
 		t.Skip("OS-protected provider vault targets Linux")
 	}
@@ -237,6 +239,7 @@ func TestOSProtectedVaultSignInOAuthAndTaskAccessWithoutPassphrase(t *testing.T)
 }
 
 func TestOSProtectedVaultRefusesWithoutOSSecretsAndPreventsLegacyDowngrade(t *testing.T) {
+	t.Parallel()
 	if runtime.GOOS != "linux" {
 		t.Skip("OS-protected provider vault targets Linux")
 	}
@@ -282,6 +285,7 @@ func TestOSProtectedVaultRefusesWithoutOSSecretsAndPreventsLegacyDowngrade(t *te
 }
 
 func TestNativeProviderRouterAndLongDeadline(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	s.provider.apiCredentials = true
 	// OpenAI transport must respect caller deadline > 5s instead of killing streams at 5s.

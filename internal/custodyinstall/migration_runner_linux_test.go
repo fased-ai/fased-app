@@ -17,6 +17,7 @@ import (
 )
 
 func TestMigrationRunnerRequiresExactIndependentApproval(t *testing.T) {
+	t.Parallel()
 	tx, _ := modelTransaction(t)
 	approval := migrationRunnerApproval{Version: 1, Owner: tx.Base.Owner, InstallationID: tx.Base.ID, IntentID: tx.Binding.Index.Binding.Pause.Request.IntentID, BindingDigest: update.InstallDigest(tx.Binding), PreviousCore: tx.Base.CoreHash, TargetCore: tx.Target.CoreHash, TargetSigner: tx.Target.SignerHash, RunnerSHA256: strings.Repeat("c", 64), GuardSHA256: strings.Repeat("d", 64)}
 	marker := tx.dir() + "/migration-runner.json"
@@ -91,6 +92,7 @@ func TestMigrationRunnerRequiresExactIndependentApproval(t *testing.T) {
 }
 
 func TestReusableAuthorityRejectsTransactionSubstitutionOfPinnedGuard(t *testing.T) {
+	t.Parallel()
 	tx, _ := modelTransaction(t)
 	runner, guard := []byte("untrusted staged runner"), []byte("untrusted staged guard")
 	approval := migrationRunnerApproval{Version: 1, Owner: tx.Base.Owner, InstallationID: tx.Base.ID, IntentID: tx.Binding.Index.Binding.Pause.Request.IntentID, BindingDigest: update.InstallDigest(tx.Binding), PreviousCore: tx.Base.CoreHash, TargetCore: tx.Target.CoreHash, TargetSigner: tx.Target.SignerHash, RunnerSHA256: sum(runner), GuardSHA256: sum(guard)}
@@ -118,6 +120,7 @@ func TestReusableAuthorityRejectsTransactionSubstitutionOfPinnedGuard(t *testing
 }
 
 func TestAtomicAdmissionRejectsSubstitutedPinnedGuard(t *testing.T) {
+	t.Parallel()
 	tx, _ := modelTransaction(t)
 	pin := reusableMaintenanceAuthority{Version: 1, Owner: tx.Base.Owner, InstallationID: tx.Base.ID, RunnerSHA256: strings.Repeat("c", 64), GuardSHA256: strings.Repeat("d", 64)}
 	approval := migrationRunnerApproval{Version: 1, Owner: tx.Base.Owner, InstallationID: tx.Base.ID, IntentID: tx.Binding.Index.Binding.Pause.Request.IntentID, BindingDigest: update.InstallDigest(tx.Binding), PreviousCore: tx.Base.CoreHash, TargetCore: tx.Target.CoreHash, TargetSigner: tx.Target.SignerHash, RunnerSHA256: pin.RunnerSHA256, GuardSHA256: strings.Repeat("e", 64)}
@@ -144,6 +147,7 @@ func TestAtomicAdmissionRejectsSubstitutedPinnedGuard(t *testing.T) {
 }
 
 func TestReusableAuthoritySelectsPinnedRunnerForInitialAndRecoveryEntry(t *testing.T) {
+	t.Parallel()
 	tx, _ := modelTransaction(t)
 	id := tx.Binding.Index.Binding.Pause.Request.IntentID
 	pinned := reusableMaintenanceAuthority{Version: 1, Owner: tx.Base.Owner, InstallationID: tx.Base.ID, RunnerSHA256: strings.Repeat("c", 64), GuardSHA256: strings.Repeat("d", 64)}
@@ -208,6 +212,7 @@ func TestReusableAuthoritySelectsPinnedRunnerForInitialAndRecoveryEntry(t *testi
 }
 
 func TestReusableAuthorityRejectsForeignOrDamagedPins(t *testing.T) {
+	t.Parallel()
 	tx, _ := modelTransaction(t)
 	valid := reusableMaintenanceAuthority{Version: 1, Owner: tx.Base.Owner, InstallationID: tx.Base.ID, RunnerSHA256: strings.Repeat("c", 64), GuardSHA256: strings.Repeat("d", 64)}
 	path := reusableMaintenancePath(tx.Base, "authority.json")
@@ -243,6 +248,7 @@ func TestReusableAuthorityRejectsForeignOrDamagedPins(t *testing.T) {
 }
 
 func TestReusableAuthorityDoesNotFallBackWhenPinRecordIsMissing(t *testing.T) {
+	t.Parallel()
 	tx, _ := modelTransaction(t)
 	marker := reusableMaintenancePath(tx.Base, "reusable-v1.json")
 	read := func(path string) (hostFile, error) {
@@ -257,6 +263,7 @@ func TestReusableAuthorityDoesNotFallBackWhenPinRecordIsMissing(t *testing.T) {
 }
 
 func TestReusableAuthorityDoesNotFallBackWhenScopeIsMissing(t *testing.T) {
+	t.Parallel()
 	tx, _ := modelTransaction(t)
 	pin := reusableMaintenanceAuthority{Version: 1, Owner: tx.Base.Owner, InstallationID: tx.Base.ID, RunnerSHA256: strings.Repeat("c", 64), GuardSHA256: strings.Repeat("d", 64)}
 	files := map[string]hostFile{
@@ -290,6 +297,7 @@ func TestReusableAuthorityDoesNotFallBackWhenScopeIsMissing(t *testing.T) {
 }
 
 func TestScopedMaintenanceRefusesMissingScopeWithPinnedAuthority(t *testing.T) {
+	t.Parallel()
 	const owner = 1800
 	authority := Root(owner) + "/maintenance/authority.json"
 	marker := Root(owner) + "/maintenance/reusable-v1.json"
@@ -323,6 +331,7 @@ func TestScopedMaintenanceRefusesMissingScopeWithPinnedAuthority(t *testing.T) {
 }
 
 func TestInitialMigrationRunnerRequiresExactOwnerIntentAndSource(t *testing.T) {
+	t.Parallel()
 	tx, _ := modelTransaction(t)
 	id := tx.Binding.Index.Binding.Pause.Request.IntentID
 	a := migrationRunnerApproval{Version: 1, Owner: tx.Base.Owner, InstallationID: tx.Base.ID, IntentID: id, BindingDigest: update.InstallDigest(tx.Binding), PreviousCore: tx.Base.CoreHash, TargetCore: tx.Target.CoreHash, TargetSigner: tx.Target.SignerHash, RunnerSHA256: strings.Repeat("c", 64), GuardSHA256: strings.Repeat("d", 64)}
@@ -391,6 +400,7 @@ func TestInitialMigrationRunnerRequiresExactOwnerIntentAndSource(t *testing.T) {
 }
 
 func TestPrepareMigrationRunnerRetainsApprovalAcrossInterruption(t *testing.T) {
+	t.Parallel()
 	tx, _ := modelTransaction(t)
 	if tx.Base.Owner != os.Getuid() {
 		t.Skip("model requires the ordinary fixture owner")
@@ -448,6 +458,7 @@ func TestPrepareMigrationRunnerRetainsApprovalAcrossInterruption(t *testing.T) {
 }
 
 func TestScopedControllerPreflightRefusesMissingApprovedInputs(t *testing.T) {
+	t.Parallel()
 	tx, _ := modelTransaction(t)
 	files := map[string][]byte{
 		"runner": []byte("old-core"), "previous-signer": []byte("old-signer"),
@@ -477,6 +488,7 @@ func TestScopedControllerPreflightRefusesMissingApprovedInputs(t *testing.T) {
 }
 
 func TestScopedRestartDropInsRequireExactRootOwnedAssertions(t *testing.T) {
+	t.Parallel()
 	tx, _ := modelTransaction(t)
 	m := tx.Base
 	want := []byte("[Unit]\nAssertPathExists=!" + m.Root + "/update-start-blocked.json\n")
@@ -513,6 +525,7 @@ func TestScopedRestartDropInsRequireExactRootOwnedAssertions(t *testing.T) {
 }
 
 func TestScopedControllerRefusesDirectLiveReplacement(t *testing.T) {
+	t.Parallel()
 	owner := os.Getuid()
 	root := Root(owner)
 	for _, name := range []string{"fased-app", "fased-signer", "install.json", "intent.json", "ready.json"} {
@@ -534,6 +547,7 @@ func TestScopedControllerRefusesDirectLiveReplacement(t *testing.T) {
 }
 
 func TestScopedControllerRefusesEquivalentLiveDestinations(t *testing.T) {
+	t.Parallel()
 	owner := os.Getuid()
 	root := Root(owner)
 	for _, args := range [][]string{
@@ -549,6 +563,7 @@ func TestScopedControllerRefusesEquivalentLiveDestinations(t *testing.T) {
 }
 
 func TestScopedMaintenanceUsesExactPasswordFreeRules(t *testing.T) {
+	t.Parallel()
 	s := &System{}
 	if err := s.configureScopedMaintenance(os.Getuid(), func(int) (bool, error) { return true, nil }); err != nil || !s.NonInteractive {
 		t.Fatal("scoped maintenance would request a general sudo password", err)
@@ -563,6 +578,7 @@ func TestScopedMaintenanceUsesExactPasswordFreeRules(t *testing.T) {
 }
 
 func TestControllerRefusesDirectGuardMutationBeforeSudo(t *testing.T) {
+	t.Parallel()
 	s := &System{NonInteractive: true}
 	root := Root(os.Getuid())
 	for _, args := range [][]string{
@@ -698,6 +714,7 @@ func TestScopedMigrationProcessDeathAndFailedTarget(t *testing.T) {
 }
 
 func TestMigrationContractRequiresSignedCoreAndHeldCapabilities(t *testing.T) {
+	t.Parallel()
 	tx, _ := modelTransaction(t)
 	var contract update.Contract
 	for _, c := range tx.Binding.Contracts {
@@ -724,6 +741,7 @@ func TestMigrationContractRequiresSignedCoreAndHeldCapabilities(t *testing.T) {
 }
 
 func TestMigrationProbeRunsAsOrdinaryOwner(t *testing.T) {
+	t.Parallel()
 	tx, _ := modelTransaction(t)
 	if os.Getuid() != tx.Base.Owner || os.Geteuid() != os.Getuid() {
 		t.Skip("fixture requires its ordinary owner")

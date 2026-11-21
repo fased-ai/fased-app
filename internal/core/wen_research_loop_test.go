@@ -7,6 +7,7 @@ import (
 )
 
 func TestWENResearchLoopGrammar(t *testing.T) {
+	t.Parallel()
 	s, _, _, c := readBatchFixture(t)
 	in := researchInput(t, c)
 	in.Schema = "wen-research-ai-prepare/2"
@@ -74,6 +75,7 @@ func loopNext(t *testing.T, s *Store, r WENResearchAIReview) WENResearchAIReview
 	return v
 }
 func TestWENResearchLoopTranscript(t *testing.T) {
+	t.Parallel()
 	for _, steps := range []int{1, 2, 3} {
 		t.Run(fmt.Sprintf("%d-consents", steps), func(t *testing.T) {
 			s, _, _, c := readBatchFixture(t)

@@ -8,6 +8,7 @@ import (
 )
 
 func TestChatReminderReviewDoesNotSchedule(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	v := aiPrepare(t, s)
 	v = aiStart(t, s, v)
@@ -71,6 +72,7 @@ func rewriteReminderFixture(t *testing.T, s *Store, change func(*agentDocument))
 	}
 }
 func TestChatReminderCreateControlsRestartAndSingleUse(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	now := time.Unix(1800000000, 0)
 	s.now = func() time.Time { return now }
@@ -138,6 +140,7 @@ func TestChatReminderCreateControlsRestartAndSingleUse(t *testing.T) {
 	}
 }
 func TestChatReminderReviewRefusals(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name string
 		doc  func(*agentDocument)
@@ -195,6 +198,7 @@ func TestChatReminderReviewRefusals(t *testing.T) {
 	}
 }
 func TestChatReminderConsentExpiryPauseAndConcurrentCreation(t *testing.T) {
+	t.Parallel()
 	for _, mode := range []string{"missing-consent", "changed-text", "changed-interval", "changed-runs", "expired", "stale", "paused", "concurrent"} {
 		t.Run(mode, func(t *testing.T) {
 			s := fixtureStore(t)

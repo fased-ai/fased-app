@@ -13,6 +13,7 @@ import (
 )
 
 func TestAIAccountsPreserveLegacyAssignmentAndIsolation(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	a := saveTestConnection(t, s)
 	env, err := s.readAIVault()
@@ -82,6 +83,7 @@ func TestAIAccountsPreserveLegacyAssignmentAndIsolation(t *testing.T) {
 }
 
 func TestAIAccountsMigrationPreservesVaultAndHolds(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	a := saveTestConnection(t, s)
 	v := agentApply(t, s, AgentCommand{Action: "profile-update", ProfileID: "trading-analyst", Name: "Analyst", Provider: "openai", Model: admittedOpenAIModel})
@@ -114,6 +116,7 @@ func TestAIAccountsMigrationPreservesVaultAndHolds(t *testing.T) {
 }
 
 func TestAIAccountsNondefaultTaskGrantAndTransport(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	a := saveTestConnection(t, s)
 	const key = "fased-test-task-second-disposable-key"
@@ -164,6 +167,7 @@ func TestAIAccountsNondefaultTaskGrantAndTransport(t *testing.T) {
 }
 
 func TestAIAccountsChatRevocationIsScoped(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	a := saveTestConnection(t, s)
 	_, permission := chatPermission(t, s, a.Ref)
@@ -217,6 +221,7 @@ func TestAIAccountsSchema22ReaderRefuses(t *testing.T) {
 	}
 }
 func TestAIAccountsPausedMigrationRefuses(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	if _, err := s.db.Exec("PRAGMA user_version=22"); err != nil {
 		t.Fatal(err)

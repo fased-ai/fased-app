@@ -10,6 +10,7 @@ import (
 )
 
 func TestLocalNamedServerReviewedModels(t *testing.T) {
+	t.Parallel()
 	for _, id := range []string{"google/gemma-4-e2b", "google/gemma-4-e4b", "google/gemma-4-E2B-it", "google/gemma-4-E4B-it"} {
 		p := localModelPolicy(id)
 		if p.Model != id || p.Provider != "local" || p.WireVersion != localWire || p.InputMicrousdPerMillion != 0 {
@@ -19,6 +20,7 @@ func TestLocalNamedServerReviewedModels(t *testing.T) {
 }
 
 func TestLocalNamedServerSetupAndScopes(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	original := saveTestConnection(t, s)
 	before, _ := s.readAIVault(original.Ref)

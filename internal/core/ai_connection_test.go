@@ -20,6 +20,7 @@ const testAPIKey = "fased-test-disposable-openai-connection-key"
 const testVaultPassword = "disposable-vault-password"
 
 func TestAIConnectionEncryptedStorage(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	v, e := s.ChangeAIConnection(t.Context(), AIConnectionCommand{Action: "save", Key: testAPIKey, Passphrase: testVaultPassword})
 	if e != nil || v.Ref == "" || v.Locked || v.LiveCallsEnabled {
@@ -75,6 +76,7 @@ func httpsFixture(t *testing.T, handler http.HandlerFunc) http.RoundTripper {
 	return rt
 }
 func TestAIConnectionRestartExpiryRotationAndRemoval(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	v := saveTestConnection(t, s)
 	if runtime.GOOS != "windows" {
@@ -122,6 +124,7 @@ func TestAIConnectionRestartExpiryRotationAndRemoval(t *testing.T) {
 	}
 }
 func TestAIConnectionTamperInstanceAndPause(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	v := saveTestConnection(t, s)
 	original, _ := os.ReadFile(s.aiVaultPath())
@@ -157,6 +160,7 @@ func TestAIConnectionTamperInstanceAndPause(t *testing.T) {
 	}
 }
 func TestAIConnectionHTTPSConsentAndNoReplay(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	connection := saveTestConnection(t, s)
 	v := prepareConnected(t, s, connection.Ref)
@@ -207,6 +211,7 @@ func TestAIConnectionHTTPSConsentAndNoReplay(t *testing.T) {
 	}
 }
 func TestAIConnectionStaleAndLockedConsent(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	connection := saveTestConnection(t, s)
 	v := prepareConnected(t, s, connection.Ref)
@@ -234,6 +239,7 @@ func TestAIConnectionStaleAndLockedConsent(t *testing.T) {
 	}
 }
 func TestAIConnectionHTTPSFailuresHoldAndDoNotLeak(t *testing.T) {
+	t.Parallel()
 	for _, mode := range []string{"401", "429", "redirect", "usage", "echo", "timeout", "lock"} {
 		t.Run(mode, func(t *testing.T) {
 			s := fixtureStore(t)
@@ -291,6 +297,7 @@ func TestAIConnectionHTTPSFailuresHoldAndDoNotLeak(t *testing.T) {
 	}
 }
 func TestAIConnectionTLSAdmissionAndOwnerAPI(t *testing.T) {
+	t.Parallel()
 	for _, u := range []string{"http://127.0.0.1:1", "https://api.openai.com", "https://127.0.0.1:1/redirect", "https://user@127.0.0.1:1", "https://localhost:1"} {
 		if _, e := newOpenAIHTTPSFixture(u, x509.NewCertPool()); e == nil {
 			t.Fatal("unsafe fixture URL", u)
@@ -341,6 +348,7 @@ func TestAIConnectionTLSAdmissionAndOwnerAPI(t *testing.T) {
 	}
 }
 func TestAIConnectionSchema6MigrationGuard(t *testing.T) {
+	t.Parallel()
 	for _, paused := range []bool{false, true} {
 		s := fixtureStore(t)
 		dropEmptyHistoryFixture(t, s)
@@ -365,6 +373,7 @@ func TestAIConnectionSchema6MigrationGuard(t *testing.T) {
 }
 
 func TestAIConnectionBoundTaskAndActiveCancellation(t *testing.T) {
+	t.Parallel()
 	t.Run("scheduled", func(t *testing.T) {
 		s := fixtureStore(t)
 		connection := saveTestConnection(t, s)

@@ -9,6 +9,7 @@ import (
 )
 
 func TestInspectionColdMetadataNoMigration(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	os.Chmod(dir, 0700)
 	s, e := OpenStore(dir)
@@ -39,6 +40,7 @@ func TestInspectionColdMetadataNoMigration(t *testing.T) {
 }
 
 func TestInspectionColdRefusesPendingRollbackJournal(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	os.Chmod(dir, 0700)
 	s, e := OpenStore(dir)
@@ -61,6 +63,7 @@ func TestInspectionColdRefusesPendingRollbackJournal(t *testing.T) {
 }
 
 func TestInspectionColdRefusesForeignWAL(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	os.Chmod(dir, 0700)
 	s, e := OpenStore(dir)
@@ -80,6 +83,7 @@ func TestInspectionColdRefusesForeignWAL(t *testing.T) {
 }
 
 func TestColdPauseGuardRequiresOriginalDurableFence(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	command := pauseCommand(t, s, 1)
 	receipt, err := s.UpdatePause(t.Context(), command)

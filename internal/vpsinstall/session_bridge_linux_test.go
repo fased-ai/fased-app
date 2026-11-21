@@ -141,6 +141,7 @@ func sourceSessionReceiverFixture(t *testing.T) (*memoryHost, hostOps, Manifest,
 }
 
 func TestSourceSessionReceiverAdmitsActualBoundImage(t *testing.T) {
+	t.Parallel()
 	_, o, m, image, record := sourceSessionReceiverFixture(t)
 	got, err := validateSourceSessionHelper(m.Config, image, record, m.AppUID, o)
 	if err != nil || got != m {
@@ -152,6 +153,7 @@ func TestSourceSessionReceiverAdmitsActualBoundImage(t *testing.T) {
 }
 
 func TestSourceSessionReceiverRefusesChangedProcessOrGeneration(t *testing.T) {
+	t.Parallel()
 	for _, kind := range []string{"actual-image", "root", "owner", "group", "supplementary-group", "binding-owner", "binding-generation", "helper-content", "helper-mode", "installed-content", "source-path"} {
 		t.Run(kind, func(t *testing.T) {
 			h, o, m, image, record := sourceSessionReceiverFixture(t)
@@ -202,6 +204,7 @@ func TestSourceSessionReceiverRefusesChangedProcessOrGeneration(t *testing.T) {
 }
 
 func TestSourceSessionBridgeIsBoundAndDropsBeforeExecution(t *testing.T) {
+	t.Parallel()
 	h, o, m, _ := ownerCallFixture(t)
 	body := []byte("bounded-verified-current-helper")
 	digest := hash(body)
@@ -256,6 +259,7 @@ func TestSourceSessionBridgeIsBoundAndDropsBeforeExecution(t *testing.T) {
 }
 
 func TestSourceSessionUsesInstalledHelperWithoutStaging(t *testing.T) {
+	t.Parallel()
 	h, o, m, _ := ownerCallFixture(t)
 	var calls int
 	o.helper = func(_ context.Context, args []string, out io.Writer) error {
@@ -303,6 +307,7 @@ func TestSourceSessionUsesInstalledHelperWithoutStaging(t *testing.T) {
 }
 
 func TestSourceSessionRejectsMismatchedInstalledInstance(t *testing.T) {
+	t.Parallel()
 	h, o, m, _ := ownerCallFixture(t)
 	body := []byte("bounded-verified-current-helper")
 	digest, image := hash(body), "/verified/bootstrap/fased-app"
@@ -340,6 +345,7 @@ func TestSourceSessionRejectsMismatchedInstalledInstance(t *testing.T) {
 }
 
 func TestSourceSessionRejectsUnhealthyOrForeignOwner(t *testing.T) {
+	t.Parallel()
 	for _, kind := range []string{"unhealthy", "missing-owner", "wrong-owner", "custody", "local"} {
 		t.Run(kind, func(t *testing.T) {
 			h, o, m, _ := ownerCallFixture(t)
@@ -379,6 +385,7 @@ func TestSourceSessionRejectsUnhealthyOrForeignOwner(t *testing.T) {
 }
 
 func TestSourceSessionCancellationNeverStagesFallback(t *testing.T) {
+	t.Parallel()
 	h, o, m, _ := ownerCallFixture(t)
 	ctx, cancel := context.WithCancel(t.Context())
 	o.helper = func(context.Context, []string, io.Writer) error {
@@ -396,6 +403,7 @@ func TestSourceSessionCancellationNeverStagesFallback(t *testing.T) {
 }
 
 func TestSourceSessionRejectsMalformedInstalledStatus(t *testing.T) {
+	t.Parallel()
 	h, o, m, _ := ownerCallFixture(t)
 	body := []byte("bounded-verified-current-helper")
 	digest := hash(body)

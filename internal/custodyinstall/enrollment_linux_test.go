@@ -14,6 +14,7 @@ import (
 )
 
 func TestEnrollmentCustodyProfileAndLegacyBytes(t *testing.T) {
+	t.Parallel()
 	m := fixtureManifest()
 	before := mustJSON(m)
 	if bytes.Contains(before, []byte(`"enrollment"`)) || bytes.Contains(before, []byte(`"location"`)) || bytes.Contains(before, []byte(`"publicOrigin"`)) {
@@ -52,6 +53,7 @@ func TestEnrollmentCustodyProfileAndLegacyBytes(t *testing.T) {
 }
 
 func TestEnrollmentRecordRejectsUnpinnedPaths(t *testing.T) {
+	t.Parallel()
 	s := System{Out: io.Discard}
 	for _, path := range []string{"/tmp/enrollment.json", "/proc/1/fd/5/source/enrollment.json", "/proc/1000/fd/5/../source/enrollment.json"} {
 		if err := s.EnrollmentRecord(context.Background(), path, strings.Repeat("a", 32), []byte(`{}`)); err == nil {
@@ -61,6 +63,7 @@ func TestEnrollmentRecordRejectsUnpinnedPaths(t *testing.T) {
 }
 
 func TestEnrollmentRecordAcceptsPinnedFilename(t *testing.T) {
+	t.Parallel()
 	s := System{Out: io.Discard}
 	path := fmt.Sprintf("/proc/%d/fd/0/source/enrollment.json", os.Getpid())
 	err := s.EnrollmentRecord(context.Background(), path, strings.Repeat("a", 32), []byte(`{}`))
@@ -70,6 +73,7 @@ func TestEnrollmentRecordAcceptsPinnedFilename(t *testing.T) {
 }
 
 func TestEnrollmentIdentitySurvivesOnlyVerifiedCodePairChanges(t *testing.T) {
+	t.Parallel()
 	original := fixtureManifest()
 	original.Version, original.Mode, original.Network, original.Enrollment, original.Location = 2, "disposable-custody:v2", "devnet", true, "local"
 	updated := original

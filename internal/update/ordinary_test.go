@@ -11,6 +11,7 @@ import (
 )
 
 func TestOrdinaryBootstrapSignedFiniteReaderDelta(t *testing.T) {
+	t.Parallel()
 	for _, bad := range []string{"", "new-reader-support", "omit-maintenance-reader", "omit-completion-reader", "peer", "schema", "provenance", "financial-feature", "unknown-reader-feature", "owner-admission", "owner-history", "current-signer", "wrong-source", "unsigned", "normal-slot"} {
 		t.Run(bad, func(t *testing.T) {
 			base, _, trust, key := fixture(t)

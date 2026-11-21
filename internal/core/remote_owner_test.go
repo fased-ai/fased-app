@@ -16,6 +16,7 @@ import (
 )
 
 func TestRemoteOwnerEnrollmentPreservationAndReplay(t *testing.T) {
+	t.Parallel()
 	for _, legacy := range []bool{false, true} {
 		t.Run(map[bool]string{false: "fresh", true: "legacy"}[legacy], func(t *testing.T) {
 			dir := filepath.Join(t.TempDir(), "fased")
@@ -118,6 +119,7 @@ func TestRemoteOwnerEnrollmentPreservationAndReplay(t *testing.T) {
 }
 
 func TestRemotePackageSetupUsesPrivateIPCAndOriginalDevice(t *testing.T) {
+	t.Parallel()
 	s, err := OpenStore(filepath.Join(t.TempDir(), "fased"))
 	if err != nil {
 		t.Fatal(err)
@@ -161,6 +163,7 @@ func TestRemotePackageSetupUsesPrivateIPCAndOriginalDevice(t *testing.T) {
 }
 
 func TestRemoteClaimRetryCannotReplacePendingDevice(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	first := tailnet.Identity{UserID: 7, NodeID: "first", Login: "owner@example.test"}
 	other := first
@@ -185,6 +188,7 @@ func TestRemoteClaimRetryCannotReplacePendingDevice(t *testing.T) {
 }
 
 func TestStaleClaimWriterCannotRemoveRemoteBinding(t *testing.T) {
+	t.Parallel()
 	first := fixtureStore(t)
 	second, err := OpenStore(first.dir)
 	if err != nil {
@@ -212,6 +216,7 @@ func TestStaleClaimWriterCannotRemoveRemoteBinding(t *testing.T) {
 	}
 }
 func TestRemoteHeadersNeverGrantLocalOrProxyAuthority(t *testing.T) {
+	t.Parallel()
 	s, err := OpenStore(filepath.Join(t.TempDir(), "fased"))
 	if err != nil {
 		t.Fatal(err)
@@ -244,6 +249,7 @@ func TestRemoteHeadersNeverGrantLocalOrProxyAuthority(t *testing.T) {
 	}
 }
 func TestRemoteExpiredHandoffAndPausedEnrollment(t *testing.T) {
+	t.Parallel()
 	s, err := OpenStore(filepath.Join(t.TempDir(), "fased"))
 	if err != nil {
 		t.Fatal(err)
@@ -259,6 +265,7 @@ func TestRemoteExpiredHandoffAndPausedEnrollment(t *testing.T) {
 }
 
 func TestRemoteEnrollmentRespectsDurablePause(t *testing.T) {
+	t.Parallel()
 	s, err := OpenStore(filepath.Join(t.TempDir(), "fased"))
 	if err != nil {
 		t.Fatal(err)
@@ -286,6 +293,7 @@ func TestRemoteEnrollmentRespectsDurablePause(t *testing.T) {
 	}
 }
 func TestRemoteReenrollmentCannotResurrectRevokedToken(t *testing.T) {
+	t.Parallel()
 	s, err := OpenStore(filepath.Join(t.TempDir(), "fased"))
 	if err != nil {
 		t.Fatal(err)
@@ -334,6 +342,7 @@ func TestRemoteReenrollmentCannotResurrectRevokedToken(t *testing.T) {
 	}
 }
 func TestRemoteInitialHandoffIsBoundToPredeploymentDevice(t *testing.T) {
+	t.Parallel()
 	s, err := OpenStore(filepath.Join(t.TempDir(), "fased"))
 	if err != nil {
 		t.Fatal(err)

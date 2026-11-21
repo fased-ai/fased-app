@@ -11,6 +11,7 @@ import (
 )
 
 func TestUpdateContractMatchesDurableSigner(t *testing.T) {
+	t.Parallel()
 	dir := fixtureDir(t)
 	v := openFixture(t, dir)
 	if err := v.Create(fixturePassword); err != nil {

@@ -12,6 +12,7 @@ import (
 )
 
 func TestLockedOwnerBackupPreservesStagedRecovery(t *testing.T) {
+	t.Parallel()
 	source := ordinaryVault(t, fixtureDir(t))
 	if e := source.Create(fixturePassword); e != nil {
 		t.Fatal(e)
@@ -113,6 +114,7 @@ func TestLockedOwnerBackupPreservesStagedRecovery(t *testing.T) {
 }
 
 func TestLockedBackupKeyCredentialsAndNoImplicitLock(t *testing.T) {
+	t.Parallel()
 	v := ordinaryVault(t, fixtureDir(t))
 	if e := v.Create(fixturePassword); e != nil {
 		t.Fatal(e)

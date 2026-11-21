@@ -66,6 +66,7 @@ func fixtureHost() (*memoryHost, hostOps, Options) {
 }
 
 func TestScopedRemoteCoreUsesApprovedImmutableSource(t *testing.T) {
+	t.Parallel()
 	h, o, _ := fixtureHost()
 	id := strings.Repeat("a", 32)
 	stage := "/var/lib/.fased-app-vps-1000-" + id + ".pending"
@@ -294,6 +295,7 @@ func installFixture(t *testing.T) (*memoryHost, hostOps, Manifest) {
 	return h, o, m
 }
 func TestRemoteInstallDeferredStartAndIdentity(t *testing.T) {
+	t.Parallel()
 	h, o, opt := fixtureHost()
 	m, e := install(context.Background(), opt, o)
 	if e != nil {
@@ -342,6 +344,7 @@ func TestRemoteInstallDeferredStartAndIdentity(t *testing.T) {
 	}
 }
 func TestEveryInstallInterruptionRetriesWithoutReplacingInputs(t *testing.T) {
+	t.Parallel()
 	baseline, _, _ := installFixture(t)
 	count := len(baseline.calls)
 	for fault := 1; fault <= count; fault++ {
@@ -368,6 +371,7 @@ func TestEveryInstallInterruptionRetriesWithoutReplacingInputs(t *testing.T) {
 	}
 }
 func TestAccountCollisionsGroupsAndPasswordLockFailClosed(t *testing.T) {
+	t.Parallel()
 	for _, change := range []string{"marker", "shell", "shared-group", "sudo-group", "unlocked", "uid", "gid", "uid-alias", "group-alias"} {
 		t.Run(change, func(t *testing.T) {
 			h, o, m := installFixture(t)
@@ -416,6 +420,7 @@ func TestAccountCollisionsGroupsAndPasswordLockFailClosed(t *testing.T) {
 	}
 }
 func TestForeignFilesUnitsOverridesAndOwnerRefused(t *testing.T) {
+	t.Parallel()
 	for _, change := range []string{"binary", "setuid", "manifest-owner", "probe", "state", "root-extra", "unit", "dropin", "enable-link", "owner", "root-owner"} {
 		t.Run(change, func(t *testing.T) {
 			h, o, m := installFixture(t)
@@ -469,6 +474,7 @@ func TestForeignFilesUnitsOverridesAndOwnerRefused(t *testing.T) {
 	}
 }
 func TestRuntimeIdentityAndArgumentBinding(t *testing.T) {
+	t.Parallel()
 	for _, change := range []string{"none", "uid", "euid", "gid", "groups", "core", "config", "data", "listen", "origin", "image"} {
 		t.Run(change, func(t *testing.T) {
 			_, o, m := installFixture(t)
@@ -506,6 +512,7 @@ func TestRuntimeIdentityAndArgumentBinding(t *testing.T) {
 	}
 }
 func TestRemovalRetryPreservesAllStateAndIdentities(t *testing.T) {
+	t.Parallel()
 	h, o, m := installFixture(t)
 	if e := start(context.Background(), o, m); e != nil {
 		t.Fatal(e)
@@ -540,6 +547,7 @@ func TestRemovalRetryPreservesAllStateAndIdentities(t *testing.T) {
 	}
 }
 func TestConsentSourceAndPlatformRefusedBeforeMutation(t *testing.T) {
+	t.Parallel()
 	for _, change := range []string{"consent", "root", "source", "platform", "listen", "origin"} {
 		t.Run(change, func(t *testing.T) {
 			h, o, opt := fixtureHost()
@@ -568,6 +576,7 @@ func TestConsentSourceAndPlatformRefusedBeforeMutation(t *testing.T) {
 }
 
 func TestUbuntuOSReleaseTrustedAlias(t *testing.T) {
+	t.Parallel()
 	for _, variant := range []string{"absolute", "relative", "foreign-alias", "foreign-destination", "writable-destination", "foreign-parent", "writable-parent", "parent-symlink", "chained-alias", "unexpected-target", "foreign-regular"} {
 		t.Run(variant, func(t *testing.T) {
 			h, o, opt := fixtureHost()
@@ -620,6 +629,7 @@ func TestUbuntuOSReleaseTrustedAlias(t *testing.T) {
 }
 
 func TestSharedPasswordToolRejectsEveryMutationForm(t *testing.T) {
+	t.Parallel()
 	for _, args := range [][]string{{"/usr/bin/passwd"}, {"/usr/bin/passwd", "-l", "fased-vps-1000"}, {"/usr/bin/passwd", "-S"}, {"/usr/bin/passwd", "-S", "--all"}, {"/usr/bin/passwd", "-S", "fased-vps-1000", "--unlock"}} {
 		if _, e := (&custodyinstall.System{Out: io.Discard}).Run(context.Background(), nil, args...); e == nil || !strings.Contains(e.Error(), "status") {
 			t.Fatal("password mutation form admitted", args, e)
@@ -628,6 +638,7 @@ func TestSharedPasswordToolRejectsEveryMutationForm(t *testing.T) {
 }
 
 func TestOwnerSetupLinkUsesVerifiedUIDHelper(t *testing.T) {
+	t.Parallel()
 	h, o, m := installFixture(t)
 	if err := start(t.Context(), o, m); err != nil {
 		t.Fatal(err)
@@ -649,6 +660,7 @@ func TestOwnerSetupLinkUsesVerifiedUIDHelper(t *testing.T) {
 }
 
 func TestReadinessUsesQuietProbeWithoutHidingLifecycleCommands(t *testing.T) {
+	t.Parallel()
 	_, o, m := installFixture(t)
 	probes := 0
 	original := o.run

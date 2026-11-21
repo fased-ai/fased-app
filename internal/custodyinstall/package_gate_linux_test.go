@@ -21,6 +21,7 @@ import (
 )
 
 func TestProvisionedPackageReleasesLockBeforeRecoveryServiceStarts(t *testing.T) {
+	t.Parallel()
 	_, m := packageGateInitialRecord(t)
 	path := filepath.Join(t.TempDir(), "operation.lock")
 	first, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0600)
@@ -88,6 +89,7 @@ func TestProvisionedPackageReleasesLockBeforeRecoveryServiceStarts(t *testing.T)
 }
 
 func TestProvisionedPackageBindsOwnerBeforeInstallerReturns(t *testing.T) {
+	t.Parallel()
 	_, m := packageGateInitialRecord(t)
 	lock, err := os.OpenFile(filepath.Join(t.TempDir(), "operation.lock"), os.O_CREATE|os.O_RDWR, 0600)
 	if err != nil {
@@ -121,6 +123,7 @@ func TestProvisionedPackageBindsOwnerBeforeInstallerReturns(t *testing.T) {
 }
 
 func TestPackageOwnerReleasesLockBeforeUpdateRequest(t *testing.T) {
+	t.Parallel()
 	path := filepath.Join(t.TempDir(), "operation.lock")
 	first, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0600)
 	if err != nil {
@@ -153,6 +156,7 @@ func TestPackageOwnerReleasesLockBeforeUpdateRequest(t *testing.T) {
 }
 
 func TestPackageOwnerCommitBindsTheRunningLocalInstance(t *testing.T) {
+	t.Parallel()
 	_, m := packageGateInitialRecord(t)
 	instance := base64.RawURLEncoding.EncodeToString([]byte(strings.Repeat("x", 32)))
 	health := core.Health{Status: "ok", APIVersion: core.APIVersion, InstanceID: instance,
@@ -192,6 +196,7 @@ func TestPackageOwnerCommitBindsTheRunningLocalInstance(t *testing.T) {
 }
 
 func TestInstalledPackageOwnerHealthWithEnrolledWallet(t *testing.T) {
+	t.Parallel()
 	_, m := packageGateInitialRecord(t)
 	health := core.Health{Status: "ok", APIVersion: core.APIVersion,
 		InstanceID: base64.RawURLEncoding.EncodeToString([]byte(strings.Repeat("x", 32))),
@@ -218,6 +223,7 @@ func TestInstalledPackageOwnerHealthWithEnrolledWallet(t *testing.T) {
 }
 
 func TestPackageOwnerCommitBindsTheRunningRemoteInstance(t *testing.T) {
+	t.Parallel()
 	_, m := packageGateInitialRecord(t)
 	m.Location, m.PublicOrigin = "remote", "https://node.example.ts.net:8443"
 	m.Root, _ = PackageRoot(m.Owner, m.Location, m.ID)
@@ -262,6 +268,7 @@ func packageGateInitialRecord(t *testing.T) (update.MaintenanceRecord, Manifest)
 }
 
 func TestLocalPackageJournalRetainsVerifiedWalletClient(t *testing.T) {
+	t.Parallel()
 	r, m := packageGateInitialRecord(t)
 	r.Package.NativeDesktop = &update.Artifact{File: "fased-desktop", Size: 20, SHA256: strings.Repeat("d", 64)}
 	r.Package.NativePackage = &update.NativePackage{
@@ -296,6 +303,7 @@ func TestLocalPackageJournalRetainsVerifiedWalletClient(t *testing.T) {
 }
 
 func TestLegacyLocalImportBindsIdleJournalWithoutPermittingStart(t *testing.T) {
+	t.Parallel()
 	r, m := packageGateInitialRecord(t)
 	p := r.Package
 	p.Version, p.Source, p.ReleaseSHA256 = "0.1.23", maintenance.LegacyLocalRetainedSource, maintenance.LegacyLocalRetainedPacket
@@ -335,6 +343,7 @@ func TestLegacyLocalImportBindsIdleJournalWithoutPermittingStart(t *testing.T) {
 }
 
 func TestPackageGateSelectsOnlyBoundStartState(t *testing.T) {
+	t.Parallel()
 	r, m := packageGateInitialRecord(t)
 	selected, err := packageStartSelection(r, m.Owner, m.Location, m.ID, nil)
 	if err != nil || selected != m {
@@ -385,6 +394,7 @@ func TestPackageGateSelectsOnlyBoundStartState(t *testing.T) {
 }
 
 func TestPackageOfflineRecoverySelectsOnlyItsRecordedOperation(t *testing.T) {
+	t.Parallel()
 	r, base := packageGateInitialRecord(t)
 	previous := *r.Package
 	previous.NativePackage = &update.NativePackage{Family: "dnf", Artifact: update.Artifact{File: "fased-app-linux-amd64.rpm", Size: 1, SHA256: strings.Repeat("1", 64)}, InstallerSHA256: strings.Repeat("2", 64)}
@@ -466,6 +476,7 @@ func TestPackageOfflineRecoverySelectsOnlyItsRecordedOperation(t *testing.T) {
 }
 
 func TestPackageGateRequiresOriginalEmptySignerCheckpoint(t *testing.T) {
+	t.Parallel()
 	r, base := packageGateInitialRecord(t)
 	r.Package.NativePackage = &update.NativePackage{Family: "dnf", Artifact: update.Artifact{File: "fased-app-linux-amd64.rpm", Size: 1, SHA256: strings.Repeat("6", 64)}, InstallerSHA256: strings.Repeat("7", 64)}
 	target := base
@@ -569,6 +580,7 @@ func TestPackageGateRequiresOriginalEmptySignerCheckpoint(t *testing.T) {
 }
 
 func TestPackageStagingRequiresProtectedNativeRecovery(t *testing.T) {
+	t.Parallel()
 	_, m := packageGateInitialRecord(t)
 	p := update.MaintenancePackage{NativePackage: &update.NativePackage{InstallerSHA256: strings.Repeat("a", 64)}}
 	if validateNativePackageUpdateScope(m, p, false) == nil {
@@ -600,6 +612,7 @@ func TestPackageStagingRequiresProtectedNativeRecovery(t *testing.T) {
 }
 
 func TestBundleJournalKeepsTheOriginalPairAndRecoveryIdentity(t *testing.T) {
+	t.Parallel()
 	r, m := packageGateInitialRecord(t)
 	r.Package.Bundle = &update.LinuxBundle{Archive: update.Artifact{File: "fased-app-linux-amd64.tar.gz", Size: 1, SHA256: strings.Repeat("6", 64)}, ManifestSHA256: strings.Repeat("7", 64), InstallerSHA256: strings.Repeat("8", 64)}
 	if err := r.Package.Validate(); err != nil {
@@ -652,6 +665,7 @@ func TestBundleJournalKeepsTheOriginalPairAndRecoveryIdentity(t *testing.T) {
 }
 
 func TestPackageWalletAdmissionPreservesIdleJournalWhenOwnerSignerHeld(t *testing.T) {
+	t.Parallel()
 	r, m := packageGateInitialRecord(t)
 	old := *r.Package
 	old.Components = append([]update.Component(nil), old.Components...)
@@ -674,6 +688,7 @@ func TestPackageWalletAdmissionPreservesIdleJournalWhenOwnerSignerHeld(t *testin
 }
 
 func TestPackageWalletAdmissionBindsSignerContract(t *testing.T) {
+	t.Parallel()
 	r, m := packageGateInitialRecord(t)
 	p := *r.Package
 	p.Components = append([]update.Component(nil), p.Components...)
@@ -706,6 +721,7 @@ func TestPackageWalletAdmissionBindsSignerContract(t *testing.T) {
 }
 
 func TestPackageGateAdmitsOnlyTheOriginalHeldTarget(t *testing.T) {
+	t.Parallel()
 	r, base := packageGateInitialRecord(t)
 	base.Network = "devnet"
 	r.Base = mustJSON(base)
@@ -860,6 +876,7 @@ func TestPackageGateAdmitsOnlyTheOriginalHeldTarget(t *testing.T) {
 }
 
 func TestPackageGateRequiresTheOriginalFence(t *testing.T) {
+	t.Parallel()
 	r, m := packageGateInitialRecord(t)
 	files := map[string]hostFile{}
 	read := func(path string) (hostFile, error) {
@@ -894,6 +911,7 @@ func TestPackageGateRequiresTheOriginalFence(t *testing.T) {
 }
 
 func TestPackageGateRejectsInvalidPhysicalEntry(t *testing.T) {
+	t.Parallel()
 	r, m := packageGateInitialRecord(t)
 	var raw map[string]json.RawMessage
 	if err := json.Unmarshal(r.Base, &raw); err != nil {

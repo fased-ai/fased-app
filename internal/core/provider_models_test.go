@@ -28,6 +28,7 @@ func modelChoice(v AIConnectionView, id string) ProviderModel {
 	return ProviderModel{}
 }
 func TestProviderModelsAccountIsolationFreshnessAndFailure(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	a := saveTestConnection(t, s)
 	const secondKey = "fased-test-discovery-second-account"
@@ -82,6 +83,7 @@ func TestProviderModelsAccountIsolationFreshnessAndFailure(t *testing.T) {
 	}
 }
 func TestProviderModelsLateRefreshCannotResurrectAccount(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	a := saveTestConnection(t, s)
 	started, release := make(chan struct{}), make(chan struct{})
@@ -106,6 +108,7 @@ func TestProviderModelsLateRefreshCannotResurrectAccount(t *testing.T) {
 	}
 }
 func TestProviderModelsMalformedAndForeignEvidenceRefused(t *testing.T) {
+	t.Parallel()
 	for _, kind := range []string{"duplicate", "wrong-object", "retired", "foreign-owner", "redirect", "secret"} {
 		t.Run(kind, func(t *testing.T) {
 			s := fixtureStore(t)
@@ -144,6 +147,7 @@ func TestProviderModelsMalformedAndForeignEvidenceRefused(t *testing.T) {
 	}
 }
 func TestProviderModelsLatestOnlyAndLegacyInspection(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	a := saveTestConnection(t, s)
 	v := agentApply(t, s, AgentCommand{Action: "session-create", ProfileID: "trading-analyst", Name: "Latest"})
@@ -209,6 +213,7 @@ func TestProviderModelsSchema23ReaderAndPausedMigration(t *testing.T) {
 }
 
 func TestProviderModelsReasoningStreamAndEveryCurrentModel(t *testing.T) {
+	t.Parallel()
 	for _, model := range currentModels.Models {
 		t.Run(model.ID, func(t *testing.T) {
 			s := fixtureStore(t)
@@ -246,6 +251,7 @@ func TestProviderModelsReasoningStreamAndEveryCurrentModel(t *testing.T) {
 	}
 }
 func TestProviderModelsNewGenerationRemovesOldSelection(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	a := saveTestConnection(t, s)
 	rt := httpsFixture(t, func(w http.ResponseWriter, r *http.Request) {
@@ -291,6 +297,7 @@ func TestProviderModelsFrozenDraftSurvivesRegistryRemoval(t *testing.T) {
 }
 
 func TestProviderModelsSupersessionSurvivesFailedRefreshAndUnlock(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	a := saveTestConnection(t, s)
 	p := openAIModelPolicy()

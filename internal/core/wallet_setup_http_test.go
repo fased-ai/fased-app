@@ -8,6 +8,7 @@ import (
 )
 
 func TestWalletSetupHTTPAuthorizationAndSecretRefusal(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	token := claimFixture(t, s)
 	s.rpcAdmission = true

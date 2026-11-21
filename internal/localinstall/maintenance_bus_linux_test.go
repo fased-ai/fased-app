@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -78,16 +79,26 @@ func (m *maintenanceTestManager) StartUnit(unit, mode string) (dbus.ObjectPath, 
 }
 
 type maintenanceTestProperties struct {
+	mu    sync.Mutex
 	m     Manifest
 	id    string
 	drops []string
+}
+
+func (p *maintenanceTestProperties) setDrops(drops []string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.drops = append([]string(nil), drops...)
 }
 
 func (p *maintenanceTestProperties) GetAll(iface string) (map[string]dbus.Variant, *dbus.Error) {
 	if iface == "org.freedesktop.systemd1.Service" {
 		return map[string]dbus.Variant{"Result": dbus.MakeVariant("success"), "ExecStart": dbus.MakeVariant([]maintenanceExec{{Path: maintenanceExecutable(p.m), Args: []string{maintenanceExecutable(p.m), "maintenance-delegate", "--operation", p.id, "--prefix", p.m.Root, "--data-dir", p.m.Data}}})}, nil
 	}
-	return map[string]dbus.Variant{"LoadState": dbus.MakeVariant("loaded"), "FragmentPath": dbus.MakeVariant(maintenanceTemplatePath(p.m)), "DropInPaths": dbus.MakeVariant(p.drops), "ActiveState": dbus.MakeVariant("inactive"), "SubState": dbus.MakeVariant("dead"), "UnitFileState": dbus.MakeVariant("disabled")}, nil
+	p.mu.Lock()
+	drops := append([]string(nil), p.drops...)
+	p.mu.Unlock()
+	return map[string]dbus.Variant{"LoadState": dbus.MakeVariant("loaded"), "FragmentPath": dbus.MakeVariant(maintenanceTemplatePath(p.m)), "DropInPaths": dbus.MakeVariant(drops), "ActiveState": dbus.MakeVariant("inactive"), "SubState": dbus.MakeVariant("dead"), "UnitFileState": dbus.MakeVariant("disabled")}, nil
 }
 func TestSandboxMaintenanceBusReadsExactCommandAndStartsOnlyOwnUnit(t *testing.T) {
 	if _, e := exec.LookPath("dbus-daemon"); e != nil {
@@ -151,16 +162,16 @@ func TestSandboxMaintenanceBusReadsExactCommandAndStartsOnlyOwnUnit(t *testing.T
 		t.Fatal(e)
 	}
 	if image.FedoraUserDropIn != nil {
-		properties.drops = []string{fedoraUserDropIn}
+		properties.setDrops([]string{fedoraUserDropIn})
 		b, e = maintenanceBusCall(ctx, client, a.old, unit, "show")
 		if e != nil || !strings.Contains(string(b), "DropInPaths="+fedoraUserDropIn+"\n") {
 			t.Fatal("verified Fedora drop-in was not preserved through D-Bus", e, string(b))
 		}
-		properties.drops = append(properties.drops, "/home/owner/override.conf")
+		properties.setDrops([]string{fedoraUserDropIn, "/home/owner/override.conf"})
 		if _, e = maintenanceBusCall(ctx, client, a.old, unit, "show"); e == nil {
 			t.Fatal("foreign D-Bus drop-in was accepted")
 		}
-		properties.drops = []string{}
+		properties.setDrops(nil)
 	}
 	if _, e = maintenanceBusCall(ctx, client, a.old, "ssh.service", "start"); e == nil {
 		t.Fatal("foreign service accepted")

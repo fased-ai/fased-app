@@ -206,15 +206,10 @@ func TestRemoveRetriesReceiptDirectorySync(t *testing.T) {
 func (f roundTrip) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
 func fixture(t *testing.T) string {
 	t.Helper()
-	root, _ := filepath.Abs("../../.evidence/access-fixtures")
-	if e := os.MkdirAll(root, 0700); e != nil {
+	p := t.TempDir()
+	if e := os.Chmod(p, 0700); e != nil {
 		t.Fatal(e)
 	}
-	p, e := os.MkdirTemp(root, "f-")
-	if e != nil {
-		t.Fatal(e)
-	}
-	t.Cleanup(func() { os.RemoveAll(p) })
 	return p
 }
 func TestPlansAndOwnerBoundaries(t *testing.T) {

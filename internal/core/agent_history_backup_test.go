@@ -9,6 +9,7 @@ import (
 )
 
 func TestAgentHistoryIncludedInProtectedMetadataBackup(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	v, id := completedHistoryTask(t, s, "Backed up result")
 	agentApply(t, s, AgentCommand{Action: "task-archive", ProfileID: v.ProfileID, ID: id})

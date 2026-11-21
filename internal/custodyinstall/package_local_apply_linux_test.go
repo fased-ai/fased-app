@@ -9,6 +9,7 @@ import (
 )
 
 func TestLegacyLocalApplyAdmitsOnlyOneOperation(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name                              string
 		recover, recorded, complete, held bool
@@ -36,6 +37,7 @@ func TestLegacyLocalApplyAdmitsOnlyOneOperation(t *testing.T) {
 }
 
 func TestLegacyLocalApplyReconcilesOnlyVerifiedStaleUnits(t *testing.T) {
+	t.Parallel()
 	m := Manifest{Layout: PackageLayout, Owner: 1000, Location: "local", ID: strings.Repeat("a", 32), Root: "/var/lib/example", App: Identity{UID: 1201, GID: 1201}}
 	image := m.Root + "/fased-app"
 	for _, tc := range []struct {

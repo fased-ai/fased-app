@@ -18,6 +18,7 @@ import (
 // invoking sudo. This tests only publication; it does not approve a complete
 // update policy or prove an installed migration.
 func TestPredecessorPublicationAcceptsOnlyExactPrestagedSigner(t *testing.T) {
+	t.Parallel()
 	id := strings.Repeat("a", 32)
 	intent := strings.Repeat("b", 32)
 	data := []byte("disposable approved signer")
@@ -49,6 +50,7 @@ func TestPredecessorPublicationAcceptsOnlyExactPrestagedSigner(t *testing.T) {
 }
 
 func TestPredecessorPrestagedSignerReplacementAndRollback(t *testing.T) {
+	t.Parallel()
 	tx, dir := modelTransaction(t)
 	ops := modelOps(t, tx, dir)
 	target := tx.Base.Root + "/fased-signer"
@@ -84,6 +86,7 @@ func TestPredecessorPrestagedSignerReplacementAndRollback(t *testing.T) {
 }
 
 func TestPredecessorPrestagedReceiptRequiresLiveSignerHold(t *testing.T) {
+	t.Parallel()
 	for _, live := range []bool{false, true} {
 		t.Run(fmt.Sprintf("live=%t", live), func(t *testing.T) {
 			tx, dir := modelTransaction(t)

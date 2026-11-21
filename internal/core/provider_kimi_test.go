@@ -10,6 +10,7 @@ import (
 )
 
 func TestKimiInternationalPolicyAndRegionIsolation(t *testing.T) {
+	t.Parallel()
 	p, ok := providerDefinitionFor("moonshot-intl")
 	if !ok || p.Host != "api.moonshot.ai" {
 		t.Fatal("missing explicit international API identity")
@@ -49,6 +50,7 @@ func TestKimiInternationalPolicyAndRegionIsolation(t *testing.T) {
 }
 
 func TestKimiInternationalCatalogPreservesMainlandAccount(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	old := addNativeAccount(t, s, "moonshot", false)
 	before, _ := s.readAIVault(old.Ref)
@@ -79,6 +81,7 @@ func TestKimiInternationalCatalogPreservesMainlandAccount(t *testing.T) {
 }
 
 func TestKimiCacheUsageAndLatestGeneration(t *testing.T) {
+	t.Parallel()
 	policy := openAIModelPolicy("moonshot-intl/kimi-k3.1-pro")
 	q := AgentAIRequest{Model: policy.Model, Policy: &policy, Limits: AILimits{MaxInputTokens: 24000, MaxOutputTokens: 1024}}
 	for _, mode := range []string{"mixed", "missing-write", "negative-write", "overlap", "wrong-model"} {
@@ -112,6 +115,7 @@ func TestKimiCacheUsageAndLatestGeneration(t *testing.T) {
 }
 
 func TestKimiMalformedUsageKeepsHold(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	a := addNativeAccount(t, s, "moonshot-intl", true)
 	v, p := nativePermission(t, s, a, "moonshot-intl/kimi-k3.1-pro")

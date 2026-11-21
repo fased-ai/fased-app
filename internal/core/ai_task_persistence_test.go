@@ -64,6 +64,7 @@ func restartDurable(t *testing.T, s *Store, key *testTaskSecrets) *Store {
 }
 
 func TestDurableTaskAccessRestartPreservesLimits(t *testing.T) {
+	t.Parallel()
 	s, c, v, key := durableTask(t)
 	original, e := s.AIConnection(c.Ref)
 	if e != nil {
@@ -103,6 +104,7 @@ func TestDurableTaskAccessRestartPreservesLimits(t *testing.T) {
 }
 
 func TestDurableTaskAccessRecoveryRefusesUnsafeState(t *testing.T) {
+	t.Parallel()
 	for _, fault := range []string{"locked-os", "different-os-key", "tamper-budget", "revoked", "provider-lock", "changed-credential", "expired", "uncertain", "dispatch-reservation", "grant-change"} {
 		t.Run(fault, func(t *testing.T) {
 			s, c, v, key := durableTask(t)
@@ -199,6 +201,7 @@ func TestDurableTaskAccessRecoveryRefusesUnsafeState(t *testing.T) {
 }
 
 func TestDurableTaskAccessExpiryWithoutMutation(t *testing.T) {
+	t.Parallel()
 	s, c, _, _ := durableTask(t)
 	later := s.now().Add(2 * time.Hour)
 	s.now = func() time.Time { return later }
@@ -209,6 +212,7 @@ func TestDurableTaskAccessExpiryWithoutMutation(t *testing.T) {
 }
 
 func TestDurableRestoreRetiresTerminalTime(t *testing.T) {
+	t.Parallel()
 	for _, condition := range []string{"expiry", "rollback"} {
 		t.Run(condition, func(t *testing.T) {
 			s, c, _, key := durableTask(t)
@@ -241,6 +245,7 @@ func TestDurableRestoreRetiresTerminalTime(t *testing.T) {
 }
 
 func TestDurableRestoreRefusesRetirementWriteFailure(t *testing.T) {
+	t.Parallel()
 	s, c, _, _ := durableTask(t)
 	col, err := s.readAIVaultCollection()
 	if err != nil {

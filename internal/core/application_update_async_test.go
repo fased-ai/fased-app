@@ -29,6 +29,7 @@ func (d *delayedUpdateChecker) releaseValue() ApplicationRelease {
 	return d.updateControllerFixture.release
 }
 func TestApplicationUpdateAsyncCheckOutlivesTickAndCloses(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	d := &delayedUpdateChecker{updateControllerFixture: fixtureUpdateController(), entered: make(chan context.Context, 1), release: make(chan struct{})}
 	if e := s.BindApplicationUpdateController(d, true); e != nil {
@@ -78,6 +79,7 @@ func TestApplicationUpdateAsyncCheckOutlivesTickAndCloses(t *testing.T) {
 	}
 }
 func TestApplicationUpdateAsyncCloseCancelsAcquisition(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	d := &delayedUpdateChecker{updateControllerFixture: fixtureUpdateController(), entered: make(chan context.Context, 1), release: make(chan struct{})}
 	if e := s.BindApplicationUpdateController(d, true); e != nil {

@@ -11,6 +11,7 @@ import (
 )
 
 func TestNativeOwnerPolicyGrantsOnlyFixedAppClientAndStarts(t *testing.T) {
+	t.Parallel()
 	m := Manifest{Owner: 1000, Root: Root(1000), App: Identity{UID: 991, GID: 991}}
 	p := string(nativePolicy(m))
 	for _, bad := range []string{"NOPASSWD: ALL", "fased-signer", "*", "bash", "--password", "--request-stdin"} {

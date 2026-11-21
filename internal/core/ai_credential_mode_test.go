@@ -24,6 +24,7 @@ func admitDisposableAPI(t *testing.T, s *Store, ref string) AIConnectionView {
 	return v
 }
 func TestAPICredentialVaultLifecycleAndClosedRestart(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	if _, e := s.ChangeAIConnection(t.Context(), AIConnectionCommand{Action: "save", CredentialMode: "openai", Key: disposableAPIInput, Passphrase: testVaultPassword}); e == nil {
 		t.Fatal("ordinary runtime admitted API mode")
@@ -104,6 +105,7 @@ func TestAPICredentialVaultLifecycleAndClosedRestart(t *testing.T) {
 	}
 }
 func TestAPICredentialExplicitReplacementPreservesLegacy(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	legacy := saveTestConnection(t, s)
 	before, _ := os.ReadFile(s.aiVaultPath())
@@ -126,6 +128,7 @@ func TestAPICredentialExplicitReplacementPreservesLegacy(t *testing.T) {
 	}
 }
 func TestAPICredentialControlledHTTPSChat(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	connection := admitDisposableAPI(t, s, "")
 	v := agentApply(t, s, AgentCommand{Action: "session-create", ProfileID: "trading-analyst", Name: "API-mode chat"})

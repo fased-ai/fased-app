@@ -25,6 +25,7 @@ type onchainReadHook struct {
 }
 
 func TestRemoteCustodyOnchainCancellation(t *testing.T) {
+	t.Parallel()
 	harness := newSwapHarness(t)
 	s := harness.store
 	id := tailnet.Identity{UserID: 1, NodeID: "owner-device", Login: "owner"}
@@ -93,6 +94,7 @@ func (r *onchainReadHook) Read(p []byte) (int, error) {
 }
 
 func TestRemoteCustodyOnchainScope(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	id := tailnet.Identity{UserID: 1, NodeID: "owner-device", Login: "owner"}
 	code, err := s.IssueRemoteClaim(t.Context(), id)
@@ -226,6 +228,7 @@ func TestRemoteCustodyOnchainScope(t *testing.T) {
 }
 
 func TestRemoteCustodyOnchainClientRestart(t *testing.T) {
+	t.Parallel()
 	dir := filepath.Join(t.TempDir(), "state")
 	var instance string
 	for boot := 0; boot < 2; boot++ {

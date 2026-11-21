@@ -13,6 +13,7 @@ import (
 )
 
 func TestAgentMemoryRestoreReadOnlyHTTP(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	token := claimFixture(t, s)
 	v := agentApply(t, s, AgentCommand{Action: "memory-put", ProfileID: "trading-analyst", Text: "Retained expired preference", Source: "Owner original", ExpiresAt: 1})
@@ -44,6 +45,7 @@ func TestAgentMemoryRestoreReadOnlyHTTP(t *testing.T) {
 }
 
 func TestAgentMemoryRestoreHTTPSelectorsAndAuth(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	token := claimFixture(t, s)
 	v := agentApply(t, s, AgentCommand{Action: "memory-put", ProfileID: "trading-analyst", Text: "Private original note", Source: "Owner"})
@@ -86,6 +88,7 @@ func TestAgentMemoryRestoreHTTPSelectorsAndAuth(t *testing.T) {
 }
 
 func TestAgentMemoryRestoreHistoryExpiryEvidenceAndRestart(t *testing.T) {
+	t.Parallel()
 	s, v, id := memoryRecallFixture(t, "message")
 	note := v.Memories[0]
 	v = agentApply(t, s, AgentCommand{Action: "memory-put", ProfileID: v.ProfileID, ID: id, Text: "Expired retained preference", Source: note.Source, ExpiresAt: 1})
@@ -138,6 +141,7 @@ func TestAgentMemoryRestoreHistoryExpiryEvidenceAndRestart(t *testing.T) {
 }
 
 func TestAgentMemoryRestoreStaleAndForeignSave(t *testing.T) {
+	t.Parallel()
 	for _, change := range []string{"correct", "delete", "foreign-command"} {
 		t.Run(change, func(t *testing.T) {
 			s, v, id := memoryRecallFixture(t, "message")
@@ -169,6 +173,7 @@ func TestAgentMemoryRestoreStaleAndForeignSave(t *testing.T) {
 }
 
 func TestAgentMemoryRestoreRefusesAmbiguityCapacityAndInvalidHistory(t *testing.T) {
+	t.Parallel()
 	for _, change := range []string{"empty", "overflow", "duplicate-memory", "duplicate-profile", "invalid-text", "negative-expiry"} {
 		t.Run(change, func(t *testing.T) {
 			s, v, id := memoryRecallFixture(t, "message")
@@ -208,6 +213,7 @@ func TestAgentMemoryRestoreRefusesAmbiguityCapacityAndInvalidHistory(t *testing.
 }
 
 func TestAgentMemoryRecallHTTPReadOnly(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	token := claimFixture(t, s)
 	v := agentApply(t, s, AgentCommand{Action: "memory-put", ProfileID: "trading-analyst", Text: "Prefer short updates", Source: "Owner"})
@@ -254,6 +260,7 @@ func memoryRecallFixture(t *testing.T, kind string) (*Store, AgentView, string) 
 }
 
 func TestAgentMemoryRecallSearchCorrectionExpiryAndReadOnly(t *testing.T) {
+	t.Parallel()
 	s, v, id := memoryRecallFixture(t, "message")
 	note := v.Memories[0]
 	v = agentApply(t, s, AgentCommand{Action: "memory-put", ProfileID: v.ProfileID, ID: id, Text: "Corrected concise preference", Source: note.Source})
@@ -310,6 +317,7 @@ func TestAgentMemoryRecallSearchCorrectionExpiryAndReadOnly(t *testing.T) {
 }
 
 func TestAgentMemoryRecallSourceStatusesAndPrivacy(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name, kind, status string
 		edit               func(*agentDocument)
@@ -399,6 +407,7 @@ func TestAgentMemoryRecallSourceStatusesAndPrivacy(t *testing.T) {
 }
 
 func TestAgentMemoryRecallRestartProviderAndDeletion(t *testing.T) {
+	t.Parallel()
 	s, v, id := memoryRecallFixture(t, "answer")
 	original, err := s.AgentMemories(t.Context(), v.ProfileID, "", id)
 	if err != nil {
@@ -429,6 +438,7 @@ func TestAgentMemoryRecallRestartProviderAndDeletion(t *testing.T) {
 }
 
 func TestAgentMemoryRecallHTTPStrictScopeAndInput(t *testing.T) {
+	t.Parallel()
 	s, v, id := memoryRecallFixture(t, "message")
 	token := claimFixture(t, s)
 	h, err := NewHTTPHandler(s, "http://127.0.0.1:7331", "", nil)

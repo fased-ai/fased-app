@@ -27,6 +27,7 @@ func addLocalFixtureAccount(t *testing.T, s *Store) AIConnectionView {
 }
 
 func TestLocalProviderConnectionAndAssignment(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	account := addLocalFixtureAccount(t, s)
 	if account.Provider != "local" || account.Ref == "" || account.Locked || account.AuthMethod != "local" {
@@ -56,6 +57,7 @@ func TestLocalProviderConnectionAndAssignment(t *testing.T) {
 }
 
 func TestLocalProviderChatTaskAndRestart(t *testing.T) {
+	t.Parallel()
 	for server, model := range map[string]string{"ollama": "gemma4:e2b", "lmstudio": "google/gemma-4-e2b", "vllm": "google/gemma-4-E2B-it"} {
 		t.Run(server, func(t *testing.T) { localProviderJoinedJourney(t, server, model) })
 	}
@@ -161,6 +163,7 @@ func localProviderJoinedJourney(t *testing.T, server, model string) {
 }
 
 func TestLocalProviderReplacementRequiresExplicitBinding(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	account := addLocalFixtureAccount(t, s)
 	raw, _ := json.Marshal(map[string]any{"version": 1, "endpoint": "http://127.0.0.1:11434/v1", "apiKey": "real-looking-key-must-never-enter-fixtures"})
@@ -175,6 +178,7 @@ func TestLocalProviderReplacementRequiresExplicitBinding(t *testing.T) {
 	}
 }
 func TestLocalProviderWireRequiresJSONEnvelope(t *testing.T) {
+	t.Parallel()
 	policy := localModelPolicy("gemma4:e2b")
 	q := AgentAIRequest{Model: policy.Model, Policy: &policy, Context: "synthetic note", Limits: AILimits{MaxInputTokens: 24000, MaxOutputTokens: 1024, DeadlineSeconds: 60}}
 	raw, err := aiWire(q)
@@ -194,6 +198,7 @@ func TestLocalProviderWireRequiresJSONEnvelope(t *testing.T) {
 }
 
 func TestLocalProviderOutputDiagnosticIsLocal(t *testing.T) {
+	t.Parallel()
 	p := localModelPolicy("gemma4:e2b")
 	q := AgentAIRequest{Policy: &p, Model: p.Model, CostBasis: localUsageCostBasis, InputTokens: 100, OutputTokens: 2000}
 	result := planOutputLimitFailure(q)
@@ -203,6 +208,7 @@ func TestLocalProviderOutputDiagnosticIsLocal(t *testing.T) {
 }
 
 func TestLocalProviderUnknownUsageRemainsHeld(t *testing.T) {
+	t.Parallel()
 	p := localModelPolicy("gemma4:e2b")
 	q := AgentAIRequest{Policy: &p, Model: p.Model, State: "cancelled", DispatchBoot: "fixture-boot"}
 	if !aiHasUsageHold(q) {
@@ -218,6 +224,7 @@ func TestLocalProviderUnknownUsageRemainsHeld(t *testing.T) {
 	}
 }
 func TestLocalProviderSchemaMigrationPreservesRecords(t *testing.T) {
+	t.Parallel()
 	for _, paused := range []bool{false, true} {
 		t.Run(fmt.Sprint(paused), func(t *testing.T) {
 			s := fixtureStore(t)
@@ -270,6 +277,7 @@ func TestLocalProviderSchemaMigrationPreservesRecords(t *testing.T) {
 }
 
 func TestLocalProviderSupersededModelStaysRefused(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	account := addLocalFixtureAccount(t, s)
 	rt := aiTestTransport(func(r *http.Request) (*http.Response, error) {
@@ -290,6 +298,7 @@ func TestLocalProviderSupersededModelStaysRefused(t *testing.T) {
 }
 
 func TestLocalProviderFreshAdmissionRejectsNewFamily(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	account := addLocalFixtureAccount(t, s)
 	view := agentApply(t, s, AgentCommand{Action: "profile-create", Name: "Fresh local analyst", Provider: "local", AccountRef: &account.Ref, Model: "gemma4:e2b"})
@@ -324,6 +333,7 @@ func TestLocalProviderFreshAdmissionRejectsNewFamily(t *testing.T) {
 }
 
 func TestLocalProviderCompletionDiagnosticIsLocal(t *testing.T) {
+	t.Parallel()
 	p := localModelPolicy("gemma4:e2b")
 	q := AgentAIRequest{Policy: &p, Model: p.Model, State: "running", DispatchBoot: "fixture-boot"}
 	rejectAICompletion(&q, "scope changed")
@@ -333,6 +343,7 @@ func TestLocalProviderCompletionDiagnosticIsLocal(t *testing.T) {
 }
 
 func TestLocalProviderFailurePausesAndRevokesAccess(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	account := addLocalFixtureAccount(t, s)
 	before, err := s.readAIVault(account.Ref)

@@ -9,6 +9,7 @@ import (
 )
 
 func TestTaskAnalysisProtectedBackupKeepsPoliciesResultsAndUsageHolds(t *testing.T) {
+	t.Parallel()
 	s, v := analysisWatchFixture(t, "optional")
 	v = fetchAnalysisWatch(t, s, v, watchBody(s.now().Unix()), true)
 	rewriteReminderFixture(t, s, func(d *agentDocument) {

@@ -79,6 +79,7 @@ func mustRefuseModel(t *testing.T, e error) {
 }
 
 func TestInstalledAdmissionCompatibilityModel(t *testing.T) {
+	t.Parallel()
 	old := func(n int) admissionModelReader { return admissionModelReader{Lifecycle: n, Readable: true} }
 	future := admissionModelReader{Proposed: true, Capability: installedAdmissionModelCapability, Readable: true}
 	readers := func(o, s admissionModelReader) admissionModelReaders {
@@ -139,6 +140,7 @@ func TestInstalledAdmissionCompatibilityModel(t *testing.T) {
 	}
 }
 func TestInstalledAdmissionAuthorityModel(t *testing.T) {
+	t.Parallel()
 	for _, field := range []string{"fixture", "seed-auth", "instance", "config", "owner-hash", "signer-hash", "seed-pin", "policy-pin", "transport-pin"} {
 		t.Run("IA-02-"+field, func(t *testing.T) {
 			f := newInstalledModelFixture(t)
@@ -218,6 +220,7 @@ func TestInstalledAdmissionAuthorityModel(t *testing.T) {
 	})
 }
 func TestInstalledAdmissionReviewModel(t *testing.T) {
+	t.Parallel()
 	t.Run("IA-05-denied", func(t *testing.T) {
 		f := newInstalledModelFixture(t)
 		f.h.reviewAllowed.Store(false)
@@ -340,6 +343,7 @@ func TestInstalledAdmissionReviewModel(t *testing.T) {
 	})
 }
 func TestInstalledAdmissionRecoveryModel(t *testing.T) {
+	t.Parallel()
 	t.Run("IA-09-model-record-exchange-binding", func(t *testing.T) {
 		f := newInstalledModelFixture(t)
 		a := f.h.actors["owner"]
@@ -492,6 +496,7 @@ func modelBridgeFixture(t *testing.T) admissionModelBridge {
 	return b
 }
 func TestInstalledAdmissionBridgeModel(t *testing.T) {
+	t.Parallel()
 	for _, field := range []string{"protocol", "financial-format", "topology", "unreadable"} {
 		t.Run("IA-11-contract-"+field, func(t *testing.T) {
 			b := modelBridgeFixture(t)
@@ -620,6 +625,7 @@ func TestInstalledAdmissionBridgeModel(t *testing.T) {
 	}
 }
 func TestInstalledAdmissionNoExecutionModel(t *testing.T) {
+	t.Parallel()
 	t.Run("IA-15-namespace-cannot-be-adopted", func(t *testing.T) {
 		f := newInstalledModelFixture(t)
 		r := f.checked(t)

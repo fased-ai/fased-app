@@ -152,6 +152,7 @@ func TestVenueCredentialHTTPSJourneyIndependentReceipt(t *testing.T) {
 	saveSwapEvidence(t, "credential-https-confirmed", v)
 }
 func TestVenueCredentialPersistencePurposeAndRevocation(t *testing.T) {
+	t.Parallel()
 	h, tls, c := setupCredentialSwapHarness(t, fixtureStore(t), true)
 	r, _ := h.store.accountsRecord(t.Context())
 	a, _ := swapAccount(r, c.AccountID)
@@ -225,6 +226,7 @@ func TestVenueCredentialPersistencePurposeAndRevocation(t *testing.T) {
 	}
 }
 func TestVenueCredentialRefusesChangedCiphertextAndQueuedLease(t *testing.T) {
+	t.Parallel()
 	for _, change := range []string{"ciphertext", "rpc-rotation", "signout", "expiry", "network"} {
 		t.Run(change, func(t *testing.T) {
 			h, _, c := setupCredentialSwapHarness(t, fixtureStore(t), true)
@@ -323,6 +325,7 @@ func TestVenueCredentialUnknownRestartRetainsOriginal(t *testing.T) {
 }
 
 func TestVenueCredentialRetireAfterRPCPasswordChange(t *testing.T) {
+	t.Parallel()
 	h, tls, c := setupCredentialSwapHarness(t, fixtureStore(t), true)
 	rpc, _ := h.store.readRPCVault(c.AccountID)
 	remove := RPCCredentialCommand{AccountID: c.AccountID, Revision: c.Revision, Ref: rpc.Ref, Action: "remove", Passphrase: venuePassword}
@@ -366,6 +369,7 @@ func TestVenueCredentialRetireAfterRPCPasswordChange(t *testing.T) {
 }
 
 func TestVenueCredentialSchema32PreservesRecordsAndRefusesUnprotectedPolicy(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	var before string
 	var revision int64
@@ -405,6 +409,7 @@ func TestVenueCredentialSchema32PreservesRecordsAndRefusesUnprotectedPolicy(t *t
 }
 
 func TestVenueCredentialInFlightUnlockCannotOutliveRevocation(t *testing.T) {
+	t.Parallel()
 	for _, action := range []string{"logout", "close"} {
 		t.Run(action, func(t *testing.T) {
 			h, _, c := setupCredentialSwapHarness(t, fixtureStore(t), true)
@@ -449,6 +454,7 @@ func TestVenueCredentialInFlightUnlockCannotOutliveRevocation(t *testing.T) {
 }
 
 func TestVenueCredentialHTTPUsesExistingOwnerAndCSRFBoundary(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	token := claimFixture(t, s)
 	_, _, c := setupCredentialSwapHarness(t, s, true)
@@ -491,6 +497,7 @@ func (b *venueSlowBody) Read(p []byte) (int, error) {
 }
 
 func TestVenueCredentialDelayedHTTPBodyCannotCrossLogout(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	token := claimFixture(t, s)
 	_, _, c := setupCredentialSwapHarness(t, s, true)
@@ -539,6 +546,7 @@ func TestVenueCredentialDelayedHTTPBodyCannotCrossLogout(t *testing.T) {
 }
 
 func TestVenueCredentialAdmissionDuringLogoutIsFinallyRevoked(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	token := claimFixture(t, s)
 	_, _, c := setupCredentialSwapHarness(t, s, true)

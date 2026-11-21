@@ -11,6 +11,7 @@ import (
 )
 
 func TestPublicIdentityEncodingAndRefusal(t *testing.T) {
+	t.Parallel()
 	ref := AccountRef{Version: 1, SignerID: strings.Repeat("1", 32), WalletID: strings.Repeat("2", 32), Epoch: strings.Repeat("3", 32), Network: FixtureNetwork}
 	for _, tc := range []struct{ hex, address string }{
 		{strings.Repeat("0", 64), strings.Repeat("1", 32)},
@@ -37,6 +38,7 @@ func TestPublicIdentityEncodingAndRefusal(t *testing.T) {
 }
 
 func TestPublicIdentitySurvivesRecoveryWithoutAuthority(t *testing.T) {
+	t.Parallel()
 	dir := fixtureDir(t)
 	v := openFixture(t, dir)
 	if e := v.Create(fixturePassword); e != nil {
@@ -72,6 +74,7 @@ func TestPublicIdentitySurvivesRecoveryWithoutAuthority(t *testing.T) {
 }
 
 func TestPublicIdentityDoesNotChangeSignerWire(t *testing.T) {
+	t.Parallel()
 	ref := AccountRef{Version: 1, SignerID: strings.Repeat("1", 32), WalletID: strings.Repeat("2", 32), Epoch: strings.Repeat("3", 32), Network: FixtureNetwork, PublicKey: strings.Repeat("0", 64)}
 	status := Status{FixtureOnly: true, Locked: true, Account: &ref}
 	wire, e := json.Marshal(Response{Status: status})

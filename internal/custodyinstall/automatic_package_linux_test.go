@@ -15,6 +15,7 @@ import (
 )
 
 func TestAutomaticPackageAdmissionAndRecovery(t *testing.T) {
+	t.Parallel()
 	instance, op := strings.Repeat("a", 32), strings.Repeat("b", 32)
 	base := Manifest{Layout: PackageLayout, Owner: 1400, ID: instance, Location: "local", CoreHash: strings.Repeat("c", 64)}
 	target := update.Target{OS: "linux", Arch: runtime.GOARCH}

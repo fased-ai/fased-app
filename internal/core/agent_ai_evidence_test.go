@@ -27,6 +27,7 @@ func evidenceAICommand(t *testing.T, session string, evidence AgentEvidenceView)
 }
 
 func TestAgentAIEvidenceDisclosure(t *testing.T) {
+	t.Parallel()
 	for _, kind := range []string{"memory", "headline", "reminder-run"} {
 		for _, mode := range []string{"legacy", "all", "none", "selected"} {
 			t.Run(kind+"/"+mode, func(t *testing.T) {
@@ -107,6 +108,7 @@ func evidenceReviewFixture(t *testing.T, s *Store, expires int64) (AgentView, Ag
 	return v, note, evidenceAICommand(t, session, e)
 }
 func TestAgentAIEvidenceRefusals(t *testing.T) {
+	t.Parallel()
 	for _, name := range []string{"wrong-hash", "uppercase-hash", "missing-hash", "missing-source", "foreign-source", "ambiguous-source", "changed-source", "expired", "invalid-provenance", "foreign-conversation", "ambiguous-conversation", "unknown-kind", "extra-item", "missing-item", "other-action", "scheduled", "slots"} {
 		t.Run(name, func(t *testing.T) {
 			s := fixtureStore(t)
@@ -153,6 +155,7 @@ func TestAgentAIEvidenceRefusals(t *testing.T) {
 	}
 }
 func TestAgentAIEvidenceBounds(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	v, note, c := evidenceReviewFixture(t, s, 0)
 	// A complete valid inspected record may still exceed the smaller AI context.
@@ -201,6 +204,7 @@ func TestAgentAIEvidenceBounds(t *testing.T) {
 	selectionRefused(t, s, c, false)
 }
 func TestAgentAIEvidenceConsentDispatchAndCompletion(t *testing.T) {
+	t.Parallel()
 	for _, stage := range []string{"ordinary", "consent", "dispatch", "completion", "unknown", "inflight"} {
 		t.Run(stage, func(t *testing.T) {
 			s := fixtureStore(t)
@@ -268,6 +272,7 @@ func TestAgentAIEvidenceConsentDispatchAndCompletion(t *testing.T) {
 	}
 }
 func TestAgentAIEvidenceAdmissionBoundaries(t *testing.T) {
+	t.Parallel()
 	for _, boundary := range []string{"access", "count", "create", "inflight"} {
 		t.Run(boundary, func(t *testing.T) {
 			s, connection := admissionStore(t)
@@ -310,6 +315,7 @@ func TestAgentAIEvidenceAdmissionBoundaries(t *testing.T) {
 	}
 }
 func TestAgentAIEvidenceRestartProviderDraftAndHolds(t *testing.T) {
+	t.Parallel()
 	for _, state := range []string{"prepared", "unknown"} {
 		t.Run(state, func(t *testing.T) {
 			s := fixtureStore(t)
@@ -372,6 +378,7 @@ func TestAgentAIEvidenceRestartProviderDraftAndHolds(t *testing.T) {
 	}
 }
 func TestAgentAIEvidenceFrozenGrammar(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	v, _, c := evidenceReviewFixture(t, s, 0)
 	v = agentApply(t, s, c)
@@ -458,6 +465,7 @@ func preEvidenceContextReader(d agentDocument, q AgentAIRequest, now int64) (str
 	return addNewsContext(base, f)
 }
 func TestAgentAIEvidenceOlderContextAndInterruptedHold(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	v, _, c := evidenceReviewFixture(t, s, 0)
 	v = agentApply(t, s, c)
@@ -489,6 +497,7 @@ func TestAgentAIEvidenceOlderContextAndInterruptedHold(t *testing.T) {
 }
 
 func TestAgentAIEvidenceNewsDependencyAndExpiry(t *testing.T) {
+	t.Parallel()
 	t.Run("fresh-news-remains-independent", func(t *testing.T) {
 		s, v, calls := evidenceFixture(t)
 		source := v.NewsSources[0]
@@ -540,6 +549,7 @@ func TestAgentAIEvidenceNewsDependencyAndExpiry(t *testing.T) {
 }
 
 func TestArchivedMemoryEvidenceJourney(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	v := aiStart(t, s, aiPrepare(t, s))
 	if err := s.advanceAgentAI(t.Context(), fixtureAITransport{}, true); err != nil {

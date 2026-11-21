@@ -123,6 +123,7 @@ func atomicTransactionModel(t *testing.T, tx InstallTransaction, dir string, fai
 }
 
 func TestAtomicTransactionRecoversOriginalIntentAndCompletion(t *testing.T) {
+	t.Parallel()
 	for _, boundary := range []string{"forward:fased-app", "completion:intent", "cleanup-complete:active"} {
 		t.Run(boundary, func(t *testing.T) {
 			tx, dir := modelTransaction(t)
@@ -176,6 +177,7 @@ func TestAtomicTransactionRecoversOriginalIntentAndCompletion(t *testing.T) {
 }
 
 func TestAtomicRollbackRecoversDecisionAndPreservesHistory(t *testing.T) {
+	t.Parallel()
 	tx, dir := modelTransaction(t)
 	for _, item := range []struct {
 		name string
@@ -209,6 +211,7 @@ func TestAtomicRollbackRecoversDecisionAndPreservesHistory(t *testing.T) {
 }
 
 func TestAtomicTransactionDoesNotCreateHoldOnUnknownStateOrRollback(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name     string
 		stateErr error

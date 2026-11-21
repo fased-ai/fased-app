@@ -15,6 +15,7 @@ import (
 )
 
 func TestInstallationStartGuardRequiresHoldOrExistingStoppedRecovery(t *testing.T) {
+	t.Parallel()
 	v, _, _ := configuredFixture(t, fixtureDir(t))
 	defer v.Close()
 	intent, binding := installationFixture(t, v)
@@ -75,6 +76,7 @@ func TestInstallationStartGuardRequiresHoldOrExistingStoppedRecovery(t *testing.
 }
 
 func TestInstallationGuardMarkerRequiresExactCanonicalIdentityAndPhase(t *testing.T) {
+	t.Parallel()
 	c := Config{OwnerUID: 1800, SignerID: strings.Repeat("a", 32)}
 	intent, digest := strings.Repeat("b", 32), strings.Repeat("c", 64)
 	base := InstallationGuardMarker{Version: 1, Owner: c.OwnerUID, SignerID: c.SignerID, IntentID: intent, Digest: digest, Direction: "forward"}
@@ -99,6 +101,7 @@ func TestInstallationGuardMarkerRequiresExactCanonicalIdentityAndPhase(t *testin
 }
 
 func TestCustodyBoundaryRequiresBothServicesStopped(t *testing.T) {
+	t.Parallel()
 	marker := "/var/lib/fased-app-custody-1800/update-start-blocked.json"
 	for _, activeRole := range []string{"", "app", "signer"} {
 		t.Run(activeRole, func(t *testing.T) {
@@ -143,6 +146,7 @@ func TestCustodyBoundaryRequiresBothServicesStopped(t *testing.T) {
 }
 
 func TestInstallationBoundarySelectsOnlyExactPackageInstance(t *testing.T) {
+	t.Parallel()
 	id := strings.Repeat("a", 32)
 	c := Config{Version: 3, Mode: OrdinaryCustodyMode, Profile: OwnerCustodyProfile, Provenance: OwnerKeyProvenance, Network: "devnet", SignerID: id, OwnerUID: 1800, AppUID: 1801, SignerUID: 1802}
 	for _, profile := range []string{"local", "remote"} {
@@ -181,6 +185,7 @@ func TestInstallationBoundarySelectsOnlyExactPackageInstance(t *testing.T) {
 }
 
 func TestPackageSignerGuardChecksItsOwnStoppedServices(t *testing.T) {
+	t.Parallel()
 	id := strings.Repeat("a", 32)
 	c := Config{Version: 3, Mode: OrdinaryCustodyMode, Profile: OwnerCustodyProfile, Provenance: OwnerKeyProvenance, Network: "devnet", SignerID: id, OwnerUID: 1800, AppUID: 1801, SignerUID: 1802, StateDir: "/var/lib/fased-app-package/1800/local/" + id + "/signer-state", SocketDir: "/var/lib/fased-app-package/1800/local/" + id + "/signer-ipc"}
 	b, err := installationBoundary(c)
@@ -212,6 +217,7 @@ func TestPackageSignerGuardChecksItsOwnStoppedServices(t *testing.T) {
 }
 
 func TestSignerSystemdGuardRequiresLoadedAssertionAndStoppedService(t *testing.T) {
+	t.Parallel()
 	marker := "/var/lib/fased-app-custody-1800/update-start-blocked.json"
 	assertions := `{"type":"a(sbbsi)","data":[["AssertPathExists",false,true,"` + marker + `",0]]}`
 	active := `{"type":"s","data":"inactive"}`

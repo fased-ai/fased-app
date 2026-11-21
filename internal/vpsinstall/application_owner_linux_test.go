@@ -36,6 +36,7 @@ func ownerCallFixture(t *testing.T) (*memoryHost, hostOps, Manifest, core.Applic
 }
 
 func TestApplicationOwnerCallFixedDroppedHelper(t *testing.T) {
+	t.Parallel()
 	h, o, m, command := ownerCallFixture(t)
 	before := len(h.calls)
 	var got []string
@@ -59,6 +60,7 @@ func TestApplicationOwnerCallFixedDroppedHelper(t *testing.T) {
 }
 
 func TestApplicationOwnerPrivateDeviceProofUsesExistingHelper(t *testing.T) {
+	t.Parallel()
 	_, o, m, command := ownerCallFixture(t)
 	command.Action = "private-access"
 	command.PrivateProof = &core.PrivateAccessProofRequest{Action: "begin", Token: strings.Repeat("A", 43)}
@@ -79,6 +81,7 @@ func TestApplicationOwnerPrivateDeviceProofUsesExistingHelper(t *testing.T) {
 }
 
 func TestApplicationOwnerCallRefusesBeforeElevation(t *testing.T) {
+	t.Parallel()
 	for _, name := range []string{"owner", "root", "manifest", "binary", "extra-file", "unit", "env", "action", "lease", "outcome", "oversized", "offline-lease", "offline-outcome"} {
 		t.Run(name, func(t *testing.T) {
 			h, o, m, command := ownerCallFixture(t)
@@ -130,6 +133,7 @@ func TestApplicationOwnerCallRefusesBeforeElevation(t *testing.T) {
 }
 
 func TestApplicationOwnerCallStrictResponseAndErrors(t *testing.T) {
+	t.Parallel()
 	for _, response := range []string{`{}`, `{"unexpected":true}`, `{} {}`, strings.Repeat(" ", applicationOwnerResponseLimit+1), `{"view":{"version":1,"instanceId":"fixture","operation":{"id":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}}}`} {
 		_, o, m, command := ownerCallFixture(t)
 		if _, e := applicationOwnerCall(t.Context(), m, command, o, func(context.Context, []byte, []string) ([]byte, error) { return []byte(response), nil }); e == nil {

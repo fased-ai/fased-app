@@ -68,6 +68,7 @@ func injectRevisionAgents(t *testing.T, s *Store, change func(*agentDocument)) {
 }
 
 func TestWENStrategyRevisionSourceBytesAtomicSaveAndRestart(t *testing.T) {
+	t.Parallel()
 	s, h, token, c := revisionFixture(t)
 	before := retainedRevisionState(t, s)
 	old, _, _ := readAgents(t.Context(), s.db)
@@ -121,6 +122,7 @@ func TestWENStrategyRevisionSourceBytesAtomicSaveAndRestart(t *testing.T) {
 }
 
 func TestWENStrategyRevisionInputRefusals(t *testing.T) {
+	t.Parallel()
 	for _, kind := range []string{"missing-source", "foreign-source", "system-source", "duplicate-source", "duplicate-session", "unknown-profile", "duplicate-profile", "foreign-parent", "parent-corrupt", "chat-revision", "library-revision", "invalid-document", "duplicate-document-field", "unchanged", "mandate", "automatic", "market"} {
 		t.Run(kind, func(t *testing.T) {
 			s, h, token, c := revisionFixture(t)
@@ -180,6 +182,7 @@ func TestWENStrategyRevisionInputRefusals(t *testing.T) {
 }
 
 func TestWENStrategyRevisionReviewRefusalsAndAtomicRollback(t *testing.T) {
+	t.Parallel()
 	for _, kind := range []string{"candidate", "source", "profile", "witness", "expired", "new-core", "chat-changed", "library-changed", "source-bytes", "messages-full", "versions-full", "agent-document-full", "paused"} {
 		t.Run(kind, func(t *testing.T) {
 			s, h, token, c := revisionFixture(t)
@@ -260,6 +263,7 @@ func TestWENStrategyRevisionReviewRefusalsAndAtomicRollback(t *testing.T) {
 }
 
 func TestWENStrategyRevisionHTTPAuthorityAndBounds(t *testing.T) {
+	t.Parallel()
 	s, h, token, c := revisionFixture(t)
 	raw, _ := json.Marshal(c)
 	for _, tc := range []struct {

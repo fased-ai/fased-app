@@ -11,6 +11,7 @@ import (
 )
 
 func TestDurablePauseFailurePreservesUncertainDispatch(t *testing.T) {
+	t.Parallel()
 	if runtime.GOOS != "linux" {
 		t.Skip("protected restart credentials are Linux-only")
 	}

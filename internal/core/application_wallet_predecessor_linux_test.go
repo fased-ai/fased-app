@@ -14,6 +14,7 @@ import (
 )
 
 func TestSettleArchivedWalletCompletion(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	dir := fixtureDir(t)
 	s, err := OpenStore(dir)

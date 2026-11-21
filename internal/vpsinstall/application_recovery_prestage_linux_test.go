@@ -15,6 +15,7 @@ import (
 )
 
 func TestRemoteApplicationPrestageReadmissionRetainsPartial(t *testing.T) {
+	t.Parallel()
 	f := remoteApplicationFixture(t)
 	run := f.o.run
 	partial := ""
@@ -69,6 +70,7 @@ func TestRemoteApplicationPrestageReadmissionRetainsPartial(t *testing.T) {
 }
 
 func TestRemoteApplicationPrestageSerializesRejectWithPublication(t *testing.T) {
+	t.Parallel()
 	f := remoteApplicationFixture(t)
 	lockPath := filepath.Join(t.TempDir(), "installer.lock")
 	f.o.lock = func() (io.Closer, error) { return core.LockInstance(lockPath) }
@@ -100,6 +102,7 @@ func TestRemoteApplicationPrestageSerializesRejectWithPublication(t *testing.T) 
 }
 
 func TestRemoteApplicationPrestagePublishedMismatchHeld(t *testing.T) {
+	t.Parallel()
 	f := remoteApplicationFixture(t)
 	read := f.o.read
 	f.o.read = func(path string) (hostFile, error) {

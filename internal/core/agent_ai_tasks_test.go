@@ -38,6 +38,7 @@ func taskAIRun(t *testing.T, s *Store, v AgentView) AgentView {
 	return n
 }
 func TestTaskAIConsentBudgetsAndDurableEvaluations(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	v := taskAIPlan(t, s, 2)
 	task := v.Tasks[0]
@@ -93,6 +94,7 @@ func TestTaskAIConsentBudgetsAndDurableEvaluations(t *testing.T) {
 	}
 }
 func TestTaskAIFailureAndLocalContinuity(t *testing.T) {
+	t.Parallel()
 	for _, mode := range []string{"unknown", "deadline", "cancel", "disabled", "changed"} {
 		t.Run(mode, func(t *testing.T) {
 			s := fixtureStore(t)
@@ -142,6 +144,7 @@ func TestTaskAIFailureAndLocalContinuity(t *testing.T) {
 	}
 }
 func TestTaskAIRestartAndConcurrentTickNoReplay(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	v := taskAIAuthorize(t, s, taskAIPlan(t, s, 1))
 	task := v.Tasks[0]
@@ -209,6 +212,7 @@ func TestTaskAIRestartAndConcurrentTickNoReplay(t *testing.T) {
 }
 
 func TestTaskAIReviewExpiryCapacityAndMigration(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	v := taskAIPlan(t, s, 2)
 	task := v.Tasks[0]
@@ -279,6 +283,7 @@ func TestTaskAIReviewExpiryCapacityAndMigration(t *testing.T) {
 	})
 }
 func TestTaskAIKnownFailureAndActiveStop(t *testing.T) {
+	t.Parallel()
 	for _, mode := range []string{"incomplete", "malformed", "stop", "pause", "update-pause"} {
 		t.Run(mode, func(t *testing.T) {
 			s := fixtureStore(t)
@@ -346,6 +351,7 @@ func TestTaskAIKnownFailureAndActiveStop(t *testing.T) {
 	}
 }
 func TestTaskAIFixedPaperInputsAndDefaultOffRestart(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	p := "trading-analyst"
 	v := agentApply(t, s, AgentCommand{Action: "bot-create", ProfileID: p, Name: "Fixed dependent", Quantity: 2, PriceCents: 5, BudgetCents: 20})
@@ -382,6 +388,7 @@ func TestTaskAIFixedPaperInputsAndDefaultOffRestart(t *testing.T) {
 }
 
 func TestTaskAIActualWorkerWithoutBrowser(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	v := taskAIAuthorize(t, s, taskAIPlan(t, s, 1))
 	tx, e := s.db.BeginTx(t.Context(), nil)
@@ -426,6 +433,7 @@ func TestTaskAIActualWorkerWithoutBrowser(t *testing.T) {
 }
 
 func TestTaskAIRefusesChangedWireContract(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	v := taskAIAuthorize(t, s, taskAIPlan(t, s, 1))
 	d, _, e := readAgents(t.Context(), s.db)
@@ -441,6 +449,7 @@ func TestTaskAIRefusesChangedWireContract(t *testing.T) {
 }
 
 func TestTaskAIProfileContentionDefersWithoutNewDispatch(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	v := taskAIAuthorize(t, s, taskAIPlan(t, s, 1))
 	v = taskAIAuthorize(t, s, taskAIPlan(t, s, 1))
@@ -483,6 +492,7 @@ func TestTaskAIProfileContentionDefersWithoutNewDispatch(t *testing.T) {
 }
 
 func TestAgentAIMemorySelectionScheduledRefusal(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	v := taskAIPlan(t, s, 1)
 	q := v.Tasks[0]

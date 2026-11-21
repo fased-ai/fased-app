@@ -76,6 +76,7 @@ func (d *invalidOutcomeUpdateController) Status(ctx context.Context, o Applicati
 }
 
 func TestApplicationUpdateInvalidInstalledEngineRequiresRecovery(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name, phase, engine string
 		reportFromStatus    bool
@@ -132,6 +133,7 @@ func (d *recoverableUpdateFixture) Recover(_ context.Context, o ApplicationUpdat
 }
 
 func TestApplicationUpdateExplicitRecoveryStartsOnlyOriginalOperation(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	d := &recoverableUpdateFixture{updateControllerFixture: fixtureUpdateController()}
 	if err := s.BindApplicationUpdateController(d); err != nil {
@@ -198,6 +200,7 @@ func updateModeFixture(t *testing.T, s *Store, p UpdatePolicy) {
 	}
 }
 func TestApplicationUpdateManualReviewOneControllerAndRestart(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	d := fixtureUpdateController()
 	if e := s.BindApplicationUpdateController(d); e != nil {
@@ -235,6 +238,7 @@ func TestApplicationUpdateManualReviewOneControllerAndRestart(t *testing.T) {
 	}
 }
 func TestApplicationUpdateAutomaticWindowPinPolicyAndNoReplay(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	d := fixtureUpdateController()
 	if e := s.BindApplicationUpdateController(d); e != nil {
@@ -304,6 +308,7 @@ func TestApplicationUpdateAutomaticWindowPinPolicyAndNoReplay(t *testing.T) {
 }
 
 func TestApplicationUpdateAutomaticActivationReflectsInstalledAuthority(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	updateModeFixture(t, s, UpdatePolicy{Mode: "automatic", Notify: true})
 	v, err := s.ApplicationUpdates(t.Context())
@@ -324,6 +329,7 @@ func TestApplicationUpdateAutomaticActivationReflectsInstalledAuthority(t *testi
 	}
 }
 func TestApplicationUpdateClosedOrdinaryModeAndPreservedState(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	before, e := os.ReadFile(filepath.Join(s.dir, "core.sqlite"))
 	if e != nil || len(before) == 0 {

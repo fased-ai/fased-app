@@ -10,6 +10,7 @@ import (
 // Exercise the v2 root/context branch through the same access/count/create
 // guards as v1, with only the compiled provider fixture as transport.
 func TestWENResearchLoopProviderSources(t *testing.T) {
+	t.Parallel()
 	for _, phase := range []string{"before-dispatch", "before-count", "before-create", "in-flight", "completion"} {
 		t.Run(phase, func(t *testing.T) {
 			s, _, _, c := readBatchFixture(t)

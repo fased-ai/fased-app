@@ -19,6 +19,7 @@ func researchRaw(t *testing.T) string {
 	return string(b)
 }
 func TestWENResearchPersistenceIsolationRevisionPause(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	claimFixture(t, s)
 	ctx := t.Context()
@@ -72,6 +73,7 @@ func TestWENResearchPersistenceIsolationRevisionPause(t *testing.T) {
 	}
 }
 func TestWENResearchHTTPAuthority(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	token := claimFixture(t, s)
 	h, e := NewHTTPHandler(s, "http://127.0.0.1:7331", "", nil)
@@ -90,6 +92,7 @@ func TestWENResearchHTTPAuthority(t *testing.T) {
 	}
 }
 func TestWENResearchSchema10MigrationAndNewerRefusal(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	dir := s.dir
 	dropEmptyHistoryFixture(t, s)
@@ -113,6 +116,7 @@ func TestWENResearchSchema10MigrationAndNewerRefusal(t *testing.T) {
 }
 
 func TestWENResearchHistoryImportAndRefusals(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	ctx := t.Context()
 	raw, e := os.ReadFile("../wenstrategy/testdata/history-vectors.json")

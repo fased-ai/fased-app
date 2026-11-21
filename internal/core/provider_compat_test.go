@@ -12,6 +12,7 @@ import (
 )
 
 func TestCompatibleProviderDefinitions(t *testing.T) {
+	t.Parallel()
 	for id, name := range map[string]string{"moonshot": "Moonshot / Kimi", "google": "Google", "openrouter": "OpenRouter", "qwen": "Qwen", "opencode": "OpenCode Zen"} {
 		t.Run(id, func(t *testing.T) {
 			p, ok := providerDefinitionFor(id)
@@ -23,6 +24,7 @@ func TestCompatibleProviderDefinitions(t *testing.T) {
 }
 
 func TestCompatibleAccountsUseReviewedModelsAndSharedChat(t *testing.T) {
+	t.Parallel()
 	for _, provider := range []string{"moonshot", "google", "openrouter", "qwen", "opencode"} {
 		t.Run(provider, func(t *testing.T) {
 			s := fixtureStore(t)
@@ -55,6 +57,7 @@ func TestCompatibleAccountsUseReviewedModelsAndSharedChat(t *testing.T) {
 }
 
 func TestCompatibleRoutesAreFixedAndAccountScoped(t *testing.T) {
+	t.Parallel()
 	for _, id := range []string{"moonshot", "google", "openrouter", "qwen", "opencode"} {
 		p, _ := providerDefinitionFor(id)
 		for _, path := range []string{providerModelsPath(id), providerBasePath(id) + "/chat/completions"} {
@@ -84,6 +87,7 @@ func TestCompatibleRoutesAreFixedAndAccountScoped(t *testing.T) {
 }
 
 func TestCompatibleUsageStreamAndRoutingRefuseAmbiguity(t *testing.T) {
+	t.Parallel()
 	for _, id := range []string{"google", "openrouter", "qwen", "opencode"} {
 		t.Run(id, func(t *testing.T) {
 			m := registryForProvider(id).Models[0]
@@ -151,6 +155,7 @@ func TestCompatibleUsageStreamAndRoutingRefuseAmbiguity(t *testing.T) {
 }
 
 func TestCompatibleVaultCapacityRestartAndBinding(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	original := saveTestConnection(t, s)
 	originalEnvelope, _ := s.readAIVault(original.Ref)
@@ -210,6 +215,7 @@ func TestCompatibleVaultCapacityRestartAndBinding(t *testing.T) {
 }
 
 func TestCompatibleUnknownUsageRetainsHoldAndNewerModelsDisableOldChoice(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	a := addNativeAccount(t, s, "google", false)
 	v, p := nativePermission(t, s, a, "gemini-3.8-flash")
@@ -261,6 +267,7 @@ func TestCompatibleUnknownUsageRetainsHoldAndNewerModelsDisableOldChoice(t *test
 }
 
 func TestCompatibleRouterDiscoveryPaginationIsFiniteAndComplete(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	a := addNativeAccount(t, s, "openrouter", false)
 	calls := 0

@@ -79,6 +79,7 @@ func (f *remoteUpdateFixture) apply(t *testing.T, rollback bool) (Manifest, erro
 	return replaceApplication(t.Context(), f.o, f.old, f.c, f.cb, rollback)
 }
 func TestRemoteApplicationUpdateCommitsExactRootGeneration(t *testing.T) {
+	t.Parallel()
 	f := remoteApplicationFixture(t)
 	data := hostFile{UID: f.old.AppUID, GID: f.old.AppGID, Mode: 0600, Regular: true, Data: []byte("original secret owner state")}
 	f.h.files[f.old.Data+"/original"] = data
@@ -117,6 +118,7 @@ func TestRemoteApplicationUpdateCommitsExactRootGeneration(t *testing.T) {
 	}
 }
 func TestRemoteApplicationUpdateRootInterruptionResumes(t *testing.T) {
+	t.Parallel()
 	base := remoteApplicationFixture(t)
 	initial := len(base.h.calls)
 	if _, e := base.apply(t, false); e != nil {
@@ -148,6 +150,7 @@ func TestRemoteApplicationUpdateRootInterruptionResumes(t *testing.T) {
 	}
 }
 func TestRemoteApplicationUpdateHealthRollbackAndConsumedFloor(t *testing.T) {
+	t.Parallel()
 	for _, deny := range []bool{false, true} {
 		t.Run(map[bool]string{false: "compatible", true: "held"}[deny], func(t *testing.T) {
 			f := remoteApplicationFixture(t)
@@ -187,6 +190,7 @@ func TestRemoteApplicationUpdateHealthRollbackAndConsumedFloor(t *testing.T) {
 	}
 }
 func TestRemoteApplicationUpdateRefusesForeignOrCustodyState(t *testing.T) {
+	t.Parallel()
 	for _, kind := range []string{"source", "manifest", "unit", "custody", "desktop", "callback"} {
 		t.Run(kind, func(t *testing.T) {
 			f := remoteApplicationFixture(t)
@@ -226,6 +230,7 @@ func TestRemoteApplicationUpdateRefusesForeignOrCustodyState(t *testing.T) {
 }
 
 func TestRemoteApplicationUpdateOwnerAndLeaseBoundary(t *testing.T) {
+	t.Parallel()
 	for _, kind := range []string{"actor", "lease", "enrollment"} {
 		t.Run(kind, func(t *testing.T) {
 			f := remoteApplicationFixture(t)
@@ -254,6 +259,7 @@ func TestRemoteApplicationUpdateOwnerAndLeaseBoundary(t *testing.T) {
 }
 
 func TestRemoteApplicationHeldCompletionReplaysOnlyExactCallback(t *testing.T) {
+	t.Parallel()
 	for _, rollback := range []bool{false, true} {
 		t.Run(map[bool]string{false: "healthy", true: "rolled-back"}[rollback], func(t *testing.T) {
 			f := remoteApplicationFixture(t)
@@ -303,6 +309,7 @@ func TestRemoteApplicationHeldCompletionReplaysOnlyExactCallback(t *testing.T) {
 	}
 }
 func TestRemoteApplicationRecoveryUsesOnlyRetainedTransaction(t *testing.T) {
+	t.Parallel()
 	for _, rollback := range []bool{false, true} {
 		t.Run(map[bool]string{false: "resume", true: "rollback"}[rollback], func(t *testing.T) {
 			f := remoteApplicationFixture(t)
@@ -340,6 +347,7 @@ func TestRemoteApplicationRecoveryUsesOnlyRetainedTransaction(t *testing.T) {
 }
 
 func TestRemoteAuthenticatedFirstInstallAndUpdatedRepairFloor(t *testing.T) {
+	t.Parallel()
 	h, o, opt := fixtureHost()
 	opt.ApplicationSequence = 7
 	opt.ApplicationReleaseSHA256 = strings.Repeat("1", 64)
@@ -372,6 +380,7 @@ func TestRemoteAuthenticatedFirstInstallAndUpdatedRepairFloor(t *testing.T) {
 }
 
 func TestRemoteInitialAdmissionRefusesDamagedPriorFloorBeforeOSMutation(t *testing.T) {
+	t.Parallel()
 	h, o, opt := fixtureHost()
 	h.journals["intent.json"] = encoded(intent{Version: 1, ID: strings.Repeat("a", 32), OwnerUID: 1000, OwnerGID: 1000, CoreSHA256: opt.CoreSHA256, Listen: opt.Listen, ApplicationSequence: 7})
 	if _, e := install(t.Context(), opt, o); e == nil || len(h.calls) > 0 {

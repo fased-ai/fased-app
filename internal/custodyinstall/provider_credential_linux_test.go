@@ -5,6 +5,7 @@ package custodyinstall
 import "testing"
 
 func TestProviderCredentialEncryptionIsExact(t *testing.T) {
+	t.Parallel()
 	args := []string{"/usr/bin/systemd-creds", "encrypt", "--with-key=host", "--name=fased-provider-task-key", "-", "-"}
 	if !providerCredentialEncryption(make([]byte, 32), args) {
 		t.Fatal("fixed OS encryption rejected")

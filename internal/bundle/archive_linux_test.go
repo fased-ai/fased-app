@@ -110,6 +110,7 @@ func archiveDestination(t *testing.T) string {
 }
 
 func TestArchiveVerifiedProducerCompatible(t *testing.T) {
+	t.Parallel()
 	for _, desktop := range []bool{false, true} {
 		t.Run(map[bool]string{false: "headless", true: "desktop"}[desktop], func(t *testing.T) {
 			entries, want, pin := archiveFixture(t, desktop)
@@ -157,6 +158,7 @@ func TestArchiveVerifiedProducerCompatible(t *testing.T) {
 }
 
 func TestArchiveRejectsInvalidIdentities(t *testing.T) {
+	t.Parallel()
 	entries, _, pin := archiveFixture(t, false)
 	input, id := archiveInput(t, archiveBytes(t, entries))
 	for _, which := range []string{"missing-pin", "wrong-pin", "uppercase-pin", "bad-pin", "wrong-hash", "short-hash", "uppercase-hash", "wrong-size", "zero-size", "oversize"} {
@@ -196,6 +198,7 @@ func TestArchiveRejectsInvalidIdentities(t *testing.T) {
 }
 
 func TestArchiveRejectsForeignOutput(t *testing.T) {
+	t.Parallel()
 	entries, _, pin := archiveFixture(t, false)
 	input, id := archiveInput(t, archiveBytes(t, entries))
 	for _, which := range []string{"file", "directory", "symlink", "parent-symlink", "public-parent"} {
@@ -251,6 +254,7 @@ func TestArchiveRejectsForeignOutput(t *testing.T) {
 }
 
 func TestArchiveRejectsMalformedMembers(t *testing.T) {
+	t.Parallel()
 	base, _, pin := archiveFixture(t, false)
 	prefix := "fased-app-linux-" + runtime.GOARCH
 	cases := map[string]func([]archiveEntry) []archiveEntry{
@@ -342,6 +346,7 @@ func assertArchiveRefused(t *testing.T, b []byte, pin string) {
 }
 
 func TestArchiveRejectsTruncationAndTrailingData(t *testing.T) {
+	t.Parallel()
 	entries, _, pin := archiveFixture(t, false)
 	good := archiveBytes(t, entries)
 	for _, cut := range []int{1, 8, len(good) / 2, len(good) - 1, len(good) - 8} {
@@ -374,6 +379,7 @@ func TestArchiveRejectsTruncationAndTrailingData(t *testing.T) {
 }
 
 func TestArchiveRejectsDeclaredSizeBeforeReadingPayload(t *testing.T) {
+	t.Parallel()
 	_, _, pin := archiveFixture(t, false)
 	prefix := "fased-app-linux-" + runtime.GOARCH + "/"
 	for _, test := range []struct {
@@ -413,6 +419,7 @@ func TestArchiveRejectsDeclaredSizeBeforeReadingPayload(t *testing.T) {
 }
 
 func TestArchiveCorruptionCleansAndCanRetry(t *testing.T) {
+	t.Parallel()
 	entries, want, pin := archiveFixture(t, false)
 	good := archiveBytes(t, entries)
 	for i := range entries {
@@ -436,6 +443,7 @@ func TestArchiveCorruptionCleansAndCanRetry(t *testing.T) {
 }
 
 func TestArchiveRejectsUninventoriedLegacyGuide(t *testing.T) {
+	t.Parallel()
 	dir, m := bundleFixture(t)
 	manifestBytes := writeBundleManifest(t, dir, m)
 	pin := sha256.Sum256(manifestBytes)
@@ -463,6 +471,7 @@ func (archiveZeros) Read(b []byte) (int, error) {
 }
 
 func TestArchiveRejectsExpandedTotal(t *testing.T) {
+	t.Parallel()
 	// A small compressed fixture would expand to two allowed 128 MiB files,
 	// then one byte beyond the aggregate bound. No large in-memory fixture is
 	// retained, and the failed extraction must remove all temporary payloads.

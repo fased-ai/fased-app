@@ -60,6 +60,7 @@ func TestBootstrapAuthorizationDoesNotDependOnSudoDefaults(t *testing.T) {
 }
 
 func TestTrustedUtilityRefusesOwnerControlledExecutable(t *testing.T) {
+	t.Parallel()
 	path := filepath.Join(t.TempDir(), "foreign")
 	if err := os.WriteFile(path, []byte("foreign"), 0700); err != nil {
 		t.Fatal(err)
@@ -70,6 +71,7 @@ func TestTrustedUtilityRefusesOwnerControlledExecutable(t *testing.T) {
 }
 
 func TestFedoraMaintenancePackageIsBounded(t *testing.T) {
+	t.Parallel()
 	if os.Getuid() == 0 {
 		t.Skip("authorization runs as an ordinary user")
 	}

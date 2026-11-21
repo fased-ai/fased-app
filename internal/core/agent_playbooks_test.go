@@ -8,6 +8,7 @@ import (
 )
 
 func TestAgentPlaybookSaveIsInert(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	v := agentApply(t, s, AgentCommand{Action: "news-source-add", ProfileID: "news-researcher", Name: "Fixture headlines", Source: fixtureNewsURL, NewsMaxAgeSeconds: 3600})
 	_, err := s.ChangeAgents(t.Context(), AgentCommand{Revision: v.Revision, ProfileID: v.ProfileID, Action: "playbook-save", Name: "Morning digest", Text: "Summarize the selected fixture headlines.", NewsSourceID: v.NewsSources[0].ID, NewsMaxAgeSeconds: 3600, Limits: &AILimits{MaxInputTokens: 24000, MaxOutputTokens: 1024, DeadlineSeconds: 3, BudgetMicrousd: 30000}})
@@ -47,6 +48,7 @@ func playbookReview(t *testing.T, s *Store, v AgentView) PlaybookReview {
 	return *out.PlaybookReview
 }
 func TestAgentPlaybookJourneyVersionsAndRestart(t *testing.T) {
+	t.Parallel()
 	s, v := playbookSetup(t)
 	before := retainedRevisionState(t, s)
 	draft, err := s.AgentPlaybookDraft(t.Context(), v.ProfileID, v.Playbooks[0].ID, 1)
@@ -117,6 +119,7 @@ func TestAgentPlaybookJourneyVersionsAndRestart(t *testing.T) {
 	}
 }
 func TestAgentPlaybookReviewFences(t *testing.T) {
+	t.Parallel()
 	for _, mode := range []string{"digest", "session", "version", "profile", "expiry", "restart", "stale", "rebase", "disabled-source", "failed-news", "missing-news"} {
 		t.Run(mode, func(t *testing.T) {
 			s, v := playbookSetup(t)
@@ -166,6 +169,7 @@ func TestAgentPlaybookReviewFences(t *testing.T) {
 	}
 }
 func TestAgentPlaybookBoundsAndStrictInputs(t *testing.T) {
+	t.Parallel()
 	s, v := playbookSetup(t)
 	l := v.Playbooks[0].Versions[0].Limits
 	base := AgentCommand{Action: "playbook-save", Revision: v.Revision, ProfileID: v.ProfileID, ID: v.Playbooks[0].ID, Name: "vNext", Text: "Digest", NewsSourceID: v.NewsSources[0].ID, NewsMaxAgeSeconds: 3600, Limits: &l}
@@ -217,6 +221,7 @@ func TestAgentPlaybookBoundsAndStrictInputs(t *testing.T) {
 	}
 }
 func TestAgentPlaybookMigrationAndCompatibility(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	before := retainedRevisionState(t, s)
 	if _, err := s.db.Exec("PRAGMA user_version=15"); err != nil {
@@ -247,6 +252,7 @@ func TestAgentPlaybookMigrationAndCompatibility(t *testing.T) {
 	}
 }
 func TestAgentPlaybookHTTPStrictReadAndAuthentication(t *testing.T) {
+	t.Parallel()
 	s, v := playbookSetup(t)
 	token := claimFixture(t, s)
 	h, err := NewHTTPHandler(s, "http://127.0.0.1:7331", "", nil)
@@ -275,6 +281,7 @@ func TestAgentPlaybookHTTPStrictReadAndAuthentication(t *testing.T) {
 }
 
 func TestAgentPlaybookPausedMigrationAndStorageRefusal(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	p := pauseCommand(t, s, 1)
 	if _, err := s.UpdatePause(t.Context(), p); err != nil {

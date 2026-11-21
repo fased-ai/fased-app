@@ -241,6 +241,7 @@ func ordinaryPlanFixture(t *testing.T) (*Store, AIConnectionView, *ordinaryPlanH
 }
 
 func TestOrdinarySignInTerminalUsageIsSourceMatched(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		mode  string
 		known bool
@@ -304,6 +305,7 @@ func TestOrdinarySignInTerminalUsageIsSourceMatched(t *testing.T) {
 }
 
 func TestOrdinarySignInFailedTaskRetainsReportedUsage(t *testing.T) {
+	t.Parallel()
 	s, account, fixture := ordinaryPlanFixture(t)
 	v, p := ordinaryPlanChat(t, s, account)
 	v = agentApply(t, s, AgentCommand{Action: "task-ai-prepare", ProfileID: v.ProfileID, ID: p.SessionID, UseAgentDefaults: true, Name: "Known failed plan task", Text: "A fictional bounded summary", IntervalSeconds: 60, MaxRuns: 1, AuthorizationSeconds: 900, Limits: &p.Limits})
@@ -330,6 +332,7 @@ func TestOrdinarySignInFailedTaskRetainsReportedUsage(t *testing.T) {
 }
 
 func TestOrdinarySignInCancelledReceiptRetainsKnownUsage(t *testing.T) {
+	t.Parallel()
 	for _, mode := range []string{"completed", "terminal-failed-valid"} {
 		t.Run(mode, func(t *testing.T) {
 			s, account, fixture := ordinaryPlanFixture(t)
@@ -385,6 +388,7 @@ func ordinaryPlanSend(t *testing.T, s *Store, v AgentView, p ChatPermission, tex
 }
 
 func TestOrdinarySignInChatTaskResultMemory(t *testing.T) {
+	t.Parallel()
 	s, account, fixture := ordinaryPlanFixture(t)
 	v, permission := ordinaryPlanChat(t, s, account)
 	v = ordinaryPlanSend(t, s, v, permission, "Summarize one fictional event.")
@@ -443,6 +447,7 @@ func TestOrdinarySignInChatTaskResultMemory(t *testing.T) {
 }
 
 func TestOrdinarySignInErrorsPreserveAccountAndDiagnostics(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		mode, code, shape string
 		status            int
@@ -525,6 +530,7 @@ func TestOrdinarySignInErrorsPreserveAccountAndDiagnostics(t *testing.T) {
 }
 
 func TestOrdinarySignInQueuedStopRevokeLockRestart(t *testing.T) {
+	t.Parallel()
 	for _, action := range []string{"stop", "revoke", "lock", "restart"} {
 		t.Run(action, func(t *testing.T) {
 			s, account, fixture := ordinaryPlanFixture(t)
@@ -566,6 +572,7 @@ func TestOrdinarySignInQueuedStopRevokeLockRestart(t *testing.T) {
 }
 
 func TestOrdinarySignInRejectsLegacyTariffAndAPIFallback(t *testing.T) {
+	t.Parallel()
 	s, account, fixture := ordinaryPlanFixture(t)
 	v, permission := ordinaryPlanChat(t, s, account)
 	v = ordinaryPlanSend(t, s, v, permission, "A current plan request.")
@@ -601,6 +608,7 @@ func TestOrdinarySignInRejectsLegacyTariffAndAPIFallback(t *testing.T) {
 }
 
 func TestOrdinarySignInRejectsMonetaryPlanConsent(t *testing.T) {
+	t.Parallel()
 	s, account, _ := ordinaryPlanFixture(t)
 	v := agentApply(t, s, AgentCommand{Action: "profile-create", Name: "Plan money isolation", Provider: "openai", AccountRef: &account.Ref, Model: admittedOpenAIModel})
 	v = agentApply(t, s, AgentCommand{Action: "session-create", ProfileID: v.ProfileID, Name: "Plan review"})
@@ -630,6 +638,7 @@ func TestOrdinarySignInRejectsMonetaryPlanConsent(t *testing.T) {
 }
 
 func TestOrdinarySignInDiagnosticCannotReflectOpaqueBearer(t *testing.T) {
+	t.Parallel()
 	s, account, _ := ordinaryPlanFixture(t)
 	opaque := "opaque-disposable-signin-secret"
 	s.provider.mu.Lock()
@@ -747,6 +756,7 @@ func (r *ordinaryPlanCloseHook) Close() error {
 }
 
 func TestOrdinarySignInUncertaintySurvivesCompletionChange(t *testing.T) {
+	t.Parallel()
 	for _, change := range []string{"lock", "context", "clock", "stop"} {
 		t.Run(change, func(t *testing.T) {
 			s, account, fixture := ordinaryPlanFixture(t)
@@ -847,6 +857,7 @@ func TestOrdinarySignInUncertaintySurvivesCompletionChange(t *testing.T) {
 }
 
 func TestOrdinarySignInPolicyHasNoAPIMoney(t *testing.T) {
+	t.Parallel()
 	policy := chatModelPolicyForMethod(admittedOpenAIModel, "sign-in")
 	if policy == nil || policy.WireVersion != "openai-signin-v2" || policy.InputMicrousdPerMillion != 0 || policy.CachedMicrousdPerMillion != 0 || policy.OutputMicrousdPerMillion != 0 || policy.BillableOutputTokens != 0 || policy.MaxRequestBudgetMicrousd != 0 {
 		t.Fatal("ordinary sign-in still inherits the synthetic/API tariff policy")

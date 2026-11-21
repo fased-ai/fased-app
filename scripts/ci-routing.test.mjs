@@ -62,6 +62,9 @@ function result(plan) {
     ["inspection-installed", "inspection"],
   ])
     needs[job] = { result: plan[flag] ? "success" : "skipped" };
+  needs["build-artifacts"] = {
+    result: plan.core || plan.signer || plan.inspection ? "success" : "skipped",
+  };
   needs["core-scenarios"] = {
     result: plan.scope === "full" ? "success" : "skipped",
   };
@@ -369,6 +372,15 @@ test("browser and joined CLI coverage run independently of retained native clien
       assert.throws(() => verifyGate(broken), /browser/);
     }
   }
+  const skippedBuild = result(classify(["docs/chat.md"]));
+  assert.equal(skippedBuild["build-artifacts"].result, "skipped");
+  assert.doesNotThrow(() => verifyGate(skippedBuild));
+  const missingBuild = result(classify([]));
+  missingBuild["build-artifacts"].result = "skipped";
+  assert.throws(
+    () => verifyGate(missingBuild),
+    /required result missing: build-artifacts/,
+  );
   // The trusted base router can still emit the retired desktop flag.
   const base = result(classify([]));
   base.classify.outputs.desktop = "true";

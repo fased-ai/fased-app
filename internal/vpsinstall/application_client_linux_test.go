@@ -12,6 +12,7 @@ import (
 )
 
 func TestApplicationUpdateClientAllowsConfirmedPasswordFreeApply(t *testing.T) {
+	t.Parallel()
 	_, o, m, _ := ownerCallFixture(t)
 	var out bytes.Buffer
 	called := false

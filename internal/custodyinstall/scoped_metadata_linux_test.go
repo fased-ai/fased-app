@@ -16,6 +16,7 @@ import (
 )
 
 func TestScopedUpdateMetadataUsesApprovedSource(t *testing.T) {
+	t.Parallel()
 	owner := os.Getuid()
 	id := strings.Repeat("a", 32)
 	intent := strings.Repeat("b", 32)
@@ -48,6 +49,7 @@ func TestScopedUpdateMetadataUsesApprovedSource(t *testing.T) {
 }
 
 func TestScopedOrdinaryRepairInterruptionPreservesHistory(t *testing.T) {
+	t.Parallel()
 	tx, dir, o, c := ordinaryRepairModel(t)
 	retained, err := os.ReadFile(dir + "/updates/" + tx.ID + "/transaction.json")
 	if err != nil {
@@ -121,6 +123,7 @@ func TestScopedOrdinaryRepairInterruptionPreservesHistory(t *testing.T) {
 }
 
 func TestScopedPairedUpdateRefusedRollbackRetainsHold(t *testing.T) {
+	t.Parallel()
 	tx, dir := modelTransaction(t)
 	o := modelOps(t, tx, dir)
 	approval := migrationRunnerApproval{Version: 1, Owner: tx.Base.Owner, InstallationID: tx.Base.ID, IntentID: tx.Binding.Index.Binding.Pause.Request.IntentID, BindingDigest: update.InstallDigest(tx.Binding), PreviousCore: tx.Base.CoreHash, TargetCore: tx.Target.CoreHash, TargetSigner: tx.Target.SignerHash, RunnerSHA256: strings.Repeat("c", 64), GuardSHA256: strings.Repeat("d", 64)}

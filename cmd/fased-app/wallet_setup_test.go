@@ -15,19 +15,7 @@ import (
 )
 
 func TestWalletSetupCLIUsesSavedSessionAndRejectsSecrets(t *testing.T) {
-	root := filepath.Join(".evidence", "wallet-setup-cli")
-	if err := os.MkdirAll(root, 0700); err != nil {
-		t.Fatal(err)
-	}
-	dir, err := os.MkdirTemp(root, "f-")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() {
-		if err := os.RemoveAll(dir); err != nil {
-			t.Error(err)
-		}
-	})
+	dir := shortFixtureDir(t, "fa-")
 	server, err := core.Start(t.Context(), dir, "127.0.0.1:0", "", nil)
 	if err != nil {
 		t.Fatal(err)

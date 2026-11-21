@@ -13,6 +13,7 @@ import (
 )
 
 func TestPackageProviderCredentialPrepareRetainsOriginalEnvelope(t *testing.T) {
+	t.Parallel()
 	stage := t.TempDir()
 	path := filepath.Join(stage, packageTaskCredential)
 	var encryptions int
@@ -67,6 +68,7 @@ func TestPackageProviderCredentialPrepareRetainsOriginalEnvelope(t *testing.T) {
 }
 
 func TestPackageProviderCredentialDropInIsInstanceAndRoleBound(t *testing.T) {
+	t.Parallel()
 	m := Manifest{Layout: PackageLayout, Owner: 1000, Location: "local", ID: strings.Repeat("a", 32), App: Identity{UID: 1201, GID: 1201}}
 	var err error
 	m.Root, err = PackageRoot(m.Owner, m.Location, m.ID)

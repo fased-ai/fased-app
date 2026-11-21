@@ -34,6 +34,7 @@ func chatSend(t *testing.T, s *Store, v AgentView, p ChatPermission, text string
 	return next
 }
 func TestNormalChatPermissionAndStreaming(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	v, p := chatPermission(t, s)
 	c := AgentCommand{Action: "chat-send", Revision: v.Revision, ProfileID: v.ProfileID, ID: p.SessionID, Text: "Explain a reminder", ConsentDigest: p.ID}
@@ -88,6 +89,7 @@ func TestNormalChatPermissionAndStreaming(t *testing.T) {
 }
 
 func TestChatPermissionRevocationRestartAndScope(t *testing.T) {
+	t.Parallel()
 	for _, mode := range []string{"stop", "revoke", "lock", "logout", "expire", "persona", "rotation", "restart"} {
 		t.Run(mode, func(t *testing.T) {
 			s := fixtureStore(t)
@@ -148,6 +150,7 @@ func TestChatPermissionRevocationRestartAndScope(t *testing.T) {
 	}
 }
 func TestChatStopsDuringActualHTTPSStream(t *testing.T) {
+	t.Parallel()
 	for _, mode := range []string{"stop", "revoke", "lock"} {
 		t.Run(mode, func(t *testing.T) {
 			s := fixtureStore(t)
@@ -223,6 +226,7 @@ func TestChatStopsDuringActualHTTPSStream(t *testing.T) {
 	}
 }
 func TestChatCapacityPreservesSourcesAndJournals(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	v, p := chatPermission(t, s)
 	// Reserve all ten slots, including linked task and unknown-journal records.

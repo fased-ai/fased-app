@@ -4,16 +4,37 @@ import (
 	"bufio"
 	"bytes"
 	"errors"
+	"github.com/fased-ai/fased-app/internal/custodyinstall"
 	"github.com/fased-ai/fased-app/internal/privateaccess"
 	"github.com/fased-ai/fased-app/internal/vpsinstall"
 	"io"
+	"os"
 	"runtime"
 	"strings"
 	"testing"
 	"time"
 )
 
+func shortFixtureDir(t *testing.T, prefix string) string {
+	t.Helper()
+	dir, err := os.MkdirTemp("", prefix)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := os.RemoveAll(dir); err != nil {
+			t.Error(err)
+		}
+	})
+	return dir
+}
+
 func TestManagedRemoteRequiresBundleBeforeHostAccess(t *testing.T) {
+	previousLoader := loadEnrolledTarget
+	loadEnrolledTarget = func(string, int) (custodyinstall.Manifest, error) {
+		return custodyinstall.Manifest{}, os.ErrNotExist
+	}
+	t.Cleanup(func() { loadEnrolledTarget = previousLoader })
 	err := hostCommand([]string{"install", "--managed-remote", "--autostart", "--prepare-host", "--access", "ssh"}, io.Discard, io.Discard)
 	if err == nil || !strings.Contains(err.Error(), "verified headless bundle") {
 		t.Fatalf("managed Remote reached the wrong admission path: %v", err)

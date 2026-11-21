@@ -23,6 +23,7 @@ func ordinaryTradeQuote(t *testing.T, ref AccountRef, chain *onchaintest.Chain) 
 	return NewSwapProposal(ref, q)
 }
 func TestOrdinaryTradeTypedProposal(t *testing.T) {
+	t.Parallel()
 	ref := AccountRef{Version: 3, SignerID: strings.Repeat("a", 32), WalletID: strings.Repeat("b", 32), Epoch: strings.Repeat("c", 32), Network: "mainnet-beta", PublicKey: strings.Repeat("d", 64)}
 	p := ordinaryTradeQuote(t, ref, &onchaintest.Chain{})
 	if err := ValidateSwapHistory(p); err != nil {

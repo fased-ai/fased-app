@@ -11,6 +11,7 @@ import (
 )
 
 func TestRemoteAgentsHelperFixedCommand(t *testing.T) {
+	t.Parallel()
 	tx, _, _, _ := ordinaryBootstrapModel(t, true)
 	m := tx.Base
 	input, output, errorsOut := bytes.NewBufferString("original typed command"), &bytes.Buffer{}, &bytes.Buffer{}
@@ -43,6 +44,7 @@ func TestRemoteAgentsHelperFixedCommand(t *testing.T) {
 }
 
 func TestRemotePrivateProofUsesFixedAppUIDStatus(t *testing.T) {
+	t.Parallel()
 	tx, _, _, _ := ordinaryBootstrapModel(t, true)
 	m := tx.Base
 	input := bytes.NewBufferString(`{"action":"begin","token":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"}`)

@@ -7,7 +7,6 @@ import (
 	"github.com/fased-ai/fased-app/internal/core"
 	"io"
 	"os"
-	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -29,19 +28,7 @@ func TestReminderTaskDraftCLIArguments(t *testing.T) {
 }
 
 func TestReminderTaskDraftCLIPrivateRoundTrip(t *testing.T) {
-	root := filepath.Join(".evidence", "reminder-draft-cli")
-	if err := os.MkdirAll(root, 0700); err != nil {
-		t.Fatal(err)
-	}
-	dir, err := os.MkdirTemp(root, "f-")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() {
-		if err := os.RemoveAll(dir); err != nil {
-			t.Error(err)
-		}
-	})
+	dir := shortFixtureDir(t, "fa-")
 	server, err := core.Start(t.Context(), dir, "127.0.0.1:0", "", nil)
 	if err != nil {
 		t.Fatal(err)
@@ -168,19 +155,7 @@ func TestAgentAIRequestDraftCLIArguments(t *testing.T) {
 }
 
 func TestAgentAIRequestDraftCLIPrivateRoundTrip(t *testing.T) {
-	root := filepath.Join(".evidence", "agent-draft-cli")
-	if err := os.MkdirAll(root, 0700); err != nil {
-		t.Fatal(err)
-	}
-	dir, err := os.MkdirTemp(root, "f-")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() {
-		if err := os.RemoveAll(dir); err != nil {
-			t.Error(err)
-		}
-	})
+	dir := shortFixtureDir(t, "fa-")
 	server, err := core.Start(t.Context(), dir, "127.0.0.1:0", "", nil)
 	if err != nil {
 		t.Fatal(err)
@@ -253,19 +228,7 @@ func TestAgentAIRequestDraftCLIPrivateRoundTrip(t *testing.T) {
 }
 
 func TestAgentEvidenceCLIPrivateRoundTrip(t *testing.T) {
-	root := filepath.Join(".evidence", "agent-evidence-cli")
-	if err := os.MkdirAll(root, 0700); err != nil {
-		t.Fatal(err)
-	}
-	dir, err := os.MkdirTemp(root, "f-")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() {
-		if err := os.RemoveAll(dir); err != nil {
-			t.Error(err)
-		}
-	})
+	dir := shortFixtureDir(t, "fa-")
 	server, err := core.Start(t.Context(), dir, "127.0.0.1:0", "", nil)
 	if err != nil {
 		t.Fatal(err)
@@ -363,19 +326,7 @@ func TestAgentEvidenceCLIArguments(t *testing.T) {
 }
 
 func TestAgentAIEvidenceCLIPrivateRoundTrip(t *testing.T) {
-	root := filepath.Join(".evidence", "ai-evidence-cli")
-	if err := os.MkdirAll(root, 0700); err != nil {
-		t.Fatal(err)
-	}
-	dir, err := os.MkdirTemp(root, "f-")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() {
-		if err := os.RemoveAll(dir); err != nil {
-			t.Error(err)
-		}
-	})
+	dir := shortFixtureDir(t, "fa-")
 	server, err := core.Start(t.Context(), dir, "127.0.0.1:0", "", nil)
 	if err != nil {
 		t.Fatal(err)

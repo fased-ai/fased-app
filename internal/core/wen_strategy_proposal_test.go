@@ -45,6 +45,7 @@ func proposalReview(t *testing.T, h *HTTPHandler, token string, c WENStrategyPro
 }
 
 func TestWENStrategyProposalReviewedCard(t *testing.T) {
+	t.Parallel()
 	s, h, token, input := proposalFixture(t)
 	before := retainedRevisionState(t, s)
 	d, _, _ := readAgents(t.Context(), s.db)
@@ -104,6 +105,7 @@ func TestWENStrategyProposalReviewedCard(t *testing.T) {
 }
 
 func TestWENStrategyProposalStrictChanges(t *testing.T) {
+	t.Parallel()
 	for _, kind := range []string{"empty", "null", "unknown", "duplicate", "escaped-duplicate", "case-alias", "root-case-alias", "weights-null", "weight-null", "weights-short", "weights-fraction", "weights-overflow", "weights-sum", "dust", "cadence-null", "cadence-fraction", "cadence-zero", "thesis-null", "thesis-unknown", "schema", "prose", "parent", "oversized", "owner-duplicate", "owner-null", "owner-unknown", "name-empty", "name-long"} {
 		t.Run(kind, func(t *testing.T) {
 			s, h, token, c := proposalFixture(t)
@@ -196,6 +198,7 @@ func TestWENStrategyProposalStrictChanges(t *testing.T) {
 }
 
 func TestWENStrategyProposalSourceAndSaveRefusals(t *testing.T) {
+	t.Parallel()
 	for _, stage := range []string{"prepare", "save"} {
 		for _, kind := range []string{"missing-request", "missing-card", "foreign-profile", "scheduled", "incomplete", "dismissed", "wrong-kind", "duplicate-request", "duplicate-card", "duplicate-session", "request-digest", "disclosure", "card-text", "chat-revision", "library-revision", "parent-bytes", "paused", "witness", "candidate", "amounts", "expired", "backward-time", "new-core", "messages-full", "agent-full", "versions-full"} {
 			if stage == "prepare" && (kind == "witness" || kind == "candidate" || kind == "amounts" || kind == "expired" || kind == "backward-time" || kind == "new-core" || strings.HasSuffix(kind, "full")) {
@@ -309,6 +312,7 @@ func TestWENStrategyProposalSourceAndSaveRefusals(t *testing.T) {
 }
 
 func TestWENStrategyProposalHTTPAuthorityAndSize(t *testing.T) {
+	t.Parallel()
 	s, h, token, c := proposalFixture(t)
 	body, _ := json.Marshal(c)
 	for _, kind := range []string{"auth", "csrf", "origin", "method", "query", "unknown", "duplicate", "null-override", "oversized"} {
@@ -344,6 +348,7 @@ func TestWENStrategyProposalHTTPAuthorityAndSize(t *testing.T) {
 }
 
 func TestWENStrategyProposalCompleteReviewCapacity(t *testing.T) {
+	t.Parallel()
 	s, h, token, c := proposalFixture(t)
 	all, revision, err := readWENLibraries(t.Context(), s.db)
 	if err != nil {

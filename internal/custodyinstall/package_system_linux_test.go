@@ -60,6 +60,7 @@ func debTestArchive(t *testing.T, extra string) []byte {
 }
 
 func TestNativePackageInspectionRefusesForeignFilesAndScripts(t *testing.T) {
+	t.Parallel()
 	data := debTestArchive(t, "")
 	if _, err := inspectDebTar(bytes.NewReader(data), false, testPackageFiles()); err != nil {
 		t.Fatal("matching package was refused", err)
@@ -105,6 +106,7 @@ func TestNativePackageInspectionRefusesForeignFilesAndScripts(t *testing.T) {
 }
 
 func TestNativeRPMInspectionBindsTheApprovedPair(t *testing.T) {
+	t.Parallel()
 	files := testPackageFiles()
 	var listing strings.Builder
 	listing.WriteString("fased-app\t0.1.12\t1\tx86_64\n")
@@ -136,6 +138,7 @@ func TestNativeRPMInspectionBindsTheApprovedPair(t *testing.T) {
 }
 
 func TestNativeRPMInstallUsesAttestedPackageAndKeepsDigestChecks(t *testing.T) {
+	t.Parallel()
 	path := "/verified/fased.rpm"
 	name, args := nativePackageInstallCommand("dnf", path)
 	if name != "/usr/bin/rpm" || !slices.Contains(args, "--nosignature") || args[len(args)-1] != path {
@@ -149,6 +152,7 @@ func TestNativeRPMInstallUsesAttestedPackageAndKeepsDigestChecks(t *testing.T) {
 }
 
 func TestDebianPredecessorMaintainerScriptsAreRefused(t *testing.T) {
+	t.Parallel()
 	for _, name := range []string{
 		"fased-app.prerm", "fased-app.postrm", "fased-app.preinst", "fased-app.postinst",
 		"fased-app:amd64.prerm", "fased-app:arm64.postrm",
@@ -178,6 +182,7 @@ func TestDebianPredecessorMaintainerScriptsAreRefused(t *testing.T) {
 }
 
 func TestNativePredecessorInventoryPreservesForeignFiles(t *testing.T) {
+	t.Parallel()
 	for _, family := range []string{"apt", "dnf"} {
 		t.Run(family, func(t *testing.T) {
 			paths := []string{"/usr/bin/fased", "/usr/lib/fased-app", "/usr/share/doc/fased-app"}
@@ -283,6 +288,7 @@ func TestNativeDebInspectionOfRetainedPackage(t *testing.T) {
 }
 
 func TestNativePackageTrailerIsBoundedAndEmpty(t *testing.T) {
+	t.Parallel()
 	if err := drainPackageTrailer(bytes.NewReader(make([]byte, 8192))); err != nil {
 		t.Fatal(err)
 	}
@@ -295,6 +301,7 @@ func TestNativePackageTrailerIsBoundedAndEmpty(t *testing.T) {
 }
 
 func TestPendingPackageRecoveryRequiresTheOriginalTarget(t *testing.T) {
+	t.Parallel()
 	_, target := packageGateInitialRecord(t)
 	if err := verifyPendingNativeTarget(t.Context(), target, nil); err == nil {
 		t.Fatal("pending package recovery accepted a missing target")
@@ -312,6 +319,7 @@ func TestPendingPackageRecoveryRequiresTheOriginalTarget(t *testing.T) {
 }
 
 func TestInstanceCompletionDoesNotDependOnSharedPackageVersion(t *testing.T) {
+	t.Parallel()
 	r, m := packageGateInitialRecord(t)
 	r.Package.NativePackage = &update.NativePackage{Family: "dnf", Artifact: update.Artifact{File: "fased-app-linux-amd64.rpm", Size: 1, SHA256: strings.Repeat("6", 64)}, InstallerSHA256: strings.Repeat("7", 64)}
 	if err := r.Package.Validate(); err != nil {
@@ -341,6 +349,7 @@ func TestInstanceCompletionDoesNotDependOnSharedPackageVersion(t *testing.T) {
 }
 
 func TestBootstrapRecoveryRetainsOriginalPackageAndReceiver(t *testing.T) {
+	t.Parallel()
 	r, m := packageGateInitialRecord(t)
 	r.Package.NativePackage = &update.NativePackage{Family: "dnf", Artifact: update.Artifact{File: "fased-app-linux-amd64.rpm", Size: 1, SHA256: strings.Repeat("6", 64)}, InstallerSHA256: strings.Repeat("7", 64)}
 	original := nativeBootstrap{Version: 1, Base: m, Package: *r.Package}

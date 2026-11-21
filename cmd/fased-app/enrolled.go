@@ -22,12 +22,14 @@ func enrolledURL(m custodyinstall.Manifest) string {
 	return "http://" + m.Listen
 }
 
+var loadEnrolledTarget = enrollment.EnrolledTarget
+
 // A pending/foreign fence is an error, never permission to launch the old core.
 func enrolledTarget(data string) (custodyinstall.Manifest, bool, error) {
 	if runtime.GOOS != "linux" {
 		return custodyinstall.Manifest{}, false, nil
 	}
-	m, err := enrollment.EnrolledTarget(data, os.Getuid())
+	m, err := loadEnrolledTarget(data, os.Getuid())
 	if errors.Is(err, os.ErrNotExist) {
 		return m, false, nil
 	}

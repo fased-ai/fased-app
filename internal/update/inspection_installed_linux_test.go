@@ -59,6 +59,7 @@ func TestInstalledInspectionFrameRefusal(t *testing.T) {
 	}
 }
 func TestInstalledInspectionGuardBeforeState(t *testing.T) {
+	t.Parallel()
 	for _, root := range []string{t.TempDir(), "/tmp/foreign", "/var/lib/fased-app-custody-0", "/var/lib/fased-app-custody-01"} {
 		if _, e := VerifyInstalledInspectionGuard(root, "owner"); e == nil {
 			t.Fatal("foreign/no-fence startup")

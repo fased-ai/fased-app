@@ -13,6 +13,7 @@ import (
 )
 
 func TestLocalOwnerFormatPreservesExistingIdentity(t *testing.T) {
+	t.Parallel()
 	for _, existing := range []bool{false, true} {
 		t.Run(map[bool]string{false: "new-local", true: "existing-password"}[existing], func(t *testing.T) {
 			dir := filepath.Join(t.TempDir(), "state")
@@ -104,6 +105,7 @@ func TestLocalOwnerActualReleasedReaderRefusesNewState(t *testing.T) {
 }
 
 func TestLocalOwnerCLIPreservesMalformedSession(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	if err := os.Chmod(dir, 0700); err != nil {
 		t.Fatal(err)

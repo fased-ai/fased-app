@@ -66,6 +66,8 @@ func sealVerifiedExecutable(source io.ReadSeeker, size int64, expected string) (
 	return sealed, nil
 }
 
+var loadCustodyManifest = custodyinstall.Load
+
 // RunUpgrade reuses Run's pinned held-FD verification/one-invocation gate. It
 // calls only the existing owner-maintenance entry, never install-over-existing
 // or an artifact/source/credential override. The target independently admits its
@@ -80,7 +82,7 @@ func (p *Prepared) RunUpgrade(ctx context.Context, o UpgradeOptions, in io.Reade
 	if candidate {
 		return errors.New("candidate admission cannot authorize a bootstrap upgrade")
 	}
-	if m, err := custodyinstall.Load(os.Getuid()); err == nil {
+	if m, err := loadCustodyManifest(os.Getuid()); err == nil {
 		if o.Prefix != "" || o.DataDirectory != "" || o.Remote != (m.Location == "remote") {
 			return errors.New("custody upgrade must retain the exact installed profile and paths")
 		}

@@ -23,6 +23,7 @@ func rpcInput() RPCCheckRequest {
 }
 
 func TestRPCAdmissionAndCancellation(t *testing.T) {
+	t.Parallel()
 	result, err := CheckFixtureRPC(context.Background(), rpcInput())
 	if err != nil || !result.FixtureOnly || result.LiveRPC || result.GenesisHash != fixtureGenesis || result.CheckedAt.IsZero() {
 		t.Fatalf("%+v %v", result, err)
@@ -49,6 +50,7 @@ func TestRPCAdmissionAndCancellation(t *testing.T) {
 }
 
 func TestRPCHTTPSProtocol(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name, body        string
 		status, wantCalls int
@@ -125,6 +127,7 @@ func TestRPCHTTPSProtocol(t *testing.T) {
 }
 
 func TestRPCHTTPAuthorizationAndNoWrite(t *testing.T) {
+	t.Parallel()
 	s := fixtureStore(t)
 	token := claimFixture(t, s)
 	h, err := NewHTTPHandler(s, "http://127.0.0.1:7331", "", nil)

@@ -51,6 +51,7 @@ func onchainOwner(ref AccountRef) (string, error) {
 	return onchain.Base58(b), e
 }
 func TestSwapOwnerRolesExactApprovalAndJournalRecovery(t *testing.T) {
+	t.Parallel()
 	v, p, chain, dir := swapFixture(t)
 	if got := execute(v, Request{Action: "swap-approve", PublicInput: PublicInput{Swap: &p}}, false); got.Error == "" {
 		t.Fatal("app approved swap")
@@ -125,6 +126,7 @@ func TestSwapOwnerRolesExactApprovalAndJournalRecovery(t *testing.T) {
 	}
 }
 func TestSwapExpiredApprovalAndOrdinaryStartupRemainClosed(t *testing.T) {
+	t.Parallel()
 	v, p, _, _ := swapFixture(t)
 	v.now = func() time.Time { return time.Unix(p.Quote.ExpiresAt, 0) }
 	if _, e := v.ApproveSwap(p); e == nil {
@@ -155,6 +157,7 @@ func TestSwapExpiredApprovalAndOrdinaryStartupRemainClosed(t *testing.T) {
 }
 
 func TestSwapKeyRecoveryRetainsUnknownUntilIndependentSettlement(t *testing.T) {
+	t.Parallel()
 	v, p, chain, dir := swapFixture(t)
 	backupPassword := []byte("disposable-swap-backup-password")
 	backup, e := v.Backup(backupPassword)

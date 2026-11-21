@@ -20,6 +20,7 @@ import (
 )
 
 func TestAcquireDevelopmentHTTPS(t *testing.T) {
+	t.Parallel()
 	if runtime.GOOS == "windows" {
 		t.Skip("private acquisition directory ACL acceptance is not available on Windows")
 	}

@@ -11,6 +11,7 @@ import (
 // A Serve switch must not remove the old private listener before the new
 // listener can answer. The test uses only disposable loopback listeners.
 func TestRemoteListenerTransitionServesBothPaths(t *testing.T) {
+	t.Parallel()
 	listen := func() net.Listener {
 		t.Helper()
 		l, err := net.Listen("tcp", "127.0.0.1:0")
