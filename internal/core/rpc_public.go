@@ -149,7 +149,13 @@ func newPublicRPCTransport() *publicRPCTransport {
 		enabled: rpcActivationEnabled,
 		transport: &http.Transport{
 			Proxy: nil, DisableKeepAlives: true, DisableCompression: true, MaxResponseHeaderBytes: 8192,
-			TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12}, TLSHandshakeTimeout: 5 * time.Second, ResponseHeaderTimeout: 10 * time.Second,
+			// Use standard TLS 1.3/1.2 elliptic curves so public Solana Mainnet RPC proxies
+			// that reject Go's default hybrid PQ key-share ClientHello negotiate cleanly.
+			TLSClientConfig: &tls.Config{
+				MinVersion:       tls.VersionTLS12,
+				CurvePreferences: []tls.CurveID{tls.X25519, tls.CurveP256, tls.CurveP384},
+			},
+			TLSHandshakeTimeout: 5 * time.Second, ResponseHeaderTimeout: 10 * time.Second,
 			DialContext: func(ctx context.Context, network, address string) (net.Conn, error) {
 				return dialPublicRPC(ctx, network, address, net.DefaultResolver.LookupNetIP, d.DialContext)
 			},
