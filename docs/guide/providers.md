@@ -13,4 +13,4 @@ Credentials are stored encrypted. **Reconnect** updates account access while pre
 
 For a local model server, the address is reached from the machine running Fased. When using Remote, that is your server, not the computer displaying the browser.
 
-Live AI use is disabled in the development app. See [Availability](/reference/status).
+Credentials stay encrypted in OS-protected storage across restarts without a vault password prompt on supported Linux hosts (with passphrase fallback when OS keyrings are unavailable). See [Availability](/reference/status).

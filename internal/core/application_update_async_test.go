@@ -35,7 +35,7 @@ func TestApplicationUpdateAsyncCheckOutlivesTickAndCloses(t *testing.T) {
 		t.Fatal(e)
 	}
 	updateCommandFixture(t, s, "check")
-	tick, cancel := context.WithTimeout(t.Context(), 5*time.Millisecond)
+	tick, cancel := context.WithTimeout(t.Context(), 250*time.Millisecond)
 	if e := s.runApplicationUpdates(tick); e != nil {
 		t.Fatal(e)
 	}

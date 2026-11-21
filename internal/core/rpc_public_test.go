@@ -155,3 +155,136 @@ func TestPublicRPCControlledTLS(t *testing.T) {
 		})
 	}
 }
+
+func TestPublicRPCMultiIPFallback(t *testing.T) {
+	t.Run("ipv6 fallback to ipv4 on single lookup", func(t *testing.T) {
+		lookups := 0
+		var dialed []string
+		c1, c2 := net.Pipe()
+		defer c1.Close()
+		defer c2.Close()
+		conn, err := dialPublicRPC(context.Background(), "tcp", "example.com:443",
+			func(context.Context, string, string) ([]netip.Addr, error) {
+				lookups++
+				return []netip.Addr{
+					netip.MustParseAddr("2606:4700:4700::1111"),
+					netip.MustParseAddr("1.1.1.1"),
+				}, nil
+			},
+			func(attemptCtx context.Context, network, addr string) (net.Conn, error) {
+				if _, ok := attemptCtx.Deadline(); !ok {
+					t.Fatal("multi-IP fallback attempt missing bounded timeout")
+				}
+				dialed = append(dialed, addr)
+				if addr == "[2606:4700:4700::1111]:443" {
+					return nil, errors.New("ipv6 unreachable")
+				}
+				return c1, nil
+			})
+		if err != nil || conn != c1 {
+			t.Fatalf("expected fallback connection, got conn=%v err=%v", conn, err)
+		}
+		if lookups != 1 || len(dialed) != 2 || dialed[0] != "[2606:4700:4700::1111]:443" || dialed[1] != "1.1.1.1:443" {
+			t.Fatalf("unexpected lookups=%d dialed=%v", lookups, dialed)
+		}
+	})
+
+	t.Run("deduplicate and interleave ipv6 and ipv4", func(t *testing.T) {
+		var dialed []string
+		_, err := dialPublicRPC(context.Background(), "tcp", "example.com:443",
+			func(context.Context, string, string) ([]netip.Addr, error) {
+				return []netip.Addr{
+					netip.MustParseAddr("2606:4700:4700::1111"),
+					netip.MustParseAddr("2606:4700:4700::1111"),
+					netip.MustParseAddr("2606:4700:4700::1001"),
+					netip.MustParseAddr("2606:4700:4700::64"),
+					netip.MustParseAddr("1.1.1.1"),
+					netip.MustParseAddr("8.8.8.8"),
+				}, nil
+			},
+			func(_ context.Context, _ string, addr string) (net.Conn, error) {
+				dialed = append(dialed, addr)
+				return nil, errors.New("refused")
+			})
+		if err == nil {
+			t.Fatal("expected failure when all targets fail")
+		}
+		want := []string{
+			"[2606:4700:4700::1111]:443",
+			"1.1.1.1:443",
+			"[2606:4700:4700::1001]:443",
+			"8.8.8.8:443",
+			"[2606:4700:4700::64]:443",
+		}
+		if strings.Join(dialed, ",") != strings.Join(want, ",") {
+			t.Fatalf("got dialed=%v, want %v", dialed, want)
+		}
+	})
+
+	t.Run("target cap", func(t *testing.T) {
+		dials := 0
+		_, err := dialPublicRPC(context.Background(), "tcp", "example.com:443",
+			func(context.Context, string, string) ([]netip.Addr, error) {
+				return []netip.Addr{
+					netip.MustParseAddr("1.1.1.1"),
+					netip.MustParseAddr("1.0.0.1"),
+					netip.MustParseAddr("8.8.8.8"),
+					netip.MustParseAddr("8.8.4.4"),
+					netip.MustParseAddr("9.9.9.9"),
+					netip.MustParseAddr("149.112.112.112"),
+					netip.MustParseAddr("208.67.222.222"),
+					netip.MustParseAddr("208.67.220.220"),
+					netip.MustParseAddr("4.2.2.1"),
+					netip.MustParseAddr("4.2.2.2"),
+				}, nil
+			},
+			func(context.Context, string, string) (net.Conn, error) {
+				dials++
+				return nil, errors.New("refused")
+			})
+		if err == nil || dials != 6 {
+			t.Fatalf("expected error and 6 dials, got err=%v dials=%d", err, dials)
+		}
+	})
+
+	t.Run("mixed public and private rejected with zero dials", func(t *testing.T) {
+		dials := 0
+		_, err := dialPublicRPC(context.Background(), "tcp", "example.com:443",
+			func(context.Context, string, string) ([]netip.Addr, error) {
+				return []netip.Addr{
+					netip.MustParseAddr("2606:4700:4700::1111"),
+					netip.MustParseAddr("1.1.1.1"),
+					netip.MustParseAddr("10.0.0.1"),
+				}, nil
+			},
+			func(context.Context, string, string) (net.Conn, error) {
+				dials++
+				return nil, errors.New("unexpected dial")
+			})
+		if err == nil || dials != 0 {
+			t.Fatalf("expected rejection with zero dials, got err=%v dials=%d", err, dials)
+		}
+	})
+
+	t.Run("canceled parent context stops fallback after attempt 1", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		dials := 0
+		_, err := dialPublicRPC(ctx, "tcp", "example.com:443",
+			func(context.Context, string, string) ([]netip.Addr, error) {
+				return []netip.Addr{
+					netip.MustParseAddr("2606:4700:4700::1111"),
+					netip.MustParseAddr("1.1.1.1"),
+					netip.MustParseAddr("8.8.8.8"),
+				}, nil
+			},
+			func(context.Context, string, string) (net.Conn, error) {
+				dials++
+				cancel()
+				return nil, errors.New("canceled")
+			})
+		if err == nil || dials != 1 {
+			t.Fatalf("expected early stop after 1 dial, got err=%v dials=%d", err, dials)
+		}
+	})
+}

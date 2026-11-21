@@ -57,8 +57,41 @@ func publicRPCURL(raw string) (*url.URL, error) {
 type rpcLookup func(context.Context, string, string) ([]netip.Addr, error)
 type rpcDial func(context.Context, string, string) (net.Conn, error)
 
+const maxPublicRPCDialTargets = 6
+
+func orderPublicRPCTargets(ips []netip.Addr) []netip.Addr {
+	var v4, v6 []netip.Addr
+	seen := make(map[netip.Addr]struct{}, len(ips))
+	for _, raw := range ips {
+		ip := raw.Unmap()
+		if _, ok := seen[ip]; ok {
+			continue
+		}
+		seen[ip] = struct{}{}
+		if ip.Is4() {
+			v4 = append(v4, ip)
+		} else if ip.Is6() {
+			v6 = append(v6, ip)
+		}
+	}
+	first, second := v4, v6
+	if len(ips) > 0 && ips[0].Unmap().Is6() {
+		first, second = v6, v4
+	}
+	targets := make([]netip.Addr, 0, min(len(first)+len(second), maxPublicRPCDialTargets))
+	for i := 0; len(targets) < maxPublicRPCDialTargets && (i < len(first) || i < len(second)); i++ {
+		if i < len(first) {
+			targets = append(targets, first[i])
+		}
+		if len(targets) < maxPublicRPCDialTargets && i < len(second) {
+			targets = append(targets, second[i])
+		}
+	}
+	return targets
+}
+
 // Resolve once per connection, reject the entire answer set if any IP is not
-// public, then dial a checked numeric address. TLS still verifies the DNS name.
+// public, then dial checked numeric addresses across IPv4/IPv6. TLS still verifies the DNS name.
 func dialPublicRPC(ctx context.Context, network, address string, lookup rpcLookup, dial rpcDial) (net.Conn, error) {
 	host, port, err := net.SplitHostPort(address)
 	if err != nil || port != "443" || network != "tcp" {
@@ -76,11 +109,28 @@ func dialPublicRPC(ctx context.Context, network, address string, lookup rpcLooku
 			return nil, errors.New("RPC destination refused")
 		}
 	}
-	conn, err := dial(ctx, network, net.JoinHostPort(ips[0].Unmap().String(), port))
-	if err != nil {
-		return nil, errors.New("RPC connection failed")
+	targets := orderPublicRPCTargets(ips)
+	for _, ip := range targets {
+		if ctx.Err() != nil {
+			break
+		}
+		attemptCtx := ctx
+		var cancel context.CancelFunc
+		if len(targets) > 1 {
+			attemptCtx, cancel = context.WithTimeout(ctx, 2*time.Second)
+		}
+		conn, dialErr := dial(attemptCtx, network, net.JoinHostPort(ip.String(), port))
+		if cancel != nil {
+			cancel()
+		}
+		if dialErr == nil {
+			return conn, nil
+		}
+		if ctx.Err() != nil {
+			break
+		}
 	}
-	return conn, nil
+	return nil, errors.New("RPC connection failed")
 }
 
 // Live read-only Solana RPC admission and official keyless public endpoints are
