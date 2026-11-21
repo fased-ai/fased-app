@@ -167,6 +167,39 @@ export function accountAddress(a: Account, view: AccountsView): string {
 
 export type WalletMode = "watch" | "create" | "import";
 export const walletNetworks = ["devnet", "mainnet-beta"] as const;
+export type RPCPreset = {
+  id: "solana" | "helius" | "alchemy";
+  label: string;
+  endpoint: string;
+  requiresKey: boolean;
+};
+export function rpcPresets(network: string): RPCPreset[] {
+  if (network !== "devnet" && network !== "mainnet-beta") return [];
+  const heliusPrefix = network === "mainnet-beta" ? "mainnet" : "devnet";
+  return [
+    {
+      id: "solana",
+      label: "Solana",
+      endpoint: `https://api.${network}.solana.com`,
+      requiresKey: false,
+    },
+    {
+      id: "helius",
+      label: "Helius",
+      endpoint: `https://${heliusPrefix}.helius-rpc.com`,
+      requiresKey: true,
+    },
+    {
+      id: "alchemy",
+      label: "Alchemy",
+      endpoint: `https://solana-${heliusPrefix}.g.alchemy.com`,
+      requiresKey: true,
+    },
+  ];
+}
+export function rpcRequiresKey(endpoint: string, network: string): boolean {
+  return endpoint !== `https://api.${network}.solana.com`;
+}
 export function walletNetwork(network: string): boolean {
   return walletNetworks.some((n) => n === network);
 }

@@ -29,25 +29,28 @@ type RPCCredentialCommand struct {
 	Backup     *RPCCredentialBackup `json:"backup,omitempty"`
 }
 type RPCCredentialView struct {
-	CanVerify      bool                 `json:"canVerify"`
-	CanCheck       bool                 `json:"canCheck"`
-	Backup         *RPCCredentialBackup `json:"backup,omitempty"`
-	BackupVerified bool                 `json:"backupVerified,omitempty"`
-	Ref            string               `json:"ref"`
-	Saved          bool                 `json:"saved"`
-	Stale          bool                 `json:"stale"`
-	Locked         bool                 `json:"locked"`
-	TestOnly       bool                 `json:"testOnly"`
-	LiveRPC        bool                 `json:"liveRPC"`
-	Check          *RPCCheckResult      `json:"check,omitempty"`
+	CanVerify        bool                 `json:"canVerify"`
+	CanCheck         bool                 `json:"canCheck"`
+	Backup           *RPCCredentialBackup `json:"backup,omitempty"`
+	BackupVerified   bool                 `json:"backupVerified,omitempty"`
+	Ref              string               `json:"ref"`
+	Saved            bool                 `json:"saved"`
+	Stale            bool                 `json:"stale"`
+	Locked           bool                 `json:"locked"`
+	OSVaultAvailable bool                 `json:"osVaultAvailable,omitempty"`
+	OSProtected      bool                 `json:"osProtected,omitempty"`
+	TestOnly         bool                 `json:"testOnly"`
+	LiveRPC          bool                 `json:"liveRPC"`
+	Check            *RPCCheckResult      `json:"check,omitempty"`
 }
 type rpcVault struct {
-	Version    int    `json:"version"`
-	Ref        string `json:"ref"`
-	Binding    string `json:"binding"`
-	Salt       []byte `json:"salt"`
-	Nonce      []byte `json:"nonce"`
-	Ciphertext []byte `json:"ciphertext"`
+	Version     int    `json:"version"`
+	OSProtected bool   `json:"osProtected,omitempty"`
+	Ref         string `json:"ref"`
+	Binding     string `json:"binding"`
+	Salt        []byte `json:"salt"`
+	Nonce       []byte `json:"nonce"`
+	Ciphertext  []byte `json:"ciphertext"`
 }
 
 func rpcBinding(a Account) string {
@@ -62,10 +65,20 @@ func testRPCCredential(s string) bool {
 func (s *Store) rpcVaultPath(id string) string {
 	return filepath.Join(s.dir, "rpc-credential-"+id+".json")
 }
+func deriveRPCOSVaultKey(osKey, salt []byte) []byte {
+	h := sha256.New()
+	h.Write([]byte("fased-rpc-os-vault-v1:"))
+	h.Write(osKey)
+	h.Write(salt)
+	return h.Sum(nil)
+}
 func (s *Store) rpcAAD(id string, v rpcVault) []byte {
 	prefix := "fased-rpc-vault-v1:"
 	if v.Version == 2 {
 		prefix = "fased-rpc-vault-v2:"
+		if v.OSProtected {
+			prefix = "fased-rpc-vault-os-v2:"
+		}
 	}
 	return []byte(prefix + s.instanceID + ":" + id + ":" + v.Ref + ":" + v.Binding)
 }
@@ -91,7 +104,7 @@ func (s *Store) readRPCVault(id string) (rpcVault, error) {
 func (s *Store) RPCCredential(ctx context.Context, c RPCCredentialCommand) (RPCCredentialView, error) {
 	transport := newPublicRPCTransport()
 	var check func(context.Context, RPCCheckRequest, []byte, func() error) (RPCCheckResult, error)
-	if transport.enabled {
+	if transport.enabled && s.rpcAdmission {
 		check = func(ctx context.Context, in RPCCheckRequest, key []byte, valid func() error) (RPCCheckResult, error) {
 			if in.Endpoint == FixtureRPCURL {
 				return checkCredentialRPC(ctx, in, key, valid)
@@ -106,7 +119,8 @@ func (s *Store) rpcCredential(ctx context.Context, c RPCCredentialCommand, check
 		s.lockVenueCredentials()
 	}
 	fail := errors.New("RPC credential operation refused")
-	view := RPCCredentialView{Locked: true, TestOnly: true}
+	osVaultAvailable := s.osVaultSecretsAvailable(ctx)
+	view := RPCCredentialView{Locked: true, TestOnly: true, OSVaultAvailable: osVaultAvailable}
 	if !hexValue(c.AccountID, 16) || (c.Action != "status" && c.Action != "save" && c.Action != "verify" && c.Action != "check" && c.Action != "remove" && c.Action != "backup" && c.Action != "verify-backup" && c.Action != "restore") {
 		return view, fail
 	}
@@ -118,12 +132,12 @@ func (s *Store) rpcCredential(ctx context.Context, c RPCCredentialCommand, check
 		if c.Key != "" || c.Passphrase != "" {
 			return view, fail
 		}
-	} else if !validPassword(c.Passphrase) || (c.Action == "save" && c.Key == "") || (c.Action != "save" && c.Key != "") {
+	} else if (c.Action == "save" && c.Key == "") || (c.Action != "save" && c.Key != "") || (c.Passphrase != "" && !validPassword(c.Passphrase)) || ((recovering || c.Action == "backup") && !validPassword(c.Passphrase)) {
 		return view, fail
 	}
 	if c.Action == "check" {
 		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, 5*time.Second)
+		ctx, cancel = context.WithTimeout(ctx, 10*time.Second)
 		defer cancel()
 	}
 	// SQLite's write fence serializes configuration/identity changes and vault
@@ -190,6 +204,7 @@ func (s *Store) rpcCredential(ctx context.Context, c RPCCredentialCommand, check
 		view.TestOnly = v.Version == 1
 		view.Ref = v.Ref
 		view.Saved = true
+		view.OSProtected = v.OSProtected
 		view.Stale = account.RPC == nil || v.Binding != rpcBinding(*account)
 		if account.Mode == "fixture-managed" || ordinaryNetworkAccount(*account) {
 			live := s.fixtureView(ctx)
@@ -205,6 +220,12 @@ func (s *Store) rpcCredential(ctx context.Context, c RPCCredentialCommand, check
 		return view, ErrConflict
 	}
 	if c.Action != "remove" && (account.RPC == nil || (version == 1 && account.RPC.Endpoint != FixtureRPCURL) || (version == 2 && !validProviderRPC(*account)) || account.RPC.Network != account.Network) {
+		return view, fail
+	}
+	if version == 2 && (c.Action == "save" || c.Action == "check" || c.Action == "restore") && !rpcProviderRequiresKey(rpcProvider(account.RPC.Endpoint, account.Network)) {
+		return view, fail
+	}
+	if c.Action == "save" && c.Passphrase == "" && (version != 2 || !osVaultAvailable) {
 		return view, fail
 	}
 	var restored []byte
@@ -223,7 +244,22 @@ func (s *Store) rpcCredential(ctx context.Context, c RPCCredentialCommand, check
 		}
 	}
 	if exists {
-		plain, err := s.openRPCVaultKey(c.AccountID, c.Passphrase, v)
+		openSecret := c.Passphrase
+		if c.Action == "backup" {
+			if v.OSProtected {
+				openSecret = ""
+			}
+		} else if c.Action != "save" {
+			if v.OSProtected {
+				if c.Passphrase != "" {
+					return view, fail
+				}
+				openSecret = ""
+			} else if !validPassword(c.Passphrase) {
+				return view, fail
+			}
+		}
+		plain, err := s.openRPCVaultKey(ctx, c.AccountID, openSecret, v)
 		defer clear(plain)
 		if err != nil {
 			return view, fail
@@ -263,16 +299,23 @@ func (s *Store) rpcCredential(ctx context.Context, c RPCCredentialCommand, check
 			view.Check = &result
 			return view, nil
 		}
+		if c.Action == "backup" {
+			if view.Stale {
+				return view, fail
+			}
+			backupVault := v
+			if v.OSProtected {
+				backupVault, err = s.sealRPCVaultEnvelope(ctx, v.Version, account.ID, v.Ref, v.Binding, c.Passphrase, plain, false)
+				if err != nil {
+					return view, fail
+				}
+			}
+			view.Backup = &RPCCredentialBackup{Version: backupVault.Version, InstanceID: s.instanceID, AccountID: account.ID, Vault: backupVault}
+			view.BackupVerified = true
+			return view, nil
+		}
 	} else if c.Action != "save" && c.Action != "restore" {
 		return view, fail
-	}
-	if c.Action == "backup" {
-		if view.Stale {
-			return view, fail
-		}
-		view.Backup = &RPCCredentialBackup{Version: v.Version, InstanceID: s.instanceID, AccountID: account.ID, Vault: v}
-		view.BackupVerified = true
-		return view, nil
 	}
 	if c.Action == "verify" {
 		if view.Stale {
@@ -284,41 +327,99 @@ func (s *Store) rpcCredential(ctx context.Context, c RPCCredentialCommand, check
 		if os.Remove(s.rpcVaultPath(c.AccountID)) != nil {
 			return view, fail
 		}
-		return RPCCredentialView{Locked: true, TestOnly: true, CanVerify: view.CanVerify, CanCheck: view.CanCheck}, nil
+		return RPCCredentialView{Locked: true, TestOnly: true, CanVerify: view.CanVerify, CanCheck: view.CanCheck, OSVaultAvailable: osVaultAvailable}, nil
 	}
-	v = rpcVault{Version: version, Binding: rpcBinding(*account), Salt: make([]byte, 16), Nonce: make([]byte, 12)}
-	if v.Ref, e = randomToken(); e != nil {
-		return view, fail
-	}
-	if _, e = rand.Read(v.Salt); e != nil {
-		return view, fail
-	}
-	if _, e = rand.Read(v.Nonce); e != nil {
-		return view, fail
-	}
-	key := passwordHash(c.Passphrase, v.Salt)
-	block, _ := aes.NewCipher(key)
-	clear(key)
-	gcm, _ := cipher.NewGCM(block)
 	plain := []byte(c.Key)
 	if c.Action == "restore" {
 		plain = append([]byte(nil), restored...)
 	}
 	defer clear(plain)
-	v.Ciphertext = gcm.Seal(nil, v.Nonce, plain, s.rpcAAD(c.AccountID, v))
+	v, err := s.sealRPCVaultEnvelope(ctx, version, c.AccountID, "", rpcBinding(*account), c.Passphrase, plain, osVaultAvailable)
+	if err != nil {
+		return view, fail
+	}
 	if WritePrivateJSON(s.rpcVaultPath(c.AccountID), v) != nil {
 		return view, fail
 	}
-	return RPCCredentialView{Ref: v.Ref, Saved: true, Locked: true, TestOnly: version == 1, CanVerify: view.CanVerify, CanCheck: view.CanCheck}, nil
+	return RPCCredentialView{Ref: v.Ref, Saved: true, Locked: true, OSVaultAvailable: osVaultAvailable, OSProtected: v.OSProtected, TestOnly: version == 1, CanVerify: view.CanVerify, CanCheck: view.CanCheck}, nil
+}
+
+func (s *Store) rpcSealKey(ctx context.Context, version int, passphrase string, salt []byte, osVaultAvailable bool) ([]byte, bool, error) {
+	if passphrase != "" {
+		if !validPassword(passphrase) {
+			return nil, false, errors.New("RPC credential operation refused")
+		}
+		return passwordHash(passphrase, salt), false, nil
+	}
+	if version != 2 || !osVaultAvailable {
+		return nil, false, errors.New("RPC credential operation refused")
+	}
+	osKey, err := s.taskSecretKey(ctx, true)
+	if err != nil || len(osKey) != 32 {
+		clear(osKey)
+		return nil, false, errors.New("system credential protection unavailable")
+	}
+	derived := deriveRPCOSVaultKey(osKey, salt)
+	clear(osKey)
+	return derived, true, nil
+}
+
+func (s *Store) sealRPCVaultEnvelope(ctx context.Context, version int, id, ref, binding, passphrase string, plain []byte, osVaultAvailable bool) (rpcVault, error) {
+	v := rpcVault{
+		Version: version,
+		Ref:     ref,
+		Binding: binding,
+		Salt:    make([]byte, 16),
+		Nonce:   make([]byte, 12),
+	}
+	if v.Ref == "" {
+		var err error
+		if v.Ref, err = randomToken(); err != nil {
+			return rpcVault{}, err
+		}
+	}
+	if _, err := rand.Read(v.Salt); err != nil {
+		return rpcVault{}, err
+	}
+	if _, err := rand.Read(v.Nonce); err != nil {
+		return rpcVault{}, err
+	}
+	key, osProtected, err := s.rpcSealKey(ctx, version, passphrase, v.Salt, osVaultAvailable)
+	if err != nil {
+		return rpcVault{}, err
+	}
+	v.OSProtected = osProtected
+	block, _ := aes.NewCipher(key)
+	clear(key)
+	gcm, _ := cipher.NewGCM(block)
+	v.Ciphertext = gcm.Seal(nil, v.Nonce, plain, s.rpcAAD(id, v))
+	return v, nil
 }
 
 // Every caller owns only one operation's plaintext and must clear it. This
 // creates no unlocked session, background lease or new credential format.
-func (s *Store) openRPCVaultKey(id, passphrase string, v rpcVault) ([]byte, error) {
-	if !validPassword(passphrase) || !validRPCVault(v) {
+func (s *Store) openRPCVaultKey(ctx context.Context, id, passphrase string, v rpcVault) ([]byte, error) {
+	if !validRPCVault(v) {
 		return nil, errors.New("RPC locked")
 	}
-	key := passwordHash(passphrase, v.Salt)
+	var key []byte
+	if v.OSProtected {
+		if passphrase != "" || !s.osVaultSecretsAvailable(ctx) {
+			return nil, errors.New("RPC locked")
+		}
+		osKey, err := s.taskSecretKey(ctx, false)
+		if err != nil || len(osKey) != 32 {
+			clear(osKey)
+			return nil, errors.New("RPC locked")
+		}
+		key = deriveRPCOSVaultKey(osKey, v.Salt)
+		clear(osKey)
+	} else {
+		if !validPassword(passphrase) {
+			return nil, errors.New("RPC locked")
+		}
+		key = passwordHash(passphrase, v.Salt)
+	}
 	block, _ := aes.NewCipher(key)
 	clear(key)
 	gcm, _ := cipher.NewGCM(block)

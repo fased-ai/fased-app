@@ -26,6 +26,7 @@ func providerAccount(t *testing.T, s *Store, endpoint, network string) RPCCreden
 	a.Network = network
 	a.Mode = "watch"
 	r.Accounts = []Account{a}
+	s.rpcAdmission = false
 	if _, e := s.UpdateAccounts(t.Context(), r); e == nil {
 		t.Fatal("closed account admission")
 	}
@@ -99,9 +100,10 @@ func TestProviderRPCVaultLifecycle(t *testing.T) {
 	if e != nil {
 		t.Fatal(e)
 	}
+	s.rpcAdmission = false
 	c.Action = "check"
 	if _, e = s.RPCCredential(t.Context(), c); e == nil {
-		t.Fatal("restart enabled credentials")
+		t.Fatal("closed admission enabled credentials")
 	}
 	c.Action = "status"
 	status := c
@@ -145,6 +147,7 @@ func TestProviderRPCVaultLifecycle(t *testing.T) {
 	}
 	c.Action = "check"
 	c.Backup = nil
+	s.rpcAdmission = false
 	if _, e = s.RPCCredential(t.Context(), c); e == nil {
 		t.Fatal("ordinary transport enabled")
 	}

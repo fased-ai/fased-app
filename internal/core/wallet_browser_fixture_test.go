@@ -51,6 +51,7 @@ func TestWalletBrowserFixtureDriver(t *testing.T) {
 		}
 	}()
 	s := server.Store
+	s.taskSecrets = fixtureTaskSecrets{}
 	s.rpcAdmission = true
 	s.custodyNetwork = "devnet"
 	s.fixture = func(_ context.Context, r signer.Request) (signer.Response, error) {

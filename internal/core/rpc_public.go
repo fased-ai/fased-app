@@ -84,19 +84,22 @@ func dialPublicRPC(ctx context.Context, network, address string, lookup rpcLooku
 }
 
 type publicRPCTransport struct {
-	enabled   bool // Deliberately false in every ordinary constructor. Tests only.
+	enabled   bool
 	transport *http.Transport
 }
 
 func newPublicRPCTransport() *publicRPCTransport {
-	d := &net.Dialer{Timeout: time.Second}
-	return &publicRPCTransport{transport: &http.Transport{
-		Proxy: nil, DisableKeepAlives: true, DisableCompression: true, MaxResponseHeaderBytes: 8192,
-		TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12}, TLSHandshakeTimeout: time.Second, ResponseHeaderTimeout: 2 * time.Second,
-		DialContext: func(ctx context.Context, network, address string) (net.Conn, error) {
-			return dialPublicRPC(ctx, network, address, net.DefaultResolver.LookupNetIP, d.DialContext)
+	d := &net.Dialer{Timeout: 5 * time.Second}
+	return &publicRPCTransport{
+		enabled: rpcActivationEnabled,
+		transport: &http.Transport{
+			Proxy: nil, DisableKeepAlives: true, DisableCompression: true, MaxResponseHeaderBytes: 8192,
+			TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12}, TLSHandshakeTimeout: 5 * time.Second, ResponseHeaderTimeout: 10 * time.Second,
+			DialContext: func(ctx context.Context, network, address string) (net.Conn, error) {
+				return dialPublicRPC(ctx, network, address, net.DefaultResolver.LookupNetIP, d.DialContext)
+			},
 		},
-	}}
+	}
 }
 func (t *publicRPCTransport) RoundTrip(r *http.Request) (*http.Response, error) {
 	if !t.enabled {

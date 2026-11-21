@@ -67,6 +67,7 @@ func TestOrdinaryCustodyAccountRPCRestartAndRecovery(t *testing.T) {
 		t.Fatalf("unsafe public projection: %+v", current)
 	}
 	account := current.Record.Accounts[0]
+	s.rpcAdmission = false
 	rpc := RPCConfigInput{Revision: current.Record.Revision, AccountID: account.ID, Network: "devnet", Endpoint: "https://devnet.helius-rpc.com"}
 	if _, err = s.ConfigureAccountRPC(ctx, rpc); err == nil {
 		t.Fatal("ordinary RPC dispatch enabled")

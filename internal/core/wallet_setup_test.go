@@ -74,6 +74,7 @@ func TestWalletSetupWatchAddressAndPreservation(t *testing.T) {
 	address := testRef().PublicIdentity().Address
 	c := AccountSetupCommand{Revision: v.Record.Revision, Action: "watch", Name: "Research", Network: "devnet", Address: address}
 	before, _ := json.Marshal(v.Record)
+	s.rpcAdmission = false
 	if _, err = s.SetupAccount(t.Context(), c); err == nil {
 		t.Fatal("ordinary admission enabled")
 	}
@@ -189,7 +190,7 @@ func TestWalletSetupMetadataIsReadOnlyAndNoSecret(t *testing.T) {
 	defer s.Close()
 	claimFixture(t, s)
 	v, _ := s.Accounts(t.Context())
-	if v.Setup.State != "not-installed" || v.Setup.NetworkWatchEnabled {
+	if v.Setup.State != "not-installed" || v.Setup.NetworkWatchEnabled != rpcActivationEnabled {
 		t.Fatal("fabricated readiness")
 	}
 	s.custodyNetwork = "mainnet-beta"

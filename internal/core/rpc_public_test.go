@@ -29,6 +29,10 @@ func TestPublicRPCAdmissionClosed(t *testing.T) {
 		}
 	}
 	rt := newPublicRPCTransport()
+	if rt.enabled != rpcActivationEnabled {
+		t.Fatal("unexpected transport activation state", rt.enabled)
+	}
+	rt.enabled = false
 	rt.transport.DialContext = func(context.Context, string, string) (net.Conn, error) {
 		t.Fatal("closed transport dialed")
 		return nil, nil

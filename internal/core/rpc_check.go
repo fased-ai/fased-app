@@ -33,13 +33,15 @@ type RPCCheckResult struct {
 	LiveRPC         bool      `json:"liveRPC"`
 }
 
-// CheckFixtureRPC preserves fixture behavior; public endpoints reach the dormant
-// production checker, whose ordinary constructor refuses before DNS or dispatch.
+// CheckFixtureRPC preserves fixture behavior; standalone callers never enable
+// live public dispatch.
 func CheckFixtureRPC(ctx context.Context, input RPCCheckRequest) (RPCCheckResult, error) {
 	if input.Endpoint == FixtureRPCURL {
 		return checkRPC(ctx, input, fixtureRPCTransport{})
 	}
-	return checkPublicRPC(ctx, input, newPublicRPCTransport())
+	disabled := newPublicRPCTransport()
+	disabled.enabled = false
+	return checkPublicRPC(ctx, input, disabled)
 }
 func checkRPC(ctx context.Context, input RPCCheckRequest, rt http.RoundTripper) (RPCCheckResult, error) {
 	var empty RPCCheckResult
@@ -53,7 +55,7 @@ func checkRPC(ctx context.Context, input RPCCheckRequest, rt http.RoundTripper) 
 
 func checkRPCProtocol(ctx context.Context, input RPCCheckRequest, rt http.RoundTripper, genesis string, fixture bool) (RPCCheckResult, error) {
 	var empty RPCCheckResult
-	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	client := http.Client{Transport: rt, CheckRedirect: func(*http.Request, []*http.Request) error { return errors.New("RPC redirects refused") }}
 	for i, method := range []string{"getGenesisHash", "getHealth"} {
@@ -158,7 +160,15 @@ func (s *Store) CheckAccountRPC(ctx context.Context, input RPCCheckRequest) (RPC
 	if s.rpcCheckFixture != nil {
 		return s.checkAccountRPC(ctx, input, s.rpcCheckFixture)
 	}
-	return s.checkAccountRPC(ctx, input, CheckFixtureRPC)
+	return s.checkAccountRPC(ctx, input, func(ctx context.Context, req RPCCheckRequest) (RPCCheckResult, error) {
+		if req.Endpoint == FixtureRPCURL {
+			return checkRPC(ctx, req, fixtureRPCTransport{})
+		}
+		if !s.rpcAdmission {
+			return RPCCheckResult{}, errors.New("only the disposable RPC endpoint and network are available")
+		}
+		return checkPublicRPC(ctx, req, newPublicRPCTransport())
+	})
 }
 func (s *Store) checkAccountRPC(ctx context.Context, input RPCCheckRequest, check func(context.Context, RPCCheckRequest) (RPCCheckResult, error)) (RPCCheckResult, error) {
 	if input.AccountID == "" && input.AccountRevision == nil {

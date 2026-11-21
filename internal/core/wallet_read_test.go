@@ -296,8 +296,9 @@ func TestWalletReadLocksRestartAndRevocation(t *testing.T) {
 		t.Fatal("restart/name-only change stranded encrypted key", err)
 	}
 	s.walletReadFixture = nil
+	s.rpcAdmission = false
 	if _, err = s.ReadWallet(t.Context(), in); err == nil {
-		t.Fatal("restart enabled ordinary live reads")
+		t.Fatal("closed admission enabled live reads")
 	}
 }
 
@@ -424,6 +425,7 @@ func TestWalletReadUIFixture(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer server.Close(context.Background())
+	server.Store.taskSecrets = fixtureTaskSecrets{}
 	var in WalletReadCommand
 	claimed, err := server.Store.Claimed(t.Context())
 	if err != nil {

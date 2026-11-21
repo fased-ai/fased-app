@@ -3,7 +3,7 @@ import { useCore } from "../core";
 import { useUI } from "../ui-preferences";
 import { Dialog } from "../components/shared";
 import { WalletTransactionDetails } from "./WalletTransactionDetails";
-import type { Account } from "../accounts";
+import { rpcRequiresKey, type Account } from "../accounts";
 import {
   currentWalletSnapshot,
   walletAmount,
@@ -29,6 +29,7 @@ export function WalletRead({
   const [snapshot, setSnapshot] = useState<WalletSnapshot>();
   const [selected, setSelected] = useState<WalletActivity>();
   const [ref, setRef] = useState(""),
+    [osProtected, setOsProtected] = useState(false),
     [password, setPassword] = useState("");
   const [open, setOpen] = useState(false),
     [busy, setBusy] = useState(false);
@@ -42,6 +43,7 @@ export function WalletRead({
     setSelected(undefined);
     setPassword("");
     setRef("");
+    setOsProtected(false);
     setOpen(false);
     setBusy(false);
     setState("Unavailable");
@@ -64,6 +66,30 @@ export function WalletRead({
     );
     return () => clearTimeout(timer);
   }, [snapshot]);
+  async function loadSnapshot(
+    readRef: string,
+    secret: string,
+    epoch: number,
+    signal: AbortSignal,
+  ) {
+    const v = await core.request<WalletSnapshot>(
+      "accounts/read",
+      "POST",
+      {
+        accountId: account.id,
+        revision,
+        ref: readRef,
+        ...(secret ? { passphrase: secret } : {}),
+      },
+      signal,
+    );
+    if (epoch !== generation.current) return;
+    if (!currentWalletSnapshot(v, account, revision, readRef, address))
+      throw new Error("stale snapshot");
+    setSnapshot(v);
+    setState("");
+    setOpen(false);
+  }
   async function prepare() {
     if (busy || blocked || account.rpc?.version !== 2) return;
     const epoch = ++generation.current;
@@ -75,10 +101,17 @@ export function WalletRead({
     setBusy(true);
     setState("Loading");
     try {
+      if (!rpcRequiresKey(account.rpc.endpoint, account.network)) {
+        setOsProtected(false);
+        setRef("");
+        await loadSnapshot("", "", epoch, abort.signal);
+        return;
+      }
       const v = await core.request<{
         saved: boolean;
         stale: boolean;
         ref: string;
+        osProtected?: boolean;
       }>(
         "accounts/rpc-credential",
         "PUT",
@@ -92,6 +125,12 @@ export function WalletRead({
       }
       setRef(v.ref);
       setPassword("");
+      if (v.osProtected) {
+        setOsProtected(true);
+        await loadSnapshot(v.ref, "", epoch, abort.signal);
+        return;
+      }
+      setOsProtected(false);
       setOpen(true);
       setState("Locked");
     } catch {
@@ -112,18 +151,7 @@ export function WalletRead({
     setBusy(true);
     setState("Loading");
     try {
-      const v = await core.request<WalletSnapshot>(
-        "accounts/read",
-        "POST",
-        { accountId: account.id, revision, ref, passphrase: secret },
-        abort.signal,
-      );
-      if (epoch !== generation.current) return;
-      if (!currentWalletSnapshot(v, account, revision, ref, address))
-        throw new Error("stale snapshot");
-      setSnapshot(v);
-      setState("");
-      setOpen(false);
+      await loadSnapshot(ref, secret, epoch, abort.signal);
     } catch {
       if (epoch === generation.current) setState("Unavailable");
     } finally {
@@ -229,6 +257,7 @@ export function WalletRead({
           account={account}
           snapshot={current}
           activity={selected}
+          passwordless={current.credentialRef === "" || osProtected}
           onClose={() => setSelected(undefined)}
         />
       )}

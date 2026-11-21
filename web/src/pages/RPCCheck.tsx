@@ -8,6 +8,8 @@ import { Dialog } from "../components/shared";
 import {
   fixtureNetwork,
   rpcEndpoint,
+  rpcPresets,
+  rpcRequiresKey,
   type Account,
   type AccountsView,
 } from "../accounts";
@@ -24,15 +26,16 @@ export function RPCCheck({
 }) {
   const { t } = useUI();
   const core = useCore();
+  const presets = rpcPresets(account.network);
   const [endpoint, setEndpoint] = useState(() => rpcEndpoint(account));
-  const [result, setResult] = useState(false);
+  const [result, setResult] = useState<"" | "live" | "test">("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const generation = useRef(0);
   useEffect(() => {
     generation.current++;
     setBusy(false);
-    setResult(false);
+    setResult("");
     setError("");
     return () => {
       generation.current++;
@@ -43,7 +46,7 @@ export function RPCCheck({
     const epoch = ++generation.current;
     setBusy(true);
     setError("");
-    setResult(false);
+    setResult("");
     try {
       const view = await core.request<AccountsView>("accounts/rpc", "PUT", {
         accountId: account.id,
@@ -68,7 +71,7 @@ export function RPCCheck({
             if (busy) return;
             const epoch = ++generation.current;
             setBusy(true);
-            setResult(false);
+            setResult("");
             setError("");
             try {
               const v = await core.request<{
@@ -84,14 +87,15 @@ export function RPCCheck({
               });
               if (epoch === generation.current) {
                 if (
-                  !v.fixtureOnly ||
-                  v.liveRPC ||
+                  typeof v.fixtureOnly !== "boolean" ||
+                  typeof v.liveRPC !== "boolean" ||
+                  v.fixtureOnly === v.liveRPC ||
                   v.account?.id !== account.id ||
                   v.account.network !== account.network ||
                   v.accountRevision !== revision
                 )
                   throw new Error("Unexpected RPC capability");
-                setResult(true);
+                setResult(v.liveRPC ? "live" : "test");
               }
             } catch (e) {
               if (epoch === generation.current)
@@ -101,6 +105,26 @@ export function RPCCheck({
             }
           }}
         >
+          {presets.length > 0 && (
+            <div className="account-actions" role="group" aria-label="RPC">
+              {presets.map((preset) => (
+                <button
+                  key={preset.id}
+                  type="button"
+                  className="secondary"
+                  aria-pressed={endpoint === preset.endpoint}
+                  disabled={busy}
+                  onClick={() => {
+                    setEndpoint(preset.endpoint);
+                    setResult("");
+                    setError("");
+                  }}
+                >
+                  {preset.label}
+                </button>
+              ))}
+            </div>
+          )}
           <label>
             RPC
             <input
@@ -110,7 +134,7 @@ export function RPCCheck({
               disabled={busy}
               onChange={(e) => {
                 setEndpoint(e.target.value);
-                setResult(false);
+                setResult("");
                 setError("");
               }}
             />
@@ -147,13 +171,23 @@ export function RPCCheck({
               </button>
             )}
           </div>
-          {result && <p role="status">{t("Verified (test)")}</p>}
+          {result && (
+            <p role="status">
+              {t(result === "live" ? "Verified" : "Verified (test)")}
+            </p>
+          )}
           {error && <p role="alert">{error}</p>}
         </form>
         <RPCCredential
           accountId={account.id}
           revision={revision}
           configured={!!account.rpc}
+          keyless={
+            !rpcRequiresKey(
+              endpoint || account.rpc?.endpoint || "",
+              account.network,
+            )
+          }
         />
         {account.version === 3 && (
           <VenueCredential accountId={account.id} revision={revision} />

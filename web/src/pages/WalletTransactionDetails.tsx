@@ -17,11 +17,13 @@ export function WalletTransactionDetails({
   account,
   snapshot,
   activity,
+  passwordless = false,
   onClose,
 }: {
   account: Account;
   snapshot: WalletSnapshot;
   activity: WalletActivity;
+  passwordless?: boolean;
   onClose: () => void;
 }) {
   const core = useCore(),
@@ -31,11 +33,15 @@ export function WalletTransactionDetails({
     [failed, setFailed] = useState(false),
     [detail, setDetail] = useState<WalletTransaction>();
   const active = useRef<AbortController | undefined>(undefined);
-  useEffect(() => () => active.current?.abort(), []);
-  async function inspect() {
-    if (busy || !password || snapshot.expiresAt * 1000 <= Date.now()) return;
-    const secret = password,
-      abort = new AbortController();
+  async function inspect(secret = password) {
+    if (
+      busy ||
+      (!passwordless && !secret) ||
+      snapshot.expiresAt * 1000 <= Date.now()
+    )
+      return;
+    const abort = new AbortController();
+    active.current?.abort();
     active.current = abort;
     setPassword("");
     setBusy(true);
@@ -49,7 +55,7 @@ export function WalletTransactionDetails({
           accountId: account.id,
           revision: snapshot.revision,
           ref: snapshot.credentialRef,
-          passphrase: secret,
+          ...(secret ? { passphrase: secret } : {}),
           selection: {
             ...activity,
             binding: snapshot.binding,
@@ -82,6 +88,10 @@ export function WalletTransactionDetails({
       }
     }
   }
+  useEffect(() => {
+    if (passwordless) void inspect("");
+    return () => active.current?.abort();
+  }, [passwordless, snapshot.credentialRef, activity.signature]);
   return (
     <Dialog title={t("Transaction")} onClose={onClose}>
       <div className="wallet-transaction">
@@ -135,6 +145,28 @@ export function WalletTransactionDetails({
             <button className="text-button" onClick={onClose}>
               {t("Close")}
             </button>
+          </>
+        ) : passwordless ? (
+          <>
+            {failed ? (
+              <span role="alert">{t("Unavailable")}</span>
+            ) : (
+              <p role="status">{t("Loading")}</p>
+            )}
+            <div className="account-actions">
+              {failed && (
+                <button
+                  type="button"
+                  disabled={busy || snapshot.expiresAt * 1000 <= Date.now()}
+                  onClick={() => void inspect("")}
+                >
+                  {t("Retry")}
+                </button>
+              )}
+              <button type="button" className="text-button" onClick={onClose}>
+                {t("Close")}
+              </button>
+            </div>
           </>
         ) : (
           <form

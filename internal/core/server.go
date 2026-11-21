@@ -96,6 +96,7 @@ func startModesWithTaskSecrets(ctx context.Context, dir, listen, publicOrigin st
 	store.providerFixture = fixture
 	store.providerOnlyFixture = providerOnly
 	if fixture || sessionFixture {
+		store.rpcAdmission = false
 		store.provider.apiCredentials = false
 	}
 	failed := true
