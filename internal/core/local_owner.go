@@ -50,7 +50,7 @@ func (s *Store) hasPassword(ctx context.Context) (bool, error) {
 	if err := s.db.QueryRowContext(ctx, "SELECT password_salt, password_hash FROM instance WHERE id=1").Scan(&salt, &hash); err != nil {
 		return false, err
 	}
-	return len(hash) > 0 && !localPasswordDisabled(salt), nil
+	return len(hash) > 0 && !passwordDisabled(salt), nil
 }
 
 func (s *Store) localOwnerSessionLocked(ctx context.Context) (string, error) {
@@ -189,6 +189,10 @@ func (h *HTTPHandler) localOwnerAPI(w http.ResponseWriter, r *http.Request) {
 }
 
 func localPasswordDisabled(salt []byte) bool { return bytes.Equal(salt, localOwnerSalt) }
+
+func passwordDisabled(salt []byte) bool {
+	return localPasswordDisabled(salt) || bytes.Equal(salt, remoteOwnerSalt) || bytes.Equal(salt, pairedOwnerSalt)
+}
 
 // Existing app-password sessions remain valid; an OS-authorized Local command
 // can also obtain a session without a separate login or stored credential.

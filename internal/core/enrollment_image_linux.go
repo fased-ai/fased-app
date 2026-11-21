@@ -157,7 +157,7 @@ func enrollmentPath(name string) (included bool, max int64, ok bool) {
 		return true, aiVaultMaxSerializedBytes, true
 	case "core.sqlite-wal", "core.sqlite-shm":
 		return false, MaxEnrollmentFileBytes, true
-	case "endpoint.json", "claim-code.json", "cli-session.json":
+	case "endpoint.json", "claim-code.json", "cli-session.json", "pairing.json":
 		return false, 64 << 10, true
 	case "instance.lock", "host-preparation.lock":
 		return false, 0, true
@@ -513,7 +513,7 @@ func enrollmentOwner(ctx context.Context, c snapshotReader, schema int) error {
 	if c.QueryRowContext(ctx, "SELECT password_salt,password_hash FROM instance WHERE id=1").Scan(&salt, &hash) != nil {
 		return errEnrollmentImage
 	}
-	marker := localPasswordDisabled(salt) || bytes.Equal(salt, remoteOwnerSalt)
+	marker := passwordDisabled(salt)
 	if schema == LocalOwnerStateSchema {
 		if !localPasswordDisabled(salt) || !validConnectionRef(string(hash)) {
 			return errEnrollmentImage

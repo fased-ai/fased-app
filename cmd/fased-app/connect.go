@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"github.com/fased-ai/fased-app/internal/connection"
 	"github.com/fased-ai/fased-app/internal/core"
-	"github.com/fased-ai/fased-app/internal/tailnet"
 	"io"
 	"path/filepath"
 	"time"
@@ -22,7 +21,7 @@ func connectCommand(args []string, out, errOut io.Writer) error {
 		return e
 	}
 	dataDir := f.String("data-dir", base, "private client preferences")
-	address := f.String("url", "", "existing Local or Tailscale HTTPS instance")
+	address := f.String("url", "", "existing Local or Remote HTTPS instance (Tailscale, Cloudflare Tunnel, or HTTPS domain)")
 	expected := f.String("instance-id", "", "optional expected instance identity")
 	printOnly := f.Bool("print", false, "verify and print without opening a browser")
 	if e := f.Parse(args); e != nil {
@@ -38,8 +37,8 @@ func connectCommand(args []string, out, errOut io.Writer) error {
 		return e
 	}
 	if result.Location == "remote" {
-		if _, _, err := tailnet.Origin(result.URL); err != nil {
-			return errors.New("Remote requires its Tailscale HTTPS address")
+		if _, err := connection.RemoteHTTPSOrigin(result.URL); err != nil {
+			return errors.New("Remote requires an HTTPS address (Tailscale HTTPS, Cloudflare Tunnel, or your own HTTPS domain)")
 		}
 		dir := *dataDir
 		if e = core.EnsurePrivateDirectory(dir); e != nil {
@@ -64,7 +63,7 @@ func connectCommand(args []string, out, errOut io.Writer) error {
 func connectedRemoteClient(ctx context.Context, dir string) (*core.Client, error) {
 	data, err := core.ReadPrivateFile(filepath.Join(dir, "remote-connection.json"))
 	if err != nil {
-		return nil, errors.New("choose your Remote instance with fased connect --url https://your-instance.ts.net")
+		return nil, errors.New("choose your Remote instance with fased connect --url https://your-instance")
 	}
 	var profile connection.Result
 	if json.Unmarshal(data, &profile) != nil || profile.Location != "remote" || profile.Transport != "private-https" {

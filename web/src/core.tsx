@@ -14,6 +14,7 @@ export type InstanceConnection = {
   instanceId: string;
   location: "local" | "remote";
   transport: "loopback" | "private-https";
+  remoteTransport?: string;
   ownerUid?: number;
   ownerKind?: "custody";
 };
@@ -31,6 +32,7 @@ type Health = {
   connection: {
     location: "local" | "remote";
     transport: "loopback" | "private-https";
+    remoteTransport?: string;
     ownerUid?: number;
     ownerKind?: "custody";
   };
@@ -60,6 +62,8 @@ function useCoreState() {
   const [remoteAccess, setRemoteAccess] = useState(false);
   const [remoteEnrolled, setRemoteEnrolled] = useState(false);
   const [remoteSignedOut, setRemoteSignedOut] = useState(false);
+  const [pairingAvailable, setPairingAvailable] = useState(false);
+  const [remoteTransport, setRemoteTransport] = useState("");
   const [localAccess, setLocalAccess] = useState(false);
   const [localAutoEnter, setLocalAutoEnter] = useState(false);
   const [localSignedOut, setLocalSignedOut] = useState(() => {
@@ -139,6 +143,7 @@ function useCoreState() {
         route !== "auth/claim" &&
         route !== "auth/local" &&
         route !== "auth/remote" &&
+        route !== "auth/pair" &&
         route !== "installation/local-owner"
       ) {
         const message = "Your session ended. Sign in again.";
@@ -186,6 +191,9 @@ function useCoreState() {
         instanceId: health.instanceId,
         location: health.connection.location,
         transport: health.connection.transport,
+        ...(health.connection.remoteTransport === undefined
+          ? {}
+          : { remoteTransport: health.connection.remoteTransport }),
         ...(health.connection.ownerUid === undefined
           ? {}
           : { ownerUid: health.connection.ownerUid }),
@@ -202,6 +210,8 @@ function useCoreState() {
         remoteAccess?: boolean;
         remoteEnrolled?: boolean;
         remoteSignedOut?: boolean;
+        pairingAvailable?: boolean;
+        remoteTransport?: string;
         legacyAuthenticated?: boolean;
         passwordAvailable?: boolean;
       }>("auth/state");
@@ -211,6 +221,10 @@ function useCoreState() {
       setRemoteAccess(auth.remoteAccess === true);
       setRemoteEnrolled(auth.remoteEnrolled === true);
       setRemoteSignedOut(auth.remoteSignedOut === true);
+      setPairingAvailable(auth.pairingAvailable === true);
+      setRemoteTransport(
+        auth.remoteTransport ?? health.connection.remoteTransport ?? "",
+      );
       if (auth.legacyAuthenticated) csrf.current = auth.csrfToken ?? "";
       setPasswordAvailable(auth.passwordAvailable === true);
       if (
@@ -380,6 +394,49 @@ function useCoreState() {
       changePending(epoch, -1);
     }
   }
+  async function pair(pairCode: string, label?: string) {
+    const epoch = ++authGeneration.current;
+    setError("");
+    changePending(epoch, 1);
+    try {
+      await inspect();
+      const session = await request<{
+        csrfToken: string;
+        sessionToken?: string;
+        sessionMode?: "bearer" | "cookie";
+      }>(
+        "auth/pair",
+        "POST",
+        label ? { code: pairCode.trim(), label } : { code: pairCode.trim() },
+        undefined,
+        { "X-Fased-Pair": "1" },
+      );
+      if (epoch !== authGeneration.current) return;
+      try {
+        sessionStorage.removeItem("fased.remote.signed-out");
+      } catch {}
+      csrf.current = session.csrfToken;
+      const cookieMode = session.sessionMode
+        ? session.sessionMode === "cookie"
+        : location.protocol === "https:";
+      token.current = cookieMode ? "" : (session.sessionToken ?? "");
+      try {
+        if (token.current) sessionStorage.setItem(sessionKey, token.current);
+        else sessionStorage.removeItem(sessionKey);
+      } catch {
+        /* current-tab memory still works */
+      }
+      await refresh();
+      if (epoch === authGeneration.current) setRemoteSignedOut(false);
+    } catch (e) {
+      if (epoch === authGeneration.current) {
+        setError(e instanceof Error ? e.message : "Pairing failed");
+        throw e;
+      }
+    } finally {
+      changePending(epoch, -1);
+    }
+  }
   const updateSetup = useCallback(
     (patch: Partial<PrototypeState["setup"]>) => {
       const epoch = generation.current;
@@ -424,7 +481,7 @@ function useCoreState() {
     try {
       await request("auth/logout", "POST", {});
       if (epoch === authGeneration.current) {
-        if (remoteAccess) {
+        if (remoteAccess || pairingAvailable) {
           setRemoteSignedOut(true);
           try {
             sessionStorage.setItem("fased.remote.signed-out", "1");
@@ -449,6 +506,8 @@ function useCoreState() {
     remoteAccess,
     remoteEnrolled,
     remoteSignedOut,
+    pairingAvailable,
+    remoteTransport,
     localAccess,
     localAutoEnter,
     localSignedOut,
@@ -463,6 +522,7 @@ function useCoreState() {
     capabilities,
     connection,
     authenticate,
+    pair,
     updateSetup,
     logout,
     retry: async () => {

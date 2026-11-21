@@ -1,7 +1,6 @@
 package core
 
 import (
-	"bytes"
 	"context"
 	"crypto/hmac"
 	"crypto/rand"
@@ -136,7 +135,7 @@ func (s *Store) Login(ctx context.Context, password string) (string, error) {
 	if err := s.db.QueryRowContext(ctx, "SELECT password_salt,password_hash FROM instance WHERE id=1 AND password_hash IS NOT NULL").Scan(&salt, &expected); err != nil {
 		return "", ErrUnauthorized
 	}
-	if localPasswordDisabled(salt) || bytes.Equal(salt, remoteOwnerSalt) {
+	if passwordDisabled(salt) {
 		return "", ErrUnauthorized
 	}
 	derived := passwordHash(password, salt)
@@ -211,6 +210,9 @@ func (s *Store) Logout(ctx context.Context, token string) error {
 	defer s.lockVenueCredentials() // Close the admission window before session deletion completes.
 	s.logoutAIConnections()
 	_, err := s.db.ExecContext(ctx, "DELETE FROM sessions WHERE token_hash=?", tokenHash(token))
+	if err == nil && len(token) == 43 {
+		s.removePairedDeviceByTokenHash(tokenHash(token))
+	}
 	return err
 }
 func csrfToken(token string) string {

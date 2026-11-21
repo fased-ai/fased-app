@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"errors"
 	"github.com/fased-ai/fased-app/internal/core"
-	"github.com/fased-ai/fased-app/internal/tailnet"
 	"io"
 	"mime"
 	"net"
@@ -19,7 +18,46 @@ import (
 	"time"
 )
 
-var identity = regexp.MustCompile(`^[A-Za-z0-9_-]{16,128}$`)
+var (
+	identity = regexp.MustCompile(`^[A-Za-z0-9_-]{16,128}$`)
+	fqdnHost = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$`)
+)
+
+// RemoteHTTPSOrigin validates a credential-free HTTPS public origin suitable
+// for Tailscale Serve, Cloudflare Tunnel, or a custom reverse-proxied domain.
+func RemoteHTTPSOrigin(value string) (string, error) {
+	origin, err := Origin(value)
+	if err != nil {
+		return "", err
+	}
+	u, err := url.Parse(origin)
+	if err != nil || u.Scheme != "https" {
+		return "", errors.New("Remote requires an HTTPS address (Tailscale HTTPS, Cloudflare Tunnel, or your own HTTPS domain)")
+	}
+	host := strings.ToLower(u.Hostname())
+	if len(host) > 253 || net.ParseIP(host) != nil || !fqdnHost.MatchString(host) || strings.HasSuffix(host, ".localhost") || strings.HasSuffix(host, ".local") {
+		return "", errors.New("Remote requires an HTTPS domain name (Tailscale HTTPS, Cloudflare Tunnel, or your own HTTPS domain)")
+	}
+	parts := strings.Split(host, ".")
+	tld := parts[len(parts)-1]
+	allDigits := true
+	for _, r := range tld {
+		if r < '0' || r > '9' {
+			allDigits = false
+			break
+		}
+	}
+	if len(tld) < 2 || allDigits {
+		return "", errors.New("Remote requires an HTTPS domain name (Tailscale HTTPS, Cloudflare Tunnel, or your own HTTPS domain)")
+	}
+	if u.Port() != "" {
+		port, convErr := strconv.Atoi(u.Port())
+		if convErr != nil || strconv.Itoa(port) != u.Port() || port < 1024 || port > 65535 {
+			return "", errors.New("invalid Remote HTTPS port")
+		}
+	}
+	return origin, nil
+}
 
 func Origin(value string) (string, error) {
 	value = strings.TrimSpace(value)
@@ -59,8 +97,11 @@ type Result struct {
 func Probe(ctx context.Context, value, expected string) (Result, error) {
 	result, err := Inspect(ctx, value, expected)
 	if err == nil && result.Location == "remote" {
-		if _, _, e := tailnet.Origin(result.URL); e != nil {
-			return Result{}, errors.New("Remote requires its Tailscale HTTPS address")
+		if result.Transport != "private-https" {
+			return Result{}, errors.New("Remote requires an HTTPS address (Tailscale HTTPS, Cloudflare Tunnel, or your own HTTPS domain)")
+		}
+		if _, e := RemoteHTTPSOrigin(result.URL); e != nil {
+			return Result{}, e
 		}
 	}
 	return result, err

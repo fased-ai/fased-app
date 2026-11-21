@@ -4,6 +4,7 @@ export default defineConfig({
   ...prototype,
   testMatch: [
     "core-auth-owner.spec.ts",
+    "core-remote-pair.spec.ts",
     "core-providers-signin.spec.ts",
     "core-chat-drafts.spec.ts",
     "core-tasks-schedules.spec.ts",

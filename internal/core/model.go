@@ -63,11 +63,12 @@ type SetupRecord struct {
 	Settings Setup `json:"settings"`
 }
 type ConnectionInfo struct {
-	RemoteReady bool   `json:"remoteReady,omitempty"`
-	Location    string `json:"location"`
-	Transport   string `json:"transport"`
-	OwnerUID    int    `json:"ownerUid,omitempty"` // Protected owner terminal handoff; never authorization.
-	OwnerKind   string `json:"ownerKind,omitempty"`
+	RemoteReady     bool   `json:"remoteReady,omitempty"`
+	Location        string `json:"location"`
+	Transport       string `json:"transport"`
+	RemoteTransport string `json:"remoteTransport,omitempty"`
+	OwnerUID        int    `json:"ownerUid,omitempty"` // Protected owner terminal handoff; never authorization.
+	OwnerKind       string `json:"ownerKind,omitempty"`
 }
 
 type Health struct {
@@ -90,10 +91,12 @@ func (s *Store) Health() Health {
 }
 
 type Endpoint struct {
-	URL        string `json:"url"`
-	InstanceID string `json:"instanceId"`
-	Network    string `json:"network"`
-	Address    string `json:"address"`
+	URL             string `json:"url"`
+	InstanceID      string `json:"instanceId"`
+	Network         string `json:"network"`
+	Address         string `json:"address"`
+	PublicOrigin    string `json:"publicOrigin,omitempty"`
+	RemoteTransport string `json:"remoteTransport,omitempty"`
 }
 type ClaimCode struct {
 	Code      string    `json:"code"`

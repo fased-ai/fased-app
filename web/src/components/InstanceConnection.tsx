@@ -1,15 +1,34 @@
 import { useUI } from "../ui-preferences";
 import "./instance-connection.css";
 import { useState, useId, type FormEvent } from "react";
-import { instanceOrigin } from "../connection";
+import { remoteInstanceOrigin } from "../connection";
 import { useCore } from "../core";
 import { ArrowRight, Monitor, Server } from "../icons";
+
+function transportLabel(transport?: string): string {
+  switch (transport) {
+    case "tailscale":
+      return "Tailscale";
+    case "cloudflare":
+      return "Cloudflare";
+    case "domain":
+      return "Domain";
+    case "ssh":
+      return "SSH";
+    case "proxy":
+      return "HTTPS";
+    default:
+      return "";
+  }
+}
 
 export function InstanceSummary() {
   const { t: uiText } = useUI();
   const core = useCore();
   const info = core.connection;
   if (!info) return null;
+  const transportTag =
+    info.location === "remote" ? transportLabel(info.remoteTransport) : "";
   return (
     <>
       <dl className="instance-facts">
@@ -21,7 +40,12 @@ export function InstanceSummary() {
             ) : (
               <Server size={14} />
             )}{" "}
-            {info.location === "local" ? uiText("Local") : uiText("Remote")}{" "}
+            <span>
+              {info.location === "local" ? uiText("Local") : uiText("Remote")}
+            </span>
+            {transportTag && (
+              <span className="transport-tag"> · {transportTag}</span>
+            )}{" "}
             <span className="dot" />
           </dd>
         </div>
@@ -62,7 +86,7 @@ export function RemoteConnection({ expanded = false }: { expanded?: boolean }) {
     setOpened(false);
     let url: string;
     try {
-      url = instanceOrigin(address);
+      url = remoteInstanceOrigin(address);
     } catch (e) {
       setError((e as Error).message);
       return;
@@ -106,7 +130,7 @@ export function RemoteConnection({ expanded = false }: { expanded?: boolean }) {
         <input
           id={inputId}
           type="url"
-          placeholder={uiText("https://your-instance.ts.net")}
+          placeholder={uiText("https://fased.example.com")}
           autoComplete="url"
           value={address}
           onChange={(e) => {

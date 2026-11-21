@@ -97,3 +97,41 @@ func TestProbeRefusesRedirectAndOversize(t *testing.T) {
 		t.Fatal("oversized reply accepted")
 	}
 }
+
+func TestRemoteHTTPSOriginAndPairURL(t *testing.T) {
+	t.Parallel()
+	for _, valid := range []string{
+		"https://node.owner.ts.net",
+		"https://fased.example.com/",
+		"https://tunnel-1.trycloudflare.com",
+		"https://fased.example.com:8443",
+	} {
+		if got, err := RemoteHTTPSOrigin(valid); err != nil || !strings.HasPrefix(got, "https://") {
+			t.Fatalf("valid remote HTTPS origin %q failed: %q %v", valid, got, err)
+		}
+	}
+	for _, invalid := range []string{
+		"http://fased.example.com",
+		"http://127.0.0.1:7331",
+		"https://127.0.0.1:7331",
+		"https://[::1]:7331",
+		"https://localhost:7331",
+		"https://intranet",
+		"https://fased.local",
+		"https://fased.example.com:443",
+		"https://fased.example.com:08443",
+	} {
+		if _, err := RemoteHTTPSOrigin(invalid); err == nil {
+			t.Fatalf("unsafe remote origin accepted: %q", invalid)
+		}
+	}
+	id := strings.Repeat("a", 43)
+	code := strings.Repeat("p", 43)
+	u, err := OwnerPairURL("https://fased.example.com/", id, code)
+	if err != nil || u != "https://fased.example.com/?instance="+id+"#pair="+code {
+		t.Fatalf("unexpected OwnerPairURL: %q %v", u, err)
+	}
+	if _, err = OwnerPairURL("https://fased.example.com", id, "bad"); err == nil {
+		t.Fatal("bad pairing code accepted")
+	}
+}

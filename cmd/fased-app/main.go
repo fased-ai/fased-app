@@ -111,6 +111,12 @@ func run(args []string, in *os.File, out, errOut io.Writer) error {
 	if len(args) > 0 && args[0] == "connect" {
 		return connectCommand(args[1:], out, errOut)
 	}
+	if len(args) > 0 && args[0] == "pair" {
+		return pairCommand(args[1:], out, errOut)
+	}
+	if len(args) > 0 && args[0] == "server" {
+		return serverCommand(args[1:], out, errOut)
+	}
 	if len(args) > 1 && args[0] == "custody" && args[1] == "fixture-inspection" {
 		return inspectionFixtureCommand(args[2:], in, out, errOut)
 	}
@@ -172,7 +178,7 @@ func run(args []string, in *os.File, out, errOut io.Writer) error {
 		return custodyCommand(args[1:], in, out, errOut)
 	}
 	if len(args) == 0 {
-		return errors.New("usage: fased-app wen-session|wen-research|wen-market-data|agents|update|updates|accounts|install|connect|custody|service|open|access|recover|uninstall|serve|status|claim-code|claim|login|logout|setup|version [options]")
+		return errors.New("usage: fased-app wen-session|wen-research|wen-market-data|agents|update|updates|accounts|install|connect|pair|server|custody|service|open|access|recover|uninstall|serve|status|claim-code|claim|login|logout|setup|version [options]")
 	}
 	if args[0] == "install" || args[0] == "uninstall" || args[0] == "service" || args[0] == "open" {
 		return hostCommand(args, out, errOut)
@@ -207,6 +213,7 @@ func run(args []string, in *os.File, out, errOut io.Writer) error {
 	listen := flags.String("listen", "127.0.0.1:7331", "loopback listener")
 	researchOrigin := flags.String("wen-research-origin", "", "optional local read-only Kraken research service")
 	publicOrigin := flags.String("public-origin", "", "exact private HTTPS origin behind a trusted local proxy")
+	remoteTransport := flags.String("remote-transport", "", "remote ingress transport: tailscale, cloudflare, domain, proxy, or ssh")
 	requireSandbox := flags.Bool("require-sandbox", false, "require installed Linux mount isolation before starting")
 	requirePassword := flags.Bool("require-password", false, "require explicit owner password instead of instant Local browser entry")
 	installationRoot := flags.String("installation-root", "", "immutable installed application directory")
@@ -225,6 +232,19 @@ func run(args []string, in *os.File, out, errOut io.Writer) error {
 	}
 	if *instanceLocation != "local" && *instanceLocation != "remote" {
 		return errors.New("instance location must be local or remote")
+	}
+	if *remoteTransport != "" {
+		if args[0] != "serve" || *instanceLocation != "remote" {
+			return errors.New("--remote-transport requires serve --instance-location remote")
+		}
+		switch *remoteTransport {
+		case "tailscale", "cloudflare", "domain", "proxy", "ssh":
+		default:
+			return errors.New("--remote-transport must be tailscale, cloudflare, domain, proxy, or ssh")
+		}
+		if *remoteConfig != "" && *remoteTransport != "tailscale" {
+			return errors.New("managed Remote requires tailscale transport")
+		}
 	}
 	if *privateProofStdin && args[0] != "status" {
 		return errors.New("private access proof requires status")
@@ -319,7 +339,7 @@ func run(args []string, in *os.File, out, errOut io.Writer) error {
 				source = "remote"
 			}
 		}
-		return serveInstalledRuntimeWithOptions(*installationRoot, *dir, *listen, *publicOrigin, *researchOrigin, *instanceLocation, source, ownerUID, installedProviderFixture, *requirePassword, out, *custodyConfig)
+		return serveInstalledRuntimeWithTransport(*installationRoot, *dir, *listen, *publicOrigin, *researchOrigin, *instanceLocation, *remoteTransport, source, ownerUID, installedProviderFixture, *requirePassword, out, *custodyConfig)
 	case "setup-link":
 		return ownerSetupLink(ctx, *dir, *publicOrigin, out)
 	case "claim-code":
@@ -500,6 +520,9 @@ func serveInstalledRuntimeWithProviderFixture(installationRoot, dir, listen, pub
 	return serveInstalledRuntimeWithOptions(installationRoot, dir, listen, publicOrigin, researchOrigin, location, source, ownerUID, fixture, false, out, custodyConfig...)
 }
 func serveInstalledRuntimeWithOptions(installationRoot, dir, listen, publicOrigin, researchOrigin, location, source string, ownerUID int, fixture, requirePassword bool, out io.Writer, custodyConfig ...string) error {
+	return serveInstalledRuntimeWithTransport(installationRoot, dir, listen, publicOrigin, researchOrigin, location, "", source, ownerUID, fixture, requirePassword, out, custodyConfig...)
+}
+func serveInstalledRuntimeWithTransport(installationRoot, dir, listen, publicOrigin, researchOrigin, location, remoteTransport, source string, ownerUID int, fixture, requirePassword bool, out io.Writer, custodyConfig ...string) error {
 	start := core.Start
 	if fixture {
 		if installationRoot == "" || source != location || (source != "local" && source != "remote") || researchOrigin != "" || len(custodyConfig) > 1 || len(custodyConfig) == 1 && custodyConfig[0] != "" {
@@ -512,7 +535,7 @@ func serveInstalledRuntimeWithOptions(installationRoot, dir, listen, publicOrigi
 	if err != nil {
 		return err
 	}
-	if err = server.ConfigureConnection(location, ownerUID); err == nil {
+	if err = server.ConfigureConnectionWithTransport(location, remoteTransport, ownerUID); err == nil {
 		server.ConfigureRequirePassword(requirePassword)
 		projectionSource := source
 		if len(custodyConfig) == 1 && custodyConfig[0] != "" {

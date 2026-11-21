@@ -28,6 +28,8 @@ type Server struct {
 	URL          string
 	agentFixture bool
 	dir          string
+	ipcNetwork   string
+	ipcAddress   string
 	taskCancel   context.CancelFunc
 	taskDone     chan struct{}
 }
@@ -151,8 +153,10 @@ func startModesWithTaskSecrets(ctx context.Context, dir, listen, publicOrigin st
 		return nil, err
 	}
 	server.IPC = ipc
+	server.ipcNetwork = network
+	server.ipcAddress = address
 	server.IPCServer = &http.Server{Handler: privateIPCHandler(handler), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second, WriteTimeout: 30 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 16 * 1024}
-	if err = WritePrivateJSON(filepath.Join(dir, "endpoint.json"), Endpoint{URL: baseURL, InstanceID: store.instanceID, Network: network, Address: address}); err != nil {
+	if err = server.writeEndpoint(); err != nil {
 		listener.Close()
 		ipc.Close()
 		return nil, err
@@ -293,14 +297,43 @@ func (s *Server) Close(ctx context.Context) error {
 	return errors.Join(err, s.Store.Close(), s.Lock.Close())
 }
 
+func (s *Server) writeEndpoint() error {
+	if s.dir == "" || s.ipcAddress == "" {
+		return nil
+	}
+	h := s.HTTP.Handler.(*HTTPHandler)
+	return WritePrivateJSON(filepath.Join(s.dir, "endpoint.json"), Endpoint{
+		URL:             s.URL,
+		InstanceID:      s.Store.instanceID,
+		Network:         s.ipcNetwork,
+		Address:         s.ipcAddress,
+		PublicOrigin:    h.publicOriginURL(),
+		RemoteTransport: h.effectiveRemoteTransport(),
+	})
+}
+
 // ConfigureConnection is called before Serve using the installed service's host
 // profile. A browser preference can never change this runtime descriptor.
 func (s *Server) ConfigureConnection(location string, owner ...int) error {
+	return s.ConfigureConnectionWithTransport(location, "", owner...)
+}
+
+// ConfigureConnectionWithTransport binds the runtime host location and optional
+// Remote ingress transport ("tailscale", "cloudflare", "domain", "proxy", "ssh").
+func (s *Server) ConfigureConnectionWithTransport(location, remoteTransport string, owner ...int) error {
 	if location != "local" && location != "remote" {
 		return errors.New("instance location must be local or remote")
 	}
 	if s.Store != nil && s.Store.pilot.binding != nil && location != "local" {
 		return errors.New("pilot is bound to Local mode")
+	}
+	if remoteTransport != "" && location != "remote" {
+		return errors.New("remote transport requires a remote instance location")
+	}
+	switch remoteTransport {
+	case "", "tailscale", "cloudflare", "domain", "proxy", "ssh":
+	default:
+		return errors.New("unsupported remote transport")
 	}
 	uid := 0
 	if len(owner) > 1 {
@@ -318,7 +351,25 @@ func (s *Server) ConfigureConnection(location string, owner ...int) error {
 		return errors.New("dedicated owner identity requires a verified managed profile and a valid UID")
 	}
 	h := s.HTTP.Handler.(*HTTPHandler)
-	if location == "remote" && h.publicHost != "" {
+	switch remoteTransport {
+	case "tailscale":
+		if h.publicHost == "" {
+			return errors.New("Tailscale transport requires --public-origin")
+		}
+		if _, _, err := tailnet.Origin("https://" + h.publicHost); err != nil {
+			return errors.New("Tailscale transport requires a .ts.net --public-origin")
+		}
+	case "cloudflare", "domain", "proxy":
+		if h.publicHost == "" {
+			return errors.New("proxy transport requires an exact HTTPS --public-origin")
+		}
+	case "ssh":
+		if h.publicHost != "" {
+			return errors.New("SSH tunnel transport cannot be combined with --public-origin")
+		}
+	}
+	useTailscale := location == "remote" && h.publicHost != "" && (remoteTransport == "" || remoteTransport == "tailscale")
+	if useTailscale {
 		if s.RemoteHTTP != nil {
 			return errors.New("Remote ingress is already configured")
 		}
@@ -346,14 +397,28 @@ func (s *Server) ConfigureConnection(location string, owner ...int) error {
 		}
 		s.Remote = listener
 		h.remoteIngress = true
+		h.remoteProxyTrust = false
+		h.remoteTransport = "tailscale"
 		s.RemoteHTTP = &http.Server{Handler: h.remoteProxy(tailnet.WhoIs), ConnContext: tailnet.ConnContext, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second, WriteTimeout: 90 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 16 * 1024}
+	} else if location == "remote" && (remoteTransport == "cloudflare" || remoteTransport == "domain" || remoteTransport == "proxy") {
+		h.remoteIngress = false
+		h.remoteProxyTrust = true
+		h.remoteTransport = remoteTransport
+	} else if location == "remote" {
+		h.remoteIngress = false
+		h.remoteProxyTrust = false
+		h.remoteTransport = "ssh"
+	} else {
+		h.remoteIngress = false
+		h.remoteProxyTrust = false
+		h.remoteTransport = ""
 	}
 	h.instanceLocation, h.instanceOwnerUID = location, uid
 	h.instanceOwnerKind = ""
 	if uid > 0 && managedCustody {
 		h.instanceOwnerKind = "custody"
 	}
-	return nil
+	return s.writeEndpoint()
 }
 
 // ConfigureInstallationSource is called only after main verifies its installed

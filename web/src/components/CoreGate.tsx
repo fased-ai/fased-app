@@ -12,17 +12,25 @@ let ownerSetup = captureOwnerSetup(window.location.href, (url) =>
 );
 let nativeProof: { instanceId: string; result: Promise<string> } | undefined;
 let localProof: { code: string; result: Promise<void> } | undefined;
+let pairProof: { code: string; result: Promise<void> } | undefined;
 let localBrowserAttempt:
   { instance: string; result: Promise<void> } | undefined;
 let nativeLocalAttempted = false;
 let remoteAttempt: { instance: string; result: Promise<void> } | undefined;
+function extractPairCode(raw: string): string {
+  const trimmed = raw.trim();
+  const match = trimmed.match(/#pair=([A-Za-z0-9_-]{43})(?:&|$)/);
+  return match ? match[1] : trimmed;
+}
 export function CoreGate({ children }: { children: ReactNode }) {
   const { t: uiText } = useUI();
   const core = useCore();
   const [password, setPassword] = useState("");
   const [code, setCode] = useState(ownerSetup?.code ?? "");
+  const [pairInput, setPairInput] = useState("");
   const [claimError, setClaimError] = useState("");
   const [passwordSignIn, setPasswordSignIn] = useState(false);
+  const [pairGate, setPairGate] = useState(false);
   const handoff = ownerHandoff(core.connection);
   const recoveryCommands = handoff?.recovery ?? [];
   const native = ["wails", "wails.localhost"].includes(
@@ -190,6 +198,52 @@ export function CoreGate({ children }: { children: ReactNode }) {
     };
   }, [core.mode, core.connection, code]);
   useEffect(() => {
+    if (core.mode === "ready") {
+      if (ownerSetup?.mode === "pair") {
+        ownerSetup = null;
+        setCode("");
+      }
+      setPasswordSignIn(false);
+      setPairGate(false);
+      return;
+    }
+    if (
+      ownerSetup?.mode !== "pair" ||
+      !core.connection ||
+      !["locked", "unclaimed"].includes(core.mode)
+    )
+      return;
+    if (ownerSetup.instanceId !== core.connection.instanceId) {
+      ownerSetup = null;
+      setCode("");
+      setClaimError("Reopen Fased to connect.");
+      return;
+    }
+    const proof = ownerSetup.code;
+    if (!pairProof || pairProof.code !== proof) {
+      pairProof = { code: proof, result: core.pair(proof) };
+    }
+    let active = true;
+    pairProof.result
+      .then(() => {
+        if (ownerSetup?.code === proof) ownerSetup = null;
+        if (active) {
+          setCode("");
+          setPairInput("");
+        }
+      })
+      .catch(() => {
+        if (ownerSetup?.code === proof) ownerSetup = null;
+        if (active) {
+          setCode("");
+          setClaimError("Pairing link expired or already used.");
+        }
+      });
+    return () => {
+      active = false;
+    };
+  }, [core.mode, core.connection, code]);
+  useEffect(() => {
     const receive = () => {
       const next = captureOwnerSetup(window.location.href, (url) =>
         history.replaceState(history.state, "", url),
@@ -243,6 +297,23 @@ export function CoreGate({ children }: { children: ReactNode }) {
       active = false;
     };
   }, [core.mode, core.connection, native, code, core.localAccess]);
+  async function submitPair(event: FormEvent) {
+    event.preventDefault();
+    const cleaned = extractPairCode(pairInput);
+    if (!cleaned) return;
+    setClaimError("");
+    try {
+      await core.pair(cleaned);
+      setPairInput("");
+      setPairGate(false);
+    } catch (e) {
+      setClaimError(
+        e instanceof Error
+          ? e.message
+          : "Invalid, expired, or already used pairing code.",
+      );
+    }
+  }
   async function submit(event: FormEvent) {
     event.preventDefault();
     try {
@@ -261,6 +332,8 @@ export function CoreGate({ children }: { children: ReactNode }) {
     }
   }
   if (core.mode === "ready" || core.mode === "prototype") return children;
+  const pairingInProgress =
+    ownerSetup?.mode === "pair" && ["locked", "unclaimed"].includes(core.mode);
   const minimalLocalGate =
     core.localAccess &&
     (core.localAutoEnter || native) &&
@@ -276,6 +349,14 @@ export function CoreGate({ children }: { children: ReactNode }) {
     !ownerSetup &&
     !code &&
     ["locked", "unclaimed"].includes(core.mode);
+  const showPairForm =
+    core.pairingAvailable &&
+    !core.remoteAccess &&
+    !passwordSignIn &&
+    (pairGate ||
+      (core.mode === "unclaimed" &&
+        !(ownerSetup && !ownerSetup.mode && code)) ||
+      (core.mode === "locked" && !core.passwordAvailable));
   return (
     <main className="core-gate">
       <section className="core-auth panel">
@@ -302,7 +383,9 @@ export function CoreGate({ children }: { children: ReactNode }) {
               {uiText("Retry connection")}
             </button>
           </div>
-        ) : ownerSetup?.mode === "local" || autoEnteringLocal ? (
+        ) : ownerSetup?.mode === "local" ||
+          pairingInProgress ||
+          autoEnteringLocal ? (
           <div className="empty-state" role="status">
             {uiText("Opening your workspace")}
           </div>
@@ -386,6 +469,54 @@ export function CoreGate({ children }: { children: ReactNode }) {
               </button>
             )}
           </div>
+        ) : showPairForm ? (
+          <form onSubmit={submitPair}>
+            <div className="settings-body">
+              <h1>{uiText("Pair this device")}</h1>
+              <label htmlFor="pair-code">{uiText("Pairing code")}</label>
+              <input
+                id="pair-code"
+                type="text"
+                autoFocus
+                autoComplete="off"
+                spellCheck={false}
+                required
+                value={pairInput}
+                onChange={(e) => {
+                  setPairInput(e.target.value);
+                  setClaimError("");
+                }}
+              />
+              {claimError && (
+                <p className="core-error" role="alert">
+                  {uiText(claimError)}
+                </p>
+              )}
+              <button
+                className="primary"
+                disabled={core.saving || !pairInput.trim()}
+              >
+                {core.saving ? uiText("Checking…") : uiText("Pair")}
+                <ArrowRight size={15} />
+              </button>
+              <pre>
+                <code>fased-app pair</code>
+              </pre>
+              {core.passwordAvailable && core.mode === "locked" && (
+                <button
+                  type="button"
+                  className="secondary"
+                  onClick={() => {
+                    setClaimError("");
+                    setPairGate(false);
+                    setPasswordSignIn(true);
+                  }}
+                >
+                  {uiText("Use password")}
+                </button>
+              )}
+            </div>
+          </form>
         ) : (
           <form onSubmit={submit}>
             <div className="settings-body">
@@ -439,6 +570,21 @@ export function CoreGate({ children }: { children: ReactNode }) {
                     : uiText("Sign in")}
                 <ArrowRight size={15} />
               </button>
+              {core.mode === "locked" &&
+                core.pairingAvailable &&
+                !core.remoteAccess && (
+                  <button
+                    type="button"
+                    className="secondary"
+                    onClick={() => {
+                      setClaimError("");
+                      setPasswordSignIn(false);
+                      setPairGate(true);
+                    }}
+                  >
+                    {uiText("Use pairing code")}
+                  </button>
+                )}
               {core.mode === "locked" && (
                 <details>
                   <summary>{uiText("Recovery")}</summary>
