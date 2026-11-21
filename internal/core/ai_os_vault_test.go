@@ -14,6 +14,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/fased-ai/fased-app/internal/tailnet"
 )
 
 func TestOSProtectedVaultLifecycleAndRestartUnseal(t *testing.T) {
@@ -355,5 +357,58 @@ func TestNativeProviderRouterAndLongDeadline(t *testing.T) {
 	}
 	if rt := s.providerModelTransport(testConn.Ref); rt != nil {
 		t.Fatalf("expected nil providerModelTransport for TestOnly account, got %T", rt)
+	}
+}
+
+func TestOSProtectedConnectionsRestoreOnLocalAndRemoteRelogin(t *testing.T) {
+	t.Parallel()
+	if runtime.GOOS != "linux" {
+		t.Skip("OS-protected provider vault targets Linux")
+	}
+	dir := fixtureDir(t)
+	s, err := openStoreWithTaskSecrets(dir, &testTaskSecrets{key: bytes.Repeat([]byte{92}, 32)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	s.providerFixture = true
+	added, err := s.ChangeAIConnection(t.Context(), AIConnectionCommand{
+		Action:         "add",
+		Provider:       "openai",
+		Name:           "OS Relogin Fixture",
+		CredentialMode: "test",
+		Key:            testAPIKey,
+	})
+	if err != nil || added.Locked || !added.OSProtected {
+		t.Fatalf("setup OS-protected account failed: %+v err=%v", added, err)
+	}
+	// Locking clears in-memory decrypted secrets; passwordless Local & Remote
+	// session issuance must restore them identically to password login.
+	s.lockAIConnection()
+	locked, _ := s.AIConnection(added.Ref)
+	if !locked.Locked {
+		t.Fatal("lock did not lock OS-protected account")
+	}
+	localToken, err := s.localOwnerSession(t.Context())
+	if err != nil {
+		t.Fatalf("localOwnerSession failed: %v", err)
+	}
+	restoredLocal, _ := s.AIConnection(added.Ref)
+	if restoredLocal.Locked {
+		t.Fatal("localOwnerSession did not restore OS-protected AI connection")
+	}
+	// Enroll a Remote Tailscale identity using existing authenticated session,
+	// lock credentials again, and verify passwordless Remote device re-login restores them.
+	device := tailnet.Identity{UserID: 42, NodeID: "node-relogin-1", Login: "owner@example.test"}
+	if _, err = s.remoteSession(t.Context(), device, "", localToken); err != nil {
+		t.Fatalf("remoteSession initial enrollment failed: %v", err)
+	}
+	s.lockAIConnection()
+	if _, err = s.remoteSession(t.Context(), device, "", ""); err != nil {
+		t.Fatalf("remoteSession re-login failed: %v", err)
+	}
+	restoredRemote, _ := s.AIConnection(added.Ref)
+	if restoredRemote.Locked {
+		t.Fatal("remoteSession did not restore OS-protected AI connection")
 	}
 }

@@ -24,14 +24,20 @@ type openAITransport struct {
 
 func newOpenAITransport() *openAITransport {
 	return &openAITransport{enabled: providerActivationEnabled, wire: &http.Transport{
-		Proxy:                  nil,
-		DialContext:            (&net.Dialer{Timeout: 10 * time.Second}).DialContext,
-		TLSClientConfig:        &tls.Config{MinVersion: tls.VersionTLS12},
+		Proxy:             nil,
+		DialContext:       (&net.Dialer{Timeout: 10 * time.Second}).DialContext,
+		ForceAttemptHTTP2: true,
+		TLSClientConfig: &tls.Config{
+			MinVersion:       tls.VersionTLS12,
+			CurvePreferences: []tls.CurveID{tls.X25519, tls.CurveP256, tls.CurveP384},
+		},
 		TLSHandshakeTimeout:    10 * time.Second,
 		ResponseHeaderTimeout:  120 * time.Second,
 		MaxResponseHeaderBytes: 32768,
-		DisableKeepAlives:      true,
-		DisableCompression:     true,
+		DisableKeepAlives:      false,
+		MaxIdleConns:           8,
+		IdleConnTimeout:        30 * time.Second,
+		DisableCompression:     false,
 	}}
 }
 
@@ -64,14 +70,14 @@ func (t *openAITransport) RoundTrip(r *http.Request) (*http.Response, error) {
 		header = "x-api-key"
 	}
 	auth := r.Header.Values(header)
-	if len(auth) != 1 || len(auth[0]) < 8 || len(auth[0]) > 4096 || provider != "anthropic" && !strings.HasPrefix(auth[0], "Bearer ") || provider == "anthropic" && r.Header.Get("anthropic-version") != "2026-10-21" {
+	if len(auth) != 1 || (provider != "anthropic" && !strings.HasPrefix(auth[0], "Bearer ")) || (provider == "anthropic" && r.Header.Get("anthropic-version") != "2026-10-21") {
 		return nil, errors.New("provider authentication required")
 	}
 	token := auth[0]
 	if provider != "anthropic" {
 		token = strings.TrimPrefix(token, "Bearer ")
 	}
-	if strings.ContainsAny(token, " \t\r\n") {
+	if len(token) < 1 || len(token) > 8192 || strings.ContainsAny(token, " \t\r\n") {
 		return nil, errors.New("provider authentication required")
 	}
 	var ctx context.Context
@@ -104,6 +110,7 @@ func (t *openAITransport) RoundTrip(r *http.Request) (*http.Response, error) {
 		}
 		copy.Header.Set("anthropic-version", "2026-10-21")
 	}
+	copy.Header.Set("User-Agent", "Fased/"+Version)
 	if provider == "kimi-code" {
 		copy.Header.Set("User-Agent", "Fased")
 	}

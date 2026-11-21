@@ -112,13 +112,15 @@ func TestFreshTailscaleRefusesPriorOrChangedState(t *testing.T) {
 			t.Fatal("accepted ambiguous existing Tailscale state")
 		}
 	}
-	for _, v := range []string{`{"short":"1.104.4"}`, `{"short":"1.105.0"}`, `{}`} {
+	for _, v := range []string{`{"short":"1.104.4"}`, `{"short":"0.105.0"}`, `{"short":"2.0.0"}`, `{"short":"1.104.05"}`, `{"short":"+1.104.5"}`, `{"short":"1.104"}`, `{}`} {
 		if _, err := supportedTailscaleVersion([]byte(v)); err == nil {
-			t.Fatal("accepted unverified Tailscale version")
+			t.Fatal("accepted unverified Tailscale version", v)
 		}
 	}
-	if _, err := supportedTailscaleVersion([]byte(`{"short":"1.104.7"}`)); err != nil {
-		t.Fatal(err)
+	for _, v := range []string{`{"short":"1.104.5"}`, `{"short":"1.104.7"}`, `{"short":"1.104.8"}`, `{"short":"1.105.0"}`} {
+		if _, err := supportedTailscaleVersion([]byte(v)); err != nil {
+			t.Fatalf("rejected supported Tailscale version %s: %v", v, err)
+		}
 	}
 }
 

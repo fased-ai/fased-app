@@ -4,6 +4,7 @@ package core
 // Authentication and model discovery never authorize generation. Ordinary live
 // admission stays held; compiled development fixtures exercise the same lifecycle.
 import (
+	"bytes"
 	"context"
 	"crypto"
 	"crypto/aes"
@@ -16,6 +17,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"math/big"
 	"mime"
 	"net"
@@ -29,8 +31,67 @@ import (
 const signInIssuer = "https://auth.openai.com"
 const signInResource = "https://api.openai.com/v1"
 const signInScope = "openid profile email offline_access resource.invoke chatgpt.tokens.use.direct"
-const providerSignInMaxPlaintext = 16000
+const providerSignInMaxPlaintext = 24000
 const providerSignInMaxCiphertext = providerSignInMaxPlaintext + 16 // AES-GCM authentication tag
+
+func safeEndpointPath(raw string) string {
+	u, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || u.Host == "" {
+		return ""
+	}
+	return u.Host + u.Path
+}
+
+func sanitizeDiagValue(s string, max int) string {
+	if len(s) > max {
+		s = s[:max]
+	}
+	var b strings.Builder
+	b.Grow(len(s))
+	for _, r := range s {
+		if r >= 32 && r <= 126 {
+			b.WriteRune(r)
+		} else if r == '\n' || r == '\r' || r == '\t' {
+			b.WriteByte(' ')
+		}
+	}
+	out := strings.TrimSpace(b.String())
+	for _, marker := range []string{"Bearer ", "sk-", "eyJ"} {
+		if idx := strings.Index(out, marker); idx >= 0 {
+			out = strings.TrimSpace(out[:idx]) + " [redacted]"
+		}
+	}
+	return out
+}
+
+func extractOAuthError(raw []byte) (string, string) {
+	var body struct {
+		Error string `json:"error"`
+		Desc  string `json:"error_description"`
+	}
+	if len(raw) == 0 || len(raw) > 65536 || json.Unmarshal(raw, &body) != nil {
+		return "", ""
+	}
+	return sanitizeDiagValue(body.Error, 64), sanitizeDiagValue(body.Desc, 160)
+}
+
+func logProviderDiag(stage string, fields map[string]any) {
+	payload := map[string]any{"stage": stage}
+	for k, v := range fields {
+		if s, ok := v.(string); ok {
+			if s == "" {
+				continue
+			}
+			v = sanitizeDiagValue(s, 180)
+		}
+		payload[k] = v
+	}
+	encoded, err := json.Marshal(payload)
+	if err != nil {
+		return
+	}
+	log.Printf("fased provider diag: %s", encoded)
+}
 
 type ProviderSignInView struct {
 	ID        string `json:"id"`
@@ -68,7 +129,7 @@ func parseProviderSignInCredential(raw []byte) (providerSignInCredential, bool) 
 	if c.SignedOut {
 		return c, c.AccessToken == "" && c.RefreshToken == "" && c.IDToken == "" && c.Scope == "" && c.ExpiresAt == 0
 	}
-	if !validSignInValue(c.AccessToken, 4096) || !validSignInValue(c.RefreshToken, 4096) || !validSignInValue(c.IDToken, 8192) || len(c.Scope) > 1024 || strings.ContainsAny(c.Scope, "\r\n\t") || c.ExpiresAt <= 0 {
+	if !validSignInValue(c.AccessToken, 8192) || (c.RefreshToken != "" && !validSignInValue(c.RefreshToken, 8192)) || !validSignInValue(c.IDToken, 12288) || len(c.Scope) > 1024 || strings.ContainsAny(c.Scope, "\r\n\t") || c.ExpiresAt <= 0 {
 		return providerSignInCredential{}, false
 	}
 	return c, true
@@ -270,7 +331,7 @@ func (s *Store) startProviderSignIn(c AIConnectionCommand) (AIConnectionView, er
 	if err != nil {
 		return AIConnectionView{}, err
 	}
-	a.view = ProviderSignInView{ID: id, Ref: c.Ref, Provider: "openai", State: "waiting", ExpiresAt: s.now().Add(5 * time.Minute).Unix(), Remote: c.Remote}
+	a.view = ProviderSignInView{ID: id, Ref: c.Ref, Provider: "openai", State: "waiting", ExpiresAt: s.now().Add(10 * time.Minute).Unix(), Remote: c.Remote}
 	listener, err := s.listenProviderSignInLocked(a)
 	if err != nil {
 		return AIConnectionView{}, err
@@ -300,7 +361,7 @@ func (s *Store) startProviderSignIn(c AIConnectionCommand) (AIConnectionView, er
 		return AIConnectionView{}, errors.New("sign-in transport unavailable")
 	}
 	s.provider.signIn = a
-	a.timer = time.AfterFunc(5*time.Minute, func() {
+	a.timer = time.AfterFunc(10*time.Minute, func() {
 		s.provider.mu.Lock()
 		defer s.provider.mu.Unlock()
 		if s.provider.signIn == a {
@@ -318,11 +379,11 @@ func (s *Store) listenProviderSignInLocked(a *providerSignInAttempt) (net.Listen
 		return nil, errors.New("private sign-in callback unavailable")
 	}
 	a.redirect = "http://" + listener.Addr().String() + "/auth/callback"
-	a.server = &http.Server{ReadHeaderTimeout: 2 * time.Second, MaxHeaderBytes: 4096, Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	a.server = &http.Server{ReadHeaderTimeout: 2 * time.Second, MaxHeaderBytes: 8192, Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
 		w.Header().Set("Referrer-Policy", "no-referrer")
 		w.Header().Set("Content-Security-Policy", "default-src 'none'; frame-ancestors 'none'")
-		if r.Method != "GET" || r.URL.Path != "/auth/callback" || r.Host != listener.Addr().String() || len(r.URL.RawQuery) > 4096 {
+		if r.Method != "GET" || r.URL.Path != "/auth/callback" || r.Host != listener.Addr().String() || len(r.URL.RawQuery) > 8192 {
 			http.Error(w, "Invalid callback", 400)
 			return
 		}
@@ -345,46 +406,64 @@ func (s *Store) listenProviderSignInLocked(a *providerSignInAttempt) (net.Listen
 }
 
 func providerSignInCallback(a *providerSignInAttempt, callback string) (string, string, error) {
+	code, client, _, err := providerSignInCallbackWithScope(a, callback)
+	return code, client, err
+}
+
+func providerSignInCallbackWithScope(a *providerSignInAttempt, callback string) (string, string, string, error) {
 	if a.view.Provider == "google" {
 		code, err := googleSignInCallback(a, callback)
-		return code, a.client, err
+		return code, a.client, "", err
 	}
 	if a.view.Provider == "openrouter" {
 		code, err := routerSignInCallback(a, callback)
-		return code, "", err
+		return code, "", "", err
 	}
 	callback = strings.TrimSpace(callback)
 	u, err := url.Parse(callback)
+	if u != nil {
+		u.Fragment = ""
+	}
 	base, _ := url.Parse(a.redirect)
-	if err != nil || len(callback) > 4096 || u.Scheme != base.Scheme || u.Host != base.Host || u.Path != base.Path || u.RawPath != "" || u.User != nil || u.Fragment != "" {
-		return "", "", errors.New("invalid sign-in callback")
+	if err != nil || len(callback) > 8192 || u.Scheme != base.Scheme || u.Host != base.Host || u.Path != base.Path || u.RawPath != "" || u.User != nil {
+		logProviderDiag("callback", map[string]any{"provider": "openai", "remote": a.view.Remote, "reason": "url_parse"})
+		return "", "", "", errors.New("invalid sign-in callback")
 	}
 	q, err := url.ParseQuery(u.RawQuery)
 	if err != nil || q.Get("state") != a.state || len(q["state"]) != 1 {
-		return "", "", errors.New("sign-in state mismatch")
+		logProviderDiag("callback", map[string]any{"provider": "openai", "remote": a.view.Remote, "reason": "state_mismatch"})
+		return "", "", "", errors.New("sign-in state mismatch")
 	}
-	for key, values := range q {
-		if len(values) != 1 || (key != "code" && key != "state" && key != "client_id" && key != "scope" && key != "iss" && key != "error" && key != "error_description") {
-			return "", "", errors.New("invalid sign-in callback")
+	for _, key := range []string{"code", "state", "client_id", "scope", "iss", "error", "error_description"} {
+		if values, present := q[key]; present && len(values) != 1 {
+			logProviderDiag("callback", map[string]any{"provider": "openai", "remote": a.view.Remote, "reason": "duplicate_param", "param": key})
+			return "", "", "", errors.New("invalid sign-in callback")
 		}
 	}
-	if iss := q.Get("iss"); iss != "" && iss != signInIssuer {
-		return "", "", errors.New("sign-in issuer mismatch")
+	if iss := strings.TrimSuffix(strings.TrimSpace(q.Get("iss")), "/"); iss != "" && iss != signInIssuer {
+		logProviderDiag("callback", map[string]any{"provider": "openai", "remote": a.view.Remote, "reason": "issuer_mismatch"})
+		return "", "", "", errors.New("sign-in issuer mismatch")
 	}
-	if q.Get("error") != "" {
-		return "", "", errors.New("sign-in was not authorized")
+	if oauthErr := q.Get("error"); oauthErr != "" {
+		logProviderDiag("callback", map[string]any{
+			"provider": "openai", "remote": a.view.Remote, "reason": "provider_error",
+			"oauthError": oauthErr, "oauthErrorDesc": q.Get("error_description"),
+		})
+		return "", "", "", errors.New("sign-in was not authorized")
 	}
 	client := q.Get("client_id")
 	if a.client != "dynamic_agent_client" {
 		if client != "" && client != a.client {
-			return "", "", errors.New("sign-in registration changed")
+			logProviderDiag("callback", map[string]any{"provider": "openai", "remote": a.view.Remote, "reason": "client_changed"})
+			return "", "", "", errors.New("sign-in registration changed")
 		}
 		client = a.client
 	}
 	if !validSignInValue(q.Get("code"), 2048) || !validSignInValue(client, 256) || client == "dynamic_agent_client" {
-		return "", "", errors.New("sign-in code or issued client missing")
+		logProviderDiag("callback", map[string]any{"provider": "openai", "remote": a.view.Remote, "reason": "missing_code_or_client"})
+		return "", "", "", errors.New("sign-in code or issued client missing")
 	}
-	return q.Get("code"), client, nil
+	return q.Get("code"), client, strings.TrimSpace(q.Get("scope")), nil
 }
 
 func (s *Store) completeProviderSignIn(ctx context.Context, c AIConnectionCommand) (AIConnectionView, error) {
@@ -410,24 +489,40 @@ func (s *Store) completeProviderSignIn(ctx context.Context, c AIConnectionComman
 		s.provider.mu.Unlock()
 		return AIConnectionView{}, errors.New("complete sign-in in your browser first")
 	}
-	code, client, err := providerSignInCallback(a, callback)
+	code, client, cbScope, err := providerSignInCallbackWithScope(a, callback)
 	if err != nil {
-		s.cancelProviderSignInLocked()
 		s.provider.mu.Unlock()
 		return AIConnectionView{}, err
 	}
+	fallbackScope := cbScope
+	if fallbackScope == "" {
+		fallbackScope = signInScope
+	}
 	a.busy = true
+	settled := false
 	nonce, verifier, redirect, wire, expected := a.nonce, a.verifier, a.redirect, a.wire, a.expected
 	s.provider.mu.Unlock()
-	credential, err := exchangeProviderSignIn(ctx, wire, url.Values{"grant_type": {"authorization_code"}, "client_id": {client}, "code": {code}, "code_verifier": {verifier}, "redirect_uri": {redirect}, "resource": {signInResource}}, nonce, client, s.now())
+	defer func() {
+		if !settled {
+			s.provider.mu.Lock()
+			if s.provider.signIn == a {
+				a.busy = false
+			}
+			s.provider.mu.Unlock()
+		}
+	}()
+	credential, err := exchangeProviderSignIn(ctx, wire, url.Values{"grant_type": {"authorization_code"}, "client_id": {client}, "code": {code}, "code_verifier": {verifier}, "redirect_uri": {redirect}, "resource": {signInResource}}, nonce, client, s.now(), fallbackScope, "", "", "")
 	if err == nil && expected != nil && (credential.Issuer != expected.Issuer || credential.Subject != expected.Subject || credential.ClientID != expected.ClientID) {
+		logProviderDiag("sign-in-complete", map[string]any{"provider": "openai", "reason": "account_identity_changed"})
 		err = errors.New("sign-in account identity changed")
 	}
 	if err != nil {
+		logProviderDiag("sign-in-complete", map[string]any{"provider": "openai", "reason": "token_exchange_failed", "err": err.Error()})
 		s.provider.mu.Lock()
 		if s.provider.signIn == a {
 			s.cancelProviderSignInLocked()
 		}
+		settled = true
 		s.provider.mu.Unlock()
 		return AIConnectionView{}, err
 	}
@@ -441,11 +536,19 @@ func (s *Store) completeProviderSignIn(ctx context.Context, c AIConnectionComman
 	}
 	s.provider.mu.Lock()
 	if s.provider.signIn != a || !s.providerSignInAvailableLocked() || a.view.ExpiresAt <= s.now().Unix() || a.ref != "" && s.credentialLocked(a.ref).epoch != a.epoch {
+		if s.provider.signIn == a && (a.view.ExpiresAt <= s.now().Unix() || a.ref != "" && s.credentialLocked(a.ref).epoch != a.epoch) {
+			s.cancelProviderSignInLocked()
+			settled = true
+		}
 		s.provider.mu.Unlock()
 		return AIConnectionView{}, ErrConflict
 	}
 	v, err := s.saveProviderSignInLocked(ctx, credential, c.Passphrase, a.ref, a.name, a.fixture, a.digest)
+	if err != nil {
+		logProviderDiag("sign-in-complete", map[string]any{"provider": "openai", "reason": "vault_save_failed", "err": err.Error()})
+	}
 	s.cancelProviderSignInLocked()
+	settled = true
 	s.provider.mu.Unlock()
 	if err != nil {
 		return v, err
@@ -564,6 +667,7 @@ func signInHTTP(ctx context.Context, wire http.RoundTripper, method, endpoint st
 	if err != nil {
 		return errors.New("sign-in request unavailable")
 	}
+	req.Header.Set("User-Agent", "Fased/"+Version)
 	req.Header.Set("Accept", "application/json")
 	if form != nil {
 		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
@@ -571,22 +675,41 @@ func signInHTTP(ctx context.Context, wire http.RoundTripper, method, endpoint st
 	client := http.Client{Transport: wire, CheckRedirect: func(*http.Request, []*http.Request) error { return errors.New("sign-in redirect refused") }}
 	res, err := client.Do(req)
 	if err != nil {
+		logProviderDiag("signin-http", map[string]any{"method": method, "endpoint": safeEndpointPath(endpoint), "reason": "transport", "err": err.Error()})
 		return errors.New("sign-in provider unavailable")
 	}
 	defer res.Body.Close()
 	raw, err := io.ReadAll(io.LimitReader(res.Body, 65537))
 	defer clear(raw)
 	if err != nil || len(raw) > 65536 || res.StatusCode != http.StatusOK || res.Header.Get("Content-Encoding") != "" {
+		oauthErr, oauthDesc := extractOAuthError(raw)
+		readErrStr := ""
+		if err != nil {
+			readErrStr = err.Error()
+		}
+		logProviderDiag("signin-http", map[string]any{
+			"method": method, "endpoint": safeEndpointPath(endpoint),
+			"status": res.StatusCode, "contentType": res.Header.Get("Content-Type"),
+			"contentEncoding": res.Header.Get("Content-Encoding"), "bodyBytes": len(raw),
+			"cfRay": res.Header.Get("CF-Ray"), "requestId": res.Header.Get("x-request-id"),
+			"oauthError": oauthErr, "oauthErrorDesc": oauthDesc, "reason": "response_rejected", "err": readErrStr,
+		})
 		return errors.New("sign-in provider refused request")
 	}
 	if target == nil {
 		if len(raw) != 0 {
+			logProviderDiag("signin-http", map[string]any{"method": method, "endpoint": safeEndpointPath(endpoint), "bodyBytes": len(raw), "reason": "revoke_nonempty"})
 			return errors.New("invalid revocation response")
 		}
 		return nil
 	}
 	kind, _, err := mime.ParseMediaType(res.Header.Get("Content-Type"))
 	if err != nil || kind != "application/json" || !uniqueAIJSON(raw, 65536) || json.Unmarshal(raw, target) != nil {
+		logProviderDiag("signin-http", map[string]any{
+			"method": method, "endpoint": safeEndpointPath(endpoint),
+			"status": res.StatusCode, "contentType": res.Header.Get("Content-Type"),
+			"bodyBytes": len(raw), "reason": "invalid_json",
+		})
 		return errors.New("invalid sign-in provider response")
 	}
 	return nil
@@ -595,6 +718,11 @@ func readSignInDiscovery(ctx context.Context, wire http.RoundTripper) (signInDis
 	var d signInDiscovery
 	err := signInHTTP(ctx, wire, "GET", signInIssuer+"/.well-known/openid-configuration", nil, &d)
 	if err != nil || d.Issuer != signInIssuer || !signInEndpoint(d.JWKS) || !signInEndpoint(d.Revoke) {
+		errText := ""
+		if err != nil {
+			errText = err.Error()
+		}
+		logProviderDiag("oidc-discovery", map[string]any{"reason": "discovery_invalid", "err": errText})
 		return signInDiscovery{}, errors.New("untrusted sign-in discovery")
 	}
 	return d, nil
@@ -638,26 +766,46 @@ type signInTokenResponse struct {
 	ExpiresIn    int64  `json:"expires_in"`
 }
 
-func exchangeProviderSignIn(ctx context.Context, wire http.RoundTripper, form url.Values, nonce, client string, now time.Time) (providerSignInCredential, error) {
+func exchangeProviderSignIn(ctx context.Context, wire http.RoundTripper, form url.Values, nonce, client string, now time.Time, fallbackScope, fallbackRefresh, fallbackIDToken, fallbackSubject string) (providerSignInCredential, error) {
 	var result signInTokenResponse
 	if err := signInHTTP(ctx, wire, "POST", signInIssuer+"/api/accounts/oauth/token", form, &result); err != nil {
 		return providerSignInCredential{}, err
 	}
 	if !strings.EqualFold(result.Type, "Bearer") || result.ExpiresIn < 1 || result.ExpiresIn > 31*86400 {
+		logProviderDiag("token-exchange", map[string]any{"reason": "invalid_token_type_or_ttl", "expiresIn": result.ExpiresIn})
 		return providerSignInCredential{}, errors.New("invalid sign-in token grant")
 	}
-	d, err := readSignInDiscovery(ctx, wire)
-	if err != nil {
-		return providerSignInCredential{}, err
+	scope := strings.TrimSpace(result.Scope)
+	if scope == "" {
+		scope = strings.TrimSpace(fallbackScope)
 	}
-	subject, err := validateSignInIDToken(ctx, wire, d.JWKS, result.IDToken, client, nonce, now.Unix())
-	if err != nil {
-		return providerSignInCredential{}, err
+	refresh := result.RefreshToken
+	if refresh == "" && fallbackRefresh != "" {
+		refresh = fallbackRefresh
 	}
-	c := providerSignInCredential{Version: 1, Issuer: d.Issuer, Subject: subject, ClientID: client, AccessToken: result.AccessToken, RefreshToken: result.RefreshToken, IDToken: result.IDToken, Scope: result.Scope, ExpiresAt: now.Unix() + result.ExpiresIn}
+	idToken := result.IDToken
+	var subject string
+	if nonce != "" || idToken != "" {
+		d, err := readSignInDiscovery(ctx, wire)
+		if err != nil {
+			return providerSignInCredential{}, err
+		}
+		subject, err = validateSignInIDToken(ctx, wire, d.JWKS, idToken, client, nonce, now.Unix())
+		if err != nil {
+			return providerSignInCredential{}, err
+		}
+	} else {
+		idToken = fallbackIDToken
+		subject = fallbackSubject
+	}
+	c := providerSignInCredential{Version: 1, Issuer: signInIssuer, Subject: subject, ClientID: client, AccessToken: result.AccessToken, RefreshToken: refresh, IDToken: idToken, Scope: scope, ExpiresAt: now.Unix() + result.ExpiresIn}
 	raw, _ := json.Marshal(c)
 	defer clear(raw)
 	if _, ok := parseProviderSignInCredential(raw); !ok {
+		logProviderDiag("token-exchange", map[string]any{
+			"reason": "credential_validation_failed", "accessLen": len(result.AccessToken),
+			"refreshLen": len(refresh), "idLen": len(idToken), "scopeLen": len(scope),
+		})
 		return providerSignInCredential{}, errors.New("invalid sign-in credential grant")
 	}
 	return c, nil
@@ -668,16 +816,20 @@ func validateSignInIDToken(ctx context.Context, wire http.RoundTripper, jwks, to
 }
 func validateOIDCIDToken(ctx context.Context, wire http.RoundTripper, jwks, token, client, nonce string, now int64, issuer string, fetch func(context.Context, http.RoundTripper, string, string, url.Values, any) error) (string, error) {
 	refused := errors.New("sign-in identity verification failed")
-	if len(token) > 16384 {
+	fail := func(stage string) (string, error) {
+		logProviderDiag("oidc-id-token", map[string]any{"issuer": issuer, "reason": stage})
 		return "", refused
+	}
+	if len(token) > 16384 {
+		return fail("token_len")
 	}
 	parts := strings.Split(token, ".")
 	if len(parts) != 3 {
-		return "", refused
+		return fail("jwt_parts")
 	}
 	header, err := base64.RawURLEncoding.DecodeString(parts[0])
 	if err != nil || !uniqueAIJSON(header, 4096) {
-		return "", refused
+		return fail("header_decode")
 	}
 	var h struct {
 		Alg, Kid string
@@ -685,76 +837,79 @@ func validateOIDCIDToken(ctx context.Context, wire http.RoundTripper, jwks, toke
 		JKU      string
 		JWK      json.RawMessage
 	}
-	if json.Unmarshal(header, &h) != nil || h.Alg != "RS256" || !validSignInValue(h.Kid, 256) || len(h.Crit) != 0 || h.JKU != "" || len(h.JWK) != 0 {
-		return "", refused
+	if json.Unmarshal(header, &h) != nil || h.Alg != "RS256" || !validSignInValue(h.Kid, 256) || len(h.Crit) != 0 || h.JKU != "" {
+		return fail("header_alg_or_fields")
+	}
+	if jwk := bytes.TrimSpace(h.JWK); len(jwk) != 0 && string(jwk) != "null" {
+		return fail("header_jwk_inline")
 	}
 	var keys struct {
 		Keys []struct{ Kty, Kid, Alg, Use, N, E string }
 	}
 	if fetch(ctx, wire, "GET", jwks, nil, &keys) != nil || len(keys.Keys) > 32 {
-		return "", refused
+		return fail("jwks_fetch")
 	}
 	var public *rsa.PublicKey
 	for _, key := range keys.Keys {
 		if key.Kid != h.Kid {
 			continue
 		}
-		if public != nil || key.Kty != "RSA" || key.Alg != "RS256" || key.Use != "sig" {
-			return "", refused
+		if public != nil || key.Kty != "RSA" || (key.Alg != "" && key.Alg != "RS256") || (key.Use != "" && key.Use != "sig") {
+			return fail("jwks_key_invalid")
 		}
 		n, err := base64.RawURLEncoding.DecodeString(key.N)
 		if err != nil || len(n) < 256 || len(n) > 512 {
-			return "", refused
+			return fail("jwks_modulus_invalid")
 		}
 		e, err := base64.RawURLEncoding.DecodeString(key.E)
 		if err != nil || len(e) > 4 || len(e) == 0 {
-			return "", refused
+			return fail("jwks_exponent_invalid")
 		}
 		exponent := 0
 		for _, b := range e {
 			exponent = exponent*256 + int(b)
 		}
 		if exponent < 3 || exponent%2 == 0 {
-			return "", refused
+			return fail("jwks_exponent_value")
 		}
 		public = &rsa.PublicKey{N: new(big.Int).SetBytes(n), E: exponent}
 	}
 	if public == nil {
-		return "", refused
+		return fail("kid_not_found")
 	}
 	signature, err := base64.RawURLEncoding.DecodeString(parts[2])
 	if err != nil {
-		return "", refused
+		return fail("signature_decode")
 	}
 	digest := sha256.Sum256([]byte(parts[0] + "." + parts[1]))
 	if rsa.VerifyPKCS1v15(public, crypto.SHA256, digest[:], signature) != nil {
-		return "", refused
+		return fail("signature_invalid")
 	}
 	claims, err := base64.RawURLEncoding.DecodeString(parts[1])
-	if err != nil || !uniqueAIJSON(claims, 12288) {
-		return "", refused
+	if err != nil || !uniqueAIJSON(claims, 32768) {
+		return fail("claims_decode")
 	}
 	var c struct {
 		Iss, Sub, Nonce, Azp string
 		Aud                  json.RawMessage
 		Exp, Iat             int64
 	}
-	if json.Unmarshal(claims, &c) != nil || (c.Iss != issuer && !(issuer == googleIssuer && c.Iss == "accounts.google.com")) || !validSignInValue(c.Sub, 512) || c.Exp <= now || c.Iat > now+30 || c.Iat < now-86400 || nonce != "" && c.Nonce != nonce {
-		return "", refused
+	if json.Unmarshal(claims, &c) != nil || (c.Iss != issuer && !(issuer == googleIssuer && c.Iss == "accounts.google.com")) || !validSignInValue(c.Sub, 512) || c.Exp <= now || c.Iat > now+300 || c.Iat < now-86400 || nonce != "" && c.Nonce != nonce {
+		return fail("claims_iss_sub_time_nonce")
 	}
 	if c.Azp != "" && c.Azp != client {
-		return "", refused
+		return fail("claims_azp")
 	}
 	var audience string
 	if json.Unmarshal(c.Aud, &audience) == nil {
 		if audience != client {
-			return "", refused
+			return fail("claims_aud")
 		}
 		return c.Sub, nil
 	}
 	var audiences []string
 	if json.Unmarshal(c.Aud, &audiences) != nil || len(audiences) == 0 || len(audiences) > 16 {
-		return "", refused
+		return fail("claims_aud_array")
 	}
 	matched := false
 	for _, entry := range audiences {
@@ -763,8 +918,8 @@ func validateOIDCIDToken(ctx context.Context, wire http.RoundTripper, jwks, toke
 			break
 		}
 	}
-	if !matched || len(audiences) > 1 && c.Azp != client {
-		return "", refused
+	if !matched {
+		return fail("claims_aud")
 	}
 	return c.Sub, nil
 }
@@ -822,12 +977,14 @@ func (s *Store) renewProviderSignIn(ctx context.Context, c AIConnectionCommand) 
 		return AIConnectionView{}, errors.New("sign-in transport unavailable")
 	}
 	if c.Action == "sign-in-disconnect" {
-		d, err := readSignInDiscovery(ctx, wire)
-		if err != nil {
-			return AIConnectionView{}, err
-		}
-		if err = signInHTTP(ctx, wire, "POST", d.Revoke, url.Values{"token": {credential.RefreshToken}, "token_type_hint": {"refresh_token"}, "client_id": {credential.ClientID}}, nil); err != nil {
-			return AIConnectionView{}, errors.New("account locked; remote revocation not confirmed, retry disconnect or revoke in ChatGPT settings")
+		if credential.RefreshToken != "" {
+			d, err := readSignInDiscovery(ctx, wire)
+			if err != nil {
+				return AIConnectionView{}, err
+			}
+			if err = signInHTTP(ctx, wire, "POST", d.Revoke, url.Values{"token": {credential.RefreshToken}, "token_type_hint": {"refresh_token"}, "client_id": {credential.ClientID}}, nil); err != nil {
+				return AIConnectionView{}, errors.New("account locked; remote revocation not confirmed, retry disconnect or revoke in ChatGPT settings")
+			}
 		}
 		tx, err := s.db.BeginTx(ctx, nil)
 		if err != nil {
@@ -855,7 +1012,10 @@ func (s *Store) renewProviderSignIn(ctx context.Context, c AIConnectionCommand) 
 		s.clearAIConnectionLocked(c.Ref)
 		return s.aiConnectionLocked(c.Ref)
 	}
-	renewed, err := exchangeProviderSignIn(ctx, wire, url.Values{"grant_type": {"refresh_token"}, "client_id": {credential.ClientID}, "refresh_token": {credential.RefreshToken}, "resource": {signInResource}}, "", credential.ClientID, s.now())
+	if credential.RefreshToken == "" {
+		return AIConnectionView{}, errors.New("sign-in account has no refresh token; reconnect to renew")
+	}
+	renewed, err := exchangeProviderSignIn(ctx, wire, url.Values{"grant_type": {"refresh_token"}, "client_id": {credential.ClientID}, "refresh_token": {credential.RefreshToken}, "resource": {signInResource}}, "", credential.ClientID, s.now(), credential.Scope, credential.RefreshToken, credential.IDToken, credential.Subject)
 	if err != nil {
 		return AIConnectionView{}, err
 	}
@@ -884,4 +1044,153 @@ func (s *Store) renewProviderSignIn(ctx context.Context, c AIConnectionCommand) 
 		return s.AIConnection(v.Ref)
 	}
 	return s.refreshProviderModels(ctx, v.Ref, s.providerModelTransport(v.Ref))
+}
+
+func (s *Store) openAISignInWire() http.RoundTripper {
+	if s.provider.signInTransport != nil {
+		return s.provider.signInTransport
+	}
+	if providerActivationEnabled && s.provider.apiCredentials {
+		return newOpenAITransport().wire
+	}
+	return nil
+}
+
+func (s *Store) persistOSProtectedSignInLocked(ctx context.Context, ref string, raw []byte, expected [32]byte) ([32]byte, error) {
+	col, err := s.readAIVaultCollection()
+	if err != nil {
+		return [32]byte{}, err
+	}
+	for i, env := range col.Accounts {
+		if env.Ref != ref || env.Version != 5 || env.Provider != "openai" || env.Mode != "openai-signin" || !env.OSProtected {
+			continue
+		}
+		encoded, _ := json.Marshal(env)
+		if sha256.Sum256(encoded) != expected {
+			return [32]byte{}, ErrConflict
+		}
+		salt := make([]byte, 16)
+		nonce := make([]byte, 12)
+		if _, err = rand.Read(salt); err != nil {
+			return [32]byte{}, err
+		}
+		if _, err = rand.Read(nonce); err != nil {
+			return [32]byte{}, err
+		}
+		updated := env
+		updated.Salt = salt
+		updated.Nonce = nonce
+		key, osProtected, err := s.vaultSealKey(ctx, "", updated.Salt, false)
+		if err != nil || !osProtected {
+			clear(key)
+			if err == nil {
+				err = errors.New("system credential protection unavailable")
+			}
+			return [32]byte{}, err
+		}
+		block, _ := aes.NewCipher(key)
+		clear(key)
+		gcm, _ := cipher.NewGCM(block)
+		updated.Ciphertext = gcm.Seal(nil, updated.Nonce, raw, s.aiVaultAAD(updated))
+		col.Accounts[i] = updated
+		if err = s.writeAIVaultCollection(col); err != nil {
+			return [32]byte{}, err
+		}
+		nextEncoded, _ := json.Marshal(updated)
+		return sha256.Sum256(nextEncoded), nil
+	}
+	return [32]byte{}, ErrConflict
+}
+
+// Automatically refresh expiring OpenAI sign-in access tokens without breaking
+// the active account epoch or granting new task authority. When OS vault custody
+// protects the entry, updated single-use refresh tokens are persisted on disk.
+func (a authenticatedAITransport) ensureSignInAccess(request *http.Request) error {
+	ctx := request.Context()
+	s := a.store
+	s.provider.mu.Lock()
+	v, err := s.aiConnectionLocked(a.ref)
+	if err != nil || v.AuthMethod != "sign-in" {
+		s.provider.mu.Unlock()
+		return err
+	}
+	state := s.credentialLocked(a.ref)
+	credential, ok := parseProviderSignInCredential(state.key)
+	if !ok || credential.SignedOut {
+		s.provider.mu.Unlock()
+		return errors.New("sign-in credential unavailable")
+	}
+	if credential.ExpiresAt > s.now().Unix()+60 {
+		s.provider.mu.Unlock()
+		return nil
+	}
+	routeAllowed := (request.Method == "GET" && request.URL.Path == "/v1/models") || (request.Method == "POST" && request.URL.Path == "/v1/responses")
+	if !routeAllowed || !providerRequestAllowed("openai", request) {
+		s.provider.mu.Unlock()
+		return errors.New("sign-in route refused")
+	}
+	allowed := !v.Locked
+	if a.request != nil && a.request.TaskID != "" {
+		allowed = s.taskAccessMatches(*a.request, state.taskAccess, true, state)
+	}
+	if a.request != nil && (a.request.ConnectionRef != a.ref || policyProvider(a.request.Policy) != "openai" || !signInRequest(*a.request)) {
+		allowed = false
+	}
+	if !allowed || (a.request == nil && !a.modelsOnly) {
+		s.provider.mu.Unlock()
+		return errors.New("sign-in refresh requires current account permission")
+	}
+	if credential.RefreshToken == "" {
+		s.provider.mu.Unlock()
+		return errors.New("sign-in expired; reconnect to renew")
+	}
+	if s.provider.signInRenewals[a.ref] {
+		s.provider.mu.Unlock()
+		return errors.New("sign-in credential operation already in progress")
+	}
+	wire := s.openAISignInWire()
+	if wire == nil {
+		s.provider.mu.Unlock()
+		return nil
+	}
+	if s.provider.signInRenewals == nil {
+		s.provider.signInRenewals = map[string]bool{}
+	}
+	s.provider.signInRenewals[a.ref] = true
+	digest, epoch, osProt, previous := state.digest, state.epoch, state.osProtected, append([]byte(nil), state.key...)
+	s.provider.mu.Unlock()
+	defer clear(previous)
+	defer func() {
+		s.provider.mu.Lock()
+		delete(s.provider.signInRenewals, a.ref)
+		s.provider.mu.Unlock()
+	}()
+	renewed, err := exchangeProviderSignIn(ctx, wire, url.Values{"grant_type": {"refresh_token"}, "client_id": {credential.ClientID}, "refresh_token": {credential.RefreshToken}, "resource": {signInResource}}, "", credential.ClientID, s.now(), credential.Scope, credential.RefreshToken, credential.IDToken, credential.Subject)
+	if err != nil {
+		logProviderDiag("auto-refresh", map[string]any{"ref": a.ref, "err": err.Error()})
+		return err
+	}
+	if renewed.Subject != credential.Subject || renewed.Issuer != credential.Issuer || renewed.ClientID != credential.ClientID {
+		logProviderDiag("auto-refresh", map[string]any{"ref": a.ref, "reason": "identity_changed"})
+		return errors.New("renewed sign-in identity changed")
+	}
+	raw, _ := json.Marshal(renewed)
+	defer clear(raw)
+	s.provider.mu.Lock()
+	defer s.provider.mu.Unlock()
+	state = s.credentialLocked(a.ref)
+	if state.epoch != epoch || state.digest != digest || !bytes.Equal(state.key, previous) || ctx.Err() != nil {
+		return ErrConflict
+	}
+	if osProt {
+		nextDigest, err := s.persistOSProtectedSignInLocked(ctx, a.ref, raw, digest)
+		if err != nil {
+			logProviderDiag("auto-refresh-os-vault", map[string]any{"ref": a.ref, "err": err.Error()})
+			return err
+		}
+		state.digest = nextDigest
+	}
+	clear(state.key)
+	state.key = append([]byte(nil), raw...)
+	return nil
 }

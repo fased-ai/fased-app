@@ -137,20 +137,26 @@ func TestConfinedTailscaleSetupDoesNotGrantOperator(t *testing.T) {
 }
 
 func TestGuidedTailscaleRejectsUnverifiedPackageBeforeInstall(t *testing.T) {
-	f := setupFixture()
-	run := func(ctx context.Context, body []byte, args ...string) ([]byte, error) {
-		if args[0] == "/usr/bin/apt-cache" {
-			return []byte("tailscale:\n  Candidate: 1.105.0\n"), nil
+	for _, candidate := range []string{"1.104.4", "2.0.0"} {
+		f := setupFixture()
+		run := func(ctx context.Context, body []byte, args ...string) ([]byte, error) {
+			if args[0] == "/usr/bin/apt-cache" {
+				return []byte("tailscale:\n  Candidate: " + candidate + "\n"), nil
+			}
+			return f.run(ctx, body, args...)
 		}
-		return f.run(ctx, body, args...)
-	}
-	if err := prepareTailscale(t.Context(), preparationDirectory(t), 1000, "owner", &bytes.Buffer{}, f.read, run); err == nil {
-		t.Fatal("unverified package accepted")
-	}
-	for _, call := range f.calls {
-		if strings.Contains(call, "/usr/bin/apt-get") && strings.Contains(call, " install ") {
-			t.Fatal("unverified package was installed")
+		if err := prepareTailscale(t.Context(), preparationDirectory(t), 1000, "owner", &bytes.Buffer{}, f.read, run); err == nil {
+			t.Fatal("unverified package accepted", candidate)
 		}
+		for _, call := range f.calls {
+			if strings.Contains(call, "/usr/bin/apt-get") && strings.Contains(call, " install ") {
+				t.Fatal("unverified package was installed", candidate)
+			}
+		}
+	}
+	got, err := tailscaleAptCandidate([]byte("tailscale:\n  Candidate: 1.105.0\n"))
+	if err != nil || got != "1.105.0" {
+		t.Fatalf("supported Tailscale apt candidate rejected: got=%q err=%v", got, err)
 	}
 }
 

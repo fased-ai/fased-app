@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"os"
 	"testing"
+	"time"
 )
 
 // Preference changes use an explicit disposable account/current model. They do
@@ -49,9 +50,17 @@ func TestProviderCatalogTracksConnectionWithoutEntitlementClaims(t *testing.T) {
 		t.Fatal("locked credential offered as ready", err)
 	}
 	policy := openAIModelPolicy()
-	catalog := providerCatalog(AIConnectionView{Ref: "retained", TestOnly: true}, policy.ExpiresAt)
+	catalog := providerCatalog(AIConnectionView{Ref: "retained", TestOnly: true}, policy.ReviewedAt-1)
 	if catalog.Models[0].Selectable || catalog.Models[0].Availability != "expired" {
-		t.Fatal("expired admission offered")
+		t.Fatal("pre-review model offered")
+	}
+	ready := modelDiscovery{
+		State: "ready", FetchedAt: policy.ExpiresAt - 10, ExpiresAt: policy.ExpiresAt + 600,
+		Models: []discoveredModel{{ID: policy.Model, Object: "model", OwnedBy: "openai", Created: policy.ReviewedAt}},
+	}
+	catalog = discoveredProviderCatalog(AIConnectionView{Ref: "retained", TestOnly: true}, ready, policy.ExpiresAt)
+	if !catalog.Models[0].Selectable || catalog.Models[0].Availability != "fixture" || !catalog.ReviewStale {
+		t.Fatalf("stale review should warn without hard-locking selectable models: %+v", catalog)
 	}
 	catalog = providerCatalog(AIConnectionView{Ref: "retained", CredentialMode: "openai"}, policy.ReviewedAt+1)
 	if catalog.Models[0].Selectable || catalog.Models[0].Availability != "unverified" {
@@ -135,6 +144,47 @@ func TestAgentProviderSharedReviewSelection(t *testing.T) {
 	review.Action = "chat-send"
 	if _, err = s.ChangeAgents(t.Context(), review); err == nil {
 		t.Fatal("defaults resolved at dispatch")
+	}
+}
+
+func TestAgentProviderAllowsPastPolicyExpiresAt(t *testing.T) {
+	t.Parallel()
+	policy := openAIModelPolicy()
+	s := fixtureStore(t)
+	s.now = func() time.Time { return time.Unix(policy.ExpiresAt+3600, 0) }
+	connection := saveTestConnection(t, s)
+	v := agentApply(t, s, AgentCommand{Action: "session-create", ProfileID: "trading-analyst", Name: "Stale review"})
+	id := v.Sessions[len(v.Sessions)-1].ID
+	v = agentApply(t, s, AgentCommand{Action: "profile-update", ProfileID: v.ProfileID, Name: "Analyst", Provider: "openai", Model: admittedOpenAIModel})
+	got, err := s.ChangeAgents(t.Context(), AgentCommand{
+		Action:               "chat-review",
+		UseAgentDefaults:     true,
+		ProfileID:            v.ProfileID,
+		ID:                   id,
+		Limits:               &AILimits{MaxInputTokens: 24000, MaxOutputTokens: 1024, DeadlineSeconds: 1, BudgetMicrousd: 30000},
+		MemorySelection:      &AIMemorySelection{Mode: "none"},
+		MaxRuns:              2,
+		AuthorizationSeconds: 3600,
+		TotalBudgetMicrousd:  60000,
+		Revision:             v.Revision,
+	})
+	if err != nil || got.ChatReview == nil || got.ChatReview.ConnectionRef != connection.Ref || got.ChatReview.Model != admittedOpenAIModel {
+		t.Fatalf("stale registry blocked chat-review past ExpiresAt: got=%+v err=%v", got.ChatReview, err)
+	}
+	s.now = func() time.Time { return time.Unix(policy.ReviewedAt-1, 0) }
+	if _, err = s.ChangeAgents(t.Context(), AgentCommand{
+		Action:               "chat-review",
+		UseAgentDefaults:     true,
+		ProfileID:            v.ProfileID,
+		ID:                   id,
+		Limits:               &AILimits{MaxInputTokens: 24000, MaxOutputTokens: 1024, DeadlineSeconds: 1, BudgetMicrousd: 30000},
+		MemorySelection:      &AIMemorySelection{Mode: "none"},
+		MaxRuns:              2,
+		AuthorizationSeconds: 3600,
+		TotalBudgetMicrousd:  60000,
+		Revision:             v.Revision,
+	}); err == nil {
+		t.Fatal("pre-review model accepted by chat-review")
 	}
 }
 

@@ -167,12 +167,21 @@ func fetchProviderModelList(ctx context.Context, client *http.Client, provider s
 		req, _ := http.NewRequestWithContext(ctx, "GET", providerOrigin(provider)+path, nil)
 		response, err := client.Do(req)
 		if err != nil {
+			logProviderDiag("models-fetch", map[string]any{"provider": provider, "method": method, "endpoint": safeEndpointPath(providerOrigin(provider) + path), "err": err.Error()})
 			return failed
 		}
 		raw, readErr := io.ReadAll(io.LimitReader(response.Body, providerModelBodyLimit(provider)+1))
 		response.Body.Close()
 		kind, _, mediaErr := mime.ParseMediaType(response.Header.Get("Content-Type"))
 		if readErr != nil || int64(len(raw)) > providerModelBodyLimit(provider) || response.StatusCode != 200 || mediaErr != nil || kind != "application/json" || response.Header.Get("Content-Encoding") != "" || !uniqueAIJSON(raw, providerJSONNodes(provider)) {
+			oauthErr, oauthDesc := extractOAuthError(raw)
+			logProviderDiag("models-fetch", map[string]any{
+				"provider": provider, "method": method, "endpoint": safeEndpointPath(providerOrigin(provider) + path),
+				"status": response.StatusCode, "contentType": response.Header.Get("Content-Type"),
+				"contentEncoding": response.Header.Get("Content-Encoding"), "bodyBytes": len(raw),
+				"cfRay": response.Header.Get("CF-Ray"), "requestId": response.Header.Get("x-request-id"),
+				"oauthError": oauthErr, "oauthErrorDesc": oauthDesc, "reason": "response_rejected",
+			})
 			return failed
 		}
 		var records []discoveredModel
@@ -195,10 +204,16 @@ func fetchProviderModelList(ctx context.Context, client *http.Client, provider s
 			err = parseProviderModelList(provider, raw, &object, &records)
 		}
 		if err != nil || object != "list" || records == nil || len(rows)+len(records) > 2048 {
+			errText := ""
+			if err != nil {
+				errText = err.Error()
+			}
+			logProviderDiag("models-fetch", map[string]any{"provider": provider, "method": method, "endpoint": safeEndpointPath(providerOrigin(provider) + path), "reason": "parse_error", "err": errText})
 			return failed
 		}
 		for _, m := range records {
 			if !validProviderModelID(m.ID) || seen[m.ID] || m.Object != "model" || (m.Created <= 0 && !compatibleProvider(provider) && provider != "local") || m.Created < 0 || m.Created > now.Unix() || len(m.OwnedBy) < 1 || len(m.OwnedBy) > 128 {
+				logProviderDiag("models-fetch", map[string]any{"provider": provider, "method": method, "endpoint": safeEndpointPath(providerOrigin(provider) + path), "reason": "entry_invalid"})
 				return failed
 			}
 			seen[m.ID] = true
@@ -241,7 +256,7 @@ func discoveredProviderCatalog(v AIConnectionView, d modelDiscovery, now int64) 
 		provider = "openai"
 	}
 	registry := registryForProvider(provider)
-	catalog := ProviderCatalog{Version: 1, Policy: "latest-only", State: d.State, FetchedAt: d.FetchedAt, ExpiresAt: d.ExpiresAt, Source: d.Source, SHA256: d.SHA256, Providers: providerEntries(), Models: []ProviderModel{}}
+	catalog := ProviderCatalog{Version: 1, Policy: "latest-only", State: d.State, FetchedAt: d.FetchedAt, ExpiresAt: d.ExpiresAt, ReviewStale: now >= registry.ExpiresAt, Source: d.Source, SHA256: d.SHA256, Providers: providerEntries(), Models: []ProviderModel{}}
 	records := map[string]discoveredModel{}
 	for _, r := range d.Models {
 		records[r.ID] = r
@@ -268,7 +283,7 @@ func discoveredProviderCatalog(v AIConnectionView, d modelDiscovery, now int64) 
 			m.Availability = "currency-unsupported"
 		case v.AuthMethod == "sign-in" && !v.PlanUse && !v.Locked:
 			m.Availability = "plan-access-required"
-		case now < registry.ReviewedAt || now >= registry.ExpiresAt:
+		case now < registry.ReviewedAt:
 			m.Availability = "expired"
 		case v.Ref == "":
 			m.Availability = "disconnected"

@@ -13,11 +13,13 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -222,7 +224,7 @@ func TestProviderSignInRefusesCallbackReplayExpiryAndDowngrade(t *testing.T) {
 				q.Del("client_id")
 			case "expiry":
 				now := s.now()
-				s.now = func() time.Time { return now.Add(6 * time.Minute) }
+				s.now = func() time.Time { return now.Add(11 * time.Minute) }
 			case "cancel":
 				_, err = s.ChangeAIConnection(t.Context(), AIConnectionCommand{Action: "sign-in-cancel", SignInID: v.SignIn.ID})
 				if err != nil {
@@ -376,12 +378,12 @@ func TestProviderSignInIdentityAndPlanPermissionRefusals(t *testing.T) {
 func TestProviderSignInVaultMaximumAccountsAndOversizePreservation(t *testing.T) {
 	t.Parallel()
 	s := fixtureStore(t)
-	credential := providerSignInCredential{Version: 1, Issuer: signInIssuer, Subject: "disposable-max-user", ClientID: "oaiapp_disposable_max", AccessToken: strings.Repeat("a", 4096), RefreshToken: strings.Repeat("r", 4096), IDToken: "i", Scope: signInScope, ExpiresAt: s.now().Add(time.Hour).Unix()}
+	credential := providerSignInCredential{Version: 1, Issuer: signInIssuer, Subject: "disposable-max-user", ClientID: "oaiapp_disposable_max", AccessToken: strings.Repeat("a", 8192), RefreshToken: strings.Repeat("r", 8192), IDToken: "i", Scope: signInScope, ExpiresAt: s.now().Add(time.Hour).Unix()}
 	raw, _ := json.Marshal(credential)
-	credential.IDToken = strings.Repeat("i", 1+16000-len(raw))
+	credential.IDToken = strings.Repeat("i", 1+providerSignInMaxPlaintext-len(raw))
 	raw, _ = json.Marshal(credential)
 	defer clear(raw)
-	if len(raw) != 16000 {
+	if len(raw) != providerSignInMaxPlaintext {
 		t.Fatal("not testing plaintext bound", len(raw))
 	}
 	if _, ok := parseProviderSignInCredential(raw); !ok {
@@ -605,8 +607,8 @@ func TestProviderSignInLiveCallbackIssWhitespaceReconnectRefModelsAndOIDC(t *tes
 			"iss": signInIssuer, "sub": "user-1", "nonce": "n1",
 			"aud": []string{client, signInResource}, "iat": now, "exp": now + 3600,
 		})
-		if _, err := validateOIDCIDToken(t.Context(), nil, signInIssuer+"/.well-known/jwks.json", missingAzp, client, "n1", now, signInIssuer, fetch); err == nil {
-			t.Fatal("multi-audience without azp accepted")
+		if sub, err := validateOIDCIDToken(t.Context(), nil, signInIssuer+"/.well-known/jwks.json", missingAzp, client, "n1", now, signInIssuer, fetch); err != nil || sub != "user-1" {
+			t.Fatal("multi-audience without azp matching client_id refused", sub, err)
 		}
 		wrongAzp := signToken(map[string]any{
 			"iss": signInIssuer, "sub": "user-1", "nonce": "n1", "azp": "oaiapp_other",
@@ -616,4 +618,387 @@ func TestProviderSignInLiveCallbackIssWhitespaceReconnectRefModelsAndOIDC(t *tes
 			t.Fatal("mismatched azp accepted")
 		}
 	})
+}
+
+func TestProviderSignInOAuthToleranceAutoRefreshAndOSPersist(t *testing.T) {
+	t.Parallel()
+
+	t.Run("callback-extra-params-fragment-trailing-iss-retry-and-default", func(t *testing.T) {
+		s := fixtureStore(t)
+		start, err := s.ChangeAIConnection(t.Context(), AIConnectionCommand{Action: "sign-in-start", Provider: "openai", Remote: true, Name: "Flexible Callback"})
+		if err != nil || start.SignIn == nil {
+			t.Fatal(err)
+		}
+		// Wrong state must NOT cancel the pending sign-in attempt; user can retry with corrected paste.
+		badURL, _ := url.Parse(start.SignIn.URL)
+		bq := badURL.Query()
+		bq.Set("state", "wrong-state")
+		badURL.RawQuery = bq.Encode()
+		if _, err = s.ChangeAIConnection(t.Context(), AIConnectionCommand{Action: "sign-in-complete", SignInID: start.SignIn.ID, Callback: badURL.String(), Passphrase: testVaultPassword}); err == nil {
+			t.Fatal("mismatched state accepted")
+		}
+		stillPending, _ := s.AIConnection()
+		if stillPending.SignIn == nil || stillPending.SignIn.ID != start.SignIn.ID {
+			t.Fatal("callback error destructively cancelled pending sign-in")
+		}
+		// Valid callback with extra unknown params, #fragment, and trailing / on iss succeeds.
+		u, _ := url.Parse(start.SignIn.URL)
+		q := u.Query()
+		q.Set("iss", signInIssuer+"/")
+		q.Set("session_state", "extra-session-state")
+		q.Set("authuser", "0")
+		u.RawQuery = q.Encode()
+		u.Fragment = "_=done"
+		done, err := s.ChangeAIConnection(t.Context(), AIConnectionCommand{Action: "sign-in-complete", SignInID: start.SignIn.ID, Callback: u.String(), Passphrase: testVaultPassword})
+		if err != nil || done.Ref == "" || !done.PlanUse {
+			t.Fatalf("flexible callback completion failed: %+v err=%v", done, err)
+		}
+		// First sign-in save leaves legacy API-key default slot untouched while surfacing the connection in top-level Connections.
+		col, err := s.readAIVaultCollection()
+		if err != nil || col.Default != "" {
+			t.Fatalf("sign-in save mutated legacy col.Default: %+v err=%v", col.Default, err)
+		}
+		top, err := s.AIConnection()
+		if err != nil || len(top.Connections) != 1 || top.Connections[0].Ref != done.Ref || top.Connections[0].Locked || !top.Connections[0].PlanUse {
+			t.Fatalf("top-level AIConnection Connections missing saved sign-in account: %+v err=%v", top, err)
+		}
+	})
+
+	t.Run("omitted-scope-and-missing-refresh-token", func(t *testing.T) {
+		s := fixtureStore(t)
+		s.providerFixture = false
+		key, err := rsa.GenerateKey(rand.Reader, 2048)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var currentNonce, issuedCode string
+		clientID := "oaiapp_no_refresh"
+		s.provider.signInTransport = aiTestTransport(func(r *http.Request) (*http.Response, error) {
+			var payload any
+			switch r.URL.Path {
+			case "/.well-known/openid-configuration":
+				payload = map[string]any{"issuer": signInIssuer, "jwks_uri": signInIssuer + "/.well-known/jwks.json", "revocation_endpoint": signInIssuer + "/api/accounts/oauth/revoke"}
+			case "/.well-known/jwks.json":
+				payload = map[string]any{"keys": []any{map[string]any{"kty": "RSA", "kid": "k1", "jwk": nil, "n": base64.RawURLEncoding.EncodeToString(key.N.Bytes()), "e": "AQAB"}}}
+			case "/api/accounts/oauth/token":
+				_ = r.ParseForm()
+				if r.Form.Get("code") != issuedCode {
+					return nil, errors.New("unexpected code")
+				}
+				now := s.now().Unix()
+				hdr, _ := json.Marshal(map[string]any{"alg": "RS256", "kid": "k1", "jwk": nil})
+				cls, _ := json.Marshal(map[string]any{
+					"iss": signInIssuer, "sub": "user-no-refresh", "nonce": currentNonce,
+					"aud": clientID, "iat": now + 250, "exp": now + 3600,
+					"pad": strings.Repeat("x", 8500),
+				})
+				msg := base64.RawURLEncoding.EncodeToString(hdr) + "." + base64.RawURLEncoding.EncodeToString(cls)
+				d := sha256.Sum256([]byte(msg))
+				sig, _ := rsa.SignPKCS1v15(rand.Reader, key, crypto.SHA256, d[:])
+				// RFC 6749 §5.1 omitted scope + optional omitted refresh_token.
+				payload = map[string]any{
+					"access_token": "tok-" + strings.Repeat("a", 50),
+					"id_token":     msg + "." + base64.RawURLEncoding.EncodeToString(sig),
+					"token_type":   "Bearer",
+					"expires_in":   3600,
+				}
+			case "/v1/models":
+				payload = map[string]any{"models": []any{map[string]any{"slug": admittedOpenAIModel, "display_name": "GPT Test", "visibility": "list"}}}
+			default:
+				return &http.Response{StatusCode: 404, Body: io.NopCloser(strings.NewReader("")), Request: r}, nil
+			}
+			b, _ := json.Marshal(payload)
+			return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": {"application/json"}}, Body: io.NopCloser(bytes.NewReader(b)), Request: r}, nil
+		})
+		start, err := s.ChangeAIConnection(t.Context(), AIConnectionCommand{Action: "sign-in-start", Provider: "openai", Remote: true, Name: "No Refresh"})
+		if err != nil || start.SignIn == nil {
+			t.Fatal(err)
+		}
+		s.provider.mu.Lock()
+		currentNonce = s.provider.signIn.nonce
+		csrfState := s.provider.signIn.state
+		callbackURL := s.provider.signIn.redirect
+		s.provider.mu.Unlock()
+		issuedCode = "code-no-refresh"
+		u, _ := url.Parse(callbackURL)
+		q := url.Values{"state": {csrfState}, "code": {issuedCode}, "client_id": {clientID}}
+		u.RawQuery = q.Encode()
+		v, err := s.ChangeAIConnection(t.Context(), AIConnectionCommand{Action: "sign-in-complete", SignInID: start.SignIn.ID, Callback: u.String(), Passphrase: testVaultPassword})
+		if err != nil || v.Ref == "" || !v.PlanUse {
+			t.Fatalf("omitted scope/refresh sign-in failed: %+v err=%v", v, err)
+		}
+		if _, err = s.ChangeAIConnection(t.Context(), AIConnectionCommand{Action: "sign-in-refresh", Ref: v.Ref, Passphrase: testVaultPassword}); err == nil {
+			t.Fatal("manual refresh without refresh_token succeeded")
+		}
+		disconnected, err := s.ChangeAIConnection(t.Context(), AIConnectionCommand{Action: "sign-in-disconnect", Ref: v.Ref, Passphrase: testVaultPassword})
+		if err != nil || !disconnected.Locked {
+			t.Fatalf("disconnect without refresh_token failed: %+v err=%v", disconnected, err)
+		}
+	})
+
+	t.Run("validateOIDCIDToken-iat-clock-skew-and-jwks-optional-alg-use", func(t *testing.T) {
+		key, err := rsa.GenerateKey(rand.Reader, 2048)
+		if err != nil {
+			t.Fatal(err)
+		}
+		now := int64(1795267200)
+		client := "oaiapp_test_client"
+		jwksJSON, _ := json.Marshal(map[string]any{
+			"keys": []any{map[string]any{
+				"kty": "RSA", "kid": "k1",
+				"n": base64.RawURLEncoding.EncodeToString(key.N.Bytes()), "e": "AQAB",
+			}},
+		})
+		fetch := func(_ context.Context, _ http.RoundTripper, _, _ string, _ url.Values, target any) error {
+			return json.Unmarshal(jwksJSON, target)
+		}
+		signWithHeader := func(iat int64) string {
+			h, _ := json.Marshal(map[string]any{"alg": "RS256", "kid": "k1", "jwk": nil})
+			c, _ := json.Marshal(map[string]any{"iss": signInIssuer, "sub": "user-skew", "nonce": "n1", "aud": client, "iat": iat, "exp": now + 3600})
+			msg := base64.RawURLEncoding.EncodeToString(h) + "." + base64.RawURLEncoding.EncodeToString(c)
+			d := sha256.Sum256([]byte(msg))
+			sig, _ := rsa.SignPKCS1v15(rand.Reader, key, crypto.SHA256, d[:])
+			return msg + "." + base64.RawURLEncoding.EncodeToString(sig)
+		}
+		if sub, err := validateOIDCIDToken(t.Context(), nil, signInIssuer+"/.well-known/jwks.json", signWithHeader(now+300), client, "n1", now, signInIssuer, fetch); err != nil || sub != "user-skew" {
+			t.Fatalf("iat+300s / null jwk / omitted alg+use refused: %v", err)
+		}
+		if _, err := validateOIDCIDToken(t.Context(), nil, signInIssuer+"/.well-known/jwks.json", signWithHeader(now+301), client, "n1", now, signInIssuer, fetch); err == nil {
+			t.Fatal("iat+301s skew accepted")
+		}
+	})
+
+	t.Run("os-protected-auto-refresh-persists-and-keeps-epoch", func(t *testing.T) {
+		dir := fixtureDir(t)
+		s, err := openStoreWithTaskSecrets(dir, &testTaskSecrets{key: bytes.Repeat([]byte{93}, 32)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer s.Close()
+		s.providerFixture = true
+		v := completeSignInFixtureOS(t, s)
+		env, _ := s.readAIVault(v.Ref)
+		if !env.OSProtected {
+			t.Fatal("expected OS-protected sign-in vault")
+		}
+		s.provider.mu.Lock()
+		f, _ := newProviderSignInRenewFixture(providerSignInCredential{ClientID: "ignored"}, s.now)
+		rawOld, _ := json.Marshal(env)
+		plainOld, _ := s.openAIVault(env, "")
+		credOld, _ := parseProviderSignInCredential(plainOld)
+		clear(plainOld)
+		f.subject, f.clientID, f.refresh, f.scope = credOld.Subject, credOld.ClientID, credOld.RefreshToken, credOld.Scope
+		s.provider.signInTransport = aiTestTransport(func(r *http.Request) (*http.Response, error) {
+			if r.Host == "auth.openai.com" {
+				return f.RoundTrip(r)
+			}
+			if !strings.Contains(r.Header.Get("Authorization"), "fased-test-signin-access-") {
+				return nil, errors.New("missing bearer")
+			}
+			return (fixtureAITransport{}).RoundTrip(r)
+		})
+		state := s.credentialLocked(v.Ref)
+		beforeEpoch := state.epoch
+		credOld.ExpiresAt = s.now().Unix() + 10
+		state.key, _ = json.Marshal(credOld)
+		_ = rawOld
+		s.provider.mu.Unlock()
+
+		req, _ := http.NewRequestWithContext(t.Context(), "GET", "https://api.openai.com/v1/models", nil)
+		rt := authenticatedAITransport{store: s, ref: v.Ref, modelsOnly: true, next: s.provider.signInTransport}
+		res, err := rt.RoundTrip(req)
+		if err != nil {
+			t.Fatalf("auto-refresh RoundTrip failed: %v", err)
+		}
+		res.Body.Close()
+
+		s.provider.mu.Lock()
+		afterEpoch := s.credentialLocked(v.Ref).epoch
+		s.provider.mu.Unlock()
+		if afterEpoch != beforeEpoch {
+			t.Fatalf("auto-refresh mutated epoch %d -> %d", beforeEpoch, afterEpoch)
+		}
+		// Restore from disk into fresh map to verify rotated refresh_token was persisted to OS vault.
+		s.lockAIConnection()
+		s.restoreOSProtectedConnections(t.Context())
+		s.provider.mu.Lock()
+		reloaded, ok := parseProviderSignInCredential(s.credentialLocked(v.Ref).key)
+		s.provider.mu.Unlock()
+		if !ok || reloaded.RefreshToken == credOld.RefreshToken || reloaded.AccessToken == credOld.AccessToken {
+			t.Fatalf("rotated OS-protected refresh token not persisted across reload: ok=%v", ok)
+		}
+	})
+
+	t.Run("busy-reset-on-db-cancel", func(t *testing.T) {
+		s := fixtureStore(t)
+		s.providerFixture = false
+		key, err := rsa.GenerateKey(rand.Reader, 2048)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		var currentNonce, issuedCode string
+		clientID := "oaiapp_busy_reset"
+		s.provider.signInTransport = aiTestTransport(func(r *http.Request) (*http.Response, error) {
+			var payload any
+			switch r.URL.Path {
+			case "/.well-known/openid-configuration":
+				payload = map[string]any{"issuer": signInIssuer, "jwks_uri": signInIssuer + "/.well-known/jwks.json", "revocation_endpoint": signInIssuer + "/api/accounts/oauth/revoke"}
+			case "/.well-known/jwks.json":
+				payload = map[string]any{"keys": []any{map[string]any{"kty": "RSA", "kid": "k1", "alg": "RS256", "use": "sig", "n": base64.RawURLEncoding.EncodeToString(key.N.Bytes()), "e": "AQAB"}}}
+				b, _ := json.Marshal(payload)
+				return &http.Response{
+					StatusCode: 200,
+					Header:     http.Header{"Content-Type": {"application/json"}},
+					Body:       &cancelOnCloseReader{Reader: bytes.NewReader(b), onClose: cancel},
+					Request:    r,
+				}, nil
+			case "/api/accounts/oauth/token":
+				_ = r.ParseForm()
+				if r.Form.Get("code") != issuedCode {
+					return nil, errors.New("unexpected code")
+				}
+				now := s.now().Unix()
+				hdr, _ := json.Marshal(map[string]any{"alg": "RS256", "kid": "k1"})
+				cls, _ := json.Marshal(map[string]any{"iss": signInIssuer, "sub": "user-busy-reset", "nonce": currentNonce, "aud": clientID, "iat": now, "exp": now + 3600})
+				msg := base64.RawURLEncoding.EncodeToString(hdr) + "." + base64.RawURLEncoding.EncodeToString(cls)
+				d := sha256.Sum256([]byte(msg))
+				sig, _ := rsa.SignPKCS1v15(rand.Reader, key, crypto.SHA256, d[:])
+				payload = map[string]any{
+					"access_token": "tok-" + strings.Repeat("b", 50),
+					"id_token":     msg + "." + base64.RawURLEncoding.EncodeToString(sig),
+					"token_type":   "Bearer",
+					"expires_in":   3600,
+				}
+			case "/v1/models":
+				payload = map[string]any{"models": []any{map[string]any{"slug": admittedOpenAIModel, "display_name": "GPT Test", "visibility": "list"}}}
+			default:
+				return &http.Response{StatusCode: 404, Body: io.NopCloser(strings.NewReader("")), Request: r}, nil
+			}
+			b, _ := json.Marshal(payload)
+			return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": {"application/json"}}, Body: io.NopCloser(bytes.NewReader(b)), Request: r}, nil
+		})
+		start, err := s.ChangeAIConnection(t.Context(), AIConnectionCommand{Action: "sign-in-start", Provider: "openai", Remote: true, Name: "Busy Reset"})
+		if err != nil || start.SignIn == nil {
+			t.Fatal(err)
+		}
+		s.provider.mu.Lock()
+		currentNonce = s.provider.signIn.nonce
+		csrfState := s.provider.signIn.state
+		callbackURL := s.provider.signIn.redirect
+		s.provider.mu.Unlock()
+		issuedCode = "code-busy-reset"
+		u, _ := url.Parse(callbackURL)
+		u.RawQuery = url.Values{"state": {csrfState}, "code": {issuedCode}, "client_id": {clientID}}.Encode()
+		if _, err = s.ChangeAIConnection(ctx, AIConnectionCommand{Action: "sign-in-complete", SignInID: start.SignIn.ID, Callback: u.String(), Passphrase: testVaultPassword}); !errors.Is(err, context.Canceled) {
+			t.Fatalf("expected context.Canceled from aborted DB transaction, got err=%v", err)
+		}
+		s.provider.mu.Lock()
+		attempt := s.provider.signIn
+		busy := attempt != nil && attempt.busy
+		s.provider.mu.Unlock()
+		if attempt == nil || busy {
+			t.Fatalf("signIn busy remained wedged or cleared unexpectedly: attempt=%v busy=%v", attempt != nil, busy)
+		}
+		// Retry with a healthy context should now succeed instead of failing ErrConflict.
+		done, err := s.ChangeAIConnection(t.Context(), AIConnectionCommand{Action: "sign-in-complete", SignInID: start.SignIn.ID, Callback: u.String(), Passphrase: testVaultPassword})
+		if err != nil || done.Ref == "" || !done.PlanUse {
+			t.Fatalf("retry after busy reset failed: %+v err=%v", done, err)
+		}
+	})
+}
+
+type cancelOnCloseReader struct {
+	io.Reader
+	onClose func()
+}
+
+func (r *cancelOnCloseReader) Close() error {
+	if r.onClose != nil {
+		r.onClose()
+	}
+	return nil
+}
+
+type lockedDiagBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *lockedDiagBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *lockedDiagBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
+func completeSignInFixtureOS(t *testing.T, s *Store) AIConnectionView {
+	t.Helper()
+	v, err := s.ChangeAIConnection(t.Context(), AIConnectionCommand{Action: "sign-in-start", Provider: "openai", Name: "ChatGPT OS"})
+	if err != nil || v.SignIn == nil {
+		t.Fatal(err)
+	}
+	res, err := http.Get(v.SignIn.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	res.Body.Close()
+	out, err := s.ChangeAIConnection(t.Context(), AIConnectionCommand{Action: "sign-in-complete", SignInID: v.SignIn.ID})
+	if err != nil || !out.OSProtected || out.Locked {
+		t.Fatalf("complete OS sign-in failed: %+v err=%v", out, err)
+	}
+	return out
+}
+
+func TestProviderSignInRedactedDiagnostics(t *testing.T) {
+	var buf lockedDiagBuffer
+	prevOut := log.Writer()
+	log.SetOutput(&buf)
+	defer log.SetOutput(prevOut)
+
+	s := fixtureStore(t)
+	s.providerFixture = false
+	secretToken := "sk-secret-do-not-leak-1234567890"
+	s.provider.signInTransport = aiTestTransport(func(r *http.Request) (*http.Response, error) {
+		body := `{"error":"invalid_grant","error_description":"bad token Bearer ` + secretToken + `"}`
+		hdr := http.Header{}
+		hdr.Set("Content-Type", "application/json")
+		hdr.Set("CF-Ray", "ray-999-dfw")
+		hdr.Set("x-request-id", "req-abc")
+		return &http.Response{
+			StatusCode: 403,
+			Header:     hdr,
+			Body:       io.NopCloser(strings.NewReader(body)),
+			Request:    r,
+		}, nil
+	})
+	start, err := s.ChangeAIConnection(t.Context(), AIConnectionCommand{Action: "sign-in-start", Provider: "openai", Remote: true})
+	if err != nil || start.SignIn == nil {
+		t.Fatal(err)
+	}
+	s.provider.mu.Lock()
+	callbackBase := s.provider.signIn.redirect
+	csrfState := s.provider.signIn.state
+	s.provider.mu.Unlock()
+	u, _ := url.Parse(callbackBase)
+	q := url.Values{"state": {csrfState}, "code": {"secret-auth-code-999"}, "client_id": {"oaiapp_diag"}}
+	u.RawQuery = q.Encode()
+	_, _ = s.ChangeAIConnection(t.Context(), AIConnectionCommand{Action: "sign-in-complete", SignInID: start.SignIn.ID, Callback: u.String(), Passphrase: testVaultPassword})
+	logged := buf.String()
+	for _, want := range []string{`"stage":"signin-http"`, `"status":403`, `"cfRay":"ray-999-dfw"`, `"requestId":"req-abc"`, `"oauthError":"invalid_grant"`, `[redacted]`} {
+		if !strings.Contains(logged, want) {
+			t.Fatalf("diagnostic log missing %s: %s", want, logged)
+		}
+	}
+	for _, secret := range []string{secretToken, "secret-auth-code-999", testVaultPassword, csrfState} {
+		if strings.Contains(logged, secret) {
+			t.Fatalf("diagnostic log leaked secret %q: %s", secret, logged)
+		}
+	}
 }

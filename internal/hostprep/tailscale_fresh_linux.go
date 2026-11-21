@@ -195,12 +195,27 @@ func supportedTailscaleVersion(b []byte) (string, error) {
 }
 
 func supportedTailscaleRelease(version string) bool {
-	switch version {
-	case "1.104.5", "1.104.6", "1.104.7":
-		return true
-	default:
+	parts := strings.Split(version, ".")
+	if len(parts) != 3 {
 		return false
 	}
+	var nums [3]int
+	for i, part := range parts {
+		if len(part) == 0 || len(part) > 6 || (len(part) > 1 && part[0] == '0') {
+			return false
+		}
+		for j := 0; j < len(part); j++ {
+			if part[j] < '0' || part[j] > '9' {
+				return false
+			}
+		}
+		v, err := strconv.Atoi(part)
+		if err != nil || v < 0 {
+			return false
+		}
+		nums[i] = v
+	}
+	return nums[0] == 1 && (nums[1] > 104 || (nums[1] == 104 && nums[2] >= 5))
 }
 
 func tailscaleAptCandidate(b []byte) (string, error) {

@@ -140,7 +140,7 @@ type aiVaultCollection struct {
 
 // Sixteen maximum sign-in envelopes include base64 expansion and JSON metadata.
 // Reader and atomic writer enforce the same serialized byte limit.
-const aiVaultMaxSerializedBytes = 512 * 1024
+const aiVaultMaxSerializedBytes = 768 * 1024
 const aiMaxAccounts = 16
 
 func validConnectionRef(ref string) bool {
@@ -876,6 +876,9 @@ type authenticatedAITransport struct {
 
 func (a authenticatedAITransport) RoundTrip(r *http.Request) (*http.Response, error) {
 	if err := a.ensureGoogleAccess(r); err != nil {
+		return nil, err
+	}
+	if err := a.ensureSignInAccess(r); err != nil {
 		return nil, err
 	}
 	if a.next == nil || a.modelsOnly && (r.Method != "GET" || !strings.HasSuffix(r.URL.Path, "/models") && !strings.HasSuffix(r.URL.Path, "/models/user")) {

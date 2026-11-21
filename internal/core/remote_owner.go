@@ -159,6 +159,7 @@ func (s *Store) remoteSession(ctx context.Context, id tailnet.Identity, code, ex
 	if err = tx.Commit(); err != nil {
 		return "", err
 	}
+	s.restoreOSProtectedConnections(ctx)
 	return token, nil
 }
 func (h *HTTPHandler) ownerSession(r *http.Request, token string) bool {
