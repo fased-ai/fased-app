@@ -1063,7 +1063,7 @@ func (s *Store) changeAgents(ctx context.Context, c AgentCommand, fixture bool) 
 	if e = tx.Commit(); e != nil {
 		return AgentView{}, e
 	}
-	s.mirrorNewTaskRunsToV2(ctx, d, beforeRuns)
+	mirrorTaskRunsToV2(ctx, s, d, beforeRuns)
 	signalStoreChange(s)
 	v, e := agentView(d, revision+1, profile, "", now)
 	return s.chatView(v), e
@@ -1317,7 +1317,7 @@ func (s *Store) runAgentTasks(ctx context.Context, fixture bool) error {
 	if e = tx.Commit(); e != nil {
 		return e
 	}
-	s.mirrorNewTaskRunsToV2(ctx, d, beforeRuns)
+	mirrorTaskRunsToV2(ctx, s, d, beforeRuns)
 	return nil
 }
 

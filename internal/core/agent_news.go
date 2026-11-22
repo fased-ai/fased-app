@@ -552,7 +552,7 @@ func (s *Store) advanceAgentNews(ctx context.Context, rt http.RoundTripper, fixt
 	if e = tx.Commit(); e != nil {
 		return e
 	}
-	s.mirrorNewTaskRunsToV2(ctx, d, beforeRuns)
+	mirrorTaskRunsToV2(ctx, s, d, beforeRuns)
 	if dispatch == nil {
 		return nil
 	}
@@ -621,7 +621,7 @@ func (s *Store) advanceAgentNews(ctx context.Context, rt http.RoundTripper, fixt
 			if e = tx.Commit(); e != nil {
 				return e
 			}
-			s.mirrorNewTaskRunsToV2(finish, d, beforeRuns)
+			mirrorTaskRunsToV2(finish, s, d, beforeRuns)
 			return nil
 		}
 	}

@@ -9,6 +9,12 @@ import (
 	"time"
 )
 
+func init() {
+	taskRunsV2Mirror = func(ctx context.Context, s *Store, d agentDocument, beforeRuns int) {
+		s.mirrorNewTaskRunsToV2(ctx, d, beforeRuns)
+	}
+}
+
 func shouldMirrorTaskRunToV2(run AgentRun) bool {
 	if run.Strategy == "news-gate-v1" || run.WEN != nil || run.BotID != "" || run.Swap != nil || run.WENMining != nil {
 		return false

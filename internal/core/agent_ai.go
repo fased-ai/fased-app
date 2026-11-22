@@ -69,6 +69,14 @@ func clearStoreSignal(s *Store) {
 	storeChangeSignals.Delete(s)
 }
 
+var taskRunsV2Mirror func(context.Context, *Store, agentDocument, int)
+
+func mirrorTaskRunsToV2(ctx context.Context, s *Store, d agentDocument, beforeRuns int) {
+	if taskRunsV2Mirror != nil {
+		taskRunsV2Mirror(ctx, s, d, beforeRuns)
+	}
+}
+
 const fixtureAIModel = "fixture-openai-v1"
 
 // Maximum decoded answer/card bytes can expand sixfold in persisted JSON.
@@ -895,7 +903,7 @@ func (s *Store) advanceAgentAI(ctx context.Context, rt http.RoundTripper, fixtur
 	if e = tx.Commit(); e != nil {
 		return e
 	}
-	s.mirrorNewTaskRunsToV2(ctx, d, beforeRuns)
+	mirrorTaskRunsToV2(ctx, s, d, beforeRuns)
 	if dispatch == nil {
 		return nil
 	}
@@ -1040,7 +1048,7 @@ func (s *Store) advanceAgentAI(ctx context.Context, rt http.RoundTripper, fixtur
 			if e = tx.Commit(); e != nil {
 				return e
 			}
-			s.mirrorNewTaskRunsToV2(finish, d, beforeRuns)
+			mirrorTaskRunsToV2(finish, s, d, beforeRuns)
 			if isResearchLoop(q) && q.State == "completed" {
 				return s.runLoopReadsLocked(ctx, q.ResearchTurnID)
 			}
