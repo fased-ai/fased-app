@@ -22,11 +22,15 @@ func validRPCVault(v rpcVault) bool {
 	return (v.Version == 1 || v.Version == 2) && (!v.OSProtected || v.Version == 2) && len(v.Ref) == 43 && hexValue(v.Binding, 32) && len(v.Salt) == 16 && len(v.Nonce) == 12 && len(v.Ciphertext) >= 16 && len(v.Ciphertext) <= 272
 }
 func (s *Store) openRPCBackup(b *RPCCredentialBackup, a Account, password string) ([]byte, error) {
+	return s.openRPCBackupWithPreKey(b, a, password, preDerivedKDF{})
+}
+
+func (s *Store) openRPCBackupWithPreKey(b *RPCCredentialBackup, a Account, password string, pre preDerivedKDF) ([]byte, error) {
 	fail := errors.New("RPC backup does not match this wallet or password")
 	if b == nil || b.Version != b.Vault.Version || b.InstanceID != s.instanceID || b.AccountID != a.ID || a.RPC == nil || !validRPCVault(b.Vault) || b.Vault.OSProtected || b.Vault.Binding != rpcBinding(a) || b.Vault.Version != a.RPC.Version {
 		return nil, fail
 	}
-	key := passwordHash(password, b.Vault.Salt)
+	key := pre.keyFor(password, b.Vault.Salt)
 	block, _ := aes.NewCipher(key)
 	clear(key)
 	gcm, _ := cipher.NewGCM(block)

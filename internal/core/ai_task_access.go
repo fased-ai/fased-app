@@ -124,7 +124,7 @@ func (s *Store) reviewTaskAccess(d agentDocument, c AIConnectionCommand, revisio
 	}
 	return a, nil
 }
-func (s *Store) changeTaskAccess(ctx context.Context, tx *sql.Tx, c AIConnectionCommand, v AIConnectionView) (AIConnectionView, error) {
+func (s *Store) changeTaskAccess(ctx context.Context, tx *sql.Tx, c AIConnectionCommand, v AIConnectionView, preOpen preDerivedKDF) (AIConnectionView, error) {
 	state := s.credentialLocked(c.Ref)
 	if c.Action == "task-access-revoke" {
 		if c.Passphrase != "" || c.Key != "" || c.Allowance != nil || c.ContinueOnSignOut || c.ContinueAfterRestart {
@@ -184,7 +184,7 @@ func (s *Store) changeTaskAccess(ctx context.Context, tx *sql.Tx, c AIConnection
 	if e != nil {
 		return v, errors.New("credential vault unavailable")
 	}
-	plain, e := s.openAIVaultWithContext(ctx, env, c.Passphrase)
+	plain, e := s.openAIVaultWithPreKey(ctx, env, c.Passphrase, preOpen)
 	defer clear(plain)
 	if e != nil {
 		return v, errors.New("vault unlock failed")

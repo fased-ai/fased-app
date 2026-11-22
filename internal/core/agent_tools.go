@@ -81,6 +81,49 @@ func agentV2ToolRegistry() []agentToolEntry {
 		},
 		{
 			spec: AgentToolSpec{
+				Name:        "get_portfolio_summary",
+				Tier:        toolTierRead,
+				Description: "Summarize configured wallets, SOL/SPL balances, best-effort USD valuations, active tasks, and pending drafts across the workspace. Never accesses private keys or signing authority.",
+				Parameters: map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"network": map[string]any{
+							"type":        "string",
+							"description": "Optional Solana network filter (e.g. mainnet-beta, devnet).",
+						},
+						"rpcRef": map[string]any{
+							"type":        "string",
+							"description": "Optional RPC credential reference hint.",
+						},
+					},
+				},
+			},
+			execute: toolGetPortfolioSummary,
+		},
+		{
+			spec: AgentToolSpec{
+				Name:        "fetch_web_page",
+				Tier:        toolTierRead,
+				Description: "Read-only fetch of a public HTTPS web page, returning title and stripped plain text marked untrusted. Refuses non-HTTPS, IP literals, private/local hosts, and private redirects.",
+				Parameters: map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"url": map[string]any{
+							"type":        "string",
+							"description": "Public https:// URL to fetch.",
+						},
+						"maxChars": map[string]any{
+							"type":        "integer",
+							"description": "Maximum text characters to return (500-6000, default 4000).",
+						},
+					},
+					"required": []string{"url"},
+				},
+			},
+			execute: toolFetchWebPage,
+		},
+		{
+			spec: AgentToolSpec{
 				Name:        "get_token_price",
 				Tier:        toolTierRead,
 				Description: "Fetch live read-only USD prices and 24h changes for Solana tokens (Jupiter Price v3) and major crypto assets (CoinGecko), e.g. SOL, USDC, JUP, WEN, BTC, ETH, HYPE.",

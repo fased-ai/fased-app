@@ -1,7 +1,7 @@
 import "./OnchainSwap.css";
 import { useEffect, useRef, useState } from "react";
 import type { Account, AccountsView } from "../accounts";
-import type { AgentView } from "../agents";
+import { hasActiveOperations, useVisiblePoll, type AgentView } from "../agents";
 import type {
   OnchainView,
   SwapCommand,
@@ -129,6 +129,7 @@ export function OnchainSwap() {
   const expired =
     !!review && review.proposal.quote.expiresAt * 1000 <= Date.now();
   const active = view ?? agents.view?.onchain;
+  const hasActive = busy || hasActiveOperations(active);
   const order =
     active?.tasks.find((x) => x.id === selected) ?? active?.tasks.at(-1);
   const result = active?.runs.find((x) => x.taskId === order?.id)?.swap;
@@ -140,6 +141,7 @@ export function OnchainSwap() {
     const current = () =>
       stamp === generation.current && sequence === readSequence.current;
     let failure = "";
+    let nextActive = false;
     try {
       // Accounts are usable independently of the agent/result read. In
       // particular, a transient native agent failure must not hide wallets.
@@ -159,10 +161,12 @@ export function OnchainSwap() {
         );
         if (!current()) return;
         setView(v.onchain);
+        nextActive = hasActiveOperations(v.onchain);
       } catch (e) {
         failure ||= e instanceof Error ? e.message : t("Unavailable");
       }
       if (current()) setReadError(failure);
+      return nextActive;
     } finally {
       if (reading.current === stamp) reading.current = null;
     }
@@ -242,15 +246,16 @@ export function OnchainSwap() {
       setDraft(emptyDraft);
     }
     setLoaded(storageKey);
-    void read();
-    const timer = setInterval(() => {
-      if (!writing.current) void read();
-    }, 1500);
     return () => {
       generation.current++;
-      clearInterval(timer);
     };
   }, [storageKey, core.request]);
+  useVisiblePoll({
+    resetKey: storageKey,
+    request: core.request,
+    active: hasActive,
+    onPoll: read,
+  });
   useEffect(() => {
     if (loaded === storageKey) {
       try {

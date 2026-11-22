@@ -267,17 +267,19 @@ func (s *Store) runLoopReadsLocked(ctx context.Context, turnID string) error {
 		done := make(chan struct{})
 		go func() {
 			defer close(done)
-			tick := time.NewTicker(50 * time.Millisecond)
-			defer tick.Stop()
+			fallback := time.NewTicker(time.Second)
+			defer fallback.Stop()
 			for {
+				sig := storeChangeChan(s)
 				select {
 				case <-readCtx.Done():
 					return
-				case <-tick.C:
-					if !s.loopReadActive(readCtx, turnID, id) {
-						cancel()
-						return
-					}
+				case <-sig:
+				case <-fallback.C:
+				}
+				if !s.loopReadActive(readCtx, turnID, id) {
+					cancel()
+					return
 				}
 			}
 		}()

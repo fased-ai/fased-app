@@ -1185,7 +1185,8 @@ for (const location of ["local", "remote"]) {
     await editor.getByRole("button", { name: "Finish", exact: true }).click();
     await expect
       .poll(
-        async () => (await privateCLI(["ai-connection"])).connections.length,
+        async () =>
+          ((await privateCLI(["ai-connection"])).connections ?? []).length,
       )
       .toBe(2);
     const accounts = await privateCLI(["ai-connection"]);
@@ -1367,7 +1368,7 @@ for (const location of ["local", "remote"]) {
       await expect
         .poll(
           async () =>
-            (await privateCLI(["ai-connection"])).connections.find(
+            (await privateCLI(["ai-connection"])).connections?.find(
               (c: any) => c.ref === account.ref,
             )?.taskAccess?.budgetMicrousd,
         )
@@ -1503,7 +1504,10 @@ test("provider sign-in remote restores pending attempt on reload and accepts liv
   await editor.getByRole("button", { name: "Finish", exact: true }).click();
 
   await expect
-    .poll(async () => (await privateCLI(["ai-connection"])).connections.length)
+    .poll(
+      async () =>
+        ((await privateCLI(["ai-connection"])).connections ?? []).length,
+    )
     .toBe(1);
   const accounts = await privateCLI(["ai-connection"]);
   expect(accounts.connections[0]).toMatchObject({
@@ -1581,7 +1585,7 @@ test("shared Add Provider binds native accounts and latest models across Chat an
     await expect
       .poll(
         async () =>
-          (await privateCLI(["ai-connection"])).connections.find(
+          (await privateCLI(["ai-connection"])).connections?.find(
             (a: any) => a.provider === provider,
           )?.locked,
       )
@@ -2113,7 +2117,10 @@ test("Providers page preserves agent drafts and shares account models without ge
     .fill("disposable-full-page-vault-password");
   await providers.getByRole("button", { name: "Save", exact: true }).click();
   await expect
-    .poll(async () => (await privateCLI(["ai-connection"])).connections.length)
+    .poll(
+      async () =>
+        ((await privateCLI(["ai-connection"])).connections ?? []).length,
+    )
     .toBe(1);
   const account = (await privateCLI(["ai-connection"])).connections[0];
   await expect(
@@ -2768,7 +2775,10 @@ test("Qwen API keeps its region and model through Providers, agent and Chat", as
     .fill("disposable-qwen-region-vault");
   await providers.getByRole("button", { name: "Save", exact: true }).click();
   await expect
-    .poll(async () => (await privateCLI(["ai-connection"])).connections.length)
+    .poll(
+      async () =>
+        ((await privateCLI(["ai-connection"])).connections ?? []).length,
+    )
     .toBe(1);
   const account = (await privateCLI(["ai-connection"])).connections[0];
   expect(account.catalog.source).toBe(
@@ -2939,7 +2949,10 @@ test("Kimi regional USD account shares agent Chat and preserves mainland records
     .fill("disposable-kimi-region-vault");
   await providers.getByRole("button", { name: "Save", exact: true }).click();
   await expect
-    .poll(async () => (await privateCLI(["ai-connection"])).connections.length)
+    .poll(
+      async () =>
+        ((await privateCLI(["ai-connection"])).connections ?? []).length,
+    )
     .toBe(2);
   const account = (await privateCLI(["ai-connection"])).connections.find(
     (a: any) => a.provider === "moonshot-intl",
@@ -3119,7 +3132,10 @@ test("Google API sign-in uses project models in agent Chat and preserves its API
     .fill("disposable-google-oauth-vault");
   await providers.getByRole("button", { name: "Finish", exact: true }).click();
   await expect
-    .poll(async () => (await privateCLI(["ai-connection"])).connections.length)
+    .poll(
+      async () =>
+        ((await privateCLI(["ai-connection"])).connections ?? []).length,
+    )
     .toBe(2);
   const all = (await privateCLI(["ai-connection"])).connections;
   const account = all.find((a: any) => a.authMethod === "oauth");
@@ -3292,7 +3308,10 @@ test("Kimi Code membership connects models agent and normal Chat without task au
     .fill("disposable-kimi-region-vault");
   await providers.getByRole("button", { name: "Save", exact: true }).click();
   await expect
-    .poll(async () => (await privateCLI(["ai-connection"])).connections.length)
+    .poll(
+      async () =>
+        ((await privateCLI(["ai-connection"])).connections ?? []).length,
+    )
     .toBe(2);
   const account = (await privateCLI(["ai-connection"])).connections.find(
     (a: any) => a.provider === "kimi-code",
@@ -3471,7 +3490,10 @@ test("Anthropic workspace account joins models agent Chat and preserves existing
     .fill("wrkspc_01JwQvzr7rXLA5AGx3HKfFUJ");
   await providers.getByRole("button", { name: "Save", exact: true }).click();
   await expect
-    .poll(async () => (await privateCLI(["ai-connection"])).connections.length)
+    .poll(
+      async () =>
+        ((await privateCLI(["ai-connection"])).connections ?? []).length,
+    )
     .toBe(2);
   const account = (await privateCLI(["ai-connection"])).connections.find(
     (a: any) => a.provider === "anthropic" && a.ref !== mainland.ref,
@@ -3637,7 +3659,10 @@ test("Ollama Cloud key joins models agent Chat and task access without an invent
     .fill("disposable-kimi-region-vault");
   await providers.getByRole("button", { name: "Save", exact: true }).click();
   await expect
-    .poll(async () => (await privateCLI(["ai-connection"])).connections.length)
+    .poll(
+      async () =>
+        ((await privateCLI(["ai-connection"])).connections ?? []).length,
+    )
     .toBe(2);
   const account = (await privateCLI(["ai-connection"])).connections.find(
     (a: any) => a.provider === "ollama-cloud",

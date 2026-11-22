@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { lazy, Suspense, useState } from "react";
 import { Plus } from "../icons";
 import { SectionHead } from "../components/shared";
 import { AgentChatV2 } from "../components/AgentChatV2";
@@ -8,10 +8,13 @@ import { useWorkspace } from "../workspace";
 import { AgentMemorySection } from "./AgentMemorySection";
 import { AgentProfileSettings } from "./AgentProfileSettings";
 import { AgentTasks } from "./AgentTasks";
-import { LegacyAgentChat } from "./LegacyAgentChat";
 import { NewsInputs } from "./NewsInputs";
 import type { AgentView } from "../agents";
 import "../agents.css";
+
+const LegacyAgentChat = lazy(() =>
+  import("./LegacyAgentChat").then((m) => ({ default: m.LegacyAgentChat })),
+);
 
 const sectionTitles: Record<string, string> = {
   chat: "Chat",
@@ -109,6 +112,7 @@ function LocalAgentEditor({
   taskPanel: string;
   setTaskPanel: (value: string) => void;
 }) {
+  const { t: uiText } = useUI();
   const { tab, navigate } = useWorkspace();
   const [legacySessionId, setLegacySessionId] = useState("");
   const [legacySearch, setLegacySearch] = useState("");
@@ -128,14 +132,16 @@ function LocalAgentEditor({
       )}
       {tab === "chat" &&
         (useLegacyChat ? (
-          <LegacyAgentChat
-            view={v}
-            session={legacySessionId}
-            setSession={setLegacySessionId}
-            search={legacySearch}
-            setSearch={setLegacySearch}
-            onBackToThreads={() => setUseLegacyChat(false)}
-          />
+          <Suspense fallback={<p role="status">{uiText("Loading")}</p>}>
+            <LegacyAgentChat
+              view={v}
+              session={legacySessionId}
+              setSession={setLegacySessionId}
+              search={legacySearch}
+              setSearch={setLegacySearch}
+              onBackToThreads={() => setUseLegacyChat(false)}
+            />
+          </Suspense>
         ) : (
           <AgentChatV2
             view={v}
@@ -146,17 +152,19 @@ function LocalAgentEditor({
           />
         ))}
       {tab === "review" && (
-        <LegacyAgentChat
-          view={v}
-          session={legacySessionId}
-          setSession={setLegacySessionId}
-          search={legacySearch}
-          setSearch={setLegacySearch}
-          onBackToThreads={() => {
-            setUseLegacyChat(false);
-            navigate("agents/chat");
-          }}
-        />
+        <Suspense fallback={<p role="status">{uiText("Loading")}</p>}>
+          <LegacyAgentChat
+            view={v}
+            session={legacySessionId}
+            setSession={setLegacySessionId}
+            search={legacySearch}
+            setSearch={setLegacySearch}
+            onBackToThreads={() => {
+              setUseLegacyChat(false);
+              navigate("agents/chat");
+            }}
+          />
+        </Suspense>
       )}
       {tab === "settings" && <AgentProfileSettings view={v} />}
       {tab === "memory" && (
