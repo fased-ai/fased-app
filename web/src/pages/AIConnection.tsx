@@ -28,6 +28,13 @@ export {
 };
 
 const defaultLocalEndpoint = "http://127.0.0.1:11434/v1";
+const PROVIDER_API_KEY_URLS: Record<string, string> = {
+  openai: "https://platform.openai.com/api-keys",
+  anthropic: "https://console.anthropic.com/settings/keys",
+  google: "https://aistudio.google.com/apikey",
+  xai: "https://console.x.ai",
+  openrouter: "https://openrouter.ai/settings/keys",
+};
 function ConnectionOptions({
   collapsed,
   open,
@@ -448,9 +455,15 @@ export function AIConnectionSettings({
               ?.family === p.id,
         ) ?? false,
     }))
-    .sort((a, b) =>
-      a.connected === b.connected ? a.index - b.index : a.connected ? -1 : 1,
-    )
+    .sort((a, b) => {
+      if (a.provider.id === "local" && b.provider.id !== "local") return 1;
+      if (b.provider.id === "local" && a.provider.id !== "local") return -1;
+      return a.connected === b.connected
+        ? a.index - b.index
+        : a.connected
+          ? -1
+          : 1;
+    })
     .map((x) => x.provider);
   return (
     <section className="providers-page" aria-label={uiText("Providers")}>
@@ -931,18 +944,31 @@ export function AIConnectionSettings({
                       )}
                     </>
                   ) : (
-                    <button
-                      className="primary"
-                      disabled={
-                        busy ||
-                        !view ||
-                        (isLocal ? !endpoint : !key) ||
-                        (needsPassphrase && passphrase.length < 12) ||
-                        (view.pilotEnrollment && !!view.ref)
-                      }
-                    >
-                      {view?.ref ? uiText("Replace") : uiText("Save")}
-                    </button>
+                    <>
+                      <button
+                        className="primary"
+                        disabled={
+                          busy ||
+                          !view ||
+                          (isLocal ? !endpoint : !key) ||
+                          (needsPassphrase && passphrase.length < 12) ||
+                          (view.pilotEnrollment && !!view.ref)
+                        }
+                      >
+                        {view?.ref ? uiText("Replace") : uiText("Save")}
+                      </button>
+                      {method === "api-key" &&
+                        PROVIDER_API_KEY_URLS[provider] && (
+                          <a
+                            className="secondary"
+                            href={PROVIDER_API_KEY_URLS[provider]}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                          >
+                            {uiText("Get API key")}
+                          </a>
+                        )}
+                    </>
                   )}
                   {(view?.ref ||
                     (root && !view && selected && selected !== "new")) && (

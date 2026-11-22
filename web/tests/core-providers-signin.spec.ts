@@ -4131,7 +4131,13 @@ test("passwordless OS-protected providers and task access work without a vault p
     .getByRole("button", { name: "Refresh", exact: true });
   await expect(refreshModels).toBeVisible();
   await refreshModels.click();
-  await expect(refreshModels).toHaveCount(0);
+  await expect
+    .poll(() => postedActions.some((a) => a.action === "models-refresh"))
+    .toBe(true);
+  await expect(refreshModels).toBeVisible();
+  await expect(editor.locator(".provider-models")).toContainText(
+    /Recommended|Ready/,
+  );
 
   // Background task access allowance works with zero Vault passphrase prompt.
   await editor.getByText("Background access", { exact: true }).click();

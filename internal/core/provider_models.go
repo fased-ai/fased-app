@@ -2,12 +2,15 @@ package core
 
 import (
 	"context"
+	"database/sql"
 	_ "embed"
 	"encoding/json"
 	"errors"
 	"io"
 	"mime"
 	"net/http"
+	"os"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -126,14 +129,19 @@ func (s *Store) refreshProviderModels(ctx context.Context, ref string, rt http.R
 		result = modelDiscovery{State: "failed"}
 	}
 	s.provider.mu.Lock()
-	defer s.provider.mu.Unlock()
 	current, err := s.aiConnectionLocked(ref)
 	state = s.provider.accounts[ref]
 	if err != nil || state == nil || current.Ref != ref || current.Locked || state.epoch != epoch || state.digest != digest || state.modelRefresh != refresh {
+		s.provider.mu.Unlock()
 		return current, ErrConflict
 	}
 	state.discovery = result
-	return s.aiConnectionLocked(ref)
+	out, viewErr := s.aiConnectionLocked(ref)
+	s.provider.mu.Unlock()
+	if viewErr == nil && !out.TestOnly && result.State == "ready" {
+		s.saveProviderModelCache(ctx, ref, out.Provider, result)
+	}
+	return out, viewErr
 }
 
 func fetchProviderModelList(ctx context.Context, client *http.Client, provider string, now time.Time, method string) modelDiscovery {
@@ -175,7 +183,7 @@ func fetchProviderModelList(ctx context.Context, client *http.Client, provider s
 		}
 		var records []discoveredModel
 		cursor, object := "", "list"
-		if method == "sign-in" {
+		if method == "sign-in" && provider == "openai" {
 			records, err = parseProviderSignInModels(raw, now.Unix())
 		} else if provider == "anthropic" {
 			records, cursor, err = parseAnthropicModelPage(raw)
@@ -233,7 +241,7 @@ func fetchProviderModelList(ctx context.Context, client *http.Client, provider s
 			if provider == "qwen" {
 				source = providerOrigin(provider) + qwenModelsPagePath(1)
 			}
-			return modelDiscovery{State: "ready", FetchedAt: now.Unix(), ExpiresAt: now.Add(15 * time.Minute).Unix(), SHA256: hash, Source: source, Models: rows}
+			return modelDiscovery{State: "ready", FetchedAt: now.Unix(), ExpiresAt: now.Add(providerModelCacheTTL).Unix(), SHA256: hash, Source: source, Models: rows}
 		}
 		if cursors[cursor] {
 			return failed
@@ -319,7 +327,7 @@ func discoveredProviderCatalog(v AIConnectionView, d modelDiscovery, now int64) 
 	}
 	ids := []string{}
 	for id := range records {
-		if !curated[id] {
+		if !curated[id] && !isNonChatDiscoveredModel(provider, id) {
 			ids = append(ids, id)
 		}
 	}
@@ -418,4 +426,271 @@ func (s *Store) providerModelSuperseded(ref, model string) bool {
 		}
 	}
 	return false
+}
+
+const providerModelCacheTTL = 6 * time.Hour
+
+const providerModelCacheTableSQL = `
+CREATE TABLE IF NOT EXISTS provider_model_cache (
+	ref TEXT PRIMARY KEY,
+	provider TEXT NOT NULL,
+	state TEXT NOT NULL,
+	fetched_at INTEGER NOT NULL,
+	expires_at INTEGER NOT NULL,
+	sha256 TEXT NOT NULL,
+	source TEXT NOT NULL,
+	models_json TEXT NOT NULL,
+	updated_at INTEGER NOT NULL
+);`
+
+func isNonChatDiscoveredModel(provider, id string) bool {
+	lower := strings.ToLower(strings.TrimSpace(id))
+	if lower == "" {
+		return true
+	}
+	base := lower
+	if i := strings.LastIndex(base, "/"); i >= 0 {
+		base = base[i+1:]
+	}
+	for _, prefix := range []string{
+		"text-embedding",
+		"embedding-",
+		"gemini-embedding",
+		"whisper",
+		"tts-",
+		"dall-e",
+		"gpt-image",
+		"sora",
+		"omni-moderation",
+		"text-moderation",
+		"babbage",
+		"davinci",
+		"imagen",
+		"veo",
+		"aqa",
+		"text-bison",
+		"chat-bison",
+		"learnlm",
+		"medlm",
+	} {
+		if strings.HasPrefix(base, prefix) {
+			return true
+		}
+	}
+	for _, sub := range []string{
+		"-embedding",
+		"-transcribe",
+		"-tts",
+		"-realtime",
+		"realtime-preview",
+		"-image-generation",
+		"-moderation",
+	} {
+		if strings.Contains(base, sub) {
+			return true
+		}
+	}
+	_ = provider
+	return false
+}
+
+type cachedProviderModels struct {
+	Provider  string
+	Discovery modelDiscovery
+}
+
+func (s *Store) openProviderModelCacheDB(ctx context.Context, create bool) (*sql.DB, error) {
+	if s == nil || s.dir == "" {
+		return nil, os.ErrNotExist
+	}
+	dbPath := filepath.Join(s.dir, "agents.sqlite")
+	if info, err := os.Lstat(dbPath); err == nil {
+		if !info.Mode().IsRegular() {
+			return nil, errors.New("agents.sqlite must be a regular file")
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return nil, err
+	} else {
+		if !create {
+			return nil, os.ErrNotExist
+		}
+		if err := os.MkdirAll(s.dir, 0700); err != nil {
+			return nil, err
+		}
+		f, err := os.OpenFile(dbPath, os.O_CREATE|os.O_EXCL|os.O_RDWR, 0600)
+		if err != nil && !errors.Is(err, os.ErrExist) {
+			return nil, err
+		}
+		if f != nil {
+			_ = f.Close()
+		}
+	}
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		return nil, err
+	}
+	db.SetMaxOpenConns(1)
+	if _, err := db.ExecContext(ctx, `PRAGMA busy_timeout=5000; PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL;`); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	if create {
+		if _, err := db.ExecContext(ctx, providerModelCacheTableSQL); err != nil {
+			_ = db.Close()
+			return nil, err
+		}
+	}
+	return db, nil
+}
+
+func (s *Store) saveProviderModelCache(ctx context.Context, ref, provider string, d modelDiscovery) {
+	if s == nil || s.dir == "" || ref == "" || d.State != "ready" {
+		return
+	}
+	modelsJSON, err := json.Marshal(d.Models)
+	if err != nil {
+		return
+	}
+	db, err := s.openProviderModelCacheDB(ctx, true)
+	if err != nil {
+		return
+	}
+	defer db.Close()
+	_, _ = db.ExecContext(ctx, `
+INSERT INTO provider_model_cache (ref, provider, state, fetched_at, expires_at, sha256, source, models_json, updated_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT(ref) DO UPDATE SET
+	provider=excluded.provider,
+	state=excluded.state,
+	fetched_at=excluded.fetched_at,
+	expires_at=excluded.expires_at,
+	sha256=excluded.sha256,
+	source=excluded.source,
+	models_json=excluded.models_json,
+	updated_at=excluded.updated_at`,
+		ref, provider, d.State, d.FetchedAt, d.ExpiresAt, d.SHA256, d.Source, string(modelsJSON), s.now().Unix(),
+	)
+}
+
+func (s *Store) deleteProviderModelCache(ctx context.Context, ref string) {
+	if s == nil || s.dir == "" || ref == "" {
+		return
+	}
+	db, err := s.openProviderModelCacheDB(ctx, false)
+	if err != nil {
+		return
+	}
+	defer db.Close()
+	_, _ = db.ExecContext(ctx, `DELETE FROM provider_model_cache WHERE ref = ?`, ref)
+}
+
+func (s *Store) loadProviderModelCacheMap(ctx context.Context) map[string]cachedProviderModels {
+	if s == nil || s.dir == "" {
+		return nil
+	}
+	db, err := s.openProviderModelCacheDB(ctx, false)
+	if err != nil {
+		return nil
+	}
+	defer db.Close()
+	rows, err := db.QueryContext(ctx, `SELECT ref, provider, state, fetched_at, expires_at, sha256, source, models_json FROM provider_model_cache`)
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+	out := map[string]cachedProviderModels{}
+	for rows.Next() {
+		var ref, provider, state, sha, source, modelsJSON string
+		var fetchedAt, expiresAt int64
+		if err := rows.Scan(&ref, &provider, &state, &fetchedAt, &expiresAt, &sha, &source, &modelsJSON); err != nil {
+			continue
+		}
+		if ref == "" || state != "ready" {
+			continue
+		}
+		var models []discoveredModel
+		if err := json.Unmarshal([]byte(modelsJSON), &models); err != nil {
+			continue
+		}
+		out[ref] = cachedProviderModels{
+			Provider: provider,
+			Discovery: modelDiscovery{
+				State:     state,
+				FetchedAt: fetchedAt,
+				ExpiresAt: expiresAt,
+				SHA256:    sha,
+				Source:    source,
+				Models:    models,
+			},
+		}
+	}
+	return out
+}
+
+func (s *Store) applyCachedModelDiscoveryLocked(cached map[string]cachedProviderModels, refs ...string) {
+	if len(cached) == 0 {
+		return
+	}
+	filter := ""
+	if len(refs) > 0 {
+		filter = refs[0]
+	}
+	col, err := s.readAIVaultCollection()
+	if err != nil {
+		return
+	}
+	providersByRef := make(map[string]string, len(col.Accounts))
+	for _, env := range col.Accounts {
+		providersByRef[env.Ref] = env.Provider
+	}
+	for ref, entry := range cached {
+		if filter != "" && ref != filter {
+			continue
+		}
+		provider, ok := providersByRef[ref]
+		if !ok || (provider != "" && entry.Provider != "" && provider != entry.Provider) {
+			continue
+		}
+		st := s.credentialLocked(ref)
+		if st.discovery.State != "" {
+			continue
+		}
+		st.discovery = entry.Discovery
+	}
+}
+
+func (s *Store) refreshStaleProviderModels(ctx context.Context) {
+	if s == nil || s.providerFixture || s.deferPilotDiscovery() {
+		return
+	}
+	v, err := s.AIConnection()
+	if err != nil {
+		return
+	}
+	conns := v.Connections
+	if len(conns) == 0 && v.Ref != "" {
+		conns = []AIConnectionView{v}
+	}
+	now := s.now().Unix()
+	for _, acc := range conns {
+		if ctx.Err() != nil {
+			return
+		}
+		if acc.Ref == "" || acc.Locked || acc.TestOnly {
+			continue
+		}
+		if acc.AuthMethod == "sign-in" && !acc.PlanUse {
+			continue
+		}
+		if acc.Catalog.State == "ready" && acc.Catalog.ExpiresAt > now {
+			continue
+		}
+		rt := s.providerModelTransport(acc.Ref)
+		if rt == nil {
+			continue
+		}
+		reqCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+		_, _ = s.refreshProviderModels(reqCtx, acc.Ref, rt)
+		cancel()
+	}
 }

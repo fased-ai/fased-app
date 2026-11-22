@@ -35,6 +35,10 @@ test("Local owner setup opens without a password and keeps logout final", async 
   ).toBeVisible();
   await expect(page.locator('input[type="password"]')).toHaveCount(0);
   await expect(
+    page.getByRole("heading", { name: "Dashboard", exact: true }),
+  ).toBeVisible();
+  await page.getByRole("link", { name: "Chat", exact: true }).first().click();
+  await expect(
     page.getByRole("heading", { name: "Chat", exact: true }),
   ).toBeVisible();
   const connectCard = page.getByRole("region", {

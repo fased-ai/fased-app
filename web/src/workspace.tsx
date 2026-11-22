@@ -87,7 +87,7 @@ function defaultLandingRoute() {
         return "overview";
     } catch {}
   }
-  return "agents/chat";
+  return "overview";
 }
 function getRoute() {
   const raw = window.location.hash.slice(1);

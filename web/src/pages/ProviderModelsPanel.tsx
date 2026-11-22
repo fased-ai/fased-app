@@ -16,15 +16,11 @@ export function ProviderModelsPanel({
   const models = (view.catalog?.models ?? []).filter(
     (m) => m.connectionRef === view.ref && m.provider === provider,
   );
-  const needsRefresh =
-    !view.locked &&
-    (view.catalog?.state !== "ready" ||
-      models.some((m) => m.availability === "stale"));
   return (
     <section className="provider-models" aria-label={uiText("Models")}>
       <header>
         <h3>{uiText("Models")}</h3>
-        {needsRefresh && (
+        {!view.locked && (
           <button
             type="button"
             className="secondary"

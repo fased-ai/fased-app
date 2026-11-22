@@ -374,7 +374,7 @@ func (s *Store) aiConnectionLocked(refs ...string) (v AIConnectionView, err erro
 		v.CredentialModes = append(v.CredentialModes, "local")
 	}
 	if s.provider.apiCredentials {
-		v.CredentialModes = []string{"openai", "anthropic", "xai", "moonshot", "moonshot-intl", "kimi-code", "ollama-cloud", "google", "openrouter", "qwen", "opencode", "local"}
+		v.CredentialModes = append([]string(nil), canonicalProviderOrder...)
 	}
 	v.LiveCallsEnabled = providerActivationEnabled && s.provider.apiCredentials
 	env, e := s.readAIVault(refs...)
@@ -448,9 +448,11 @@ func (s *Store) aiConnectionLocked(refs ...string) (v AIConnectionView, err erro
 	return v, nil
 }
 func (s *Store) AIConnection(refs ...string) (AIConnectionView, error) {
+	cached := s.loadProviderModelCacheMap(context.Background())
 	s.provider.mu.Lock()
 	defer s.provider.mu.Unlock()
 	s.probeTaskSecrets(context.Background())
+	s.applyCachedModelDiscoveryLocked(cached)
 	v, e := s.aiConnectionLocked(refs...)
 	if e != nil {
 		return v, e
@@ -546,7 +548,11 @@ func (s *Store) ChangeAIConnection(ctx context.Context, c AIConnectionCommand) (
 	}
 
 	if strings.HasPrefix(c.Action, "sign-in-") {
-		return s.changeProviderSignIn(ctx, c)
+		v, err := s.changeProviderSignIn(ctx, c)
+		if err == nil && c.Action == "sign-in-disconnect" && c.Ref != "" {
+			s.deleteProviderModelCache(ctx, c.Ref)
+		}
+		return v, err
 	}
 	if c.SignInID != "" || c.Callback != "" || c.Remote {
 		return AIConnectionView{}, errors.New("sign-in fields require a sign-in operation")
@@ -570,11 +576,31 @@ func (s *Store) ChangeAIConnection(ctx context.Context, c AIConnectionCommand) (
 		}
 		return s.refreshProviderModels(ctx, c.Ref, s.providerModelTransport(c.Ref))
 	}
+	var cached map[string]cachedProviderModels
+	if c.Action == "unlock" {
+		cached = s.loadProviderModelCacheMap(ctx)
+	}
 	v, err := s.changeAIConnection(ctx, c)
 	if err != nil {
 		return v, err
 	}
+	if c.Action == "remove" && c.Ref != "" {
+		s.deleteProviderModelCache(ctx, c.Ref)
+		return v, nil
+	}
+	if c.Action == "unlock" && v.Ref != "" && len(cached) > 0 {
+		s.provider.mu.Lock()
+		s.applyCachedModelDiscoveryLocked(cached, v.Ref)
+		v, err = s.aiConnectionLocked(v.Ref)
+		s.provider.mu.Unlock()
+		if err != nil {
+			return v, err
+		}
+	}
 	if (c.Action == "save" || c.Action == "add" || c.Action == "unlock") && v.Ref != "" && (v.AuthMethod != "sign-in" || v.PlanUse) && !s.deferPilotDiscovery() {
+		if c.Action == "unlock" && v.Catalog.State == "ready" && (v.Catalog.ExpiresAt == 0 || s.now().Unix() < v.Catalog.ExpiresAt) {
+			return v, nil
+		}
 		return s.refreshProviderModels(ctx, v.Ref, s.providerModelTransport(v.Ref))
 	}
 	return v, nil
@@ -585,7 +611,7 @@ func (s *Store) providerModelTransport(ref string) http.RoundTripper {
 	}
 	if s.providerFixture {
 		v, err := s.AIConnection(ref)
-		if err == nil && v.AuthMethod == "sign-in" {
+		if err == nil && v.Provider == "openai" && v.AuthMethod == "sign-in" {
 			return providerSignInModelFixture{}
 		}
 		return fixtureAITransport{}
