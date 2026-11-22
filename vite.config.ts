@@ -7,6 +7,7 @@ export default defineConfig({
   build: { outDir: "../dist", emptyOutDir: true },
   test: {
     include: ["src/**/*.test.ts"],
+    setupFiles: ["./src/test-setup.ts"],
     reporters: ["default", "json"],
     outputFile: "../.evidence/unit-results.json",
   },

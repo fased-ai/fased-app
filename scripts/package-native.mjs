@@ -3,6 +3,10 @@ import { mkdir, readFile, writeFile, rm } from "node:fs/promises";
 import { resolve, join } from "node:path";
 import { createHash } from "node:crypto";
 import { createMacDiskImage } from "./macos-dmg.mjs";
+import {
+  buildLinuxDesktopPackages,
+  linuxArch,
+} from "./linux-desktop-package.mjs";
 const output = resolve(".evidence/packages");
 await mkdir(output, { recursive: true });
 const windows = process.platform === "win32";
@@ -101,10 +105,33 @@ if (process.platform === "darwin") {
     await rm(fixture, { recursive: true, force: true });
   }
 }
+let linuxPackages = null;
+if (process.platform === "linux") {
+  const arch = linuxArch(process.arch);
+  const bundleName = `fased-app-linux-${arch}`;
+  const archive = join(output, `${bundleName}.tar.gz`);
+  const fixture = resolve(".evidence/linux-package-stage");
+  await rm(fixture, { recursive: true, force: true });
+  await mkdir(fixture, { mode: 0o700 });
+  try {
+    execFileSync("tar", ["-xzf", archive, "-C", fixture], {
+      stdio: "inherit",
+    });
+    const manifest = JSON.parse(await readFile("package.json", "utf8"));
+    linuxPackages = await buildLinuxDesktopPackages({
+      payloadDir: join(fixture, bundleName),
+      outputDir: output,
+      version: process.env.FASED_RELEASE_VERSION || manifest.version || "0.0.0",
+      arch,
+    });
+  } finally {
+    await rm(fixture, { recursive: true, force: true });
+  }
+}
 const { readdir } = await import("node:fs/promises");
 const files = {};
 for (const name of await readdir(output)) {
-  if (!/\.(zip|gz|exe|dmg)$/.test(name)) continue;
+  if (!/\.(zip|gz|exe|dmg|deb|AppImage)$/.test(name)) continue;
   const b = await readFile(join(output, name));
   files[name] = {
     bytes: b.length,
@@ -118,6 +145,7 @@ await writeFile(
       source,
       platform: process.platform,
       files,
+      ...(linuxPackages ? { linuxPackages } : {}),
       unsignedEngineering: true,
       publicRelease: false,
     },

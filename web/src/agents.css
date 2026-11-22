@@ -28,7 +28,7 @@
   border: 1px solid var(--line);
   border-radius: 10px;
   background: var(--bg);
-  color: #e8eae5;
+  color: var(--wt-text);
   font: inherit;
 }
 .agent-record-body textarea {

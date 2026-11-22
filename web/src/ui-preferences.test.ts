@@ -1,6 +1,13 @@
 import { describe, expect, it } from "vitest";
 import { parsePreferences, defaultPreferences } from "./ui-preferences";
-import { copyKeys, languages, resolveLanguage, translate } from "./ui-language";
+import {
+  isLanguageLoaded,
+  languages,
+  resolveLanguage,
+  translate,
+} from "./ui-language";
+import { catalog, copyKeys } from "./ui-language-catalog";
+import { previewEnglish } from "./ui-language-preview";
 describe("UI preferences", () => {
   it("translates reachable setup and agent controls while preserving owner content", () => {
     expect(translate("ru", "Refresh records")).toBe("Обновить записи");
@@ -58,5 +65,12 @@ describe("UI preferences", () => {
     );
     expect(translate("ru", "constructor")).toBe("constructor");
     expect(translate("es", "toString")).toBe("toString");
+    expect(isLanguageLoaded("en")).toBe(true);
+    for (const key of Object.keys(previewEnglish)) {
+      expect(
+        Object.hasOwn(catalog, key),
+        `missing catalog row for ${key}`,
+      ).toBe(true);
+    }
   });
 });

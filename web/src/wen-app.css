@@ -52,7 +52,7 @@
 }
 .wt .primary {
   background: var(--wt-coral);
-  color: #151116;
+  color: var(--shell-primary-text);
   border: 1px solid transparent;
   border-radius: 8px;
   min-height: 32px;
@@ -60,7 +60,7 @@
   font-weight: 600;
 }
 .wt button.primary:hover:not(:disabled) {
-  background: #ff7a8e;
+  background: var(--shell-primary-hover);
 }
 .wt .secondary {
   border: 1px solid var(--line);
@@ -71,8 +71,8 @@
   padding: 5px 10px;
 }
 .wt .secondary:hover {
-  border-color: #575466;
-  background: #292835;
+  border-color: var(--wt-btn-hover-border);
+  background: var(--wt-btn-hover);
 }
 .wt .icon-button {
   border-radius: 8px;

@@ -1,0 +1,10 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=Fased App
+Comment=Self-hosted personal and financial AI agent
+Exec=fased-desktop
+Icon=fased-app
+Terminal=false
+Categories=Utility;
+StartupWMClass=fased-desktop
