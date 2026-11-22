@@ -10,20 +10,26 @@ import (
 	"unicode/utf8"
 )
 
-const agentV2MaxToolRounds = 8
+const (
+	agentV2MaxToolRounds           = 8
+	agentV2PromptMemoryMaxRunes    = 3200
+	agentV2PromptMemoryItemMaxRunes = 500
+)
 
 type AgentStreamEvent struct {
-	Type             string          `json:"type"`
-	ThreadID         string          `json:"threadId,omitempty"`
-	MessageID        string          `json:"messageId,omitempty"`
-	Provider         string          `json:"provider,omitempty"`
-	Model            string          `json:"model,omitempty"`
-	Delta            string          `json:"delta,omitempty"`
-	ToolCall         *AgentToolCall  `json:"toolCall,omitempty"`
-	Approval         *AgentApproval  `json:"approval,omitempty"`
-	Message          *AgentV2Message `json:"message,omitempty"`
-	AwaitingApproval bool            `json:"awaitingApproval,omitempty"`
-	Error            string          `json:"error,omitempty"`
+	Type                 string          `json:"type"`
+	ThreadID             string          `json:"threadId,omitempty"`
+	MessageID            string          `json:"messageId,omitempty"`
+	Provider             string          `json:"provider,omitempty"`
+	Model                string          `json:"model,omitempty"`
+	Delta                string          `json:"delta,omitempty"`
+	ToolCall             *AgentToolCall  `json:"toolCall,omitempty"`
+	Approval             *AgentApproval  `json:"approval,omitempty"`
+	Message              *AgentV2Message `json:"message,omitempty"`
+	AwaitingApproval     bool            `json:"awaitingApproval,omitempty"`
+	RecalledMemories     int             `json:"recalledMemories,omitempty"`
+	RecalledMemoryTitles []string        `json:"recalledMemoryTitles,omitempty"`
+	Error                string          `json:"error,omitempty"`
 }
 
 type AgentV2PromptInput struct {
@@ -82,26 +88,76 @@ func buildAgentV2Instructions(ctx context.Context, s *Store, profileID, summary,
 		sb.WriteString("\n")
 	}
 
-	memories, err := s.SearchMemories(ctx, profileID, query, 8)
-	if err == nil && len(memories) > 0 {
+	memories := selectPromptMemories(ctx, s, profileID, query)
+	if len(memories) > 0 {
 		sb.WriteString("\nRelevant workspace memories:\n")
+		usedRunes := 0
 		for _, m := range memories {
 			label := m.Title
 			if label == "" {
 				label = m.Scope
 			}
-			line := sanitizeV2Title(m.Content, "")
+			line := sanitizeV2MemorySnippet(m.Content, agentV2PromptMemoryItemMaxRunes)
 			if line == "" {
 				continue
 			}
-			sb.WriteString("- [")
-			sb.WriteString(label)
-			sb.WriteString("] ")
-			sb.WriteString(line)
-			sb.WriteByte('\n')
+			prefix := "- ["
+			if m.Pinned {
+				prefix = "- [Pinned · "
+			}
+			entry := prefix + label + "] " + line + "\n"
+			entryRunes := utf8.RuneCountInString(entry)
+			if usedRunes+entryRunes > agentV2PromptMemoryMaxRunes {
+				remaining := agentV2PromptMemoryMaxRunes - usedRunes
+				if remaining <= utf8.RuneCountInString(prefix+label+"] ")+16 {
+					break
+				}
+				head := prefix + label + "] "
+				avail := remaining - utf8.RuneCountInString(head) - 1
+				entry = head + sanitizeV2MemorySnippet(line, avail) + "\n"
+				entryRunes = utf8.RuneCountInString(entry)
+			}
+			sb.WriteString(entry)
+			usedRunes += entryRunes
 		}
 	}
 	return sb.String()
+}
+
+func selectPromptMemories(ctx context.Context, s *Store, profileID, query string) []AgentV2Memory {
+	if s == nil {
+		return nil
+	}
+	const promptMemLimit = 8
+	selected := make([]AgentV2Memory, 0, promptMemLimit)
+	seen := map[string]bool{}
+
+	if pinned, err := s.ListPinnedMemories(ctx, profileID, true, 6); err == nil {
+		for _, m := range pinned {
+			if seen[m.ID] || isV2DraftScope(m.Scope) {
+				continue
+			}
+			seen[m.ID] = true
+			selected = append(selected, m)
+			if len(selected) >= promptMemLimit {
+				return selected
+			}
+		}
+	}
+
+	if hits, err := s.SearchMemories(ctx, profileID, query, promptMemLimit+4); err == nil {
+		for _, m := range hits {
+			if seen[m.ID] || isV2DraftScope(m.Scope) {
+				continue
+			}
+			seen[m.ID] = true
+			selected = append(selected, m)
+			if len(selected) >= promptMemLimit {
+				break
+			}
+		}
+	}
+	return selected
 }
 
 func (s *Store) RunAgentV2Turn(ctx context.Context, threadID string, input AgentV2PromptInput, emit func(AgentStreamEvent)) (AgentV2RunResult, error) {
@@ -154,11 +210,25 @@ func (s *Store) RunAgentV2Turn(ctx context.Context, threadID string, input Agent
 		return AgentV2RunResult{}, err
 	}
 
+	recalled := selectPromptMemories(ctx, s, detail.Thread.ProfileID, content)
+	recalledTitles := make([]string, 0, len(recalled))
+	for _, m := range recalled {
+		title := sanitizeV2Title(m.Title, sanitizeV2Title(m.Scope, "Memory"))
+		if title != "" {
+			recalledTitles = append(recalledTitles, title)
+		}
+		if len(recalledTitles) >= 8 {
+			break
+		}
+	}
+
 	emitEvent(emit, AgentStreamEvent{
-		Type:     "run_started",
-		ThreadID: threadID,
-		Provider: target.Provider,
-		Model:    target.Model,
+		Type:                 "run_started",
+		ThreadID:             threadID,
+		Provider:             target.Provider,
+		Model:                target.Model,
+		RecalledMemories:     len(recalled),
+		RecalledMemoryTitles: recalledTitles,
 	})
 
 	toolsEnabled := true

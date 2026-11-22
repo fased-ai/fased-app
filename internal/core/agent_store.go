@@ -320,6 +320,25 @@ func sanitizeV2Title(title, fallback string) string {
 	return t
 }
 
+func isV2DraftScope(scope string) bool {
+	return strings.HasSuffix(strings.TrimSpace(scope), "_draft")
+}
+
+func sanitizeV2MemorySnippet(content string, maxRunes int) string {
+	t := strings.Join(strings.Fields(strings.TrimSpace(content)), " ")
+	if t == "" || maxRunes <= 0 {
+		return t
+	}
+	runes := []rune(t)
+	if len(runes) > maxRunes {
+		if maxRunes <= 3 {
+			return string(runes[:maxRunes])
+		}
+		return strings.TrimSpace(string(runes[:maxRunes-3])) + "..."
+	}
+	return t
+}
+
 func validV2ID(id string) bool {
 	if len(id) < 6 || len(id) > 128 {
 		return false
@@ -841,6 +860,14 @@ type MemoryInput struct {
 	Source    string `json:"source,omitempty"`
 }
 
+type MemoryUpdateInput struct {
+	Title   *string `json:"title,omitempty"`
+	Content *string `json:"content,omitempty"`
+	Tags    *string `json:"tags,omitempty"`
+	Pinned  *bool   `json:"pinned,omitempty"`
+	Scope   *string `json:"scope,omitempty"`
+}
+
 func (s *Store) CreateMemory(ctx context.Context, in MemoryInput) (AgentV2Memory, error) {
 	content := strings.TrimSpace(in.Content)
 	if content == "" || len(content) > 16384 || !utf8.ValidString(content) {
@@ -944,6 +971,131 @@ func (s *Store) DeleteMemory(ctx context.Context, id string) error {
 		return err
 	}
 	return tx.Commit()
+}
+
+func (s *Store) UpdateMemory(ctx context.Context, id string, patch MemoryUpdateInput) (AgentV2Memory, error) {
+	if !validV2ID(id) {
+		return AgentV2Memory{}, ErrMemoryNotFound
+	}
+	v2, err := s.ensureAgentV2(ctx)
+	if err != nil {
+		return AgentV2Memory{}, err
+	}
+	var m AgentV2Memory
+	var pinnedInt int
+	err = v2.db.QueryRowContext(ctx,
+		`SELECT id,profile_id,scope,title,content,tags,pinned,source,created_at,updated_at
+		 FROM memories WHERE id=?`, id,
+	).Scan(&m.ID, &m.ProfileID, &m.Scope, &m.Title, &m.Content, &m.Tags, &pinnedInt, &m.Source, &m.CreatedAt, &m.UpdatedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return AgentV2Memory{}, ErrMemoryNotFound
+	}
+	if err != nil {
+		return AgentV2Memory{}, err
+	}
+	m.Pinned = pinnedInt != 0
+
+	if patch.Content != nil {
+		content := strings.TrimSpace(*patch.Content)
+		if content == "" || len(content) > 16384 || !utf8.ValidString(content) {
+			return AgentV2Memory{}, errors.New("memory content must be 1 to 16384 UTF-8 bytes")
+		}
+		m.Content = content
+	}
+	if patch.Title != nil {
+		m.Title = sanitizeV2Title(*patch.Title, m.Title)
+	}
+	if patch.Scope != nil {
+		scope := strings.TrimSpace(*patch.Scope)
+		if scope == "" || len(scope) > 40 || !validAgentText(scope, 40, true) {
+			return AgentV2Memory{}, errors.New("invalid memory scope")
+		}
+		m.Scope = scope
+	}
+	if patch.Tags != nil {
+		tags := strings.TrimSpace(*patch.Tags)
+		if len(tags) > 256 || !utf8.ValidString(tags) {
+			return AgentV2Memory{}, errors.New("invalid memory tags")
+		}
+		m.Tags = tags
+	}
+	if patch.Pinned != nil {
+		m.Pinned = *patch.Pinned
+	}
+	m.UpdatedAt = s.now().Unix()
+	nextPinned := 0
+	if m.Pinned {
+		nextPinned = 1
+	}
+
+	tx, err := v2.db.BeginTx(ctx, nil)
+	if err != nil {
+		return AgentV2Memory{}, err
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx,
+		`UPDATE memories SET scope=?, title=?, content=?, tags=?, pinned=?, updated_at=? WHERE id=?`,
+		m.Scope, m.Title, m.Content, m.Tags, nextPinned, m.UpdatedAt, m.ID,
+	); err != nil {
+		return AgentV2Memory{}, err
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM memories_fts WHERE memory_id=?`, m.ID); err != nil {
+		return AgentV2Memory{}, err
+	}
+	if _, err := tx.ExecContext(ctx,
+		`INSERT INTO memories_fts(memory_id,profile_id,title,content,tags) VALUES(?,?,?,?,?)`,
+		m.ID, m.ProfileID, m.Title, m.Content, m.Tags,
+	); err != nil {
+		return AgentV2Memory{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return AgentV2Memory{}, err
+	}
+	return m, nil
+}
+
+func (s *Store) ListPinnedMemories(ctx context.Context, profileID string, excludeDrafts bool, limit int) ([]AgentV2Memory, error) {
+	v2, err := s.ensureAgentV2(ctx)
+	if err != nil {
+		return nil, err
+	}
+	profileID = strings.TrimSpace(profileID)
+	if limit <= 0 {
+		limit = 6
+	}
+	if limit > 50 {
+		limit = 50
+	}
+	draftFilter := ""
+	if excludeDrafts {
+		draftFilter = " AND NOT (length(scope) >= 6 AND substr(scope, length(scope) - 5) = '_draft')"
+	}
+	rows, err := v2.db.QueryContext(ctx,
+		`SELECT id,profile_id,scope,title,content,tags,pinned,source,created_at,updated_at
+		 FROM memories
+		 WHERE pinned = 1 AND (? = '' OR profile_id = '' OR profile_id = ?)`+draftFilter+`
+		 ORDER BY updated_at DESC LIMIT ?`,
+		profileID, profileID, limit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := []AgentV2Memory{}
+	for rows.Next() {
+		var m AgentV2Memory
+		var p int
+		if err := rows.Scan(&m.ID, &m.ProfileID, &m.Scope, &m.Title, &m.Content, &m.Tags, &p, &m.Source, &m.CreatedAt, &m.UpdatedAt); err != nil {
+			return nil, err
+		}
+		m.Pinned = p != 0
+		out = append(out, m)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 func sanitizeFTSQuery(raw string) string {
@@ -1121,11 +1273,12 @@ func (s *Store) SearchMemories(ctx context.Context, profileID, query string, lim
 				}
 				return ' '
 			}, qTrim)))
+			now := s.now().Unix()
 			for _, lm := range d.Memories {
 				if len(out) >= limit {
 					break
 				}
-				if lm.Expired || (profileID != "" && lm.ProfileID != "" && lm.ProfileID != profileID) {
+				if lm.Expired || (lm.ExpiresAt > 0 && lm.ExpiresAt <= now) || (profileID != "" && lm.ProfileID != "" && lm.ProfileID != profileID) {
 					continue
 				}
 				if qTrim != "" {
