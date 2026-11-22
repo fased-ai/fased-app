@@ -1,5 +1,10 @@
 {
   "version": 3,
+  "releasedPredecessor": {
+    "version": "0.1.6",
+    "source": "738bd835b8c86c7cf7b3abfb2945240635f51fe7",
+    "artifactSetSha256": "aea00a0d9e1b7ed05a1346428cdf8cc277cbe40f93cfcd86d40fc9b45c559460"
+  },
   "remoteFormat4": {
     "targetSource": "21c7b865f4ee3ef0a00c1a7e067af6b48f0a6cd5",
     "targetPacketSha256": "f009a6ad164403688e062e384f23c4ead7d994f1f94d339b8fdf4ee82ffb4725",

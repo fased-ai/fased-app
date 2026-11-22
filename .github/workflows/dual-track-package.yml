@@ -97,7 +97,9 @@ jobs:
       - run: go -C desktop mod verify
       - run: npm run build:desktop
       - run: npm run build:core
-      - run: node --test scripts/linux-desktop-package.test.mjs
+      - name: Linux desktop packaging unit checks
+        if: runner.os == 'Linux'
+        run: node --test scripts/linux-desktop-package.test.mjs
       - run: npm run package:native
       - uses: actions/upload-artifact@v4
         with:

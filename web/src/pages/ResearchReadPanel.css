@@ -24,7 +24,7 @@
   width: 18px;
   height: 18px;
   min-height: 18px;
-  accent-color: var(--accent, #fc5269);
+  accent-color: var(--wt-coral);
 }
 .wen-research-actions {
   display: flex;

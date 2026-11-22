@@ -41,11 +41,11 @@
 .f4-rehearsal td {
   text-align: left;
   padding: 8px;
-  border-bottom: 1px solid var(--border, #35313f);
+  border-bottom: 1px solid var(--wt-border);
   overflow-wrap: anywhere;
 }
 .f4-rehearsal .f4-session {
-  border-top: 1px solid var(--border, #35313f);
+  border-top: 1px solid var(--wt-border);
   padding-top: 18px;
   margin-top: 24px;
 }

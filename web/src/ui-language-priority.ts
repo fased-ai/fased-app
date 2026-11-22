@@ -365,7 +365,6 @@ export const priorityCopy = {
   Stale: ["Устарело", "Desactualizado", "已过期", "오래됨"],
   Saved: ["Сохранено", "Guardado", "已保存", "저장됨"],
   Forget: ["Забыть", "Olvidar", "忘记", "잊기"],
-  Edit: ["Изменить", "Editar", "编辑", "수정"],
   Source: ["Источник", "Fuente", "来源", "출처"],
   Templates: ["Шаблоны", "Plantillas", "模板", "템플릿"],
   Timing: ["Расписание", "Horario", "时间安排", "일정"],
@@ -377,15 +376,12 @@ export const priorityCopy = {
 
   "Test key": ["Тестовый ключ", "Clave de prueba", "测试密钥", "테스트 키"],
   Credentials: ["Доступ", "Credenciales", "凭据", "인증 정보"],
-  "Review task": ["Проверить задачу", "Revisar tarea", "审核任务", "작업 검토"],
   "Review schedule": [
     "Проверить расписание",
     "Revisar horario",
     "审核计划",
     "일정 검토",
   ],
-  "Create task": ["Создать задачу", "Crear tarea", "创建任务", "작업 생성"],
-  "Save memory": ["Сохранить", "Guardar memoria", "保存记忆", "기억 저장"],
 
   "Agent settings": [
     "Настройки агента",
@@ -420,7 +416,6 @@ export const priorityCopy = {
   Move: ["Переместить", "Mover", "移动", "이동"],
   "Move up": ["Выше", "Subir", "上移", "위로"],
   "Move down": ["Ниже", "Bajar", "下移", "아래로"],
-  Remove: ["Убрать", "Quitar", "移除", "제거"],
   Resize: ["Размер", "Redimensionar", "调整大小", "크기 조절"],
   "Move {name}": [
     "Переместить {name}",

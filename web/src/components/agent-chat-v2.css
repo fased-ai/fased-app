@@ -192,18 +192,18 @@
 }
 .v2-pill-completed,
 .v2-pill-approved {
-  color: var(--lime-text);
-  border-color: rgba(195, 237, 131, 0.35);
+  color: var(--wt-ok);
+  border-color: var(--wt-ok-border);
 }
 .v2-pill-awaiting_approval,
 .v2-pill-pending {
   color: var(--wt-coral);
-  border-color: rgba(255, 79, 124, 0.4);
+  border-color: var(--wt-accent-border);
 }
 .v2-pill-rejected,
 .v2-pill-error {
-  color: #f69c9e;
-  border-color: rgba(246, 156, 158, 0.35);
+  color: var(--wt-danger);
+  border-color: var(--wt-danger-border);
 }
 .v2-tool-body {
   padding: 8px 11px;
@@ -223,7 +223,7 @@
 }
 .v2-tool-err {
   margin: 0;
-  color: #f69c9e;
+  color: var(--wt-danger);
   font-size: 12px;
 }
 .v2-markdown {
@@ -277,7 +277,7 @@
   gap: 10px;
 }
 .local-messages article.v2-approval-card {
-  border: 1px solid rgba(255, 79, 124, 0.45);
+  border: 1px solid var(--wt-accent-border);
   border-radius: 12px;
   background: var(--wt-bg);
   padding: 12px 14px;
@@ -285,7 +285,7 @@
   gap: 10px;
 }
 .local-messages article.v2-approval-card.v2-approval-approved {
-  border-color: rgba(195, 237, 131, 0.4);
+  border-color: var(--wt-ok-border);
 }
 .local-messages article.v2-approval-card.v2-approval-rejected {
   border-color: var(--wt-border);
