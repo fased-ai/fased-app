@@ -13,7 +13,7 @@ import (
 )
 
 const (
-	agentV2SchemaVersion    = 1
+	agentV2SchemaVersion    = 2
 	agentV2MaxPromptBytes   = 32 * 1024
 	agentV2CompactMsgLimit  = 24
 	agentV2CompactCharLimit = 48000
@@ -132,7 +132,7 @@ func (s *Store) ensureAgentV2(ctx context.Context) (*agentV2Store, error) {
 	if err := privateFile(dbPath); err != nil {
 		return nil, err
 	}
-	db, err := sql.Open("sqlite", dbPath)
+	db, err := sql.Open("sqlite", sqliteDSN(dbPath))
 	if err != nil {
 		return nil, err
 	}
@@ -249,10 +249,50 @@ CREATE VIRTUAL TABLE memories_fts USING fts5(
 	tokenize='porter unicode61'
 );
 
-PRAGMA user_version=1;
+CREATE TABLE IF NOT EXISTS provider_model_cache (
+	ref TEXT PRIMARY KEY,
+	provider TEXT NOT NULL,
+	state TEXT NOT NULL,
+	fetched_at INTEGER NOT NULL,
+	expires_at INTEGER NOT NULL,
+	sha256 TEXT NOT NULL,
+	source TEXT NOT NULL,
+	models_json TEXT NOT NULL,
+	updated_at INTEGER NOT NULL
+);
+
+PRAGMA user_version=2;
 `
 		if _, err := tx.ExecContext(ctx, schemaSQL); err != nil {
 			return nil, fmt.Errorf("init agents.sqlite schema: %w", err)
+		}
+		if err := tx.Commit(); err != nil {
+			return nil, err
+		}
+	}
+	if version == 1 {
+		tx, err := db.BeginTx(ctx, nil)
+		if err != nil {
+			return nil, err
+		}
+		defer tx.Rollback()
+		upgradeSQL := `
+CREATE TABLE IF NOT EXISTS provider_model_cache (
+	ref TEXT PRIMARY KEY,
+	provider TEXT NOT NULL,
+	state TEXT NOT NULL,
+	fetched_at INTEGER NOT NULL,
+	expires_at INTEGER NOT NULL,
+	sha256 TEXT NOT NULL,
+	source TEXT NOT NULL,
+	models_json TEXT NOT NULL,
+	updated_at INTEGER NOT NULL
+);
+
+PRAGMA user_version=2;
+`
+		if _, err := tx.ExecContext(ctx, upgradeSQL); err != nil {
+			return nil, fmt.Errorf("upgrade agents.sqlite schema v1->v2: %w", err)
 		}
 		if err := tx.Commit(); err != nil {
 			return nil, err

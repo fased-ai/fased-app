@@ -717,8 +717,8 @@ func TestAgentV2SSEToolLoopAndApprovals(t *testing.T) {
 		t.Fatal(err)
 	}
 	toolsResp.Body.Close()
-	if len(toolsBody.Tools) != 13 {
-		t.Fatalf("expected 13 registered tools, got %d", len(toolsBody.Tools))
+	if len(toolsBody.Tools) != 15 {
+		t.Fatalf("expected 15 registered tools, got %d", len(toolsBody.Tools))
 	}
 
 	// Create thread -> 201.
@@ -1326,5 +1326,104 @@ func TestAgentV2PauseSlotsAndApprovalErrorPropagation(t *testing.T) {
 	pausedResp.Body.Close()
 	if pausedResp.StatusCode != http.StatusConflict {
 		t.Fatalf("expected 409 when core paused, got %d", pausedResp.StatusCode)
+	}
+}
+
+func TestAgentV2ToolGetPortfolioSummary(t *testing.T) {
+	t.Parallel()
+	s := fixtureStore(t)
+
+	// Configure a watch wallet without RPC so portfolio summary cleanly summarizes status & counts.
+	view, err := s.Accounts(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.rpcAdmission = true
+	if _, err := s.UpdateAccounts(t.Context(), AccountsRecord{
+		Version:  view.Record.Version,
+		Revision: view.Record.Revision,
+		Accounts: []Account{{
+			Version:   2,
+			ID:        "11111111111111111111111111111111",
+			Name:      "Primary Watch",
+			Mode:      "watch",
+			Network:   "mainnet-beta",
+			PublicKey: strings.Repeat("11", 32),
+		}},
+		Proposals: []ProposalDraft{},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	s.rpcAdmission = false
+
+	entry, ok := lookupAgentV2Tool("get_portfolio_summary")
+	if !ok || entry.spec.Tier != toolTierRead {
+		t.Fatalf("get_portfolio_summary tool missing or wrong tier: ok=%v spec=%+v", ok, entry.spec)
+	}
+	resAny, err := entry.execute(t.Context(), s, "trading-analyst", json.RawMessage(`{"network":"mainnet-beta"}`))
+	if err != nil {
+		t.Fatalf("get_portfolio_summary failed: %v", err)
+	}
+	res := resAny.(map[string]any)
+	if res["walletCount"] != 1 || res["signingEnabled"] != false {
+		t.Fatalf("unexpected portfolio summary: %+v", res)
+	}
+	wallets := res["wallets"].([]map[string]any)
+	if len(wallets) != 1 || wallets[0]["name"] != "Primary Watch" || wallets[0]["status"] != "rpc_not_configured" {
+		t.Fatalf("unexpected wallet entry: %+v", wallets)
+	}
+}
+
+func TestAgentV2ToolFetchWebPageAndSSRFGuards(t *testing.T) {
+	t.Parallel()
+	s := fixtureStore(t)
+	s.marketDataTransport = aiTestTransport(func(r *http.Request) (*http.Response, error) {
+		if r.URL.Path == "/redirect-ssrf" {
+			return &http.Response{
+				StatusCode: http.StatusFound,
+				Header:     http.Header{"Location": []string{"https://169.254.169.254/latest/meta-data/"}},
+				Body:       io.NopCloser(strings.NewReader("")),
+				Request:    r,
+			}, nil
+		}
+		htmlBody := `<!doctype html><html><head><title>Solana &amp; Ecosystem Note</title><style>body{color:#fff}</style></head><body><script>alert("xss")</script><h1>Hello   World</h1><p>Bounded summary paragraph.</p></body></html>`
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"text/html; charset=utf-8"}},
+			Body:       io.NopCloser(strings.NewReader(htmlBody)),
+			Request:    r,
+		}, nil
+	})
+
+	entry, ok := lookupAgentV2Tool("fetch_web_page")
+	if !ok || entry.spec.Tier != toolTierRead {
+		t.Fatalf("fetch_web_page tool missing or wrong tier: ok=%v spec=%+v", ok, entry.spec)
+	}
+	resAny, err := entry.execute(t.Context(), s, "", json.RawMessage(`{"url":"https://docs.fased.invalid/guide","maxChars":500}`))
+	if err != nil {
+		t.Fatalf("fetch_web_page valid HTML failed: %v", err)
+	}
+	res := resAny.(map[string]any)
+	if res["title"] != "Solana & Ecosystem Note" || res["untrusted"] != true {
+		t.Fatalf("unexpected title/untrusted: %+v", res)
+	}
+	txt := res["text"].(string)
+	if !strings.Contains(txt, "Hello World") || !strings.Contains(txt, "Bounded summary paragraph.") || strings.Contains(txt, "alert(") || strings.Contains(txt, "color:#fff") {
+		t.Fatalf("script/style not stripped or text missing: %q", txt)
+	}
+
+	for _, badURL := range []string{
+		"http://example.com/",
+		"https://127.0.0.1/",
+		"https://169.254.169.254/latest/meta-data/",
+		"https://10.0.0.1/",
+		"https://service.local/",
+		"https://metadata.google.internal/",
+		"https://docs.fased.invalid/redirect-ssrf",
+	} {
+		argsJSON, _ := json.Marshal(map[string]any{"url": badURL})
+		if _, err := entry.execute(t.Context(), s, "", argsJSON); err == nil {
+			t.Fatalf("SSRF guard failed to block %q", badURL)
+		}
 	}
 }

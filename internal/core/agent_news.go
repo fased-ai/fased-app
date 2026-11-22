@@ -213,6 +213,13 @@ func parseNewsRSS(b []byte, f NewsFetch, now int64) (NewsFetch, error) {
 	if roots != 1 || depth != 0 {
 		return f, errors.New("one complete RSS document required")
 	}
+	type feedParsedItem struct {
+		title     string
+		link      string
+		published string
+	}
+	var parsedItems []feedParsedItem
+
 	var rss struct {
 		XMLName  xml.Name `xml:"rss"`
 		Version  string   `xml:"version,attr"`
@@ -224,13 +231,53 @@ func parseNewsRSS(b []byte, f NewsFetch, now int64) (NewsFetch, error) {
 			} `xml:"item"`
 		} `xml:"channel"`
 	}
-	if xml.Unmarshal(b, &rss) != nil || rss.Version != "2.0" || len(rss.Channels) != 1 || len(rss.Channels[0].Items) == 0 || len(rss.Channels[0].Items) > 32 {
-		return f, errors.New("bounded RSS 2.0 channel required")
+	if xml.Unmarshal(b, &rss) == nil && rss.XMLName.Local == "rss" {
+		if rss.Version != "2.0" || len(rss.Channels) != 1 || len(rss.Channels[0].Items) == 0 || len(rss.Channels[0].Items) > 32 {
+			return f, errors.New("bounded RSS 2.0 channel required")
+		}
+		for _, x := range rss.Channels[0].Items {
+			parsedItems = append(parsedItems, feedParsedItem{title: x.Title, link: x.Link, published: x.Published})
+		}
+	} else {
+		var atom struct {
+			XMLName xml.Name `xml:"feed"`
+			Entries []struct {
+				Title     string `xml:"title"`
+				Published string `xml:"published"`
+				Updated   string `xml:"updated"`
+				Links     []struct {
+					Href string `xml:"href,attr"`
+					Rel  string `xml:"rel,attr"`
+				} `xml:"link"`
+			} `xml:"entry"`
+		}
+		if xml.Unmarshal(b, &atom) != nil || atom.XMLName.Local != "feed" || (atom.XMLName.Space != "" && atom.XMLName.Space != "http://www.w3.org/2005/Atom") || len(atom.Entries) == 0 || len(atom.Entries) > 32 {
+			return f, errors.New("bounded RSS 2.0 or Atom 1.0 feed required")
+		}
+		for _, e := range atom.Entries {
+			link := ""
+			for _, l := range e.Links {
+				rel := strings.ToLower(strings.TrimSpace(l.Rel))
+				if rel == "alternate" {
+					link = l.Href
+					break
+				}
+				if rel == "" && link == "" {
+					link = l.Href
+				}
+			}
+			pub := strings.TrimSpace(e.Published)
+			if pub == "" {
+				pub = strings.TrimSpace(e.Updated)
+			}
+			parsedItems = append(parsedItems, feedParsedItem{title: e.Title, link: link, published: pub})
+		}
 	}
+
 	items := []NewsItem{}
 	seen := map[string]bool{}
-	for _, x := range rss.Channels[0].Items {
-		title, link := strings.TrimSpace(x.Title), strings.TrimSpace(x.Link)
+	for _, x := range parsedItems {
+		title, link := strings.TrimSpace(x.title), strings.TrimSpace(x.link)
 		if !validAgentText(title, 240, true) {
 			return f, errors.New("RSS headline outside bound")
 		}
@@ -239,11 +286,11 @@ func parseNewsRSS(b []byte, f NewsFetch, now int64) (NewsFetch, error) {
 		}
 		var published time.Time
 		var e error
-		for _, layout := range []string{time.RFC3339, time.RFC1123Z, time.RFC1123, time.RFC822Z, time.RFC822} {
-			if (layout == time.RFC1123 || layout == time.RFC822) && !strings.HasSuffix(x.Published, " GMT") && !strings.HasSuffix(x.Published, " UTC") {
+		for _, layout := range []string{time.RFC3339, time.RFC3339Nano, time.RFC1123Z, time.RFC1123, time.RFC822Z, time.RFC822} {
+			if (layout == time.RFC1123 || layout == time.RFC822) && !strings.HasSuffix(x.published, " GMT") && !strings.HasSuffix(x.published, " UTC") {
 				continue
 			}
-			published, e = time.Parse(layout, strings.TrimSpace(x.Published))
+			published, e = time.Parse(layout, strings.TrimSpace(x.published))
 			if e == nil {
 				break
 			}
@@ -511,31 +558,33 @@ func (s *Store) advanceAgentNews(ctx context.Context, rt http.RoundTripper, fixt
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		tick := time.NewTicker(50 * time.Millisecond)
-		defer tick.Stop()
+		fallback := time.NewTicker(time.Second)
+		defer fallback.Stop()
 		for {
+			sig := storeChangeChan(s)
 			select {
 			case <-callCtx.Done():
 				return
-			case <-tick.C:
-				current, _, err := readAgents(callCtx, s.db)
-				active := false
-				if err == nil {
-					for _, f := range current.NewsFetches {
-						if f.ID == dispatch.ID && f.State == "fetching" && newsTaskPending(current, f) {
-							_, err = newsSource(current, f.ProfileID, f.SourceID)
-							active = err == nil
-						}
+			case <-sig:
+			case <-fallback.C:
+			}
+			current, _, err := readAgents(callCtx, s.db)
+			active := false
+			if err == nil {
+				for _, f := range current.NewsFetches {
+					if f.ID == dispatch.ID && f.State == "fetching" && newsTaskPending(current, f) {
+						_, err = newsSource(current, f.ProfileID, f.SourceID)
+						active = err == nil
 					}
 				}
-				var phase string
-				if s.db.QueryRowContext(callCtx, "SELECT phase FROM update_pause WHERE id=1").Scan(&phase) != nil || phase == "paused" {
-					active = false
-				}
-				if !active {
-					cancel()
-					return
-				}
+			}
+			var phase string
+			if s.db.QueryRowContext(callCtx, "SELECT phase FROM update_pause WHERE id=1").Scan(&phase) != nil || phase == "paused" {
+				active = false
+			}
+			if !active {
+				cancel()
+				return
 			}
 		}
 	}()

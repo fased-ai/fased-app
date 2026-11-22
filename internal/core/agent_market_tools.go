@@ -7,9 +7,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"html"
 	"io"
 	"math"
 	"math/big"
+	"mime"
 	"net"
 	"net/http"
 	"net/url"
@@ -286,49 +288,7 @@ func fetchMarketJSON(ctx context.Context, client *http.Client, targetURL string,
 	return errors.New("market request retry exhausted")
 }
 
-func toolGetWalletBalances(ctx context.Context, s *Store, _ string, rawArgs json.RawMessage) (any, error) {
-	var args struct {
-		AccountID string `json:"accountId"`
-	}
-	if err := decodeToolArgs(rawArgs, &args); err != nil {
-		return nil, err
-	}
-	view, err := s.Accounts(ctx)
-	if err != nil {
-		return nil, err
-	}
-	if len(view.Record.Accounts) == 0 {
-		return map[string]any{
-			"accounts":       []any{},
-			"count":          0,
-			"signingEnabled": false,
-			"message":        "No wallets configured. Add a watch or managed wallet in Wallets.",
-		}, nil
-	}
-
-	targetQuery := strings.TrimSpace(args.AccountID)
-	var chosen *Account
-	for i := range view.Record.Accounts {
-		a := &view.Record.Accounts[i]
-		if targetQuery != "" {
-			if a.ID == targetQuery || strings.EqualFold(a.Name, targetQuery) {
-				chosen = a
-				break
-			}
-			continue
-		}
-		if validProviderRPC(*a) {
-			chosen = a
-			break
-		}
-	}
-	if chosen == nil {
-		if targetQuery != "" {
-			return nil, fmt.Errorf("wallet account %q not found", targetQuery)
-		}
-		chosen = &view.Record.Accounts[0]
-	}
-
+func readWalletBalanceSnapshot(ctx context.Context, s *Store, chosen *Account, revision int64, rpcRefOverride string, maxTokens int) (map[string]any, error) {
 	address := ""
 	if pub, decErr := hex.DecodeString(chosen.PublicKey); decErr == nil && len(pub) == 32 && hex.EncodeToString(pub) == chosen.PublicKey {
 		address = onchain.Base58(pub)
@@ -346,7 +306,7 @@ func toolGetWalletBalances(ctx context.Context, s *Store, _ string, rawArgs json
 	}
 
 	provider := rpcProvider(chosen.RPC.Endpoint, chosen.Network)
-	rpcRef := ""
+	rpcRef := strings.TrimSpace(rpcRefOverride)
 	if rpcProviderRequiresKey(provider) {
 		vault, vErr := s.readRPCVault(chosen.ID)
 		if vErr != nil || vault.Version != 2 || vault.Binding != rpcBinding(*chosen) {
@@ -392,7 +352,7 @@ func toolGetWalletBalances(ctx context.Context, s *Store, _ string, rawArgs json
 
 	snap, err := s.ReadWallet(ctx, WalletReadCommand{
 		AccountID: chosen.ID,
-		Revision:  view.Record.Revision,
+		Revision:  revision,
 		Ref:       rpcRef,
 	})
 	if err != nil {
@@ -429,8 +389,8 @@ func toolGetWalletBalances(ctx context.Context, s *Store, _ string, rawArgs json
 	}
 	tokens := append(knownTokens, unknownTokens...)
 	totalNonZero := len(tokens)
-	if len(tokens) > 25 {
-		tokens = tokens[:25]
+	if maxTokens > 0 && len(tokens) > maxTokens {
+		tokens = tokens[:maxTokens]
 	}
 	recent := snap.Activity
 	if len(recent) > 5 {
@@ -455,6 +415,353 @@ func toolGetWalletBalances(ctx context.Context, s *Store, _ string, rawArgs json
 		"liveRPC":             snap.LiveRPC,
 		"fixtureOnly":         snap.FixtureOnly,
 		"signingEnabled":      false,
+	}, nil
+}
+
+func toolGetWalletBalances(ctx context.Context, s *Store, _ string, rawArgs json.RawMessage) (any, error) {
+	var args struct {
+		AccountID string `json:"accountId"`
+	}
+	if err := decodeToolArgs(rawArgs, &args); err != nil {
+		return nil, err
+	}
+	view, err := s.Accounts(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if len(view.Record.Accounts) == 0 {
+		return map[string]any{
+			"accounts":       []any{},
+			"count":          0,
+			"signingEnabled": false,
+			"message":        "No wallets configured. Add a watch or managed wallet in Wallets.",
+		}, nil
+	}
+
+	targetQuery := strings.TrimSpace(args.AccountID)
+	var chosen *Account
+	for i := range view.Record.Accounts {
+		a := &view.Record.Accounts[i]
+		if targetQuery != "" {
+			if a.ID == targetQuery || strings.EqualFold(a.Name, targetQuery) {
+				chosen = a
+				break
+			}
+			continue
+		}
+		if validProviderRPC(*a) {
+			chosen = a
+			break
+		}
+	}
+	if chosen == nil {
+		if targetQuery != "" {
+			return nil, fmt.Errorf("wallet account %q not found", targetQuery)
+		}
+		chosen = &view.Record.Accounts[0]
+	}
+	return readWalletBalanceSnapshot(ctx, s, chosen, view.Record.Revision, "", 25)
+}
+
+func toolGetPortfolioSummary(ctx context.Context, s *Store, profileID string, rawArgs json.RawMessage) (any, error) {
+	var args struct {
+		Network string `json:"network"`
+		RPCRef  string `json:"rpcRef"`
+	}
+	if err := decodeToolArgs(rawArgs, &args); err != nil {
+		return nil, err
+	}
+	netFilter := strings.ToLower(strings.TrimSpace(args.Network))
+	view, err := s.Accounts(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	wallets := make([]map[string]any, 0, len(view.Record.Accounts))
+	priceQueries := []string{"SOL"}
+	seenToken := map[string]bool{"SOL": true}
+	for i := range view.Record.Accounts {
+		acc := &view.Record.Accounts[i]
+		if netFilter != "" && strings.ToLower(strings.TrimSpace(acc.Network)) != netFilter {
+			continue
+		}
+		if len(wallets) >= 10 {
+			break
+		}
+		snap, readErr := readWalletBalanceSnapshot(ctx, s, acc, view.Record.Revision, args.RPCRef, 10)
+		if readErr != nil {
+			wallets = append(wallets, map[string]any{
+				"accountId": acc.ID,
+				"name":      acc.Name,
+				"network":   acc.Network,
+				"status":    "locked_or_unavailable",
+				"error":     readErr.Error(),
+			})
+			continue
+		}
+		delete(snap, "recentActivity")
+		if toks, ok := snap["tokens"].([]map[string]any); ok {
+			for _, tok := range toks {
+				sym, _ := tok["symbol"].(string)
+				if sym != "" && !seenToken[sym] && len(priceQueries) < 10 {
+					if _, known := lookupKnownMarketToken(sym); known {
+						seenToken[sym] = true
+						priceQueries = append(priceQueries, sym)
+					}
+				}
+			}
+		}
+		wallets = append(wallets, snap)
+	}
+
+	usdPrices := map[string]float64{}
+	if !s.providerFixture || s.marketDataTransport != nil {
+		rawToks, _ := json.Marshal(map[string]any{"tokens": priceQueries})
+		if res, pErr := toolGetTokenPrice(ctx, s, profileID, rawToks); pErr == nil {
+			if m, ok := res.(map[string]any); ok {
+				if rows, ok := m["prices"].([]map[string]any); ok {
+					for _, row := range rows {
+						sym, _ := row["symbol"].(string)
+						if usd, ok := row["usdPrice"].(float64); ok && sym != "" {
+							usdPrices[sym] = usd
+						}
+					}
+				}
+			}
+		}
+	}
+
+	activeTasks, pendingApprovals, strategiesCount := 0, 0, 0
+	if d, _, aErr := readAgents(ctx, s.db); aErr == nil {
+		strategiesCount = len(d.Strategies)
+		for _, t := range d.Tasks {
+			if profileID == "" || t.ProfileID == profileID {
+				if t.State == "active" || t.State == "running" || t.State == "queued" || t.State == "pending" {
+					activeTasks++
+				}
+			}
+		}
+	}
+	s.agentV2Mu.Lock()
+	v2 := s.agentV2
+	s.agentV2Mu.Unlock()
+	if v2 != nil && v2.db != nil {
+		_ = v2.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM approvals WHERE status = 'pending'`).Scan(&pendingApprovals)
+	}
+
+	return map[string]any{
+		"networkFilter":    netFilter,
+		"walletCount":      len(wallets),
+		"wallets":          wallets,
+		"usdPrices":        usdPrices,
+		"activeTasks":      activeTasks,
+		"pendingApprovals": pendingApprovals,
+		"strategiesCount":  strategiesCount,
+		"signingEnabled":   false,
+	}, nil
+}
+
+const (
+	webFetchMaxBodyBytes = 256 * 1024
+	webFetchDefaultChars = 4000
+	webFetchMinChars     = 500
+	webFetchMaxChars     = 6000
+)
+
+func validPublicWebURL(raw string, allowTestInvalid bool) (*url.URL, error) {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" || len(trimmed) > 1024 {
+		return nil, errors.New("public HTTPS URL required")
+	}
+	u, err := url.Parse(trimmed)
+	if err != nil || u.Scheme != "https" || u.User != nil {
+		return nil, errors.New("only clean https:// URLs without credentials are permitted")
+	}
+	if p := u.Port(); p != "" && p != "443" {
+		return nil, errors.New("only port 443 HTTPS URLs are permitted")
+	}
+	host := strings.ToLower(strings.TrimSuffix(u.Hostname(), "."))
+	if host == "" || len(host) > 253 || net.ParseIP(host) != nil || !strings.Contains(host, ".") {
+		return nil, errors.New("public DNS hostname required")
+	}
+	for _, blocked := range []string{".localhost", ".local", ".internal", ".home", ".lan", ".arpa"} {
+		if host == strings.TrimPrefix(blocked, ".") || strings.HasSuffix(host, blocked) {
+			return nil, errors.New("private or local hostname refused")
+		}
+	}
+	if !allowTestInvalid && strings.HasSuffix(host, ".invalid") {
+		return nil, errors.New("reserved .invalid hostname refused")
+	}
+	for _, part := range strings.Split(host, ".") {
+		if len(part) == 0 || len(part) > 63 || part[0] == '-' || part[len(part)-1] == '-' {
+			return nil, errors.New("invalid hostname label")
+		}
+		for _, r := range part {
+			if !(r >= 'a' && r <= 'z' || r >= '0' && r <= '9' || r == '-') {
+				return nil, errors.New("ASCII hostname required")
+			}
+		}
+	}
+	return u, nil
+}
+
+func extractWebTitleAndText(contentType, raw string) (string, string) {
+	media := strings.ToLower(contentType)
+	if media != "" && !strings.Contains(media, "html") {
+		return "", strings.Join(strings.Fields(raw), " ")
+	}
+	lower := strings.ToLower(raw)
+	title := ""
+	if ts := strings.Index(lower, "<title"); ts >= 0 {
+		if gt := strings.IndexByte(lower[ts:], '>'); gt >= 0 {
+			contentStart := ts + gt + 1
+			if te := strings.Index(lower[contentStart:], "</title>"); te >= 0 {
+				title = strings.Join(strings.Fields(html.UnescapeString(raw[contentStart:contentStart+te])), " ")
+			}
+		}
+	}
+
+	var b strings.Builder
+	b.Grow(len(raw))
+	n := len(raw)
+	for i := 0; i < n; {
+		if raw[i] == '<' {
+			restLower := lower[i:]
+			skippedBlock := false
+			for _, tag := range []string{"<script", "<style", "<noscript", "<svg"} {
+				if strings.HasPrefix(restLower, tag) && len(restLower) > len(tag) && (restLower[len(tag)] == '>' || restLower[len(tag)] == ' ' || restLower[len(tag)] == '\t' || restLower[len(tag)] == '\n' || restLower[len(tag)] == '\r') {
+					closeTag := "</" + tag[1:] + ">"
+					if endIdx := strings.Index(restLower, closeTag); endIdx >= 0 {
+						i += endIdx + len(closeTag)
+						b.WriteByte(' ')
+						skippedBlock = true
+						break
+					}
+					i = n
+					skippedBlock = true
+					break
+				}
+			}
+			if skippedBlock {
+				continue
+			}
+			if closeBracket := strings.IndexByte(raw[i:], '>'); closeBracket >= 0 {
+				i += closeBracket + 1
+				b.WriteByte(' ')
+				continue
+			}
+			break
+		}
+		b.WriteByte(raw[i])
+		i++
+	}
+	text := strings.Join(strings.Fields(html.UnescapeString(b.String())), " ")
+	return title, text
+}
+
+func toolFetchWebPage(ctx context.Context, s *Store, _ string, rawArgs json.RawMessage) (any, error) {
+	var args struct {
+		URL      string `json:"url"`
+		MaxChars int    `json:"maxChars"`
+	}
+	if err := decodeToolArgs(rawArgs, &args); err != nil {
+		return nil, err
+	}
+	maxChars := args.MaxChars
+	if maxChars <= 0 {
+		maxChars = webFetchDefaultChars
+	} else if maxChars < webFetchMinChars {
+		maxChars = webFetchMinChars
+	} else if maxChars > webFetchMaxChars {
+		maxChars = webFetchMaxChars
+	}
+
+	allowTestInvalid := s != nil && (s.providerFixture || s.marketDataTransport != nil)
+	parsedURL, err := validPublicWebURL(args.URL, allowTestInvalid)
+	if err != nil {
+		return nil, err
+	}
+
+	rt := http.RoundTripper(getPublicMarketLiveTransport())
+	if s != nil && s.marketDataTransport != nil {
+		rt = s.marketDataTransport
+	}
+	client := &http.Client{
+		Transport: rt,
+		Timeout:   10 * time.Second,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if len(via) > 3 {
+				return errors.New("too many redirects")
+			}
+			if _, vErr := validPublicWebURL(req.URL.String(), allowTestInvalid); vErr != nil {
+				return vErr
+			}
+			req.Header.Del("Authorization")
+			req.Header.Del("Cookie")
+			return nil
+		},
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, parsedURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Accept", "text/html, text/plain, application/json;q=0.9, application/xml;q=0.8")
+	req.Header.Set("User-Agent", "fased-agent/1")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("web fetch failed: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("web page returned HTTP %d", resp.StatusCode)
+	}
+
+	mediaType := ""
+	if ct := strings.TrimSpace(resp.Header.Get("Content-Type")); ct != "" {
+		parsedCT, _, ctErr := mime.ParseMediaType(ct)
+		if ctErr != nil {
+			return nil, errors.New("invalid web response content-type")
+		}
+		mediaType = strings.ToLower(parsedCT)
+		switch mediaType {
+		case "text/html", "text/plain", "text/markdown", "application/json", "application/xml", "text/xml", "application/xhtml+xml":
+		default:
+			return nil, fmt.Errorf("unsupported content-type %q", mediaType)
+		}
+	}
+
+	body, err := io.ReadAll(io.LimitReader(resp.Body, webFetchMaxBodyBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(body) > webFetchMaxBodyBytes {
+		body = body[:webFetchMaxBodyBytes]
+	}
+
+	title, text := extractWebTitleAndText(mediaType, string(body))
+	truncated := false
+	runes := []rune(text)
+	if len(runes) > maxChars {
+		text = strings.TrimSpace(string(runes[:maxChars]))
+		truncated = true
+	}
+
+	finalURL := parsedURL.String()
+	if resp.Request != nil && resp.Request.URL != nil {
+		finalURL = resp.Request.URL.String()
+	}
+
+	return map[string]any{
+		"url":         parsedURL.String(),
+		"finalUrl":    finalURL,
+		"title":       title,
+		"contentType": mediaType,
+		"text":        text,
+		"truncated":   truncated,
+		"bytes":       len(body),
+		"untrusted":   true,
 	}, nil
 }
 

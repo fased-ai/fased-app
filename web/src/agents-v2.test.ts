@@ -34,6 +34,8 @@ describe("formatToolLabel", () => {
     expect(formatToolLabel("workspace_status")).toBe("Workspace status");
     expect(formatToolLabel("list_wallets")).toBe("Wallets");
     expect(formatToolLabel("get_wallet_balances")).toBe("Wallet balances");
+    expect(formatToolLabel("get_portfolio_summary")).toBe("Portfolio");
+    expect(formatToolLabel("fetch_web_page")).toBe("Web page");
     expect(formatToolLabel("get_token_price")).toBe("Token price");
     expect(formatToolLabel("get_swap_quote")).toBe("Swap quote");
     expect(formatToolLabel("list_tasks")).toBe("Tasks");
@@ -94,6 +96,36 @@ describe("formatToolSummary", () => {
         JSON.stringify({ status: "rpc_not_configured" }),
       ),
     ).toBe("Configure RPC");
+    expect(
+      formatToolSummary(
+        "get_portfolio_summary",
+        JSON.stringify({ walletCount: 2, activeTasks: 1, pendingApprovals: 3 }),
+      ),
+    ).toBe("2 wallets · 1 task · 3 pending");
+    expect(
+      formatToolSummary(
+        "get_portfolio_summary",
+        JSON.stringify({ walletCount: 0, activeTasks: 0, pendingApprovals: 0 }),
+      ),
+    ).toBe("0 wallets");
+    expect(
+      formatToolSummary(
+        "fetch_web_page",
+        JSON.stringify({
+          title: "Solana Foundation Network Status",
+          finalUrl: "https://status.solana.com/",
+        }),
+      ),
+    ).toBe("Solana Foundation Network Status");
+    expect(
+      formatToolSummary(
+        "fetch_web_page",
+        JSON.stringify({
+          title: "",
+          finalUrl: "https://docs.jupiter.ag/api",
+        }),
+      ),
+    ).toBe("docs.jupiter.ag");
     expect(formatToolSummary("get_token_price", "{broken")).toBe("");
     expect(formatToolSummary("workspace_status", "{}")).toBe("");
   });

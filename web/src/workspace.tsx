@@ -1,8 +1,11 @@
 import {
   createContext,
+  useCallback,
   useContext,
   useEffect,
+  useMemo,
   useReducer,
+  useRef,
   useState,
   type ReactNode,
   type FormEvent,
@@ -87,7 +90,7 @@ function defaultLandingRoute() {
         return "overview";
     } catch {}
   }
-  return "agents/chat";
+  return "overview";
 }
 function getRoute() {
   const raw = window.location.hash.slice(1);
@@ -124,69 +127,90 @@ function useWorkspaceState() {
   const core = useCore();
   const agents = useAgents(core);
   const activeAgents = core.mode === "ready" ? agents.view : null;
-  const state =
-    core.mode === "ready" && core.setup
-      ? {
-          ...prototypeState,
-          setup: core.setup.settings,
-          ...(activeAgents
-            ? {
-                profiles: activeAgents.profiles.map((p) => ({
-                  id: p.id,
-                  name: p.name,
-                  role: p.persona,
-                  initials: p.name
-                    .split(" ")
-                    .map((x) => x[0])
-                    .join("")
-                    .slice(0, 2),
-                  color: "lime",
-                  provider: p.provider,
-                })),
-                selectedProfile: activeAgents.profileId,
-                memories: activeAgents.memories.map((m) => ({
-                  id: m.id,
-                  profileId: m.profileId,
-                  text: m.text,
-                  source: m.source,
-                  verified: new Date(m.updatedAt * 1000).toLocaleDateString(),
-                })),
-                notices: activeAgents.notices.map((n) => ({
-                  id: n.id,
-                  title: n.text,
-                  detail:
-                    "Saved by the local task engine. No financial execution.",
-                  read: n.read,
-                  tone: "info" as const,
-                })),
-              }
-            : {}),
-        }
-      : prototypeState;
-  function dispatch(action: Action) {
-    if (core.mode === "ready" && action.type === "profile") {
-      void agents.select(action.id);
-      return;
-    }
-    if (core.mode === "ready" && action.type === "read-notices") {
-      void (async () => {
-        for (const n of agents.view?.notices ?? []) {
-          if (
-            !n.read &&
-            !(await agents.change({ action: "notice-read", id: n.id }))
-          )
-            break;
-        }
-      })();
-      return;
-    }
-    if (action.type === "setup" && core.mode === "ready") {
-      void core.updateSetup(action.patch);
-      return;
-    }
-    localDispatch(action);
-  }
+  const state = useMemo(
+    () =>
+      core.mode === "ready" && core.setup
+        ? {
+            ...prototypeState,
+            setup: core.setup.settings,
+            ...(activeAgents
+              ? {
+                  profiles: activeAgents.profiles.map((p) => ({
+                    id: p.id,
+                    name: p.name,
+                    role: p.persona,
+                    initials: p.name
+                      .split(" ")
+                      .map((x) => x[0])
+                      .join("")
+                      .slice(0, 2),
+                    color: "lime",
+                    provider: p.provider,
+                  })),
+                  selectedProfile: activeAgents.profileId,
+                  memories: activeAgents.memories.map((m) => ({
+                    id: m.id,
+                    profileId: m.profileId,
+                    text: m.text,
+                    source: m.source,
+                    verified: new Date(m.updatedAt * 1000).toLocaleDateString(),
+                  })),
+                  notices: activeAgents.notices.map((n) => ({
+                    id: n.id,
+                    title: n.text,
+                    detail:
+                      "Saved by the local task engine. No financial execution.",
+                    read: n.read,
+                    tone: "info" as const,
+                  })),
+                }
+              : {}),
+          }
+        : prototypeState,
+    [core.mode, core.setup, activeAgents, prototypeState],
+  );
+  const agentsActionRef = useRef({
+    select: agents.select,
+    change: agents.change,
+    notices: agents.view?.notices,
+  });
+  agentsActionRef.current = {
+    select: agents.select,
+    change: agents.change,
+    notices: agents.view?.notices,
+  };
+  const dispatch = useCallback(
+    (action: Action) => {
+      if (core.mode === "ready" && action.type === "profile") {
+        void agentsActionRef.current.select(action.id);
+        return;
+      }
+      if (core.mode === "ready" && action.type === "read-notices") {
+        void (async () => {
+          for (const n of agentsActionRef.current.notices ?? []) {
+            if (
+              !n.read &&
+              !(await agentsActionRef.current.change({
+                action: "notice-read",
+                id: n.id,
+              }))
+            )
+              break;
+          }
+        })();
+        return;
+      }
+      if (action.type === "setup" && core.mode === "ready") {
+        void core.updateSetup(action.patch);
+        return;
+      }
+      localDispatch(action);
+    },
+    [core.mode, core.updateSetup],
+  );
   const [route, setRoute] = useState(getRoute);
+  const routeRef = useRef(route);
+  routeRef.current = route;
   const [walletSnapshot, setWalletSnapshot] = useState<{
     instance: string;
     view: AccountsView | null;
@@ -223,12 +247,19 @@ function useWorkspaceState() {
       active = false;
     };
   }, [core.mode, core.instanceId, core.request, route, walletRefresh]);
-  const wallets = {
-    ...(core.mode === "ready" && walletSnapshot?.instance === core.instanceId
-      ? walletSnapshot
-      : { view: null, error: "", loading: false }),
-    refresh: () => setWalletRefresh((revision) => revision + 1),
-  };
+  const refreshWallets = useCallback(
+    () => setWalletRefresh((revision) => revision + 1),
+    [],
+  );
+  const wallets = useMemo(
+    () => ({
+      ...(core.mode === "ready" && walletSnapshot?.instance === core.instanceId
+        ? walletSnapshot
+        : { view: null, error: "", loading: false }),
+      refresh: refreshWallets,
+    }),
+    [core.mode, core.instanceId, walletSnapshot, refreshWallets],
+  );
   const [focusedTask, setFocusedTask] = useState("");
   const [focusedRun, setFocusedRun] = useState<FocusedRun | null>(null);
   const [chatDrafts, setChatDrafts] = useState(new Map<string, string>());
@@ -246,19 +277,32 @@ function useWorkspaceState() {
   const [providersPreset, setProvidersPreset] =
     useState<ProvidersPreset | null>(null);
   const [providerReturn, setProviderReturn] = useState("agents/settings");
-  function setProvidersOpen(open: boolean) {
-    if (open) {
-      if (route !== "providers") setProviderReturn(route);
-      navigate("providers");
-    } else navigate(providerReturn);
-  }
-  function openProvidersWith(preset?: ProvidersPreset) {
-    setProvidersPreset(preset ?? null);
-    setProvidersOpen(true);
-  }
-  function clearProvidersPreset() {
+  const navigate = useCallback((path: string) => {
+    window.location.hash = path;
+    if (path === routeRef.current) {
+      setQuery("");
+    }
+  }, []);
+  const setProvidersOpen = useCallback(
+    (open: boolean) => {
+      if (open) {
+        if (routeRef.current !== "providers")
+          setProviderReturn(routeRef.current);
+        navigate("providers");
+      } else navigate(providerReturn);
+    },
+    [navigate, providerReturn],
+  );
+  const openProvidersWith = useCallback(
+    (preset?: ProvidersPreset) => {
+      setProvidersPreset(preset ?? null);
+      setProvidersOpen(true);
+    },
+    [setProvidersOpen],
+  );
+  const clearProvidersPreset = useCallback(() => {
     setProvidersPreset(null);
-  }
+  }, []);
   const [noticesOpen, setNoticesOpen] = useState(false);
   const [actionOpen, setActionOpen] = useState(false);
   const [profileOpen, setProfileOpen] = useState(false);
@@ -313,138 +357,190 @@ function useWorkspaceState() {
     setMessages([]);
     setMessage("");
   }, [state.selectedProfile]);
-  function navigate(path: string) {
-    window.location.hash = path;
-    if (path === route) {
-      setQuery("");
-    }
-  }
-  function launchChatPrompt(input: {
-    profileId: string;
-    title?: string;
-    prompt: string;
-  }) {
-    setPendingChatPrompt({
-      id: crypto.randomUUID(),
-      profileId: input.profileId,
-      title: input.title,
-      prompt: input.prompt,
-    });
-    navigate("agents/chat");
-  }
-  function clearChatPrompt(id: string) {
-    setPendingChatPrompt((cur) => (cur?.id === id ? null : cur));
-  }
-  function notify(
-    title: string,
-    detail = "Recorded in this prototype only. No external action was performed.",
-  ) {
-    dispatch({
-      type: "notice",
-      notice: {
+  const launchChatPrompt = useCallback(
+    (input: { profileId: string; title?: string; prompt: string }) => {
+      setPendingChatPrompt({
         id: crypto.randomUUID(),
-        title,
-        detail,
-        read: false,
-        tone: "success",
-      },
-    });
-    setToast(title);
-  }
-  function sendChat(event: FormEvent) {
-    event.preventDefault();
-    const text = message.trim();
-    if (!text) return;
-    setMessages((old) => [
-      ...old,
-      { role: "you", text },
-      {
-        role: "agent",
-        text: "Example response: I can help turn this into a reviewable task or strategy. In the working app I would use your selected sources and provider, then show the inputs, limits and proposed action. This prototype has not contacted an AI provider.",
-      },
-    ]);
-    setMessage("");
-  }
-  const searchItems = [
-    ...[
-      ["Dashboard", "overview"],
-      ["Chat", "agents/chat"],
-      ["Tasks", "agents/tasks"],
-      ["Agents", "agents/settings"],
-      ["News", "agents/news"],
-      ["Wallets", "wallets/overview"],
-      ["Settings", "settings"],
-      ["Activity", "activity"],
-    ].map(([title, path]) => ({ title, path })),
-    { title: "Mining", path: "terminals/satcoin" },
-    { title: "Onchain", path: "terminals/jupiter" },
-    { title: "Hyperliquid", path: "terminals/hyperliquid" },
-    { title: "Memory", path: "agents/memory" },
-    { title: "Permissions", path: "wallets/permissions" },
-    { title: "Providers", path: "providers" },
-  ].filter((item) => t(item.title).toLowerCase().includes(query.toLowerCase()));
+        profileId: input.profileId,
+        title: input.title,
+        prompt: input.prompt,
+      });
+      navigate("agents/chat");
+    },
+    [navigate],
+  );
+  const clearChatPrompt = useCallback((id: string) => {
+    setPendingChatPrompt((cur) => (cur?.id === id ? null : cur));
+  }, []);
+  const notify = useCallback(
+    (
+      title: string,
+      detail = "Recorded in this prototype only. No external action was performed.",
+    ) => {
+      dispatch({
+        type: "notice",
+        notice: {
+          id: crypto.randomUUID(),
+          title,
+          detail,
+          read: false,
+          tone: "success",
+        },
+      });
+      setToast(title);
+    },
+    [dispatch],
+  );
+  const sendChat = useCallback(
+    (event: FormEvent) => {
+      event.preventDefault();
+      const text = message.trim();
+      if (!text) return;
+      setMessages((old) => [
+        ...old,
+        { role: "you", text },
+        {
+          role: "agent",
+          text: "Example response: I can help turn this into a reviewable task or strategy. In the working app I would use your selected sources and provider, then show the inputs, limits and proposed action. This prototype has not contacted an AI provider.",
+        },
+      ]);
+      setMessage("");
+    },
+    [message],
+  );
+  const searchItems = useMemo(
+    () =>
+      [
+        ...[
+          ["Dashboard", "overview"],
+          ["Chat", "agents/chat"],
+          ["Tasks", "agents/tasks"],
+          ["Agents", "agents/settings"],
+          ["News", "agents/news"],
+          ["Wallets", "wallets/overview"],
+          ["Settings", "settings"],
+          ["Activity", "activity"],
+        ].map(([title, path]) => ({ title, path })),
+        { title: "Mining", path: "terminals/satcoin" },
+        { title: "Onchain", path: "terminals/jupiter" },
+        { title: "Hyperliquid", path: "terminals/hyperliquid" },
+        { title: "Memory", path: "agents/memory" },
+        { title: "Permissions", path: "wallets/permissions" },
+        { title: "Providers", path: "providers" },
+      ].filter(
+        (item) =>
+          item.title &&
+          t(item.title).toLowerCase().includes(query.toLowerCase()),
+      ),
+    [query, t],
+  );
 
-  return {
-    core,
-    agents,
-    wallets,
-    focusedTask,
-    setFocusedTask,
-    focusedRun,
-    setFocusedRun,
-    chatDrafts,
-    setChatDrafts,
-    chatModelDrafts,
-    setChatModelDrafts,
-    agentSettingsDrafts,
-    setAgentSettingsDrafts,
-    taskComposerDrafts,
-    setTaskComposerDrafts,
-    state,
-    dispatch,
-    route,
-    setupOpen,
-    setSetupOpen,
-    providersOpen,
-    setProvidersOpen,
-    providersPreset,
-    openProvidersWith,
-    clearProvidersPreset,
-    noticesOpen,
-    setNoticesOpen,
-    actionOpen,
-    setActionOpen,
-    profileOpen,
-    setProfileOpen,
-    contextOpen,
-    setContextOpen,
-    resetOpen,
-    setResetOpen,
-    query,
-    setQuery,
-    storageError,
-    toast,
-    setToast,
-    messages,
-    setMessages,
-    message,
-    setMessage,
-    memoryText,
-    setMemoryText,
-    profileName,
-    setProfileName,
-    profile,
-    section,
-    tab,
-    unread,
-    navigate,
-    notify,
-    sendChat,
-    searchItems,
-    pendingChatPrompt,
-    launchChatPrompt,
-    clearChatPrompt,
-  };
+  return useMemo(
+    () => ({
+      core,
+      agents,
+      wallets,
+      focusedTask,
+      setFocusedTask,
+      focusedRun,
+      setFocusedRun,
+      chatDrafts,
+      setChatDrafts,
+      chatModelDrafts,
+      setChatModelDrafts,
+      agentSettingsDrafts,
+      setAgentSettingsDrafts,
+      taskComposerDrafts,
+      setTaskComposerDrafts,
+      state,
+      dispatch,
+      route,
+      setupOpen,
+      setSetupOpen,
+      providersOpen,
+      setProvidersOpen,
+      providersPreset,
+      openProvidersWith,
+      clearProvidersPreset,
+      noticesOpen,
+      setNoticesOpen,
+      actionOpen,
+      setActionOpen,
+      profileOpen,
+      setProfileOpen,
+      contextOpen,
+      setContextOpen,
+      resetOpen,
+      setResetOpen,
+      query,
+      setQuery,
+      storageError,
+      toast,
+      setToast,
+      messages,
+      setMessages,
+      message,
+      setMessage,
+      memoryText,
+      setMemoryText,
+      profileName,
+      setProfileName,
+      profile,
+      section,
+      tab,
+      unread,
+      navigate,
+      notify,
+      sendChat,
+      searchItems,
+      pendingChatPrompt,
+      launchChatPrompt,
+      clearChatPrompt,
+    }),
+    [
+      core,
+      agents,
+      wallets,
+      focusedTask,
+      focusedRun,
+      chatDrafts,
+      chatModelDrafts,
+      agentSettingsDrafts,
+      taskComposerDrafts,
+      state,
+      dispatch,
+      route,
+      setupOpen,
+      providersOpen,
+      setProvidersOpen,
+      providersPreset,
+      openProvidersWith,
+      clearProvidersPreset,
+      noticesOpen,
+      actionOpen,
+      profileOpen,
+      contextOpen,
+      resetOpen,
+      query,
+      storageError,
+      toast,
+      messages,
+      message,
+      memoryText,
+      profileName,
+      profile,
+      section,
+      tab,
+      unread,
+      navigate,
+      notify,
+      sendChat,
+      searchItems,
+      pendingChatPrompt,
+      launchChatPrompt,
+      clearChatPrompt,
+    ],
+  );
 }
 const WorkspaceContext = createContext<ReturnType<
   typeof useWorkspaceState
