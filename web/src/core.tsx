@@ -1,4 +1,5 @@
 import { validOwnerHandoff } from "./owner-handoff";
+import { parseSSEChunkBuffer, type SSEFrame } from "./agents-v2";
 import {
   createContext,
   useCallback,
@@ -161,6 +162,75 @@ function useCoreState() {
           response.status,
         );
       return result as T;
+    },
+    [lock],
+  );
+  const stream = useCallback(
+    async (
+      route: string,
+      body: unknown,
+      options: {
+        signal?: AbortSignal;
+        onEvent: (frame: SSEFrame) => void;
+      },
+    ): Promise<void> => {
+      const epoch = authGeneration.current;
+      const headers: Record<string, string> = {
+        "Content-Type": "application/json",
+        Accept: "text/event-stream",
+      };
+      if (token.current) headers.Authorization = `Bearer ${token.current}`;
+      if (csrf.current) headers["X-CSRF-Token"] = csrf.current;
+      const response = await fetch(`/api/v1/${route}`, {
+        method: "POST",
+        signal: options.signal,
+        headers,
+        credentials: "same-origin",
+        cache: "no-store",
+        body: JSON.stringify(body),
+      });
+      if (response.status === 401) {
+        const message = "Your session ended. Sign in again.";
+        if (epoch === authGeneration.current) lock(message);
+        throw new CoreError(message, 401);
+      }
+      if (!response.ok) {
+        let message = "Stream request failed";
+        try {
+          if (
+            response.headers.get("content-type")?.includes("application/json")
+          ) {
+            const parsed = await response.json();
+            if (typeof parsed?.error === "string") message = parsed.error;
+          }
+        } catch {
+          /* ignore parse errors on error bodies */
+        }
+        throw new CoreError(message, response.status);
+      }
+      if (!response.body) {
+        throw new CoreError("Streaming body unavailable", response.status);
+      }
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder("utf-8");
+      let pendingBuffer = "";
+      try {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          pendingBuffer += decoder.decode(value, { stream: true });
+          const { frames, rest } = parseSSEChunkBuffer(pendingBuffer);
+          pendingBuffer = rest;
+          for (const frame of frames) options.onEvent(frame);
+        }
+        pendingBuffer += decoder.decode();
+        if (pendingBuffer.trim()) {
+          const { frames } = parseSSEChunkBuffer(`${pendingBuffer}\n\n`);
+          for (const frame of frames) options.onEvent(frame);
+        }
+      } finally {
+        reader.releaseLock();
+      }
     },
     [lock],
   );
@@ -514,6 +584,7 @@ function useCoreState() {
     passwordAvailable,
     mode,
     request,
+    stream,
     setup,
     error,
     saving: pending.generation === authGeneration.current && pending.count > 0,

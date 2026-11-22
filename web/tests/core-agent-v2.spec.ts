@@ -1,0 +1,126 @@
+import { expect, test } from "@playwright/test";
+import {
+  installCoreFixture,
+  start,
+  stop,
+  url,
+} from "./helpers/core-fixture.ts";
+
+installCoreFixture();
+
+test("T3Code streaming chat, Tier-1 tool execution, inline swap approval cards, and FTS5 memory work end-to-end", async ({
+  page,
+  isMobile,
+}) => {
+  test.setTimeout(75000);
+  await stop();
+  await start(true, "127.0.0.1:0", "local", false);
+
+  await page.goto(url);
+  await expect(
+    page.getByRole("heading", { name: "Chat", exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("dialog", { name: "Allow replies", exact: true }),
+  ).toHaveCount(0);
+
+  const composer = page.getByLabel("Message", { exact: true });
+  await composer.fill("Check my wallet list");
+  await page.getByRole("button", { name: "Send", exact: true }).click();
+
+  // Tier-1 Wallets tool runs automatically and streamed reply renders without modal friction.
+  const toolSummary = page.locator("details.v2-tool-call summary").first();
+  await expect(toolSummary).toContainText("Wallets", { timeout: 12000 });
+  await expect(toolSummary).toContainText("Done", { timeout: 12000 });
+  await toolSummary.click();
+  await expect(page.locator("details.v2-tool-call pre").first()).toContainText(
+    "signingEnabled",
+  );
+  await expect(page.locator(".v2-markdown").first()).toContainText(
+    "Fixture agent reviewed",
+  );
+
+  // Tier-2 swap proposal pauses on an inline review-only approval card.
+  await composer.fill("Propose a small swap");
+  await page.getByRole("button", { name: "Send", exact: true }).click();
+
+  const swapCard = page.getByRole("article", {
+    name: "Swap draft: 10 USDC -> SOL",
+    exact: true,
+  });
+  await expect(swapCard).toBeVisible({ timeout: 12000 });
+  await expect(swapCard).toContainText("Review-only · No signing");
+  await expect(
+    swapCard.getByRole("button", { name: "Approve", exact: true }),
+  ).toBeVisible();
+  await expect(
+    swapCard.getByRole("button", { name: "Reject", exact: true }),
+  ).toBeVisible();
+
+  if (!isMobile) {
+    await expect(page.getByLabel("Pending approval").first()).toBeVisible();
+  }
+
+  // Approve -> flips card status, resumes agent, and saves draft to FTS5 Memory.
+  await swapCard.getByRole("button", { name: "Approve", exact: true }).click();
+  await expect(swapCard).toContainText("Approved", { timeout: 12000 });
+  await expect(page.locator(".v2-markdown").last()).toContainText(
+    "Fixture agent reviewed draft_swap (completed)",
+    { timeout: 12000 },
+  );
+
+  // Verify persistence across page reload.
+  await page.reload();
+  await expect(
+    page.getByRole("article", {
+      name: "Swap draft: 10 USDC -> SOL",
+      exact: true,
+    }),
+  ).toContainText("Approved", { timeout: 12000 });
+
+  // Open Memory tab and search FTS5 workspace index for saved Swap draft.
+  await page.goto(url + "/#agents/memory");
+  const workspaceIndex = page.getByRole("region", {
+    name: "Workspace index",
+    exact: true,
+  });
+  await expect(workspaceIndex).toContainText("Swap draft: 10 USDC -> SOL");
+  await workspaceIndex.getByLabel("Search saved drafts").fill("USDC");
+  await workspaceIndex
+    .getByRole("button", { name: "Search", exact: true })
+    .click();
+  await expect(workspaceIndex).toContainText("swap_draft");
+
+  // Return to Chat, start a fresh thread, and exercise Reject path + delete thread.
+  await page.goto(url + "/#agents/chat");
+  if (isMobile) {
+    await page
+      .getByRole("button", { name: "Conversations", exact: true })
+      .click();
+  }
+  await page.getByRole("button", { name: "New thread", exact: true }).click();
+  await composer.fill("Propose a small swap");
+  await page.getByRole("button", { name: "Send", exact: true }).click();
+
+  const rejectCard = page.getByRole("article", {
+    name: "Swap draft: 10 USDC -> SOL",
+    exact: true,
+  });
+  await expect(rejectCard).toBeVisible({ timeout: 12000 });
+  await rejectCard.getByRole("button", { name: "Reject", exact: true }).click();
+  await expect(rejectCard).toContainText("Rejected", { timeout: 12000 });
+  await expect(page.locator(".v2-markdown").last()).toContainText("rejected", {
+    timeout: 12000,
+  });
+
+  // Delete active thread and confirm it disappears from rail.
+  await page
+    .getByRole("button", { name: "Delete conversation", exact: true })
+    .click();
+  if (isMobile) {
+    await page
+      .getByRole("button", { name: "Conversations", exact: true })
+      .click();
+  }
+  await expect(page.locator(".v2-thread-row")).toHaveCount(1);
+});
