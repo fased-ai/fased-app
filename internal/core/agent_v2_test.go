@@ -720,8 +720,8 @@ func TestAgentV2SSEToolLoopAndApprovals(t *testing.T) {
 		t.Fatal(err)
 	}
 	toolsResp.Body.Close()
-	if len(toolsBody.Tools) != 15 {
-		t.Fatalf("expected 15 registered tools, got %d", len(toolsBody.Tools))
+	if len(toolsBody.Tools) != 17 {
+		t.Fatalf("expected 17 registered tools, got %d", len(toolsBody.Tools))
 	}
 
 	// Create thread -> 201.
@@ -2253,5 +2253,205 @@ func TestAgentV2UsageAggregationAndPricing(t *testing.T) {
 		if badResp.StatusCode != http.StatusBadRequest {
 			t.Fatalf("expected 400 for %s, got %d", bad, badResp.StatusCode)
 		}
+	}
+}
+
+func TestAgentV2WebSearchAndCitations(t *testing.T) {
+	t.Parallel()
+	s := fixtureStore(t)
+
+	// Seed a local workspace news headline (alongside an invalid HTTP item) to test local news merging + SSRF filtering.
+	d, _, err := readAgents(t.Context(), s.db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	d.NewsSources = []NewsSource{{ID: "src_1", Name: "Solana Wire"}}
+	d.NewsFetches = []NewsFetch{{
+		ID:       "nf_1",
+		SourceID: "src_1",
+		Items: []NewsItem{
+			{ID: "ni_1", Title: "Solana validator upgrade cuts fees", URL: "https://news.solana.example/fees"},
+			{ID: "ni_2", Title: "Insecure Solana mirror", URL: "http://mirror.solana.example/fees"},
+		},
+	}}
+	docBytes, err := json.Marshal(d)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.db.ExecContext(t.Context(), `UPDATE agent_workspace SET document=? WHERE id=1`, string(docBytes)); err != nil {
+		t.Fatal(err)
+	}
+
+	// Deterministic fixture mode (without external HTTP or marketDataTransport) returns citations cleanly.
+	sFixture := fixtureStore(t)
+	sFixture.providerFixture = true
+	resFix, err := toolWebSearch(t.Context(), sFixture, "operator", json.RawMessage(`{"query":"solana transaction fees","limit":2}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixMap := resFix.(map[string]any)
+	if fixMap["untrusted"] != true || fixMap["count"] != 2 {
+		t.Fatalf("unexpected fixture search payload: %+v", fixMap)
+	}
+
+	// Mocked HTTP search transport verifies DuckDuckGo + Wikipedia parsing + strict SSRF URL filtering.
+	s.marketDataTransport = aiTestTransport(func(r *http.Request) (*http.Response, error) {
+		switch r.URL.Host {
+		case "api.duckduckgo.com":
+			body := `{
+				"Heading": "Solana Documentation",
+				"AbstractText": "Solana charges deterministic base transaction fees.",
+				"AbstractURL": "https://docs.solana.com/fees",
+				"RelatedTopics": [
+					{"FirstURL": "http://insecure.example.com/bad", "Text": "Should be dropped (http)"},
+					{"FirstURL": "https://127.0.0.1/private", "Text": "Should be dropped (ip literal)"},
+					{"FirstURL": "https://solana.com/developers", "Text": "Solana Developers - Guides and SDKs"}
+				]
+			}`
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     http.Header{"Content-Type": []string{"application/json"}},
+				Body:       io.NopCloser(strings.NewReader(body)),
+			}, nil
+		case "en.wikipedia.org":
+			body := `{
+				"query": {
+					"search": [
+						{"title": "Solana (blockchain platform)", "snippet": "Solana is a <span class=\"searchmatch\">blockchain</span> platform with low fees."}
+					]
+				}
+			}`
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     http.Header{"Content-Type": []string{"application/json"}},
+				Body:       io.NopCloser(strings.NewReader(body)),
+			}, nil
+		default:
+			return &http.Response{
+				StatusCode: http.StatusNotFound,
+				Header:     http.Header{"Content-Type": []string{"text/plain"}},
+				Body:       io.NopCloser(strings.NewReader("not found")),
+			}, nil
+		}
+	})
+
+	resLive, err := toolWebSearch(t.Context(), s, "operator", json.RawMessage(`{"query":"Solana fees","limit":5,"topic":"crypto"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	liveMap := resLive.(map[string]any)
+	rows := liveMap["results"].([]agentWebSearchResult)
+	if len(rows) != 4 {
+		t.Fatalf("expected 4 filtered HTTPS search results (1 local news + DDG abstract + DDG related + Wikipedia), got %+v", rows)
+	}
+	if rows[0].Source != "news" || rows[0].URL != "https://news.solana.example/fees" {
+		t.Fatalf("unexpected local news result: %+v", rows[0])
+	}
+	if rows[1].URL != "https://docs.solana.com/fees" || rows[1].Domain != "docs.solana.com" {
+		t.Fatalf("unexpected DDG abstract result: %+v", rows[1])
+	}
+	if rows[3].URL != "https://en.wikipedia.org/wiki/Solana_%28blockchain_platform%29" || strings.Contains(rows[3].Snippet, "<span") {
+		t.Fatalf("expected clean HTML-stripped Wikipedia result, got %+v", rows[3])
+	}
+	for _, r := range rows {
+		if !strings.HasPrefix(r.URL, "https://") {
+			t.Fatalf("non-HTTPS URL leaked into search results: %+v", r)
+		}
+	}
+
+	if _, err := toolWebSearch(t.Context(), s, "operator", json.RawMessage(`{"query":"bad","topic":"invalid_topic"}`)); err == nil {
+		t.Fatal("expected invalid topic to be rejected")
+	}
+	if _, err := toolWebSearch(t.Context(), s, "operator", json.RawMessage(`{"query":"   "}`)); err == nil {
+		t.Fatal("expected blank query to be rejected")
+	}
+}
+
+func TestAgentV2DelegateToAgentAndRecursionGuard(t *testing.T) {
+	t.Parallel()
+	s := fixtureStore(t)
+	conn := saveTestConnection(t, s)
+
+	var seenInstructions string
+	var seenToolNames []string
+	round := 0
+	s.agentV2TransportOverride = aiTestTransport(func(r *http.Request) (*http.Response, error) {
+		raw, _ := io.ReadAll(r.Body)
+		var payload map[string]any
+		if err := json.Unmarshal(raw, &payload); err != nil {
+			return nil, err
+		}
+		if round == 0 {
+			seenInstructions, _ = payload["instructions"].(string)
+			if tools, ok := payload["tools"].([]any); ok {
+				for _, item := range tools {
+					if m, ok := item.(map[string]any); ok {
+						if name, ok := m["name"].(string); ok {
+							seenToolNames = append(seenToolNames, name)
+						}
+					}
+				}
+			}
+			round++
+			return sseHTTPResponse(
+				`event: response.created`,
+				`data: {"type":"response.created","response":{"id":"del_r1"}}`,
+				``,
+				`event: response.output_item.added`,
+				`data: {"type":"response.output_item.added","item":{"type":"function_call","id":"fc_1","call_id":"call_del_ws","name":"workspace_status","arguments":"{}"}}`,
+				``,
+				`event: response.function_call_arguments.done`,
+				`data: {"type":"response.function_call_arguments.done","item_id":"fc_1","call_id":"call_del_ws","name":"workspace_status","arguments":"{}"}`,
+				``,
+				`event: response.completed`,
+				`data: {"type":"response.completed","response":{"id":"del_r1","status":"completed","usage":{"input_tokens":40,"output_tokens":10}}}`,
+			), nil
+		}
+		round++
+		return sseHTTPResponse(
+			`event: response.created`,
+			`data: {"type":"response.created","response":{"id":"del_r2"}}`,
+			``,
+			`event: response.output_text.delta`,
+			`data: {"type":"response.output_text.delta","delta":"Analyst view: volatility is moderate."}`,
+			``,
+			`event: response.completed`,
+			`data: {"type":"response.completed","response":{"id":"del_r2","status":"completed","usage":{"input_tokens":55,"output_tokens":14,"input_tokens_details":{"cached_tokens":5}}}}`,
+		), nil
+	})
+
+	// Update operator default connection? Not required since saveTestConnection returns unlocked default conn!
+	_ = conn
+	res, err := toolDelegateToAgent(t.Context(), s, "wen-operator", json.RawMessage(`{"agent":"trading-analyst","task":"Assess SOL volatility","context":"Watch wallet holds SOL."}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := res.(map[string]any)
+	if out["agentId"] != "trading-analyst" || out["summary"] != "Analyst view: volatility is moderate." {
+		t.Fatalf("unexpected delegation output: %+v", out)
+	}
+	if out["inputTokens"] != int64(95) || out["outputTokens"] != int64(24) || out["cachedTokens"] != int64(5) {
+		t.Fatalf("unexpected delegation token totals: %+v", out)
+	}
+	if !strings.Contains(seenInstructions, "Delegation mode:") {
+		t.Fatalf("expected delegation mode instruction, got %q", seenInstructions)
+	}
+	for _, forbidden := range []string{"delegate_to_agent", "save_memory", "draft_task", "draft_swap", "draft_strategy"} {
+		for _, got := range seenToolNames {
+			if got == forbidden {
+				t.Fatalf("delegated tool list must exclude %q, got %v", forbidden, seenToolNames)
+			}
+		}
+	}
+
+	// Self-delegation refused.
+	if _, err := toolDelegateToAgent(t.Context(), s, "trading-analyst", json.RawMessage(`{"agent":"trading-analyst","task":"Loop self"}`)); err == nil {
+		t.Fatal("expected self-delegation to be rejected")
+	}
+
+	// Nested delegation (depth >= 1) refused.
+	nestedCtx := context.WithValue(t.Context(), delegateDepthContextKey{}, 1)
+	if _, err := toolDelegateToAgent(nestedCtx, s, "wen-operator", json.RawMessage(`{"agent":"trading-analyst","task":"Nested call"}`)); err == nil {
+		t.Fatal("expected nested delegation to be rejected")
 	}
 }

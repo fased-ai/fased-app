@@ -505,3 +505,66 @@
   font-size: 13px;
   color: var(--wt-text);
 }
+.wt .v2-inline-link {
+  color: var(--wt-cyan, var(--lime-text));
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.wt .v2-inline-link:hover {
+  opacity: 0.88;
+}
+.wt .v2-citations {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-top: 6px;
+  color: var(--wt-muted);
+}
+.wt .v2-citation-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  padding: 3px 9px;
+  border-radius: 999px;
+  border: 1px solid var(--wt-border);
+  background: var(--wt-raised);
+  color: var(--wt-text);
+  font-size: 11px;
+  text-decoration: none;
+}
+.wt .v2-citation-chip:hover {
+  border-color: var(--wt-accent-border);
+}
+.wt .v2-citation-chip span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 200px;
+}
+.wt .v2-citation-chip small {
+  color: var(--wt-muted);
+  font-size: 10px;
+}
+.wt .v2-delegate-summary {
+  display: grid;
+  gap: 4px;
+  padding: 8px 10px;
+  margin-bottom: 6px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: var(--wt-surface);
+  font-size: 12px;
+}
+.wt .v2-composer .composer-actions {
+  gap: 6px;
+}
+.wt .v2-voice-btn {
+  color: var(--wt-muted);
+}
+.wt .v2-voice-btn.is-listening {
+  color: var(--wt-coral);
+  background: var(--wt-raised);
+  border: 1px solid var(--wt-accent-border);
+}

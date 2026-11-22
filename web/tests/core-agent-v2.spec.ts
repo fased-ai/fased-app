@@ -545,3 +545,105 @@ test("T3Code slash /side, manual /compact persistence across reload, and Setting
   ).toHaveAttribute("aria-pressed", "true");
   await expect(usagePanel).toContainText("fixture-v2");
 });
+
+test("T3Code web_search citations, multi-agent delegation, and voice input", async ({
+  page,
+}) => {
+  test.setTimeout(60000);
+  await stop();
+  await start(true, "127.0.0.1:0", "local", false);
+
+  await page.addInitScript(() => {
+    class MockSpeechRecognition {
+      lang = "en-US";
+      continuous = false;
+      interimResults = false;
+      onresult: ((ev: unknown) => void) | null = null;
+      onerror: ((ev: unknown) => void) | null = null;
+      onend: (() => void) | null = null;
+      start() {
+        setTimeout(() => {
+          this.onresult?.({
+            resultIndex: 0,
+            results: [
+              {
+                isFinal: true,
+                length: 1,
+                0: { transcript: "Please web search Solana fees" },
+              },
+            ],
+          });
+        }, 30);
+      }
+      stop() {
+        this.onend?.();
+      }
+      abort() {}
+    }
+    (window as unknown as { SpeechRecognition?: unknown }).SpeechRecognition =
+      MockSpeechRecognition;
+  });
+
+  await page.goto(url + "/#agents/chat");
+  await expect(
+    page.getByRole("heading", { name: "Chat", exact: true }),
+  ).toBeVisible();
+
+  // Voice input button starts recording, fills transcript into composer, and stops cleanly.
+  const voiceBtn = page.getByRole("button", {
+    name: "Voice input",
+    exact: true,
+  });
+  await expect(voiceBtn).toBeVisible({ timeout: 12000 });
+  await voiceBtn.click();
+
+  const stopVoiceBtn = page.getByRole("button", {
+    name: "Stop recording",
+    exact: true,
+  });
+  await expect(stopVoiceBtn).toHaveAttribute("aria-pressed", "true");
+
+  const composer = page.getByLabel("Message", { exact: true });
+  await expect(composer).toHaveValue("Please web search Solana fees", {
+    timeout: 5000,
+  });
+  await stopVoiceBtn.click();
+  await expect(voiceBtn).toHaveAttribute("aria-pressed", "false");
+
+  // Submitting dictated web_search prompt executes web_search, renders inline citation link & Sources strip.
+  await page.getByRole("button", { name: "Send", exact: true }).click();
+  const toolSummary = page.locator("details.v2-tool-call summary").first();
+  await expect(toolSummary).toContainText("Web search", { timeout: 12000 });
+  await expect(toolSummary).toContainText("Done", { timeout: 12000 });
+
+  const inlineLink = page.locator(".v2-markdown a.v2-inline-link").first();
+  await expect(inlineLink).toHaveAttribute(
+    "href",
+    "https://docs.solana.invalid/fees",
+  );
+  const sources = page.locator('.v2-citations[aria-label="Sources"]').first();
+  await expect(sources).toBeVisible({ timeout: 12000 });
+  await expect(sources).toContainText("docs.solana.invalid");
+
+  // Multi-agent delegation invokes delegate_to_agent -> Trading Analyst specialist synthesis.
+  await composer.fill("Delegate analysis to trading analyst");
+  await page.getByRole("button", { name: "Send", exact: true }).click();
+  const delegateRow = page
+    .locator("details.v2-tool-call")
+    .filter({ hasText: "Delegate" })
+    .first();
+  await expect(delegateRow.locator("summary")).toContainText(
+    "Trading Analyst",
+    {
+      timeout: 12000,
+    },
+  );
+  await delegateRow.locator("summary").click();
+  await expect(delegateRow.locator(".v2-delegate-summary")).toContainText(
+    "Delegated to Trading Analyst",
+  );
+  await expect(page.locator(".v2-markdown").last()).toContainText(
+    "Specialist analysis: SOL volatility remains moderate",
+    { timeout: 12000 },
+  );
+});

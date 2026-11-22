@@ -5289,12 +5289,26 @@ export const pageCopy = {
     "上下文已压缩",
     "컨텍스트를 압축했습니다",
   ],
+  Delegate: ["Делегировать", "Delegar", "委派", "위임"],
+  "Delegated to {agent}": [
+    "Передано агенту {agent}",
+    "Delegado a {agent}",
+    "已委派给 {agent}",
+    "{agent}에게 위임됨",
+  ],
   "Est. cost": ["Оценка расхода", "Costo est.", "预估费用", "예상 비용"],
   "Handoff from {model}": [
     "Передача с {model}",
     "Relevo desde {model}",
     "从 {model} 接续",
     "{model}에서 인계됨",
+  ],
+  Listening: ["Слушаю", "Escuchando", "正在聆听", "듣는 중"],
+  "Microphone blocked": [
+    "Микрофон заблокирован",
+    "Micrófono bloqueado",
+    "麦克风已被阻止",
+    "마이크가 차단되었습니다",
   ],
   "No usage yet": [
     "Пока нет использования",
@@ -5314,6 +5328,12 @@ export const pageCopy = {
     "旁白提问",
     "보조 질문",
   ],
+  "Stop recording": [
+    "Остановить запись",
+    "Detener grabación",
+    "停止录音",
+    "녹음 중지",
+  ],
   Tokens: ["Токены", "Tokens", "Tokens", "토큰"],
   Turns: ["Ходы", "Turnos", "轮次", "턴"],
   "Usage & Cost": [
@@ -5322,6 +5342,14 @@ export const pageCopy = {
     "用量与费用",
     "사용량 및 비용",
   ],
+  "Voice input": ["Голосовой ввод", "Entrada de voz", "语音输入", "음성 입력"],
+  "Voice unavailable": [
+    "Голосовой ввод недоступен",
+    "Entrada de voz no disponible",
+    "语音输入不可用",
+    "음성 입력을 사용할 수 없습니다",
+  ],
+  "Web search": ["Поиск в сети", "Búsqueda web", "网页搜索", "웹 검색"],
   "{count} rules recalled": [
     "Учтено правил: {count}",
     "{count} reglas recordadas",
