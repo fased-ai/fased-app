@@ -1,7 +1,8 @@
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
-import { copyKeys, languages, translate, type Language } from "./ui-language";
+import { languages, translate, type Language } from "./ui-language";
+import { copyKeys } from "./ui-language-catalog";
 import { WENPaperJourney } from "./pages/WENPaperJourney";
 import { WENSessionAutomatic } from "./pages/WENSessionAutomatic";
 import { WENSessionRehearsal } from "./pages/WENSessionRehearsal";

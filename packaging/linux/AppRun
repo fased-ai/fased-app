@@ -1,0 +1,5 @@
+#!/bin/sh
+set -eu
+APPDIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+export FASED_BUNDLE_DIR="${APPDIR}/usr/lib/fased-app"
+exec "${APPDIR}/usr/lib/fased-app/fased-desktop" "$@"

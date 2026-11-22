@@ -7,6 +7,8 @@ import {
   type ReactNode,
 } from "react";
 import {
+  ensureLanguageLoaded,
+  isLanguageLoaded,
   languages,
   resolveLanguage,
   translate,
@@ -52,6 +54,7 @@ function load() {
 function usePreferenceState() {
   const [preferences, setPreferences] = useState(load);
   const [storageError, setStorageError] = useState(false);
+  const [catalogTick, setCatalogTick] = useState(0);
   const language = resolveLanguage(preferences.language, navigator.languages);
   useLayoutEffect(() => {
     const media = matchMedia("(prefers-color-scheme: dark)");
@@ -71,6 +74,16 @@ function usePreferenceState() {
     document.documentElement.lang = language === "zh" ? "zh-Hans" : language;
   }, [language]);
   useEffect(() => {
+    if (isLanguageLoaded(language)) return;
+    let active = true;
+    void ensureLanguageLoaded(language).then(() => {
+      if (active) setCatalogTick((n) => n + 1);
+    });
+    return () => {
+      active = false;
+    };
+  }, [language]);
+  useEffect(() => {
     const onStorage = (e: StorageEvent) => {
       if (e.key === UI_PREFERENCES_KEY || e.key === null)
         setPreferences(load());
@@ -86,12 +99,21 @@ function usePreferenceState() {
     } catch {
       setStorageError(true);
     }
+    if (patch.language !== undefined) {
+      const nextLanguage = resolveLanguage(next.language, navigator.languages);
+      if (!isLanguageLoaded(nextLanguage)) {
+        void ensureLanguageLoaded(nextLanguage).then(() => {
+          setCatalogTick((n) => n + 1);
+        });
+      }
+    }
     setPreferences(next);
   }
   return {
     preferences,
     update,
     language,
+    catalogTick,
     storageError,
     t: (key: string, values?: Record<string, string | number>) =>
       translate(language, key, values),
