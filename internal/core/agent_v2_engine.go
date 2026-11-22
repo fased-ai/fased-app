@@ -11,8 +11,8 @@ import (
 )
 
 const (
-	agentV2MaxToolRounds           = 8
-	agentV2PromptMemoryMaxRunes    = 3200
+	agentV2MaxToolRounds            = 8
+	agentV2PromptMemoryMaxRunes     = 3200
 	agentV2PromptMemoryItemMaxRunes = 500
 )
 
