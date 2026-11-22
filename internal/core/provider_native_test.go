@@ -519,13 +519,13 @@ func TestNativeProvidersDiscoveryPaginationAndSupersession(t *testing.T) {
 		return fixtureAdmissionResponse(r, map[string]any{"data": []any{row}, "has_more": more, "last_id": row["id"]}), nil
 	})
 	got, err := s.refreshProviderModels(t.Context(), a.Ref, rt)
-	if err != nil || pages != 2 || got.Catalog.State != "ready" || modelChoice(got, "claude-sonnet-5-5").Selectable || modelChoice(got, "claude-sonnet-5-5").Availability != "superseded" {
-		t.Fatal("pagination/supersession", pages, err, got.Catalog)
+	if err != nil || pages != 2 || got.Catalog.State != "ready" || !modelChoice(got, "claude-sonnet-5-5").Selectable || !modelChoice(got, "claude-sonnet-6-0").Selectable || modelChoice(got, "claude-sonnet-6-0").Policy == nil {
+		t.Fatal("pagination/dynamic discovery", pages, err, got.Catalog)
 	}
 	failed := aiTestTransport(func(r *http.Request) (*http.Response, error) { return nil, errors.New("unavailable") })
 	got, err = s.refreshProviderModels(t.Context(), a.Ref, failed)
-	if err != nil || modelChoice(got, "claude-sonnet-5-5").Selectable || !s.providerModelSuperseded(a.Ref, "claude-sonnet-5-5") {
-		t.Fatal("failure forgot supersession", err)
+	if err != nil || got.Catalog.State != "failed" || modelChoice(got, "claude-sonnet-5-5").Selectable || modelChoice(got, "claude-sonnet-6-0").Selectable {
+		t.Fatal("failed refresh left models selectable", err, got.Catalog)
 	}
 	// Partial/repeating pages, missing lifecycle and a response of the wrong media type fail closed.
 	for _, bad := range []string{`{"data":[],"has_more":true,"last_id":"cursor"}`, `{"data":[{"id":"m","type":"model","created_at":"2026-10-07T00:00:00Z"}],"has_more":false}`} {
@@ -537,8 +537,8 @@ func TestNativeProvidersDiscoveryPaginationAndSupersession(t *testing.T) {
 	got, err = s.refreshProviderModels(t.Context(), b.Ref, aiTestTransport(func(r *http.Request) (*http.Response, error) {
 		return fixtureAdmissionResponse(r, map[string]any{"data": []any{map[string]any{"id": "grok-4.7", "created": 1744588800}, map[string]any{"id": "grok-5.0", "created": 1744588801}}}), nil
 	}))
-	if err != nil || modelChoice(got, "grok-4.7").Availability != "superseded" || modelChoice(got, "grok-5.0").Selectable {
-		t.Fatal("Grok latest-only", err)
+	if err != nil || !modelChoice(got, "grok-4.7").Selectable || !modelChoice(got, "grok-5.0").Selectable || modelChoice(got, "grok-5.0").Policy == nil {
+		t.Fatal("Grok dynamic discovery", err, got.Catalog)
 	}
 }
 func TestNativeProvidersAdmissionAndUnknownUsageHold(t *testing.T) {

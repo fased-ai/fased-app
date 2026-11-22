@@ -34,6 +34,12 @@ func installedEntry(ctx context.Context, profile, action string, in io.Reader, o
 		}
 		return false, nil
 	}
+	if profile == "server" {
+		if action != "install" {
+			return true, errors.New("use fased server uninstall or status to manage an installed server")
+		}
+		return false, nil
+	}
 	if profile == "local" {
 		if handled, err := installedCustodyEntry(ctx, profile, action, errOut); handled || err != nil {
 			return handled, err

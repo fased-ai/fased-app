@@ -161,8 +161,10 @@ func run(args []string, in io.Reader, out, errOut io.Writer) error {
 	prefix := f.String("prefix", "", "optional explicit installation directory")
 	data := f.String("data-dir", "", "optional explicit instance data directory")
 	start := f.Bool("start", true, "start the user service after owner-reviewed installation")
-	profile := f.String("profile", "", "preselected Local/Remote/Connect terminal setup")
+	profile := f.String("profile", "", "preselected Local/Remote/Connect/Server terminal setup")
 	listen := f.String("listen", "", "optional fixed loopback listener for installation")
+	serverTransport := f.String("server-transport", "", "server ingress transport: tailscale, cloudflare, domain, or ssh")
+	serverDomain := f.String("server-domain", "", "HTTPS domain for cloudflare, domain, or tailscale server")
 	receipt := f.String("receipt-file", "", "private bootstrap acquisition receipt")
 	walletInstance := f.String("wallet-instance", "", "exact existing Remote workspace for optional Wallets enrollment")
 	walletNetwork := f.String("wallet-network", "", "network for optional protected Wallets enrollment")
@@ -455,8 +457,11 @@ func run(args []string, in io.Reader, out, errOut io.Writer) error {
 	if *install && *upgrade || *remote && !*upgrade || *upgrade && !*start {
 		return errors.New("choose installation or an existing Local/Remote upgrade")
 	}
-	if *profile != "" && *profile != "remote" && *profile != "local" && *profile != "connect" || (*profile != "" || *listen != "") && *upgrade {
+	if *profile != "" && *profile != "remote" && *profile != "local" && *profile != "connect" && *profile != "server" || (*profile != "" || *listen != "") && *upgrade {
 		return errors.New("profile/listen require a fresh Remote installation")
+	}
+	if (*serverTransport != "" || *serverDomain != "") && (*profile != "server" || *upgrade) {
+		return errors.New("server transport/domain require --profile server")
 	}
 	if *receipt != "" && (!*install || *profile == "" || *upgrade) {
 		return errors.New("private entry receipt requires an installation profile")
@@ -549,7 +554,7 @@ func run(args []string, in io.Reader, out, errOut io.Writer) error {
 	}
 
 	if *install {
-		if err = p.Run(context.Background(), bootstrap.InstallOptions{WalletSigner: walletPayload(), WalletDesktop: walletDesktopPayload(), WalletInstance: *walletInstance, WalletNetwork: *walletNetwork, Prefix: *prefix, DataDirectory: *data, Start: *start, Profile: *profile, Listen: *listen}, in, out, errOut); err != nil {
+		if err = p.Run(context.Background(), bootstrap.InstallOptions{WalletSigner: walletPayload(), WalletDesktop: walletDesktopPayload(), WalletInstance: *walletInstance, WalletNetwork: *walletNetwork, Prefix: *prefix, DataDirectory: *data, Start: *start, Profile: *profile, Listen: *listen, ServerTransport: *serverTransport, ServerDomain: *serverDomain}, in, out, errOut); err != nil {
 			return err
 		}
 	}

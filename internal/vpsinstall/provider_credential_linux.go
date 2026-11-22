@@ -81,9 +81,31 @@ func prepareTaskCredential(ctx context.Context, o hostOps, m Manifest) error {
 		return errors.New("preserve foreign credential directory")
 	}
 	target := filepath.Join(directory, taskCredentialID(m))
-	if f, _, e := inspectTaskCredential(o, target); e == nil {
+	if f, readable, e := inspectTaskCredential(o, target); e == nil {
 		if size := taskCredentialSize(f); size < 32 || size > 16384 {
 			return errors.New("preserve foreign protected credential")
+		}
+		if f.Mode.Perm() == 0644 {
+			if !readable || len(f.Data) < 32 || len(f.Data) > 16384 {
+				return errors.New("preserve foreign protected credential")
+			}
+			stageMode := filepath.Join(directory, "."+filepath.Base(target)+"-"+m.ID+".mode")
+			if _, e = o.run(ctx, f.Data, "/usr/bin/install", "-m", "600", "-o", "root", "-g", "root", "--", "/dev/stdin", stageMode); e != nil {
+				return e
+			}
+			st, stReadable, e := inspectTaskCredential(o, stageMode)
+			if e != nil || st.Mode.Perm() != 0600 || taskCredentialSize(st) != int64(len(f.Data)) || (stReadable && !bytes.Equal(st.Data, f.Data)) {
+				return errors.New("root staging verification failed")
+			}
+			if _, e = o.run(ctx, nil, "/usr/bin/sync", "-f", stageMode); e != nil {
+				return e
+			}
+			if _, e = o.run(ctx, nil, "/usr/bin/mv", "--force", "--no-target-directory", "--", stageMode, target); e != nil {
+				return e
+			}
+			if _, e = o.run(ctx, nil, "/usr/bin/sync", "-f", directory); e != nil {
+				return e
+			}
 		}
 		return prepareTaskCredentialDropIn(ctx, o, m)
 	} else if !errors.Is(e, os.ErrNotExist) {

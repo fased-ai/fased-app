@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { renderEntry } from "./render-install-entry.mjs";
+import { renderEntry, renderWindowsEntry } from "./render-install-entry.mjs";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { readFileSync, writeFileSync, mkdtempSync, rmSync } from "node:fs";
@@ -8,6 +8,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 const template = readFileSync(
   new URL("../install.sh", import.meta.url),
+  "utf8",
+);
+const windowsTemplate = readFileSync(
+  new URL("../install.ps1", import.meta.url),
   "utf8",
 );
 function assertShellSyntax(script) {
@@ -894,4 +898,414 @@ test("public bundle reaches only its verified Local or Remote package handoff", 
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test("Server entry supports multi-distro hosts without polkit/nftables and validates flags", () => {
+  const armSeed = Buffer.from(
+    JSON.stringify({
+      ...JSON.parse(seed.toString()),
+      target: { os: "linux", arch: "arm64" },
+    }),
+  );
+  const rendered = renderEntry(template, {
+    version: "1.0.0",
+    targets: [
+      config,
+      { ...config, seed: armSeed, installer: Buffer.from("arm verifier") },
+    ],
+  });
+  assertShellSyntax(rendered);
+
+  // Package selection for --server skips polkitd/polkit/nftables while preserving Local.
+  const ownerStart = template.indexOf(
+    "  missing=()\n  packages=(ca-certificates curl)",
+  );
+  const end = template.indexOf("  for package in", ownerStart);
+  const selection = template.slice(ownerStart, end);
+  const pkgCheck = spawnSync("bash", [
+    "-c",
+    `
+    set -eu
+    profile=server package_family=apt action=install
+    ${selection}
+    printf '%s\\n' "\${packages[@]}"
+  `,
+  ]);
+  assert.equal(pkgCheck.status, 0, pkgCheck.stderr.toString());
+  const pkgs = pkgCheck.stdout.toString().trim().split("\n");
+  assert.deepEqual(pkgs, ["ca-certificates", "curl"]);
+
+  // Multi-distro server acceptance (Debian, Rocky, Fedora, Ubuntu; both amd64 & arm64).
+  const dir = mkdtempSync(join(tmpdir(), "fased-server-entry-"));
+  try {
+    const osRelease = join(dir, "os-release");
+    for (const tool of ["apt-get", "dnf", "rpm"]) {
+      writeFileSync(join(dir, tool), "#!/bin/sh\nexit 0\n", { mode: 0o700 });
+    }
+    writeFileSync(
+      join(dir, "dpkg-query"),
+      "#!/bin/sh\nprintf 'install ok installed'\n",
+      { mode: 0o700 },
+    );
+    writeFileSync(
+      join(dir, "curl"),
+      "#!/usr/bin/env bash\necho 'curl stubbed after headless preflight' >&2\nexit 22\n",
+      { mode: 0o700 },
+    );
+    const detached = `import os,subprocess,sys
+r=subprocess.run(['bash','-c',sys.argv[1],'entry',*sys.argv[2:]],stdout=subprocess.PIPE,stderr=subprocess.PIPE,preexec_fn=os.setsid,timeout=4)
+sys.stdout.buffer.write(r.stdout);sys.stderr.buffer.write(r.stderr);sys.exit(r.returncode)
+`;
+    for (const [release, cpu] of [
+      ["ID=debian\nVERSION_ID=12\n", "aarch64"],
+      ['ID=rocky\nID_LIKE="rhel fedora"\nVERSION_ID=9.5\n', "aarch64"],
+      ["ID=fedora\nVERSION_ID=45\n", "x86_64"],
+      ["ID=ubuntu\nVERSION_ID=24.04\n", "aarch64"],
+    ]) {
+      writeFileSync(osRelease, release);
+      let script = rendered
+        .replaceAll("/etc/os-release", osRelease)
+        .replace("case $(/usr/bin/uname -m)", `case ${cpu}`);
+      for (const tool of ["apt-get", "dpkg-query", "dnf", "rpm", "curl"]) {
+        script = script.replaceAll(`/usr/bin/${tool}`, join(dir, tool));
+      }
+      const result = spawnSync(
+        "python3",
+        [
+          "-c",
+          detached,
+          script,
+          "--server",
+          "--transport",
+          "cloudflare",
+          "--domain",
+          "fased.example.com",
+        ],
+        {
+          env: { ...process.env, HOME: dir },
+          timeout: 6000,
+        },
+      );
+      assert.equal(result.status, 22, result.stderr.toString());
+      assert.doesNotMatch(
+        result.stderr.toString(),
+        /Run this command in an interactive terminal/,
+      );
+      assert.match(result.stderr.toString(), /Downloading and verifying Fased/);
+    }
+    for (const interactiveArgs of [[], ["--connect"]]) {
+      let script = rendered.replaceAll("/etc/os-release", osRelease);
+      for (const tool of ["apt-get", "dpkg-query", "dnf", "rpm"]) {
+        script = script.replaceAll(`/usr/bin/${tool}`, join(dir, tool));
+      }
+      const ttyRequired = spawnSync(
+        "python3",
+        ["-c", detached, script, ...interactiveArgs],
+        {
+          timeout: 6000,
+        },
+      );
+      assert.equal(ttyRequired.status, 1, ttyRequired.stderr.toString());
+      assert.match(
+        ttyRequired.stderr.toString(),
+        /Run this command in an interactive terminal/,
+      );
+    }
+
+    // Bad flag combinations fail early with explicit diagnostics.
+    for (const [args, wantErr] of [
+      [["--server", "--transport", "bogus"], /Server transport must be/],
+      [
+        ["--transport", "cloudflare", "--domain", "fased.example.com"],
+        /--transport and --domain require --server/,
+      ],
+      [
+        ["--server", "--transport", "ssh", "--domain", "fased.example.com"],
+        /SSH tunnel transport does not take --domain/,
+      ],
+      [
+        ["--server", "--transport", "cloudflare", "--domain", "http://bad.com"],
+        /Invalid server HTTPS domain/,
+      ],
+      [["--server", "--purge"], /--purge requires --uninstall/],
+    ]) {
+      const r = spawnSync("bash", ["-c", rendered, "entry", ...args]);
+      assert.equal(r.status, 1);
+      assert.match(r.stderr.toString(), wantErr);
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("install.sh avoids Bash 4 case-conversion syntax for macOS Bash 3.2 compatibility", () => {
+  assert.doesNotMatch(template, /\$\{[^}]+(?:,,|\^\^)\}/);
+  const rendered = renderEntry(template, config);
+  assert.doesNotMatch(rendered, /\$\{[^}]+(?:,,|\^\^)\}/);
+});
+
+test("macOS Darwin entry pins archives, rejects --remote, and fails closed without targets", () => {
+  const macArmBytes = Buffer.from("fake macos arm64 zip archive");
+  const macAmdBytes = Buffer.from("fake macos amd64 zip archive");
+  const macArmSha = createHash("sha256").update(macArmBytes).digest("hex");
+  const macAmdSha = createHash("sha256").update(macAmdBytes).digest("hex");
+
+  const withMac = renderEntry(template, {
+    ...config,
+    darwinTargets: [
+      { arch: "arm64", archive: macArmBytes },
+      { arch: "amd64", archive: macAmdBytes },
+    ],
+  });
+  assertShellSyntax(withMac);
+  assert.match(
+    withMac,
+    /https:\/\/github\.com\/fased-ai\/fased-app\/releases\/download\/v1\.0\.0\/fased-app-darwin-arm64\.zip/,
+  );
+  assert.match(
+    withMac,
+    /https:\/\/github\.com\/fased-ai\/fased-app\/releases\/download\/v1\.0\.0\/fased-app-darwin-amd64\.zip/,
+  );
+  assert.ok(withMac.includes(macArmSha));
+  assert.ok(withMac.includes(macAmdSha));
+
+  assert.throws(() =>
+    renderEntry(template, {
+      ...config,
+      darwinTargets: [
+        { arch: "arm64", archive: macArmBytes, url: "http://bad.invalid" },
+      ],
+    }),
+  );
+  assert.throws(() =>
+    renderEntry(template, {
+      ...config,
+      darwinTargets: [
+        { arch: "arm64", archive: macArmBytes },
+        { arch: "arm64", archive: macArmBytes },
+      ],
+    }),
+  );
+  assert.throws(() => renderEntry(template, { ...config, darwinTargets: [] }));
+
+  // Mock uname -s -> Darwin and uname -m -> arm64 inside a sandboxed run.
+  const asDarwin = (raw) =>
+    raw
+      .replaceAll("$(/usr/bin/uname -s)", "Darwin")
+      .replaceAll("$(/usr/bin/uname -m)", "arm64")
+      .replaceAll("$(/usr/bin/id -u)", "501");
+
+  const withoutMac = asDarwin(renderEntry(template, config));
+  const darwinScript = asDarwin(withMac);
+
+  const remoteErr = spawnSync("bash", [
+    "-c",
+    darwinScript,
+    "entry",
+    "--remote",
+  ]);
+  assert.equal(remoteErr.status, 1);
+  assert.match(
+    remoteErr.stderr.toString(),
+    /Managed Remote requires a supported Linux host; use --server on macOS/,
+  );
+
+  const missingMacErr = spawnSync("bash", [
+    "-c",
+    withoutMac,
+    "entry",
+    "--local",
+  ]);
+  assert.equal(missingMacErr.status, 1);
+  assert.match(
+    missingMacErr.stderr.toString(),
+    /No authenticated macOS package for darwin-arm64/,
+  );
+
+  for (const [args, wantErr] of [
+    [["--server", "--transport", "bogus"], /Server transport must be/],
+    [
+      ["--server", "--transport", "ssh", "--domain", "mac.example.com"],
+      /SSH tunnel transport does not take --domain/,
+    ],
+    [
+      ["--local", "--uninstall", "--purge"],
+      /--purge is only supported with --server --uninstall/,
+    ],
+  ]) {
+    const bad = spawnSync("bash", ["-c", darwinScript, "entry", ...args]);
+    assert.equal(bad.status, 1);
+    assert.match(bad.stderr.toString(), wantErr);
+  }
+
+  const detachedLocal = spawnSync(
+    "python3",
+    [
+      "-c",
+      `import os,subprocess,sys
+r=subprocess.run(['bash','-c',sys.argv[1],'entry','--local'],stdout=subprocess.PIPE,stderr=subprocess.PIPE,preexec_fn=os.setsid,timeout=4)
+sys.stdout.buffer.write(r.stdout);sys.stderr.buffer.write(r.stderr);sys.exit(r.returncode)
+`,
+      darwinScript,
+    ],
+    { timeout: 6000 },
+  );
+  assert.equal(detachedLocal.status, 1);
+  assert.match(
+    detachedLocal.stderr.toString(),
+    /Run this command in an interactive terminal/,
+  );
+});
+
+test("renderWindowsEntry pins release URLs, digests, and validates targets", () => {
+  const winAmdBytes = Buffer.from("fake windows amd64 zip archive");
+  const winArmBytes = Buffer.from("fake windows arm64 zip archive");
+  const winAmdSha = createHash("sha256").update(winAmdBytes).digest("hex");
+  const winArmSha = createHash("sha256").update(winArmBytes).digest("hex");
+
+  const psScript = renderWindowsEntry(windowsTemplate, {
+    version: "1.0.0",
+    targets: [
+      { arch: "amd64", archive: winAmdBytes },
+      { arch: "arm64", archive: winArmBytes },
+    ],
+  });
+  assert.doesNotMatch(psScript, /@[A-Z0-9_]+@/);
+  assert.match(
+    psScript,
+    /https:\/\/github\.com\/fased-ai\/fased-app\/releases\/download\/v1\.0\.0\/fased-app-windows-amd64\.zip/,
+  );
+  assert.match(
+    psScript,
+    /https:\/\/github\.com\/fased-ai\/fased-app\/releases\/download\/v1\.0\.0\/fased-app-windows-arm64\.zip/,
+  );
+  assert.ok(psScript.includes(winAmdSha));
+  assert.ok(psScript.includes(winArmSha));
+  assert.match(psScript, /\$EntryVersion = '1\.0\.0'/);
+  assert.match(psScript, /\$DevelopmentOnly = '0'/);
+
+  // Fixture profile accepts only loopback HTTPS.
+  const psFixture = renderWindowsEntry(windowsTemplate, {
+    version: "1.0.0",
+    fixture: true,
+    targets: [
+      {
+        arch: "amd64",
+        archive: winAmdBytes,
+        url: "https://127.0.0.1:24443/fased-win.zip",
+      },
+    ],
+  });
+  assert.match(psFixture, /\$DevelopmentOnly = '1'/);
+
+  assert.throws(() =>
+    renderWindowsEntry(windowsTemplate, {
+      version: "1.0.0",
+      targets: [
+        {
+          arch: "amd64",
+          archive: winAmdBytes,
+          url: "http://evil.invalid/w.zip",
+        },
+      ],
+    }),
+  );
+  assert.throws(() =>
+    renderWindowsEntry(windowsTemplate, {
+      version: "1.0.0",
+      targets: [
+        { arch: "amd64", archive: winAmdBytes },
+        { arch: "amd64", archive: winAmdBytes },
+      ],
+    }),
+  );
+  assert.throws(() =>
+    renderWindowsEntry(windowsTemplate, {
+      version: "bad",
+      targets: [{ arch: "amd64", archive: winAmdBytes }],
+    }),
+  );
+});
+
+test("install.ps1 enforces fail-closed TLS, SHA-256 pre-extraction verification, and balanced syntax", () => {
+  const hashIdx = windowsTemplate.indexOf(
+    "Get-FileHash -LiteralPath $ZipPath -Algorithm SHA256",
+  );
+  const expandIdx = windowsTemplate.indexOf(
+    "Expand-Archive -LiteralPath $ZipPath",
+  );
+  assert.ok(
+    hashIdx > 0 && expandIdx > hashIdx,
+    "SHA-256 verification must precede Expand-Archive",
+  );
+
+  for (const required of [
+    "Set-StrictMode -Version Latest",
+    "SecurityProtocolType]::Tls12",
+    "^127\\.0\\.0\\.1:([0-9]{4,5})$",
+    "$ListenPort -lt 1024 -or $ListenPort -gt 65535",
+    "[switch]$Local",
+    "[switch]$Server",
+    "[switch]$Connect",
+    "[switch]$Uninstall",
+    "[switch]$Purge",
+    "$env:LOCALAPPDATA",
+    "fased.cmd",
+  ]) {
+    assert.ok(
+      windowsTemplate.includes(required),
+      `Missing required contract: ${required}`,
+    );
+  }
+  assert.doesNotMatch(
+    windowsTemplate,
+    /SkipCertificateCheck|ServerCertificateValidationCallback/,
+  );
+
+  // Scan install.ps1 for balanced braces, parens, and quotes (skipping # line comments & strings).
+  let mode = "code"; // 'code' | 'single' | 'double' | 'comment'
+  const stack = [];
+  for (let i = 0; i < windowsTemplate.length; i++) {
+    const ch = windowsTemplate[i];
+    const next = windowsTemplate[i + 1];
+    if (mode === "comment") {
+      if (ch === "\n") mode = "code";
+      continue;
+    }
+    if (mode === "single") {
+      if (ch === "'") {
+        if (next === "'") i++;
+        else mode = "code";
+      }
+      continue;
+    }
+    if (mode === "double") {
+      if (ch === "`" && next !== undefined) {
+        i++;
+      } else if (ch === '"') {
+        if (next === '"') i++;
+        else mode = "code";
+      }
+      continue;
+    }
+    if (ch === "#") {
+      mode = "comment";
+    } else if (ch === "'") {
+      mode = "single";
+    } else if (ch === '"') {
+      mode = "double";
+    } else if (ch === "{" || ch === "(") {
+      stack.push(ch);
+    } else if (ch === "}") {
+      assert.equal(stack.pop(), "{", `Unmatched } near index ${i}`);
+    } else if (ch === ")") {
+      assert.equal(stack.pop(), "(", `Unmatched ) near index ${i}`);
+    }
+  }
+  assert.equal(
+    mode,
+    "code",
+    `Unterminated string literal (${mode}) in install.ps1`,
+  );
+  assert.deepEqual(stack, [], "Unclosed delimiters in install.ps1");
 });

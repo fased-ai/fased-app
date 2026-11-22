@@ -164,7 +164,7 @@ export function WENPaperJourney() {
                           void agents
                             .change({ action: "wen-paper-explain", id: t.id })
                             .then((ok) => {
-                              if (ok) navigate("agents/chat");
+                              if (ok) navigate("agents/review");
                             })
                         }
                       >

@@ -281,19 +281,19 @@ func TestLocalProviderSupersededModelStaysRefused(t *testing.T) {
 	s := fixtureStore(t)
 	account := addLocalFixtureAccount(t, s)
 	rt := aiTestTransport(func(r *http.Request) (*http.Response, error) {
-		return fixtureAdmissionResponse(r, map[string]any{"object": "list", "data": []map[string]any{{"id": "gemma4:e2b", "object": "model", "owned_by": "local", "created": 1}, {"id": "gemma5:e2b", "object": "model", "owned_by": "local", "created": 1}}}), nil
+		return fixtureAdmissionResponse(r, map[string]any{"object": "list", "data": []map[string]any{{"id": "gemma4:e2b", "object": "model", "owned_by": "local", "created": 1}, {"id": "gemma5:e2b", "object": "model", "owned_by": "local", "created": 1}, {"id": "gemma-retired", "object": "model", "owned_by": "local", "created": 1, "shutdown_date": "2026-10-01"}}}), nil
 	})
 	v, err := s.refreshProviderModels(t.Context(), account.Ref, rt)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if modelChoice(v, "gemma4:e2b").Selectable || modelChoice(v, "gemma4:e2b").Availability != "superseded" || modelChoice(v, "gemma5:e2b").Selectable {
-		t.Fatal("older or unreviewed local model selected")
+	if !modelChoice(v, "gemma4:e2b").Selectable || !modelChoice(v, "gemma5:e2b").Selectable || modelChoice(v, "gemma-retired").Selectable || modelChoice(v, "gemma-retired").Availability != "retired" {
+		t.Fatal("dynamic local selection mismatch", v.Catalog.Models)
 	}
 	fail := aiTestTransport(func(*http.Request) (*http.Response, error) { return nil, fmt.Errorf("controlled failure") })
 	v, _ = s.refreshProviderModels(t.Context(), account.Ref, fail)
-	if modelChoice(v, "gemma4:e2b").Selectable {
-		t.Fatal("failed refresh revived superseded local model")
+	if modelChoice(v, "gemma4:e2b").Selectable || modelChoice(v, "gemma5:e2b").Selectable {
+		t.Fatal("failed refresh left local models selectable")
 	}
 }
 
@@ -301,7 +301,13 @@ func TestLocalProviderFreshAdmissionRejectsNewFamily(t *testing.T) {
 	t.Parallel()
 	s := fixtureStore(t)
 	account := addLocalFixtureAccount(t, s)
-	view := agentApply(t, s, AgentCommand{Action: "profile-create", Name: "Fresh local analyst", Provider: "local", AccountRef: &account.Ref, Model: "gemma4:e2b"})
+	rt := aiTestTransport(func(r *http.Request) (*http.Response, error) {
+		return fixtureAdmissionResponse(r, map[string]any{"object": "list", "data": []map[string]any{{"id": "gemma5:e2b", "object": "model", "owned_by": "local", "created": 1}}}), nil
+	})
+	if _, err := s.refreshProviderModels(t.Context(), account.Ref, rt); err != nil {
+		t.Fatal(err)
+	}
+	view := agentApply(t, s, AgentCommand{Action: "profile-create", Name: "Fresh local analyst", Provider: "local", AccountRef: &account.Ref, Model: "gemma5:e2b"})
 	profile := view.ProfileID
 	view = agentApply(t, s, AgentCommand{Action: "session-create", ProfileID: profile, Name: "Fresh local note"})
 	session := view.Sessions[len(view.Sessions)-1].ID
@@ -309,10 +315,11 @@ func TestLocalProviderFreshAdmissionRejectsNewFamily(t *testing.T) {
 	permission := *view.ChatReview
 	view = agentApply(t, s, AgentCommand{Action: "chat-allow", ProfileID: profile, ID: session, ChatPermission: &permission, ConsentDigest: permission.ID})
 	_ = chatSend(t, s, view, permission, "Summarize a synthetic note.")
+	// When /v1/models omits the bound model at execution time, admission must still fail closed and pause the account.
 	generated := false
 	transport := aiTestTransport(func(r *http.Request) (*http.Response, error) {
 		if r.Method == "GET" && r.URL.Path == "/v1/models" {
-			return fixtureAdmissionResponse(r, map[string]any{"object": "list", "data": []map[string]any{{"id": "gemma4:e2b", "object": "model", "owned_by": "local", "created": 1}, {"id": "gemma5:e2b", "object": "model", "owned_by": "local", "created": 1}}}), nil
+			return fixtureAdmissionResponse(r, map[string]any{"object": "list", "data": []map[string]any{{"id": "gemma4:e2b", "object": "model", "owned_by": "local", "created": 1}}}), nil
 		}
 		generated = true
 		return (fixtureAITransport{}).RoundTrip(r)
@@ -323,7 +330,7 @@ func TestLocalProviderFreshAdmissionRejectsNewFamily(t *testing.T) {
 	view, _ = s.Agents(t.Context(), profile, "")
 	result := view.AIRequests[len(view.AIRequests)-1]
 	if generated || result.State != "failed" || result.Admission == nil || result.Admission.GenerationAttempted {
-		t.Fatal("fresh newer local family reached generation", result.State, generated)
+		t.Fatal("missing model reached generation", result.State, generated)
 	}
 	paused, _ := s.AIConnection(account.Ref)
 	if !paused.PlanPaused {

@@ -1,4 +1,5 @@
 import { validOwnerHandoff } from "./owner-handoff";
+import { parseSSEChunkBuffer, type SSEFrame } from "./agents-v2";
 import {
   createContext,
   useCallback,
@@ -14,6 +15,7 @@ export type InstanceConnection = {
   instanceId: string;
   location: "local" | "remote";
   transport: "loopback" | "private-https";
+  remoteTransport?: string;
   ownerUid?: number;
   ownerKind?: "custody";
 };
@@ -22,9 +24,16 @@ type Health = {
   apiVersion: string;
   instanceId: string;
   version: string;
+  capabilities?: {
+    aiConnections?: boolean;
+    walletSigner?: boolean;
+    financialExecution?: boolean;
+    updater?: boolean;
+  };
   connection: {
     location: "local" | "remote";
     transport: "loopback" | "private-https";
+    remoteTransport?: string;
     ownerUid?: number;
     ownerKind?: "custody";
   };
@@ -47,11 +56,24 @@ function useCoreState() {
   const [pending, setPending] = useState({ generation: 0, count: 0 });
   const [instanceId, setInstanceId] = useState("");
   const [version, setVersion] = useState("");
+  const [capabilities, setCapabilities] = useState<
+    Health["capabilities"] | null
+  >(null);
   const [connection, setConnection] = useState<InstanceConnection | null>(null);
   const [remoteAccess, setRemoteAccess] = useState(false);
   const [remoteEnrolled, setRemoteEnrolled] = useState(false);
   const [remoteSignedOut, setRemoteSignedOut] = useState(false);
+  const [pairingAvailable, setPairingAvailable] = useState(false);
+  const [remoteTransport, setRemoteTransport] = useState("");
   const [localAccess, setLocalAccess] = useState(false);
+  const [localAutoEnter, setLocalAutoEnter] = useState(false);
+  const [localSignedOut, setLocalSignedOut] = useState(() => {
+    try {
+      return sessionStorage.getItem("fased.local.signed-out") === "1";
+    } catch {
+      return false;
+    }
+  });
   const [passwordAvailable, setPasswordAvailable] = useState(false);
   const connectedID = useRef(
     new URL(location.href).searchParams.get("instance") ?? "",
@@ -83,6 +105,7 @@ function useCoreState() {
     setSetup(null);
     setInstanceId("");
     setVersion("");
+    setCapabilities(null);
     setError(reason);
     setMode("locked");
     try {
@@ -97,9 +120,10 @@ function useCoreState() {
       method = "GET",
       body?: unknown,
       signal?: AbortSignal,
+      extraHeaders?: Record<string, string>,
     ): Promise<T> => {
       const epoch = authGeneration.current;
-      const headers: Record<string, string> = {};
+      const headers: Record<string, string> = { ...extraHeaders };
       if (token.current && route !== "health")
         headers.Authorization = `Bearer ${token.current}`;
       if (method !== "GET") {
@@ -120,6 +144,7 @@ function useCoreState() {
         route !== "auth/claim" &&
         route !== "auth/local" &&
         route !== "auth/remote" &&
+        route !== "auth/pair" &&
         route !== "installation/local-owner"
       ) {
         const message = "Your session ended. Sign in again.";
@@ -137,6 +162,75 @@ function useCoreState() {
           response.status,
         );
       return result as T;
+    },
+    [lock],
+  );
+  const stream = useCallback(
+    async (
+      route: string,
+      body: unknown,
+      options: {
+        signal?: AbortSignal;
+        onEvent: (frame: SSEFrame) => void;
+      },
+    ): Promise<void> => {
+      const epoch = authGeneration.current;
+      const headers: Record<string, string> = {
+        "Content-Type": "application/json",
+        Accept: "text/event-stream",
+      };
+      if (token.current) headers.Authorization = `Bearer ${token.current}`;
+      if (csrf.current) headers["X-CSRF-Token"] = csrf.current;
+      const response = await fetch(`/api/v1/${route}`, {
+        method: "POST",
+        signal: options.signal,
+        headers,
+        credentials: "same-origin",
+        cache: "no-store",
+        body: JSON.stringify(body),
+      });
+      if (response.status === 401) {
+        const message = "Your session ended. Sign in again.";
+        if (epoch === authGeneration.current) lock(message);
+        throw new CoreError(message, 401);
+      }
+      if (!response.ok) {
+        let message = "Stream request failed";
+        try {
+          if (
+            response.headers.get("content-type")?.includes("application/json")
+          ) {
+            const parsed = await response.json();
+            if (typeof parsed?.error === "string") message = parsed.error;
+          }
+        } catch {
+          /* ignore parse errors on error bodies */
+        }
+        throw new CoreError(message, response.status);
+      }
+      if (!response.body) {
+        throw new CoreError("Streaming body unavailable", response.status);
+      }
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder("utf-8");
+      let pendingBuffer = "";
+      try {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          pendingBuffer += decoder.decode(value, { stream: true });
+          const { frames, rest } = parseSSEChunkBuffer(pendingBuffer);
+          pendingBuffer = rest;
+          for (const frame of frames) options.onEvent(frame);
+        }
+        pendingBuffer += decoder.decode();
+        if (pendingBuffer.trim()) {
+          const { frames } = parseSSEChunkBuffer(`${pendingBuffer}\n\n`);
+          for (const frame of frames) options.onEvent(frame);
+        }
+      } finally {
+        reader.releaseLock();
+      }
     },
     [lock],
   );
@@ -167,6 +261,9 @@ function useCoreState() {
         instanceId: health.instanceId,
         location: health.connection.location,
         transport: health.connection.transport,
+        ...(health.connection.remoteTransport === undefined
+          ? {}
+          : { remoteTransport: health.connection.remoteTransport }),
         ...(health.connection.ownerUid === undefined
           ? {}
           : { ownerUid: health.connection.ownerUid }),
@@ -179,17 +276,25 @@ function useCoreState() {
         authenticated: boolean;
         csrfToken?: string;
         localAccess?: boolean;
+        localAutoEnter?: boolean;
         remoteAccess?: boolean;
         remoteEnrolled?: boolean;
         remoteSignedOut?: boolean;
+        pairingAvailable?: boolean;
+        remoteTransport?: string;
         legacyAuthenticated?: boolean;
         passwordAvailable?: boolean;
       }>("auth/state");
       if (epoch !== authGeneration.current) return;
       setLocalAccess(auth.localAccess === true);
+      setLocalAutoEnter(auth.localAutoEnter === true);
       setRemoteAccess(auth.remoteAccess === true);
       setRemoteEnrolled(auth.remoteEnrolled === true);
       setRemoteSignedOut(auth.remoteSignedOut === true);
+      setPairingAvailable(auth.pairingAvailable === true);
+      setRemoteTransport(
+        auth.remoteTransport ?? health.connection.remoteTransport ?? "",
+      );
       if (auth.legacyAuthenticated) csrf.current = auth.csrfToken ?? "";
       setPasswordAvailable(auth.passwordAvailable === true);
       if (
@@ -227,6 +332,7 @@ function useCoreState() {
       setSetup(current);
       setInstanceId(health.instanceId);
       setVersion(health.version);
+      setCapabilities(health.capabilities ?? null);
       setMode("ready");
     } catch (e) {
       if (epoch === authGeneration.current) throw e;
@@ -253,6 +359,7 @@ function useCoreState() {
       if (fixturePreview && e instanceof CoreError && e.status === 0)
         setMode("prototype");
       else {
+        setLocalAutoEnter(false);
         setMode("error");
         setError(
           "The Fased instance is unavailable. Restart it or retry the connection.",
@@ -289,6 +396,7 @@ function useCoreState() {
         connection.transport !== "loopback"
       )
         await inspect();
+      const browserLocal = local && code === undefined && !nativeLocal;
       const session = await request<{
         csrfToken: string;
         sessionToken?: string;
@@ -310,16 +418,25 @@ function useCoreState() {
             : { code }
           : nativeLocal
             ? {}
-            : local
-              ? { action: "exchange", code }
-              : code === undefined
-                ? { password }
-                : { password, code },
+            : browserLocal
+              ? { action: "browser" }
+              : local
+                ? { action: "exchange", code }
+                : code === undefined
+                  ? { password }
+                  : { password, code },
+        undefined,
+        browserLocal ? { "X-Fased-Local": "1" } : undefined,
       );
       if (epoch !== authGeneration.current) return;
       if (remote) {
         try {
           sessionStorage.removeItem("fased.remote.signed-out");
+        } catch {}
+      }
+      if (local) {
+        try {
+          sessionStorage.removeItem("fased.local.signed-out");
         } catch {}
       }
       csrf.current = session.csrfToken;
@@ -337,9 +454,53 @@ function useCoreState() {
       }
       await refresh();
       if (epoch === authGeneration.current && remote) setRemoteSignedOut(false);
+      if (epoch === authGeneration.current && local) setLocalSignedOut(false);
     } catch (e) {
       if (epoch === authGeneration.current) {
         setError(e instanceof Error ? e.message : "Authentication failed");
+        throw e;
+      }
+    } finally {
+      changePending(epoch, -1);
+    }
+  }
+  async function pair(pairCode: string, label?: string) {
+    const epoch = ++authGeneration.current;
+    setError("");
+    changePending(epoch, 1);
+    try {
+      await inspect();
+      const session = await request<{
+        csrfToken: string;
+        sessionToken?: string;
+        sessionMode?: "bearer" | "cookie";
+      }>(
+        "auth/pair",
+        "POST",
+        label ? { code: pairCode.trim(), label } : { code: pairCode.trim() },
+        undefined,
+        { "X-Fased-Pair": "1" },
+      );
+      if (epoch !== authGeneration.current) return;
+      try {
+        sessionStorage.removeItem("fased.remote.signed-out");
+      } catch {}
+      csrf.current = session.csrfToken;
+      const cookieMode = session.sessionMode
+        ? session.sessionMode === "cookie"
+        : location.protocol === "https:";
+      token.current = cookieMode ? "" : (session.sessionToken ?? "");
+      try {
+        if (token.current) sessionStorage.setItem(sessionKey, token.current);
+        else sessionStorage.removeItem(sessionKey);
+      } catch {
+        /* current-tab memory still works */
+      }
+      await refresh();
+      if (epoch === authGeneration.current) setRemoteSignedOut(false);
+    } catch (e) {
+      if (epoch === authGeneration.current) {
+        setError(e instanceof Error ? e.message : "Pairing failed");
         throw e;
       }
     } finally {
@@ -390,10 +551,16 @@ function useCoreState() {
     try {
       await request("auth/logout", "POST", {});
       if (epoch === authGeneration.current) {
-        if (remoteAccess) {
+        if (remoteAccess || pairingAvailable) {
           setRemoteSignedOut(true);
           try {
             sessionStorage.setItem("fased.remote.signed-out", "1");
+          } catch {}
+        }
+        if (localAccess) {
+          setLocalSignedOut(true);
+          try {
+            sessionStorage.setItem("fased.local.signed-out", "1");
           } catch {}
         }
         lock();
@@ -409,17 +576,24 @@ function useCoreState() {
     remoteAccess,
     remoteEnrolled,
     remoteSignedOut,
+    pairingAvailable,
+    remoteTransport,
     localAccess,
+    localAutoEnter,
+    localSignedOut,
     passwordAvailable,
     mode,
     request,
+    stream,
     setup,
     error,
     saving: pending.generation === authGeneration.current && pending.count > 0,
     instanceId,
     version,
+    capabilities,
     connection,
     authenticate,
+    pair,
     updateSetup,
     logout,
     retry: async () => {
@@ -427,6 +601,7 @@ function useCoreState() {
       try {
         await refresh();
       } catch {
+        setLocalAutoEnter(false);
         setMode("error");
         setError("The Fased instance is unavailable. Retry the connection.");
       }

@@ -221,15 +221,16 @@ func admitSignIn(ctx context.Context, q *AgentAIRequest, rt http.RoundTripper, n
 		return refuse(&planProviderFailure{Body: "transport", Code: "model_discovery_unavailable"})
 	}
 	defer res.Body.Close()
-	raw, err := io.ReadAll(io.LimitReader(res.Body, 262145))
-	if err != nil || len(raw) > 262144 {
+	modelLimit := providerModelBodyLimit("openai")
+	raw, err := io.ReadAll(io.LimitReader(res.Body, modelLimit+1))
+	if err != nil || int64(len(raw)) > modelLimit {
 		return refuse(&planProviderFailure{Status: res.StatusCode, Body: "invalid", RequestID: safePlanIdentifier(res.Header.Get("X-Request-Id"), 96), Code: "model_response_unverified"})
 	}
 	if res.StatusCode != 200 {
 		return refuse(planFailure(res.StatusCode, res.Header.Get("Content-Type"), res.Header.Get("X-Request-Id"), raw, false))
 	}
 	kind, _, mediaErr := mime.ParseMediaType(res.Header.Get("Content-Type"))
-	if mediaErr != nil || kind != "application/json" || res.Header.Get("Content-Encoding") != "" || !uniqueAIJSON(raw, 32768) {
+	if mediaErr != nil || kind != "application/json" || res.Header.Get("Content-Encoding") != "" || !uniqueAIJSON(raw, providerJSONNodes("openai")) {
 		return refuse(localPlanFailure("model_response_unverified", "model"))
 	}
 	models, err := parseProviderSignInModels(raw, now().Unix())

@@ -40,9 +40,12 @@ type HTTPHandler struct {
 	hosts             map[string]bool
 	publicHost        string
 	remoteIngress     bool
+	remoteProxyTrust  bool
+	remoteTransport   string
 	instanceLocation  string
 	instanceOwnerUID  int
 	instanceOwnerKind string
+	requirePassword   bool
 	assets            fs.FS
 	authSlots         chan struct{}
 	aiSlots           chan struct{}
@@ -89,6 +92,9 @@ func NewHTTPHandler(store *Store, baseURL, publicOrigin string, assets fs.FS) (*
 	}
 	return h, nil
 }
+func (h *HTTPHandler) SetRequirePassword(v bool) {
+	h.requirePassword = v
+}
 func isLoopbackHost(host string) bool { ip := net.ParseIP(host); return ip != nil && ip.IsLoopback() }
 func (h *HTTPHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("X-Content-Type-Options", "nosniff")
@@ -100,6 +106,13 @@ func (h *HTTPHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			writeError(w, 403, "Private Tailscale access required")
 			return
 		}
+	}
+	if h.remoteProxyTrust && r.Host == h.publicHost && r.Context().Value(privateIPCKey{}) != true {
+		if r.TLS == nil && !strings.EqualFold(r.Header.Get("X-Forwarded-Proto"), "https") {
+			writeError(w, 403, "HTTPS proxy required")
+			return
+		}
+		w.Header().Set("Strict-Transport-Security", "max-age=31536000")
 	}
 	if !h.hosts[r.Host] {
 		writeError(w, http.StatusForbidden, "unexpected request host")
@@ -150,6 +163,15 @@ func (h *HTTPHandler) api(w http.ResponseWriter, r *http.Request) {
 	case "/api/v1/auth/remote":
 		h.remoteOwnerAPI(w, r)
 		return
+	case "/api/v1/auth/pair/issue":
+		h.pairIssueAPI(w, r)
+		return
+	case "/api/v1/auth/pair/manage":
+		h.pairManageAPI(w, r)
+		return
+	case "/api/v1/auth/pair":
+		h.pairExchangeAPI(w, r)
+		return
 	case "/api/v1/auth/remote-setup":
 		h.remotePackageSetupAPI(w, r)
 		return
@@ -170,7 +192,7 @@ func (h *HTTPHandler) api(w http.ResponseWriter, r *http.Request) {
 			location, transport = "remote", "private-https"
 		}
 		owner, _ := h.store.remoteOwner(r.Context())
-		health.Connection = &ConnectionInfo{RemoteReady: owner.UserID != 0, Location: location, Transport: transport, OwnerUID: h.instanceOwnerUID, OwnerKind: h.instanceOwnerKind}
+		health.Connection = &ConnectionInfo{RemoteReady: owner.UserID != 0, Location: location, Transport: transport, RemoteTransport: h.effectiveRemoteTransport(), OwnerUID: h.instanceOwnerUID, OwnerKind: h.instanceOwnerKind}
 		writeJSON(w, 200, health)
 		return
 	case "/api/v1/auth/state":
@@ -209,7 +231,21 @@ func (h *HTTPHandler) api(w http.ResponseWriter, r *http.Request) {
 				writeError(w, 500, "state unavailable")
 				return
 			}
-			result["passwordAvailable"] = claimed && !localPasswordDisabled(salt)
+			passwordAvailable := claimed && !passwordDisabled(salt)
+			result["passwordAvailable"] = passwordAvailable
+			result["localAutoEnter"] = !h.requirePassword && !passwordAvailable
+		}
+		if h.instanceLocation == "remote" || h.publicHost != "" || h.remoteIngress {
+			hasPW, pwErr := h.store.hasPassword(r.Context())
+			if pwErr != nil {
+				writeError(w, 500, "state unavailable")
+				return
+			}
+			result["pairingAvailable"] = true
+			result["passwordAvailable"] = hasPW
+			if transport := h.effectiveRemoteTransport(); transport != "" {
+				result["remoteTransport"] = transport
+			}
 		}
 		if valid {
 			result["csrfToken"] = csrfToken(token)
@@ -560,6 +596,9 @@ func (h *HTTPHandler) api(w http.ResponseWriter, r *http.Request) {
 		}
 		writeJSON(w, 200, record)
 		return
+	case "/api/v1/auth/pair/devices":
+		h.pairDevicesAPI(w, r, token)
+		return
 	case "/api/v1/auth/logout":
 		if r.Method != http.MethodPost {
 			writeError(w, 405, "method not allowed")
@@ -586,6 +625,10 @@ func (h *HTTPHandler) api(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 200, map[string]any{"available": false, "executionEnabled": false, "reason": "real wallets unavailable; public fixture references are managed through accounts"})
 		return
 	default:
+		if r.URL.Path == "/api/v1/agents/v2" || strings.HasPrefix(r.URL.Path, "/api/v1/agents/v2/") {
+			h.agentsV2API(w, r, token)
+			return
+		}
 		writeError(w, 404, "unknown API operation")
 	}
 }
@@ -595,6 +638,26 @@ func (h *HTTPHandler) ratePeerKey(r *http.Request) string {
 	}
 	if r.Context().Value(privateIPCKey{}) == true {
 		return "ipc"
+	}
+	if h.remoteProxyTrust && r.Host == h.publicHost {
+		if h.remoteTransport == "cloudflare" {
+			if cfIP := strings.TrimSpace(r.Header.Get("CF-Connecting-IP")); cfIP != "" {
+				if parsed := net.ParseIP(cfIP); parsed != nil {
+					return "proxy:" + parsed.String()
+				}
+			}
+		}
+		if xff := r.Header.Values("X-Forwarded-For"); len(xff) > 0 {
+			for i := len(xff) - 1; i >= 0; i-- {
+				parts := strings.Split(xff[i], ",")
+				for j := len(parts) - 1; j >= 0; j-- {
+					if parsed := net.ParseIP(strings.TrimSpace(parts[j])); parsed != nil {
+						return "proxy:" + parsed.String()
+					}
+				}
+			}
+		}
+		return "proxy:loopback"
 	}
 	host := r.RemoteAddr
 	if parsed, _, err := net.SplitHostPort(r.RemoteAddr); err == nil && parsed != "" {
@@ -763,7 +826,7 @@ func (h *HTTPHandler) mutation(w http.ResponseWriter, r *http.Request) bool {
 	// Freeze ordinary writes from durable dispatch through recovery. Sessions and
 	// protected maintenance remain reachable. The existing metadata fence remains
 	// the authority across processes; this closes dispatch-to-fence HTTP races.
-	if !strings.HasPrefix(r.URL.Path, "/api/v1/updates/") && !oneOf(r.URL.Path, "/api/v1/login", "/api/v1/logout", "/api/v1/auth/login", "/api/v1/auth/logout", "/api/v1/auth/local", "/api/v1/auth/remote", "/api/v1/auth/native-local") {
+	if !strings.HasPrefix(r.URL.Path, "/api/v1/updates/") && !oneOf(r.URL.Path, "/api/v1/login", "/api/v1/logout", "/api/v1/auth/login", "/api/v1/auth/logout", "/api/v1/auth/local", "/api/v1/auth/remote", "/api/v1/auth/pair", "/api/v1/auth/native-local") {
 		o, _, e := readApplicationUpdate(r.Context(), h.store.db)
 		if e != nil || oneOf(o.Phase, "applying", "recovery") {
 			writeError(w, 409, "Update in progress. Inspect recovery before changing this instance.")

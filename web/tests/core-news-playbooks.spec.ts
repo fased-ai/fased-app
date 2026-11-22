@@ -285,7 +285,7 @@ test("reviewed playbooks keep versions and fresh consent through one fixture dig
   await result
     .getByRole("button", { name: "Discuss digest", exact: true })
     .click();
-  await expect(page).toHaveURL(/#agents\/chat$/);
+  await expect(page).toHaveURL(/#agents\/review$/);
   v = await read();
   const message = v.messages.at(-1);
   expect(message.text).toContain(savedResult.runs[0].news.fetchId);
@@ -430,8 +430,9 @@ test("joined agent workspace preserves news chat reminder run memory and reviewe
     await expect(profile.locator("option:checked")).toHaveText(chosen!);
   };
   const open = async (tab: string) => {
+    await page.getByRole("button", { name: "More", exact: true }).click();
     await page
-      .getByRole("navigation", { name: "Page shortcuts", exact: true })
+      .getByRole("navigation", { name: "More pages", exact: true })
       .getByRole("link", { name: tab, exact: true })
       .click();
     await expect(
@@ -666,14 +667,17 @@ test("joined agent workspace preserves news chat reminder run memory and reviewe
     .click();
   await expect(page).toHaveURL(/#agents\/memory$/);
   expect((await read()).memories).toHaveLength(1);
+  const memorySearch = page.locator(".memory-search");
   await revealControl(
     page,
-    page.getByRole("searchbox", { name: "Search", exact: true }),
+    memorySearch.getByRole("searchbox", { name: "Search", exact: true }),
   );
-  await page
+  await memorySearch
     .getByRole("searchbox", { name: "Search", exact: true })
     .fill("HEADLINE PROVENANCE");
-  await page.getByRole("button", { name: "Search", exact: true }).click();
+  await memorySearch
+    .getByRole("button", { name: "Search", exact: true })
+    .click();
   await expect(
     page.getByRole("article", { name: `Memory ${note.id}`, exact: true }),
   ).toContainText(noteText);
@@ -715,7 +719,7 @@ test("joined agent workspace preserves news chat reminder run memory and reviewe
   await start();
   origins.add(new URL(url).origin);
   await login();
-  await page.goto(url + "/#agents/chat");
+  await page.goto(url + "/#agents/review");
   await revealControl(
     page,
     page.getByLabel("Owner password", { exact: true }),
@@ -1365,7 +1369,7 @@ test("WEN paper context hands off UI and CLI to frozen same-profile chat with op
       exact: true,
     })
     .click();
-  await expect(page).toHaveURL(/#agents\/chat$/);
+  await expect(page).toHaveURL(/#agents\/review$/);
   const snapshot = page
     .locator(".local-messages article")
     .filter({ hasText: "Frozen WEN paper context v1" });
@@ -1462,7 +1466,7 @@ test("WEN paper context hands off UI and CLI to frozen same-profile chat with op
   // exact two disposable core origins belong to this fixture, never arbitrary
   // loopback or external services.
   fixtureOrigins.add(new URL(url).origin);
-  await page.goto(url + "/#agents/chat");
+  await page.goto(url + "/#agents/review");
   await revealControl(
     page,
     page.getByLabel("Owner password", { exact: true }),
@@ -1543,7 +1547,7 @@ test("news chat shares saved headline UI and CLI capture, reviewed memory, expli
     if (!ownedFixtureOrigins.has(new URL(r.url()).origin))
       external.push(r.url());
   });
-  await page.goto(url + "/#agents/chat");
+  await page.goto(url + "/#agents/review");
   await revealControl(page, page.getByLabel("Agent", { exact: true }), "");
   await page
     .getByLabel("Agent", { exact: true })
@@ -1774,7 +1778,7 @@ test("news chat shares saved headline UI and CLI capture, reviewed memory, expli
   await stop();
   await start();
   await login();
-  await page.goto(url + "/#agents/chat");
+  await page.goto(url + "/#agents/review");
   await revealControl(
     page,
     page.getByLabel("Owner password", { exact: true }),
@@ -1969,7 +1973,7 @@ test("provider-free News watch reviews rules deduplicates across restart and joi
     .getByRole("article", { name: `Run ${v.runs[0].id}`, exact: true })
     .getByRole("button", { name: "Discuss", exact: true })
     .click();
-  await expect(page).toHaveURL(/#agents\/chat/);
+  await expect(page).toHaveURL(/#agents\/review/);
   const message = page
     .locator(".chat-message")
     .filter({ hasText: "Paper headlines" })

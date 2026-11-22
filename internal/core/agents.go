@@ -186,6 +186,7 @@ type AgentCommand struct {
 	StrategyVersion      int                  `json:"strategyVersion,omitempty"`
 	Analysis             *TaskAnalysisPolicy  `json:"analysis,omitempty"`
 	Watch                *NewsWatchRule       `json:"watch,omitempty"`
+	providerName         string               // Resolved only by the core, never accepted from JSON.
 	providerAuthMethod   string               // Resolved only by the core, never accepted from JSON.
 	AccountRef           *string              `json:"accountRef,omitempty"`
 	UseAgentDefaults     bool                 `json:"useAgentDefaults,omitempty"`
@@ -616,9 +617,11 @@ func (s *Store) changeAgents(ctx context.Context, c AgentCommand, fixture bool) 
 		if err != nil {
 			return AgentView{}, err
 		}
+		c.providerName = connection.Provider
 		c.providerAuthMethod = connection.AuthMethod
+		policy := dynamicModelPolicy(connection.Provider, c.Model, connection.AuthMethod)
 		if c.Model != "" && c.Model != fixtureAIModel {
-			if _, ok := currentProviderModel(c.Model); !ok {
+			if !validProviderModelID(c.Model) || policy == nil {
 				return AgentView{}, errors.New("select an available current model; older drafts remain unchanged")
 			}
 			selectable := false
@@ -631,7 +634,7 @@ func (s *Store) changeAgents(ctx context.Context, c AgentCommand, fixture bool) 
 				return AgentView{}, errors.New("refresh this account and select an available current model")
 			}
 		}
-		if connection.Ref == c.ConnectionRef && connection.CredentialMode != "test" && chatModelPolicy(c.Model) == nil {
+		if connection.Ref == c.ConnectionRef && connection.CredentialMode != "test" && policy == nil {
 			return AgentView{}, errors.New("select the admitted provider model")
 		}
 	}
@@ -761,31 +764,43 @@ func (s *Store) changeAgents(ctx context.Context, c AgentCommand, fixture bool) 
 		if !validAgentText(c.Name, 80, true) || !supportedAgentProvider(c.Provider) {
 			return AgentView{}, errors.New("name and supported provider preference required")
 		}
-		if c.Model != "" && c.Model != fixtureAIModel {
-			if _, ok := currentProviderModel(c.Model); !ok && c.Model != d.Profiles[pi].Model {
-				return AgentView{}, errors.New("select a current model")
-			}
-		}
 		accountRef := d.Profiles[pi].ConnectionRef
 		if c.AccountRef != nil {
 			accountRef = *c.AccountRef
 		}
+		var connection AIConnectionView
 		if accountRef != "" {
 			if !validConnectionRef(accountRef) {
 				return AgentView{}, errors.New("invalid agent connection")
 			}
-			connection, err := s.AIConnection(accountRef)
+			var err error
+			connection, err = s.AIConnection(accountRef)
 			if err != nil || connection.Ref != accountRef || connection.Provider != c.Provider {
 				return AgentView{}, errors.New("agent connection unavailable")
 			}
 		}
+		if c.Model != "" && c.Model != fixtureAIModel {
+			if model, ok := currentProviderModel(c.Model); ok {
+				if modelProvider(model) != c.Provider {
+					return AgentView{}, errors.New("provider/model mismatch")
+				}
+			} else if c.Model != d.Profiles[pi].Model {
+				if accountRef == "" || !validProviderModelID(c.Model) || dynamicModelPolicy(connection.Provider, c.Model, connection.AuthMethod) == nil {
+					return AgentView{}, errors.New("select a current model")
+				}
+				found := false
+				for _, m := range connection.Catalog.Models {
+					if m.ID == c.Model && m.Availability != "retired" && m.Availability != "currency-unsupported" && m.Availability != "unsupported" {
+						found = true
+					}
+				}
+				if !found {
+					return AgentView{}, errors.New("select a current model")
+				}
+			}
+		}
 		if (c.Provider == "anthropic" || c.Provider == "xai") && accountRef == "" {
 			return AgentView{}, errors.New("select a provider account")
-		}
-		if c.Model != "" && c.Model != fixtureAIModel {
-			if model, ok := currentProviderModel(c.Model); ok && modelProvider(model) != c.Provider {
-				return AgentView{}, errors.New("provider/model mismatch")
-			}
 		}
 		d.Profiles[pi] = AgentProfile{ConnectionRef: accountRef, ID: profile, Name: strings.TrimSpace(c.Name), Persona: c.Text, Provider: c.Provider, Model: c.Model, HistoryDays: d.Profiles[pi].HistoryDays}
 	case "session-create":
@@ -1047,6 +1062,7 @@ func (s *Store) changeAgents(ctx context.Context, c AgentCommand, fixture bool) 
 	if e = tx.Commit(); e != nil {
 		return AgentView{}, e
 	}
+	signalStoreChange(s)
 	v, e := agentView(d, revision+1, profile, "", now)
 	return s.chatView(v), e
 }

@@ -53,3 +53,24 @@ it("scrubs malformed, unbound and duplicate proofs without granting authority", 
     captureOwnerSetup("http://localhost/#agents/chat", () => {}),
   ).toBeNull();
 });
+it("captures a Remote pairing fragment once and scrubs it from history", () => {
+  const id = "i".repeat(43),
+    code = "p".repeat(43);
+  let cleaned = "";
+  expect(
+    captureOwnerSetup(
+      `https://fased.example.com/?instance=${id}#pair=${code}`,
+      (next) => {
+        cleaned = next;
+      },
+    ),
+  ).toEqual({ instanceId: id, code, mode: "pair" });
+  expect(cleaned).not.toContain(code);
+  expect(cleaned).not.toContain("pair=");
+  expect(
+    captureOwnerSetup(
+      `https://fased.example.com/?instance=${id}#pair=${code}&setup=${code}`,
+      () => {},
+    ),
+  ).toBeNull();
+});

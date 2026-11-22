@@ -11,13 +11,88 @@ const platforms = JSON.parse(
   ),
 );
 const shell = (value) => "'" + String(value).replaceAll("'", "'\\''") + "'";
+const psString = (value) => "'" + String(value).replaceAll("'", "''") + "'";
+const validVersion = (version) =>
+  /^[0-9]+\.[0-9]+\.[0-9]+(?:[-+][A-Za-z0-9.-]+)?$/.test(version ?? "");
+
+function darwinTargetValues(config) {
+  const { version, fixture = false, targets, ca } = config;
+  if (!Array.isArray(targets) || targets.length === 0) {
+    throw Error("macOS targets must be a non-empty array when provided");
+  }
+  const seen = new Set();
+  const resolved = targets.map((t) => {
+    const arch = t?.arch;
+    if (!["arm64", "amd64"].includes(arch) || seen.has(arch)) {
+      throw Error("Unique supported macOS targets (arm64/amd64) required");
+    }
+    seen.add(arch);
+    if (!t.archive?.length) {
+      throw Error("Exact macOS archive bytes required");
+    }
+    const expectedUrl = `https://github.com/fased-ai/fased-app/releases/download/v${version}/fased-app-darwin-${arch}.zip`;
+    if (fixture) {
+      if (
+        !/^https:\/\/127\.0\.0\.1:[0-9]+\//.test(t.url ?? "") ||
+        !(t.ca?.length || ca?.length)
+      ) {
+        throw Error("Wrong controlled macOS fixture profile");
+      }
+    } else if (t.url !== undefined || t.ca !== undefined) {
+      throw Error("Public macOS entry cannot override URL or CA");
+    }
+    return {
+      arch,
+      url: fixture ? t.url : expectedUrl,
+      sha256: sha(t.archive),
+    };
+  });
+  return resolved;
+}
+
+function windowsTargetValues(config) {
+  const { version, fixture = false } = config;
+  if (!validVersion(version)) {
+    throw Error("Valid release version required");
+  }
+  const rawTargets = config.targets ?? (config.archive ? [config] : []);
+  if (!Array.isArray(rawTargets) || rawTargets.length === 0) {
+    throw Error("Unique supported Windows targets (amd64/arm64) required");
+  }
+  const seen = new Set();
+  return rawTargets.map((t) => {
+    const arch = t?.arch;
+    if (!["amd64", "arm64"].includes(arch) || seen.has(arch)) {
+      throw Error("Unique supported Windows targets (amd64/arm64) required");
+    }
+    seen.add(arch);
+    if (!t.archive?.length) {
+      throw Error("Exact Windows archive bytes required");
+    }
+    const expectedUrl = `https://github.com/fased-ai/fased-app/releases/download/v${version}/fased-app-windows-${arch}.zip`;
+    if (fixture) {
+      if (!/^https:\/\/127\.0\.0\.1:[0-9]+\//.test(t.url ?? "")) {
+        throw Error("Wrong controlled Windows fixture URL");
+      }
+    } else if (
+      t.url !== undefined ||
+      config.url !== undefined ||
+      config.ca !== undefined ||
+      t.ca !== undefined
+    ) {
+      throw Error("Public Windows entry cannot override URL or CA");
+    }
+    return {
+      arch,
+      url: fixture ? t.url : expectedUrl,
+      sha256: sha(t.archive),
+    };
+  });
+}
+
 function targetValues(config) {
   const { version, installer, seed, fixture = false, ca } = config;
-  if (
-    !/^[0-9]+\.[0-9]+\.[0-9]+(?:[-+][A-Za-z0-9.-]+)?$/.test(version ?? "") ||
-    !installer?.length ||
-    !seed?.length
-  )
+  if (!validVersion(version) || !installer?.length || !seed?.length)
     throw Error("Version, exact verifier bytes and public trust seed required");
   const trust = JSON.parse(Buffer.from(seed).toString());
   if (
@@ -103,6 +178,25 @@ export function renderEntry(template, config) {
       )
       .join("\n") +
     '\n*) die "No authenticated installer package for $target." ;;\nesac';
+  values.DARWIN_TARGET_BINDINGS =
+    config.darwinTargets !== undefined
+      ? 'case "$target" in\n' +
+        darwinTargetValues({
+          version: values.ENTRY_VERSION,
+          fixture: Boolean(config.fixture),
+          ca: config.ca,
+          targets: config.darwinTargets,
+        })
+          .map(
+            (t) =>
+              `darwin-${t.arch})\n` +
+              `  darwin_archive_url=${shell(t.url)}\n` +
+              `  darwin_archive_sha256=${shell(t.sha256)}\n` +
+              ";;",
+          )
+          .join("\n") +
+        '\n*) die "No authenticated macOS package for $target." ;;\nesac'
+      : 'case "$target" in\n*) die "No authenticated macOS package for $target." ;;\nesac';
   for (const p of platforms) {
     if (!/^[a-z]+$/.test(p.id) || !/^[0-9]+(?:\.[0-9]+)?$/.test(p.version))
       throw Error("Invalid platform mapping");
@@ -148,6 +242,32 @@ export function renderEntry(template, config) {
   return result;
 }
 
+export function renderWindowsEntry(template, config) {
+  const targets = windowsTargetValues(config);
+  const values = {
+    ENTRY_VERSION: config.version,
+    DEVELOPMENT_ONLY: config.fixture ? "1" : "0",
+    WINDOWS_TARGET_BINDINGS:
+      "switch ($TargetArch) {\n" +
+      targets
+        .map(
+          (t) =>
+            `${psString(t.arch)} {\n` +
+            `  $ArchiveUrl = ${psString(t.url)}\n` +
+            `  $ArchiveSha256 = ${psString(t.sha256)}\n` +
+            "}",
+        )
+        .join("\n") +
+      '\ndefault { Fail "No authenticated Windows package for windows-$TargetArch." }\n}',
+  };
+  const result = template.replace(/@([A-Z0-9_]+)@/g, (_, key) => {
+    if (!(key in values)) throw Error("Unknown Windows installer stamp");
+    return values[key];
+  });
+  if (/@[A-Z0-9_]+@/.test(result)) throw Error("Unstamped Windows installer");
+  return result;
+}
+
 if (
   process.argv[1] &&
   import.meta.url === pathToFileURL(process.argv[1]).href
@@ -157,25 +277,68 @@ if (
       "Usage: node scripts/render-install-entry.mjs CONFIG_JSON OUTPUT",
     );
   const config = JSON.parse(await readFile(process.argv[2], "utf8"));
-  const loadTarget = async (target) => ({
-    ...target,
-    installer: await readFile(target.installer),
-    seed: await readFile(target.seed),
-    ...(target.ca ? { ca: await readFile(target.ca) } : {}),
-  });
-  const loaded = config.targets
-    ? {
-        ...config,
-        targets: await Promise.all(
-          config.targets.map((target) =>
-            loadTarget({ ...config, ...target, targets: undefined }),
+  if (process.argv[3].endsWith(".ps1")) {
+    const loadWinTarget = async (target) => ({
+      ...target,
+      archive: await readFile(target.archive),
+    });
+    const loaded = config.targets
+      ? {
+          ...config,
+          targets: await Promise.all(
+            config.targets.map((target) =>
+              loadWinTarget({ ...config, ...target, targets: undefined }),
+            ),
           ),
-        ),
-      }
-    : await loadTarget(config);
-  const result = renderEntry(
-    await readFile(new URL("../install.sh", import.meta.url), "utf8"),
-    loaded,
-  );
-  await writeFile(process.argv[3], result, { mode: 0o500, flag: "wx" });
+        }
+      : await loadWinTarget(config);
+    const result = renderWindowsEntry(
+      await readFile(new URL("../install.ps1", import.meta.url), "utf8"),
+      loaded,
+    );
+    await writeFile(process.argv[3], result, { mode: 0o600, flag: "wx" });
+  } else {
+    const loadTarget = async (target) => ({
+      ...target,
+      installer: await readFile(target.installer),
+      seed: await readFile(target.seed),
+      ...(target.ca ? { ca: await readFile(target.ca) } : {}),
+    });
+    const loadDarwinTarget = async (target) => ({
+      ...target,
+      archive: await readFile(target.archive),
+      ...(target.ca ? { ca: await readFile(target.ca) } : {}),
+    });
+    const loaded = config.targets
+      ? {
+          ...config,
+          targets: await Promise.all(
+            config.targets.map((target) =>
+              loadTarget({ ...config, ...target, targets: undefined }),
+            ),
+          ),
+          ...(config.darwinTargets !== undefined
+            ? {
+                darwinTargets: await Promise.all(
+                  config.darwinTargets.map(loadDarwinTarget),
+                ),
+              }
+            : {}),
+        }
+      : {
+          ...(await loadTarget(config)),
+          ...(config.darwinTargets !== undefined
+            ? {
+                darwinTargets: await Promise.all(
+                  config.darwinTargets.map(loadDarwinTarget),
+                ),
+              }
+            : {}),
+        };
+    const result = renderEntry(
+      await readFile(new URL("../install.sh", import.meta.url), "utf8"),
+      loaded,
+    );
+    await writeFile(process.argv[3], result, { mode: 0o500, flag: "wx" });
+  }
 }

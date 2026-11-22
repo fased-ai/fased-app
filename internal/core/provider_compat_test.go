@@ -256,8 +256,8 @@ func TestCompatibleUnknownUsageRetainsHoldAndNewerModelsDisableOldChoice(t *test
 	if err != nil {
 		t.Fatal(err)
 	}
-	if modelChoice(a, "gemini-3.8-flash").Selectable {
-		t.Fatal("superseded model remains selectable")
+	if !modelChoice(a, "gemini-3.8-flash").Selectable || !modelChoice(a, "gemini-3.9-flash").Selectable || modelChoice(a, "gemini-3.9-flash").Policy == nil {
+		t.Fatal("discovered Google models not selectable", a.Catalog)
 	}
 	current, _ := s.Agents(t.Context(), v.ProfileID, "")
 	held := current.AIRequests[len(current.AIRequests)-1]

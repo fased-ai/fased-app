@@ -46,3 +46,16 @@ func OwnerSetupURL(value, instanceID, proof string) (string, error) {
 	}
 	return address, nil
 }
+
+// OwnerPairURL constructs the one-time fragment-based browser pairing URL.
+// The `#pair=` fragment is processed client-side and never sent in HTTP GET logs.
+func OwnerPairURL(value, instanceID, code string) (string, error) {
+	origin, err := Origin(value)
+	if err != nil {
+		return "", err
+	}
+	if !identity.MatchString(instanceID) || !regexp.MustCompile(`^[A-Za-z0-9_-]{43}$`).MatchString(code) {
+		return "", errors.New("invalid pairing link parameters")
+	}
+	return origin + "/?instance=" + instanceID + "#pair=" + code, nil
+}

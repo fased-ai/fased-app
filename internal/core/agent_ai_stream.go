@@ -68,8 +68,8 @@ func partialAIAnswer(raw string) string {
 }
 func readAIStream(body io.Reader, model string, onDelta func(string), planModes ...bool) ([]byte, error) {
 	streamHash := sha256.New()
-	scanner := bufio.NewScanner(io.LimitReader(io.TeeReader(body, streamHash), 262145))
-	scanner.Buffer(make([]byte, 4096), 32768)
+	scanner := bufio.NewScanner(io.LimitReader(io.TeeReader(body, streamHash), 2*1024*1024+1))
+	scanner.Buffer(make([]byte, 4096), 262144)
 	var data, event, identity, output string
 	var completed []byte
 	textIndex := -1
@@ -304,7 +304,7 @@ func (b *guardedAIBody) Read(dst []byte) (int, error) {
 		n, e := b.body.Read(chunk)
 		b.total += n
 		b.pending = append(b.pending, chunk[:n]...)
-		if b.total > 262144 || bytes.Contains(b.pending, b.key) {
+		if b.total > 2*1024*1024 || bytes.Contains(b.pending, b.key) {
 			clear(b.pending)
 			return 0, errors.New("provider response refused")
 		}

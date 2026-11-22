@@ -153,11 +153,13 @@ func enrollmentPath(name string) (included bool, max int64, ok bool) {
 	switch name {
 	case "core.sqlite":
 		return true, MaxEnrollmentFileBytes, true
+	case "agents.sqlite":
+		return true, MaxEnrollmentFileBytes, true
 	case "ai-credentials.json":
 		return true, aiVaultMaxSerializedBytes, true
-	case "core.sqlite-wal", "core.sqlite-shm":
+	case "core.sqlite-wal", "core.sqlite-shm", "agents.sqlite-wal", "agents.sqlite-shm":
 		return false, MaxEnrollmentFileBytes, true
-	case "endpoint.json", "claim-code.json", "cli-session.json":
+	case "endpoint.json", "claim-code.json", "cli-session.json", "pairing.json":
 		return false, 64 << 10, true
 	case "instance.lock", "host-preparation.lock":
 		return false, 0, true
@@ -373,13 +375,25 @@ func exportEnrollmentImage(ctx context.Context, dir string, existingLock bool) (
 	if err != nil {
 		return out, nil, fmt.Errorf("enrollment source snapshot: %w", err)
 	}
+	var serializedAgents []byte
+	if agentsEntry, ok := before["agents.sqlite"]; ok && len(agentsEntry.data) > 0 {
+		serializedAgents, err = serializeDisposableSQLite(ctx, agentsEntry.data, before["agents.sqlite-wal"].data)
+		if err != nil {
+			return out, nil, fmt.Errorf("enrollment agents snapshot: %w", err)
+		}
+	}
 	out = EnrollmentImage{Version: 1, InstanceID: id, Schema: schema}
 	for path, entry := range before {
 		included, _, _ := enrollmentPath(path)
 		if included {
 			data := entry.data
-			if path == "core.sqlite" {
+			switch path {
+			case "core.sqlite":
 				data = serialized
+			case "agents.sqlite":
+				if serializedAgents != nil {
+					data = serializedAgents
+				}
 			}
 			out.Files = append(out.Files, EnrollmentFile{Path: path, Data: data})
 		}
@@ -513,7 +527,7 @@ func enrollmentOwner(ctx context.Context, c snapshotReader, schema int) error {
 	if c.QueryRowContext(ctx, "SELECT password_salt,password_hash FROM instance WHERE id=1").Scan(&salt, &hash) != nil {
 		return errEnrollmentImage
 	}
-	marker := localPasswordDisabled(salt) || bytes.Equal(salt, remoteOwnerSalt)
+	marker := passwordDisabled(salt)
 	if schema == LocalOwnerStateSchema {
 		if !localPasswordDisabled(salt) || !validConnectionRef(string(hash)) {
 			return errEnrollmentImage
@@ -803,4 +817,40 @@ func enrollmentStageFile(root int, item EnrollmentFile) error {
 		return errEnrollmentImage
 	}
 	return unix.Fsync(parent)
+}
+
+func serializeDisposableSQLite(ctx context.Context, dbBytes, walBytes []byte) ([]byte, error) {
+	tmp, err := os.MkdirTemp("", "fased-enroll-sqlite-*")
+	if err != nil {
+		return nil, err
+	}
+	defer os.RemoveAll(tmp)
+	if err := os.Chmod(tmp, 0700); err != nil {
+		return nil, err
+	}
+	dbPath := filepath.Join(tmp, "agents.sqlite")
+	if err := os.WriteFile(dbPath, dbBytes, 0600); err != nil {
+		return nil, err
+	}
+	if len(walBytes) > 0 {
+		if err := os.WriteFile(dbPath+"-wal", walBytes, 0600); err != nil {
+			return nil, err
+		}
+	}
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		return nil, err
+	}
+	defer db.Close()
+	var busy, total, checkpointed int
+	if err := db.QueryRowContext(ctx, "PRAGMA wal_checkpoint(TRUNCATE)").Scan(&busy, &total, &checkpointed); err != nil {
+		return nil, err
+	}
+	if busy != 0 {
+		return nil, errors.New("disposable sqlite wal checkpoint busy")
+	}
+	if err := db.Close(); err != nil {
+		return nil, err
+	}
+	return os.ReadFile(dbPath)
 }

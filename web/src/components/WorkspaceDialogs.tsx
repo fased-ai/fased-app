@@ -33,6 +33,7 @@ export function WorkspaceDialogs() {
     core,
     agents,
     dispatch,
+    route,
     setupOpen,
     setSetupOpen,
     providersOpen,
@@ -586,7 +587,7 @@ export function WorkspaceDialogs() {
                   setNewModel("");
                   setInstructions("");
                   setProfileOpen(false);
-                  navigate("agents/chat");
+                  if (route !== "agents/review") navigate("agents/chat");
                 }
                 return;
               }
@@ -633,7 +634,11 @@ export function WorkspaceDialogs() {
                         setNewModel(
                           chosen?.catalog?.models.find(
                             (item) => item.selectable && item.recommended,
-                          )?.id || "",
+                          )?.id ||
+                            chosen?.catalog?.models.find(
+                              (item) => item.selectable,
+                            )?.id ||
+                            "",
                         );
                       }}
                     >

@@ -190,11 +190,14 @@ func (h *HTTPHandler) ownerSession(r *http.Request, token string) bool {
 		return true
 	}
 	owner, err := h.store.remoteOwner(r.Context())
-	if err != nil || !remoteDeviceAllowed(owner, id) {
+	if err != nil {
 		return false
 	}
 	var node string
-	return h.store.db.QueryRowContext(r.Context(), "SELECT node_id FROM remote_sessions WHERE token_hash=?", tokenHash(token)).Scan(&node) == nil && node == id.NodeID
+	if remoteDeviceAllowed(owner, id) && h.store.db.QueryRowContext(r.Context(), "SELECT node_id FROM remote_sessions WHERE token_hash=?", tokenHash(token)).Scan(&node) == nil && node == id.NodeID {
+		return true
+	}
+	return (owner.UserID == 0 || owner.UserID == id.UserID) && h.store.matchPairedSessionNode(tokenHash(token), id.NodeID)
 }
 func (s *Store) markRemoteSignedOut(nodeID string) {
 	if nodeID == "" {
@@ -355,7 +358,7 @@ func (h *HTTPHandler) remoteProxy(resolve tailnet.Resolver) http.Handler {
 			return
 		}
 		owner, err := h.store.remoteOwner(r.Context())
-		if err != nil || r.URL.Path != "/api/v1/health" && owner.UserID != 0 && !remoteDeviceAllowed(owner, id) && !(id.UserID == owner.UserID && (r.URL.Path == "/api/v1/auth/remote" || r.URL.Path == "/api/v1/auth/state" || !strings.HasPrefix(r.URL.Path, "/api/"))) {
+		if err != nil || r.URL.Path != "/api/v1/health" && owner.UserID != 0 && !remoteDeviceAllowed(owner, id) && !(id.UserID == owner.UserID && (r.URL.Path == "/api/v1/auth/remote" || r.URL.Path == "/api/v1/auth/pair" || r.URL.Path == "/api/v1/auth/state" || !strings.HasPrefix(r.URL.Path, "/api/"))) {
 			writeError(w, 403, "This device is not approved.")
 			return
 		}

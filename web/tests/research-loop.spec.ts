@@ -26,6 +26,7 @@ test("reviewed v2 continuations share UI/CLI consent, transcript and restart", a
     child = spawn(binary, [
       "serve",
       "--ai-fixture",
+      "--require-password",
       "--listen",
       "127.0.0.1:0",
       "--data-dir",
@@ -158,7 +159,7 @@ test("reviewed v2 continuations share UI/CLI consent, transcript and restart", a
       text: "Frozen.",
     });
     const before = await read();
-    await page.goto(url + "/#agents/chat");
+    await page.goto(url + "/#agents/review");
     await page.getByRole("button", { name: "Sources", exact: true }).click();
     const panel = page.getByRole("region", {
       name: "Research inspection",
@@ -409,7 +410,7 @@ test("reviewed v2 continuations share UI/CLI consent, transcript and restart", a
       );
     }
     await start();
-    await page.goto(url + "/#agents/chat");
+    await page.goto(url + "/#agents/review");
     await openPasswordSignIn(page);
     await page.getByLabel("Owner password", { exact: true }).fill(password);
     await page.getByRole("button", { name: "Sign in", exact: true }).click();

@@ -102,3 +102,51 @@ func TestPredeploymentNeverDisclosesApprovalProofInHTML(t *testing.T) {
 		t.Fatal("approval proof exposed")
 	}
 }
+
+func TestSetupProbeRejectsDuplicateHeadersAndConflictAfterFirstApproval(t *testing.T) {
+	t.Parallel()
+	const origin = "https://node.owner.ts.net"
+	const proof = "setup-proof-token-123"
+	resolve := func(_ context.Context, ip string) (tailnet.Identity, error) {
+		return tailnet.Identity{UserID: 7, NodeID: "owner-node", Login: ip}, nil
+	}
+
+	// Duplicate X-Forwarded-Host / X-Forwarded-Proto / multi-hop XFF rejected before approval
+	for _, mutate := range []func(*http.Request){
+		func(r *http.Request) { r.Header.Add("X-Forwarded-Host", "evil.example") },
+		func(r *http.Request) { r.Header.Add("X-Forwarded-Proto", "http") },
+		func(r *http.Request) { r.Header.Set("X-Forwarded-For", "100.64.0.1, 100.64.0.2") },
+		func(r *http.Request) { r.Header.Add("X-Forwarded-For", "100.64.0.2") },
+	} {
+		ch := make(chan tailnet.Identity, 1)
+		h := setupProbe(origin, proof, func(*http.Request) bool { return true }, resolve, ch)
+		r := httptest.NewRequest("POST", "http://localhost/approve", strings.NewReader(`{"code":"`+proof+`"}`))
+		r.Header.Set("Origin", origin)
+		r.Header.Set("X-Forwarded-Host", "node.owner.ts.net")
+		r.Header.Set("X-Forwarded-Proto", "https")
+		r.Header.Set("X-Forwarded-For", "100.64.0.1")
+		mutate(r)
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, r)
+		if w.Code != 403 || len(ch) != 0 {
+			t.Fatalf("expected 403 without approval, got %d (ch=%d)", w.Code, len(ch))
+		}
+	}
+
+	// Second concurrent/duplicate POST must receive 409 Conflict instead of 204
+	ch := make(chan tailnet.Identity, 1)
+	h := setupProbe(origin, proof, func(*http.Request) bool { return true }, resolve, ch)
+	send := func() int {
+		r := httptest.NewRequest("POST", "http://localhost/approve", strings.NewReader(`{"code":"`+proof+`"}`))
+		r.Header.Set("Origin", origin)
+		r.Header.Set("X-Forwarded-Host", "node.owner.ts.net")
+		r.Header.Set("X-Forwarded-Proto", "https")
+		r.Header.Set("X-Forwarded-For", "100.64.0.1")
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, r)
+		return w.Code
+	}
+	if code1, code2 := send(), send(); code1 != 204 || code2 != 409 {
+		t.Fatalf("expected first POST 204 and duplicate POST 409, got %d, %d", code1, code2)
+	}
+}

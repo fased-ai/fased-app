@@ -51,16 +51,10 @@ func providerModelsPath(id string) string {
 	return providerBasePath(id) + "/models"
 }
 func providerModelBodyLimit(id string) int64 {
-	if id == "openrouter" {
-		return 2097152
-	}
-	return 262144
+	return 4 * 1024 * 1024
 }
 func providerJSONNodes(id string) int {
-	if id == "openrouter" {
-		return 262144
-	}
-	return 32768
+	return 524288
 }
 func compatibleRequestAllowed(id string, r *http.Request) bool {
 	if id == "qwen" && r.Method == http.MethodGet {
@@ -195,9 +189,11 @@ func parseCompatibleModels(provider string, raw []byte, object *string, rows *[]
 	var list struct {
 		Object string `json:"object"`
 		Data   []struct {
-			ID       string  `json:"id"`
-			Created  int64   `json:"created"`
-			Shutdown *string `json:"shutdown_date"`
+			ID          string  `json:"id"`
+			Name        string  `json:"name"`
+			DisplayName string  `json:"display_name"`
+			Created     int64   `json:"created"`
+			Shutdown    *string `json:"shutdown_date"`
 		} `json:"data"`
 	}
 	if json.Unmarshal(raw, &list) != nil || list.Data == nil || len(list.Data) > 2048 || list.Object != "" && list.Object != "list" {
@@ -222,7 +218,11 @@ func parseCompatibleModels(provider string, raw []byte, object *string, rows *[]
 		if provider == "moonshot-intl" {
 			id = "moonshot-intl/" + id
 		}
-		*rows = append(*rows, discoveredModel{ID: id, Object: "model", Created: m.Created, OwnedBy: provider, Shutdown: m.Shutdown})
+		display := sanitizeModelDisplayName(m.DisplayName)
+		if display == "" {
+			display = sanitizeModelDisplayName(m.Name)
+		}
+		*rows = append(*rows, discoveredModel{ID: id, Name: display, Object: "model", Created: m.Created, OwnedBy: provider, Shutdown: m.Shutdown})
 	}
 	return nil
 }
@@ -265,7 +265,7 @@ func admitCompatible(ctx context.Context, q *AgentAIRequest, rt http.RoundTrippe
 	found := false
 	seen := map[string]bool{}
 	for _, row := range rows {
-		if !validProviderModelID(row.ID) || seen[row.ID] || row.Created < 0 || row.Created > now().Unix() || newerProviderRecordForID(q.Model, row, rows) {
+		if !validProviderModelID(row.ID) || seen[row.ID] || row.Created < 0 || row.Created > now().Unix()+300 {
 			return refuse()
 		}
 		seen[row.ID] = true

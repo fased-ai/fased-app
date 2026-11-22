@@ -30,9 +30,6 @@ func (s *Store) providerRequestAllowed(q AgentAIRequest, fixture bool) bool {
 	if q.Model != fixtureAIModel && !currentModelRequest(q) {
 		return false
 	}
-	if q.Model != fixtureAIModel && s.providerModelSuperseded(q.ConnectionRef, q.Model) {
-		return false
-	}
 	if q.ConnectionRef != "" {
 		v, err := s.AIConnection(q.ConnectionRef)
 		if err != nil || v.Ref != q.ConnectionRef || v.PlanPaused {
@@ -112,7 +109,7 @@ func (s *Store) providerActionAllowed(d agentDocument, c AgentCommand, profile s
 				if err != nil || account.Ref != p.ConnectionRef {
 					return false
 				}
-				return s.providerRequestAllowed(AgentAIRequest{ConnectionRef: p.ConnectionRef, Model: p.Model, Policy: chatModelPolicyForMethod(p.Model, account.AuthMethod)}, false)
+				return s.providerRequestAllowed(AgentAIRequest{ConnectionRef: p.ConnectionRef, Model: p.Model, Policy: dynamicModelPolicy(account.Provider, p.Model, account.AuthMethod)}, false)
 			}
 		}
 	case "ai-start":
@@ -123,7 +120,11 @@ func (s *Store) providerActionAllowed(d agentDocument, c AgentCommand, profile s
 		}
 	case "task-reviewed-create":
 		if c.Analysis != nil && c.ConnectionRef != "" {
-			return s.providerRequestAllowed(AgentAIRequest{ConnectionRef: c.ConnectionRef, Model: c.Model, Policy: chatModelPolicyForMethod(c.Model, c.providerAuthMethod)}, false)
+			policy := chatModelPolicyForMethod(c.Model, c.providerAuthMethod)
+			if c.providerName != "" {
+				policy = dynamicModelPolicy(c.providerName, c.Model, c.providerAuthMethod)
+			}
+			return s.providerRequestAllowed(AgentAIRequest{ConnectionRef: c.ConnectionRef, Model: c.Model, Policy: policy}, false)
 		}
 	case "task-ai-authorize", "task-run", "task-resume":
 		for _, task := range d.Tasks {

@@ -50,7 +50,7 @@ func TestNativeWalletResponseFitsBoundedCoreProjection(t *testing.T) {
 	if err != nil || len(b) <= 32*1024 || int64(len(b)) > responseLimit("/api/v1/accounts/read") {
 		t.Fatal("valid bounded wallet output would be truncated", len(b), err)
 	}
-	if responseLimit("/api/v1/accounts/read") > 256*1024 || responseLimit("/api/v1/accounts") != 32*1024 {
+	if responseLimit("/api/v1/accounts/read") != core.WalletReadResponseLimit || responseLimit("/api/v1/accounts") != 32*1024 {
 		t.Fatal("response allowance expanded beyond the affected read route")
 	}
 }

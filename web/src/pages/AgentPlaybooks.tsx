@@ -520,7 +520,7 @@ export function AgentPlaybooks({ view: v }: { view: AgentView }) {
                         id: run.id,
                       })
                     )
-                      navigate("agents/chat");
+                      navigate("agents/review");
                   }}
                 >
                   {uiText("Discuss digest")}

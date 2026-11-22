@@ -92,16 +92,16 @@ func (s *Store) resolveAgentProvider(c *AgentCommand, profile AgentProfile) erro
 			return errors.New("agent model unavailable")
 		}
 	case "openai", "anthropic", "xai", "moonshot", "moonshot-intl", "kimi-code", "ollama-cloud", "google", "openrouter", "qwen", "opencode", "local":
-		policy := openAIModelPolicy(profile.Model)
-		if !currentModelRequest(AgentAIRequest{Model: profile.Model, Policy: &policy}) || profile.Model != policy.Model || s.now().Unix() < policy.ReviewedAt {
-			return errors.New("agent model unavailable")
-		}
 		if profile.Provider != "openai" && profile.ConnectionRef == "" {
 			return errors.New("select this provider account")
 		}
 		connection, err := s.AIConnection(profile.ConnectionRef)
-		if err != nil || connection.Ref == "" || connection.Locked || connection.Provider != profile.Provider || policyProvider(&policy) != profile.Provider {
+		if err != nil || connection.Ref == "" || connection.Locked || connection.Provider != profile.Provider {
 			return errors.New("unlock the selected connection first")
+		}
+		policy := dynamicModelPolicy(connection.Provider, profile.Model, connection.AuthMethod)
+		if policy == nil || s.now().Unix() < policy.ReviewedAt || policyProvider(policy) != profile.Provider {
+			return errors.New("agent model unavailable")
 		}
 		available := false
 		for _, m := range connection.Catalog.Models {

@@ -12,13 +12,20 @@ import (
 	"net/http"
 	"sort"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/fased-ai/fased-app/internal/onchain"
 )
 
-const token2022Program = "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"
-const walletActivityLimit = 20
+const (
+	token2022Program          = "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"
+	walletActivityLimit       = 20
+	walletRPCMaxResponseBytes = 4 * 1024 * 1024
+	maxWalletTokenAccounts    = 1024
+)
+
+var walletRPCRetryDelays = []time.Duration{250 * time.Millisecond, 500 * time.Millisecond}
 
 type WalletTokenBalance struct {
 	Program  string `json:"program"`
@@ -55,42 +62,96 @@ type WalletSnapshot struct {
 	LiveRPC       bool                 `json:"liveRPC"`
 }
 
+func retryWalletRPCDelay(retryAfter string, fallback time.Duration) time.Duration {
+	if secs, err := strconv.Atoi(strings.TrimSpace(retryAfter)); err == nil && secs > 0 {
+		d := time.Duration(secs) * time.Second
+		if d > 2*time.Second {
+			return 2 * time.Second
+		}
+		return d
+	}
+	return fallback
+}
+
+func waitContext(ctx context.Context, d time.Duration) error {
+	if d <= 0 {
+		return ctx.Err()
+	}
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
+}
+
 func walletRPCCaller(ctx context.Context, endpoint string, rt http.RoundTripper, valid func() error) func(string, any, any) error {
 	client := &http.Client{Transport: rt, CheckRedirect: func(*http.Request, []*http.Request) error { return errors.New("RPC redirects refused") }}
 	id := 0
 	return func(method string, params any, dest any) error {
-		if err := valid(); err != nil {
-			return err
+		maxAttempts := len(walletRPCRetryDelays) + 1
+		for attempt := 0; attempt < maxAttempts; attempt++ {
+			if err := valid(); err != nil {
+				return err
+			}
+			id++
+			body, _ := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": id, "method": method, "params": params})
+			req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
+			if err != nil {
+				return errors.New("RPC unavailable")
+			}
+			req.Host = req.URL.Host
+			req.Header.Set("Content-Type", "application/json")
+			response, err := client.Do(req)
+			if err != nil {
+				return errors.New("RPC unavailable")
+			}
+			data, readErr := io.ReadAll(io.LimitReader(response.Body, walletRPCMaxResponseBytes+1))
+			retryAfter := response.Header.Get("Retry-After")
+			statusCode := response.StatusCode
+			response.Body.Close()
+
+			if statusCode == http.StatusTooManyRequests && attempt < len(walletRPCRetryDelays) {
+				delay := retryWalletRPCDelay(retryAfter, walletRPCRetryDelays[attempt])
+				if err := waitContext(ctx, delay); err != nil {
+					return errors.New("RPC unavailable")
+				}
+				continue
+			}
+			if readErr != nil || len(data) > walletRPCMaxResponseBytes || statusCode != http.StatusOK {
+				return errors.New("RPC unavailable")
+			}
+			var envelope struct {
+				JSONRPC string          `json:"jsonrpc"`
+				ID      int             `json:"id"`
+				Result  json.RawMessage `json:"result"`
+				Error   json.RawMessage `json:"error"`
+			}
+			decoder := json.NewDecoder(bytes.NewReader(data))
+			decoder.DisallowUnknownFields()
+			if decoder.Decode(&envelope) != nil || decoder.Decode(new(any)) != io.EOF || envelope.JSONRPC != "2.0" || envelope.ID != id {
+				return errors.New("Invalid RPC response")
+			}
+			if len(envelope.Error) > 0 && string(envelope.Error) != "null" {
+				var rpcErr struct {
+					Code int `json:"code"`
+				}
+				if json.Unmarshal(envelope.Error, &rpcErr) == nil && rpcErr.Code == -32016 && attempt < len(walletRPCRetryDelays) {
+					if err := waitContext(ctx, walletRPCRetryDelays[attempt]); err != nil {
+						return errors.New("RPC unavailable")
+					}
+					continue
+				}
+				return errors.New("Invalid RPC response")
+			}
+			if len(envelope.Result) == 0 || string(envelope.Result) == "null" || json.Unmarshal(envelope.Result, dest) != nil {
+				return errors.New("Invalid RPC response")
+			}
+			return valid()
 		}
-		id++
-		body, _ := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": id, "method": method, "params": params})
-		req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
-		if err != nil {
-			return errors.New("RPC unavailable")
-		}
-		req.Host = req.URL.Host
-		req.Header.Set("Content-Type", "application/json")
-		response, err := client.Do(req)
-		if err != nil {
-			return errors.New("RPC unavailable")
-		}
-		defer response.Body.Close()
-		data, err := io.ReadAll(io.LimitReader(response.Body, 262145))
-		if err != nil || len(data) > 262144 || response.StatusCode != 200 {
-			return errors.New("RPC unavailable")
-		}
-		var envelope struct {
-			JSONRPC string          `json:"jsonrpc"`
-			ID      int             `json:"id"`
-			Result  json.RawMessage `json:"result"`
-			Error   json.RawMessage `json:"error"`
-		}
-		decoder := json.NewDecoder(bytes.NewReader(data))
-		decoder.DisallowUnknownFields()
-		if decoder.Decode(&envelope) != nil || decoder.Decode(new(any)) != io.EOF || envelope.JSONRPC != "2.0" || envelope.ID != id || (len(envelope.Error) > 0 && string(envelope.Error) != "null") || len(envelope.Result) == 0 || string(envelope.Result) == "null" || json.Unmarshal(envelope.Result, dest) != nil {
-			return errors.New("Invalid RPC response")
-		}
-		return valid()
+		return errors.New("RPC unavailable")
 	}
 }
 
@@ -152,7 +213,7 @@ func walletRPC(ctx context.Context, endpoint string, rt http.RoundTripper, valid
 		if err := call("getTokenAccountsByOwner", []any{address, map[string]any{"programId": program}, map[string]any{"commitment": "finalized", "encoding": "jsonParsed", "minContextSlot": *balance.Context.Slot}}, &result); err != nil {
 			return WalletSnapshot{}, err
 		}
-		if result.Context.Slot == nil || *result.Context.Slot < *balance.Context.Slot || result.Value == nil || len(result.Value) > 64 {
+		if result.Context.Slot == nil || *result.Context.Slot < *balance.Context.Slot || result.Value == nil || len(result.Value) > maxWalletTokenAccounts {
 			return WalletSnapshot{}, errors.New("Invalid token response")
 		}
 		for _, entry := range result.Value {

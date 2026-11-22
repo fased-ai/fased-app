@@ -46,10 +46,46 @@ jobs:
         if: runner.os == 'Windows'
         shell: bash
         run: GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -o .evidence/bin/windows.exe ./cmd/fased-app
+      - name: Windows installer AST, renderer, and Task XML checks
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $errors = $null; $tokens = $null
+          [void][System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path 'install.ps1'), [ref]$tokens, [ref]$errors)
+          if ($errors -and $errors.Count -gt 0) { $errors | ForEach-Object { Write-Error $_.ToString() }; exit 1 }
+          $tmp = Join-Path $env:TEMP ('fased-ps-ci-' + [Guid]::NewGuid().ToString('N'))
+          New-Item -ItemType Directory -Path $tmp | Out-Null
+          try {
+            $zip = Join-Path $tmp 'win.zip'
+            [System.IO.File]::WriteAllText($zip, 'ci-win-bytes')
+            $cfg = Join-Path $tmp 'cfg.json'
+            @{ version = '1.0.0'; targets = @(@{ arch = 'amd64'; archive = $zip }) } | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $cfg -Encoding UTF8
+            $outPs1 = Join-Path $tmp 'rendered.ps1'
+            node scripts/render-install-entry.mjs $cfg $outPs1
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            $rErrors = $null; $rTokens = $null
+            [void][System.Management.Automation.Language.Parser]::ParseFile($outPs1, [ref]$rTokens, [ref]$rErrors)
+            if ($rErrors -and $rErrors.Count -gt 0) { $rErrors | ForEach-Object { Write-Error $_.ToString() }; exit 1 }
+            $initJson = & .\.evidence\bin\fased-app.exe server init --service-manager windows --transport ssh --json
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            $plan = $initJson | ConvertFrom-Json
+            if ($plan.serviceManager -ne 'windows') { throw 'Unexpected windows serviceManager in server init' }
+          } finally {
+            Remove-Item -LiteralPath $tmp -Recurse -Force -ErrorAction SilentlyContinue
+          }
       - name: Headless macOS compilation
         if: runner.os == 'macOS'
         shell: bash
         run: GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 go build -o .evidence/bin/macos ./cmd/fased-app
+      - name: macOS Bash 3.2 installer and launchd plist lint
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          /bin/bash -n install.sh
+          tmp="$(mktemp -d "${TMPDIR:-/tmp}/fased-mac-ci.XXXXXX")"
+          trap 'rm -rf "$tmp"' EXIT
+          .evidence/bin/fased-app server init --service-manager launchd --transport ssh --output-dir "$tmp" >/dev/null
+          plutil -lint "$tmp/org.fased.server.plist"
       - name: Verify bounded disk-image resource handling
         run: node --test --test-isolation=none scripts/macos-dmg.test.mjs
       - run: npm run package:native

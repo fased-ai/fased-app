@@ -19,6 +19,7 @@ type InstallOptions struct {
 	Prefix, DataDirectory         string
 	Start                         bool
 	Profile, Listen               string
+	ServerTransport, ServerDomain string
 	upgrade                       *UpgradeOptions
 }
 

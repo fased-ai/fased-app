@@ -349,7 +349,7 @@ func TestAgentAIValidationAndKnownUsageFailures(t *testing.T) {
 				case "identity":
 					j["model"] = "another-model"
 				case "large":
-					b = []byte(strings.Repeat("x", 16385))
+					b = []byte(strings.Repeat("x", 262145))
 				case "redirect":
 					res.StatusCode = 302
 					res.Header.Set("Location", "https://untrusted.invalid/")

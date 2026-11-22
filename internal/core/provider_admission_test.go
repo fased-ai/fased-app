@@ -47,7 +47,7 @@ func TestProviderAdmissionRemainsClosedAndReportsCapabilities(t *testing.T) {
 		}
 		modes := []string{"test", "local"}
 		if admitted {
-			modes = []string{"openai", "anthropic", "xai", "moonshot", "moonshot-intl", "kimi-code", "ollama-cloud", "google", "openrouter", "qwen", "opencode", "local"}
+			modes = append([]string(nil), canonicalProviderOrder...)
 		}
 		if len(connection.CredentialModes) != len(modes) {
 			t.Fatal("credential editor disagrees with runtime admission")

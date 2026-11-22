@@ -1,7 +1,6 @@
 package core
 
 import (
-	"bytes"
 	"context"
 	"crypto/hmac"
 	"crypto/rand"
@@ -41,6 +40,7 @@ var (
 func passwordHash(password string, salt []byte) []byte {
 	return argon2.IDKey([]byte(password), salt, kdfTime, kdfMemory, kdfThreads, 32)
 }
+
 func validPassword(password string) bool {
 	return utf8.RuneCountInString(password) >= 12 && len(password) <= 1024
 }
@@ -101,10 +101,10 @@ func (s *Store) Claim(ctx context.Context, code, password string) (string, error
 		return "", errors.New("use a password of at least 12 characters and at most 1024 bytes")
 	}
 	s.authMu.Lock()
-	defer s.authMu.Unlock()
 	var hash string
 	var expires int64
 	err := s.db.QueryRowContext(ctx, "SELECT COALESCE(claim_hash,''),COALESCE(claim_expires,0) FROM instance WHERE id=1 AND password_hash IS NULL").Scan(&hash, &expires)
+	s.authMu.Unlock()
 	if err != nil || expires <= s.now().Unix() || subtle.ConstantTimeCompare([]byte(hash), []byte(tokenHash(code))) != 1 {
 		return "", ErrUnauthorized
 	}
@@ -113,6 +113,9 @@ func (s *Store) Claim(ctx context.Context, code, password string) (string, error
 		return "", err
 	}
 	derived := passwordHash(password, salt)
+	defer clear(derived)
+	s.authMu.Lock()
+	defer s.authMu.Unlock()
 	// Recheck the claim inside the conditional write; another process may claim first.
 	result, err := s.db.ExecContext(ctx, "UPDATE instance SET password_salt=?,password_hash=?,claim_hash=NULL,claim_expires=NULL WHERE id=1 AND password_hash IS NULL AND claim_hash=? AND claim_expires>?", salt, derived, hash, s.now().Unix())
 	if err != nil {
@@ -136,7 +139,7 @@ func (s *Store) Login(ctx context.Context, password string) (string, error) {
 	if err := s.db.QueryRowContext(ctx, "SELECT password_salt,password_hash FROM instance WHERE id=1 AND password_hash IS NOT NULL").Scan(&salt, &expected); err != nil {
 		return "", ErrUnauthorized
 	}
-	if localPasswordDisabled(salt) || bytes.Equal(salt, remoteOwnerSalt) {
+	if passwordDisabled(salt) {
 		return "", ErrUnauthorized
 	}
 	derived := passwordHash(password, salt)
@@ -211,6 +214,9 @@ func (s *Store) Logout(ctx context.Context, token string) error {
 	defer s.lockVenueCredentials() // Close the admission window before session deletion completes.
 	s.logoutAIConnections()
 	_, err := s.db.ExecContext(ctx, "DELETE FROM sessions WHERE token_hash=?", tokenHash(token))
+	if err == nil && len(token) == 43 {
+		s.removePairedDeviceByTokenHash(tokenHash(token))
+	}
 	return err
 }
 func csrfToken(token string) string {

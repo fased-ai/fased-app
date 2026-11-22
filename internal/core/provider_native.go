@@ -58,9 +58,25 @@ func policyProvider(p *OpenAIModelPolicy) string {
 	}
 	return p.Provider
 }
+
+var canonicalProviderOrder = []string{
+	"openai",
+	"anthropic",
+	"google",
+	"xai",
+	"openrouter",
+	"moonshot",
+	"moonshot-intl",
+	"kimi-code",
+	"qwen",
+	"opencode",
+	"ollama-cloud",
+	"local",
+}
+
 func providerEntries() []ProviderEntry {
 	out := []ProviderEntry{}
-	for _, id := range []string{"openai", "anthropic", "xai", "moonshot", "moonshot-intl", "kimi-code", "ollama-cloud", "google", "openrouter", "qwen", "opencode", "local"} {
+	for _, id := range canonicalProviderOrder {
 		p, _ := providerDefinitionFor(id)
 		methods := []ProviderMethod{{ID: "api-key", Name: "API key"}}
 		if id == "local" {
@@ -123,8 +139,8 @@ func providerRequestAllowed(id string, r *http.Request) bool {
 			return true
 		}
 		if strings.HasPrefix(path, "/v1/models/") {
-			m, found := currentProviderModel(strings.TrimPrefix(path, "/v1/models/"))
-			return found && modelProvider(m) == p.ID
+			id := strings.TrimPrefix(path, "/v1/models/")
+			return validProviderModelID(id) && !strings.Contains(id, "/") && !strings.Contains(id, "..")
 		}
 		return false
 	}
@@ -133,6 +149,9 @@ func providerRequestAllowed(id string, r *http.Request) bool {
 	}
 	if p.ID == "anthropic" {
 		return path == "/v1/messages" || path == "/v1/messages/count_tokens"
+	}
+	if p.ID == "local" {
+		return path == "/v1/responses" || path == "/v1/chat/completions"
 	}
 	if p.ID == "xai" {
 		return path == "/v1/responses" || path == "/v1/tokenize-text"
@@ -726,17 +745,56 @@ func registryForProvider(id string) modelRegistry {
 }
 func allProviderModels() []currentModel {
 	out := append([]currentModel(nil), currentModels.Models...)
-	for _, id := range []string{"anthropic", "xai", "moonshot", "moonshot-intl", "kimi-code", "ollama-cloud", "google", "openrouter", "qwen", "opencode"} {
+	for _, id := range canonicalProviderOrder {
+		if id == "openai" || id == "local" {
+			continue
+		}
 		out = append(out, registryForProvider(id).Models...)
 	}
 	out = append(out, localRegistry().Models...)
 	return out
 }
+func sanitizeModelDisplayName(raw string) string {
+	return sanitizeDiagValue(strings.TrimSpace(raw), 128)
+}
+
 func parseProviderModelList(provider string, raw []byte, object *string, rows *[]discoveredModel) error {
 	if compatibleProvider(provider) {
 		return parseCompatibleModels(provider, raw, object, rows)
 	}
-	if provider == "openai" || provider == "local" {
+	if provider == "local" {
+		var v struct {
+			Object string `json:"object"`
+			Data   []struct {
+				discoveredModel
+				DisplayName string `json:"display_name"`
+			} `json:"data"`
+		}
+		if json.Unmarshal(raw, &v) != nil || v.Data == nil {
+			return errors.New("list refused")
+		}
+		if v.Object == "" {
+			*object = "list"
+		} else {
+			*object = v.Object
+		}
+		out := make([]discoveredModel, 0, len(v.Data))
+		for _, item := range v.Data {
+			row := item.discoveredModel
+			if row.OwnedBy != "system" && row.OwnedBy != "foreign" {
+				row.OwnedBy = "local"
+			}
+			display := sanitizeModelDisplayName(item.DisplayName)
+			if display == "" {
+				display = sanitizeModelDisplayName(row.Name)
+			}
+			row.Name = display
+			out = append(out, row)
+		}
+		*rows = out
+		return nil
+	}
+	if provider == "openai" {
 		var v struct {
 			Object string
 			Data   []discoveredModel
@@ -745,13 +803,6 @@ func parseProviderModelList(provider string, raw []byte, object *string, rows *[
 			return errors.New("list refused")
 		}
 		*object = v.Object
-		if provider == "local" {
-			for i := range v.Data {
-				if v.Data[i].OwnedBy == "library" || v.Data[i].OwnedBy == "local" || v.Data[i].OwnedBy == "vllm" || v.Data[i].OwnedBy == "organization_owner" || v.Data[i].OwnedBy == "lmstudio" || v.Data[i].OwnedBy == "lmstudio-community" {
-					v.Data[i].OwnedBy = "local"
-				}
-			}
-		}
 		*rows = v.Data
 		return nil
 	}
@@ -781,11 +832,12 @@ func parseProviderModelList(provider string, raw []byte, object *string, rows *[
 func parseAnthropicModelPage(raw []byte) ([]discoveredModel, string, error) {
 	var native struct {
 		Data []struct {
-			ID        string `json:"id"`
-			Type      string `json:"type"`
-			Created   string `json:"created_at"`
-			Lifecycle string `json:"lifecycle"`
-			Line      string `json:"line"`
+			ID          string `json:"id"`
+			Type        string `json:"type"`
+			Created     string `json:"created_at"`
+			Lifecycle   string `json:"lifecycle"`
+			Line        string `json:"line"`
+			DisplayName string `json:"display_name"`
 		}
 		More *bool  `json:"has_more"`
 		Last string `json:"last_id"`
@@ -799,7 +851,7 @@ func parseAnthropicModelPage(raw []byte) ([]discoveredModel, string, error) {
 		if err != nil || m.Type != "model" || m.Lifecycle != "active" && m.Lifecycle != "deprecated" && m.Lifecycle != "retired" {
 			return nil, "", errors.New("model record refused")
 		}
-		r := discoveredModel{ID: m.ID, Object: "model", Created: stamp.Unix(), OwnedBy: "anthropic", Line: m.Line}
+		r := discoveredModel{ID: m.ID, Name: sanitizeModelDisplayName(m.DisplayName), Object: "model", Created: stamp.Unix(), OwnedBy: "anthropic", Line: m.Line}
 		if m.Lifecycle != "active" {
 			retired := m.Lifecycle
 			r.Shutdown = &retired

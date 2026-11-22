@@ -188,3 +188,18 @@ func TestOpenAITransportLargeBearerAndGzipDecoding(t *testing.T) {
 		t.Fatal("oversized bearer token accepted")
 	}
 }
+
+func TestNativeProviderRouterReusesTransportPerProvider(t *testing.T) {
+	t.Parallel()
+	router := newNativeProviderRouter()
+	oa1 := router.transportFor("openai")
+	oa2 := router.transportFor("openai")
+	def := router.transportFor("")
+	if oa1 == nil || oa1 != oa2 || oa1 != def {
+		t.Fatalf("expected openai and default empty provider to share cached transport, got %p, %p, %p", oa1, oa2, def)
+	}
+	anth := router.transportFor("anthropic")
+	if anth == nil || anth == oa1 {
+		t.Fatalf("expected distinct cached transport for anthropic, got %p vs %p", anth, oa1)
+	}
+}

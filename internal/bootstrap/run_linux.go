@@ -33,6 +33,7 @@ type InstallOptions struct {
 	Prefix, DataDirectory         string
 	Start                         bool
 	Profile, Listen               string
+	ServerTransport, ServerDomain string
 	upgrade                       *UpgradeOptions
 }
 
@@ -138,8 +139,11 @@ func (p *Prepared) checkFreshCandidate(options InstallOptions) error {
 // Run uses the already-reviewed ordinary installer/wizard. No arbitrary command,
 // update receipt, owner session or financial permission can select the program.
 func (p *Prepared) Run(ctx context.Context, options InstallOptions, in io.Reader, out, errOut io.Writer) (resultErr error) {
-	if options.Profile != "" && options.Profile != "remote" && options.Profile != "local" && options.Profile != "connect" {
+	if options.Profile != "" && options.Profile != "remote" && options.Profile != "local" && options.Profile != "connect" && options.Profile != "server" {
 		return errors.New("invalid installation profile")
+	}
+	if (options.ServerTransport != "" || options.ServerDomain != "") && options.Profile != "server" {
+		return errors.New("server transport options require server profile")
 	}
 	if options.Listen != "" {
 		host, port, e := net.SplitHostPort(options.Listen)
@@ -188,43 +192,61 @@ func (p *Prepared) Run(ctx context.Context, options InstallOptions, in io.Reader
 	if err = p.revalidate(); err != nil {
 		return err
 	}
-	args := []string{"install", "--bundle", p.report.BundleDirectory, "--bundle-sha256", p.report.BundleSHA256, "--interactive", "--verification-output", p.options.Directory, "--bootstrap-sequence", strconv.FormatUint(p.report.Sequence, 10), "--bootstrap-release-sha256", p.report.DescriptorSHA256}
-	nativeBundle := ""
-	if options.WalletDesktop != nil && options.WalletInstance == "" && options.WalletNetwork == "" && options.upgrade == nil && options.Profile != "remote" && options.Profile != "connect" {
-		var nativePin string
-		var cleanup func() error
-		nativeBundle, nativePin, cleanup, err = p.composeNativeBundle(options.WalletDesktop, options.WalletSigner)
-		if err != nil {
-			return err
-		}
-		defer func() { resultErr = errors.Join(resultErr, cleanup()) }()
-		args = append(args, "--native-bundle", nativeBundle, "--native-bundle-sha256", nativePin)
-	}
-	if options.Profile != "" {
-		args = append(args, "--profile", options.Profile)
-	}
-	if options.Listen != "" {
-		args = append(args, "--listen", options.Listen)
-	}
-	if options.upgrade != nil {
-		args, err = p.upgradeArguments(*options.upgrade)
-		if err != nil {
-			return err
-		}
-	}
+	var args []string
 	var walletSigner *os.File
-	if options.WalletInstance != "" || options.WalletNetwork != "" {
-		if !options.Start || options.Profile != "remote" || options.Prefix != "" || options.DataDirectory != "" || options.upgrade != nil {
-			return errors.New("Wallets setup is a separate existing-Remote operation")
+	nativeBundle := ""
+	if options.Profile == "server" {
+		transport := options.ServerTransport
+		if transport == "" {
+			transport = "ssh"
 		}
-		args, walletSigner, err = p.walletEnrollmentArguments(options.WalletInstance, options.WalletNetwork, options.WalletSigner)
-		if err != nil {
-			return err
+		args = []string{"server", "install", "--transport", transport}
+		if options.ServerDomain != "" {
+			args = append(args, "--domain", options.ServerDomain)
 		}
-		defer walletSigner.Close()
-	}
-	if !options.Start {
-		args = append(args, "--start=false")
+		if options.Listen != "" {
+			args = append(args, "--listen", options.Listen)
+		}
+		if !options.Start {
+			args = append(args, "--start=false")
+		}
+	} else {
+		args = []string{"install", "--bundle", p.report.BundleDirectory, "--bundle-sha256", p.report.BundleSHA256, "--interactive", "--verification-output", p.options.Directory, "--bootstrap-sequence", strconv.FormatUint(p.report.Sequence, 10), "--bootstrap-release-sha256", p.report.DescriptorSHA256}
+		if options.WalletDesktop != nil && options.WalletInstance == "" && options.WalletNetwork == "" && options.upgrade == nil && options.Profile != "remote" && options.Profile != "connect" {
+			var nativePin string
+			var cleanup func() error
+			nativeBundle, nativePin, cleanup, err = p.composeNativeBundle(options.WalletDesktop, options.WalletSigner)
+			if err != nil {
+				return err
+			}
+			defer func() { resultErr = errors.Join(resultErr, cleanup()) }()
+			args = append(args, "--native-bundle", nativeBundle, "--native-bundle-sha256", nativePin)
+		}
+		if options.Profile != "" {
+			args = append(args, "--profile", options.Profile)
+		}
+		if options.Listen != "" {
+			args = append(args, "--listen", options.Listen)
+		}
+		if options.upgrade != nil {
+			args, err = p.upgradeArguments(*options.upgrade)
+			if err != nil {
+				return err
+			}
+		}
+		if options.WalletInstance != "" || options.WalletNetwork != "" {
+			if !options.Start || options.Profile != "remote" || options.Prefix != "" || options.DataDirectory != "" || options.upgrade != nil {
+				return errors.New("Wallets setup is a separate existing-Remote operation")
+			}
+			args, walletSigner, err = p.walletEnrollmentArguments(options.WalletInstance, options.WalletNetwork, options.WalletSigner)
+			if err != nil {
+				return err
+			}
+			defer walletSigner.Close()
+		}
+		if !options.Start {
+			args = append(args, "--start=false")
+		}
 	}
 	// Profile-specific defaults belong to the wizard. Validate only explicit
 	// owner overrides here; the restrictive output guard is handed to the same
@@ -267,7 +289,7 @@ func (p *Prepared) Run(ctx context.Context, options InstallOptions, in io.Reader
 		command.ExtraFiles = append(command.ExtraFiles, walletSigner)
 	}
 	command.Stdin, command.Stdout, command.Stderr = in, out, errOut
-	if options.Profile != "" {
+	if options.Profile != "" && options.Profile != "server" {
 		command.Stdout = io.Discard
 	}
 	p.invoked, p.report.InstallerInvoked = true, true

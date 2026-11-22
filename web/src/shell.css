@@ -991,6 +991,20 @@
 .wt .profile-defaults > div[hidden] {
   display: none;
 }
+.wt .profile-defaults > button {
+  align-self: end;
+  justify-self: start;
+}
+.wt .avatar {
+  background: var(--wt-surface-2);
+  border-color: var(--wt-border-strong);
+  color: var(--wt-ink);
+}
+.wt .agent-profile-list button[aria-pressed="true"] .avatar {
+  background: var(--shell-active);
+  border-color: var(--wt-coral);
+  color: var(--wt-coral);
+}
 .wt .account-permission {
   display: flex;
   align-items: center;

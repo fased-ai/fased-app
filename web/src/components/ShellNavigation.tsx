@@ -31,8 +31,8 @@ export const shellPages = [
   { name: "Chat", path: "agents/chat", icon: MessageSquare },
   { name: "Tasks", path: "agents/tasks", icon: Clock3 },
   { name: "Agents", path: "agents/settings", icon: Bot },
-  { name: "News", path: "agents/news", icon: Newspaper },
   { name: "Memory", path: "agents/memory", icon: BookOpen },
+  { name: "News", path: "agents/news", icon: Newspaper },
   { name: "Mining", path: "terminals/satcoin", icon: Pickaxe },
   { name: "Onchain", path: "terminals/jupiter", icon: ArrowLeftRight },
   { name: "Hyperliquid", path: "terminals/hyperliquid", icon: TrendingUp },
@@ -83,6 +83,14 @@ export function ShellNavigation() {
     setMore(false);
     if (more) moreButton.current?.focus();
   }
+  const showTradingTerminals =
+    core.mode !== "ready" ||
+    core.capabilities?.walletSigner === true ||
+    core.capabilities?.financialExecution === true;
+  const visiblePages = shellPages.filter(
+    (p) => showTradingTerminals || !p.path.startsWith("terminals/"),
+  );
+  const railPages = visiblePages.filter((p) => p.path !== "agents/news");
   const links = (items: readonly (typeof shellPages)[number][], rail = false) =>
     items.map((p) => (
       <a
@@ -165,7 +173,7 @@ export function ShellNavigation() {
                 className="shell-more"
                 aria-label={t("More pages")}
               >
-                {links(shellPages.slice(1))}
+                {links(visiblePages.slice(1))}
                 <hr />
                 <a href="#activity" onClick={closeMore}>
                   <History size={18} />
@@ -282,7 +290,7 @@ export function ShellNavigation() {
         hidden={!preferences.rail}
         aria-label={t("Page shortcuts")}
       >
-        {links(shellPages, true)}
+        {links(railPages, true)}
         <div className="shell-rail-bottom">
           {utility(
             contextOpen ? "Close context panel" : "Open context panel",

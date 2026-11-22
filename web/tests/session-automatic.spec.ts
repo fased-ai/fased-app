@@ -50,6 +50,7 @@ for (const variant of ["consent", "unknown"] as const) {
       output = "";
       child = spawn(binary, [
         "serve",
+        "--require-password",
         "--listen",
         "127.0.0.1:0",
         "--data-dir",

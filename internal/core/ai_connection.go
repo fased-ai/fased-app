@@ -283,12 +283,13 @@ func (s *Store) clearAIConnectionLocked(refs ...string) {
 func (s *Store) lockAIConnection() {
 	s.chatEpoch.Add(1)
 	s.provider.mu.Lock()
-	defer s.provider.mu.Unlock()
 	s.cancelProviderSignInLocked()
 	s.clearAIConnectionLocked()
 	for ref := range s.provider.accounts {
 		s.clearAIConnectionLocked(ref)
 	}
+	s.provider.mu.Unlock()
+	signalStoreChange(s)
 }
 func (s *Store) aiConnectionLocked(refs ...string) (v AIConnectionView, err error) {
 	v = AIConnectionView{CredentialMode: "test", AdmissionPolicy: openAIModelPolicy(), Provider: "openai", Model: fixtureAIModel, Locked: true, TestOnly: true, InputMicrousdPerToken: 1, OutputMicrousdPerToken: 4}
@@ -374,7 +375,7 @@ func (s *Store) aiConnectionLocked(refs ...string) (v AIConnectionView, err erro
 		v.CredentialModes = append(v.CredentialModes, "local")
 	}
 	if s.provider.apiCredentials {
-		v.CredentialModes = []string{"openai", "anthropic", "xai", "moonshot", "moonshot-intl", "kimi-code", "ollama-cloud", "google", "openrouter", "qwen", "opencode", "local"}
+		v.CredentialModes = append([]string(nil), canonicalProviderOrder...)
 	}
 	v.LiveCallsEnabled = providerActivationEnabled && s.provider.apiCredentials
 	env, e := s.readAIVault(refs...)
@@ -448,9 +449,11 @@ func (s *Store) aiConnectionLocked(refs ...string) (v AIConnectionView, err erro
 	return v, nil
 }
 func (s *Store) AIConnection(refs ...string) (AIConnectionView, error) {
+	cached := s.loadProviderModelCacheMap(context.Background())
 	s.provider.mu.Lock()
 	defer s.provider.mu.Unlock()
 	s.probeTaskSecrets(context.Background())
+	s.applyCachedModelDiscoveryLocked(cached)
 	v, e := s.aiConnectionLocked(refs...)
 	if e != nil {
 		return v, e
@@ -546,7 +549,12 @@ func (s *Store) ChangeAIConnection(ctx context.Context, c AIConnectionCommand) (
 	}
 
 	if strings.HasPrefix(c.Action, "sign-in-") {
-		return s.changeProviderSignIn(ctx, c)
+		v, err := s.changeProviderSignIn(ctx, c)
+		if err == nil && c.Action == "sign-in-disconnect" && c.Ref != "" {
+			s.deleteProviderModelCache(ctx, c.Ref)
+			signalStoreChange(s)
+		}
+		return v, err
 	}
 	if c.SignInID != "" || c.Callback != "" || c.Remote {
 		return AIConnectionView{}, errors.New("sign-in fields require a sign-in operation")
@@ -570,11 +578,35 @@ func (s *Store) ChangeAIConnection(ctx context.Context, c AIConnectionCommand) (
 		}
 		return s.refreshProviderModels(ctx, c.Ref, s.providerModelTransport(c.Ref))
 	}
+	var cached map[string]cachedProviderModels
+	if c.Action == "unlock" {
+		cached = s.loadProviderModelCacheMap(ctx)
+	}
 	v, err := s.changeAIConnection(ctx, c)
 	if err != nil {
 		return v, err
 	}
+	if c.Action == "remove" && c.Ref != "" {
+		s.deleteProviderModelCache(ctx, c.Ref)
+		signalStoreChange(s)
+		return v, nil
+	}
+	if c.Action == "lock" || c.Action == "save" || c.Action == "add" || c.Action == "unlock" {
+		signalStoreChange(s)
+	}
+	if c.Action == "unlock" && v.Ref != "" && len(cached) > 0 {
+		s.provider.mu.Lock()
+		s.applyCachedModelDiscoveryLocked(cached, v.Ref)
+		v, err = s.aiConnectionLocked(v.Ref)
+		s.provider.mu.Unlock()
+		if err != nil {
+			return v, err
+		}
+	}
 	if (c.Action == "save" || c.Action == "add" || c.Action == "unlock") && v.Ref != "" && (v.AuthMethod != "sign-in" || v.PlanUse) && !s.deferPilotDiscovery() {
+		if c.Action == "unlock" && v.Catalog.State == "ready" && (v.Catalog.ExpiresAt == 0 || s.now().Unix() < v.Catalog.ExpiresAt) {
+			return v, nil
+		}
 		return s.refreshProviderModels(ctx, v.Ref, s.providerModelTransport(v.Ref))
 	}
 	return v, nil
@@ -585,7 +617,7 @@ func (s *Store) providerModelTransport(ref string) http.RoundTripper {
 	}
 	if s.providerFixture {
 		v, err := s.AIConnection(ref)
-		if err == nil && v.AuthMethod == "sign-in" {
+		if err == nil && v.Provider == "openai" && v.AuthMethod == "sign-in" {
 			return providerSignInModelFixture{}
 		}
 		return fixtureAITransport{}
@@ -635,6 +667,21 @@ func (s *Store) changeAIConnection(ctx context.Context, c AIConnectionCommand) (
 		}
 		return s.aiConnectionLocked(c.Ref)
 	}
+	var preOpen, preSeal preDerivedKDF
+	defer preOpen.clear()
+	defer preSeal.clear()
+	if c.Passphrase != "" && validPassword(c.Passphrase) {
+		if c.Ref != "" && (c.Action == "unlock" || c.Action == "remove" || c.Action == "save" || c.Action == "task-access-allow") {
+			if env, err := s.readAIVault(c.Ref); err == nil && !env.OSProtected {
+				preOpen = derivePasswordKeyForSalt(c.Passphrase, env.Salt)
+			}
+		}
+		if c.Action == "save" || c.Action == "add" {
+			if p, err := deriveNewPasswordKey(c.Passphrase); err == nil {
+				preSeal = p
+			}
+		}
+	}
 	tx, e := s.db.BeginTx(ctx, nil)
 	if e != nil {
 		return AIConnectionView{}, e
@@ -673,7 +720,7 @@ func (s *Store) changeAIConnection(ctx context.Context, c AIConnectionCommand) (
 		if c.Action != "task-access-revoke" && !s.aiCredentialModeAllowed(v.CredentialMode) && !(s.pilotTargetLocked(v.Ref) && v.CredentialMode == "openai") {
 			return v, errors.New("credential mode unavailable; real credentials disabled")
 		}
-		return s.changeTaskAccess(ctx, tx, c, v)
+		return s.changeTaskAccess(ctx, tx, c, v, preOpen)
 	}
 	if c.Action != "save" && c.Action != "add" && c.Action != "unlock" && c.Action != "remove" {
 		return v, errors.New("unknown credential operation")
@@ -713,7 +760,7 @@ func (s *Store) changeAIConnection(ctx context.Context, c AIConnectionCommand) (
 		if err != nil {
 			return v, errors.New("credential vault unavailable")
 		}
-		plain, err := s.openAIVaultWithContext(ctx, env, c.Passphrase)
+		plain, err := s.openAIVaultWithPreKey(ctx, env, c.Passphrase, preOpen)
 		defer clear(plain)
 		if err != nil {
 			return v, errors.New("vault unlock failed")
@@ -779,13 +826,13 @@ func (s *Store) changeAIConnection(ctx context.Context, c AIConnectionCommand) (
 	if !validAgentText(c.Name, 80, false) {
 		return v, errors.New("invalid connection name")
 	}
-	return s.persistAIConnectionLocked(ctx, c, col, provider, mode, bootstrap)
+	return s.persistAIConnectionLocked(ctx, c, col, provider, mode, bootstrap, preSeal)
 }
 
 // Caller holds the metadata transaction and credential mutex, and has validated
 // authority, key class and account identity. OAuth-issued API keys use the same
 // encrypted envelope as manually entered API keys, never ChatGPT plan authority.
-func (s *Store) persistAIConnectionLocked(ctx context.Context, c AIConnectionCommand, col aiVaultCollection, provider, mode string, bootstrap bool) (AIConnectionView, error) {
+func (s *Store) persistAIConnectionLocked(ctx context.Context, c AIConnectionCommand, col aiVaultCollection, provider, mode string, bootstrap bool, preSeal preDerivedKDF) (AIConnectionView, error) {
 	var v AIConnectionView
 	var e error
 	env := aiVaultEnvelope{Name: strings.TrimSpace(c.Name), Version: 1, Salt: make([]byte, 16), Nonce: make([]byte, 12)}
@@ -810,14 +857,22 @@ func (s *Store) persistAIConnectionLocked(ctx context.Context, c AIConnectionCom
 	if bootstrap {
 		env.Ref = s.pilot.binding.ConnectionRef
 	}
-	if _, e = rand.Read(env.Salt); e != nil {
-		return v, e
+	var key []byte
+	var osProtected bool
+	if c.Passphrase != "" && len(preSeal.key) == 32 && len(preSeal.salt) == 16 {
+		copy(env.Salt, preSeal.salt)
+		key, osProtected = preSeal.keyFor(c.Passphrase, env.Salt), false
+	} else {
+		if _, e = rand.Read(env.Salt); e != nil {
+			return v, e
+		}
+		key, osProtected, e = s.vaultSealKey(ctx, c.Passphrase, env.Salt, true)
+		if e != nil {
+			return v, e
+		}
 	}
 	if _, e = rand.Read(env.Nonce); e != nil {
-		return v, e
-	}
-	key, osProtected, e := s.vaultSealKey(ctx, c.Passphrase, env.Salt, true)
-	if e != nil {
+		clear(key)
 		return v, e
 	}
 	env.OSProtected = osProtected
@@ -868,6 +923,7 @@ type providerNameContextKey struct{}
 
 type authenticatedAITransport struct {
 	modelsOnly bool
+	agentV2    bool
 	store      *Store
 	ref        string
 	next       http.RoundTripper
@@ -902,13 +958,13 @@ func (a authenticatedAITransport) RoundTrip(r *http.Request) (*http.Response, er
 		allowed = false
 	}
 	if v.AuthMethod == "sign-in" {
-		if !((r.Method == "GET" && r.URL.Path == "/v1/models") || (r.Method == "POST" && r.URL.Path == "/v1/responses")) || !a.modelsOnly && (a.request == nil || !signInRequest(*a.request)) {
+		if !((r.Method == "GET" && r.URL.Path == "/v1/models") || (r.Method == "POST" && r.URL.Path == "/v1/responses")) || (!a.modelsOnly && !a.agentV2 && (a.request == nil || !signInRequest(*a.request))) {
 			allowed = false
 		}
 	} else if a.request != nil && signInRequest(*a.request) {
 		allowed = false
 	}
-	if v.CredentialMode != "test" && !a.modelsOnly && (a.request == nil || !currentModelRequest(*a.request)) {
+	if v.CredentialMode != "test" && !a.modelsOnly && !a.agentV2 && (a.request == nil || !currentModelRequest(*a.request)) {
 		allowed = false
 	}
 	if !allowed {
@@ -971,7 +1027,7 @@ func (a authenticatedAITransport) RoundTrip(r *http.Request) (*http.Response, er
 	if v.Provider == "anthropic" && strings.HasPrefix(string(key), "sk-ant-oat") {
 		return nil, errors.New("Claude subscription tokens cannot use API-key access")
 	}
-	if v.Provider == "kimi-code" && (v.CredentialMode != "test" && !strings.HasPrefix(string(key), "sk-kimi-") || !a.modelsOnly && (a.request == nil || a.request.TaskID != "" || a.request.TaskDigest != "" || a.request.ChatPermissionID == "")) {
+	if v.Provider == "kimi-code" && (v.CredentialMode != "test" && !strings.HasPrefix(string(key), "sk-kimi-") || (!a.modelsOnly && !a.agentV2 && (a.request == nil || a.request.TaskID != "" || a.request.TaskDigest != "" || a.request.ChatPermissionID == ""))) {
 		return nil, errors.New("Kimi Code requires a membership key and personal interactive Chat")
 	}
 	if (v.Provider == "moonshot" || v.Provider == "moonshot-intl") && strings.HasPrefix(string(key), "sk-kimi-") {
@@ -1030,13 +1086,25 @@ func (a authenticatedAITransport) RoundTrip(r *http.Request) (*http.Response, er
 	if len(key) == 0 && strings.Split(res.Header.Get("Content-Type"), ";")[0] == "text/event-stream" {
 		return res, nil
 	}
-	limit := int64(16384)
+	limit := int64(262144)
 	if a.modelsOnly || r.Method == "GET" && r.URL.Path == providerModelsPath(v.Provider) {
 		limit = providerModelBodyLimit(v.Provider)
 	}
 	body, e := io.ReadAll(io.LimitReader(res.Body, limit+1))
 	res.Body.Close()
-	if e != nil || int64(len(body)) > limit || len(key) > 0 && bytes.Contains(body, key) {
+	keyEcho := len(key) > 0 && bytes.Contains(body, key)
+	if e != nil || int64(len(body)) > limit || keyEcho {
+		readErr := ""
+		if e != nil {
+			readErr = e.Error()
+		}
+		logProviderDiag("transport-read", map[string]any{
+			"provider": v.Provider, "method": v.AuthMethod, "path": r.URL.Path,
+			"status": res.StatusCode, "bodyBytes": len(body), "limit": limit,
+			"contentType":     res.Header.Get("Content-Type"),
+			"contentEncoding": res.Header.Get("Content-Encoding"),
+			"readErr":         readErr, "keyEcho": keyEcho,
+		})
 		return nil, errors.New("provider response refused")
 	}
 	res.Body = io.NopCloser(bytes.NewReader(body))
@@ -1165,6 +1233,44 @@ func deriveOSVaultKey(osKey, salt []byte) []byte {
 	return h.Sum(nil)
 }
 
+type preDerivedKDF struct {
+	salt []byte
+	key  []byte
+}
+
+func (p *preDerivedKDF) clear() {
+	if p != nil {
+		clear(p.key)
+		p.key = nil
+		p.salt = nil
+	}
+}
+
+func derivePasswordKeyForSalt(passphrase string, salt []byte) preDerivedKDF {
+	if !validPassword(passphrase) || len(salt) != 16 {
+		return preDerivedKDF{}
+	}
+	return preDerivedKDF{salt: append([]byte(nil), salt...), key: passwordHash(passphrase, salt)}
+}
+
+func deriveNewPasswordKey(passphrase string) (preDerivedKDF, error) {
+	if !validPassword(passphrase) {
+		return preDerivedKDF{}, nil
+	}
+	salt := make([]byte, 16)
+	if _, err := rand.Read(salt); err != nil {
+		return preDerivedKDF{}, err
+	}
+	return preDerivedKDF{salt: salt, key: passwordHash(passphrase, salt)}, nil
+}
+
+func (p preDerivedKDF) keyFor(passphrase string, salt []byte) []byte {
+	if len(p.key) == 32 && bytes.Equal(p.salt, salt) {
+		return append([]byte(nil), p.key...)
+	}
+	return passwordHash(passphrase, salt)
+}
+
 func (s *Store) vaultSealKey(ctx context.Context, passphrase string, salt []byte, create bool) ([]byte, bool, error) {
 	if passphrase != "" {
 		if !validPassword(passphrase) {
@@ -1220,6 +1326,10 @@ func (s *Store) openAIVault(v aiVaultEnvelope, passphrase string) ([]byte, error
 }
 
 func (s *Store) openAIVaultWithContext(ctx context.Context, v aiVaultEnvelope, passphrase string) ([]byte, error) {
+	return s.openAIVaultWithPreKey(ctx, v, passphrase, preDerivedKDF{})
+}
+
+func (s *Store) openAIVaultWithPreKey(ctx context.Context, v aiVaultEnvelope, passphrase string, pre preDerivedKDF) ([]byte, error) {
 	if !validAIVaultMode(v) {
 		return nil, errors.New("vault mode unavailable")
 	}
@@ -1239,7 +1349,7 @@ func (s *Store) openAIVaultWithContext(ctx context.Context, v aiVaultEnvelope, p
 		if !validPassword(passphrase) {
 			return nil, errors.New("vault unlock failed")
 		}
-		key = passwordHash(passphrase, v.Salt)
+		key = pre.keyFor(passphrase, v.Salt)
 	}
 	block, _ := aes.NewCipher(key)
 	clear(key)

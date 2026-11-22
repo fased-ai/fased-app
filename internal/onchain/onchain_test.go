@@ -155,3 +155,124 @@ func TestSwapSettlementRequiresCompleteConsistentErrorEvidence(t *testing.T) {
 		})
 	}
 }
+
+func TestSwapReconcileSettlesDroppedTransactionPastLastValidHeight(t *testing.T) {
+	t.Run("held at or below LastValidHeight", func(t *testing.T) {
+		chain, client, q, key := fixture(t)
+		q, e := client.Prepare(t.Context(), q)
+		if e != nil {
+			t.Fatal(e)
+		}
+		message, _ := onchain.Message(q)
+		packet, e := onchain.Signed(q, ed25519.Sign(key, message))
+		if e != nil {
+			t.Fatal(e)
+		}
+		chain.Unknown = true
+		chain.BlockHeight = q.LastValidHeight
+		if _, e = client.Send(t.Context(), q, packet); e != nil {
+			t.Fatal(e)
+		}
+		r, e := client.Reconcile(t.Context(), q, packet)
+		if e != nil || r.State != "unknown" {
+			t.Fatalf("expected unknown at LastValidHeight, got r=%+v err=%v", r, e)
+		}
+	})
+
+	t.Run("settles failed past LastValidHeight", func(t *testing.T) {
+		chain, client, q, key := fixture(t)
+		q, e := client.Prepare(t.Context(), q)
+		if e != nil {
+			t.Fatal(e)
+		}
+		message, _ := onchain.Message(q)
+		packet, e := onchain.Signed(q, ed25519.Sign(key, message))
+		if e != nil {
+			t.Fatal(e)
+		}
+		chain.Unknown = true
+		if _, e = client.Send(t.Context(), q, packet); e != nil {
+			t.Fatal(e)
+		}
+		chain.BlockHeight = q.LastValidHeight + 1
+		r, e := client.Reconcile(t.Context(), q, packet)
+		if e != nil || r.State != "failed" || r.Slot != q.ObservedSlot || chain.Submissions != 1 {
+			t.Fatalf("expected expired failure anchored to ObservedSlot, got r=%+v err=%v", r, e)
+		}
+	})
+
+	t.Run("recheck catches late confirmation at LastValidHeight boundary", func(t *testing.T) {
+		chain, client, q, key := fixture(t)
+		q, e := client.Prepare(t.Context(), q)
+		if e != nil {
+			t.Fatal(e)
+		}
+		message, _ := onchain.Message(q)
+		packet, e := onchain.Signed(q, ed25519.Sign(key, message))
+		if e != nil {
+			t.Fatal(e)
+		}
+		chain.Unknown = true
+		if _, e = client.Send(t.Context(), q, packet); e != nil {
+			t.Fatal(e)
+		}
+		chain.BlockHeight = q.LastValidHeight + 1
+		chain.RevealAfterReads = 2
+		r, e := client.Reconcile(t.Context(), q, packet)
+		if e != nil || r.State != "confirmed" || chain.Submissions != 1 || chain.Reads < 2 {
+			t.Fatalf("expected late confirmation via recheck, got r=%+v err=%v reads=%d", r, e, chain.Reads)
+		}
+	})
+}
+
+func TestSwapSettlementRecognizesSolanaRuntimeErrors(t *testing.T) {
+	accepted := []any{
+		"AccountInUse",
+		map[string]any{"InsufficientFundsForRent": map[string]any{"account_index": 1}},
+		map[string]any{"ProgramExecutionTemporarilyRestricted": map[string]any{"account_index": 0}},
+		map[string]any{"DuplicateInstruction": 0},
+		map[string]any{"InstructionError": []any{0, "ArithmeticOverflow"}},
+		map[string]any{"InstructionError": []any{1, "AccountNotRentExempt"}},
+		map[string]any{"InstructionError": []any{2, map[string]any{"BorshIoError": "bad"}}},
+	}
+	for _, errVal := range accepted {
+		chain, client, q, key := fixture(t)
+		q, e := client.Prepare(t.Context(), q)
+		if e != nil {
+			t.Fatal(e)
+		}
+		message, _ := onchain.Message(q)
+		packet, _ := onchain.Signed(q, ed25519.Sign(key, message))
+		if _, e = client.Send(t.Context(), q, packet); e != nil {
+			t.Fatal(e)
+		}
+		chain.SettlementMode = "custom-err"
+		chain.CustomErr = errVal
+		r, e := client.Reconcile(t.Context(), q, packet)
+		if e != nil || r.State != "failed" {
+			t.Fatalf("expected %v to settle as failed, got r=%+v err=%v", errVal, r, e)
+		}
+	}
+	rejected := []any{
+		"InsufficientFundsForRent",
+		map[string]any{"UnknownFailure": true},
+	}
+	for _, errVal := range rejected {
+		chain, client, q, key := fixture(t)
+		q, e := client.Prepare(t.Context(), q)
+		if e != nil {
+			t.Fatal(e)
+		}
+		message, _ := onchain.Message(q)
+		packet, _ := onchain.Signed(q, ed25519.Sign(key, message))
+		if _, e = client.Send(t.Context(), q, packet); e != nil {
+			t.Fatal(e)
+		}
+		chain.SettlementMode = "custom-err"
+		chain.CustomErr = errVal
+		r, e := client.Reconcile(t.Context(), q, packet)
+		if e == nil && r.State == "failed" {
+			t.Fatalf("expected %v not to settle as failed, got r=%+v err=%v", errVal, r, e)
+		}
+	}
+}

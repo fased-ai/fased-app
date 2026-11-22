@@ -141,9 +141,10 @@ func admitLocal(ctx context.Context, q *AgentAIRequest, rt http.RoundTripper, no
 		return refuse()
 	}
 	defer res.Body.Close()
-	raw, err := io.ReadAll(io.LimitReader(res.Body, 262145))
+	modelLimit := providerModelBodyLimit("local")
+	raw, err := io.ReadAll(io.LimitReader(res.Body, modelLimit+1))
 	kind, _, mediaErr := mime.ParseMediaType(res.Header.Get("Content-Type"))
-	if err != nil || len(raw) > 262144 || res.StatusCode != 200 || kind != "application/json" || mediaErr != nil || res.Header.Get("Content-Encoding") != "" || !uniqueAIJSON(raw, 32768) {
+	if err != nil || int64(len(raw)) > modelLimit || res.StatusCode != 200 || kind != "application/json" || mediaErr != nil || res.Header.Get("Content-Encoding") != "" || !uniqueAIJSON(raw, providerJSONNodes("local")) {
 		return refuse()
 	}
 	var object string
@@ -154,7 +155,7 @@ func admitLocal(ctx context.Context, q *AgentAIRequest, rt http.RoundTripper, no
 	seen := map[string]bool{}
 	found := false
 	for _, m := range rows {
-		if !validProviderModelID(m.ID) || seen[m.ID] || newerProviderRecordForID(q.Model, m, rows) {
+		if !validProviderModelID(m.ID) || seen[m.ID] {
 			return refuse()
 		}
 		seen[m.ID] = true

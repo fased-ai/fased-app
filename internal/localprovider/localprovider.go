@@ -185,7 +185,7 @@ func requestAllowed(req *http.Request) bool {
 		return false
 	}
 	if req.Method == http.MethodPost {
-		return u.Path == "/v1/responses"
+		return u.Path == "/v1/responses" || u.Path == "/v1/chat/completions"
 	}
 	if req.Method != http.MethodGet || req.Body != nil && req.Body != http.NoBody || req.ContentLength != 0 {
 		return false
