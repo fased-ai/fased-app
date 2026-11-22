@@ -868,6 +868,7 @@ type providerNameContextKey struct{}
 
 type authenticatedAITransport struct {
 	modelsOnly bool
+	agentV2    bool
 	store      *Store
 	ref        string
 	next       http.RoundTripper
@@ -902,13 +903,13 @@ func (a authenticatedAITransport) RoundTrip(r *http.Request) (*http.Response, er
 		allowed = false
 	}
 	if v.AuthMethod == "sign-in" {
-		if !((r.Method == "GET" && r.URL.Path == "/v1/models") || (r.Method == "POST" && r.URL.Path == "/v1/responses")) || !a.modelsOnly && (a.request == nil || !signInRequest(*a.request)) {
+		if !((r.Method == "GET" && r.URL.Path == "/v1/models") || (r.Method == "POST" && r.URL.Path == "/v1/responses")) || (!a.modelsOnly && !a.agentV2 && (a.request == nil || !signInRequest(*a.request))) {
 			allowed = false
 		}
 	} else if a.request != nil && signInRequest(*a.request) {
 		allowed = false
 	}
-	if v.CredentialMode != "test" && !a.modelsOnly && (a.request == nil || !currentModelRequest(*a.request)) {
+	if v.CredentialMode != "test" && !a.modelsOnly && !a.agentV2 && (a.request == nil || !currentModelRequest(*a.request)) {
 		allowed = false
 	}
 	if !allowed {
@@ -971,7 +972,7 @@ func (a authenticatedAITransport) RoundTrip(r *http.Request) (*http.Response, er
 	if v.Provider == "anthropic" && strings.HasPrefix(string(key), "sk-ant-oat") {
 		return nil, errors.New("Claude subscription tokens cannot use API-key access")
 	}
-	if v.Provider == "kimi-code" && (v.CredentialMode != "test" && !strings.HasPrefix(string(key), "sk-kimi-") || !a.modelsOnly && (a.request == nil || a.request.TaskID != "" || a.request.TaskDigest != "" || a.request.ChatPermissionID == "")) {
+	if v.Provider == "kimi-code" && (v.CredentialMode != "test" && !strings.HasPrefix(string(key), "sk-kimi-") || (!a.modelsOnly && !a.agentV2 && (a.request == nil || a.request.TaskID != "" || a.request.TaskDigest != "" || a.request.ChatPermissionID == ""))) {
 		return nil, errors.New("Kimi Code requires a membership key and personal interactive Chat")
 	}
 	if (v.Provider == "moonshot" || v.Provider == "moonshot-intl") && strings.HasPrefix(string(key), "sk-kimi-") {

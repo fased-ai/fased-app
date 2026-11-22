@@ -625,6 +625,10 @@ func (h *HTTPHandler) api(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 200, map[string]any{"available": false, "executionEnabled": false, "reason": "real wallets unavailable; public fixture references are managed through accounts"})
 		return
 	default:
+		if r.URL.Path == "/api/v1/agents/v2" || strings.HasPrefix(r.URL.Path, "/api/v1/agents/v2/") {
+			h.agentsV2API(w, r, token)
+			return
+		}
 		writeError(w, 404, "unknown API operation")
 	}
 }

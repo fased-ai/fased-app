@@ -1212,7 +1212,7 @@ func (a authenticatedAITransport) ensureSignInAccess(request *http.Request) erro
 	if a.request != nil && (a.request.ConnectionRef != a.ref || policyProvider(a.request.Policy) != "openai" || !signInRequest(*a.request)) {
 		allowed = false
 	}
-	if !allowed || (a.request == nil && !a.modelsOnly) {
+	if !allowed || (a.request == nil && !a.modelsOnly && !a.agentV2) {
 		s.provider.mu.Unlock()
 		return errors.New("sign-in refresh requires current account permission")
 	}

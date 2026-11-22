@@ -153,9 +153,11 @@ func enrollmentPath(name string) (included bool, max int64, ok bool) {
 	switch name {
 	case "core.sqlite":
 		return true, MaxEnrollmentFileBytes, true
+	case "agents.sqlite":
+		return true, MaxEnrollmentFileBytes, true
 	case "ai-credentials.json":
 		return true, aiVaultMaxSerializedBytes, true
-	case "core.sqlite-wal", "core.sqlite-shm":
+	case "core.sqlite-wal", "core.sqlite-shm", "agents.sqlite-wal", "agents.sqlite-shm":
 		return false, MaxEnrollmentFileBytes, true
 	case "endpoint.json", "claim-code.json", "cli-session.json", "pairing.json":
 		return false, 64 << 10, true

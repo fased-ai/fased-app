@@ -435,7 +435,7 @@ func (a authenticatedAITransport) ensureGoogleAccess(request *http.Request) erro
 	if a.request != nil && (a.request.ConnectionRef != a.ref || policyProvider(a.request.Policy) != "google" || !currentModelRequest(*a.request)) {
 		allowed = false
 	}
-	if !allowed || a.request == nil && !a.modelsOnly || s.provider.signInRenewals[a.ref] {
+	if !allowed || (a.request == nil && !a.modelsOnly && !a.agentV2) || s.provider.signInRenewals[a.ref] {
 		s.provider.mu.Unlock()
 		return errors.New("Google refresh requires current account permission")
 	}
