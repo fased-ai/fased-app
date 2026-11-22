@@ -512,6 +512,7 @@ func (s *Store) advanceAgentNews(ctx context.Context, rt http.RoundTripper, fixt
 	if e != nil {
 		return e
 	}
+	beforeRuns := len(d.Runs)
 	changed := false
 	var dispatch *NewsFetch
 	for i := range d.NewsFetches {
@@ -551,6 +552,7 @@ func (s *Store) advanceAgentNews(ctx context.Context, rt http.RoundTripper, fixt
 	if e = tx.Commit(); e != nil {
 		return e
 	}
+	mirrorTaskRunsToV2(ctx, s, d, beforeRuns)
 	if dispatch == nil {
 		return nil
 	}
@@ -602,6 +604,7 @@ func (s *Store) advanceAgentNews(ctx context.Context, rt http.RoundTripper, fixt
 	if e != nil {
 		return e
 	}
+	beforeRuns = len(d.Runs)
 	for i, f := range d.NewsFetches {
 		if f.ID == dispatch.ID && f.State == "fetching" && f.DispatchBoot == s.bootID {
 			if _, err := newsSource(d, f.ProfileID, f.SourceID); err != nil || !newsTaskPending(d, f) {
@@ -615,7 +618,11 @@ func (s *Store) advanceAgentNews(ctx context.Context, rt http.RoundTripper, fixt
 			if e = saveAgents(finish, tx, d, r); e != nil {
 				return e
 			}
-			return tx.Commit()
+			if e = tx.Commit(); e != nil {
+				return e
+			}
+			mirrorTaskRunsToV2(finish, s, d, beforeRuns)
+			return nil
 		}
 	}
 	return nil

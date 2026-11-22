@@ -5157,6 +5157,12 @@ export const pageCopy = {
     "始终启用",
     "항상 활성",
   ],
+  "Ask in Chat": [
+    "Спросить в чате",
+    "Preguntar en el chat",
+    "在对话中询问",
+    "채팅에서 묻기",
+  ],
   "Conversation archived": [
     "Диалог архивирован",
     "Conversación archivada",
@@ -5176,6 +5182,13 @@ export const pageCopy = {
     "暂无保存的规则",
     "저장된 규칙이 없습니다",
   ],
+  "Open in Chat": [
+    "Открыть в чате",
+    "Abrir en el chat",
+    "在对话中打开",
+    "채팅에서 열기",
+  ],
+  "Open thread": ["Открыть ветку", "Abrir hilo", "打开对话串", "스레드 열기"],
   Pin: ["Закрепить", "Fijar", "固定", "고정"],
   Pinned: ["Закреплено", "Fijado", "已固定", "고정됨"],
   "Rule or fact": [

@@ -1,7 +1,10 @@
 import { expect, test } from "@playwright/test";
 import {
+  closeNewsSources,
   installCoreFixture,
+  openNewsSources,
   openProviders,
+  revealControl,
   start,
   stop,
   url,
@@ -364,4 +367,99 @@ test("Agent Settings Rules & Memory CRUD, Enter-to-reject feedback, and 5s Archi
   await expect(page.locator(".v2-thread-row")).toHaveCount(1, {
     timeout: 12000,
   });
+});
+
+test("Scheduled reminder runs mirror into Agent V2 threads and News Ask in Chat launches V2 chat", async ({
+  page,
+}) => {
+  test.setTimeout(75000);
+  await stop();
+  await start(true, "127.0.0.1:0", "local", false);
+
+  await page.goto(url + "/#agents/tasks");
+  await page.getByRole("button", { name: "New task", exact: true }).click();
+  await page.getByLabel("Task name", { exact: true }).fill("Morning SOL Check");
+  await page
+    .getByLabel("Reminder text", { exact: true })
+    .fill("Check SOL/USDC spread and funding");
+  await page.getByRole("button", { name: "Review task", exact: true }).click();
+  await page.getByRole("button", { name: "Create task", exact: true }).click();
+
+  const runBtn = page.getByRole("button", {
+    name: "Run now: Morning SOL Check",
+    exact: true,
+  });
+  await expect(runBtn).toBeVisible({ timeout: 12000 });
+  await runBtn.click();
+
+  const openThreadBtn = page.getByRole("button", {
+    name: "Open thread",
+    exact: true,
+  });
+  await expect(openThreadBtn).toBeVisible({ timeout: 12000 });
+  await openThreadBtn.click();
+
+  await expect(page).toHaveURL(/#agents\/chat$/, { timeout: 12000 });
+  await expect(
+    page.getByRole("heading", { name: "Morning SOL Check", exact: true }),
+  ).toBeVisible({ timeout: 12000 });
+  await expect(page.locator(".v2-thread-source-pill")).toHaveText("Task");
+  await expect(page.locator(".v2-markdown").first()).toContainText(
+    "Check SOL/USDC spread and funding",
+    { timeout: 12000 },
+  );
+  await expect(page.locator(".v2-markdown").first()).toContainText("reminded");
+
+  // Reload to confirm mirrored task thread persists in agents.sqlite.
+  await page.reload();
+  await expect(
+    page.getByRole("heading", { name: "Morning SOL Check", exact: true }),
+  ).toBeVisible({ timeout: 12000 });
+
+  // NewsInputs -> Ask in Chat launches a fresh V2 chat thread with the headline.
+  await page.goto(url + "/#agents/news");
+  const news = page.getByRole("region", { name: "News", exact: true });
+  await openNewsSources(page, true);
+  await revealControl(page, news.getByLabel("Name", { exact: true }), "");
+  await news.getByLabel("Name", { exact: true }).fill("Fixture SOL Feed");
+  await revealControl(page, news.getByLabel("Feed URL", { exact: true }), "");
+  await news
+    .getByLabel("Feed URL", { exact: true })
+    .fill("https://news.fased.invalid/headlines.xml");
+  await revealControl(
+    page,
+    news.getByLabel("Freshness (minutes)", { exact: true }),
+    "",
+  );
+  await news.getByLabel("Freshness (minutes)", { exact: true }).fill("10");
+  await news.getByRole("button", { name: "Add", exact: true }).click();
+
+  const source = news.getByRole("group", {
+    name: "Source Fixture SOL Feed",
+    exact: true,
+  });
+  await expect(source).toBeVisible({ timeout: 12000 });
+  await source.getByRole("button", { name: "Fetch", exact: true }).click();
+  await closeNewsSources(page);
+  await expect(async () => {
+    await news.getByRole("button", { name: "Refresh", exact: true }).click();
+    await expect(news.locator(".news-headline").first()).toBeVisible({
+      timeout: 1500,
+    });
+  }).toPass({ timeout: 15000 });
+
+  const headline = news.locator(".news-headline").first();
+  await headline
+    .getByRole("button", { name: "Ask in Chat", exact: true })
+    .click();
+
+  await expect(page).toHaveURL(/#agents\/chat$/, { timeout: 12000 });
+  await expect(page.locator(".v2-user-bubble").last()).toContainText(
+    "untrusted external data",
+    { timeout: 12000 },
+  );
+  await expect(page.locator(".v2-markdown").last()).toContainText(
+    "Fixture response ready",
+    { timeout: 12000 },
+  );
 });

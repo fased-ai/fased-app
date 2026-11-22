@@ -50,6 +50,7 @@ type Store struct {
 	pilot                         openAIPilotState // No ordinary constructor configures a target.
 	db                            *sql.DB
 	agentV2Mu                     sync.Mutex
+	agentV2MirrorMu               sync.Mutex
 	agentV2                       *agentV2Store
 	agentV2TransportOverride      http.RoundTripper // Tests only; never configuration, CLI or IPC.
 	marketDataTransport           http.RoundTripper // Tests only; never configuration, CLI or IPC.

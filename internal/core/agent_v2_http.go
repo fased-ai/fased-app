@@ -123,6 +123,18 @@ func (h *HTTPHandler) agentsV2API(w http.ResponseWriter, r *http.Request, token 
 		}
 		writeJSON(w, 200, map[string]any{"tools": agentV2ToolSpecs()})
 
+	case rel == "/task-threads":
+		if r.Method != http.MethodGet {
+			writeError(w, 405, "method not allowed")
+			return
+		}
+		links, err := h.store.ListTaskThreadLinks(r.Context(), r.URL.Query().Get("profileId"))
+		if err != nil {
+			writeError(w, 500, "task threads unavailable")
+			return
+		}
+		writeJSON(w, 200, links)
+
 	case rel == "/threads":
 		switch r.Method {
 		case http.MethodGet:

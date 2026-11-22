@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  buildNewsChatPrompt,
+  buildTaskRunChatPrompt,
   formatApprovalFields,
   formatDraftMemorySummary,
   formatToolLabel,
@@ -396,5 +398,33 @@ describe("formatDraftMemorySummary & updateMemoryV2", () => {
       content: "Cap slippage at 25 bps",
       pinned: true,
     });
+  });
+});
+
+describe("buildNewsChatPrompt & buildTaskRunChatPrompt", () => {
+  it("formats news items as untrusted data and includes scheduled run details", () => {
+    const newsPrompt = buildNewsChatPrompt("Solana News", {
+      title: "SOL throughput hits new peak",
+      url: "https://example.invalid/sol",
+    });
+    expect(newsPrompt).toContain("untrusted external data");
+    expect(newsPrompt).toContain("Solana News");
+    expect(newsPrompt).toContain("SOL throughput hits new peak");
+    expect(newsPrompt).toContain("https://example.invalid/sol");
+
+    const runPrompt = buildTaskRunChatPrompt(
+      { name: "Morning Risk", text: "Check open risk caps" },
+      {
+        id: "task-1:1",
+        outcome: "analyzed",
+        analysis: { state: "completed" },
+        watch: { newIds: ["a", "b"] },
+      },
+      "Spread widened to 18 bps.",
+    );
+    expect(runPrompt).toContain("Morning Risk");
+    expect(runPrompt).toContain("task-1:1");
+    expect(runPrompt).toContain("New matches: 2");
+    expect(runPrompt).toContain("Spread widened to 18 bps.");
   });
 });

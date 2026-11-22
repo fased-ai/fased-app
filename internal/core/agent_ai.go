@@ -69,6 +69,14 @@ func clearStoreSignal(s *Store) {
 	storeChangeSignals.Delete(s)
 }
 
+var taskRunsV2Mirror func(context.Context, *Store, agentDocument, int)
+
+func mirrorTaskRunsToV2(ctx context.Context, s *Store, d agentDocument, beforeRuns int) {
+	if taskRunsV2Mirror != nil {
+		taskRunsV2Mirror(ctx, s, d, beforeRuns)
+	}
+}
+
 const fixtureAIModel = "fixture-openai-v1"
 
 // Maximum decoded answer/card bytes can expand sixfold in persisted JSON.
@@ -801,6 +809,7 @@ func (s *Store) advanceAgentAI(ctx context.Context, rt http.RoundTripper, fixtur
 	if e != nil {
 		return e
 	}
+	beforeRuns := len(d.Runs)
 	changed := recoverLoopReads(&d, s.now().Unix())
 	var dispatch *AgentAIRequest
 	for i := range d.AIRequests {
@@ -894,6 +903,7 @@ func (s *Store) advanceAgentAI(ctx context.Context, rt http.RoundTripper, fixtur
 	if e = tx.Commit(); e != nil {
 		return e
 	}
+	mirrorTaskRunsToV2(ctx, s, d, beforeRuns)
 	if dispatch == nil {
 		return nil
 	}
@@ -983,6 +993,7 @@ func (s *Store) advanceAgentAI(ctx context.Context, rt http.RoundTripper, fixtur
 	if e != nil {
 		return e
 	}
+	beforeRuns = len(d.Runs)
 	for i, q := range d.AIRequests {
 		cancelledPlanReceipt := callErr == nil && cancelledPlanUsageMatches(q, *dispatch, result)
 		if q.ID == dispatch.ID && (q.State == "running" || (isResearchAI(q) && q.State == "cancelled") || cancelledPlanReceipt) && q.DispatchBoot == dispatch.DispatchBoot {
@@ -1037,6 +1048,7 @@ func (s *Store) advanceAgentAI(ctx context.Context, rt http.RoundTripper, fixtur
 			if e = tx.Commit(); e != nil {
 				return e
 			}
+			mirrorTaskRunsToV2(finish, s, d, beforeRuns)
 			if isResearchLoop(q) && q.State == "completed" {
 				return s.runLoopReadsLocked(ctx, q.ResearchTurnID)
 			}
