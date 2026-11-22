@@ -228,12 +228,14 @@ func TestSwapReconcileSettlesDroppedTransactionPastLastValidHeight(t *testing.T)
 func TestSwapSettlementRecognizesSolanaRuntimeErrors(t *testing.T) {
 	accepted := []any{
 		"AccountInUse",
-		"InsufficientFundsForRent",
-		[]any{},
+		map[string]any{"InsufficientFundsForRent": map[string]any{"account_index": 1}},
+		map[string]any{"ProgramExecutionTemporarilyRestricted": map[string]any{"account_index": 0}},
+		map[string]any{"DuplicateInstruction": 0},
 		map[string]any{"InstructionError": []any{0, "ArithmeticOverflow"}},
 		map[string]any{"InstructionError": []any{1, "AccountNotRentExempt"}},
+		map[string]any{"InstructionError": []any{2, map[string]any{"BorshIoError": "bad"}}},
 	}
-	for _, errVal := range accepted[:2] {
+	for _, errVal := range accepted {
 		chain, client, q, key := fixture(t)
 		q, e := client.Prepare(t.Context(), q)
 		if e != nil {
@@ -251,7 +253,11 @@ func TestSwapSettlementRecognizesSolanaRuntimeErrors(t *testing.T) {
 			t.Fatalf("expected %v to settle as failed, got r=%+v err=%v", errVal, r, e)
 		}
 	}
-	for _, errVal := range accepted[3:] {
+	rejected := []any{
+		"InsufficientFundsForRent",
+		map[string]any{"UnknownFailure": true},
+	}
+	for _, errVal := range rejected {
 		chain, client, q, key := fixture(t)
 		q, e := client.Prepare(t.Context(), q)
 		if e != nil {
@@ -265,8 +271,8 @@ func TestSwapSettlementRecognizesSolanaRuntimeErrors(t *testing.T) {
 		chain.SettlementMode = "custom-err"
 		chain.CustomErr = errVal
 		r, e := client.Reconcile(t.Context(), q, packet)
-		if e != nil || r.State != "failed" {
-			t.Fatalf("expected %v to settle as failed, got r=%+v err=%v", errVal, r, e)
+		if e == nil && r.State == "failed" {
+			t.Fatalf("expected %v not to settle as failed, got r=%+v err=%v", errVal, r, e)
 		}
 	}
 }

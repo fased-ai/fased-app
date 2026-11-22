@@ -15,17 +15,17 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/fased-ai/fased-app/internal/onchain"
 )
 
 const (
-	jupiterPriceV3URL    = "https://lite-api.jup.ag/price/v3"
-	jupiterSwapQuoteURL  = "https://lite-api.jup.ag/swap/v1/quote"
-	coingeckoSimpleURL   = "https://api.coingecko.com/api/v3/simple/price"
-	marketHTTPMaxBytes   = 128 * 1024
-	base58AlphabetString = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
+	jupiterPriceV3URL   = "https://lite-api.jup.ag/price/v3"
+	jupiterSwapQuoteURL = "https://lite-api.jup.ag/swap/v1/quote"
+	coingeckoSimpleURL  = "https://api.coingecko.com/api/v3/simple/price"
+	marketHTTPMaxBytes  = 128 * 1024
 )
 
 type marketTokenMeta struct {
@@ -59,15 +59,8 @@ var knownMarketTokens = []marketTokenMeta{
 }
 
 func isBase58Mint(s string) bool {
-	if len(s) < 32 || len(s) > 44 {
-		return false
-	}
-	for i := 0; i < len(s); i++ {
-		if !strings.ContainsRune(base58AlphabetString, rune(s[i])) {
-			return false
-		}
-	}
-	return true
+	_, err := onchain.Key(s)
+	return err == nil
 }
 
 func lookupKnownMarketToken(raw string) (marketTokenMeta, bool) {
@@ -204,6 +197,36 @@ func (t *publicMarketRoundTripper) RoundTrip(r *http.Request) (*http.Response, e
 	return t.next.RoundTrip(r)
 }
 
+var (
+	publicMarketLiveTransportOnce sync.Once
+	publicMarketLiveTransport     *http.Transport
+)
+
+func getPublicMarketLiveTransport() *http.Transport {
+	publicMarketLiveTransportOnce.Do(func() {
+		d := &net.Dialer{Timeout: 5 * time.Second}
+		publicMarketLiveTransport = &http.Transport{
+			Proxy:               nil,
+			DisableKeepAlives:   false,
+			MaxIdleConns:        16,
+			MaxIdleConnsPerHost: 8,
+			IdleConnTimeout:     60 * time.Second,
+			ForceAttemptHTTP2:   true,
+			TLSClientConfig: &tls.Config{
+				MinVersion:       tls.VersionTLS12,
+				CurvePreferences: []tls.CurveID{tls.X25519, tls.CurveP256, tls.CurveP384},
+			},
+			TLSHandshakeTimeout:    5 * time.Second,
+			ResponseHeaderTimeout:  6 * time.Second,
+			MaxResponseHeaderBytes: 16 * 1024,
+			DialContext: func(ctx context.Context, network, address string) (net.Conn, error) {
+				return dialPublicRPC(ctx, network, address, net.DefaultResolver.LookupNetIP, d.DialContext)
+			},
+		}
+	})
+	return publicMarketLiveTransport
+}
+
 func newPublicMarketClient(s *Store) *http.Client {
 	denyRedirects := func(*http.Request, []*http.Request) error {
 		return errors.New("market redirects refused")
@@ -215,55 +238,52 @@ func newPublicMarketClient(s *Store) *http.Client {
 			CheckRedirect: denyRedirects,
 		}
 	}
-	d := &net.Dialer{Timeout: 5 * time.Second}
-	tr := &http.Transport{
-		Proxy:             nil,
-		DisableKeepAlives: true,
-		ForceAttemptHTTP2: true,
-		TLSClientConfig: &tls.Config{
-			MinVersion:       tls.VersionTLS12,
-			CurvePreferences: []tls.CurveID{tls.X25519, tls.CurveP256, tls.CurveP384},
-		},
-		TLSHandshakeTimeout:    5 * time.Second,
-		ResponseHeaderTimeout:  6 * time.Second,
-		MaxResponseHeaderBytes: 16 * 1024,
-		DialContext: func(ctx context.Context, network, address string) (net.Conn, error) {
-			return dialPublicRPC(ctx, network, address, net.DefaultResolver.LookupNetIP, d.DialContext)
-		},
-	}
 	return &http.Client{
-		Transport:     &publicMarketRoundTripper{next: tr},
+		Transport:     &publicMarketRoundTripper{next: getPublicMarketLiveTransport()},
 		Timeout:       8 * time.Second,
 		CheckRedirect: denyRedirects,
 	}
 }
 
 func fetchMarketJSON(ctx context.Context, client *http.Client, targetURL string, out any) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, targetURL, nil)
-	if err != nil {
-		return err
+	for attempt := 0; attempt < 2; attempt++ {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, targetURL, nil)
+		if err != nil {
+			return err
+		}
+		req.Header.Set("Accept", "application/json")
+		req.Header.Set("User-Agent", "fased-agent/1")
+		resp, err := client.Do(req)
+		if err != nil {
+			return fmt.Errorf("market endpoint unreachable: %w", err)
+		}
+		body, readErr := io.ReadAll(io.LimitReader(resp.Body, marketHTTPMaxBytes+1))
+		resp.Body.Close()
+		if readErr != nil {
+			return readErr
+		}
+		if len(body) > marketHTTPMaxBytes {
+			return errors.New("market response exceeded size limit")
+		}
+		if resp.StatusCode == http.StatusTooManyRequests && attempt == 0 {
+			timer := time.NewTimer(300 * time.Millisecond)
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				return ctx.Err()
+			case <-timer.C:
+			}
+			continue
+		}
+		if resp.StatusCode != http.StatusOK {
+			return fmt.Errorf("market service returned HTTP %d", resp.StatusCode)
+		}
+		if err := json.Unmarshal(body, out); err != nil {
+			return fmt.Errorf("invalid market JSON payload: %w", err)
+		}
+		return nil
 	}
-	req.Header.Set("Accept", "application/json")
-	req.Header.Set("User-Agent", "fased-agent/1")
-	resp, err := client.Do(req)
-	if err != nil {
-		return fmt.Errorf("market endpoint unreachable: %w", err)
-	}
-	defer resp.Body.Close()
-	body, err := io.ReadAll(io.LimitReader(resp.Body, marketHTTPMaxBytes+1))
-	if err != nil {
-		return err
-	}
-	if len(body) > marketHTTPMaxBytes {
-		return errors.New("market response exceeded size limit")
-	}
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("market service returned HTTP %d", resp.StatusCode)
-	}
-	if err := json.Unmarshal(body, out); err != nil {
-		return fmt.Errorf("invalid market JSON payload: %w", err)
-	}
-	return nil
+	return errors.New("market request retry exhausted")
 }
 
 func toolGetWalletBalances(ctx context.Context, s *Store, _ string, rawArgs json.RawMessage) (any, error) {
@@ -379,23 +399,38 @@ func toolGetWalletBalances(ctx context.Context, s *Store, _ string, rawArgs json
 		return nil, err
 	}
 
-	tokens := make([]map[string]any, 0, len(snap.Tokens))
+	knownTokens := make([]map[string]any, 0, len(snap.Tokens))
+	unknownTokens := make([]map[string]any, 0, len(snap.Tokens))
 	for _, tok := range snap.Tokens {
+		if isZeroAtomic(tok.Amount) {
+			continue
+		}
 		sym := tok.Mint
 		if len(sym) > 10 {
 			sym = sym[:4] + "..." + sym[len(sym)-4:]
 		}
-		if meta, ok := lookupKnownMarketTokenByMint(tok.Mint); ok {
+		meta, known := lookupKnownMarketTokenByMint(tok.Mint)
+		if known {
 			sym = meta.Symbol
 		}
-		tokens = append(tokens, map[string]any{
+		row := map[string]any{
 			"mint":     tok.Mint,
 			"symbol":   sym,
 			"amount":   tok.Amount,
 			"uiAmount": formatAtomicUnits(tok.Amount, tok.Decimals),
 			"decimals": tok.Decimals,
 			"program":  tok.Program,
-		})
+		}
+		if known {
+			knownTokens = append(knownTokens, row)
+		} else {
+			unknownTokens = append(unknownTokens, row)
+		}
+	}
+	tokens := append(knownTokens, unknownTokens...)
+	totalNonZero := len(tokens)
+	if len(tokens) > 25 {
+		tokens = tokens[:25]
 	}
 	recent := snap.Activity
 	if len(recent) > 5 {
@@ -412,6 +447,8 @@ func toolGetWalletBalances(ctx context.Context, s *Store, _ string, rawArgs json
 		"lamports":            snap.Lamports,
 		"sol":                 formatAtomicUnits(snap.Lamports, 9),
 		"tokens":              tokens,
+		"tokenCount":          totalNonZero,
+		"tokensTruncated":     totalNonZero > len(tokens),
 		"recentActivityCount": len(snap.Activity),
 		"recentActivity":      recent,
 		"fetchedAt":           snap.FetchedAt,
@@ -421,11 +458,24 @@ func toolGetWalletBalances(ctx context.Context, s *Store, _ string, rawArgs json
 	}, nil
 }
 
+func isZeroAtomic(raw string) bool {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return true
+	}
+	for i := 0; i < len(trimmed); i++ {
+		if trimmed[i] != '0' {
+			return false
+		}
+	}
+	return true
+}
+
 type jupiterPriceEntry struct {
 	USDPrice      float64 `json:"usdPrice"`
 	PriceChange24 float64 `json:"priceChange24h"`
 	Liquidity     float64 `json:"liquidity"`
-	Decimals      int     `json:"decimals"`
+	Decimals      *int    `json:"decimals"`
 }
 
 func toolGetTokenPrice(ctx context.Context, s *Store, _ string, rawArgs json.RawMessage) (any, error) {
@@ -614,10 +664,10 @@ func resolveSolanaSwapToken(ctx context.Context, client *http.Client, raw string
 		return marketTokenMeta{}, fmt.Errorf("unable to resolve mint decimals for %s: %w", meta.Mint, err)
 	}
 	entry, ok := jupPrices[meta.Mint]
-	if !ok || entry.Decimals < 0 || entry.Decimals > 18 {
+	if !ok || entry.Decimals == nil || *entry.Decimals < 0 || *entry.Decimals > 18 {
 		return marketTokenMeta{}, fmt.Errorf("token mint %s metadata unavailable", meta.Mint)
 	}
-	meta.Decimals = entry.Decimals
+	meta.Decimals = *entry.Decimals
 	return meta, nil
 }
 
@@ -753,6 +803,15 @@ func toolGetSwapQuote(ctx context.Context, s *Store, _ string, rawArgs json.RawM
 	}
 	if strings.TrimSpace(jupResp.OutAmount) == "" {
 		return nil, errors.New("quote response missing output amount")
+	}
+	if inMint := strings.TrimSpace(jupResp.InputMint); inMint != "" && inMint != fromMeta.Mint {
+		return nil, errors.New("quote input mint mismatch")
+	}
+	if outMint := strings.TrimSpace(jupResp.OutputMint); outMint != "" && outMint != toMeta.Mint {
+		return nil, errors.New("quote output mint mismatch")
+	}
+	if inAmt := strings.TrimSpace(jupResp.InAmount); inAmt != "" && inAmt != atomicIn {
+		return nil, errors.New("quote input amount mismatch")
 	}
 
 	routeSummary := make([]map[string]any, 0, len(jupResp.RoutePlan))

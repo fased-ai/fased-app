@@ -7,6 +7,7 @@ import (
 	"context"
 	"crypto/aes"
 	"crypto/cipher"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -1078,5 +1079,72 @@ func TestEnrollmentImageRejectsCorruptDeviceOwner(t *testing.T) {
 				t.Fatal("corrupt device owner accepted", mode)
 			}
 		})
+	}
+}
+
+func TestEnrollmentImageCheckpointsAgentV2WAL(t *testing.T) {
+	t.Parallel()
+	s := fixtureStore(t)
+	if _, err := s.CreateThread(t.Context(), "trading-analyst", "Baseline Thread", "", ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	// Open a raw sqlite WAL writer on agents.sqlite, write a second thread into WAL,
+	// and snapshot raw base + WAL bytes BEFORE checkpoint/close so agents.sqlite on
+	// disk lacks "Uncheckpointed WAL Thread" while agents.sqlite-wal contains it.
+	rawDB, err := sql.Open("sqlite", filepath.Join(s.dir, "agents.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := rawDB.Exec(`PRAGMA journal_mode=WAL; INSERT INTO threads (id, profile_id, title, created_at, updated_at) VALUES ('thread_wal_only', 'trading-analyst', 'Uncheckpointed WAL Thread', 100, 100);`); err != nil {
+		rawDB.Close()
+		t.Fatal(err)
+	}
+	baseBytes, err := os.ReadFile(filepath.Join(s.dir, "agents.sqlite"))
+	if err != nil {
+		rawDB.Close()
+		t.Fatal(err)
+	}
+	walBytes, err := os.ReadFile(filepath.Join(s.dir, "agents.sqlite-wal"))
+	if err != nil || len(walBytes) == 0 {
+		rawDB.Close()
+		t.Fatalf("expected non-empty agents.sqlite-wal, len=%d err=%v", len(walBytes), err)
+	}
+	rawDB.Close()
+
+	// Restore the pre-close WAL pair (base missing the row + non-empty -wal).
+	if err := os.WriteFile(filepath.Join(s.dir, "agents.sqlite"), baseBytes, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(s.dir, "agents.sqlite-wal"), walBytes, 0600); err != nil {
+		t.Fatal(err)
+	}
+	_ = os.Remove(filepath.Join(s.dir, "agents.sqlite-shm"))
+
+	image, lease, err := ExportEnrollmentImage(t.Context(), s.dir)
+	if err != nil {
+		t.Fatalf("ExportEnrollmentImage failed: %v", err)
+	}
+	defer lease.Close()
+
+	stage := enrollmentStage(t)
+	if err := ImportEnrollmentImage(t.Context(), stage, image); err != nil {
+		t.Fatalf("ImportEnrollmentImage failed: %v", err)
+	}
+	restored, err := OpenStore(stage)
+	if err != nil {
+		t.Fatalf("OpenStore(stage) failed: %v", err)
+	}
+	defer restored.Close()
+
+	if _, err := restored.ensureAgentV2(t.Context()); err != nil {
+		t.Fatalf("ensureAgentV2 failed: %v", err)
+	}
+	var title string
+	if err := restored.agentV2.db.QueryRowContext(t.Context(), "SELECT title FROM threads WHERE id='thread_wal_only'").Scan(&title); err != nil || title != "Uncheckpointed WAL Thread" {
+		t.Fatalf("expected WAL-only thread preserved across enrollment image, title=%q err=%v", title, err)
 	}
 }

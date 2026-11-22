@@ -939,11 +939,21 @@ test("Server entry supports multi-distro hosts without polkit/nftables and valid
   const dir = mkdtempSync(join(tmpdir(), "fased-server-entry-"));
   try {
     const osRelease = join(dir, "os-release");
-    for (const tool of ["apt-get", "dpkg-query", "dnf", "rpm"]) {
+    for (const tool of ["apt-get", "dnf", "rpm"]) {
       writeFileSync(join(dir, tool), "#!/bin/sh\nexit 0\n", { mode: 0o700 });
     }
+    writeFileSync(
+      join(dir, "dpkg-query"),
+      "#!/bin/sh\nprintf 'install ok installed'\n",
+      { mode: 0o700 },
+    );
+    writeFileSync(
+      join(dir, "curl"),
+      "#!/usr/bin/env bash\necho 'curl stubbed after headless preflight' >&2\nexit 22\n",
+      { mode: 0o700 },
+    );
     const detached = `import os,subprocess,sys
-r=subprocess.run(['bash','-c',sys.argv[1],'entry','--server','--transport','cloudflare','--domain','fased.example.com'],stdout=subprocess.PIPE,stderr=subprocess.PIPE,preexec_fn=os.setsid,timeout=4)
+r=subprocess.run(['bash','-c',sys.argv[1],'entry',*sys.argv[2:]],stdout=subprocess.PIPE,stderr=subprocess.PIPE,preexec_fn=os.setsid,timeout=4)
 sys.stdout.buffer.write(r.stdout);sys.stderr.buffer.write(r.stderr);sys.exit(r.returncode)
 `;
     for (const [release, cpu] of [
@@ -956,15 +966,48 @@ sys.stdout.buffer.write(r.stdout);sys.stderr.buffer.write(r.stderr);sys.exit(r.r
       let script = rendered
         .replaceAll("/etc/os-release", osRelease)
         .replace("case $(/usr/bin/uname -m)", `case ${cpu}`);
+      for (const tool of ["apt-get", "dpkg-query", "dnf", "rpm", "curl"]) {
+        script = script.replaceAll(`/usr/bin/${tool}`, join(dir, tool));
+      }
+      const result = spawnSync(
+        "python3",
+        [
+          "-c",
+          detached,
+          script,
+          "--server",
+          "--transport",
+          "cloudflare",
+          "--domain",
+          "fased.example.com",
+        ],
+        {
+          env: { ...process.env, HOME: dir },
+          timeout: 6000,
+        },
+      );
+      assert.equal(result.status, 22, result.stderr.toString());
+      assert.doesNotMatch(
+        result.stderr.toString(),
+        /Run this command in an interactive terminal/,
+      );
+      assert.match(result.stderr.toString(), /Downloading and verifying Fased/);
+    }
+    for (const interactiveArgs of [[], ["--connect"]]) {
+      let script = rendered.replaceAll("/etc/os-release", osRelease);
       for (const tool of ["apt-get", "dpkg-query", "dnf", "rpm"]) {
         script = script.replaceAll(`/usr/bin/${tool}`, join(dir, tool));
       }
-      const result = spawnSync("python3", ["-c", detached, script], {
-        timeout: 6000,
-      });
-      assert.equal(result.status, 1, result.stderr.toString());
+      const ttyRequired = spawnSync(
+        "python3",
+        ["-c", detached, script, ...interactiveArgs],
+        {
+          timeout: 6000,
+        },
+      );
+      assert.equal(ttyRequired.status, 1, ttyRequired.stderr.toString());
       assert.match(
-        result.stderr.toString(),
+        ttyRequired.stderr.toString(),
         /Run this command in an interactive terminal/,
       );
     }

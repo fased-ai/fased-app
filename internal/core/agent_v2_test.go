@@ -1277,3 +1277,54 @@ func TestAgentV2MultiProviderParity(t *testing.T) {
 		}
 	})
 }
+
+func TestAgentV2PauseSlotsAndApprovalErrorPropagation(t *testing.T) {
+	t.Parallel()
+	s := fixtureStore(t)
+	s.providerFixture = true
+	ts, token, csrf := startV2HTTPTestServer(t, s)
+	h := ts.Config.Handler.(*HTTPHandler)
+
+	thread, err := s.CreateThread(t.Context(), "trading-analyst", "Guardrails", "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// 1. aiSlots saturated returns 429 on /messages.
+	h.aiSlots <- struct{}{}
+	h.aiSlots <- struct{}{}
+	slotResp := doV2JSONRequest(t, http.MethodPost, ts.URL+"/api/v1/agents/v2/threads/"+thread.ID+"/messages", ts.URL, token, csrf, `{"content":"hello"}`, "application/json")
+	slotResp.Body.Close()
+	<-h.aiSlots
+	<-h.aiSlots
+	if slotResp.StatusCode != http.StatusTooManyRequests {
+		t.Fatalf("expected 429 when aiSlots full, got %d", slotResp.StatusCode)
+	}
+
+	// 2. Non-SSE ResolveAgentV2Approval propagates resume errors as 400 rather than returning 200.
+	swapResp := doV2JSONRequest(t, http.MethodPost, ts.URL+"/api/v1/agents/v2/threads/"+thread.ID+"/messages", ts.URL, token, csrf, `{"content":"Propose a small swap"}`, "application/json")
+	var swapRun AgentV2RunResult
+	if err := json.NewDecoder(swapResp.Body).Decode(&swapRun); err != nil {
+		t.Fatal(err)
+	}
+	swapResp.Body.Close()
+	if swapResp.StatusCode != http.StatusOK || !swapRun.AwaitingApproval || len(swapRun.PendingApprovals) != 1 {
+		t.Fatalf("expected draft_swap pending approval, status=%d run=%+v", swapResp.StatusCode, swapRun)
+	}
+
+	// Disable fixture provider before resuming so resolveAgentV2Provider errors in JSON mode (emit == nil).
+	s.providerFixture = false
+	apResp := doV2JSONRequest(t, http.MethodPost, ts.URL+"/api/v1/agents/v2/approvals/"+swapRun.PendingApprovals[0].ID, ts.URL, token, csrf, `{"decision":"approve","resume":true}`, "application/json")
+	apResp.Body.Close()
+	if apResp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("expected 400 when non-SSE approval resume fails, got %d", apResp.StatusCode)
+	}
+
+	// 3. v2Mutation returns 409 when core is paused for update/backup.
+	_ = pausedBackup(t, s)
+	pausedResp := doV2JSONRequest(t, http.MethodPost, ts.URL+"/api/v1/agents/v2/threads/"+thread.ID+"/messages", ts.URL, token, csrf, `{"content":"while paused"}`, "application/json")
+	pausedResp.Body.Close()
+	if pausedResp.StatusCode != http.StatusConflict {
+		t.Fatalf("expected 409 when core paused, got %d", pausedResp.StatusCode)
+	}
+}

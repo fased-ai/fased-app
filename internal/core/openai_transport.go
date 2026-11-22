@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/fased-ai/fased-app/internal/localprovider"
@@ -41,14 +42,35 @@ func newOpenAITransport() *openAITransport {
 	}}
 }
 
-type nativeProviderRouter struct{}
+var defaultNativeProviderTransports sync.Map
 
-func (nativeProviderRouter) RoundTrip(r *http.Request) (*http.Response, error) {
-	provider, _ := r.Context().Value(providerNameContextKey{}).(string)
+type nativeProviderRouter struct {
+	transports *sync.Map
+}
+
+func newNativeProviderRouter() nativeProviderRouter {
+	return nativeProviderRouter{transports: &sync.Map{}}
+}
+
+func (r nativeProviderRouter) transportFor(provider string) *openAITransport {
 	if provider == "" {
 		provider = "openai"
 	}
-	return newNativeProviderTransport(provider).RoundTrip(r)
+	cache := r.transports
+	if cache == nil {
+		cache = &defaultNativeProviderTransports
+	}
+	if cached, ok := cache.Load(provider); ok {
+		return cached.(*openAITransport)
+	}
+	fresh := newNativeProviderTransport(provider)
+	actual, _ := cache.LoadOrStore(provider, fresh)
+	return actual.(*openAITransport)
+}
+
+func (r nativeProviderRouter) RoundTrip(req *http.Request) (*http.Response, error) {
+	provider, _ := req.Context().Value(providerNameContextKey{}).(string)
+	return r.transportFor(provider).RoundTrip(req)
 }
 
 func (t *openAITransport) RoundTrip(r *http.Request) (*http.Response, error) {

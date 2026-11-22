@@ -541,6 +541,9 @@ func (s *Store) ResolveAgentV2Approval(ctx context.Context, approvalID, decision
 	if resume && pendingRem == 0 {
 		target, err := resolveAgentV2Provider(ctx, s, "", thread.ConnectionRef, "", thread.Model, thread.ProfileID)
 		if err != nil {
+			if emit == nil {
+				return result, err
+			}
 			emitEvent(emit, AgentStreamEvent{
 				Type:      "error",
 				ThreadID:  thread.ID,
@@ -551,6 +554,9 @@ func (s *Store) ResolveAgentV2Approval(ctx context.Context, approvalID, decision
 		}
 		msg, awaiting, loopErr := s.runAgentV2Loop(ctx, thread.ID, "", target, true, agentV2MaxToolRounds-2, emit)
 		if loopErr != nil {
+			if emit == nil {
+				return result, loopErr
+			}
 			emitEvent(emit, AgentStreamEvent{
 				Type:      "error",
 				ThreadID:  thread.ID,

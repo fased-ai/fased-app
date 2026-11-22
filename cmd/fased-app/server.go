@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -167,8 +168,16 @@ func installServerBinary(targetPath string) (string, error) {
 			binDir := filepath.Join(base, "Fased App", "bin")
 			if os.MkdirAll(binDir, 0700) == nil {
 				shimPath := filepath.Join(binDir, "fased.cmd")
-				if _, lErr := os.Lstat(shimPath); errors.Is(lErr, os.ErrNotExist) {
-					shimBody := fmt.Sprintf("@echo off\r\n\"%s\" %%*\r\n", absTarget)
+				shimBody := fmt.Sprintf("@echo off\r\n\"%s\" %%*\r\n", absTarget)
+				writeShim := false
+				if info, lErr := os.Lstat(shimPath); errors.Is(lErr, os.ErrNotExist) {
+					writeShim = true
+				} else if lErr == nil && info.Mode().IsRegular() && info.Size() <= 4096 {
+					if prev, rErr := os.ReadFile(shimPath); rErr == nil && isFasedWindowsShim(prev) {
+						writeShim = !bytes.Equal(prev, []byte(shimBody))
+					}
+				}
+				if writeShim {
 					_ = os.WriteFile(shimPath, []byte(shimBody), 0700)
 				}
 			}
@@ -262,20 +271,14 @@ func buildServerInitPlanForManager(transport, domain, listen, dataDir, binPath, 
 
 	switch transport {
 	case "tailscale":
-		if domain != "" {
-			if _, _, tErr := tailnet.Origin("https://" + domain); tErr != nil {
-				return serverInitPlan{}, errors.New("Tailscale --domain must be your MagicDNS hostname (e.g. box.tailnet.ts.net)")
-			}
-			publicOrigin = "https://" + domain
+		if domain == "" {
+			return serverInitPlan{}, errors.New("Tailscale transport requires --domain <host>.ts.net (check tailscale status --json)")
 		}
-		if publicOrigin != "" {
-			commands = append(commands, fmt.Sprintf("sudo tailscale serve --bg --https=443 http://%s", normListen))
-		} else {
-			commands = append(commands,
-				"tailscale status --json   # check your <host>.ts.net DNSName",
-				fmt.Sprintf("sudo tailscale serve --bg --https=443 http://%s", normListen),
-			)
+		if _, _, tErr := tailnet.Origin("https://" + domain); tErr != nil {
+			return serverInitPlan{}, errors.New("Tailscale --domain must be your MagicDNS hostname (e.g. box.tailnet.ts.net)")
 		}
+		publicOrigin = "https://" + domain
+		commands = append(commands, fmt.Sprintf("sudo tailscale serve --bg --https=443 unix:%s", filepath.Join(absData, "tailscale.sock")))
 	case "cloudflare":
 		if domain == "" {
 			return serverInitPlan{}, errors.New("cloudflare transport requires --domain (e.g. fased.example.com)")
@@ -347,7 +350,7 @@ func buildServerInitPlanForManager(transport, domain, listen, dataDir, binPath, 
 	case "windows":
 		serviceUnit = formatWindowsServerTaskXML(serverWindowsTaskUserID(), binPath, serveArgs)
 	default:
-		serviceUnit = formatServerUnit(transport, strings.Join(execArgs, " "), absData, true, "multi-user.target")
+		serviceUnit = formatServerUnit(transport, quoteSystemdArgs(execArgs), absData, true, "multi-user.target")
 	}
 
 	commands = append(commands, fmt.Sprintf("%s pair --data-dir %s", binPath, absData))
@@ -365,10 +368,31 @@ func buildServerInitPlanForManager(transport, domain, listen, dataDir, binPath, 
 	}, nil
 }
 
+func quoteSystemdArgs(args []string) string {
+	quoted := make([]string, 0, len(args))
+	for _, arg := range args {
+		if arg == "" || strings.ContainsAny(arg, " \t\n\r\"'\\$%") {
+			esc := strings.NewReplacer(`\`, `\\`, `"`, `\"`, `$`, `$$`, `%`, `%%`).Replace(arg)
+			quoted = append(quoted, `"`+esc+`"`)
+		} else {
+			quoted = append(quoted, arg)
+		}
+	}
+	return strings.Join(quoted, " ")
+}
+
+func isFasedWindowsShim(b []byte) bool {
+	s := strings.TrimSpace(string(b))
+	return strings.HasPrefix(s, "@echo off\r\n\"") && strings.HasSuffix(s, "\" %*") && strings.Contains(strings.ToLower(s), "fased-app")
+}
+
 func formatServerUnit(transport, execLine, absData string, protectHome bool, wantedBy string) string {
-	homeDirective := ""
+	extra := "UMask=0077\n"
 	if protectHome {
-		homeDirective = "ProtectHome=read-only\n"
+		extra += "ProtectHome=read-only\n"
+	}
+	if wantedBy == "multi-user.target" {
+		extra += "PrivateDevices=yes\nProtectKernelTunables=yes\nProtectKernelModules=yes\nProtectKernelLogs=yes\nProtectControlGroups=yes\nProtectClock=yes\nProtectHostname=yes\nLockPersonality=yes\nRestrictSUIDSGID=yes\nCapabilityBoundingSet=\n"
 	}
 	return fmt.Sprintf(`[Unit]
 Description=Fased Remote Server (%s)
@@ -387,7 +411,7 @@ ProtectSystem=strict
 
 [Install]
 WantedBy=%s
-`, transport, execLine, homeDirective, absData, wantedBy)
+`, transport, execLine, extra, absData, wantedBy)
 }
 
 func buildUserServiceUnit(plan serverInitPlan, binPath string) string {
@@ -404,7 +428,7 @@ func buildUserServiceUnit(plan serverInitPlan, binPath string) string {
 	}
 	home, _ := os.UserHomeDir()
 	inHome := home != "" && (strings.HasPrefix(plan.DataDir, home+string(os.PathSeparator)) || strings.HasPrefix(binPath, home+string(os.PathSeparator)))
-	return formatServerUnit(plan.Transport, strings.Join(execArgs, " "), plan.DataDir, !inHome, "default.target")
+	return formatServerUnit(plan.Transport, quoteSystemdArgs(execArgs), plan.DataDir, !inHome, "default.target")
 }
 
 func serverInitCommand(args []string, defaultDataDir string, out, errOut io.Writer) error {
@@ -758,8 +782,8 @@ func serverUninstallCommand(args []string, defaultDataDir string, out, errOut io
 
 	unitPath := ""
 	cfgPath := filepath.Join(absData, serverConfigFile)
+	var cfg serverConfig
 	if raw, rErr := core.ReadPrivateFile(cfgPath); rErr == nil {
-		var cfg serverConfig
 		if json.Unmarshal(raw, &cfg) == nil {
 			if cfg.UnitPath != "" {
 				unitPath = cfg.UnitPath
@@ -797,6 +821,7 @@ func serverUninstallCommand(args []string, defaultDataDir string, out, errOut io
 		if err = os.RemoveAll(absData); err != nil {
 			return err
 		}
+		cleanupPurgedServerArtifacts(cfg.BinaryPath)
 		purged = true
 	}
 
@@ -903,4 +928,72 @@ func serverStatusCommand(args []string, defaultDataDir string, out, errOut io.Wr
 	}
 	fmt.Fprintf(out, "Devices:   %d paired\n", len(managed.Devices))
 	return nil
+}
+
+func cleanupPurgedServerArtifacts(binPath string) {
+	home, _ := os.UserHomeDir()
+	xdgData := strings.TrimSpace(os.Getenv("XDG_DATA_HOME"))
+	localAppData := strings.TrimSpace(os.Getenv("LocalAppData"))
+
+	if binPath != "" {
+		cleanBin := filepath.Clean(binPath)
+		absBin, absErr := filepath.Abs(binPath)
+		matchesBin := func(candidate string) bool {
+			clean := filepath.Clean(candidate)
+			return clean == cleanBin || (absErr == nil && clean == filepath.Clean(absBin))
+		}
+
+		if home != "" {
+			for _, name := range []string{"fased", "fased-app"} {
+				link := filepath.Join(home, ".local", "bin", name)
+				info, err := os.Lstat(link)
+				if err != nil || info.Mode()&os.ModeSymlink == 0 {
+					continue
+				}
+				target, err := os.Readlink(link)
+				if err != nil {
+					continue
+				}
+				if !filepath.IsAbs(target) {
+					target = filepath.Join(filepath.Dir(link), target)
+				}
+				if matchesBin(target) {
+					_ = os.Remove(link)
+				}
+			}
+		}
+
+		if localAppData != "" {
+			shimPath := filepath.Join(localAppData, "Fased App", "bin", "fased.cmd")
+			if info, err := os.Lstat(shimPath); err == nil && info.Mode().IsRegular() && info.Size() <= 4096 {
+				if body, rErr := os.ReadFile(shimPath); rErr == nil {
+					want := []byte(fmt.Sprintf("@echo off\r\n\"%s\" %%*\r\n", binPath))
+					wantAbs := []byte(fmt.Sprintf("@echo off\r\n\"%s\" %%*\r\n", absBin))
+					if bytes.Equal(body, want) || (absErr == nil && bytes.Equal(body, wantAbs)) {
+						_ = os.Remove(shimPath)
+						_ = os.Remove(filepath.Dir(shimPath))
+					}
+				}
+			}
+		}
+
+		var managedDirs []string
+		if home != "" {
+			managedDirs = append(managedDirs, filepath.Join(home, ".local", "share", "fased-app"))
+		}
+		if xdgData != "" {
+			managedDirs = append(managedDirs, filepath.Join(xdgData, "fased-app"))
+		}
+		if localAppData != "" {
+			managedDirs = append(managedDirs, filepath.Join(localAppData, "Fased App"))
+		}
+		for _, dir := range managedDirs {
+			cleanDir := filepath.Clean(dir)
+			if filepath.Dir(cleanBin) == cleanDir || (absErr == nil && filepath.Dir(filepath.Clean(absBin)) == cleanDir) {
+				_ = os.Remove(binPath)
+				_ = os.Remove(cleanDir)
+				break
+			}
+		}
+	}
 }

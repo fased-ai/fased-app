@@ -136,7 +136,7 @@ func (s *Store) ensureAgentV2(ctx context.Context) (*agentV2Store, error) {
 	if err != nil {
 		return nil, err
 	}
-	db.SetMaxOpenConns(1)
+	db.SetMaxOpenConns(4)
 	cleanup := true
 	defer func() {
 		if cleanup {

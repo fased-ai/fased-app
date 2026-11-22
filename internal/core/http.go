@@ -647,9 +647,14 @@ func (h *HTTPHandler) ratePeerKey(r *http.Request) string {
 				}
 			}
 		}
-		if xff := r.Header.Values("X-Forwarded-For"); len(xff) == 1 && !strings.Contains(xff[0], ",") {
-			if parsed := net.ParseIP(strings.TrimSpace(xff[0])); parsed != nil {
-				return "proxy:" + parsed.String()
+		if xff := r.Header.Values("X-Forwarded-For"); len(xff) > 0 {
+			for i := len(xff) - 1; i >= 0; i-- {
+				parts := strings.Split(xff[i], ",")
+				for j := len(parts) - 1; j >= 0; j-- {
+					if parsed := net.ParseIP(strings.TrimSpace(parts[j])); parsed != nil {
+						return "proxy:" + parsed.String()
+					}
+				}
 			}
 		}
 		return "proxy:loopback"

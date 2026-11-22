@@ -45,6 +45,9 @@ func (s *Store) BackupMetadata(ctx context.Context, p update.Preflight) (update.
 	// Keep the actual paused SQLite owner and all legitimate writers fenced
 	// through serialization, verification and publication, including other
 	// Store connections. Serialize reads the connection's complete WAL view.
+	if s.agentV2 != nil && s.agentV2.db != nil {
+		_, _ = s.agentV2.db.ExecContext(ctx, "PRAGMA wal_checkpoint(PASSIVE)")
+	}
 	c, e := s.db.Conn(ctx)
 	if e != nil {
 		return zero, e
