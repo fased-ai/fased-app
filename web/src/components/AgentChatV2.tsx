@@ -255,11 +255,14 @@ export function AgentChatV2({
     setChatDrafts,
     chatModelDrafts,
     setChatModelDrafts,
+    pendingChatPrompt,
+    clearChatPrompt,
   } = useWorkspace();
   const v2 = useAgentsV2(core, view.profileId);
   const { view: connection } = useAIConnection();
   const profile = view.profiles.find((p) => p.id === view.profileId)!;
 
+  const consumedPromptIds = useRef(new Set<string>());
   const [railOpen, setRailOpen] = useState(false);
   const [search, setSearch] = useState("");
   const [toolsEnabled, setToolsEnabled] = useState(true);
@@ -322,6 +325,36 @@ export function AgentChatV2({
     setEditingTitle(false);
     setTitleDraft(v2.detail?.thread.title ?? "");
   }, [v2.detail?.thread.id, v2.detail?.thread.title]);
+
+  useEffect(() => {
+    if (
+      !pendingChatPrompt ||
+      pendingChatPrompt.profileId !== view.profileId ||
+      v2.streaming ||
+      consumedPromptIds.current.has(pendingChatPrompt.id)
+    ) {
+      return;
+    }
+    consumedPromptIds.current.add(pendingChatPrompt.id);
+    const next = pendingChatPrompt;
+    clearChatPrompt(next.id);
+    void v2.sendMessage({
+      content: next.prompt,
+      title: next.title,
+      forceNewThread: true,
+      connectionRef: activeConnectionRef || undefined,
+      model: activeModel || undefined,
+      toolsEnabled: true,
+    });
+  }, [
+    pendingChatPrompt,
+    view.profileId,
+    v2.streaming,
+    v2.sendMessage,
+    clearChatPrompt,
+    activeConnectionRef,
+    activeModel,
+  ]);
 
   useEffect(() => {
     scrollEndRef.current?.scrollIntoView({ block: "end" });

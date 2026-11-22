@@ -5,6 +5,7 @@ import {
   formatToolSummary,
   parseMarkdownBlocks,
   parseSSEChunkBuffer,
+  parseTaskDraftMemory,
 } from "./agents-v2";
 
 describe("parseSSEChunkBuffer", () => {
@@ -95,6 +96,62 @@ describe("formatToolSummary", () => {
     ).toBe("Configure RPC");
     expect(formatToolSummary("get_token_price", "{broken")).toBe("");
     expect(formatToolSummary("workspace_status", "{}")).toBe("");
+  });
+});
+
+describe("parseTaskDraftMemory", () => {
+  it("parses JSON task_draft payloads, clamps intervals, and supports fallback/invalid inputs", () => {
+    const parsed = parseTaskDraftMemory({
+      id: "mem-1",
+      scope: "task_draft",
+      title: "Task draft: SOL Watch",
+      content: JSON.stringify({
+        name: "SOL Volatility Watch",
+        description: "Check SOL/USDC spread",
+        intervalSeconds: 30,
+      }),
+      pinned: false,
+      source: "agent",
+      createdAt: 1000,
+      updatedAt: 1000,
+    });
+    expect(parsed).toEqual({
+      id: "mem-1",
+      name: "SOL Volatility Watch",
+      description: "Check SOL/USDC spread",
+      intervalSeconds: 60,
+      createdAt: 1000,
+    });
+
+    const fallback = parseTaskDraftMemory({
+      id: "mem-2",
+      scope: "task_draft",
+      title: "Task draft: Daily digest",
+      content: "Summarize overnight RSS feeds",
+      pinned: false,
+      source: "agent",
+      createdAt: 2000,
+      updatedAt: 2000,
+    });
+    expect(fallback).toEqual({
+      id: "mem-2",
+      name: "Daily digest",
+      description: "Summarize overnight RSS feeds",
+      intervalSeconds: 300,
+      createdAt: 2000,
+    });
+
+    expect(
+      parseTaskDraftMemory({
+        id: "mem-3",
+        scope: "task_draft",
+        content: "",
+        pinned: false,
+        source: "agent",
+        createdAt: 3000,
+        updatedAt: 3000,
+      }),
+    ).toBeNull();
   });
 });
 

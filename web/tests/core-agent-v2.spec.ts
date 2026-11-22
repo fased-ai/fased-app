@@ -157,3 +157,65 @@ test("Tier-1 market price and swap quote read tools stream inline summaries with
   await expect(quoteRow).toContainText("Done", { timeout: 12000 });
   expect(external).toEqual([]);
 });
+
+test("Chat task_draft approval surfaces in Tasks panel and launches back in Chat", async ({
+  page,
+}) => {
+  test.setTimeout(60000);
+  await stop();
+  await start(true, "127.0.0.1:0", "local", false);
+
+  await page.goto(url + "/#agents/chat");
+  const composer = page.getByLabel("Message", { exact: true });
+  await composer.fill("Draft a task to monitor SOL volatility");
+  await page.getByRole("button", { name: "Send", exact: true }).click();
+
+  const taskCard = page.getByRole("article", {
+    name: "Draft task: SOL Volatility Watch",
+    exact: true,
+  });
+  await expect(taskCard).toBeVisible({ timeout: 12000 });
+  await taskCard.getByRole("button", { name: "Approve", exact: true }).click();
+  await expect(taskCard).toContainText("Approved", { timeout: 12000 });
+
+  await page.goto(url + "/#agents/tasks");
+  const draftsPanel = page.getByRole("region", {
+    name: "Agent task drafts",
+    exact: true,
+  });
+  await expect(draftsPanel).toBeVisible({ timeout: 12000 });
+  const draftItem = draftsPanel.getByRole("article", {
+    name: "SOL Volatility Watch",
+    exact: true,
+  });
+  await expect(draftItem).toContainText("5 minutes");
+
+  await draftItem
+    .getByRole("button", { name: "Schedule", exact: true })
+    .click();
+  const taskComposer = page.getByRole("complementary", {
+    name: "Create a task",
+    exact: true,
+  });
+  await expect(taskComposer).toBeVisible();
+  await expect(taskComposer.getByLabel("Task name")).toHaveValue(
+    "SOL Volatility Watch",
+  );
+  await taskComposer
+    .getByRole("button", { name: "Cancel task", exact: true })
+    .click();
+
+  await draftItem
+    .getByRole("button", { name: "Run in Chat", exact: true })
+    .click();
+  await expect(page).toHaveURL(/#agents\/chat$/, { timeout: 12000 });
+  await expect(
+    page.getByRole("heading", { name: "SOL Volatility Watch" }),
+  ).toBeVisible({
+    timeout: 12000,
+  });
+  await expect(page.locator(".v2-markdown").last()).toContainText(
+    "Fixture agent reviewed",
+    { timeout: 12000 },
+  );
+});

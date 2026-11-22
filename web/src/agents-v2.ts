@@ -238,6 +238,56 @@ export function formatToolSummary(
   return "";
 }
 
+export type ParsedTaskDraft = {
+  id: string;
+  name: string;
+  description: string;
+  intervalSeconds: number;
+  createdAt: number;
+};
+
+export function parseTaskDraftMemory(m: AgentV2Memory): ParsedTaskDraft | null {
+  const rawContent = (m.content || "").trim();
+  const fallbackName = (m.title || "").replace(/^Task draft:\s*/i, "").trim();
+  if (!rawContent && !fallbackName) return null;
+
+  let name = fallbackName;
+  let description = rawContent;
+  let intervalSeconds = 300;
+  try {
+    const parsed = JSON.parse(rawContent);
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      const obj = parsed as Record<string, unknown>;
+      if (typeof obj.name === "string" && obj.name.trim()) {
+        name = obj.name.trim();
+      }
+      if (typeof obj.description === "string" && obj.description.trim()) {
+        description = obj.description.trim();
+      } else {
+        description = name;
+      }
+      if (
+        typeof obj.intervalSeconds === "number" &&
+        Number.isFinite(obj.intervalSeconds)
+      ) {
+        const clamped = Math.round(obj.intervalSeconds);
+        intervalSeconds = Math.min(86400, Math.max(60, clamped));
+      }
+    }
+  } catch {
+    if (!description) return null;
+    if (!name) name = description.slice(0, 64);
+  }
+  if (!name || !description) return null;
+  return {
+    id: m.id,
+    name,
+    description,
+    intervalSeconds,
+    createdAt: m.createdAt,
+  };
+}
+
 export type ApprovalField = { label: string; value: string };
 
 export function formatApprovalFields(
@@ -804,6 +854,8 @@ export function useAgentsV2(core: AgentV2CoreClient, profileId: string) {
   const sendMessage = useCallback(
     async (input: {
       content: string;
+      title?: string;
+      forceNewThread?: boolean;
       connectionRef?: string;
       model?: string;
       toolsEnabled?: boolean;
@@ -812,12 +864,13 @@ export function useAgentsV2(core: AgentV2CoreClient, profileId: string) {
       if (!trimmed || core.mode !== "ready") return false;
       setError("");
 
-      let threadId = activeThreadId;
+      let threadId = input.forceNewThread ? "" : activeThreadId;
       let createdFresh = false;
       try {
         if (!threadId) {
           const created = await createThreadV2(core, {
             profileId,
+            title: input.title,
             connectionRef: input.connectionRef || undefined,
             model: input.model || undefined,
           });

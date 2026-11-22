@@ -10,12 +10,19 @@ import {
 import { initialState, reducer, restoreState, STORAGE_KEY } from "./state";
 import { useUI } from "./ui-preferences";
 import { useCore } from "./core";
+import { AIConnectionProvider } from "./ai-connection";
 import { useAgents } from "./agents";
 import type { Action, Provider } from "./state";
 import type { AccountsView } from "./accounts";
 export type ProvidersPreset = {
   provider?: string;
   method?: "api-key" | "sign-in" | "local";
+};
+export type PendingChatPrompt = {
+  id: string;
+  profileId: string;
+  title?: string;
+  prompt: string;
 };
 export type AgentSettingsDraft = {
   values: {
@@ -257,6 +264,8 @@ function useWorkspaceState() {
   const [profileOpen, setProfileOpen] = useState(false);
   const [contextOpen, setContextOpen] = useState(false);
   const [resetOpen, setResetOpen] = useState(false);
+  const [pendingChatPrompt, setPendingChatPrompt] =
+    useState<PendingChatPrompt | null>(null);
   const [query, setQuery] = useState("");
   const [storageError, setStorageError] = useState(false);
   const [toast, setToast] = useState("");
@@ -309,6 +318,22 @@ function useWorkspaceState() {
     if (path === route) {
       setQuery("");
     }
+  }
+  function launchChatPrompt(input: {
+    profileId: string;
+    title?: string;
+    prompt: string;
+  }) {
+    setPendingChatPrompt({
+      id: crypto.randomUUID(),
+      profileId: input.profileId,
+      title: input.title,
+      prompt: input.prompt,
+    });
+    navigate("agents/chat");
+  }
+  function clearChatPrompt(id: string) {
+    setPendingChatPrompt((cur) => (cur?.id === id ? null : cur));
   }
   function notify(
     title: string,
@@ -416,6 +441,9 @@ function useWorkspaceState() {
     notify,
     sendChat,
     searchItems,
+    pendingChatPrompt,
+    launchChatPrompt,
+    clearChatPrompt,
   };
 }
 const WorkspaceContext = createContext<ReturnType<
@@ -424,9 +452,11 @@ const WorkspaceContext = createContext<ReturnType<
 export function WorkspaceProvider({ children }: { children: ReactNode }) {
   const value = useWorkspaceState();
   return (
-    <WorkspaceContext.Provider value={value}>
-      {children}
-    </WorkspaceContext.Provider>
+    <AIConnectionProvider>
+      <WorkspaceContext.Provider value={value}>
+        {children}
+      </WorkspaceContext.Provider>
+    </AIConnectionProvider>
   );
 }
 export function useWorkspace() {

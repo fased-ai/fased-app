@@ -1167,6 +1167,18 @@ func runFixtureProviderV2(_ context.Context, prompt providerV2Prompt, cb provide
 
 	if len(prompt.Tools) > 0 {
 		switch {
+		case strings.Contains(lastUser, "draft a task") || strings.Contains(lastUser, "draft task") || strings.Contains(lastUser, "monitor sol"):
+			return providerTurnResult{
+				ResponseID: "fixture-resp-task",
+				ToolCalls: []providerToolCall{{
+					CallID:   "fixture_call_task_1",
+					Name:     "draft_task",
+					ArgsJSON: `{"name":"SOL Volatility Watch","description":"Check live SOL price and quote 1 SOL to USDC for spread drift.","intervalSeconds":300}`,
+				}},
+				InputTokens:  48,
+				OutputTokens: 24,
+				FinishReason: "tool_calls",
+			}, nil
 		case strings.Contains(lastUser, "quote") && !strings.Contains(lastUser, "swap"):
 			return providerTurnResult{
 				ResponseID: "fixture-resp-quote",

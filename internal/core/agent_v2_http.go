@@ -217,7 +217,26 @@ func (h *HTTPHandler) agentsV2API(w http.ResponseWriter, r *http.Request, token 
 				}
 				limit = n
 			}
-			mems, err := h.store.SearchMemories(r.Context(), q.Get("profileId"), q.Get("q"), limit)
+			qStr := strings.TrimSpace(q.Get("q"))
+			scope := strings.TrimSpace(q.Get("scope"))
+			var (
+				mems []AgentV2Memory
+				err  error
+			)
+			if scope != "" && qStr == "" {
+				mems, err = h.store.ListMemoriesByScope(r.Context(), q.Get("profileId"), scope, limit)
+			} else {
+				mems, err = h.store.SearchMemories(r.Context(), q.Get("profileId"), qStr, limit)
+				if err == nil && scope != "" {
+					filtered := make([]AgentV2Memory, 0, len(mems))
+					for _, m := range mems {
+						if m.Scope == scope {
+							filtered = append(filtered, m)
+						}
+					}
+					mems = filtered
+				}
+			}
 			if err != nil {
 				writeError(w, 500, "memories unavailable")
 				return

@@ -260,6 +260,69 @@ func TestAgentV2StoreSchemaAndFTS5(t *testing.T) {
 	}
 }
 
+func TestAgentV2ScopedMemoriesHTTP(t *testing.T) {
+	t.Parallel()
+	s := fixtureStore(t)
+
+	if _, err := s.CreateMemory(t.Context(), MemoryInput{
+		ProfileID: "operator",
+		Scope:     "workspace",
+		Title:     "General note",
+		Content:   "SOL spread note",
+		Source:    "user",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.CreateMemory(t.Context(), MemoryInput{
+		ProfileID: "operator",
+		Scope:     "swap_draft",
+		Title:     "Swap draft: 1 SOL -> USDC",
+		Content:   `{"fromToken":"SOL","toToken":"USDC"}`,
+		Source:    "agent",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	taskMem, err := s.CreateMemory(t.Context(), MemoryInput{
+		ProfileID: "operator",
+		Scope:     "task_draft",
+		Title:     "Task draft: SOL Volatility Watch",
+		Content:   `{"name":"SOL Volatility Watch","description":"Watch SOL/USDC spread","intervalSeconds":300}`,
+		Source:    "agent",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ts, token, _ := startV2HTTPTestServer(t, s)
+	resp := doV2JSONRequest(t, http.MethodGet, ts.URL+"/api/v1/agents/v2/memories?profileId=operator&scope=task_draft", ts.URL, token, "", "", "application/json")
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 for scoped memories, got %d", resp.StatusCode)
+	}
+	var body struct {
+		Memories []AgentV2Memory `json:"memories"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	if len(body.Memories) != 1 || body.Memories[0].ID != taskMem.ID || body.Memories[0].Scope != "task_draft" {
+		t.Fatalf("expected only task_draft memory, got %+v", body.Memories)
+	}
+
+	// Empty q + q&scope should filter search results to the requested scope as well.
+	filteredResp := doV2JSONRequest(t, http.MethodGet, ts.URL+"/api/v1/agents/v2/memories?profileId=operator&q=SOL&scope=task_draft", ts.URL, token, "", "", "application/json")
+	defer filteredResp.Body.Close()
+	var filteredBody struct {
+		Memories []AgentV2Memory `json:"memories"`
+	}
+	if err := json.NewDecoder(filteredResp.Body).Decode(&filteredBody); err != nil {
+		t.Fatal(err)
+	}
+	if len(filteredBody.Memories) != 1 || filteredBody.Memories[0].Scope != "task_draft" {
+		t.Fatalf("expected q+scope filtered task_draft only, got %+v", filteredBody.Memories)
+	}
+}
+
 func TestAgentV2WireAdaptersAllFamilies(t *testing.T) {
 	t.Parallel()
 
