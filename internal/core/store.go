@@ -51,6 +51,7 @@ type Store struct {
 	agentV2Mu                     sync.Mutex
 	agentV2                       *agentV2Store
 	agentV2TransportOverride      http.RoundTripper // Tests only; never configuration, CLI or IPC.
+	marketDataTransport           http.RoundTripper // Tests only; never configuration, CLI or IPC.
 	dir                           string
 	instanceID                    string
 	pauseFault                    func(string) error // Test-only interruption injection, never configuration or IPC.

@@ -12,6 +12,7 @@ import type { AgentView } from "../agents";
 import {
   formatApprovalFields,
   formatToolLabel,
+  formatToolSummary,
   parseMarkdownBlocks,
   useAgentsV2,
   type AgentApproval,
@@ -125,10 +126,17 @@ function formatPrettyJSON(raw?: string) {
 
 function ToolCallRow({ tc }: { tc: AgentToolCall }) {
   const { t } = useUI();
+  const summary =
+    tc.status === "completed"
+      ? formatToolSummary(tc.toolName, tc.resultJson)
+      : "";
   return (
     <details className="v2-tool-call" data-status={tc.status}>
       <summary>
-        <span className="v2-tool-name">{formatToolLabel(tc.toolName)}</span>
+        <span className="v2-tool-head">
+          <span className="v2-tool-name">{formatToolLabel(tc.toolName)}</span>
+          {summary && <span className="v2-tool-summary">{summary}</span>}
+        </span>
         <span className={`v2-pill v2-pill-${tc.status}`}>
           {toolStatusLabel(tc.status, t)}
         </span>

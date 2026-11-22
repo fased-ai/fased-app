@@ -1167,6 +1167,42 @@ func runFixtureProviderV2(_ context.Context, prompt providerV2Prompt, cb provide
 
 	if len(prompt.Tools) > 0 {
 		switch {
+		case strings.Contains(lastUser, "quote") && !strings.Contains(lastUser, "swap"):
+			return providerTurnResult{
+				ResponseID: "fixture-resp-quote",
+				ToolCalls: []providerToolCall{{
+					CallID:   "fixture_call_quote_1",
+					Name:     "get_swap_quote",
+					ArgsJSON: `{"fromToken":"SOL","toToken":"USDC","amount":"1","slippageBps":50}`,
+				}},
+				InputTokens:  44,
+				OutputTokens: 18,
+				FinishReason: "tool_calls",
+			}, nil
+		case strings.Contains(lastUser, "price"):
+			return providerTurnResult{
+				ResponseID: "fixture-resp-price",
+				ToolCalls: []providerToolCall{{
+					CallID:   "fixture_call_price_1",
+					Name:     "get_token_price",
+					ArgsJSON: `{"tokens":["SOL","USDC"]}`,
+				}},
+				InputTokens:  44,
+				OutputTokens: 18,
+				FinishReason: "tool_calls",
+			}, nil
+		case strings.Contains(lastUser, "balance"):
+			return providerTurnResult{
+				ResponseID: "fixture-resp-balances",
+				ToolCalls: []providerToolCall{{
+					CallID:   "fixture_call_balances_1",
+					Name:     "get_wallet_balances",
+					ArgsJSON: `{}`,
+				}},
+				InputTokens:  44,
+				OutputTokens: 18,
+				FinishReason: "tool_calls",
+			}, nil
 		case strings.Contains(lastUser, "swap"):
 			return providerTurnResult{
 				ResponseID: "fixture-resp-swap",

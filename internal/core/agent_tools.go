@@ -64,6 +64,75 @@ func agentV2ToolRegistry() []agentToolEntry {
 		},
 		{
 			spec: AgentToolSpec{
+				Name:        "get_wallet_balances",
+				Tier:        toolTierRead,
+				Description: "Read verified SOL and SPL token balances plus recent finalized activity for a configured wallet account via its RPC endpoint. Never accesses private keys or signing authority.",
+				Parameters: map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"accountId": map[string]any{
+							"type":        "string",
+							"description": "Optional wallet account ID or name. Defaults to the first wallet with configured RPC.",
+						},
+					},
+				},
+			},
+			execute: toolGetWalletBalances,
+		},
+		{
+			spec: AgentToolSpec{
+				Name:        "get_token_price",
+				Tier:        toolTierRead,
+				Description: "Fetch live read-only USD prices and 24h changes for Solana tokens (Jupiter Price v3) and major crypto assets (CoinGecko), e.g. SOL, USDC, JUP, WEN, BTC, ETH, HYPE.",
+				Parameters: map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"token": map[string]any{
+							"type":        "string",
+							"description": "Single ticker symbol (e.g. SOL) or Solana mint address.",
+						},
+						"tokens": map[string]any{
+							"type":        "array",
+							"items":       map[string]any{"type": "string"},
+							"description": "List of 1-10 token ticker symbols or Solana mint addresses.",
+						},
+					},
+				},
+			},
+			execute: toolGetTokenPrice,
+		},
+		{
+			spec: AgentToolSpec{
+				Name:        "get_swap_quote",
+				Tier:        toolTierRead,
+				Description: "Fetch a live read-only Solana DEX swap quote from Jupiter showing expected output, minimum received after slippage, price impact, and route plan before drafting a swap.",
+				Parameters: map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"fromToken": map[string]any{
+							"type":        "string",
+							"description": "Input token symbol or mint (e.g. SOL or USDC).",
+						},
+						"toToken": map[string]any{
+							"type":        "string",
+							"description": "Output token symbol or mint (e.g. USDC or SOL).",
+						},
+						"amount": map[string]any{
+							"type":        "string",
+							"description": "Input token amount in human decimal units (e.g. 1 or 25.5).",
+						},
+						"slippageBps": map[string]any{
+							"type":        "integer",
+							"description": "Maximum slippage tolerance in basis points (1-5000, default 50).",
+						},
+					},
+					"required": []string{"fromToken", "toToken", "amount"},
+				},
+			},
+			execute: toolGetSwapQuote,
+		},
+		{
+			spec: AgentToolSpec{
 				Name:        "list_tasks",
 				Tier:        toolTierRead,
 				Description: "List scheduled agent tasks and their recent run outcomes.",

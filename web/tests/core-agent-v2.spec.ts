@@ -124,3 +124,36 @@ test("T3Code streaming chat, Tier-1 tool execution, inline swap approval cards, 
   }
   await expect(page.locator(".v2-thread-row")).toHaveCount(1);
 });
+
+test("Tier-1 market price and swap quote read tools stream inline summaries without live calls", async ({
+  page,
+}) => {
+  test.setTimeout(60000);
+  await stop();
+  await start(true, "127.0.0.1:0", "local", false);
+
+  const external: string[] = [];
+  const allowedHost = new URL(url).hostname;
+  page.on("request", (req) => {
+    const host = new URL(req.url()).hostname;
+    if (host !== allowedHost) external.push(req.url());
+  });
+
+  await page.goto(url + "/#agents/chat");
+  const composer = page.getByLabel("Message", { exact: true });
+
+  await composer.fill("Check SOL price");
+  await page.getByRole("button", { name: "Send", exact: true }).click();
+  const priceRow = page.locator("details.v2-tool-call summary").first();
+  await expect(priceRow).toContainText("Token price", { timeout: 12000 });
+  await expect(priceRow).toContainText("SOL $70.00", { timeout: 12000 });
+  await expect(priceRow).toContainText("Done", { timeout: 12000 });
+
+  await composer.fill("Get a quote for 1 SOL to USDC");
+  await page.getByRole("button", { name: "Send", exact: true }).click();
+  const quoteRow = page.locator("details.v2-tool-call summary").last();
+  await expect(quoteRow).toContainText("Swap quote", { timeout: 12000 });
+  await expect(quoteRow).toContainText("1 SOL -> 70 USDC", { timeout: 12000 });
+  await expect(quoteRow).toContainText("Done", { timeout: 12000 });
+  expect(external).toEqual([]);
+});

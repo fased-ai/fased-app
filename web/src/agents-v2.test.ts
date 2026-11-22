@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   formatApprovalFields,
   formatToolLabel,
+  formatToolSummary,
   parseMarkdownBlocks,
   parseSSEChunkBuffer,
 } from "./agents-v2";
@@ -31,6 +32,9 @@ describe("formatToolLabel", () => {
   it("maps known workspace & trading tools and formats unknown names", () => {
     expect(formatToolLabel("workspace_status")).toBe("Workspace status");
     expect(formatToolLabel("list_wallets")).toBe("Wallets");
+    expect(formatToolLabel("get_wallet_balances")).toBe("Wallet balances");
+    expect(formatToolLabel("get_token_price")).toBe("Token price");
+    expect(formatToolLabel("get_swap_quote")).toBe("Swap quote");
     expect(formatToolLabel("list_tasks")).toBe("Tasks");
     expect(formatToolLabel("search_memories")).toBe("Memory");
     expect(formatToolLabel("search_news")).toBe("News");
@@ -40,6 +44,57 @@ describe("formatToolLabel", () => {
     expect(formatToolLabel("draft_swap")).toBe("Swap draft");
     expect(formatToolLabel("draft_strategy")).toBe("Strategy draft");
     expect(formatToolLabel("custom_alpha_scan")).toBe("custom alpha scan");
+  });
+});
+
+describe("formatToolSummary", () => {
+  it("formats market price, swap quote, wallet balance summaries, and handles invalid inputs", () => {
+    expect(
+      formatToolSummary(
+        "get_token_price",
+        JSON.stringify({
+          prices: [
+            { symbol: "SOL", usdPrice: 70.007, change24hPct: 1.84 },
+            { symbol: "USDC", usdPrice: 1.0, change24hPct: -0.01 },
+          ],
+        }),
+      ),
+    ).toBe("SOL $70.01 (+1.8%) · USDC $1.00 (-0.0%)");
+
+    expect(
+      formatToolSummary(
+        "get_swap_quote",
+        JSON.stringify({
+          inUiAmount: "1",
+          outUiAmount: "70.059912",
+          fromSymbol: "SOL",
+          toSymbol: "USDC",
+          priceImpactPct: "0.0000224",
+        }),
+      ),
+    ).toBe("1 SOL -> 70.0599 USDC · 0.00% impact");
+
+    expect(
+      formatToolSummary(
+        "get_wallet_balances",
+        JSON.stringify({
+          sol: "2.450000000",
+          tokens: [{ mint: "EPjF", uiAmount: "120" }],
+        }),
+      ),
+    ).toBe("2.45 SOL · 1 token");
+
+    expect(
+      formatToolSummary("get_wallet_balances", JSON.stringify({ count: 0 })),
+    ).toBe("No wallets");
+    expect(
+      formatToolSummary(
+        "get_wallet_balances",
+        JSON.stringify({ status: "rpc_not_configured" }),
+      ),
+    ).toBe("Configure RPC");
+    expect(formatToolSummary("get_token_price", "{broken")).toBe("");
+    expect(formatToolSummary("workspace_status", "{}")).toBe("");
   });
 });
 

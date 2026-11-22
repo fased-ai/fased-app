@@ -138,6 +138,9 @@ export function parseSSEChunkBuffer(buffer: string): {
 const toolLabels: Record<string, string> = {
   workspace_status: "Workspace status",
   list_wallets: "Wallets",
+  get_wallet_balances: "Wallet balances",
+  get_token_price: "Token price",
+  get_swap_quote: "Swap quote",
   list_tasks: "Tasks",
   search_memories: "Memory",
   search_news: "News",
@@ -150,6 +153,89 @@ const toolLabels: Record<string, string> = {
 
 export function formatToolLabel(toolName: string): string {
   return toolLabels[toolName] ?? toolName.replace(/_/g, " ");
+}
+
+function formatUSDCompact(value: number): string {
+  if (!Number.isFinite(value) || value <= 0) return "$0";
+  if (value >= 1000) {
+    return `$${Math.round(value).toLocaleString("en-US")}`;
+  }
+  if (value >= 1) {
+    return `$${value.toFixed(2)}`;
+  }
+  return `$${Number(value.toPrecision(3))}`;
+}
+
+export function formatToolSummary(
+  toolName: string,
+  resultJson?: string,
+): string {
+  if (!resultJson) return "";
+  let parsed: Record<string, unknown> | null = null;
+  try {
+    const raw = JSON.parse(resultJson);
+    if (raw && typeof raw === "object" && !Array.isArray(raw)) {
+      parsed = raw as Record<string, unknown>;
+    }
+  } catch {
+    return "";
+  }
+  if (!parsed) return "";
+
+  if (toolName === "get_token_price" && Array.isArray(parsed.prices)) {
+    const parts = (parsed.prices as Array<Record<string, unknown>>)
+      .slice(0, 2)
+      .flatMap((p) => {
+        const symbol = typeof p.symbol === "string" ? p.symbol : "";
+        const price = typeof p.usdPrice === "number" ? p.usdPrice : 0;
+        if (!symbol || !price) return [];
+        const change =
+          typeof p.change24hPct === "number" && Number.isFinite(p.change24hPct)
+            ? ` (${p.change24hPct >= 0 ? "+" : ""}${p.change24hPct.toFixed(1)}%)`
+            : "";
+        return [`${symbol} ${formatUSDCompact(price)}${change}`];
+      });
+    return parts.join(" · ");
+  }
+
+  if (toolName === "get_swap_quote") {
+    const inUi = typeof parsed.inUiAmount === "string" ? parsed.inUiAmount : "";
+    const outUi =
+      typeof parsed.outUiAmount === "string" ? parsed.outUiAmount : "";
+    const fromSym =
+      typeof parsed.fromSymbol === "string" ? parsed.fromSymbol : "";
+    const toSym = typeof parsed.toSymbol === "string" ? parsed.toSymbol : "";
+    if (!inUi || !outUi) return "";
+    const outNum = Number(outUi);
+    const outDisplay =
+      Number.isFinite(outNum) && outNum >= 1
+        ? outNum.toFixed(outNum >= 100 ? 2 : 4).replace(/\.?0+$/, "")
+        : outUi;
+    const base = `${inUi} ${fromSym} -> ${outDisplay} ${toSym}`.trim();
+    const rawImpact = Number(parsed.priceImpactPct);
+    if (Number.isFinite(rawImpact)) {
+      return `${base} · ${(Math.abs(rawImpact) * 100).toFixed(2)}% impact`;
+    }
+    return base;
+  }
+
+  if (toolName === "get_wallet_balances") {
+    if (parsed.count === 0) return "No wallets";
+    if (parsed.status === "rpc_not_configured") return "Configure RPC";
+    if (parsed.status === "rpc_passphrase_required") return "Vault passphrase";
+    if (parsed.status === "rpc_locked") return "RPC locked";
+    const solRaw = typeof parsed.sol === "string" ? parsed.sol : "";
+    if (!solRaw) return "";
+    const solNum = Number(solRaw);
+    const solLabel =
+      Number.isFinite(solNum) && solNum > 0
+        ? solNum.toFixed(4).replace(/\.?0+$/, "")
+        : solRaw;
+    const count = Array.isArray(parsed.tokens) ? parsed.tokens.length : 0;
+    return `${solLabel} SOL${count > 0 ? ` · ${count} ${count === 1 ? "token" : "tokens"}` : ""}`;
+  }
+
+  return "";
 }
 
 export type ApprovalField = { label: string; value: string };
