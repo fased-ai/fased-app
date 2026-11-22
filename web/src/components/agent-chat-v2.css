@@ -374,3 +374,32 @@
   color: var(--wt-text) !important;
   border: 1px solid var(--wt-border) !important;
 }
+.v2-recalled-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  width: fit-content;
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--wt-border);
+  color: var(--wt-muted);
+  background: var(--wt-surface);
+}
+.v2-undo-toast {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 8px 16px 0;
+  padding: 8px 12px;
+  border: 1px solid var(--wt-accent-border);
+  border-radius: 10px;
+  background: var(--wt-surface);
+  font-size: 12px;
+}
+.v2-undo-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}

@@ -259,3 +259,109 @@ test("Non-OpenAI provider surfaces its own model in Chat composer without OpenAI
     "google/gemini-3.8-flash",
   );
 });
+
+test("Agent Settings Rules & Memory CRUD, Enter-to-reject feedback, and 5s Archive/Delete Undo work end-to-end", async ({
+  page,
+  isMobile,
+}) => {
+  test.setTimeout(75000);
+  await stop();
+  await start(true, "127.0.0.1:0", "local", false);
+
+  await page.goto(url + "/#agents/settings");
+  const rulesPanel = page.getByRole("region", {
+    name: "Rules & Memory",
+    exact: true,
+  });
+  await expect(rulesPanel).toBeVisible({ timeout: 12000 });
+  await rulesPanel
+    .getByRole("button", { name: "Add rule", exact: true })
+    .click();
+  await rulesPanel.getByLabel("Title", { exact: true }).fill("SOL Risk Cap");
+  await rulesPanel
+    .getByLabel("Rule or fact", { exact: true })
+    .fill("Never risk more than 2% per SOL trade.");
+  await rulesPanel.getByRole("button", { name: "Save", exact: true }).click();
+  await expect(rulesPanel).toContainText("SOL Risk Cap");
+  await expect(rulesPanel).toContainText("Pinned");
+
+  await page.reload();
+  const reloadedRules = page.getByRole("region", {
+    name: "Rules & Memory",
+    exact: true,
+  });
+  await expect(reloadedRules).toContainText(
+    "Never risk more than 2% per SOL trade.",
+    { timeout: 12000 },
+  );
+  await reloadedRules
+    .getByRole("button", { name: "Unpin SOL Risk Cap", exact: true })
+    .click();
+  await expect(
+    reloadedRules.getByRole("button", {
+      name: "Pin SOL Risk Cap",
+      exact: true,
+    }),
+  ).toBeVisible();
+  await reloadedRules
+    .getByRole("button", { name: "Edit SOL Risk Cap", exact: true })
+    .click();
+  await reloadedRules
+    .getByLabel("Rule or fact", { exact: true })
+    .fill("Cap single swap allocation at 1% equity.");
+  await reloadedRules
+    .getByRole("button", { name: "Save", exact: true })
+    .click();
+  await expect(reloadedRules).toContainText(
+    "Cap single swap allocation at 1% equity.",
+  );
+  await reloadedRules
+    .getByRole("button", { name: "Delete SOL Risk Cap", exact: true })
+    .click();
+  await expect(reloadedRules).toContainText("No rules saved");
+
+  await page.goto(url + "/#agents/chat");
+  const composer = page.getByLabel("Message", { exact: true });
+  await composer.fill("Propose a small swap");
+  await page.getByRole("button", { name: "Send", exact: true }).click();
+
+  const swapCard = page.getByRole("article", {
+    name: "Swap draft: 10 USDC -> SOL",
+    exact: true,
+  });
+  await expect(swapCard).toBeVisible({ timeout: 12000 });
+
+  const noteInput = swapCard.getByLabel("Approval note", { exact: true });
+  await noteInput.fill("Split into two tranches");
+  await noteInput.press("Enter");
+  await expect(swapCard).toContainText("Rejected", { timeout: 12000 });
+  await expect(swapCard).toContainText("Split into two tranches");
+  await expect(page.locator(".v2-markdown").last()).toContainText("rejected", {
+    timeout: 12000,
+  });
+
+  await page
+    .getByRole("button", { name: "Archive conversation", exact: true })
+    .click();
+  const undoToast = page.locator(".v2-undo-toast");
+  await expect(undoToast).toContainText("Conversation archived");
+  await undoToast.getByRole("button", { name: "Undo", exact: true }).click();
+  await expect(
+    page.getByRole("button", { name: "Archive conversation", exact: true }),
+  ).toBeVisible({ timeout: 12000 });
+
+  await page
+    .getByRole("button", { name: "Delete conversation", exact: true })
+    .click();
+  await expect(undoToast).toContainText("Conversation deleted");
+  if (isMobile) {
+    await page
+      .getByRole("button", { name: "Conversations", exact: true })
+      .click();
+  }
+  await expect(page.locator(".v2-thread-row")).toHaveCount(0);
+  await undoToast.getByRole("button", { name: "Undo", exact: true }).click();
+  await expect(page.locator(".v2-thread-row")).toHaveCount(1, {
+    timeout: 12000,
+  });
+});

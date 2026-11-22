@@ -10,12 +10,14 @@ import {
 } from "../pages/AIConnection";
 import type { AgentView } from "../agents";
 import {
+  deleteThreadV2,
   formatApprovalFields,
   formatToolLabel,
   formatToolSummary,
   parseMarkdownBlocks,
   useAgentsV2,
   type AgentApproval,
+  type AgentThread,
   type AgentToolCall,
   type AgentV2Message,
   type InlineSegment,
@@ -27,6 +29,7 @@ import {
   History,
   Plug,
   Plus,
+  RotateCcw,
   Shield,
   ShieldCheck,
   Square,
@@ -217,6 +220,18 @@ function ApprovalCard({
             disabled={busy}
             maxLength={400}
             onChange={(e) => setNote(e.target.value)}
+            onKeyDown={(e) => {
+              if (
+                e.key === "Enter" &&
+                !e.shiftKey &&
+                !e.nativeEvent.isComposing &&
+                note.trim() &&
+                !busy
+              ) {
+                e.preventDefault();
+                void onDecide(approval.id, "reject", note);
+              }
+            }}
           />
           <button
             type="button"
@@ -268,6 +283,20 @@ export function AgentChatV2({
   const [toolsEnabled, setToolsEnabled] = useState(true);
   const [editingTitle, setEditingTitle] = useState(false);
   const [titleDraft, setTitleDraft] = useState("");
+  const [undoToast, setUndoToast] = useState<{
+    kind: "archive" | "delete";
+    thread: AgentThread;
+    prevActiveId: string;
+  } | null>(null);
+  const [pendingDeleteIds, setPendingDeleteIds] = useState<Set<string>>(
+    () => new Set(),
+  );
+  const undoTimerRef = useRef<number | null>(null);
+  const pendingDeleteRef = useRef<AgentThread | null>(null);
+  const undoToastRef = useRef(undoToast);
+  undoToastRef.current = undoToast;
+  const coreRef = useRef(core);
+  coreRef.current = core;
   const [welcomeDismissed, setWelcomeDismissed] = useState(() => {
     try {
       return sessionStorage.getItem("fased.welcome.dismissed") === "1";
@@ -275,6 +304,138 @@ export function AgentChatV2({
       return false;
     }
   });
+
+  function clearUndoTimer() {
+    if (undoTimerRef.current !== null) {
+      window.clearTimeout(undoTimerRef.current);
+      undoTimerRef.current = null;
+    }
+  }
+
+  async function flushPendingDelete() {
+    const queued = pendingDeleteRef.current;
+    if (!queued) return;
+    pendingDeleteRef.current = null;
+    clearUndoTimer();
+    setPendingDeleteIds((prev) => {
+      if (!prev.has(queued.id)) return prev;
+      const next = new Set(prev);
+      next.delete(queued.id);
+      return next;
+    });
+    await v2.removeThread(queued.id);
+  }
+
+  function handleArchiveThread(thread: AgentThread) {
+    if (thread.archived) {
+      void v2.archiveThread(thread.id, false);
+      return;
+    }
+    void (async () => {
+      await flushPendingDelete();
+      clearUndoTimer();
+      const prevActiveId = v2.activeThreadId;
+      await v2.archiveThread(thread.id, true);
+      setUndoToast({ kind: "archive", thread, prevActiveId });
+      undoTimerRef.current = window.setTimeout(() => {
+        undoTimerRef.current = null;
+        setUndoToast(null);
+      }, 5000);
+    })();
+  }
+
+  function handleDeleteThread(thread: AgentThread) {
+    void (async () => {
+      await flushPendingDelete();
+      clearUndoTimer();
+      const prevActiveId = v2.activeThreadId;
+      pendingDeleteRef.current = thread;
+      setPendingDeleteIds((prev) => new Set(prev).add(thread.id));
+      if (v2.activeThreadId === thread.id) {
+        v2.startNewThread();
+      }
+      setUndoToast({ kind: "delete", thread, prevActiveId });
+      undoTimerRef.current = window.setTimeout(() => {
+        undoTimerRef.current = null;
+        setUndoToast(null);
+        const queued = pendingDeleteRef.current;
+        if (!queued || queued.id !== thread.id) return;
+        pendingDeleteRef.current = null;
+        setPendingDeleteIds((prev) => {
+          if (!prev.has(queued.id)) return prev;
+          const next = new Set(prev);
+          next.delete(queued.id);
+          return next;
+        });
+        void v2.removeThread(queued.id);
+      }, 5000);
+    })();
+  }
+
+  async function handleUndo() {
+    const active = undoToastRef.current;
+    if (!active) return;
+    clearUndoTimer();
+    setUndoToast(null);
+    if (active.kind === "archive") {
+      await v2.archiveThread(active.thread.id, false);
+      await v2.selectThread(active.prevActiveId || active.thread.id);
+      return;
+    }
+    if (pendingDeleteRef.current?.id === active.thread.id) {
+      pendingDeleteRef.current = null;
+      setPendingDeleteIds((prev) => {
+        if (!prev.has(active.thread.id)) return prev;
+        const next = new Set(prev);
+        next.delete(active.thread.id);
+        return next;
+      });
+      if (!active.prevActiveId || active.prevActiveId === active.thread.id) {
+        await v2.selectThread(active.thread.id);
+      }
+    }
+  }
+
+  useEffect(() => {
+    const flushOnLeave = () => {
+      clearUndoTimer();
+      const queued = pendingDeleteRef.current;
+      if (queued) {
+        pendingDeleteRef.current = null;
+        if (coreRef.current.mode === "ready") {
+          void deleteThreadV2(coreRef.current, queued.id);
+        }
+      }
+    };
+    window.addEventListener("pagehide", flushOnLeave);
+    return () => {
+      window.removeEventListener("pagehide", flushOnLeave);
+      flushOnLeave();
+      setUndoToast(null);
+      setPendingDeleteIds(new Set());
+    };
+  }, [core.instanceId, view.profileId]);
+
+  useEffect(() => {
+    if (!undoToast) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (!(e.metaKey || e.ctrlKey) || e.shiftKey || e.altKey) return;
+      if (e.key.toLowerCase() !== "z") return;
+      const target = e.target as HTMLElement | null;
+      if (
+        target &&
+        (target.tagName === "INPUT" ||
+          target.tagName === "TEXTAREA" ||
+          target.isContentEditable)
+      ) {
+        return;
+      }
+      e.preventDefault();
+      void handleUndo();
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [undoToast]);
 
   const scrollEndRef = useRef<HTMLDivElement>(null);
   const modelMenuRef = useRef<HTMLDetailsElement>(null);
@@ -392,7 +553,9 @@ export function AgentChatV2({
 
   const q = search.trim().toLowerCase();
   const visibleThreads = v2.threads.filter(
-    (item) => !q || item.title.toLowerCase().includes(q),
+    (item) =>
+      !pendingDeleteIds.has(item.id) &&
+      (!q || item.title.toLowerCase().includes(q)),
   );
   const legacySessions = view.sessions.filter(
     (s) =>
@@ -403,6 +566,13 @@ export function AgentChatV2({
   const visibleMessages: AgentV2Message[] = (v2.detail?.messages ?? []).filter(
     (m) => m.role !== "tool",
   );
+  const lastAssistantId =
+    [...visibleMessages].reverse().find((m) => m.role === "assistant")?.id ??
+    "";
+  const formatRecalledLabel = (count: number) =>
+    count === 1
+      ? t("1 rule recalled")
+      : t("{count} rules recalled").replace("{count}", String(count));
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
@@ -527,7 +697,7 @@ export function AgentChatV2({
                 aria-label={`${t("Delete")} ${item.title}`}
                 onClick={(e) => {
                   e.stopPropagation();
-                  void v2.removeThread(item.id);
+                  handleDeleteThread(item);
                 }}
               >
                 <Trash2 size={13} aria-hidden="true" />
@@ -619,12 +789,7 @@ export function AgentChatV2({
                     : t("Archive conversation")
                 }
                 disabled={v2.streaming}
-                onClick={() =>
-                  void v2.archiveThread(
-                    v2.detail!.thread.id,
-                    !v2.detail!.thread.archived,
-                  )
-                }
+                onClick={() => handleArchiveThread(v2.detail!.thread)}
               >
                 <History size={15} />
               </button>
@@ -634,10 +799,46 @@ export function AgentChatV2({
                 aria-label={t("Delete conversation")}
                 title={t("Delete conversation")}
                 disabled={v2.streaming}
-                onClick={() => void v2.removeThread(v2.detail!.thread.id)}
+                onClick={() => handleDeleteThread(v2.detail!.thread)}
               >
                 <Trash2 size={15} />
               </button>
+            </div>
+          )}
+
+          {undoToast && (
+            <div className="v2-undo-toast" role="status" aria-live="polite">
+              <span>
+                {t(
+                  undoToast.kind === "archive"
+                    ? "Conversation archived"
+                    : "Conversation deleted",
+                )}
+              </span>
+              <div className="v2-undo-actions">
+                <button
+                  type="button"
+                  className="secondary"
+                  onClick={() => void handleUndo()}
+                >
+                  <RotateCcw size={13} aria-hidden="true" />
+                  <span>{t("Undo")}</span>
+                </button>
+                <button
+                  type="button"
+                  className="icon-button"
+                  aria-label={t("Dismiss")}
+                  onClick={() => {
+                    clearUndoTimer();
+                    if (undoToast.kind === "delete") {
+                      void flushPendingDelete();
+                    }
+                    setUndoToast(null);
+                  }}
+                >
+                  <X size={13} aria-hidden="true" />
+                </button>
+              </div>
             </div>
           )}
 
@@ -718,10 +919,21 @@ export function AgentChatV2({
                         ))}
                       </div>
                     )}
-                    {(m.content ||
-                      m.errorText ||
-                      (m.approvals?.length ?? 0) > 0) &&
-                      (m.model || (m.outputTokens ?? 0) > 0) && (
+                    {(() => {
+                      const showRecalled =
+                        m.id === lastAssistantId &&
+                        v2.lastRecalled &&
+                        v2.lastRecalled.threadId === v2.detail?.thread.id &&
+                        v2.lastRecalled.count > 0;
+                      const showMeta =
+                        (m.content ||
+                          m.errorText ||
+                          (m.approvals?.length ?? 0) > 0) &&
+                        (m.model ||
+                          (m.outputTokens ?? 0) > 0 ||
+                          !!showRecalled);
+                      if (!showMeta) return null;
+                      return (
                         <footer className="v2-msg-meta">
                           {m.model && <span>{previewModel(m.model, t)}</span>}
                           {(m.outputTokens ?? 0) > 0 && (
@@ -729,8 +941,17 @@ export function AgentChatV2({
                               {(m.inputTokens ?? 0) + (m.outputTokens ?? 0)} tok
                             </span>
                           )}
+                          {showRecalled && v2.lastRecalled && (
+                            <span
+                              className="v2-recalled-pill"
+                              title={v2.lastRecalled.titles.join(", ")}
+                            >
+                              {formatRecalledLabel(v2.lastRecalled.count)}
+                            </span>
+                          )}
                         </footer>
-                      )}
+                      );
+                    })()}
                   </div>
                 )}
               </article>
@@ -742,6 +963,16 @@ export function AgentChatV2({
                 role="status"
               >
                 <div className="v2-assistant-turn">
+                  {(v2.streamDraft?.recalledMemories ?? 0) > 0 && (
+                    <span
+                      className="v2-recalled-pill"
+                      title={(v2.streamDraft?.recalledMemoryTitles ?? []).join(
+                        ", ",
+                      )}
+                    >
+                      {formatRecalledLabel(v2.streamDraft!.recalledMemories!)}
+                    </span>
+                  )}
                   {v2.streamDraft?.reasoning && (
                     <details className="v2-thinking" open>
                       <summary>{t("Thinking")}</summary>

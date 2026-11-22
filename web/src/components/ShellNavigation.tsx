@@ -90,7 +90,9 @@ export function ShellNavigation() {
   const visiblePages = shellPages.filter(
     (p) => showTradingTerminals || !p.path.startsWith("terminals/"),
   );
-  const railPages = visiblePages.filter((p) => p.path !== "agents/news");
+  const railPages = visiblePages.filter(
+    (p) => p.path !== "agents/news" && p.path !== "agents/memory",
+  );
   const links = (items: readonly (typeof shellPages)[number][], rail = false) =>
     items.map((p) => (
       <a

@@ -1,11 +1,13 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   formatApprovalFields,
+  formatDraftMemorySummary,
   formatToolLabel,
   formatToolSummary,
   parseMarkdownBlocks,
   parseSSEChunkBuffer,
   parseTaskDraftMemory,
+  updateMemoryV2,
 } from "./agents-v2";
 
 describe("parseSSEChunkBuffer", () => {
@@ -306,5 +308,93 @@ describe("parseMarkdownBlocks", () => {
         code: "const x = 1;",
       },
     ]);
+  });
+});
+
+describe("formatDraftMemorySummary & updateMemoryV2", () => {
+  it("formats swap, task, and strategy drafts cleanly while leaving non-drafts and invalid JSON untouched", () => {
+    expect(
+      formatDraftMemorySummary({
+        scope: "swap_draft",
+        title: "Swap draft: 10 USDC -> SOL",
+        content: JSON.stringify({
+          amount: "10",
+          fromToken: "USDC",
+          toToken: "SOL",
+          maxSlippageBps: 50,
+          venue: "Jupiter",
+          rationale: "Rebalance core SOL position",
+        }),
+      }),
+    ).toBe(
+      "10 USDC -> SOL (slippage 50 bps) · Jupiter · Rebalance core SOL position",
+    );
+
+    expect(
+      formatDraftMemorySummary({
+        scope: "task_draft",
+        title: "Task draft: SOL Volatility Watch",
+        content: JSON.stringify({
+          name: "SOL Volatility Watch",
+          description: "Alert on 3% intraday swing",
+          intervalSeconds: 300,
+        }),
+      }),
+    ).toBe("Alert on 3% intraday swing · every 5m");
+
+    expect(
+      formatDraftMemorySummary({
+        scope: "strategy_draft",
+        title: "Strategy draft: SOL Grid",
+        content: JSON.stringify({
+          assetPair: "SOL/USDC",
+          side: "buy",
+          thesis: "Accumulate pullbacks above support",
+          entryRule: "RSI < 38",
+          maxPositionUsd: 500,
+        }),
+      }),
+    ).toBe(
+      "SOL/USDC (buy) · Accumulate pullbacks above support · RSI < 38 · max $500",
+    );
+
+    expect(
+      formatDraftMemorySummary({
+        scope: "workspace",
+        title: "Rule",
+        content: '{"raw":"kept verbatim"}',
+      }),
+    ).toBe('{"raw":"kept verbatim"}');
+
+    expect(
+      formatDraftMemorySummary({
+        scope: "swap_draft",
+        title: "Broken",
+        content: "{not-json",
+      }),
+    ).toBe("{not-json");
+  });
+
+  it("sends PATCH request from updateMemoryV2", async () => {
+    const req = vi.fn().mockResolvedValue({
+      memory: {
+        id: "mem_1",
+        scope: "workspace",
+        title: "Risk",
+        content: "Cap slippage at 25 bps",
+        pinned: true,
+        source: "user",
+        createdAt: 1,
+        updatedAt: 2,
+      },
+    });
+    await updateMemoryV2({ request: req }, "mem 1", {
+      content: "Cap slippage at 25 bps",
+      pinned: true,
+    });
+    expect(req).toHaveBeenCalledWith("agents/v2/memories/mem%201", "PATCH", {
+      content: "Cap slippage at 25 bps",
+      pinned: true,
+    });
   });
 });

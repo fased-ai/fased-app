@@ -243,14 +243,19 @@ func (h *HTTPHandler) agentsV2API(w http.ResponseWriter, r *http.Request, token 
 			}
 			qStr := strings.TrimSpace(q.Get("q"))
 			scope := strings.TrimSpace(q.Get("scope"))
+			excludeDrafts := q.Get("excludeDrafts") == "1" || q.Get("excludeDrafts") == "true"
+			fetchLimit := limit
+			if excludeDrafts && scope == "" {
+				fetchLimit = 100
+			}
 			var (
 				mems []AgentV2Memory
 				err  error
 			)
 			if scope != "" && qStr == "" {
-				mems, err = h.store.ListMemoriesByScope(r.Context(), q.Get("profileId"), scope, limit)
+				mems, err = h.store.ListMemoriesByScope(r.Context(), q.Get("profileId"), scope, fetchLimit)
 			} else {
-				mems, err = h.store.SearchMemories(r.Context(), q.Get("profileId"), qStr, limit)
+				mems, err = h.store.SearchMemories(r.Context(), q.Get("profileId"), qStr, fetchLimit)
 				if err == nil && scope != "" {
 					filtered := make([]AgentV2Memory, 0, len(mems))
 					for _, m := range mems {
@@ -260,6 +265,19 @@ func (h *HTTPHandler) agentsV2API(w http.ResponseWriter, r *http.Request, token 
 					}
 					mems = filtered
 				}
+			}
+			if err == nil && excludeDrafts && scope == "" {
+				filtered := make([]AgentV2Memory, 0, min(len(mems), limit))
+				for _, m := range mems {
+					if isV2DraftScope(m.Scope) {
+						continue
+					}
+					filtered = append(filtered, m)
+					if len(filtered) >= limit {
+						break
+					}
+				}
+				mems = filtered
 			}
 			if err != nil {
 				writeError(w, 500, "memories unavailable")
@@ -290,23 +308,42 @@ func (h *HTTPHandler) agentsV2API(w http.ResponseWriter, r *http.Request, token 
 			writeError(w, 404, "memory not found")
 			return
 		}
-		if r.Method != http.MethodDelete {
+		switch r.Method {
+		case http.MethodPatch:
+			if !h.v2Mutation(w, r, token, true) {
+				return
+			}
+			var in MemoryUpdateInput
+			if !decodeV2JSON(w, r, &in, 32*1024) {
+				return
+			}
+			m, err := h.store.UpdateMemory(r.Context(), memID, in)
+			if errors.Is(err, ErrMemoryNotFound) {
+				writeError(w, 404, err.Error())
+				return
+			}
+			if err != nil {
+				writeError(w, 400, err.Error())
+				return
+			}
+			writeJSON(w, 200, map[string]any{"memory": m})
+		case http.MethodDelete:
+			if !h.v2Mutation(w, r, token, false) {
+				return
+			}
+			err := h.store.DeleteMemory(r.Context(), memID)
+			if errors.Is(err, ErrMemoryNotFound) {
+				writeError(w, 404, err.Error())
+				return
+			}
+			if err != nil {
+				writeError(w, 400, err.Error())
+				return
+			}
+			writeJSON(w, 200, map[string]bool{"deleted": true})
+		default:
 			writeError(w, 405, "method not allowed")
-			return
 		}
-		if !h.v2Mutation(w, r, token, false) {
-			return
-		}
-		err := h.store.DeleteMemory(r.Context(), memID)
-		if errors.Is(err, ErrMemoryNotFound) {
-			writeError(w, 404, err.Error())
-			return
-		}
-		if err != nil {
-			writeError(w, 400, err.Error())
-			return
-		}
-		writeJSON(w, 200, map[string]bool{"deleted": true})
 
 	default:
 		writeError(w, 404, "unknown API operation")

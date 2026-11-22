@@ -5,7 +5,7 @@ import {
   useState,
   type FormEvent,
 } from "react";
-import { Plus, Search, Trash2 } from "../icons";
+import { Pin, Plus, Search, Trash2 } from "../icons";
 import { Dialog } from "../components/shared";
 import { useUI } from "../ui-preferences";
 import { useCore } from "../core";
@@ -19,7 +19,9 @@ import type {
 } from "../agents";
 import {
   deleteMemoryV2,
+  formatDraftMemorySummary,
   searchMemoriesV2,
+  updateMemoryV2,
   type AgentV2Memory,
 } from "../agents-v2";
 
@@ -204,9 +206,24 @@ export function AgentMemorySection({
                     {item.pinned && (
                       <span className="v2-pill">{uiText("Pinned")}</span>
                     )}
-                    <p>{item.content}</p>
+                    <p>{formatDraftMemorySummary(item)}</p>
                   </div>
                   <div className="agent-inline">
+                    {!item.scope.endsWith("_draft") && (
+                      <button
+                        type="button"
+                        className={`icon-button ${item.pinned ? "is-pinned" : ""}`}
+                        aria-label={`${t(item.pinned ? "Unpin" : "Pin")} ${item.title || item.id}`}
+                        title={t(item.pinned ? "Unpin" : "Pin")}
+                        onClick={() =>
+                          void updateMemoryV2(core, item.id, {
+                            pinned: !item.pinned,
+                          }).then(() => loadV2Memories(ftsQuery))
+                        }
+                      >
+                        <Pin size={14} />
+                      </button>
+                    )}
                     <button
                       type="button"
                       className="icon-button"

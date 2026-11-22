@@ -102,6 +102,8 @@ export type AgentStreamEvent = {
   approval?: AgentApproval;
   message?: AgentV2Message;
   awaitingApproval?: boolean;
+  recalledMemories?: number;
+  recalledMemoryTitles?: string[];
   error?: string;
 };
 
@@ -336,6 +338,114 @@ export function parseTaskDraftMemory(m: AgentV2Memory): ParsedTaskDraft | null {
     intervalSeconds,
     createdAt: m.createdAt,
   };
+}
+
+export function formatDraftMemorySummary(
+  item: Pick<AgentV2Memory, "scope" | "title" | "content">,
+): string {
+  const scope = (item.scope || "").trim();
+  const raw = (item.content || "").trim();
+  if (!scope.endsWith("_draft") || !raw) {
+    return item.content;
+  }
+
+  let parsed: Record<string, unknown> | null = null;
+  try {
+    const val = JSON.parse(raw);
+    if (val && typeof val === "object" && !Array.isArray(val)) {
+      parsed = val as Record<string, unknown>;
+    }
+  } catch {
+    return item.content;
+  }
+  if (!parsed) return item.content;
+
+  if (scope === "task_draft") {
+    const draft = parseTaskDraftMemory({
+      id: "",
+      scope,
+      title: item.title,
+      content: raw,
+      pinned: false,
+      source: "agent",
+      createdAt: 0,
+      updatedAt: 0,
+    });
+    if (draft) {
+      const secs = draft.intervalSeconds;
+      const cadence =
+        secs >= 3600 && secs % 3600 === 0
+          ? `${secs / 3600}h`
+          : secs >= 60 && secs % 60 === 0
+            ? `${secs / 60}m`
+            : `${secs}s`;
+      return `${draft.description} · every ${cadence}`;
+    }
+  }
+
+  if (scope === "swap_draft") {
+    const amount =
+      parsed.amount !== undefined ? String(parsed.amount).trim() : "";
+    const fromToken =
+      typeof parsed.fromToken === "string" ? parsed.fromToken.trim() : "";
+    const toToken =
+      typeof parsed.toToken === "string" ? parsed.toToken.trim() : "";
+    const slippage = parsed.maxSlippageBps ?? parsed.slippageBps;
+    const venue = typeof parsed.venue === "string" ? parsed.venue.trim() : "";
+    const rationale =
+      typeof parsed.rationale === "string"
+        ? parsed.rationale.trim()
+        : typeof parsed.reason === "string"
+          ? parsed.reason.trim()
+          : "";
+    if (fromToken && toToken) {
+      const head = `${amount ? `${amount} ` : ""}${fromToken} -> ${toToken}`;
+      const slip =
+        typeof slippage === "number" || typeof slippage === "string"
+          ? ` (slippage ${slippage} bps)`
+          : "";
+      const extras = [venue, rationale].filter(Boolean);
+      return extras.length
+        ? `${head}${slip} · ${extras.join(" · ")}`
+        : `${head}${slip}`;
+    }
+  }
+
+  if (scope === "strategy_draft") {
+    const pair =
+      typeof parsed.assetPair === "string"
+        ? parsed.assetPair.trim()
+        : typeof parsed.pair === "string"
+          ? parsed.pair.trim()
+          : "";
+    const side = typeof parsed.side === "string" ? parsed.side.trim() : "";
+    const summary =
+      typeof parsed.summary === "string"
+        ? parsed.summary.trim()
+        : typeof parsed.thesis === "string"
+          ? parsed.thesis.trim()
+          : "";
+    const entryRule =
+      typeof parsed.entryRule === "string" ? parsed.entryRule.trim() : "";
+    const maxPos =
+      typeof parsed.maxPositionUsd === "number" && parsed.maxPositionUsd > 0
+        ? `max $${parsed.maxPositionUsd}`
+        : typeof parsed.maxAllocation === "string" &&
+            parsed.maxAllocation.trim()
+          ? parsed.maxAllocation.trim()
+          : "";
+    const parts = [
+      pair ? `${pair}${side ? ` (${side})` : ""}` : "",
+      summary,
+      entryRule,
+      maxPos,
+    ].filter(Boolean);
+    if (parts.length > 0) {
+      return parts.join(" · ");
+    }
+  }
+
+  return item.content;
 }
 
 export type ApprovalField = { label: string; value: string };
@@ -602,12 +712,18 @@ export function deleteThreadV2(
 
 export function searchMemoriesV2(
   core: Pick<AgentV2CoreClient, "request">,
-  params: { profileId?: string; q?: string; limit?: number } = {},
+  params: {
+    profileId?: string;
+    q?: string;
+    limit?: number;
+    excludeDrafts?: boolean;
+  } = {},
 ) {
   const qs = new URLSearchParams();
   if (params.profileId) qs.set("profileId", params.profileId);
   if (params.q) qs.set("q", params.q);
   if (params.limit) qs.set("limit", String(params.limit));
+  if (params.excludeDrafts) qs.set("excludeDrafts", "1");
   return core.request<{ memories: AgentV2Memory[] }>(
     `agents/v2/memories?${qs.toString()}`,
   );
@@ -631,6 +747,24 @@ export function createMemoryV2(
   );
 }
 
+export function updateMemoryV2(
+  core: Pick<AgentV2CoreClient, "request">,
+  id: string,
+  patch: {
+    title?: string;
+    content?: string;
+    tags?: string;
+    pinned?: boolean;
+    scope?: string;
+  },
+) {
+  return core.request<{ memory: AgentV2Memory }>(
+    `agents/v2/memories/${encodeURIComponent(id)}`,
+    "PATCH",
+    patch,
+  );
+}
+
 export function deleteMemoryV2(
   core: Pick<AgentV2CoreClient, "request">,
   id: string,
@@ -649,6 +783,14 @@ export type StreamDraft = {
   reasoning: string;
   toolCalls: AgentToolCall[];
   approvals: AgentApproval[];
+  recalledMemories?: number;
+  recalledMemoryTitles?: string[];
+};
+
+export type RecalledMemoriesInfo = {
+  threadId: string;
+  count: number;
+  titles: string[];
 };
 
 function mergeToolCall(list: AgentToolCall[], next: AgentToolCall) {
@@ -675,6 +817,9 @@ export function useAgentsV2(core: AgentV2CoreClient, profileId: string) {
   const [loading, setLoading] = useState(false);
   const [streaming, setStreaming] = useState(false);
   const [streamDraft, setStreamDraft] = useState<StreamDraft | null>(null);
+  const [lastRecalled, setLastRecalled] = useState<RecalledMemoriesInfo | null>(
+    null,
+  );
   const [resolvingApprovalId, setResolvingApprovalId] = useState("");
   const [error, setError] = useState("");
 
@@ -729,6 +874,7 @@ export function useAgentsV2(core: AgentV2CoreClient, profileId: string) {
     setActiveThreadId("");
     setDetail(null);
     setStreamDraft(null);
+    setLastRecalled(null);
     setStreaming(false);
     setError("");
     if (core.mode !== "ready") return;
@@ -758,6 +904,7 @@ export function useAgentsV2(core: AgentV2CoreClient, profileId: string) {
       abortController.current?.abort();
       setStreaming(false);
       setStreamDraft(null);
+      setLastRecalled(null);
       setActiveThreadId(id);
       if (!id) {
         setDetail(null);
@@ -772,6 +919,7 @@ export function useAgentsV2(core: AgentV2CoreClient, profileId: string) {
     abortController.current?.abort();
     setStreaming(false);
     setStreamDraft(null);
+    setLastRecalled(null);
     setActiveThreadId("");
     setDetail(null);
     setError("");
@@ -795,6 +943,17 @@ export function useAgentsV2(core: AgentV2CoreClient, profileId: string) {
       return;
     }
     if (kind === "run_started") {
+      const recalledCount = ev.recalledMemories ?? 0;
+      const recalledTitles = ev.recalledMemoryTitles ?? [];
+      setLastRecalled(
+        recalledCount > 0 && ev.threadId
+          ? {
+              threadId: ev.threadId,
+              count: recalledCount,
+              titles: recalledTitles,
+            }
+          : null,
+      );
       setStreamDraft({
         messageId: ev.messageId ?? "pending",
         provider: ev.provider,
@@ -803,6 +962,8 @@ export function useAgentsV2(core: AgentV2CoreClient, profileId: string) {
         reasoning: "",
         toolCalls: [],
         approvals: [],
+        recalledMemories: recalledCount,
+        recalledMemoryTitles: recalledTitles,
       });
       return;
     }
@@ -815,6 +976,8 @@ export function useAgentsV2(core: AgentV2CoreClient, profileId: string) {
         reasoning: (cur?.reasoning ?? "") + ev.delta,
         toolCalls: cur?.toolCalls ?? [],
         approvals: cur?.approvals ?? [],
+        recalledMemories: cur?.recalledMemories,
+        recalledMemoryTitles: cur?.recalledMemoryTitles,
       }));
       return;
     }
@@ -827,6 +990,8 @@ export function useAgentsV2(core: AgentV2CoreClient, profileId: string) {
         reasoning: cur?.reasoning ?? "",
         toolCalls: cur?.toolCalls ?? [],
         approvals: cur?.approvals ?? [],
+        recalledMemories: cur?.recalledMemories,
+        recalledMemoryTitles: cur?.recalledMemoryTitles,
       }));
       return;
     }
@@ -870,6 +1035,8 @@ export function useAgentsV2(core: AgentV2CoreClient, profileId: string) {
             updatedAp && cur
               ? mergeApproval(cur.approvals, updatedAp)
               : (cur?.approvals ?? []),
+          recalledMemories: cur?.recalledMemories,
+          recalledMemoryTitles: cur?.recalledMemoryTitles,
         }));
       }
       return;
@@ -884,6 +1051,8 @@ export function useAgentsV2(core: AgentV2CoreClient, profileId: string) {
         reasoning: cur?.reasoning ?? "",
         toolCalls: cur?.toolCalls ?? [],
         approvals: mergeApproval(cur?.approvals ?? [], ap),
+        recalledMemories: cur?.recalledMemories,
+        recalledMemoryTitles: cur?.recalledMemoryTitles,
       }));
       return;
     }
@@ -913,6 +1082,7 @@ export function useAgentsV2(core: AgentV2CoreClient, profileId: string) {
       const trimmed = input.content.trim();
       if (!trimmed || core.mode !== "ready") return false;
       setError("");
+      setLastRecalled(null);
 
       let threadId = input.forceNewThread ? "" : activeThreadId;
       let createdFresh = false;
@@ -1096,6 +1266,7 @@ export function useAgentsV2(core: AgentV2CoreClient, profileId: string) {
     loading,
     streaming,
     streamDraft,
+    lastRecalled,
     resolvingApprovalId,
     error,
     setError,

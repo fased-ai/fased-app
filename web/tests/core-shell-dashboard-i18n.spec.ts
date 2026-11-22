@@ -227,7 +227,7 @@ test("Meteora shell preserves drafts and records through navigation theme langua
     exact: true,
   });
   expect((await rail.textContent())?.trim()).toBe("");
-  for (const hidden of ["News", "Mining", "Onchain", "Hyperliquid"]) {
+  for (const hidden of ["News", "Memory", "Mining", "Onchain", "Hyperliquid"]) {
     await expect(
       rail.getByRole("link", {
         name: hidden,
@@ -236,10 +236,10 @@ test("Meteora shell preserves drafts and records through navigation theme langua
       }),
     ).toHaveCount(0);
   }
-  await rail.getByRole("link", { name: "Memory", exact: true }).focus();
+  await rail.getByRole("link", { name: "Agents", exact: true }).focus();
   expect(
     await rail
-      .getByRole("link", { name: "Memory", exact: true })
+      .getByRole("link", { name: "Agents", exact: true })
       .evaluate((el) => getComputedStyle(el, "::after").opacity),
   ).toBe("1");
   await page

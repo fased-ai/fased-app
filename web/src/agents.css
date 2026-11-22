@@ -238,3 +238,68 @@ form.agent-inline {
 .connect-ai-actions p {
   margin: 0;
 }
+.agent-settings-stack {
+  display: grid;
+  gap: 20px;
+  align-content: start;
+  min-width: 0;
+}
+.rules-memory-form {
+  display: grid;
+  gap: 12px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid var(--line);
+}
+.agent-record-body label.rules-memory-pin-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  color: var(--wt-text);
+  justify-self: start;
+}
+.agent-record-body label.rules-memory-pin-toggle input[type="checkbox"] {
+  width: auto;
+  padding: 0;
+}
+.rules-memory-search {
+  min-width: 0;
+}
+.rules-memory-list {
+  display: grid;
+  gap: 4px;
+}
+.rules-memory-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px 12px;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--line);
+  align-items: start;
+}
+.rules-memory-row:last-child {
+  border-bottom: 0;
+  padding-bottom: 0;
+}
+.rules-memory-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 4px;
+}
+.rules-memory-row p {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: var(--wt-muted);
+  font-size: 13px;
+}
+.rules-memory-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.rules-memory-actions .is-pinned {
+  color: var(--wt-coral);
+}

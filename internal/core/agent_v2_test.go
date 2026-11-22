@@ -14,6 +14,7 @@ import (
 	"sync"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/fased-ai/fased-app/internal/signer"
 )
@@ -1425,5 +1426,148 @@ func TestAgentV2ToolFetchWebPageAndSSRFGuards(t *testing.T) {
 		if _, err := entry.execute(t.Context(), s, "", argsJSON); err == nil {
 			t.Fatalf("SSRF guard failed to block %q", badURL)
 		}
+	}
+}
+
+func TestAgentV2MemoryUpdatePinnedPromptAndDraftFiltering(t *testing.T) {
+	t.Parallel()
+	s := fixtureStore(t)
+
+	longRule := "Always cap single SOL trade allocation below 5 percent of total equity, enforce max slippage 40 bps on Jupiter routes, avoid illiquid tokens below 250k daily volume, and wait for two confirmations before logging entry fill status. UNIQUE_END_MARKER_260"
+	if utf8.RuneCountInString(longRule) < 220 {
+		t.Fatalf("test setup expected >220 chars, got %d", utf8.RuneCountInString(longRule))
+	}
+
+	pinnedMem, err := s.CreateMemory(t.Context(), MemoryInput{
+		ProfileID: "trading-analyst",
+		Scope:     "workspace",
+		Title:     "Risk Cap",
+		Content:   longRule,
+		Pinned:    true,
+		Source:    "user",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	editableMem, err := s.CreateMemory(t.Context(), MemoryInput{
+		ProfileID: "trading-analyst",
+		Scope:     "workspace",
+		Title:     "Venue Note",
+		Content:   "Prefer alphaanchor aggregator before midnight.",
+		Pinned:    false,
+		Source:    "user",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, scope := range []string{"swap_draft", "task_draft", "strategy_draft"} {
+		if _, err := s.CreateMemory(t.Context(), MemoryInput{
+			ProfileID: "trading-analyst",
+			Scope:     scope,
+			Title:     "Draft: " + scope,
+			Content:   `{"secret":"SHOULD_NOT_APPEAR_IN_PROMPT_DRAFT_LEAK"}`,
+			Pinned:    true,
+			Source:    "agent",
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// Legacy expired V1 note in core.sqlite must be filtered out even if raw Expired bool is false.
+	agentApply(t, s, AgentCommand{
+		Action:    "memory-put",
+		ProfileID: "trading-analyst",
+		Text:      "EXPIRED_LEGACY_MARKER do not use outdated leverage setting",
+		Source:    "manual",
+		ExpiresAt: s.now().Unix() - 10,
+	})
+	legacyHits, err := s.SearchMemories(t.Context(), "trading-analyst", "EXPIRED_LEGACY_MARKER", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(legacyHits) != 0 {
+		t.Fatalf("expected expired V1 memory to be excluded, got %+v", legacyHits)
+	}
+
+	// buildAgentV2Instructions injects pinned rules unconditionally on unrelated queries,
+	// preserves >80 chars up to 500 runes, and excludes *_draft rows.
+	instructions := buildAgentV2Instructions(t.Context(), s, "trading-analyst", "", "hello weather forecast today")
+	if !strings.Contains(instructions, "Pinned · Risk Cap") || !strings.Contains(instructions, "UNIQUE_END_MARKER_260") {
+		t.Fatalf("expected full >220 char pinned rule in instructions on unrelated query, got:\n%s", instructions)
+	}
+	if strings.Contains(instructions, "SHOULD_NOT_APPEAR_IN_PROMPT_DRAFT_LEAK") {
+		t.Fatalf("draft scope leaked into instructions:\n%s", instructions)
+	}
+
+	// HTTP PATCH updates content/pinned and refreshes FTS5; excludeDrafts=1 excludes *_draft rows.
+	ts, token, csrf := startV2HTTPTestServer(t, s)
+	nextTitle := "Updated Venue Rule"
+	nextContent := "Prefer betalimit routing after noon."
+	nextPinned := true
+	patchBytes, _ := json.Marshal(MemoryUpdateInput{
+		Title:   &nextTitle,
+		Content: &nextContent,
+		Pinned:  &nextPinned,
+	})
+	patchResp := doV2JSONRequest(t, http.MethodPatch, ts.URL+"/api/v1/agents/v2/memories/"+editableMem.ID, ts.URL, token, csrf, string(patchBytes), "application/json")
+	defer patchResp.Body.Close()
+	if patchResp.StatusCode != http.StatusOK {
+		t.Fatalf("PATCH memory expected 200, got %d", patchResp.StatusCode)
+	}
+	var patchBody struct {
+		Memory AgentV2Memory `json:"memory"`
+	}
+	if err := json.NewDecoder(patchResp.Body).Decode(&patchBody); err != nil {
+		t.Fatal(err)
+	}
+	if patchBody.Memory.Title != nextTitle || patchBody.Memory.Content != nextContent || !patchBody.Memory.Pinned || patchBody.Memory.ID != pinnedMem.ID && patchBody.Memory.ID != editableMem.ID {
+		t.Fatalf("unexpected PATCH response: %+v", patchBody.Memory)
+	}
+
+	missingResp := doV2JSONRequest(t, http.MethodPatch, ts.URL+"/api/v1/agents/v2/memories/doesnotexist1234", ts.URL, token, csrf, string(patchBytes), "application/json")
+	missingResp.Body.Close()
+	if missingResp.StatusCode != http.StatusNotFound {
+		t.Fatalf("PATCH unknown memory expected 404, got %d", missingResp.StatusCode)
+	}
+
+	oldHits, err := s.SearchMemories(t.Context(), "trading-analyst", "alphaanchor", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(oldHits) != 0 {
+		t.Fatalf("expected old term alphaanchor removed from FTS5 after PATCH, got %+v", oldHits)
+	}
+	newHits, err := s.SearchMemories(t.Context(), "trading-analyst", "betalimit", 10)
+	if err != nil || len(newHits) != 1 || newHits[0].ID != editableMem.ID {
+		t.Fatalf("expected updated term betalimit in FTS5, got %+v err=%v", newHits, err)
+	}
+
+	allResp := doV2JSONRequest(t, http.MethodGet, ts.URL+"/api/v1/agents/v2/memories?profileId=trading-analyst&limit=50", ts.URL, token, "", "", "application/json")
+	defer allResp.Body.Close()
+	var allBody struct {
+		Memories []AgentV2Memory `json:"memories"`
+	}
+	if err := json.NewDecoder(allResp.Body).Decode(&allBody); err != nil {
+		t.Fatal(err)
+	}
+	if len(allBody.Memories) < 5 {
+		t.Fatalf("expected drafts included without excludeDrafts=1, got %d rows", len(allBody.Memories))
+	}
+
+	noDraftResp := doV2JSONRequest(t, http.MethodGet, ts.URL+"/api/v1/agents/v2/memories?profileId=trading-analyst&excludeDrafts=1&limit=50", ts.URL, token, "", "", "application/json")
+	defer noDraftResp.Body.Close()
+	var noDraftBody struct {
+		Memories []AgentV2Memory `json:"memories"`
+	}
+	if err := json.NewDecoder(noDraftResp.Body).Decode(&noDraftBody); err != nil {
+		t.Fatal(err)
+	}
+	for _, m := range noDraftBody.Memories {
+		if isV2DraftScope(m.Scope) {
+			t.Fatalf("excludeDrafts=1 leaked draft row: %+v", m)
+		}
+	}
+	if len(noDraftBody.Memories) != 2 {
+		t.Fatalf("expected 2 non-draft memories with excludeDrafts=1, got %d (%+v)", len(noDraftBody.Memories), noDraftBody.Memories)
 	}
 }
