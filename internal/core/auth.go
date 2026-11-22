@@ -1,6 +1,7 @@
 package core
 
 import (
+	"bytes"
 	"context"
 	"crypto/hmac"
 	"crypto/rand"
@@ -40,6 +41,45 @@ var (
 func passwordHash(password string, salt []byte) []byte {
 	return argon2.IDKey([]byte(password), salt, kdfTime, kdfMemory, kdfThreads, 32)
 }
+
+type preDerivedKDF struct {
+	salt []byte
+	key  []byte
+}
+
+func (p *preDerivedKDF) clear() {
+	if p != nil {
+		clear(p.key)
+		p.key = nil
+		p.salt = nil
+	}
+}
+
+func derivePasswordKeyForSalt(passphrase string, salt []byte) preDerivedKDF {
+	if !validPassword(passphrase) || len(salt) != 16 {
+		return preDerivedKDF{}
+	}
+	return preDerivedKDF{salt: append([]byte(nil), salt...), key: passwordHash(passphrase, salt)}
+}
+
+func deriveNewPasswordKey(passphrase string) (preDerivedKDF, error) {
+	if !validPassword(passphrase) {
+		return preDerivedKDF{}, nil
+	}
+	salt := make([]byte, 16)
+	if _, err := rand.Read(salt); err != nil {
+		return preDerivedKDF{}, err
+	}
+	return preDerivedKDF{salt: salt, key: passwordHash(passphrase, salt)}, nil
+}
+
+func (p preDerivedKDF) keyFor(passphrase string, salt []byte) []byte {
+	if len(p.key) == 32 && bytes.Equal(p.salt, salt) {
+		return append([]byte(nil), p.key...)
+	}
+	return passwordHash(passphrase, salt)
+}
+
 func validPassword(password string) bool {
 	return utf8.RuneCountInString(password) >= 12 && len(password) <= 1024
 }
@@ -100,10 +140,10 @@ func (s *Store) Claim(ctx context.Context, code, password string) (string, error
 		return "", errors.New("use a password of at least 12 characters and at most 1024 bytes")
 	}
 	s.authMu.Lock()
-	defer s.authMu.Unlock()
 	var hash string
 	var expires int64
 	err := s.db.QueryRowContext(ctx, "SELECT COALESCE(claim_hash,''),COALESCE(claim_expires,0) FROM instance WHERE id=1 AND password_hash IS NULL").Scan(&hash, &expires)
+	s.authMu.Unlock()
 	if err != nil || expires <= s.now().Unix() || subtle.ConstantTimeCompare([]byte(hash), []byte(tokenHash(code))) != 1 {
 		return "", ErrUnauthorized
 	}
@@ -112,6 +152,9 @@ func (s *Store) Claim(ctx context.Context, code, password string) (string, error
 		return "", err
 	}
 	derived := passwordHash(password, salt)
+	defer clear(derived)
+	s.authMu.Lock()
+	defer s.authMu.Unlock()
 	// Recheck the claim inside the conditional write; another process may claim first.
 	result, err := s.db.ExecContext(ctx, "UPDATE instance SET password_salt=?,password_hash=?,claim_hash=NULL,claim_expires=NULL WHERE id=1 AND password_hash IS NULL AND claim_hash=? AND claim_expires>?", salt, derived, hash, s.now().Unix())
 	if err != nil {
