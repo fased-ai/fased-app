@@ -291,7 +291,10 @@ export function TaskComposer({
   const setCron = (value: CronSettings) => patch({ cron: value });
   const setAt = (value: string) => patch({ at: value });
   const aiEnabled = mode === "analysis" || (mode === "watch" && draft.analyze);
-  const { view: connections } = useAIConnection();
+  const { view: connections, refresh: refreshConnections } = useAIConnection();
+  useEffect(() => {
+    void refreshConnections();
+  }, [refreshConnections]);
   const accounts =
     connections?.connections ?? (connections?.ref ? [connections] : []);
   const agent = v.profiles.find((item) => item.id === v.profileId);

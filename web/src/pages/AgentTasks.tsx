@@ -117,7 +117,7 @@ export function AgentTasks({
         ? draft
         : { ...draft, seedId: task?.id, kind: undefined, inputs: undefined },
     );
-  const { view: connections } = useAIConnection();
+  const { view: connections, refresh: refreshConnections } = useAIConnection();
   const [selected, setSelected] = useState("");
   const [resultId, setResultId] = useState("");
   const [reuse, setReuse] = useState("");
@@ -460,7 +460,10 @@ export function AgentTasks({
           <button
             className="text-button"
             aria-label={uiText("Refresh")}
-            onClick={() => void agents.refresh().catch(() => {})}
+            onClick={() => {
+              void agents.refresh().catch(() => {});
+              void refreshConnections();
+            }}
           >
             <RefreshCw size={14} />
           </button>
