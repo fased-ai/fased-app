@@ -189,9 +189,11 @@ func parseCompatibleModels(provider string, raw []byte, object *string, rows *[]
 	var list struct {
 		Object string `json:"object"`
 		Data   []struct {
-			ID       string  `json:"id"`
-			Created  int64   `json:"created"`
-			Shutdown *string `json:"shutdown_date"`
+			ID          string  `json:"id"`
+			Name        string  `json:"name"`
+			DisplayName string  `json:"display_name"`
+			Created     int64   `json:"created"`
+			Shutdown    *string `json:"shutdown_date"`
 		} `json:"data"`
 	}
 	if json.Unmarshal(raw, &list) != nil || list.Data == nil || len(list.Data) > 2048 || list.Object != "" && list.Object != "list" {
@@ -216,7 +218,11 @@ func parseCompatibleModels(provider string, raw []byte, object *string, rows *[]
 		if provider == "moonshot-intl" {
 			id = "moonshot-intl/" + id
 		}
-		*rows = append(*rows, discoveredModel{ID: id, Object: "model", Created: m.Created, OwnedBy: provider, Shutdown: m.Shutdown})
+		display := sanitizeModelDisplayName(m.DisplayName)
+		if display == "" {
+			display = sanitizeModelDisplayName(m.Name)
+		}
+		*rows = append(*rows, discoveredModel{ID: id, Name: display, Object: "model", Created: m.Created, OwnedBy: provider, Shutdown: m.Shutdown})
 	}
 	return nil
 }

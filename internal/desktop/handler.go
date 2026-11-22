@@ -294,8 +294,7 @@ func responseLimit(route string) int64 {
 		return 4 * 1024 * 1024
 	}
 	if route == "/api/v1/accounts/read" {
-		// One bounded wallet projection may contain 128 token balances,
-		// 20 activity rows and 256 transaction token changes.
+		// Bounded wallet projection (up to 1024 token accounts per program, activity, and tx detail).
 		return core.WalletReadResponseLimit
 	}
 	return 32 * 1024

@@ -3,7 +3,9 @@
 package ownerclient
 
 import (
+	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"io"
@@ -218,5 +220,75 @@ func TestRemoteWalletBrowserResumesOriginalProtectedSetup(t *testing.T) {
 	got, err := window.prepareSigner(t.Context(), Package{})
 	if err != nil || got != client || applies != 2 || client.Peer.Ready == nil || !*client.Peer.Ready {
 		t.Fatal("the original setup could not resume", err)
+	}
+}
+
+func TestBrowserWalletBinaryRecoveryUploadPreservesBytes(t *testing.T) {
+	rawBinary := append([]byte("FASED-ENCRYPTED-HISTORY:v1\n"), []byte{0x80, 0xff, 0xfe, 0x00, 0x01, 0x99, 0xc3, 0x28}...)
+	pin := signer.BackupFingerprint(rawBinary)
+	recoverIntent := intent()
+	recoverIntent.Action = "recover"
+
+	var decoded []byte
+	w := &browserWallet{intent: recoverIntent, host: "127.0.0.1:45231", token: strings.Repeat("b", 64), owner: 1000}
+	w.run = func(_ context.Context, in browserInput) (browserResult, error) {
+		doc, err := decodeBrowserRecovery(w.intent.Action, w.intent.Network, in)
+		if err != nil {
+			return browserResult{}, err
+		}
+		decoded = doc
+		return browserResult{Address: "public"}, nil
+	}
+
+	postEnroll := func(payload map[string]string) *httptest.ResponseRecorder {
+		rawBody, _ := json.Marshal(payload)
+		r := httptest.NewRequest(http.MethodPost, "http://"+w.host+"/enroll", bytes.NewReader(rawBody))
+		r.Host = w.host
+		r.Header.Set("Origin", "http://"+w.host)
+		r.Header.Set("X-Fased-Owner", w.token)
+		r.Header.Set("Content-Type", "application/json")
+		r = r.WithContext(context.WithValue(r.Context(), ownerConnectionKey{}, 1000))
+		out := httptest.NewRecorder()
+		w.ServeHTTP(out, r)
+		return out
+	}
+
+	basePayload := func() map[string]string {
+		return map[string]string{
+			"Unlock":         "disposable password",
+			"UnlockConfirm":  "disposable password",
+			"BackupPassword": "disposable backup",
+			"BackupConfirm":  "disposable backup",
+			"Fingerprint":    pin,
+		}
+	}
+
+	badDual := basePayload()
+	badDual["Recovery"] = "text"
+	badDual["RecoveryBase64"] = base64.StdEncoding.EncodeToString(rawBinary)
+	if res := postEnroll(badDual); res.Code == http.StatusOK {
+		t.Fatal("accepted simultaneous text and binary recovery")
+	}
+
+	badB64 := basePayload()
+	badB64["RecoveryBase64"] = "!!!not-base64!!!"
+	if res := postEnroll(badB64); res.Code == http.StatusOK {
+		t.Fatal("accepted malformed base64 recovery")
+	}
+
+	setupIntent := intent()
+	if _, err := decodeBrowserRecovery(setupIntent.Action, setupIntent.Network, browserInput{
+		RecoveryBase64: base64.StdEncoding.EncodeToString(rawBinary),
+	}); err == nil {
+		t.Fatal("accepted RecoveryBase64 on non-recover intent")
+	}
+
+	valid := basePayload()
+	valid["RecoveryBase64"] = base64.StdEncoding.EncodeToString(rawBinary)
+	if res := postEnroll(valid); res.Code != http.StatusOK {
+		t.Fatalf("binary recovery upload failed: %d %s", res.Code, res.Body.String())
+	}
+	if !bytes.Equal(decoded, rawBinary) {
+		t.Fatalf("binary recovery bytes mutated: got %x want %x", decoded, rawBinary)
 	}
 }

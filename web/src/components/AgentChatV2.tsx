@@ -12,6 +12,7 @@ import type { AgentView } from "../agents";
 import {
   formatApprovalFields,
   formatToolLabel,
+  formatToolSummary,
   parseMarkdownBlocks,
   useAgentsV2,
   type AgentApproval,
@@ -125,10 +126,17 @@ function formatPrettyJSON(raw?: string) {
 
 function ToolCallRow({ tc }: { tc: AgentToolCall }) {
   const { t } = useUI();
+  const summary =
+    tc.status === "completed"
+      ? formatToolSummary(tc.toolName, tc.resultJson)
+      : "";
   return (
     <details className="v2-tool-call" data-status={tc.status}>
       <summary>
-        <span className="v2-tool-name">{formatToolLabel(tc.toolName)}</span>
+        <span className="v2-tool-head">
+          <span className="v2-tool-name">{formatToolLabel(tc.toolName)}</span>
+          {summary && <span className="v2-tool-summary">{summary}</span>}
+        </span>
         <span className={`v2-pill v2-pill-${tc.status}`}>
           {toolStatusLabel(tc.status, t)}
         </span>
@@ -247,11 +255,14 @@ export function AgentChatV2({
     setChatDrafts,
     chatModelDrafts,
     setChatModelDrafts,
+    pendingChatPrompt,
+    clearChatPrompt,
   } = useWorkspace();
   const v2 = useAgentsV2(core, view.profileId);
   const { view: connection } = useAIConnection();
   const profile = view.profiles.find((p) => p.id === view.profileId)!;
 
+  const consumedPromptIds = useRef(new Set<string>());
   const [railOpen, setRailOpen] = useState(false);
   const [search, setSearch] = useState("");
   const [toolsEnabled, setToolsEnabled] = useState(true);
@@ -276,14 +287,39 @@ export function AgentChatV2({
   const composerValue = chatDrafts.get(threadDraftKey) ?? "";
   const modelSelection = chatModelDrafts.get(threadDraftKey);
 
+  const allConnections = connection?.connections?.length
+    ? connection.connections
+    : connection?.ref
+      ? [connection]
+      : [];
+  const defaultUnlocked =
+    allConnections.find(
+      (a) => a.ref === connection?.ref && !a.locked && !a.planPaused,
+    ) ??
+    allConnections.find((a) => !a.locked && !a.planPaused) ??
+    null;
+
   const activeConnectionRef =
     modelSelection?.connectionRef ??
     v2.detail?.thread.connectionRef ??
     (profile.provider === "none"
-      ? ""
-      : profile.connectionRef || connection?.ref || "");
+      ? defaultUnlocked?.ref || ""
+      : profile.connectionRef || defaultUnlocked?.ref || "");
+  const activeAccount = activeConnectionRef
+    ? (allConnections.find((a) => a.ref === activeConnectionRef) ?? null)
+    : null;
   const activeModel =
-    modelSelection?.model ?? v2.detail?.thread.model ?? profile.model ?? "";
+    (modelSelection?.model ??
+      v2.detail?.thread.model ??
+      (profile.provider !== "none" && profile.model ? profile.model : "")) ||
+    activeAccount?.catalog?.models.find(
+      (m) =>
+        m.connectionRef === activeAccount.ref && m.selectable && m.recommended,
+    )?.id ||
+    activeAccount?.catalog?.models.find(
+      (m) => m.connectionRef === activeAccount.ref && m.selectable,
+    )?.id ||
+    "";
 
   function setComposerValue(nextText: string) {
     setChatDrafts((cur) => {
@@ -314,6 +350,36 @@ export function AgentChatV2({
     setEditingTitle(false);
     setTitleDraft(v2.detail?.thread.title ?? "");
   }, [v2.detail?.thread.id, v2.detail?.thread.title]);
+
+  useEffect(() => {
+    if (
+      !pendingChatPrompt ||
+      pendingChatPrompt.profileId !== view.profileId ||
+      v2.streaming ||
+      consumedPromptIds.current.has(pendingChatPrompt.id)
+    ) {
+      return;
+    }
+    consumedPromptIds.current.add(pendingChatPrompt.id);
+    const next = pendingChatPrompt;
+    clearChatPrompt(next.id);
+    void v2.sendMessage({
+      content: next.prompt,
+      title: next.title,
+      forceNewThread: true,
+      connectionRef: activeConnectionRef || undefined,
+      model: activeModel || undefined,
+      toolsEnabled: true,
+    });
+  }, [
+    pendingChatPrompt,
+    view.profileId,
+    v2.streaming,
+    v2.sendMessage,
+    clearChatPrompt,
+    activeConnectionRef,
+    activeModel,
+  ]);
 
   useEffect(() => {
     scrollEndRef.current?.scrollIntoView({ block: "end" });
@@ -364,9 +430,16 @@ export function AgentChatV2({
     !v2.detail &&
     !welcomeDismissed;
 
+  const activeProviderName = activeAccount?.provider
+    ? connection?.catalog?.providers.find(
+        (p) => p.id === activeAccount.provider,
+      )?.name || activeAccount.provider
+    : "";
   const modelSummaryLabel =
     previewModel(activeModel, t) ||
-    (connection?.provider ? connection.provider : t("Auto model"));
+    activeAccount?.name ||
+    activeProviderName ||
+    t("Auto model");
 
   return (
     <section
@@ -757,15 +830,20 @@ export function AgentChatV2({
                       const account =
                         connection?.connections?.find((a) => a.ref === ref) ??
                         (connection?.ref === ref ? connection : null);
-                      const recommended = account?.catalog?.models.find(
-                        (item) =>
-                          item.connectionRef === ref &&
-                          item.selectable &&
-                          item.recommended,
-                      );
+                      const nextModel =
+                        account?.catalog?.models.find(
+                          (item) =>
+                            item.connectionRef === ref &&
+                            item.selectable &&
+                            item.recommended,
+                        ) ??
+                        account?.catalog?.models.find(
+                          (item) =>
+                            item.connectionRef === ref && item.selectable,
+                        );
                       setModelSelection({
                         connectionRef: ref,
-                        model: ref ? (recommended?.id ?? "") : "",
+                        model: ref ? (nextModel?.id ?? "") : "",
                       });
                     }}
                   />

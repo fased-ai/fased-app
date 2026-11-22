@@ -1469,7 +1469,10 @@ test("Dashboard joins provider agent Chat reviewed task result and memory withou
     .fill("disposable-dashboard-vault-password");
   await editor.getByRole("button", { name: "Save", exact: true }).click();
   await expect
-    .poll(async () => (await privateCLI(["ai-connection"])).connections.length)
+    .poll(
+      async () =>
+        ((await privateCLI(["ai-connection"])).connections ?? []).length,
+    )
     .toBe(2);
   const providerAccounts = await privateCLI(["ai-connection"]);
   const connection = providerAccounts.connections.find(

@@ -29,7 +29,31 @@ func (h *HTTPHandler) v2Mutation(w http.ResponseWriter, r *http.Request, token s
 		writeError(w, 409, "Update in progress. Inspect recovery before changing this instance.")
 		return false
 	}
+	if phase, _, pErr := readPause(r.Context(), h.store.db); pErr != nil {
+		writeError(w, 500, "pause state unavailable")
+		return false
+	} else if phase == "paused" {
+		writeError(w, 409, ErrCorePaused.Error())
+		return false
+	}
 	return h.csrf(w, r, token)
+}
+
+func (h *HTTPHandler) acquireAgentV2Turn(w http.ResponseWriter, r *http.Request) (func(), bool) {
+	if !h.allowRate(r, "agent-v2", 30) {
+		writeError(w, 429, "Too many requests. Wait before starting another agent turn.")
+		return nil, false
+	}
+	if h.aiSlots != nil {
+		select {
+		case h.aiSlots <- struct{}{}:
+			return func() { <-h.aiSlots }, true
+		default:
+			writeError(w, 429, "AI requests are already in progress.")
+			return nil, false
+		}
+	}
+	return func() {}, true
 }
 
 func decodeV2JSON(w http.ResponseWriter, r *http.Request, dst any, maxBytes int64) bool {
@@ -217,7 +241,26 @@ func (h *HTTPHandler) agentsV2API(w http.ResponseWriter, r *http.Request, token 
 				}
 				limit = n
 			}
-			mems, err := h.store.SearchMemories(r.Context(), q.Get("profileId"), q.Get("q"), limit)
+			qStr := strings.TrimSpace(q.Get("q"))
+			scope := strings.TrimSpace(q.Get("scope"))
+			var (
+				mems []AgentV2Memory
+				err  error
+			)
+			if scope != "" && qStr == "" {
+				mems, err = h.store.ListMemoriesByScope(r.Context(), q.Get("profileId"), scope, limit)
+			} else {
+				mems, err = h.store.SearchMemories(r.Context(), q.Get("profileId"), qStr, limit)
+				if err == nil && scope != "" {
+					filtered := make([]AgentV2Memory, 0, len(mems))
+					for _, m := range mems {
+						if m.Scope == scope {
+							filtered = append(filtered, m)
+						}
+					}
+					mems = filtered
+				}
+			}
 			if err != nil {
 				writeError(w, 500, "memories unavailable")
 				return
@@ -308,8 +351,14 @@ func (h *HTTPHandler) agentV2MessagesAPI(w http.ResponseWriter, r *http.Request,
 		writeError(w, 400, err.Error())
 		return
 	}
+	release, ok := h.acquireAgentV2Turn(w, r)
+	if !ok {
+		return
+	}
+	defer release()
 
 	if !v2WantsSSE(r) {
+		_ = http.NewResponseController(w).SetWriteDeadline(time.Time{})
 		res, err := h.store.RunAgentV2Turn(r.Context(), threadID, in, nil)
 		if err != nil {
 			writeError(w, 400, err.Error())
@@ -367,8 +416,14 @@ func (h *HTTPHandler) agentV2ApprovalAPI(w http.ResponseWriter, r *http.Request,
 	if req.Resume != nil {
 		resume = *req.Resume
 	}
+	release, ok := h.acquireAgentV2Turn(w, r)
+	if !ok {
+		return
+	}
+	defer release()
 
 	if !v2WantsSSE(r) {
+		_ = http.NewResponseController(w).SetWriteDeadline(time.Time{})
 		res, err := h.store.ResolveAgentV2Approval(r.Context(), approvalID, req.Decision, req.Note, resume, nil)
 		if errors.Is(err, ErrApprovalNotFound) {
 			writeError(w, 404, err.Error())

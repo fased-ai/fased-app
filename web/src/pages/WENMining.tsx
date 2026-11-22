@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type { Account, AccountsView } from "../accounts";
-import type { AgentView } from "../agents";
+import { hasActiveOperations, useVisiblePoll, type AgentView } from "../agents";
 import {
   lamportsToSOL,
   miningState,
@@ -115,6 +115,7 @@ export function WENMining() {
   const writing = useRef(false);
 
   const active = view ?? agents.view?.wenMining;
+  const hasActive = busy || hasActiveOperations(active);
 
   async function load() {
     const stamp = generation.current;
@@ -142,6 +143,7 @@ export function WENMining() {
           : (lib.versions[0]?.digest ?? ""),
       );
       setView(ag.wenMining);
+      return hasActiveOperations(ag.wenMining);
     } catch (e) {
       if (stamp === generation.current)
         setError(e instanceof Error ? e.message : t("Unavailable"));
@@ -152,15 +154,17 @@ export function WENMining() {
     generation.current++;
     setReview(undefined);
     setError("");
-    void load();
-    const timer = window.setInterval(() => {
-      if (!writing.current) void load();
-    }, 1500);
     return () => {
       generation.current++;
-      window.clearInterval(timer);
     };
   }, [profile, core.instanceId, core.request]);
+
+  useVisiblePoll({
+    resetKey: `${profile}:${core.instanceId}`,
+    request: core.request,
+    active: hasActive,
+    onPoll: load,
+  });
 
   async function command(action: string, wenMining: WENMiningCommand) {
     if (writing.current) return;

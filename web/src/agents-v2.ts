@@ -138,6 +138,11 @@ export function parseSSEChunkBuffer(buffer: string): {
 const toolLabels: Record<string, string> = {
   workspace_status: "Workspace status",
   list_wallets: "Wallets",
+  get_wallet_balances: "Wallet balances",
+  get_portfolio_summary: "Portfolio",
+  fetch_web_page: "Web page",
+  get_token_price: "Token price",
+  get_swap_quote: "Swap quote",
   list_tasks: "Tasks",
   search_memories: "Memory",
   search_news: "News",
@@ -150,6 +155,187 @@ const toolLabels: Record<string, string> = {
 
 export function formatToolLabel(toolName: string): string {
   return toolLabels[toolName] ?? toolName.replace(/_/g, " ");
+}
+
+function formatUSDCompact(value: number): string {
+  if (!Number.isFinite(value) || value <= 0) return "$0";
+  if (value >= 1000) {
+    return `$${Math.round(value).toLocaleString("en-US")}`;
+  }
+  if (value >= 1) {
+    return `$${value.toFixed(2)}`;
+  }
+  return `$${Number(value.toPrecision(3))}`;
+}
+
+export function formatToolSummary(
+  toolName: string,
+  resultJson?: string,
+): string {
+  if (!resultJson) return "";
+  let parsed: Record<string, unknown> | null = null;
+  try {
+    const raw = JSON.parse(resultJson);
+    if (raw && typeof raw === "object" && !Array.isArray(raw)) {
+      parsed = raw as Record<string, unknown>;
+    }
+  } catch {
+    return "";
+  }
+  if (!parsed) return "";
+
+  if (toolName === "get_token_price" && Array.isArray(parsed.prices)) {
+    const parts = (parsed.prices as Array<Record<string, unknown>>)
+      .slice(0, 2)
+      .flatMap((p) => {
+        const symbol = typeof p.symbol === "string" ? p.symbol : "";
+        const price = typeof p.usdPrice === "number" ? p.usdPrice : 0;
+        if (!symbol || !price) return [];
+        const change =
+          typeof p.change24hPct === "number" && Number.isFinite(p.change24hPct)
+            ? ` (${p.change24hPct >= 0 ? "+" : ""}${p.change24hPct.toFixed(1)}%)`
+            : "";
+        return [`${symbol} ${formatUSDCompact(price)}${change}`];
+      });
+    return parts.join(" · ");
+  }
+
+  if (toolName === "get_swap_quote") {
+    const inUi = typeof parsed.inUiAmount === "string" ? parsed.inUiAmount : "";
+    const outUi =
+      typeof parsed.outUiAmount === "string" ? parsed.outUiAmount : "";
+    const fromSym =
+      typeof parsed.fromSymbol === "string" ? parsed.fromSymbol : "";
+    const toSym = typeof parsed.toSymbol === "string" ? parsed.toSymbol : "";
+    if (!inUi || !outUi) return "";
+    const outNum = Number(outUi);
+    const outDisplay =
+      Number.isFinite(outNum) && outNum >= 1
+        ? outNum.toFixed(outNum >= 100 ? 2 : 4).replace(/\.?0+$/, "")
+        : outUi;
+    const base = `${inUi} ${fromSym} -> ${outDisplay} ${toSym}`.trim();
+    const rawImpact = Number(parsed.priceImpactPct);
+    if (Number.isFinite(rawImpact)) {
+      return `${base} · ${(Math.abs(rawImpact) * 100).toFixed(2)}% impact`;
+    }
+    return base;
+  }
+
+  if (toolName === "get_wallet_balances") {
+    if (parsed.count === 0) return "No wallets";
+    if (parsed.status === "rpc_not_configured") return "Configure RPC";
+    if (parsed.status === "rpc_passphrase_required") return "Vault passphrase";
+    if (parsed.status === "rpc_locked") return "RPC locked";
+    const solRaw = typeof parsed.sol === "string" ? parsed.sol : "";
+    if (!solRaw) return "";
+    const solNum = Number(solRaw);
+    const solLabel =
+      Number.isFinite(solNum) && solNum > 0
+        ? solNum.toFixed(4).replace(/\.?0+$/, "")
+        : solRaw;
+    const count = Array.isArray(parsed.tokens) ? parsed.tokens.length : 0;
+    return `${solLabel} SOL${count > 0 ? ` · ${count} ${count === 1 ? "token" : "tokens"}` : ""}`;
+  }
+
+  if (toolName === "get_portfolio_summary") {
+    const wallets =
+      typeof parsed.walletCount === "number" &&
+      Number.isFinite(parsed.walletCount)
+        ? parsed.walletCount
+        : null;
+    if (wallets === null) return "";
+    const parts = [`${wallets} ${wallets === 1 ? "wallet" : "wallets"}`];
+    if (
+      typeof parsed.activeTasks === "number" &&
+      Number.isFinite(parsed.activeTasks) &&
+      parsed.activeTasks > 0
+    ) {
+      parts.push(
+        `${parsed.activeTasks} ${parsed.activeTasks === 1 ? "task" : "tasks"}`,
+      );
+    }
+    if (
+      typeof parsed.pendingApprovals === "number" &&
+      Number.isFinite(parsed.pendingApprovals) &&
+      parsed.pendingApprovals > 0
+    ) {
+      parts.push(`${parsed.pendingApprovals} pending`);
+    }
+    return parts.join(" · ");
+  }
+
+  if (toolName === "fetch_web_page") {
+    const title = typeof parsed.title === "string" ? parsed.title.trim() : "";
+    if (title) {
+      return title.length > 60 ? `${title.slice(0, 57)}...` : title;
+    }
+    const rawUrl =
+      typeof parsed.finalUrl === "string"
+        ? parsed.finalUrl
+        : typeof parsed.url === "string"
+          ? parsed.url
+          : "";
+    if (rawUrl) {
+      try {
+        const host = new URL(rawUrl).hostname;
+        if (host) return host;
+      } catch {
+        // Ignore unparseable URL fallback.
+      }
+    }
+  }
+
+  return "";
+}
+
+export type ParsedTaskDraft = {
+  id: string;
+  name: string;
+  description: string;
+  intervalSeconds: number;
+  createdAt: number;
+};
+
+export function parseTaskDraftMemory(m: AgentV2Memory): ParsedTaskDraft | null {
+  const rawContent = (m.content || "").trim();
+  const fallbackName = (m.title || "").replace(/^Task draft:\s*/i, "").trim();
+  if (!rawContent && !fallbackName) return null;
+
+  let name = fallbackName;
+  let description = rawContent;
+  let intervalSeconds = 300;
+  try {
+    const parsed = JSON.parse(rawContent);
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      const obj = parsed as Record<string, unknown>;
+      if (typeof obj.name === "string" && obj.name.trim()) {
+        name = obj.name.trim();
+      }
+      if (typeof obj.description === "string" && obj.description.trim()) {
+        description = obj.description.trim();
+      } else {
+        description = name;
+      }
+      if (
+        typeof obj.intervalSeconds === "number" &&
+        Number.isFinite(obj.intervalSeconds)
+      ) {
+        const clamped = Math.round(obj.intervalSeconds);
+        intervalSeconds = Math.min(86400, Math.max(60, clamped));
+      }
+    }
+  } catch {
+    if (!description) return null;
+    if (!name) name = description.slice(0, 64);
+  }
+  if (!name || !description) return null;
+  return {
+    id: m.id,
+    name,
+    description,
+    intervalSeconds,
+    createdAt: m.createdAt,
+  };
 }
 
 export type ApprovalField = { label: string; value: string };
@@ -718,6 +904,8 @@ export function useAgentsV2(core: AgentV2CoreClient, profileId: string) {
   const sendMessage = useCallback(
     async (input: {
       content: string;
+      title?: string;
+      forceNewThread?: boolean;
       connectionRef?: string;
       model?: string;
       toolsEnabled?: boolean;
@@ -726,12 +914,13 @@ export function useAgentsV2(core: AgentV2CoreClient, profileId: string) {
       if (!trimmed || core.mode !== "ready") return false;
       setError("");
 
-      let threadId = activeThreadId;
+      let threadId = input.forceNewThread ? "" : activeThreadId;
       let createdFresh = false;
       try {
         if (!threadId) {
           const created = await createThreadV2(core, {
             profileId,
+            title: input.title,
             connectionRef: input.connectionRef || undefined,
             model: input.model || undefined,
           });

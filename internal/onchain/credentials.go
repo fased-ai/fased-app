@@ -226,9 +226,9 @@ func validCredentialBytes(purpose string, key []byte) bool {
 }
 func allowedCredentialRPC(method string, readOnly bool) bool {
 	switch method {
-	case "getSignatureStatuses", "getTransaction":
+	case "getSignatureStatuses", "getTransaction", "getBlockHeight":
 		return true
-	case "getGenesisHash", "getLatestBlockhash", "getAccountInfo", "getMinimumBalanceForRentExemption", "getFeeForMessage", "getBalance", "simulateTransaction", "getBlockHeight", "sendTransaction":
+	case "getGenesisHash", "getLatestBlockhash", "getAccountInfo", "getMinimumBalanceForRentExemption", "getFeeForMessage", "getBalance", "simulateTransaction", "sendTransaction":
 		return !readOnly
 	}
 	return false

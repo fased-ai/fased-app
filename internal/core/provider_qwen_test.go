@@ -156,7 +156,7 @@ func TestQwenLegacySubscriptionKeyNeverLeavesVault(t *testing.T) {
 	// Reconstruct a formerly accepted v4 record without weakening the public
 	// save guard. Existing bytes remain readable; transmission is refused.
 	s.provider.mu.Lock()
-	a, err := s.persistAIConnectionLocked(t.Context(), AIConnectionCommand{Name: "Legacy plan", Key: "sk-sp-disposable-legacy-plan-key", Passphrase: testVaultPassword}, aiVaultCollection{Version: 3}, "qwen", "qwen", false)
+	a, err := s.persistAIConnectionLocked(t.Context(), AIConnectionCommand{Name: "Legacy plan", Key: "sk-sp-disposable-legacy-plan-key", Passphrase: testVaultPassword}, aiVaultCollection{Version: 3}, "qwen", "qwen", false, preDerivedKDF{})
 	s.provider.mu.Unlock()
 	if err != nil {
 		t.Fatal(err)

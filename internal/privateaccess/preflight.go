@@ -139,7 +139,11 @@ func setupProbe(origin, proof string, trusted func(*http.Request) bool, resolve 
 		w.Header().Set("Cache-Control", "no-store")
 		w.Header().Set("Referrer-Policy", "no-referrer")
 		w.Header().Set("X-Frame-Options", "DENY")
-		if !trusted(r) || r.Header.Get("X-Forwarded-Host") != origin[len("https://"):] || r.Header.Get("X-Forwarded-Proto") != "https" || r.Header.Get("Tailscale-Funnel-Request") != "" {
+		hostVals := r.Header.Values("X-Forwarded-Host")
+		protoVals := r.Header.Values("X-Forwarded-Proto")
+		funnelVals := r.Header.Values("Tailscale-Funnel-Request")
+		funnelBlocked := len(funnelVals) > 1 || (len(funnelVals) == 1 && funnelVals[0] != "")
+		if !trusted(r) || len(hostVals) != 1 || hostVals[0] != origin[len("https://"):] || len(protoVals) != 1 || protoVals[0] != "https" || funnelBlocked {
 			http.Error(w, "Private Tailscale access required", 403)
 			return
 		}
@@ -164,19 +168,29 @@ func setupProbe(origin, proof string, trusted func(*http.Request) bool, resolve 
 			http.Error(w, "Reopen the setup link", 403)
 			return
 		}
-		id, err := resolve(r.Context(), r.Header.Get("X-Forwarded-For"))
-		if err != nil {
+		xffVals := r.Header.Values("X-Forwarded-For")
+		if len(xffVals) > 1 || (len(xffVals) == 1 && strings.Contains(xffVals[0], ",")) {
 			http.Error(w, "Approve a personal Tailscale device", 403)
 			return
 		}
-		w.WriteHeader(204)
-		if flush, ok := w.(http.Flusher); ok {
-			flush.Flush()
+		xff := ""
+		if len(xffVals) == 1 {
+			xff = xffVals[0]
+		}
+		id, err := resolve(r.Context(), xff)
+		if err != nil {
+			http.Error(w, "Approve a personal Tailscale device", 403)
+			return
 		}
 		select {
 		case approved <- id:
 		default:
 			http.Error(w, "Setup already confirmed", 409)
+			return
+		}
+		w.WriteHeader(204)
+		if flush, ok := w.(http.Flusher); ok {
+			flush.Flush()
 		}
 	})
 }

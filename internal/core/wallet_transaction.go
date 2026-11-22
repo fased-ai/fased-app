@@ -66,6 +66,8 @@ type transactionToken struct {
 	} `json:"uiTokenAmount"`
 }
 
+const maxWalletTransactionBytes = 2 * 1024 * 1024
+
 // Only public pre/post observations are interpreted. Instructions, logs, memos,
 // UI floating-point amounts and arbitrary metadata never become displayed facts.
 func parseWalletTransaction(raw json.RawMessage, address string, selected *WalletSelection) (WalletTransaction, error) {
@@ -107,7 +109,7 @@ func parseWalletTransaction(raw json.RawMessage, address string, selected *Walle
 			} `json:"loadedAddresses"`
 		} `json:"meta"`
 	}
-	if len(raw) > 262144 || json.Unmarshal(raw, &tx) != nil || tx.Meta == nil || tx.Slot == nil || tx.Meta.Fee == nil || len(tx.Meta.Err) == 0 {
+	if len(raw) > maxWalletTransactionBytes || json.Unmarshal(raw, &tx) != nil || tx.Meta == nil || tx.Slot == nil || tx.Meta.Fee == nil || len(tx.Meta.Err) == 0 {
 		return empty, unavailable
 	}
 	activity := WalletActivity{Signature: selected.Signature, Slot: strconv.FormatUint(*tx.Slot, 10), BlockTime: tx.BlockTime, Failed: string(tx.Meta.Err) != "null"}
@@ -222,6 +224,20 @@ func parseWalletTransaction(raw json.RawMessage, address string, selected *Walle
 			continue
 		}
 		if a.Owner != address && b.Owner != address {
+			continue
+		}
+		if !pre && post && meta.PreTokens != nil && *meta.Before[i] == 0 && *meta.After[i] > 0 && b.Owner == address && (b.Program == onchain.Token || b.Program == token2022Program) {
+			change := walletDelta("0", b.Amount.Amount)
+			if change != "0" {
+				out.Tokens = append(out.Tokens, WalletTokenChange{Account: keys[i], Program: b.Program, Mint: b.Mint, Decimals: int(*b.Amount.Decimals), Before: "0", After: b.Amount.Amount, Change: change})
+			}
+			continue
+		}
+		if pre && !post && meta.PostTokens != nil && *meta.Before[i] > 0 && *meta.After[i] == 0 && a.Owner == address && (a.Program == onchain.Token || a.Program == token2022Program) {
+			change := walletDelta(a.Amount.Amount, "0")
+			if change != "0" {
+				out.Tokens = append(out.Tokens, WalletTokenChange{Account: keys[i], Program: a.Program, Mint: a.Mint, Decimals: int(*a.Amount.Decimals), Before: a.Amount.Amount, After: "0", Change: change})
+			}
 			continue
 		}
 		if !pre || !post || a.Owner != address || b.Owner != address || a.Program == "" || (a.Program != onchain.Token && a.Program != token2022Program) || b.Program == "" || (b.Program != onchain.Token && b.Program != token2022Program) {

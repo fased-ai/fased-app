@@ -165,8 +165,23 @@
   font-size: 12px;
   list-style: none;
 }
+.v2-tool-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+}
 .v2-tool-name {
   font-weight: 500;
+  flex-shrink: 0;
+}
+.v2-tool-summary {
+  color: var(--wt-muted);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .v2-pill {
   font-size: 11px;

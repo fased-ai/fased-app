@@ -1,6 +1,6 @@
 import { previewModel } from "../ui-language-preview";
 import { agentReplyDefaults } from "../agent-defaults";
-import { Plug, ArrowUp, Square } from "../icons";
+import { Plug, ArrowUp, Square, BookOpen } from "../icons";
 import { useUI } from "../ui-preferences";
 type ChatComposer = {
   value: string;
@@ -10,21 +10,17 @@ type ChatComposer = {
   submitOnMount?: boolean;
   onSubmittedMount?: () => void;
 };
-import { AgentEvidenceInspector } from "./AgentEvidence";
 import { ChatPermissionReview } from "./ChatPermission";
-import { ChatReply } from "./ChatReply";
-import { NewsWatchMessage } from "./NewsWatchMessage";
-import { SlidersHorizontal, BookOpen } from "../icons";
 import type { ResearchSelection } from "./ResearchReadPanel";
-import { ChatMemoryReview } from "./ChatMemoryReview";
-import { reminderRun, ReminderRunMessage } from "./ReminderRunMessage";
-import { NewsSourcePicker } from "./NewsInputs";
 import {
   AIModelPicker,
   useAIConnection,
   ConnectionPicker,
   type Connection,
 } from "./AIConnection";
+import { AgentAIHistoryList } from "./AgentAIHistoryList";
+import { AgentAIContextFields } from "./AgentAIContextFields";
+import { AgentAIOptionsMenu } from "./AgentAIOptionsMenu";
 import { useEffect, useRef, useState } from "react";
 import type {
   AgentView,
@@ -523,89 +519,18 @@ function AgentAIForm({
             </button>
           </div>
         )}
-        <div
-          className="local-messages"
-          aria-live="polite"
-          ref={messagesRef}
-          onScroll={(e) => {
-            const el = e.currentTarget;
-            followReplies.current =
-              el.scrollHeight - el.scrollTop - el.clientHeight < 80;
-          }}
-        >
-          {[
-            ...view.messages
-              .filter((m) => m.sessionId === sessionId)
-              .map((message) => ({
-                id: message.id,
-                at: message.createdAt,
-                message,
-                request: undefined,
-              })),
-            ...requests.map((request) => ({
-              id: request.id,
-              at: request.createdAt,
-              message: undefined,
-              request,
-            })),
-          ]
-            .sort(
-              (a, b) => a.at - b.at || Number(!a.message) - Number(!b.message),
-            )
-            .map((entry) =>
-              entry.message ? (
-                <article
-                  className={`chat-message ${entry.message.role === "system" ? "chat-system" : ""}`}
-                  key={entry.id}
-                >
-                  {entry.message.role === "system" ? (
-                    <details>
-                      <summary>{uiText("Saved locally")}</summary>
-                      <NewsWatchMessage text={entry.message.text} />
-                    </details>
-                  ) : (
-                    <>
-                      <small>
-                        {entry.message.role === "user"
-                          ? uiText("You")
-                          : uiText("Record")}{" "}
-                        · {new Date(entry.at * 1000).toLocaleString()}
-                      </small>
-                      {reminderRun(entry.message, view.profileId) ? (
-                        <ReminderRunMessage
-                          result={reminderRun(entry.message, view.profileId)!}
-                          source={entry.message.text}
-                        />
-                      ) : (
-                        <NewsWatchMessage text={entry.message.text} />
-                      )}
-                    </>
-                  )}
-                  {entry.message.role === "user" && (
-                    <ChatMemoryReview
-                      view={view}
-                      sourceKind="message"
-                      sourceId={entry.message.id}
-                      sourceText={entry.message.text}
-                      sessionId={sessionId}
-                    />
-                  )}
-                </article>
-              ) : (
-                <ChatReply
-                  key={entry.id}
-                  q={entry.request!}
-                  requests={requests}
-                  view={view}
-                  draftBusy={draftBusy}
-                  consent={consent}
-                  setConsent={setConsent}
-                  useDraft={useDraft}
-                  onReviewStrategy={onReviewStrategy}
-                />
-              ),
-            )}
-        </div>
+        <AgentAIHistoryList
+          view={view}
+          sessionId={sessionId}
+          requests={requests}
+          messagesRef={messagesRef}
+          followReplies={followReplies}
+          draftBusy={draftBusy}
+          consent={consent}
+          setConsent={setConsent}
+          useDraft={useDraft}
+          onReviewStrategy={onReviewStrategy}
+        />
         <form
           className="chat-message-form"
           onClickCapture={() => composer?.onInteract?.()}
@@ -834,120 +759,26 @@ function AgentAIForm({
               });
           }}
         >
-          {researchSelection && (
-            <details className="composer-context">
-              <summary>{uiText("Selected research")}</summary>
-              <fieldset aria-label={uiText("Selected research for AI")}>
-                <legend>{uiText("Selected research")}</legend>
-                <label>
-                  {uiText("Research mode")}
-                  <select
-                    value={researchMode}
-                    disabled={researchPreparing}
-                    onChange={(e) => setResearchMode(e.target.value)}
-                  >
-                    <option value="single">{uiText("Single request")}</option>
-                    <option value="loop">
-                      {uiText("Reviewed continuations")}
-                    </option>
-                  </select>
-                </label>
-                <pre>{JSON.stringify(researchSelection, null, 2)}</pre>
-                <button
-                  type="button"
-                  className="secondary"
-                  disabled={researchPreparing}
-                  onClick={onClearResearch}
-                >
-                  {uiText("Remove research")}
-                </button>
-              </fieldset>
-            </details>
-          )}
-          {evidenceSelection && (
-            <details className="composer-context">
-              <summary>{uiText("Selected evidence")}</summary>
-              <fieldset aria-label={uiText("AI evidence selection")}>
-                <legend>{uiText("Selected evidence")}</legend>
-                <pre>{JSON.stringify(evidenceSelection, null, 2)}</pre>
-                {!evidenceAvailable && (
-                  <p role="status">
-                    {uiText("Selected evidence unavailable. Inspect again.")}
-                  </p>
-                )}
-                {evidencePreview && (
-                  <details>
-                    <summary>{uiText("Inspected record")}</summary>
-                    <pre>{JSON.stringify(evidencePreview, null, 2)}</pre>
-                  </details>
-                )}
-                <button
-                  type="button"
-                  className="secondary"
-                  onClick={removeEvidence}
-                >
-                  {uiText("Remove evidence")}
-                </button>
-              </fieldset>
-            </details>
-          )}
-          {researchSelection && (
-            <details className="composer-context">
-              <summary>{uiText("Limits")}</summary>
-              <fieldset
-                className="agent-form-grid"
-                aria-label={uiText("Research turn limits")}
-              >
-                <legend>{uiText("Research turn limits")}</legend>
-                <label>
-                  {uiText("Model attempts")}
-                  <input
-                    type="number"
-                    min={1}
-                    max={3}
-                    required
-                    value={modelAttempts}
-                    onChange={(e) => setModelAttempts(e.target.valueAsNumber)}
-                  />
-                </label>
-                <label>
-                  {uiText("Read attempts")}
-                  <input
-                    type="number"
-                    min={1}
-                    max={8}
-                    required
-                    value={toolAttempts}
-                    onChange={(e) => setToolAttempts(e.target.valueAsNumber)}
-                  />
-                </label>
-                <label>
-                  {uiText("Research deadline (seconds)")}
-                  <input
-                    type="number"
-                    min={1}
-                    max={90}
-                    required
-                    value={turnSeconds}
-                    onChange={(e) => setTurnSeconds(e.target.valueAsNumber)}
-                  />
-                </label>
-                {!planUsage && (
-                  <label>
-                    {uiText("Turn budget (micro USD)")}
-                    <input
-                      type="number"
-                      min={1}
-                      max={3000000}
-                      required
-                      value={turnBudget}
-                      onChange={(e) => setTurnBudget(e.target.valueAsNumber)}
-                    />
-                  </label>
-                )}
-              </fieldset>
-            </details>
-          )}
+          <AgentAIContextFields
+            researchSelection={researchSelection}
+            researchMode={researchMode}
+            setResearchMode={setResearchMode}
+            researchPreparing={researchPreparing}
+            onClearResearch={onClearResearch}
+            evidenceSelection={evidenceSelection}
+            evidenceAvailable={evidenceAvailable}
+            evidencePreview={evidencePreview}
+            removeEvidence={removeEvidence}
+            modelAttempts={modelAttempts}
+            setModelAttempts={setModelAttempts}
+            toolAttempts={toolAttempts}
+            setToolAttempts={setToolAttempts}
+            turnSeconds={turnSeconds}
+            setTurnSeconds={setTurnSeconds}
+            planUsage={planUsage}
+            turnBudget={turnBudget}
+            setTurnBudget={setTurnBudget}
+          />
           <label className="chat-input">
             <span>{composer ? tr("Message") : uiText("AI request")}</span>
             <textarea
@@ -1049,213 +880,50 @@ function AgentAIForm({
             >
               <Plug size={16} />
             </button>
-            <details
-              className="message-options"
-              ref={optionsMenu}
-              open={optionsOpen}
-              onToggle={(e) => {
-                setOptionsOpen(e.currentTarget.open);
-                if (e.currentTarget.open) void refreshAccess();
-              }}
-            >
-              <summary aria-label={tr("Options")} title={tr("Options")}>
-                <SlidersHorizontal size={16} />
-              </summary>
-              <div className="message-options-panel">
-                <details className="chat-evidence">
-                  <summary>{uiText("Sources")}</summary>
-                  {!researchSelection && (
-                    <AgentEvidenceInspector
-                      view={view}
-                      sessionId={sessionId}
-                      onUse={(e) => {
-                        generation.current++;
-                        setDraftBusy(false);
-                        setDraftError("");
-                        setDraftSource("");
-                        setEvidenceSelection({
-                          kind: e.kind,
-                          id: e.id,
-                          ...(e.itemId ? { itemId: e.itemId } : {}),
-                          sha256: e.sha256,
-                        });
-                        setEvidencePreview(e);
-                        setConsent("");
-                        closeOptions();
-                        questionRef.current?.focus();
-                      }}
-                    />
-                  )}
-                </details>
-                <label className="ai-consent">
-                  <input
-                    type="checkbox"
-                    checked={reviewEach}
-                    onChange={(e) => setReviewEach(e.target.checked)}
-                  />
-                  {tr("Review each reply")}
-                </label>
-                {currentPermission &&
-                  view.chatReadiness?.[sessionId] === "ready" && (
-                    <div className="agent-inline">
-                      <span>
-                        {tr("{count} replies left", {
-                          count:
-                            currentPermission.maxRequests -
-                            currentPermission.usedRequests,
-                        })}
-                      </span>
-                      <button
-                        type="button"
-                        className="text-button"
-                        disabled={agents.busy}
-                        onClick={() =>
-                          void agents.change({
-                            action: "chat-revoke",
-                            id: sessionId,
-                            consentDigest: currentPermission.id,
-                          })
-                        }
-                      >
-                        {tr("Revoke")}
-                      </button>
-                    </div>
-                  )}
-                {composer && (
-                  <button
-                    type="button"
-                    className="text-button"
-                    disabled={agents.busy || !prompt.trim()}
-                    onClick={async () => {
-                      closeOptions();
-                      await composer.onSave();
-                    }}
-                  >
-                    {uiText("Save message")}
-                  </button>
-                )}
-                {!researchSelection && (
-                  <NewsSourcePicker
-                    view={view}
-                    value={newsSourceId}
-                    onChange={setNewsSourceId}
-                    age={newsAge}
-                    onAge={setNewsAge}
-                  />
-                )}
-                <label>
-                  {uiText("Memory")}
-                  <select
-                    value={memoryMode}
-                    onChange={(e) =>
-                      setMemoryMode(
-                        e.target.value as AIMemorySelection["mode"] | "legacy",
-                      )
-                    }
-                  >
-                    {legacyDraft && (
-                      <option value="legacy">
-                        {uiText("Legacy active notes")}
-                      </option>
-                    )}
-                    <option value="relevant">
-                      {tr("Relevant notes and recent chat")}
-                    </option>
-                    <option value="all">{uiText("All active notes")}</option>
-                    <option value="none">{uiText("None")}</option>
-                    <option value="selected">{uiText("Selected notes")}</option>
-                  </select>
-                </label>
-                {memoryMode === "selected" && (
-                  <fieldset aria-label={uiText("AI memory selection")}>
-                    <legend>{uiText("Selected notes")}</legend>
-                    {view.memories.map((m) => (
-                      <label key={m.id}>
-                        <input
-                          type="checkbox"
-                          checked={memoryIds.includes(m.id)}
-                          disabled={m.expired && !memoryIds.includes(m.id)}
-                          onChange={(e) => toggleMemory(m.id, e.target.checked)}
-                        />
-                        {m.text}
-                        {m.expired ? uiText(" (expired)") : ""}
-                      </label>
-                    ))}
-                    {memoryIds
-                      .filter((id) => !view.memories.some((m) => m.id === id))
-                      .map((id) => (
-                        <label key={id}>
-                          <input
-                            type="checkbox"
-                            checked
-                            onChange={() => toggleMemory(id, false)}
-                          />
-                          {uiText("Unavailable note: ")}
-                          {id}
-                        </label>
-                      ))}
-                  </fieldset>
-                )}
-                <div className="agent-form-grid">
-                  <label>
-                    {uiText("Maximum input tokens")}
-                    <input
-                      type="number"
-                      min={1000}
-                      max={32000}
-                      required
-                      value={input}
-                      onChange={(e) => setInput(e.target.valueAsNumber)}
-                    />
-                  </label>
-                  <label>
-                    {uiText("Maximum output tokens")}
-                    <input
-                      type="number"
-                      min={128}
-                      max={1024}
-                      required
-                      value={output}
-                      onChange={(e) => setOutput(e.target.valueAsNumber)}
-                    />
-                  </label>
-                  <label>
-                    {uiText("Request deadline (seconds)")}
-                    <input
-                      type="number"
-                      min={1}
-                      max={120}
-                      required
-                      value={deadline}
-                      onChange={(e) => setDeadline(e.target.valueAsNumber)}
-                    />
-                  </label>
-                  {!planUsage && (
-                    <label>
-                      {uiText("Spending limit ($)")}
-                      <input
-                        type="number"
-                        min={0.000001}
-                        step="0.000001"
-                        max={
-                          (selectedAccess?.catalog?.models.find(
-                            (m) => m.id === model,
-                          )?.policy?.maxRequestBudgetMicrousd || 1000000) /
-                          1000000
-                        }
-                        required
-                        value={budget / 1_000_000}
-                        onChange={(e) =>
-                          setBudget(
-                            Math.round(e.target.valueAsNumber * 1_000_000),
-                          )
-                        }
-                      />
-                    </label>
-                  )}
-                </div>
-              </div>
-            </details>
+            <AgentAIOptionsMenu
+              optionsMenu={optionsMenu}
+              optionsOpen={optionsOpen}
+              setOptionsOpen={setOptionsOpen}
+              refreshAccess={refreshAccess}
+              closeOptions={closeOptions}
+              view={view}
+              sessionId={sessionId}
+              researchSelection={researchSelection}
+              generation={generation}
+              setDraftBusy={setDraftBusy}
+              setDraftError={setDraftError}
+              setDraftSource={setDraftSource}
+              setEvidenceSelection={setEvidenceSelection}
+              setEvidencePreview={setEvidencePreview}
+              setConsent={setConsent}
+              questionRef={questionRef}
+              reviewEach={reviewEach}
+              setReviewEach={setReviewEach}
+              currentPermission={currentPermission}
+              hasComposer={!!composer}
+              onSaveComposer={composer?.onSave}
+              prompt={prompt}
+              newsSourceId={newsSourceId}
+              setNewsSourceId={setNewsSourceId}
+              newsAge={newsAge}
+              setNewsAge={setNewsAge}
+              memoryMode={memoryMode}
+              setMemoryMode={setMemoryMode}
+              legacyDraft={legacyDraft}
+              memoryIds={memoryIds}
+              toggleMemory={toggleMemory}
+              input={input}
+              setInput={setInput}
+              output={output}
+              setOutput={setOutput}
+              deadline={deadline}
+              setDeadline={setDeadline}
+              planUsage={planUsage}
+              budget={budget}
+              setBudget={setBudget}
+              selectedAccess={selectedAccess}
+              model={model}
+            />
           </div>
           <div className="composer-actions">
             {latest?.chatPermissionId &&

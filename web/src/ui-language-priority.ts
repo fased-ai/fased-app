@@ -524,4 +524,10 @@ export const priorityCopy = {
     "지출 한도 ($)",
   ],
   "New chat": ["Новый чат", "Nuevo chat", "新建聊天", "새 채팅"],
+  "Get API key": [
+    "Получить ключ API",
+    "Obtener clave API",
+    "获取 API 密钥",
+    "API 키 받기",
+  ],
 } satisfies Record<string, [string, string, string, string]>;

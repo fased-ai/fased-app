@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -51,6 +52,7 @@ type Store struct {
 	agentV2Mu                     sync.Mutex
 	agentV2                       *agentV2Store
 	agentV2TransportOverride      http.RoundTripper // Tests only; never configuration, CLI or IPC.
+	marketDataTransport           http.RoundTripper // Tests only; never configuration, CLI or IPC.
 	dir                           string
 	instanceID                    string
 	pauseFault                    func(string) error // Test-only interruption injection, never configuration or IPC.
@@ -73,6 +75,15 @@ type Store struct {
 	researchRead                  func(context.Context, researchFactResult) (json.RawMessage, error) // Test-only local projection fault; never configuration/IPC.
 }
 
+func sqliteDSN(dbPath string) string {
+	u := url.URL{
+		Scheme:   "file",
+		Path:     filepath.ToSlash(dbPath),
+		RawQuery: "_pragma=busy_timeout(5000)&_pragma=foreign_keys(1)&_pragma=synchronous(FULL)",
+	}
+	return u.String()
+}
+
 func OpenStore(dir string) (_ *Store, resultErr error) {
 	return openStoreWithTaskSecrets(dir, providersecrets.Native{})
 }
@@ -92,7 +103,7 @@ func openStoreWithTaskSecrets(dir string, secrets providersecrets.Source) (_ *St
 	if err = privateFile(dbPath); err != nil {
 		return nil, err
 	}
-	db, err := sql.Open("sqlite", dbPath)
+	db, err := sql.Open("sqlite", sqliteDSN(dbPath))
 	if err != nil {
 		return nil, err
 	}
@@ -372,6 +383,7 @@ PRAGMA user_version=1;`)
 	return store, nil
 }
 func (s *Store) Close() error {
+	clearStoreSignal(s)
 	s.closeApplicationChecks()
 	s.closeVenueCredentials()
 	s.lockAIConnection()

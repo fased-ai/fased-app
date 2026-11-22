@@ -13,7 +13,7 @@ import (
 )
 
 const (
-	agentV2SchemaVersion    = 1
+	agentV2SchemaVersion    = 2
 	agentV2MaxPromptBytes   = 32 * 1024
 	agentV2CompactMsgLimit  = 24
 	agentV2CompactCharLimit = 48000
@@ -132,11 +132,11 @@ func (s *Store) ensureAgentV2(ctx context.Context) (*agentV2Store, error) {
 	if err := privateFile(dbPath); err != nil {
 		return nil, err
 	}
-	db, err := sql.Open("sqlite", dbPath)
+	db, err := sql.Open("sqlite", sqliteDSN(dbPath))
 	if err != nil {
 		return nil, err
 	}
-	db.SetMaxOpenConns(1)
+	db.SetMaxOpenConns(4)
 	cleanup := true
 	defer func() {
 		if cleanup {
@@ -249,10 +249,50 @@ CREATE VIRTUAL TABLE memories_fts USING fts5(
 	tokenize='porter unicode61'
 );
 
-PRAGMA user_version=1;
+CREATE TABLE IF NOT EXISTS provider_model_cache (
+	ref TEXT PRIMARY KEY,
+	provider TEXT NOT NULL,
+	state TEXT NOT NULL,
+	fetched_at INTEGER NOT NULL,
+	expires_at INTEGER NOT NULL,
+	sha256 TEXT NOT NULL,
+	source TEXT NOT NULL,
+	models_json TEXT NOT NULL,
+	updated_at INTEGER NOT NULL
+);
+
+PRAGMA user_version=2;
 `
 		if _, err := tx.ExecContext(ctx, schemaSQL); err != nil {
 			return nil, fmt.Errorf("init agents.sqlite schema: %w", err)
+		}
+		if err := tx.Commit(); err != nil {
+			return nil, err
+		}
+	}
+	if version == 1 {
+		tx, err := db.BeginTx(ctx, nil)
+		if err != nil {
+			return nil, err
+		}
+		defer tx.Rollback()
+		upgradeSQL := `
+CREATE TABLE IF NOT EXISTS provider_model_cache (
+	ref TEXT PRIMARY KEY,
+	provider TEXT NOT NULL,
+	state TEXT NOT NULL,
+	fetched_at INTEGER NOT NULL,
+	expires_at INTEGER NOT NULL,
+	sha256 TEXT NOT NULL,
+	source TEXT NOT NULL,
+	models_json TEXT NOT NULL,
+	updated_at INTEGER NOT NULL
+);
+
+PRAGMA user_version=2;
+`
+		if _, err := tx.ExecContext(ctx, upgradeSQL); err != nil {
+			return nil, fmt.Errorf("upgrade agents.sqlite schema v1->v2: %w", err)
 		}
 		if err := tx.Commit(); err != nil {
 			return nil, err
@@ -930,6 +970,50 @@ func sanitizeFTSQuery(raw string) string {
 		}
 	}
 	return strings.Join(parts, " ")
+}
+
+func (s *Store) ListMemoriesByScope(ctx context.Context, profileID, scope string, limit int) ([]AgentV2Memory, error) {
+	scope = strings.TrimSpace(scope)
+	if scope == "" {
+		return s.SearchMemories(ctx, profileID, "", limit)
+	}
+	v2, err := s.ensureAgentV2(ctx)
+	if err != nil {
+		return nil, err
+	}
+	profileID = strings.TrimSpace(profileID)
+	if limit <= 0 {
+		limit = 20
+	}
+	if limit > 100 {
+		limit = 100
+	}
+	rows, err := v2.db.QueryContext(ctx,
+		`SELECT id,profile_id,scope,title,content,tags,pinned,source,created_at,updated_at
+		 FROM memories
+		 WHERE scope = ? AND (? = '' OR profile_id = '' OR profile_id = ?)
+		 ORDER BY pinned DESC, updated_at DESC LIMIT ?`,
+		scope, profileID, profileID, limit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := []AgentV2Memory{}
+	for rows.Next() {
+		var m AgentV2Memory
+		var p int
+		if err := rows.Scan(&m.ID, &m.ProfileID, &m.Scope, &m.Title, &m.Content, &m.Tags, &p, &m.Source, &m.CreatedAt, &m.UpdatedAt); err != nil {
+			return nil, err
+		}
+		m.Pinned = p != 0
+		out = append(out, m)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 func (s *Store) SearchMemories(ctx context.Context, profileID, query string, limit int) ([]AgentV2Memory, error) {

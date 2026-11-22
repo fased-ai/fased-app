@@ -381,3 +381,39 @@ func TestControlledCancellation(t *testing.T) {
 		t.Fatal("server operation outlived cancellation")
 	}
 }
+
+func TestLocalChatCompletionsPostAllowedGetRefused(t *testing.T) {
+	var sawPath string
+	var sawMethod string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		sawPath = r.URL.Path
+		sawMethod = r.Method
+		w.Header().Set("Content-Type", "application/json")
+		io.WriteString(w, `{"ok":true}`)
+	}))
+	t.Cleanup(server.Close)
+
+	wire := server.Client().Transport.(*http.Transport).Clone()
+	wire.Proxy = nil
+	t.Cleanup(wire.CloseIdleConnections)
+	transport := &Transport{Enabled: true, Wire: wire}
+	c := credential(t, server.URL+"/v1", "fixture-local-key")
+
+	// GET /v1/chat/completions remains strictly refused.
+	if _, err := transport.RoundTrip(request(t, http.MethodGet, "/v1/chat/completions", c)); err == nil {
+		t.Fatal("GET /v1/chat/completions was not refused")
+	}
+
+	// POST /v1/chat/completions routes cleanly to the bound local endpoint.
+	r := request(t, http.MethodPost, "/v1/chat/completions", c)
+	r.Body = io.NopCloser(strings.NewReader(`{"model":"qwen3:32b"}`))
+	r.ContentLength = int64(len(`{"model":"qwen3:32b"}`))
+	res, err := transport.RoundTrip(r)
+	if err != nil {
+		t.Fatalf("POST /v1/chat/completions failed: %v", err)
+	}
+	res.Body.Close()
+	if sawMethod != http.MethodPost || sawPath != "/v1/chat/completions" {
+		t.Fatalf("unexpected upstream route: %s %s", sawMethod, sawPath)
+	}
+}

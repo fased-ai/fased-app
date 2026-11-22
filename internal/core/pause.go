@@ -146,6 +146,7 @@ func (s *Store) updatePause(ctx context.Context, c update.CorePauseCommand, main
 	if e = tx.Commit(); e != nil {
 		return update.CorePauseReceipt{}, e
 	}
+	signalStoreChange(s)
 	if s.pauseFault != nil {
 		if e = s.pauseFault("pause:durable"); e != nil {
 			return update.CorePauseReceipt{}, e

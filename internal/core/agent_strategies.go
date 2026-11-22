@@ -111,7 +111,8 @@ func validStrategyPlan(p StrategyPlan) bool {
 	return p.Version == strategyPlanVersion && validAgentText(p.AccountID, 128, true) && (p.Network == "devnet" || p.Network == "mainnet-beta") && p.Market == "SOL/USDC" && p.QuantityAtoms >= 1 && p.QuantityAtoms <= 1_000_000_000_000 && p.LimitPriceMicros >= 1 && p.LimitPriceMicros <= 1_000_000_000_000 && p.OrderBudgetMicros >= 1 && p.OrderBudgetMicros <= p.TotalBudgetMicros && p.TotalBudgetMicros <= 1_000_000_000_000_000
 }
 func strategyBinding(a Account) (StrategyBinding, error) {
-	if (a.Version != 2 && a.Version != 3) || (a.Mode != "watch" && a.Mode != "fixture-managed") || (a.Network != "devnet" && a.Network != "mainnet-beta") || !hexValue(a.PublicKey, 32) {
+	isSupportedMode := (a.Version == 2 && a.Mode == "watch") || managedNetworkAccount(a) || ordinaryNetworkAccount(a)
+	if !isSupportedMode || (a.Network != "devnet" && a.Network != "mainnet-beta") || !hexValue(a.PublicKey, 32) {
 		return StrategyBinding{}, errors.New("select a network wallet public record")
 	}
 	if a.Mode == "fixture-managed" && !managedNetworkAccount(a) {

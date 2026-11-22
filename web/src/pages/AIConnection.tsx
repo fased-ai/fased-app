@@ -1,189 +1,40 @@
-import { previewModel } from "../ui-language-preview";
 import "./Providers.css";
 import type { Provider } from "../state";
-type CredentialMode =
-  Exclude<Provider, "none"> | "test" | "openai-signin" | "google-oauth";
 import { RefreshCw, Plus, ArrowLeft, Search, LockKeyhole } from "../icons";
 import { useUI } from "../ui-preferences";
-import type { OpenAIModelPolicy, OpenAIAdmission } from "../agents";
-import { isUnmeteredPolicy, planFailureDetails } from "../agents";
-import {
-  useCallback,
-  useEffect,
-  useRef,
-  useState,
-  type ReactNode,
-} from "react";
+import { planFailureDetails } from "../agents";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useWorkspace } from "../workspace";
-import { useCore } from "../core";
-import { TaskAccessSettings, type TaskAccessAllowance } from "./TaskAccess";
-import { OpenAIPilotSettings, type PilotAllowance } from "./OpenAIPilot";
+import { TaskAccessSettings } from "./TaskAccess";
+import { OpenAIPilotSettings } from "./OpenAIPilot";
+import {
+  useAIConnection,
+  type Connection,
+  type CredentialMode,
+} from "../ai-connection";
+import {
+  ConnectionPicker,
+  AIModelPicker,
+  AIAdmissionReview,
+} from "./AIConnectionPickers";
+import { ProviderModelsPanel } from "./ProviderModelsPanel";
+
+export {
+  useAIConnection,
+  type Connection,
+  ConnectionPicker,
+  AIModelPicker,
+  AIAdmissionReview,
+};
 
 const defaultLocalEndpoint = "http://127.0.0.1:11434/v1";
-
-export type Connection = {
-  authMethod?: "api-key" | "sign-in" | "local" | "oauth";
-  endpoint?: string;
-  googleProject?: string;
-  workspace?: string;
-  googleSignInAvailable?: boolean;
-  planUse?: boolean;
-  planPaused?: boolean;
-  planFailure?: string;
-  signInAvailable?: boolean;
-  signIn?: {
-    id: string;
-    ref?: string;
-    provider: string;
-    state: "waiting" | "callback-ready";
-    url: string;
-    expiresAt: number;
-    remote: boolean;
-  };
-  pilotEnrollment?: boolean;
-  pilotAvailable?: boolean;
-  pilot?: PilotAllowance;
-  pilotReview?: PilotAllowance;
-  pilotState?: string;
-  provider?: string;
-  name?: string;
-  connections?: Connection[];
-  catalog?: {
-    version: number;
-    state?: string;
-    policy?: string;
-    providers: {
-      id: string;
-      name: string;
-      methods: { id: string; name: string }[];
-      route?: string;
-      family?: string;
-      servers?: { id: string; name: string; endpoint: string }[];
-    }[];
-    models: {
-      id: string;
-      name: string;
-      tier?: string;
-      policy?: OpenAIModelPolicy;
-      provider: string;
-      method: string;
-      connectionRef: string;
-      recommended: boolean;
-      selectable: boolean;
-      availability: string;
-    }[];
-  };
-  credentialMode?: CredentialMode;
-  credentialModes?: CredentialMode[];
-  taskAccess?: TaskAccessAllowance;
-  persistentTaskAccessAvailable?: boolean;
-  osVaultAvailable?: boolean;
-  osProtected?: boolean;
-  accessReview?: TaskAccessAllowance;
-  admissionPolicy: OpenAIModelPolicy;
-  ref: string;
-  model: string;
-  locked: boolean;
-  unlockExpires: number;
-  testOnly: boolean;
-  liveCallsEnabled: boolean;
+const PROVIDER_API_KEY_URLS: Record<string, string> = {
+  openai: "https://platform.openai.com/api-keys",
+  anthropic: "https://console.anthropic.com/settings/keys",
+  google: "https://aistudio.google.com/apikey",
+  xai: "https://console.x.ai",
+  openrouter: "https://openrouter.ai/settings/keys",
 };
-export function useAIConnection() {
-  const core = useCore();
-  const [view, setView] = useState<Connection | null>(null);
-  const [error, setError] = useState("");
-  const generation = useRef(0);
-  const refresh = useCallback(async () => {
-    const epoch = ++generation.current;
-    try {
-      const next = await core.request<Connection>("ai/connection");
-      if (epoch === generation.current) {
-        setView(next);
-        setError("");
-      }
-      return next;
-    } catch {
-      if (epoch === generation.current) {
-        setView(null);
-        setError("Connection unavailable");
-      }
-      return null;
-    }
-  }, [core.request]);
-  useEffect(() => {
-    setView(null);
-    setError("");
-    if (core.mode !== "ready") return;
-    const load = () => {
-      void refresh();
-    };
-    load();
-    window.addEventListener("ai-connection-changed", load);
-    window.addEventListener("focus", load);
-    const timer = window.setInterval(load, 15000);
-    return () => {
-      generation.current++;
-      clearInterval(timer);
-      window.removeEventListener("ai-connection-changed", load);
-      window.removeEventListener("focus", load);
-    };
-  }, [refresh, core.mode, core.instanceId]);
-  return { view, setView, error, setError, refresh, core };
-}
-export function ConnectionPicker({
-  value,
-  onChange,
-}: {
-  value: string;
-  onChange: (ref: string) => void;
-}) {
-  const { t: uiText } = useUI();
-  const { view, refresh } = useAIConnection();
-  return (
-    <label>
-      <span>{uiText("Provider")}</span>
-      <select
-        value={value}
-        aria-label={uiText("Provider")}
-        onChange={(e) => onChange(e.target.value)}
-        onFocus={() => void refresh()}
-      >
-        <option value="">{uiText("No AI")}</option>
-        {(view?.connections ?? (view?.ref ? [view] : [])).map((account) => (
-          <option
-            key={account.ref}
-            value={account.ref}
-            disabled={account.locked || account.planPaused}
-          >
-            {account.name ||
-              view?.catalog?.providers.find((p) => p.id === account.provider)
-                ?.name ||
-              account.provider ||
-              uiText("Unavailable")}{" "}
-            ·{" "}
-            {uiText(
-              account.authMethod === "oauth" || account.authMethod === "sign-in"
-                ? "Sign in"
-                : account.authMethod === "local"
-                  ? "Server"
-                  : "API key",
-            )}
-            {(account.planPaused || account.locked) &&
-              ` · ${uiText(account.planPaused ? "Paused" : "Locked")}`}
-          </option>
-        ))}
-        {value &&
-          !(view?.connections ?? (view?.ref ? [view] : [])).some(
-            (a) => a.ref === value,
-          ) && (
-            <option value={value} disabled>
-              {uiText("Previous connection unavailable")}
-            </option>
-          )}
-      </select>
-    </label>
-  );
-}
 function ConnectionOptions({
   collapsed,
   open,
@@ -227,6 +78,9 @@ export function AIConnectionSettings({
     pageHeading.current?.focus({ preventScroll: true });
     window.scrollTo(0, 0);
   }, []);
+  useEffect(() => {
+    if (core.mode === "ready") void refresh();
+  }, [core.mode, core.instanceId, refresh]);
 
   const [selected, setSelected] = useState(startNew ? "new" : assignedAccount);
   const selectionChosen = useRef(false);
@@ -443,7 +297,6 @@ export function AIConnectionSettings({
               provider,
               ...(provider === "google" ? { googleProject } : {}),
               ref: view.ref,
-              ...(provider === "google" ? { googleProject } : {}),
               remote: core.connection?.location === "remote",
             }
           : action === "sign-in-complete"
@@ -602,9 +455,15 @@ export function AIConnectionSettings({
               ?.family === p.id,
         ) ?? false,
     }))
-    .sort((a, b) =>
-      a.connected === b.connected ? a.index - b.index : a.connected ? -1 : 1,
-    )
+    .sort((a, b) => {
+      if (a.provider.id === "local" && b.provider.id !== "local") return 1;
+      if (b.provider.id === "local" && a.provider.id !== "local") return -1;
+      return a.connected === b.connected
+        ? a.index - b.index
+        : a.connected
+          ? -1
+          : 1;
+    })
     .map((x) => x.provider);
   return (
     <section className="providers-page" aria-label={uiText("Providers")}>
@@ -1085,18 +944,31 @@ export function AIConnectionSettings({
                       )}
                     </>
                   ) : (
-                    <button
-                      className="primary"
-                      disabled={
-                        busy ||
-                        !view ||
-                        (isLocal ? !endpoint : !key) ||
-                        (needsPassphrase && passphrase.length < 12) ||
-                        (view.pilotEnrollment && !!view.ref)
-                      }
-                    >
-                      {view?.ref ? uiText("Replace") : uiText("Save")}
-                    </button>
+                    <>
+                      <button
+                        className="primary"
+                        disabled={
+                          busy ||
+                          !view ||
+                          (isLocal ? !endpoint : !key) ||
+                          (needsPassphrase && passphrase.length < 12) ||
+                          (view.pilotEnrollment && !!view.ref)
+                        }
+                      >
+                        {view?.ref ? uiText("Replace") : uiText("Save")}
+                      </button>
+                      {method === "api-key" &&
+                        PROVIDER_API_KEY_URLS[provider] && (
+                          <a
+                            className="secondary"
+                            href={PROVIDER_API_KEY_URLS[provider]}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                          >
+                            {uiText("Get API key")}
+                          </a>
+                        )}
+                    </>
                   )}
                   {(view?.ref ||
                     (root && !view && selected && selected !== "new")) && (
@@ -1151,247 +1023,15 @@ export function AIConnectionSettings({
             </ConnectionOptions>
           </div>
           {view?.ref && (
-            <section className="provider-models" aria-label={uiText("Models")}>
-              <header>
-                <h3>{uiText("Models")}</h3>
-                {!view.locked && view.catalog?.state !== "ready" && (
-                  <button
-                    type="button"
-                    className="secondary"
-                    disabled={busy}
-                    onClick={() => void change("models-refresh")}
-                  >
-                    {uiText("Refresh")}
-                  </button>
-                )}
-              </header>
-              <ul>
-                {view.catalog?.models
-                  .filter(
-                    (m) =>
-                      m.connectionRef === view.ref && m.provider === provider,
-                  )
-                  .map((m) => (
-                    <li key={m.id}>
-                      <span>{m.name}</span>
-                      <small>
-                        {uiText(
-                          m.selectable
-                            ? m.recommended
-                              ? "Recommended"
-                              : "Ready"
-                            : m.availability === "currency-unsupported"
-                              ? "Pricing unavailable"
-                              : "Unavailable",
-                        )}
-                      </small>
-                    </li>
-                  ))}
-              </ul>
-            </section>
+            <ProviderModelsPanel
+              view={view}
+              provider={provider}
+              busy={busy}
+              onRefresh={() => void change("models-refresh")}
+            />
           )}
         </section>
       </div>
     </section>
-  );
-}
-
-export function AIModelPicker({
-  value,
-  onChange,
-  connectionRef,
-  allowDemo = true,
-  disabled = false,
-}: {
-  value: string;
-  onChange: (v: string) => void;
-  connectionRef: string;
-  allowDemo?: boolean;
-  disabled?: boolean;
-}) {
-  const { t: uiText } = useUI();
-  const { view } = useAIConnection();
-  const selected = connectionRef
-    ? (view?.connections?.find((a) => a.ref === connectionRef) ??
-      (view?.ref === connectionRef ? view : null))
-    : view;
-  const models =
-    selected?.catalog?.version === 1 ? selected.catalog.models : [];
-  return (
-    <label>
-      <span>{uiText("Model")}</span>
-      <select
-        aria-label={uiText("Model")}
-        disabled={disabled}
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-      >
-        {allowDemo &&
-          (!connectionRef ||
-            selected?.provider === "openai" ||
-            !selected?.provider) && <option value="">{uiText("No AI")}</option>}
-        {!allowDemo && !value && (
-          <option value="" disabled>
-            {uiText("Model")}
-          </option>
-        )}
-        {value && !models.some((model) => model.id === value) && (
-          <option value={value} disabled>
-            {uiText("Unavailable model: ")}
-            {value}
-          </option>
-        )}
-        {[true, false].map((recommended) => {
-          const group = models.filter((m) => m.recommended === recommended);
-          if (!group.length) return null;
-          return (
-            <optgroup
-              key={String(recommended)}
-              label={uiText(recommended ? "Recommended" : "All models")}
-            >
-              {group.map((model) => (
-                <option
-                  key={model.id}
-                  value={model.id}
-                  disabled={
-                    !connectionRef ||
-                    !model.selectable ||
-                    model.connectionRef !== connectionRef
-                  }
-                  title={
-                    model.selectable
-                      ? previewModel(model.id, uiText)
-                      : uiText("Unavailable")
-                  }
-                >
-                  {previewModel(model.name, uiText)}
-                </option>
-              ))}
-            </optgroup>
-          );
-        })}
-      </select>
-    </label>
-  );
-}
-export function AIAdmissionReview({
-  policy,
-  admission,
-}: {
-  policy?: OpenAIModelPolicy;
-  admission?: OpenAIAdmission;
-}) {
-  const { t: uiText } = useUI();
-  if (!policy) return null;
-  if (isUnmeteredPolicy(policy))
-    return (
-      <details className="ai-admission">
-        <summary>{uiText("Usage")}</summary>
-        <p>
-          {uiText(
-            policy.model === "gemma4:cloud"
-              ? "Ollama Cloud"
-              : policy.provider === "local"
-                ? "Local"
-                : policy.provider === "ollama-cloud" ||
-                    policy.model === "gemma4:cloud"
-                  ? "Ollama Cloud"
-                  : policy.provider === "kimi-code"
-                    ? "Kimi Code"
-                    : "ChatGPT",
-          )}{" "}
-          · {previewModel(policy.model, uiText)}
-        </p>
-        {admission && (
-          <dl>
-            <dt>{uiText("Input bound")}</dt>
-            <dd>{admission.inputTokens}</dd>
-            <dt>{uiText("Admission: ")}</dt>
-            <dd>{admission.state}</dd>
-          </dl>
-        )}
-      </details>
-    );
-  if (policy.wireVersion === "openai-signin-v1")
-    return (
-      <details className="ai-admission">
-        <summary>{uiText("Model")}</summary>
-        <p>{previewModel(policy.model, uiText)}</p>
-        <p>{uiText("Access")}</p>
-        {admission && (
-          <dl>
-            <dt>{uiText("Input bound")}</dt>
-            <dd>{admission.inputTokens}</dd>
-            <dt>{uiText("Admission: ")}</dt>
-            <dd>{admission.state}</dd>
-          </dl>
-        )}
-      </details>
-    );
-  const price = (value: number) => `$${(value / 1000000).toFixed(2)}`;
-  return (
-    <details className="ai-admission">
-      <summary>{uiText("Model and tariff admission")}</summary>
-      <p>
-        {uiText("Pinned snapshot: ")}
-        {previewModel(policy.model, uiText)}
-        {uiText(" · Standard tier · Text only · No tools.")}
-      </p>
-      <p>
-        {uiText("USD per million tokens: input ")}
-        {price(policy.inputMicrousdPerMillion)}
-        {uiText(", cached input ")}
-        {price(policy.cachedMicrousdPerMillion)}
-        {uiText(", output")} {price(policy.outputMicrousdPerMillion)}
-        {uiText(
-          ". Reserve the uncached ceiling with upward integer rounding. Accounting is not a provider invoice.",
-        )}
-      </p>
-      {!!policy.billableOutputTokens && (
-        <p title={uiText("Includes reasoning tokens")}>
-          {uiText("Output reserve")}:{" "}
-          {policy.billableOutputTokens.toLocaleString()} {uiText("tokens")}
-        </p>
-      )}
-      <p>
-        {uiText("Policy ")}
-        {policy.id}
-        {uiText(" · Reviewed")}{" "}
-        {new Date(policy.reviewedAt * 1000).toLocaleDateString()}
-        {uiText(" · Expires")}{" "}
-        {new Date(policy.expiresAt * 1000).toLocaleString(
-          typeof document === "undefined"
-            ? "en"
-            : document.documentElement.lang,
-        )}
-        .
-      </p>
-      <p>
-        {uiText(
-          "Owner consent covers model visibility and input-token preflight using the same scoped text, instructions and output schema, then one bounded response. Model visibility does not guarantee billing, quota or response permission. Each run checks again; no cache or fallback.",
-        )}
-      </p>
-      <p>{uiText("Live execution disabled")}</p>
-      {admission && (
-        <>
-          <p>
-            {uiText("Admission: ")}
-            {admission.state}
-            {uiText(" · Counted ")}
-            {admission.inputTokens}
-            {uiText(" input tokens · Response creation attempted:")}{" "}
-            {admission.generationAttempted ? uiText("yes") : uiText("no")}.
-          </p>
-          <p>
-            {uiText("Exact request SHA-256: ")}
-            {admission.wireSha256}
-          </p>
-          <p>
-            {uiText("Counted payload SHA-256: ")}
-            {admission.countPayloadSha256}
-          </p>
-        </>
-      )}
-    </details>
   );
 }

@@ -13,10 +13,61 @@ import (
 	"net/http"
 	"sort"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 	"unicode/utf8"
 )
+
+type runtimeChangeSignal struct {
+	mu sync.Mutex
+	ch chan struct{}
+}
+
+var storeChangeSignals sync.Map
+
+func getStoreSignal(s *Store) *runtimeChangeSignal {
+	if s == nil {
+		return nil
+	}
+	if existing, ok := storeChangeSignals.Load(s); ok {
+		return existing.(*runtimeChangeSignal)
+	}
+	created := &runtimeChangeSignal{ch: make(chan struct{})}
+	actual, _ := storeChangeSignals.LoadOrStore(s, created)
+	return actual.(*runtimeChangeSignal)
+}
+
+func signalStoreChange(s *Store) {
+	sig := getStoreSignal(s)
+	if sig == nil {
+		return
+	}
+	sig.mu.Lock()
+	old := sig.ch
+	sig.ch = make(chan struct{})
+	sig.mu.Unlock()
+	close(old)
+}
+
+func storeChangeChan(s *Store) <-chan struct{} {
+	sig := getStoreSignal(s)
+	if sig == nil {
+		return nil
+	}
+	sig.mu.Lock()
+	ch := sig.ch
+	sig.mu.Unlock()
+	return ch
+}
+
+func clearStoreSignal(s *Store) {
+	if s == nil {
+		return
+	}
+	signalStoreChange(s)
+	storeChangeSignals.Delete(s)
+}
 
 const fixtureAIModel = "fixture-openai-v1"
 
@@ -863,40 +914,42 @@ func (s *Store) advanceAgentAI(ctx context.Context, rt http.RoundTripper, fixtur
 	monitorDone := make(chan struct{})
 	go func() {
 		defer close(monitorDone)
-		ticker := time.NewTicker(50 * time.Millisecond)
-		defer ticker.Stop()
+		fallback := time.NewTicker(time.Second)
+		defer fallback.Stop()
 		for {
+			sig := storeChangeChan(s)
 			select {
 			case <-callCtx.Done():
 				return
-			case <-ticker.C:
-				current, _, err := readAgents(callCtx, s.db)
-				if err != nil {
-					cancel()
-					return
+			case <-sig:
+			case <-fallback.C:
+			}
+			current, _, err := readAgents(callCtx, s.db)
+			if err != nil {
+				cancel()
+				return
+			}
+			active := false
+			for _, q := range current.AIRequests {
+				if q.ID == dispatch.ID && q.State == "running" {
+					active = true
 				}
-				active := false
-				for _, q := range current.AIRequests {
-					if q.ID == dispatch.ID && q.State == "running" {
-						active = true
-					}
-				}
-				var phase string
-				if s.db.QueryRowContext(callCtx, "SELECT phase FROM update_pause WHERE id=1").Scan(&phase) != nil || phase == "paused" {
+			}
+			var phase string
+			if s.db.QueryRowContext(callCtx, "SELECT phase FROM update_pause WHERE id=1").Scan(&phase) != nil || phase == "paused" {
+				active = false
+			}
+			if dispatch.News != nil || aiUsesReviewedContext(*dispatch) {
+				if s.reviewAIRequest(callCtx, *dispatch) != nil || (observed != nil && !observeAIClock(observed, s.now().Unix())) {
 					active = false
 				}
-				if dispatch.News != nil || aiUsesReviewedContext(*dispatch) {
-					if s.reviewAIRequest(callCtx, *dispatch) != nil || (observed != nil && !observeAIClock(observed, s.now().Unix())) {
-						active = false
-					}
-				}
-				if !s.chatRequestValid(current, *dispatch, s.now().Unix()) || (observed != nil && !observeAIClock(observed, s.now().Unix())) {
-					active = false
-				}
-				if !active || validateAIModelPolicy(*dispatch, s.now().Unix()) != nil || !s.aiRequestConnectionValid(*dispatch) {
-					cancel()
-					return
-				}
+			}
+			if !s.chatRequestValid(current, *dispatch, s.now().Unix()) || (observed != nil && !observeAIClock(observed, s.now().Unix())) {
+				active = false
+			}
+			if !active || validateAIModelPolicy(*dispatch, s.now().Unix()) != nil || !s.aiRequestConnectionValid(*dispatch) {
+				cancel()
+				return
 			}
 		}
 	}()

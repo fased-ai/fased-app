@@ -254,6 +254,30 @@ func (s *Server) startAgentTasks() {
 			}
 		}()
 	}
+	if !s.Store.sessionFixture && !s.agentFixture {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			startupTimer := time.NewTimer(5 * time.Second)
+			defer startupTimer.Stop()
+			select {
+			case <-ctx.Done():
+				return
+			case <-startupTimer.C:
+				s.Store.refreshStaleProviderModels(ctx)
+			}
+			ticker := time.NewTicker(providerModelCacheTTL)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-ticker.C:
+					s.Store.refreshStaleProviderModels(ctx)
+				}
+			}
+		}()
+	}
 	go func() {
 		wg.Wait()
 		close(s.taskDone)

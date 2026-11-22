@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -257,6 +258,69 @@ func TestAgentV2StoreSchemaAndFTS5(t *testing.T) {
 	}
 	if len(detail.Messages) != 2 || len(detail.PendingApprovals) != 1 || len(detail.Messages[1].ToolCalls) != 1 {
 		t.Fatalf("unexpected reopened thread detail: %+v", detail)
+	}
+}
+
+func TestAgentV2ScopedMemoriesHTTP(t *testing.T) {
+	t.Parallel()
+	s := fixtureStore(t)
+
+	if _, err := s.CreateMemory(t.Context(), MemoryInput{
+		ProfileID: "operator",
+		Scope:     "workspace",
+		Title:     "General note",
+		Content:   "SOL spread note",
+		Source:    "user",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.CreateMemory(t.Context(), MemoryInput{
+		ProfileID: "operator",
+		Scope:     "swap_draft",
+		Title:     "Swap draft: 1 SOL -> USDC",
+		Content:   `{"fromToken":"SOL","toToken":"USDC"}`,
+		Source:    "agent",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	taskMem, err := s.CreateMemory(t.Context(), MemoryInput{
+		ProfileID: "operator",
+		Scope:     "task_draft",
+		Title:     "Task draft: SOL Volatility Watch",
+		Content:   `{"name":"SOL Volatility Watch","description":"Watch SOL/USDC spread","intervalSeconds":300}`,
+		Source:    "agent",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ts, token, _ := startV2HTTPTestServer(t, s)
+	resp := doV2JSONRequest(t, http.MethodGet, ts.URL+"/api/v1/agents/v2/memories?profileId=operator&scope=task_draft", ts.URL, token, "", "", "application/json")
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 for scoped memories, got %d", resp.StatusCode)
+	}
+	var body struct {
+		Memories []AgentV2Memory `json:"memories"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	if len(body.Memories) != 1 || body.Memories[0].ID != taskMem.ID || body.Memories[0].Scope != "task_draft" {
+		t.Fatalf("expected only task_draft memory, got %+v", body.Memories)
+	}
+
+	// Empty q + q&scope should filter search results to the requested scope as well.
+	filteredResp := doV2JSONRequest(t, http.MethodGet, ts.URL+"/api/v1/agents/v2/memories?profileId=operator&q=SOL&scope=task_draft", ts.URL, token, "", "", "application/json")
+	defer filteredResp.Body.Close()
+	var filteredBody struct {
+		Memories []AgentV2Memory `json:"memories"`
+	}
+	if err := json.NewDecoder(filteredResp.Body).Decode(&filteredBody); err != nil {
+		t.Fatal(err)
+	}
+	if len(filteredBody.Memories) != 1 || filteredBody.Memories[0].Scope != "task_draft" {
+		t.Fatalf("expected q+scope filtered task_draft only, got %+v", filteredBody.Memories)
 	}
 }
 
@@ -653,8 +717,8 @@ func TestAgentV2SSEToolLoopAndApprovals(t *testing.T) {
 		t.Fatal(err)
 	}
 	toolsResp.Body.Close()
-	if len(toolsBody.Tools) != 10 {
-		t.Fatalf("expected 10 registered tools, got %d", len(toolsBody.Tools))
+	if len(toolsBody.Tools) != 15 {
+		t.Fatalf("expected 15 registered tools, got %d", len(toolsBody.Tools))
 	}
 
 	// Create thread -> 201.
@@ -939,5 +1003,427 @@ func TestAgentV2FixtureMode(t *testing.T) {
 	apResp.Body.Close()
 	if apOut.Approval.Status != "approved" || apOut.ToolCall.Status != "completed" || apOut.ResumedMessage == nil {
 		t.Fatalf("unexpected fixture approval result: %+v", apOut)
+	}
+}
+
+func TestAgentV2MultiProviderParity(t *testing.T) {
+	t.Parallel()
+
+	t.Run("Anthropic-Discovered-DisplayName-Tools", func(t *testing.T) {
+		t.Parallel()
+		s := fixtureStore(t)
+		ant := addNativeAccount(t, s, "anthropic", false)
+		v, err := s.refreshProviderModels(t.Context(), ant.Ref, aiTestTransport(func(r *http.Request) (*http.Response, error) {
+			return fixtureAdmissionResponse(r, map[string]any{
+				"data": []map[string]any{{
+					"id":           "claude-sonnet-6-0",
+					"type":         "model",
+					"lifecycle":    "active",
+					"line":         "sonnet",
+					"display_name": "Claude Sonnet 6.0",
+					"created_at":   "2026-10-08T00:00:00Z",
+				}},
+				"has_more": false,
+				"last_id":  "claude-sonnet-6-0",
+			}), nil
+		}))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if m := modelChoice(v, "claude-sonnet-6-0"); !m.Selectable || m.Name != "Claude Sonnet 6.0" {
+			t.Fatalf("discovered Anthropic model missing name: %+v", m)
+		}
+
+		round := 0
+		s.agentV2TransportOverride = aiTestTransport(func(r *http.Request) (*http.Response, error) {
+			round++
+			if r.URL.Path != "/v1/messages" || r.Header.Get("x-api-key") == "" {
+				t.Fatalf("unexpected Anthropic request: %s %s", r.Method, r.URL.Path)
+			}
+			var body map[string]any
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			if body["model"] != "claude-sonnet-6-0" {
+				t.Fatalf("expected discovered Anthropic model, got %v", body["model"])
+			}
+			if round == 1 {
+				return sseHTTPResponse(
+					"event: message_start",
+					`data: {"type":"message_start","message":{"id":"msg_ant_p","usage":{"input_tokens":30}}}`,
+					"",
+					"event: content_block_start",
+					`data: {"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"toolu_p1","name":"list_wallets"}}`,
+					"",
+					"event: content_block_delta",
+					`data: {"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{}"}}`,
+					"",
+					"event: message_delta",
+					`data: {"type":"message_delta","delta":{"stop_reason":"tool_use"},"usage":{"output_tokens":8}}`,
+					"",
+					"event: message_stop",
+					`data: {"type":"message_stop"}`,
+				), nil
+			}
+			return sseHTTPResponse(
+				"event: message_start",
+				`data: {"type":"message_start","message":{"id":"msg_ant_p2","usage":{"input_tokens":55}}}`,
+				"",
+				"event: content_block_start",
+				`data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`,
+				"",
+				"event: content_block_delta",
+				`data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Claude Sonnet 6.0 checked wallets."}}`,
+				"",
+				"event: message_delta",
+				`data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":9}}`,
+				"",
+				"event: message_stop",
+				`data: {"type":"message_stop"}`,
+			), nil
+		})
+
+		thread, err := s.CreateThread(t.Context(), "trading-analyst", "Anthropic Dyn", ant.Ref, "claude-sonnet-6-0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		res, err := s.RunAgentV2Turn(t.Context(), thread.ID, AgentV2PromptInput{Content: "List my wallets"}, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if round != 2 || res.LastMessage == nil || res.LastMessage.Content != "Claude Sonnet 6.0 checked wallets." {
+			t.Fatalf("unexpected Anthropic V2 result: round=%d msg=%+v", round, res.LastMessage)
+		}
+	})
+
+	t.Run("Google-APIKey-And-OAuth-Tools", func(t *testing.T) {
+		t.Parallel()
+		s := fixtureStore(t)
+		apiConn := addNativeAccount(t, s, "google", false)
+		oauthConn := connectGoogleFixture(t, s, true)
+
+		var seenHeaders []string
+		round := 0
+		s.agentV2TransportOverride = aiTestTransport(func(r *http.Request) (*http.Response, error) {
+			round++
+			if r.URL.Path != "/v1beta/openai/chat/completions" {
+				t.Fatalf("unexpected Google V2 path: %s", r.URL.Path)
+			}
+			seenHeaders = append(seenHeaders, r.Header.Get("Authorization")+"|"+r.Header.Get("X-Goog-User-Project"))
+			if round%2 == 1 {
+				return sseHTTPResponse(
+					`data: {"id":"g_1","choices":[{"index":0,"delta":{"role":"assistant","tool_calls":[{"index":0,"id":"call_g_1","type":"function","function":{"name":"list_wallets","arguments":"{}"}}]},"finish_reason":"tool_calls"}],"usage":{"prompt_tokens":20,"completion_tokens":5}}`,
+					`data: [DONE]`,
+				), nil
+			}
+			return sseHTTPResponse(
+				`data: {"id":"g_2","choices":[{"index":0,"delta":{"role":"assistant","content":"Google V2 ok."},"finish_reason":"stop"}],"usage":{"prompt_tokens":40,"completion_tokens":6}}`,
+				`data: [DONE]`,
+			), nil
+		})
+
+		for _, tc := range []struct {
+			name string
+			ref  string
+			want string
+		}{
+			{"api-key", apiConn.Ref, "Bearer fased-test-google-disposable-account|"},
+			{"oauth", oauthConn.Ref, "Bearer fased-fixture-google-access-token|fased-fixture-project"},
+		} {
+			before := len(seenHeaders)
+			thread, err := s.CreateThread(t.Context(), "trading-analyst", tc.name, tc.ref, "gemini-3.8-flash")
+			if err != nil {
+				t.Fatal(err)
+			}
+			res, err := s.RunAgentV2Turn(t.Context(), thread.ID, AgentV2PromptInput{Content: "Check wallets"}, nil)
+			if err != nil {
+				t.Fatalf("%s failed: %v", tc.name, err)
+			}
+			if res.LastMessage == nil || res.LastMessage.Content != "Google V2 ok." {
+				t.Fatalf("%s bad output: %+v", tc.name, res.LastMessage)
+			}
+			if len(seenHeaders) != before+2 || seenHeaders[before] != tc.want {
+				t.Fatalf("%s auth/project mismatch: got %v want %s", tc.name, seenHeaders[before:], tc.want)
+			}
+		}
+	})
+
+	t.Run("OllamaCloud-Strips-Prefix-And-OpenRouter-Dynamic", func(t *testing.T) {
+		t.Parallel()
+		s := fixtureStore(t)
+		oc := addNativeAccount(t, s, "ollama-cloud", false)
+		or := addNativeAccount(t, s, "openrouter", false)
+		if _, err := s.refreshProviderModels(t.Context(), or.Ref, aiTestTransport(func(r *http.Request) (*http.Response, error) {
+			return fixtureAdmissionResponse(r, map[string]any{
+				"data": []map[string]any{{"id": "anthropic/claude-9-opus", "name": "Anthropic: Claude 9 Opus", "created": 1744588800}},
+			}), nil
+		})); err != nil {
+			t.Fatal(err)
+		}
+
+		var modelsSent []string
+		s.agentV2TransportOverride = aiTestTransport(func(r *http.Request) (*http.Response, error) {
+			var body map[string]any
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			m, _ := body["model"].(string)
+			modelsSent = append(modelsSent, r.URL.Path+":"+m)
+			return sseHTTPResponse(
+				`data: {"id":"c_1","choices":[{"index":0,"delta":{"role":"assistant","content":"Done."},"finish_reason":"stop"}],"usage":{"prompt_tokens":15,"completion_tokens":3}}`,
+				`data: [DONE]`,
+			), nil
+		})
+
+		t1, err := s.CreateThread(t.Context(), "trading-analyst", "Ollama Cloud", oc.Ref, "ollama-cloud/gemma4:31b")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := s.RunAgentV2Turn(t.Context(), t1.ID, AgentV2PromptInput{Content: "Hi"}, nil); err != nil {
+			t.Fatal(err)
+		}
+		t2, err := s.CreateThread(t.Context(), "trading-analyst", "OpenRouter Dyn", or.Ref, "anthropic/claude-9-opus")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := s.RunAgentV2Turn(t.Context(), t2.ID, AgentV2PromptInput{Content: "Hi"}, nil); err != nil {
+			t.Fatal(err)
+		}
+		if len(modelsSent) != 2 || modelsSent[0] != "/v1/chat/completions:gemma4:31b" || modelsSent[1] != "/api/v1/chat/completions:anthropic/claude-9-opus" {
+			t.Fatalf("unexpected remote wire models: %+v", modelsSent)
+		}
+	})
+
+	t.Run("LocalOllama-Picks-Live-Model-And-Falls-Back-To-ChatCompletions", func(t *testing.T) {
+		t.Parallel()
+		s := fixtureStore(t)
+		loc := addLocalFixtureAccount(t, s)
+		if _, err := s.refreshProviderModels(t.Context(), loc.Ref, aiTestTransport(func(r *http.Request) (*http.Response, error) {
+			return fixtureAdmissionResponse(r, map[string]any{
+				"data": []map[string]any{{"id": "qwen3:32b", "name": "Qwen 3 32B", "owned_by": "library", "created": 1}},
+			}), nil
+		})); err != nil {
+			t.Fatal(err)
+		}
+
+		// When curated gemma4:e2b is absent, resolver picks live discovered qwen3:32b automatically.
+		resolved, err := resolveAgentV2Provider(t.Context(), s, loc.Ref, "", "", "", "wen-operator")
+		if err != nil || resolved.Model != "qwen3:32b" {
+			t.Fatalf("expected live discovered qwen3:32b, got %+v err=%v", resolved, err)
+		}
+
+		// Case A: /v1/responses natively succeeds.
+		var sawNativeResponses bool
+		s.agentV2TransportOverride = aiTestTransport(func(r *http.Request) (*http.Response, error) {
+			if r.URL.Path == "/v1/responses" {
+				sawNativeResponses = true
+				return sseHTTPResponse(
+					"event: response.output_text.delta",
+					`data: {"type":"response.output_text.delta","delta":"Native responses ok."}`,
+					"",
+					"event: response.completed",
+					`data: {"type":"response.completed","response":{"id":"resp_loc_1","status":"completed","usage":{"input_tokens":12,"output_tokens":4}}}`,
+				), nil
+			}
+			return nil, errors.New("unexpected fallback")
+		})
+		threadA, err := s.CreateThread(t.Context(), "wen-operator", "Local Native", loc.Ref, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		resA, err := s.RunAgentV2Turn(t.Context(), threadA.ID, AgentV2PromptInput{Content: "Hello"}, nil)
+		if err != nil || !sawNativeResponses || resA.LastMessage == nil || resA.LastMessage.Content != "Native responses ok." {
+			t.Fatalf("local /v1/responses failed: err=%v saw=%v msg=%+v", err, sawNativeResponses, resA.LastMessage)
+		}
+
+		// Case B: /v1/responses returns 404 (older Ollama server) -> transparent fallback to /v1/chat/completions + tools.
+		var calls []string
+		round := 0
+		s.agentV2TransportOverride = aiTestTransport(func(r *http.Request) (*http.Response, error) {
+			calls = append(calls, r.URL.Path)
+			if r.URL.Path == "/v1/responses" {
+				return &http.Response{
+					StatusCode: http.StatusNotFound,
+					Header:     http.Header{"Content-Type": []string{"application/json"}},
+					Body:       io.NopCloser(strings.NewReader(`{"error":{"message":"404 page not found"}}`)),
+					Request:    r,
+				}, nil
+			}
+			if r.URL.Path != "/v1/chat/completions" {
+				t.Fatalf("unexpected fallback path: %s", r.URL.Path)
+			}
+			round++
+			if round == 1 {
+				return sseHTTPResponse(
+					`data: {"id":"ol_1","choices":[{"index":0,"delta":{"role":"assistant","tool_calls":[{"index":0,"id":"call_ol_1","type":"function","function":{"name":"list_wallets","arguments":"{}"}}]},"finish_reason":"tool_calls"}],"usage":{"prompt_tokens":20,"completion_tokens":5}}`,
+					`data: [DONE]`,
+				), nil
+			}
+			return sseHTTPResponse(
+				`data: {"id":"ol_2","choices":[{"index":0,"delta":{"role":"assistant","content":"Ollama chat fallback checked wallets."},"finish_reason":"stop"}],"usage":{"prompt_tokens":45,"completion_tokens":9}}`,
+				`data: [DONE]`,
+			), nil
+		})
+		threadB, err := s.CreateThread(t.Context(), "wen-operator", "Local Fallback", loc.Ref, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		resB, err := s.RunAgentV2Turn(t.Context(), threadB.ID, AgentV2PromptInput{Content: "List my wallets"}, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if resB.LastMessage == nil || resB.LastMessage.Content != "Ollama chat fallback checked wallets." {
+			t.Fatalf("unexpected Ollama fallback answer: %+v", resB.LastMessage)
+		}
+		// 2 rounds of /v1/responses (404) -> /v1/chat/completions (tool_use + final answer).
+		if strings.Join(calls, ",") != "/v1/responses,/v1/chat/completions,/v1/responses,/v1/chat/completions" {
+			t.Fatalf("unexpected fallback sequence: %+v", calls)
+		}
+	})
+}
+
+func TestAgentV2PauseSlotsAndApprovalErrorPropagation(t *testing.T) {
+	t.Parallel()
+	s := fixtureStore(t)
+	s.providerFixture = true
+	ts, token, csrf := startV2HTTPTestServer(t, s)
+	h := ts.Config.Handler.(*HTTPHandler)
+
+	thread, err := s.CreateThread(t.Context(), "trading-analyst", "Guardrails", "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// 1. aiSlots saturated returns 429 on /messages.
+	h.aiSlots <- struct{}{}
+	h.aiSlots <- struct{}{}
+	slotResp := doV2JSONRequest(t, http.MethodPost, ts.URL+"/api/v1/agents/v2/threads/"+thread.ID+"/messages", ts.URL, token, csrf, `{"content":"hello"}`, "application/json")
+	slotResp.Body.Close()
+	<-h.aiSlots
+	<-h.aiSlots
+	if slotResp.StatusCode != http.StatusTooManyRequests {
+		t.Fatalf("expected 429 when aiSlots full, got %d", slotResp.StatusCode)
+	}
+
+	// 2. Non-SSE ResolveAgentV2Approval propagates resume errors as 400 rather than returning 200.
+	swapResp := doV2JSONRequest(t, http.MethodPost, ts.URL+"/api/v1/agents/v2/threads/"+thread.ID+"/messages", ts.URL, token, csrf, `{"content":"Propose a small swap"}`, "application/json")
+	var swapRun AgentV2RunResult
+	if err := json.NewDecoder(swapResp.Body).Decode(&swapRun); err != nil {
+		t.Fatal(err)
+	}
+	swapResp.Body.Close()
+	if swapResp.StatusCode != http.StatusOK || !swapRun.AwaitingApproval || len(swapRun.PendingApprovals) != 1 {
+		t.Fatalf("expected draft_swap pending approval, status=%d run=%+v", swapResp.StatusCode, swapRun)
+	}
+
+	// Disable fixture provider before resuming so resolveAgentV2Provider errors in JSON mode (emit == nil).
+	s.providerFixture = false
+	apResp := doV2JSONRequest(t, http.MethodPost, ts.URL+"/api/v1/agents/v2/approvals/"+swapRun.PendingApprovals[0].ID, ts.URL, token, csrf, `{"decision":"approve","resume":true}`, "application/json")
+	apResp.Body.Close()
+	if apResp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("expected 400 when non-SSE approval resume fails, got %d", apResp.StatusCode)
+	}
+
+	// 3. v2Mutation returns 409 when core is paused for update/backup.
+	_ = pausedBackup(t, s)
+	pausedResp := doV2JSONRequest(t, http.MethodPost, ts.URL+"/api/v1/agents/v2/threads/"+thread.ID+"/messages", ts.URL, token, csrf, `{"content":"while paused"}`, "application/json")
+	pausedResp.Body.Close()
+	if pausedResp.StatusCode != http.StatusConflict {
+		t.Fatalf("expected 409 when core paused, got %d", pausedResp.StatusCode)
+	}
+}
+
+func TestAgentV2ToolGetPortfolioSummary(t *testing.T) {
+	t.Parallel()
+	s := fixtureStore(t)
+
+	// Configure a watch wallet without RPC so portfolio summary cleanly summarizes status & counts.
+	view, err := s.Accounts(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.rpcAdmission = true
+	if _, err := s.UpdateAccounts(t.Context(), AccountsRecord{
+		Version:  view.Record.Version,
+		Revision: view.Record.Revision,
+		Accounts: []Account{{
+			Version:   2,
+			ID:        "11111111111111111111111111111111",
+			Name:      "Primary Watch",
+			Mode:      "watch",
+			Network:   "mainnet-beta",
+			PublicKey: strings.Repeat("11", 32),
+		}},
+		Proposals: []ProposalDraft{},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	s.rpcAdmission = false
+
+	entry, ok := lookupAgentV2Tool("get_portfolio_summary")
+	if !ok || entry.spec.Tier != toolTierRead {
+		t.Fatalf("get_portfolio_summary tool missing or wrong tier: ok=%v spec=%+v", ok, entry.spec)
+	}
+	resAny, err := entry.execute(t.Context(), s, "trading-analyst", json.RawMessage(`{"network":"mainnet-beta"}`))
+	if err != nil {
+		t.Fatalf("get_portfolio_summary failed: %v", err)
+	}
+	res := resAny.(map[string]any)
+	if res["walletCount"] != 1 || res["signingEnabled"] != false {
+		t.Fatalf("unexpected portfolio summary: %+v", res)
+	}
+	wallets := res["wallets"].([]map[string]any)
+	if len(wallets) != 1 || wallets[0]["name"] != "Primary Watch" || wallets[0]["status"] != "rpc_not_configured" {
+		t.Fatalf("unexpected wallet entry: %+v", wallets)
+	}
+}
+
+func TestAgentV2ToolFetchWebPageAndSSRFGuards(t *testing.T) {
+	t.Parallel()
+	s := fixtureStore(t)
+	s.marketDataTransport = aiTestTransport(func(r *http.Request) (*http.Response, error) {
+		if r.URL.Path == "/redirect-ssrf" {
+			return &http.Response{
+				StatusCode: http.StatusFound,
+				Header:     http.Header{"Location": []string{"https://169.254.169.254/latest/meta-data/"}},
+				Body:       io.NopCloser(strings.NewReader("")),
+				Request:    r,
+			}, nil
+		}
+		htmlBody := `<!doctype html><html><head><title>Solana &amp; Ecosystem Note</title><style>body{color:#fff}</style></head><body><script>alert("xss")</script><h1>Hello   World</h1><p>Bounded summary paragraph.</p></body></html>`
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"text/html; charset=utf-8"}},
+			Body:       io.NopCloser(strings.NewReader(htmlBody)),
+			Request:    r,
+		}, nil
+	})
+
+	entry, ok := lookupAgentV2Tool("fetch_web_page")
+	if !ok || entry.spec.Tier != toolTierRead {
+		t.Fatalf("fetch_web_page tool missing or wrong tier: ok=%v spec=%+v", ok, entry.spec)
+	}
+	resAny, err := entry.execute(t.Context(), s, "", json.RawMessage(`{"url":"https://docs.fased.invalid/guide","maxChars":500}`))
+	if err != nil {
+		t.Fatalf("fetch_web_page valid HTML failed: %v", err)
+	}
+	res := resAny.(map[string]any)
+	if res["title"] != "Solana & Ecosystem Note" || res["untrusted"] != true {
+		t.Fatalf("unexpected title/untrusted: %+v", res)
+	}
+	txt := res["text"].(string)
+	if !strings.Contains(txt, "Hello World") || !strings.Contains(txt, "Bounded summary paragraph.") || strings.Contains(txt, "alert(") || strings.Contains(txt, "color:#fff") {
+		t.Fatalf("script/style not stripped or text missing: %q", txt)
+	}
+
+	for _, badURL := range []string{
+		"http://example.com/",
+		"https://127.0.0.1/",
+		"https://169.254.169.254/latest/meta-data/",
+		"https://10.0.0.1/",
+		"https://service.local/",
+		"https://metadata.google.internal/",
+		"https://docs.fased.invalid/redirect-ssrf",
+	} {
+		argsJSON, _ := json.Marshal(map[string]any{"url": badURL})
+		if _, err := entry.execute(t.Context(), s, "", argsJSON); err == nil {
+			t.Fatalf("SSRF guard failed to block %q", badURL)
+		}
 	}
 }

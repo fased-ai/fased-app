@@ -22,7 +22,7 @@ func needsPrivateLaunchFile(target string) bool {
 	if err != nil {
 		return false
 	}
-	return strings.HasPrefix(u.Fragment, "local=") || strings.HasPrefix(u.Fragment, "setup=")
+	return strings.HasPrefix(u.Fragment, "local=") || strings.HasPrefix(u.Fragment, "setup=") || strings.HasPrefix(u.Fragment, "pair=")
 }
 
 func writePrivateLaunchFile(target string) (string, error) {

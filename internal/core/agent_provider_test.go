@@ -24,13 +24,13 @@ func TestProviderCatalogTracksConnectionWithoutEntitlementClaims(t *testing.T) {
 	if err != nil || v.Catalog.Version != 1 || len(v.Catalog.Providers) != 12 || len(v.Catalog.Models) != 3 {
 		t.Fatalf("catalog: %+v %v", v.Catalog, err)
 	}
-	for i, id := range []string{"openai", "anthropic", "xai"} {
+	for i, id := range []string{"openai", "anthropic", "google", "xai"} {
 		p := v.Catalog.Providers[i]
 		methods := 1
-		if id == "openai" {
+		if id == "openai" || id == "google" {
 			methods = 2
 		}
-		if p.ID != id || len(p.Methods) != methods || p.Methods[0].ID != "api-key" || (id == "openai" && p.Methods[1].ID != "sign-in") {
+		if p.ID != id || len(p.Methods) != methods || p.Methods[0].ID != "api-key" || ((id == "openai" || id == "google") && p.Methods[1].ID != "sign-in") {
 			t.Fatal("provider methods must describe implemented account routes", p)
 		}
 	}

@@ -2,8 +2,10 @@ package core
 
 import (
 	"bytes"
+	"compress/gzip"
 	"context"
 	"crypto/x509"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"net"
@@ -475,5 +477,148 @@ func TestWalletReadUIFixture(t *testing.T) {
 			t.Fatal(err)
 		}
 	case <-time.After(90 * time.Second):
+	}
+}
+
+func TestWalletRPCLargeTokenAccountsGzipAndRetries(t *testing.T) {
+	t.Parallel()
+	address := onchain.Base58(bytes.Repeat([]byte{2}, 32))
+	var mode atomic.Value
+	mode.Store("large-gzip")
+	var attempts atomic.Int32
+	var sawMinSlot atomic.Int32
+	var sawRateLimit atomic.Int32
+
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var request struct {
+			ID     int               `json:"id"`
+			Method string            `json:"method"`
+			Params []json.RawMessage `json:"params"`
+		}
+		if json.NewDecoder(r.Body).Decode(&request) != nil {
+			http.Error(w, "bad json", 400)
+			return
+		}
+		curMode, _ := mode.Load().(string)
+		switch curMode {
+		case "retry-429-once":
+			if request.Method == "getBalance" && sawRateLimit.Add(1) == 1 {
+				w.Header().Set("Retry-After", "0")
+				http.Error(w, "provider limit reached: secret", http.StatusTooManyRequests)
+				return
+			}
+		case "persistent-429":
+			if request.Method == "getBalance" {
+				http.Error(w, "provider limit reached: secret", http.StatusTooManyRequests)
+				return
+			}
+		case "retry-32016-once":
+			if request.Method == "getTokenAccountsByOwner" && sawMinSlot.Add(1) == 1 {
+				_ = json.NewEncoder(w).Encode(map[string]any{
+					"jsonrpc": "2.0",
+					"id":      request.ID,
+					"error":   map[string]any{"code": -32016, "message": "minContextSlot not reached"},
+				})
+				return
+			}
+		case "over-4mib":
+			if request.Method == "getTokenAccountsByOwner" {
+				_, _ = w.Write(bytes.Repeat([]byte{'{'}, walletRPCMaxResponseBytes+1))
+				return
+			}
+		}
+		attempts.Add(1)
+		var result any
+		switch request.Method {
+		case "getGenesisHash":
+			result = solanaGenesis("devnet")
+		case "getBalance":
+			result = map[string]any{"context": map[string]any{"slot": 200}, "value": 42000}
+		case "getTokenAccountsByOwner":
+			var filter struct {
+				Program string `json:"programId"`
+			}
+			_ = json.Unmarshal(request.Params[1], &filter)
+			entries := []any{}
+			if filter.Program == onchain.Token {
+				count := 100
+				pad := strings.Repeat("p", 2600)
+				for i := 0; i < count; i++ {
+					var pub [32]byte
+					binary.BigEndian.PutUint32(pub[:4], uint32(i+1))
+					var mint [32]byte
+					binary.BigEndian.PutUint32(mint[:4], uint32(i+1000))
+					entries = append(entries, map[string]any{
+						"pubkey": onchain.Base58(pub[:]),
+						"account": map[string]any{
+							"owner":      filter.Program,
+							"executable": false,
+							"padding":    pad,
+							"data": map[string]any{
+								"parsed": map[string]any{
+									"type": "account",
+									"info": map[string]any{
+										"owner":       address,
+										"mint":        onchain.Base58(mint[:]),
+										"state":       "initialized",
+										"tokenAmount": map[string]any{"amount": "5", "decimals": 6},
+									},
+								},
+							},
+						},
+					})
+				}
+			}
+			result = map[string]any{"context": map[string]any{"slot": 200}, "value": entries}
+		case "getSignaturesForAddress":
+			result = []any{}
+		}
+		w.Header().Set("Content-Type", "application/json")
+		if curMode == "large-gzip" && request.Method == "getTokenAccountsByOwner" {
+			w.Header().Set("Content-Encoding", "gzip")
+			gz := gzip.NewWriter(w)
+			_ = json.NewEncoder(gz).Encode(map[string]any{"jsonrpc": "2.0", "id": request.ID, "result": result})
+			_ = gz.Close()
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"jsonrpc": "2.0", "id": request.ID, "result": result})
+	}))
+	defer server.Close()
+
+	rt := newPublicRPCTransport()
+	rt.enabled = true
+	roots := x509.NewCertPool()
+	roots.AddCert(server.Certificate())
+	rt.transport.TLSClientConfig.RootCAs = roots
+	rt.transport.TLSClientConfig.ServerName = "example.com"
+	rt.transport.DialContext = func(ctx context.Context, network, _ string) (net.Conn, error) {
+		return (&net.Dialer{}).DialContext(ctx, network, server.Listener.Addr().String())
+	}
+	defer rt.transport.CloseIdleConnections()
+
+	noopValid := func() error { return nil }
+	snap, err := walletRPC(t.Context(), "https://api.devnet.solana.com", rt, noopValid, false, address, "devnet", nil)
+	if err != nil || len(snap.Tokens) != 100 || snap.Lamports != "42000" {
+		t.Fatalf("expected >64 token accounts + >256KiB gzipped response to succeed, got tokens=%d err=%v", len(snap.Tokens), err)
+	}
+
+	mode.Store("retry-429-once")
+	if _, err := walletRPC(t.Context(), "https://api.devnet.solana.com", rt, noopValid, false, address, "devnet", nil); err != nil || sawRateLimit.Load() != 2 {
+		t.Fatalf("expected 429 retry to succeed, err=%v count=%d", err, sawRateLimit.Load())
+	}
+
+	mode.Store("retry-32016-once")
+	if _, err := walletRPC(t.Context(), "https://api.devnet.solana.com", rt, noopValid, false, address, "devnet", nil); err != nil || sawMinSlot.Load() != 3 {
+		t.Fatalf("expected -32016 retry to succeed, err=%v count=%d", err, sawMinSlot.Load())
+	}
+
+	mode.Store("persistent-429")
+	if _, err := walletRPC(t.Context(), "https://api.devnet.solana.com", rt, noopValid, false, address, "devnet", nil); err == nil || strings.Contains(err.Error(), "secret") {
+		t.Fatalf("expected opaque RPC unavailable after persistent 429, got %v", err)
+	}
+
+	mode.Store("over-4mib")
+	if _, err := walletRPC(t.Context(), "https://api.devnet.solana.com", rt, noopValid, false, address, "devnet", nil); err == nil || strings.Contains(err.Error(), "secret") {
+		t.Fatalf("expected >4MiB response to be rejected cleanly, got %v", err)
 	}
 }

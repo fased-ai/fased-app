@@ -73,6 +73,25 @@ func resolveAgentV2Provider(ctx context.Context, s *Store, explicitRef, threadRe
 		if m := strings.TrimSpace(profileModel); m != "" && validProviderModelID(m) && (profileRef == v.Ref || (profileRef == "" && profileProvider == v.Provider)) {
 			return m
 		}
+		if v.Catalog.State == "ready" {
+			if v.Model != "" {
+				for _, m := range v.Catalog.Models {
+					if m.ID == v.Model && m.Selectable {
+						return m.ID
+					}
+				}
+			}
+			for _, m := range v.Catalog.Models {
+				if m.Selectable && m.Recommended && m.ID != "" {
+					return m.ID
+				}
+			}
+			for _, m := range v.Catalog.Models {
+				if m.Selectable && m.ID != "" {
+					return m.ID
+				}
+			}
+		}
 		if v.Model != "" {
 			return v.Model
 		}
@@ -193,11 +212,25 @@ func streamProviderV2(ctx context.Context, s *Store, target resolvedAgentProvide
 	switch {
 	case target.Provider == "anthropic":
 		return callAnthropicV2(ctx, client, target, prompt, cb)
+	case target.Provider == "local":
+		return callLocalV2(ctx, client, target, prompt, cb)
 	case compatibleProvider(target.Provider):
 		return callCompatibleV2(ctx, client, target, prompt, cb)
 	default:
 		return callResponsesV2(ctx, client, target, prompt, cb)
 	}
+}
+
+func callLocalV2(ctx context.Context, client *http.Client, target resolvedAgentProvider, prompt providerV2Prompt, cb providerStreamCallbacks) (providerTurnResult, error) {
+	out, err := callResponsesV2(ctx, client, target, prompt, cb)
+	if err == nil {
+		return out, nil
+	}
+	var statusErr *providerHTTPStatusError
+	if errors.As(err, &statusErr) && (statusErr.StatusCode == http.StatusNotFound || statusErr.StatusCode == http.StatusMethodNotAllowed || statusErr.StatusCode == http.StatusNotImplemented) {
+		return callCompatibleV2(ctx, client, target, prompt, cb)
+	}
+	return providerTurnResult{}, err
 }
 
 func toolOutputJSONForWire(tc AgentToolCall) string {
@@ -1104,6 +1137,15 @@ func parseCompatibleV2SSE(body io.Reader, cb providerStreamCallbacks) (providerT
 	return out, nil
 }
 
+type providerHTTPStatusError struct {
+	StatusCode int
+	Message    string
+}
+
+func (e *providerHTTPStatusError) Error() string {
+	return fmt.Sprintf("provider returned HTTP %d: %s", e.StatusCode, e.Message)
+}
+
 func readProviderHTTPError(resp *http.Response) error {
 	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
 	var parsed struct {
@@ -1125,7 +1167,10 @@ func readProviderHTTPError(resp *http.Response) error {
 	if msg == "" {
 		msg = http.StatusText(resp.StatusCode)
 	}
-	return fmt.Errorf("provider returned HTTP %d: %s", resp.StatusCode, sanitizeDiagValue(msg, 240))
+	return &providerHTTPStatusError{
+		StatusCode: resp.StatusCode,
+		Message:    sanitizeDiagValue(msg, 240),
+	}
 }
 
 func runFixtureProviderV2(_ context.Context, prompt providerV2Prompt, cb providerStreamCallbacks) (providerTurnResult, error) {
@@ -1167,6 +1212,54 @@ func runFixtureProviderV2(_ context.Context, prompt providerV2Prompt, cb provide
 
 	if len(prompt.Tools) > 0 {
 		switch {
+		case strings.Contains(lastUser, "draft a task") || strings.Contains(lastUser, "draft task") || strings.Contains(lastUser, "monitor sol"):
+			return providerTurnResult{
+				ResponseID: "fixture-resp-task",
+				ToolCalls: []providerToolCall{{
+					CallID:   "fixture_call_task_1",
+					Name:     "draft_task",
+					ArgsJSON: `{"name":"SOL Volatility Watch","description":"Check live SOL price and quote 1 SOL to USDC for spread drift.","intervalSeconds":300}`,
+				}},
+				InputTokens:  48,
+				OutputTokens: 24,
+				FinishReason: "tool_calls",
+			}, nil
+		case strings.Contains(lastUser, "quote") && !strings.Contains(lastUser, "swap"):
+			return providerTurnResult{
+				ResponseID: "fixture-resp-quote",
+				ToolCalls: []providerToolCall{{
+					CallID:   "fixture_call_quote_1",
+					Name:     "get_swap_quote",
+					ArgsJSON: `{"fromToken":"SOL","toToken":"USDC","amount":"1","slippageBps":50}`,
+				}},
+				InputTokens:  44,
+				OutputTokens: 18,
+				FinishReason: "tool_calls",
+			}, nil
+		case strings.Contains(lastUser, "price"):
+			return providerTurnResult{
+				ResponseID: "fixture-resp-price",
+				ToolCalls: []providerToolCall{{
+					CallID:   "fixture_call_price_1",
+					Name:     "get_token_price",
+					ArgsJSON: `{"tokens":["SOL","USDC"]}`,
+				}},
+				InputTokens:  44,
+				OutputTokens: 18,
+				FinishReason: "tool_calls",
+			}, nil
+		case strings.Contains(lastUser, "balance"):
+			return providerTurnResult{
+				ResponseID: "fixture-resp-balances",
+				ToolCalls: []providerToolCall{{
+					CallID:   "fixture_call_balances_1",
+					Name:     "get_wallet_balances",
+					ArgsJSON: `{}`,
+				}},
+				InputTokens:  44,
+				OutputTokens: 18,
+				FinishReason: "tool_calls",
+			}, nil
 		case strings.Contains(lastUser, "swap"):
 			return providerTurnResult{
 				ResponseID: "fixture-resp-swap",

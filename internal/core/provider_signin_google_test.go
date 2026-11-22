@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -339,5 +340,128 @@ func TestGoogleOAuthCallbackAcceptsIssAndWorkspaceHdAndRejectsWrongIssuer(t *tes
 		Passphrase: testVaultPassword,
 	}); err == nil {
 		t.Fatal("Google callback with mismatched iss accepted")
+	}
+}
+
+func TestGoogleOAuthHardeningFragmentNoCancelOnTypoAndOSVaultRotation(t *testing.T) {
+	t.Parallel()
+	s := fixtureStore(t)
+	start, err := s.ChangeAIConnection(t.Context(), googleStartCommand(t, true))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Paste typo must fail without cancelling pending attempt, allowing immediate retry.
+	if _, err = s.ChangeAIConnection(t.Context(), AIConnectionCommand{
+		Action:     "sign-in-complete",
+		SignInID:   start.SignIn.ID,
+		Callback:   "not-a-valid-callback",
+		Passphrase: testVaultPassword,
+	}); err == nil {
+		t.Fatal("invalid callback accepted")
+	}
+	if s.provider.signIn == nil || s.provider.signIn.view.ID != start.SignIn.ID {
+		t.Fatal("callback typo destroyed pending Google sign-in attempt")
+	}
+
+	// Valid callback with trailing slash on iss and hash fragment completes cleanly.
+	u, _ := url.Parse(start.SignIn.URL)
+	q := u.Query()
+	q.Set("iss", googleIssuer+"/")
+	q.Set("g_csrf_token", "harmless-extra")
+	u.RawQuery = q.Encode()
+	u.Fragment = "section=done"
+	completed, err := s.ChangeAIConnection(t.Context(), AIConnectionCommand{
+		Action:     "sign-in-complete",
+		SignInID:   start.SignIn.ID,
+		Callback:   u.String(),
+		Passphrase: testVaultPassword,
+	})
+	if err != nil || completed.AuthMethod != "oauth" || completed.Locked {
+		t.Fatalf("retry with cleaned callback + fragment failed: err=%v view=%+v", err, completed)
+	}
+
+	if runtime.GOOS != "linux" {
+		return
+	}
+	dir := fixtureDir(t)
+	osStore, err := openStoreWithTaskSecrets(dir, &testTaskSecrets{key: bytes.Repeat([]byte{93}, 32)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer osStore.Close()
+	osStore.providerFixture = true
+
+	osStart, err := osStore.ChangeAIConnection(t.Context(), googleStartCommand(t, true))
+	if err != nil {
+		t.Fatal(err)
+	}
+	osAcc, err := osStore.ChangeAIConnection(t.Context(), AIConnectionCommand{
+		Action:   "sign-in-complete",
+		SignInID: osStart.SignIn.ID,
+		Callback: osStart.SignIn.URL,
+	})
+	if err != nil || !osAcc.OSProtected || osAcc.Locked {
+		t.Fatalf("OS-protected Google sign-in failed: err=%v acc=%+v", err, osAcc)
+	}
+
+	// Expire access token and inject rotated refresh token response.
+	osStore.provider.mu.Lock()
+	cred, ok := parseGoogleCredential(osStore.provider.accounts[osAcc.Ref].key)
+	if !ok {
+		osStore.provider.mu.Unlock()
+		t.Fatal("missing stored Google OS credential")
+	}
+	baseFix, err := newGoogleOAuthFixture(cred, "", "", osStore.now)
+	if err != nil {
+		osStore.provider.mu.Unlock()
+		t.Fatal(err)
+	}
+	cred.ExpiresAt = osStore.now().Add(-5 * time.Minute).Unix()
+	osStore.provider.accounts[osAcc.Ref].key, _ = json.Marshal(cred)
+	osStore.provider.signInTransport = aiTestTransport(func(r *http.Request) (*http.Response, error) {
+		if r.URL.String() == googleTokenURL {
+			return fixtureAdmissionResponse(r, map[string]any{
+				"access_token":  "fased-rotated-google-access",
+				"refresh_token": "fased-rotated-google-refresh",
+				"token_type":    "Bearer",
+				"expires_in":    3600,
+				"scope":         googleScope,
+			}), nil
+		}
+		return baseFix.RoundTrip(r)
+	})
+	osStore.provider.mu.Unlock()
+
+	rt := authenticatedAITransport{
+		store:      osStore,
+		ref:        osAcc.Ref,
+		modelsOnly: true,
+		next: aiTestTransport(func(r *http.Request) (*http.Response, error) {
+			if r.Header.Get("Authorization") != "Bearer fased-rotated-google-access" {
+				return nil, http.ErrNotSupported
+			}
+			return compatibleFixtureResponse(r, "google")
+		}),
+	}
+	req, _ := http.NewRequest("GET", providerOrigin("google")+providerModelsPath("google"), nil)
+	res, err := rt.RoundTrip(req)
+	if err != nil || res.StatusCode != 200 {
+		t.Fatalf("OS-protected Google refresh rotation failed: err=%v", err)
+	}
+	res.Body.Close()
+
+	// Verify rotated refresh token persisted to the OS-protected vault across lock+restore.
+	osStore.lockAIConnection()
+	osStore.restoreOSProtectedConnections(t.Context())
+	restored, _ := osStore.AIConnection(osAcc.Ref)
+	if restored.Locked {
+		t.Fatal("OS-protected Google connection failed to restore after rotation")
+	}
+	osStore.provider.mu.Lock()
+	afterCred, ok := parseGoogleCredential(osStore.provider.accounts[osAcc.Ref].key)
+	osStore.provider.mu.Unlock()
+	if !ok || afterCred.RefreshToken != "fased-rotated-google-refresh" {
+		t.Fatalf("rotated Google refresh token not persisted: %+v", afterCred)
 	}
 }
