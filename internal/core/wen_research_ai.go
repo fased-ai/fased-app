@@ -564,6 +564,7 @@ func (s *Store) WENResearchAI(ctx context.Context, c WENResearchAISelection, can
 		if err = tx.Commit(); err != nil {
 			return out, err
 		}
+		signalStoreChange(s)
 	}
 	return WENResearchAIReview{researchReviewSchema(t), rev, t, q, state, false}, nil
 }

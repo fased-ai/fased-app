@@ -1,3 +1,4 @@
+import { lazy, Suspense, useEffect, useState } from "react";
 import { NoticeResult } from "./components/NoticeResult";
 import { ShellNavigation } from "./components/ShellNavigation";
 import { UIProvider, useUI } from "./ui-preferences";
@@ -9,12 +10,15 @@ import { WorkspaceDialogs } from "./components/WorkspaceDialogs";
 import { AIConnectionSettings } from "./pages/AIConnection";
 import { Overview } from "./pages/Overview";
 import { Wallets } from "./pages/Wallets";
-import { Agents } from "./pages/Agents";
 import { LocalAgents } from "./pages/LocalAgents";
 import { Terminals } from "./pages/Terminals";
 import { Settings } from "./pages/Settings";
 import { CoreProvider } from "./core";
 import { CoreGate } from "./components/CoreGate";
+
+const Agents = lazy(() =>
+  import("./pages/Agents").then((m) => ({ default: m.Agents })),
+);
 function WorkspaceShell() {
   const { t: uiText } = useUI();
   const { preferences, t } = useUI();
@@ -31,6 +35,10 @@ function WorkspaceShell() {
     section,
     navigate,
   } = useWorkspace();
+  const [agentsMounted, setAgentsMounted] = useState(section === "agents");
+  useEffect(() => {
+    if (section === "agents") setAgentsMounted(true);
+  }, [section]);
   return (
     <>
       <a
@@ -61,7 +69,7 @@ function WorkspaceShell() {
             </div>
           )}
           <main id="main-content" tabIndex={-1} className="main-content">
-            {core.mode === "ready" && (
+            {core.mode === "ready" && agentsMounted && (
               <div className="agent-page" hidden={section !== "agents"}>
                 <LocalAgents />
               </div>
@@ -72,7 +80,9 @@ function WorkspaceShell() {
               <Wallets />
             ) : section === "agents" ? (
               core.mode === "ready" ? null : (
-                <Agents />
+                <Suspense fallback={<p role="status">{uiText("Loading")}</p>}>
+                  <Agents />
+                </Suspense>
               )
             ) : section === "terminals" ? (
               <Terminals />

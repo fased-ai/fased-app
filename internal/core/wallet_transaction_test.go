@@ -195,6 +195,30 @@ func TestWalletTransactionParse(t *testing.T) {
 			t.Fatal(got, err)
 		}
 	})
+	t.Run("verified ATA creation and closure compute deltas", func(t *testing.T) {
+		key := func(n byte) string { return onchain.Base58(bytes.Repeat([]byte{n}, 32)) }
+		tokenRow := func(index int, program, amount string) map[string]any {
+			return map[string]any{"accountIndex": index, "mint": key(3), "owner": key(2), "programId": program, "uiTokenAmount": map[string]any{"amount": amount, "decimals": 6}}
+		}
+		// Account index 2: ATA created (preBalances=0 -> postBalances=2039280, postTokenBalances only).
+		// Account index 3: ATA closed (preBalances=2039280 -> postBalances=0, preTokenBalances only).
+		v := walletTransactionFixture()
+		meta := v["meta"].(map[string]any)
+		meta["preBalances"] = []any{100000, uint64(9007199254740993), 0, 2039280}
+		meta["postBalances"] = []any{95000, uint64(9007199254740893), 2039280, 0}
+		meta["preTokenBalances"] = []any{tokenRow(3, token2022Program, "500000")}
+		meta["postTokenBalances"] = []any{tokenRow(2, onchain.Token, "500000")}
+		got, err := parse(v, walletSelectionFixture())
+		if err != nil || !got.TokenChangesComplete || len(got.Tokens) != 2 {
+			t.Fatalf("expected complete ATA deltas, got %+v err=%v", got, err)
+		}
+		if got.Tokens[0].Before != "0" || got.Tokens[0].After != "500000" || got.Tokens[0].Change != "500000" {
+			t.Fatalf("unexpected ATA creation delta: %+v", got.Tokens[0])
+		}
+		if got.Tokens[1].Before != "500000" || got.Tokens[1].After != "0" || got.Tokens[1].Change != "-500000" {
+			t.Fatalf("unexpected ATA closure delta: %+v", got.Tokens[1])
+		}
+	})
 	t.Run("v0 loaded addresses", func(t *testing.T) {
 		v := walletTransactionFixture()
 		v["version"] = 0

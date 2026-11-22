@@ -19,19 +19,22 @@ import (
 )
 
 type Chain struct {
-	SettlementMode  string
-	mu              sync.Mutex
-	SimulationFails bool
-	DropSubmission  bool
-	Unknown         bool
-	WrongNetwork    bool
-	TamperBuild     bool
-	RejectSubmit    bool
-	Submissions     int
-	Reads           int
-	Quote           onchain.Quote
-	Packet          []byte
-	Calls           []string
+	SettlementMode   string
+	CustomErr        any
+	BlockHeight      uint64
+	RevealAfterReads int
+	mu               sync.Mutex
+	SimulationFails  bool
+	DropSubmission   bool
+	Unknown          bool
+	WrongNetwork     bool
+	TamperBuild      bool
+	RejectSubmit     bool
+	Submissions      int
+	Reads            int
+	Quote            onchain.Quote
+	Packet           []byte
+	Calls            []string
 }
 
 func (*Chain) ControlledFixture() bool { return true }
@@ -140,6 +143,9 @@ func (c *Chain) RoundTrip(r *http.Request) (*http.Response, error) {
 		result = map[string]any{"context": context, "value": map[string]any{"err": failure, "unitsConsumed": 210000}}
 	case "getBlockHeight":
 		result = 20
+		if c.BlockHeight > 0 {
+			result = c.BlockHeight
+		}
 	case "sendTransaction":
 		var encoded string
 		json.Unmarshal(call.Params[0], &encoded)
@@ -165,7 +171,11 @@ func (c *Chain) RoundTrip(r *http.Request) (*http.Response, error) {
 	case "getSignatureStatuses":
 		c.Reads++
 		var value any
-		if len(c.Packet) > 0 && !c.Unknown {
+		unknown := c.Unknown
+		if unknown && c.RevealAfterReads > 0 && c.Reads >= c.RevealAfterReads {
+			unknown = false
+		}
+		if len(c.Packet) > 0 && !unknown {
 			value = map[string]any{"slot": 11, "err": nil, "confirmationStatus": "confirmed"}
 			c.setErrorEvidence(value.(map[string]any), "status")
 		}
@@ -239,5 +249,9 @@ func (c *Chain) setErrorEvidence(row map[string]any, where string) {
 		}
 	case "failed":
 		row["err"] = map[string]any{"InstructionError": []any{0, map[string]any{"Custom": 1}}}
+	case "custom-err":
+		if c.CustomErr != nil {
+			row["err"] = c.CustomErr
+		}
 	}
 }

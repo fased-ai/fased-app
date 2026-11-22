@@ -790,3 +790,49 @@ func TestTaskHeadlineStricterFreshnessEvidence(t *testing.T) {
 		}
 	}
 }
+
+func TestNewsAtomFeedIngestionAndSecurityBounds(t *testing.T) {
+	t.Parallel()
+	now := time.Unix(1774000000, 0)
+	ts1 := now.UTC().Format(time.RFC3339)
+	ts2 := now.Add(-time.Minute).UTC().Format(time.RFC3339)
+	atomBody := []byte(fmt.Sprintf(`<?xml version="1.0" encoding="utf-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <title>Solana Protocol Feed</title>
+  <entry>
+    <title>Validator client 3.0 shipped</title>
+    <link rel="alternate" href="https://news.example.com/validator-3"/>
+    <published>%s</published>
+  </entry>
+  <entry>
+    <title>Fee market update</title>
+    <link href="https://news.example.com/fee-market"/>
+    <updated>%s</updated>
+  </entry>
+</feed>`, ts1, ts2))
+
+	fetch, err := parseNewsRSS(atomBody, NewsFetch{SourceID: "src_atom", MaxAgeSeconds: 3600}, now.Unix())
+	if err != nil {
+		t.Fatalf("parseNewsRSS(Atom) failed: %v", err)
+	}
+	if fetch.State != "completed" || len(fetch.Items) != 2 || fetch.Items[0].Title != "Validator client 3.0 shipped" || fetch.Items[1].URL != "https://news.example.com/fee-market" {
+		t.Fatalf("unexpected parsed Atom items: %+v", fetch)
+	}
+
+	privateLinkAtom := []byte(fmt.Sprintf(`<?xml version="1.0" encoding="utf-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <entry>
+    <title>SSRF link</title>
+    <link href="https://127.0.0.1/secret"/>
+    <updated>%s</updated>
+  </entry>
+</feed>`, ts1))
+	if _, err := parseNewsRSS(privateLinkAtom, NewsFetch{SourceID: "src_bad", MaxAgeSeconds: 3600}, now.Unix()); err == nil {
+		t.Fatal("accepted private IP link inside Atom feed")
+	}
+
+	dtdAtom := []byte(`<!DOCTYPE feed><feed xmlns="http://www.w3.org/2005/Atom"><entry><title>x</title><link href="https://news.example.com/x"/><updated>2026-11-22T00:00:00Z</updated></entry></feed>`)
+	if _, err := parseNewsRSS(dtdAtom, NewsFetch{SourceID: "src_dtd", MaxAgeSeconds: 3600}, now.Unix()); err == nil {
+		t.Fatal("accepted DTD directive inside Atom feed")
+	}
+}

@@ -49,7 +49,7 @@ test("Remote SSH pairing flow, device management, revocation, and logout stay cl
     await expect(page.locator('input[type="password"]')).toHaveCount(0);
     await expect(page.getByText("Remote", { exact: true })).toBeVisible();
 
-    // 2. CLI `pair --json` produces one-time #pair= URL that auto-enters #agents/chat.
+    // 2. CLI `pair --json` produces one-time #pair= URL that auto-enters #overview (Dashboard).
     const { stdout: pairRaw } = await exec(binary, [
       "pair",
       "--data-dir",
@@ -75,7 +75,7 @@ test("Remote SSH pairing flow, device management, revocation, and logout stay cl
       page.getByRole("button", { name: "Sign out", exact: true }),
     ).toBeVisible();
     await expect(
-      page.getByRole("heading", { name: "Chat", exact: true }),
+      page.getByRole("heading", { name: "Dashboard", exact: true }),
     ).toBeVisible();
     expect(page.url()).not.toContain("#pair=");
 

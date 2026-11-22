@@ -421,11 +421,15 @@ test("Mintlify configuration and static assets are docs, executable or mixed pat
 
 test("release-script and non-custody agent changes use bounded CI lanes and keep sensitive paths conservative", () => {
   const release = classify([
+    "scripts/install-entry.test.mjs",
     "scripts/release-acceptance.mjs",
     "scripts/release-acceptance.test.mjs",
     "scripts/staged-acceptance-contract.json",
     "docs/maintainers/ubuntu-release.md",
   ]);
+  assert.equal(classify(["scripts/install-entry.test.mjs"]).scope, "release");
+  for (const lane of lanes)
+    assert.equal(classify(["scripts/install-entry.test.mjs"])[lane], false);
   assert.equal(release.scope, "release");
   for (const lane of lanes) assert.equal(release[lane], false);
   assert.doesNotThrow(() => verifyGate(result(release)));

@@ -103,6 +103,7 @@ func (s *Store) readRPCVault(id string) (rpcVault, error) {
 }
 func (s *Store) RPCCredential(ctx context.Context, c RPCCredentialCommand) (RPCCredentialView, error) {
 	transport := newPublicRPCTransport()
+	defer transport.transport.CloseIdleConnections()
 	var check func(context.Context, RPCCheckRequest, []byte, func() error) (RPCCheckResult, error)
 	if transport.enabled && s.rpcAdmission {
 		check = func(ctx context.Context, in RPCCheckRequest, key []byte, valid func() error) (RPCCheckResult, error) {
@@ -139,6 +140,25 @@ func (s *Store) rpcCredential(ctx context.Context, c RPCCredentialCommand, check
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, 10*time.Second)
 		defer cancel()
+	}
+	var preBackup, preOpen, preSeal preDerivedKDF
+	defer preBackup.clear()
+	defer preOpen.clear()
+	defer preSeal.clear()
+	if c.Passphrase != "" && validPassword(c.Passphrase) {
+		if recovering && c.Backup != nil && len(c.Backup.Vault.Salt) == 16 {
+			preBackup = derivePasswordKeyForSalt(c.Passphrase, c.Backup.Vault.Salt)
+		}
+		if c.Action != "status" {
+			if rv, err := s.readRPCVault(c.AccountID); err == nil && !rv.OSProtected {
+				preOpen = derivePasswordKeyForSalt(c.Passphrase, rv.Salt)
+			}
+		}
+		if c.Action == "save" || c.Action == "restore" || c.Action == "backup" {
+			if p, err := deriveNewPasswordKey(c.Passphrase); err == nil {
+				preSeal = p
+			}
+		}
 	}
 	// SQLite's write fence serializes configuration/identity changes and vault
 	// operations across processes, and refuses mutations during update pause.
@@ -233,7 +253,7 @@ func (s *Store) rpcCredential(ctx context.Context, c RPCCredentialCommand, check
 		if c.Action == "restore" && exists {
 			return view, errors.New("preserve the existing RPC vault; remove it explicitly before restore")
 		}
-		restored, e = s.openRPCBackup(c.Backup, *account, c.Passphrase)
+		restored, e = s.openRPCBackupWithPreKey(c.Backup, *account, c.Passphrase, preBackup)
 		if e != nil {
 			return view, e
 		}
@@ -259,7 +279,7 @@ func (s *Store) rpcCredential(ctx context.Context, c RPCCredentialCommand, check
 				return view, fail
 			}
 		}
-		plain, err := s.openRPCVaultKey(ctx, c.AccountID, openSecret, v)
+		plain, err := s.openRPCVaultKeyWithPreKey(ctx, c.AccountID, openSecret, v, preOpen)
 		defer clear(plain)
 		if err != nil {
 			return view, fail
@@ -305,7 +325,7 @@ func (s *Store) rpcCredential(ctx context.Context, c RPCCredentialCommand, check
 			}
 			backupVault := v
 			if v.OSProtected {
-				backupVault, err = s.sealRPCVaultEnvelope(ctx, v.Version, account.ID, v.Ref, v.Binding, c.Passphrase, plain, false)
+				backupVault, err = s.sealRPCVaultEnvelopeWithPreKey(ctx, v.Version, account.ID, v.Ref, v.Binding, c.Passphrase, plain, false, preSeal)
 				if err != nil {
 					return view, fail
 				}
@@ -334,7 +354,7 @@ func (s *Store) rpcCredential(ctx context.Context, c RPCCredentialCommand, check
 		plain = append([]byte(nil), restored...)
 	}
 	defer clear(plain)
-	v, err := s.sealRPCVaultEnvelope(ctx, version, c.AccountID, "", rpcBinding(*account), c.Passphrase, plain, osVaultAvailable)
+	v, err := s.sealRPCVaultEnvelopeWithPreKey(ctx, version, c.AccountID, "", rpcBinding(*account), c.Passphrase, plain, osVaultAvailable, preSeal)
 	if err != nil {
 		return view, fail
 	}
@@ -365,6 +385,10 @@ func (s *Store) rpcSealKey(ctx context.Context, version int, passphrase string, 
 }
 
 func (s *Store) sealRPCVaultEnvelope(ctx context.Context, version int, id, ref, binding, passphrase string, plain []byte, osVaultAvailable bool) (rpcVault, error) {
+	return s.sealRPCVaultEnvelopeWithPreKey(ctx, version, id, ref, binding, passphrase, plain, osVaultAvailable, preDerivedKDF{})
+}
+
+func (s *Store) sealRPCVaultEnvelopeWithPreKey(ctx context.Context, version int, id, ref, binding, passphrase string, plain []byte, osVaultAvailable bool, pre preDerivedKDF) (rpcVault, error) {
 	v := rpcVault{
 		Version: version,
 		Ref:     ref,
@@ -378,14 +402,23 @@ func (s *Store) sealRPCVaultEnvelope(ctx context.Context, version int, id, ref, 
 			return rpcVault{}, err
 		}
 	}
-	if _, err := rand.Read(v.Salt); err != nil {
-		return rpcVault{}, err
+	var key []byte
+	var osProtected bool
+	if passphrase != "" && len(pre.key) == 32 && len(pre.salt) == 16 {
+		copy(v.Salt, pre.salt)
+		key, osProtected = pre.keyFor(passphrase, v.Salt), false
+	} else {
+		if _, err := rand.Read(v.Salt); err != nil {
+			return rpcVault{}, err
+		}
+		var err error
+		key, osProtected, err = s.rpcSealKey(ctx, version, passphrase, v.Salt, osVaultAvailable)
+		if err != nil {
+			return rpcVault{}, err
+		}
 	}
 	if _, err := rand.Read(v.Nonce); err != nil {
-		return rpcVault{}, err
-	}
-	key, osProtected, err := s.rpcSealKey(ctx, version, passphrase, v.Salt, osVaultAvailable)
-	if err != nil {
+		clear(key)
 		return rpcVault{}, err
 	}
 	v.OSProtected = osProtected
@@ -399,6 +432,10 @@ func (s *Store) sealRPCVaultEnvelope(ctx context.Context, version int, id, ref, 
 // Every caller owns only one operation's plaintext and must clear it. This
 // creates no unlocked session, background lease or new credential format.
 func (s *Store) openRPCVaultKey(ctx context.Context, id, passphrase string, v rpcVault) ([]byte, error) {
+	return s.openRPCVaultKeyWithPreKey(ctx, id, passphrase, v, preDerivedKDF{})
+}
+
+func (s *Store) openRPCVaultKeyWithPreKey(ctx context.Context, id, passphrase string, v rpcVault, pre preDerivedKDF) ([]byte, error) {
 	if !validRPCVault(v) {
 		return nil, errors.New("RPC locked")
 	}
@@ -418,7 +455,7 @@ func (s *Store) openRPCVaultKey(ctx context.Context, id, passphrase string, v rp
 		if !validPassword(passphrase) {
 			return nil, errors.New("RPC locked")
 		}
-		key = passwordHash(passphrase, v.Salt)
+		key = pre.keyFor(passphrase, v.Salt)
 	}
 	block, _ := aes.NewCipher(key)
 	clear(key)

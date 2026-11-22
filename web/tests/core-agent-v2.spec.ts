@@ -17,7 +17,7 @@ test("T3Code streaming chat, Tier-1 tool execution, inline swap approval cards, 
   await stop();
   await start(true, "127.0.0.1:0", "local", false);
 
-  await page.goto(url);
+  await page.goto(url + "/#agents/chat");
   await expect(
     page.getByRole("heading", { name: "Chat", exact: true }),
   ).toBeVisible();
@@ -228,7 +228,7 @@ test("Non-OpenAI provider surfaces its own model in Chat composer without OpenAI
   await stop();
   await start(true, "127.0.0.1:0", "local", false);
 
-  await page.goto(url);
+  await page.goto(url + "/#agents/chat");
   await openProviders(page);
 
   const providers = page.getByRole("region", {

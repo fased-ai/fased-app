@@ -9,6 +9,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/fased-ai/fased-app/internal/signer"
 )
 
 func strategyFixture(t *testing.T) (*Store, StrategyPlan) {
@@ -527,5 +529,34 @@ func BenchmarkStrategyLegacyWorkspaceValidation(b *testing.B) {
 		if err := validateStrategyStorage(raw, agentDocument{}); err != nil {
 			b.Fatal(err)
 		}
+	}
+}
+
+func TestStrategyBindingAcceptsOrdinaryManagedAccount(t *testing.T) {
+	t.Parallel()
+	valid := Account{
+		Version:   4,
+		ID:        strings.Repeat("b", 32),
+		Name:      "Ordinary Managed Wallet",
+		Mode:      "managed",
+		Network:   "mainnet-beta",
+		PublicKey: strings.Repeat("2", 64),
+		Signer: &signer.AccountRef{
+			Version:   3,
+			WalletID:  strings.Repeat("1", 32),
+			SignerID:  strings.Repeat("3", 32),
+			Epoch:     strings.Repeat("4", 32),
+			PublicKey: strings.Repeat("2", 64),
+			Network:   "mainnet-beta",
+		},
+	}
+	b, err := strategyBinding(valid)
+	if err != nil || b.AccountID != valid.ID || b.Network != "mainnet-beta" || b.PublicKey != valid.PublicKey {
+		t.Fatalf("expected valid v4 managed account to bind cleanly, got b=%+v err=%v", b, err)
+	}
+	invalid := valid
+	invalid.Signer = nil
+	if _, err := strategyBinding(invalid); err == nil {
+		t.Fatal("accepted v4 managed account without valid signer ref")
 	}
 }

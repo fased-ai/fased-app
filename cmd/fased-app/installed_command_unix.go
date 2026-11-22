@@ -207,7 +207,26 @@ func removeCommand(corePath, root, data string, remote bool) error {
 			return e
 		}
 		owner, ok := i.Sys().(*syscall.Stat_t)
-		if !ok || int(owner.Uid) != os.Getuid() || !i.Mode().IsRegular() {
+		if !ok || int(owner.Uid) != os.Getuid() {
+			continue
+		}
+		if i.Mode()&os.ModeSymlink != 0 {
+			target, err := os.Readlink(path)
+			if err != nil {
+				continue
+			}
+			if !filepath.IsAbs(target) {
+				target = filepath.Join(filepath.Dir(path), target)
+			}
+			absCore, absErr := filepath.Abs(corePath)
+			if filepath.Clean(target) == filepath.Clean(corePath) || (absErr == nil && filepath.Clean(target) == filepath.Clean(absCore)) {
+				if e = os.Remove(path); e != nil {
+					return e
+				}
+			}
+			continue
+		}
+		if !i.Mode().IsRegular() {
 			continue
 		}
 		b, e := os.ReadFile(path)

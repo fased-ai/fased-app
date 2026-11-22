@@ -597,3 +597,43 @@ func TestVenueCredentialAdmissionDuringLogoutIsFinallyRevoked(t *testing.T) {
 		t.Fatal("completed logout retained an intervening credential lease")
 	}
 }
+
+func TestVenueCredentialWithOSProtectedRPCVault(t *testing.T) {
+	t.Parallel()
+	dir := fixtureDir(t)
+	s, err := openStoreWithTaskSecrets(dir, &testTaskSecrets{key: bytes.Repeat([]byte{91}, 32)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	claimFixture(t, s)
+	h, tls, c := setupCredentialSwapHarness(t, s, false)
+	if _, err := h.store.RPCCredential(t.Context(), RPCCredentialCommand{
+		AccountID: c.AccountID,
+		Revision:  c.Revision,
+		Action:    "save",
+		Key:       tls.RPCKey,
+	}); err != nil {
+		t.Fatalf("failed to save OS-protected RPC vault: %v", err)
+	}
+	saved, err := h.store.VenueCredential(t.Context(), c)
+	if err != nil || !saved.Saved || !saved.Locked || !saved.RPCReady {
+		t.Fatalf("VenueCredential save with OS-protected RPC vault failed: %+v err=%v", saved, err)
+	}
+	bad := c
+	bad.Ref = saved.Ref
+	bad.Action = "unlock"
+	bad.Key = ""
+	bad.Seconds = 60
+	bad.Passphrase = "wrong venue password 123"
+	if _, err := h.store.VenueCredential(t.Context(), bad); err == nil {
+		t.Fatal("accepted wrong venue passphrase")
+	}
+	c.Ref = saved.Ref
+	c.Action = "unlock"
+	c.Key = ""
+	c.Seconds = 60
+	unlocked, err := h.store.VenueCredential(t.Context(), c)
+	if err != nil || unlocked.Locked || unlocked.UnlockUntil == 0 {
+		t.Fatalf("VenueCredential unlock with OS-protected RPC vault failed: %+v err=%v", unlocked, err)
+	}
+}

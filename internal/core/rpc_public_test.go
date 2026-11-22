@@ -1,6 +1,7 @@
 package core
 
 import (
+	"compress/gzip"
 	"context"
 	"crypto/tls"
 	"crypto/x509"
@@ -297,4 +298,50 @@ func TestPublicRPCMultiIPFallback(t *testing.T) {
 			t.Fatalf("expected early stop after 1 dial, got err=%v dials=%d", err, dials)
 		}
 	})
+}
+
+func TestPublicRPCTransportKeepAliveAndGzip(t *testing.T) {
+	t.Parallel()
+	rt := newPublicRPCTransport()
+	if rt.transport.DisableKeepAlives || rt.transport.DisableCompression {
+		t.Fatalf("expected keep-alive and gzip enabled, got DisableKeepAlives=%v DisableCompression=%v", rt.transport.DisableKeepAlives, rt.transport.DisableCompression)
+	}
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			ID     int    `json:"id"`
+			Method string `json:"method"`
+		}
+		if json.NewDecoder(r.Body).Decode(&req) != nil {
+			t.Error("invalid request")
+			return
+		}
+		if !strings.Contains(r.Header.Get("Accept-Encoding"), "gzip") {
+			t.Errorf("expected Accept-Encoding gzip, got %q", r.Header.Get("Accept-Encoding"))
+		}
+		result := solanaGenesis("devnet")
+		if req.Method == "getHealth" {
+			result = "ok"
+		}
+		w.Header().Set("Content-Encoding", "gzip")
+		gz := gzip.NewWriter(w)
+		_ = json.NewEncoder(gz).Encode(map[string]any{"jsonrpc": "2.0", "id": req.ID, "result": result})
+		_ = gz.Close()
+	}))
+	defer server.Close()
+	rt.enabled = true
+	roots := x509.NewCertPool()
+	roots.AddCert(server.Certificate())
+	rt.transport.TLSClientConfig.RootCAs = roots
+	rt.transport.DialContext = func(ctx context.Context, network, address string) (net.Conn, error) {
+		return dialPublicRPC(ctx, network, address, func(context.Context, string, string) ([]netip.Addr, error) {
+			return []netip.Addr{netip.MustParseAddr("8.8.8.8")}, nil
+		}, func(ctx context.Context, network, _ string) (net.Conn, error) {
+			return (&net.Dialer{}).DialContext(ctx, network, server.Listener.Addr().String())
+		})
+	}
+	defer rt.transport.CloseIdleConnections()
+	res, err := checkPublicRPC(t.Context(), RPCCheckRequest{Endpoint: "https://example.com", Network: "devnet"}, rt)
+	if err != nil || res.GenesisHash != solanaGenesis("devnet") || !res.LiveRPC {
+		t.Fatalf("gzipped checkPublicRPC failed: res=%+v err=%v", res, err)
+	}
 }

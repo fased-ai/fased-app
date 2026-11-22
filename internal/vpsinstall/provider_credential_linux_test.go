@@ -310,3 +310,26 @@ func TestProtectedProviderCredentialRefusesForeignState(t *testing.T) {
 		})
 	}
 }
+
+func TestProtectedProviderCredentialUpgradesLegacyModeTo0600(t *testing.T) {
+	t.Parallel()
+	h, o, m, _ := credentialFixture(t)
+	path := taskCredentialPath(m)
+	legacyData := bytes.Repeat([]byte{9}, 64)
+	h.files[taskCredentialDirectory] = hostFile{UID: 0, Mode: os.ModeDir | 0755, Directory: true}
+	h.files[path] = hostFile{UID: 0, Mode: 0644, Regular: true, Data: legacyData}
+
+	if e := prepareTaskCredential(context.Background(), o, m); e != nil {
+		t.Fatalf("expected legacy 0644 credential to upgrade cleanly: %v", e)
+	}
+	got, ok := h.files[path]
+	if !ok {
+		t.Fatalf("credential file missing at %s after upgrade", path)
+	}
+	if got.Mode.Perm() != 0600 {
+		t.Fatalf("expected credential mode tightened to 0600, got %#o", got.Mode.Perm())
+	}
+	if !bytes.Equal(got.Data, legacyData) {
+		t.Fatal("legacy credential bytes changed during mode upgrade")
+	}
+}

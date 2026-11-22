@@ -32,7 +32,7 @@ func TestServerInitAllTransportsAndValidation(t *testing.T) {
 			name:     "tailscale",
 			args:     []string{"server", "init", "--transport", "tailscale", "--domain", "box.owner.ts.net", "--listen", "127.0.0.1:7331", "--json"},
 			wantUnit: "--remote-transport tailscale --listen 127.0.0.1:7331",
-			wantCmd:  "tailscale serve --bg --https=443 http://127.0.0.1:7331",
+			wantCmd:  "sudo tailscale serve --bg --https=443 unix:",
 		},
 		{
 			name:      "cloudflare",
@@ -91,6 +91,7 @@ func TestServerInitAllTransportsAndValidation(t *testing.T) {
 
 	for _, bad := range [][]string{
 		{"server", "init", "--transport", "invalid"},
+		{"server", "init", "--transport", "tailscale"},
 		{"server", "init", "--transport", "cloudflare"},
 		{"server", "init", "--transport", "domain", "--domain", "127.0.0.1"},
 		{"server", "init", "--transport", "ssh", "--domain", "fased.example.com"},
@@ -542,5 +543,72 @@ func TestServerInstallAndUninstallWindowsLifecycle(t *testing.T) {
 	}
 	if _, err := os.Stat(dataDir); !os.IsNotExist(err) {
 		t.Fatalf("dataDir was not purged: %v", err)
+	}
+}
+
+func TestServerHardeningSystemdQuotingPurgeAndSetupLaunch(t *testing.T) {
+	// 1. quoteSystemdArgs & formatServerUnit hardening directives
+	unit := formatServerUnit("cloudflare", quoteSystemdArgs([]string{"/tmp/Fased App/fased-app", "serve", "--data-dir", "/tmp/data 100%$"}), "/tmp/data 100%$", true, "multi-user.target")
+	for _, want := range []string{
+		`ExecStart="/tmp/Fased App/fased-app" serve --data-dir "/tmp/data 100%%$$"`,
+		"UMask=0077",
+		"PrivateDevices=yes",
+		"ProtectKernelTunables=yes",
+		"RestrictSUIDSGID=yes",
+		"CapabilityBoundingSet=",
+	} {
+		if !strings.Contains(unit, want) {
+			t.Fatalf("hardened unit missing %q:\n%s", want, unit)
+		}
+	}
+
+	// 2. server uninstall --purge removes managed binary and ~/.local/bin/fased symlink
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	managedDir := filepath.Join(home, ".local", "share", "fased-app")
+	if err := os.MkdirAll(managedDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	managedBin := filepath.Join(managedDir, "fased-app")
+	if err := os.WriteFile(managedBin, []byte("bin"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	binLinkDir := filepath.Join(home, ".local", "bin")
+	if err := os.MkdirAll(binLinkDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	symlink := filepath.Join(binLinkDir, "fased")
+	if err := os.Symlink(managedBin, symlink); err != nil {
+		t.Fatal(err)
+	}
+	dataDir := filepath.Join(home, "server-data")
+	if err := os.MkdirAll(dataDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	cfgBytes, _ := json.Marshal(serverConfig{Version: 1, ServiceManager: "systemd-user", Transport: "ssh", Listen: "127.0.0.1:7349", DataDir: dataDir, BinaryPath: managedBin})
+	if err := os.WriteFile(filepath.Join(dataDir, serverConfigFile), cfgBytes, 0600); err != nil {
+		t.Fatal(err)
+	}
+	prevCtl := serverSystemctl
+	t.Cleanup(func() { serverSystemctl = prevCtl })
+	serverSystemctl = func(context.Context, ...string) error { return nil }
+	if err := run([]string{"server", "uninstall", "--service-manager", "systemd", "--data-dir", dataDir, "--purge"}, nil, io.Discard, io.Discard); err != nil {
+		t.Fatalf("purge failed: %v", err)
+	}
+	if _, err := os.Lstat(symlink); !os.IsNotExist(err) {
+		t.Fatalf("expected symlink removed on --purge, got %v", err)
+	}
+	if _, err := os.Stat(managedBin); !os.IsNotExist(err) {
+		t.Fatalf("expected managed binary removed on --purge, got %v", err)
+	}
+
+	// 3. needsPrivateLaunchFile recognizes #pair= tokens alongside #local= and #setup=
+	for _, target := range []string{"http://127.0.0.1:7331/#local=tok", "http://127.0.0.1:7331/#setup=tok", "https://box.ts.net/#pair=tok"} {
+		if !needsPrivateLaunchFile(target) {
+			t.Fatalf("expected needsPrivateLaunchFile(%q) == true", target)
+		}
+	}
+	if needsPrivateLaunchFile("https://box.ts.net/#wallets/overview") {
+		t.Fatal("expected non-secret fragment false")
 	}
 }

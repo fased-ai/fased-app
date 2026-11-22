@@ -185,7 +185,7 @@ func (s *Store) completeRouterSignIn(ctx context.Context, c AIConnectionCommand)
 		err = errors.New("connection limit reached")
 	}
 	if err == nil {
-		view, err = s.persistAIConnectionLocked(ctx, AIConnectionCommand{Action: "add", Provider: "openrouter", Name: a.name, Key: key, Passphrase: c.Passphrase}, col, "openrouter", mode, false)
+		view, err = s.persistAIConnectionLocked(ctx, AIConnectionCommand{Action: "add", Provider: "openrouter", Name: a.name, Key: key, Passphrase: c.Passphrase}, col, "openrouter", mode, false, preDerivedKDF{})
 	}
 	s.cancelProviderSignInLocked()
 	s.provider.mu.Unlock()
