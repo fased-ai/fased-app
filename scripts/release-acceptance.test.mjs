@@ -2131,3 +2131,22 @@ test("workflow input preflight fails partial replay modes before either job", ()
   ])
     assert.throws(() => run(change));
 });
+
+test("stagedAcceptanceContract freezes releasedPredecessor and matchesReleasedPredecessor enforces exact pins", () => {
+  assert.equal(
+    Object.isFrozen(stagedAcceptanceContract.releasedPredecessor),
+    true,
+  );
+  assert.deepEqual(stagedAcceptanceContract.releasedPredecessor, {
+    version: "0.1.6",
+    source: "738bd835b8c86c7cf7b3abfb2945240635f51fe7",
+    artifactSetSha256:
+      "aea00a0d9e1b7ed05a1346428cdf8cc277cbe40f93cfcd86d40fc9b45c559460",
+  });
+  const bad = receipt();
+  bad.releasedPredecessor.version = "0.1.5";
+  assert.throws(
+    () => validateInstalledAcceptance(bad, packet, inventory),
+    /released Local-first/,
+  );
+});

@@ -1,6 +1,22 @@
 import { createHash } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { expect, it } from "vitest";
+
+function collectCssFiles(dir: string): string[] {
+  const results: string[] = [];
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    const full = join(dir, entry.name);
+    if (entry.isDirectory()) {
+      if (entry.name === "vendor") continue;
+      results.push(...collectCssFiles(full));
+    } else if (entry.name.endsWith(".css")) {
+      results.push(full);
+    }
+  }
+  return results;
+}
 
 it("preserves the pinned WEN artifact while using the approved reference palette", () => {
   const root = new URL("./vendor/wen-design/", import.meta.url);
@@ -36,4 +52,21 @@ it("preserves the pinned WEN artifact while using the approved reference palette
   expect(
     readFileSync(new URL("./styles.css", import.meta.url), "utf8"),
   ).toContain("prefers-reduced-motion");
+});
+
+it("uses WEN CSS custom properties across all non-vendor stylesheets instead of hardcoded colors", () => {
+  const srcRoot = fileURLToPath(new URL(".", import.meta.url));
+  const cssFiles = collectCssFiles(srcRoot);
+  expect(cssFiles.length).toBeGreaterThanOrEqual(10);
+  const violations: string[] = [];
+  for (const file of cssFiles) {
+    const stripped = readFileSync(file, "utf8")
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .replace(/:root(?:\.wt)?(?:\[data-theme="[^"]+"\])?\s*\{[^}]*\}/g, "");
+    const match = /(?:#[0-9a-fA-F]{3,8}\b|\brgba?\()/i.exec(stripped);
+    if (match) {
+      violations.push(`${file.replace(srcRoot, "")}: ${match[0]}`);
+    }
+  }
+  expect(violations).toEqual([]);
 });

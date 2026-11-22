@@ -10,8 +10,21 @@ export const stagedAcceptanceContract = JSON.parse(
   readFileSync(new URL("./staged-acceptance-contract.json", import.meta.url)),
 );
 for (const value of Object.values(stagedAcceptanceContract))
-  if (Array.isArray(value)) Object.freeze(value);
+  if (Array.isArray(value) || (value && typeof value === "object"))
+    Object.freeze(value);
 Object.freeze(stagedAcceptanceContract);
+
+export function matchesReleasedPredecessor(
+  actual,
+  expected = stagedAcceptanceContract.releasedPredecessor,
+) {
+  return (
+    Boolean(actual && expected) &&
+    actual.version === expected.version &&
+    actual.source === expected.source &&
+    actual.artifactSetSha256 === expected.artifactSetSha256
+  );
+}
 
 // Match canonical Tailscale Serve origins, including isolated HTTPS listeners.
 // Compare the original string so URL normalization cannot erase an input port.
@@ -162,10 +175,7 @@ export function validateInstalledAcceptance(receipt, packet, inventory) {
     receipt.remoteTransport !== "tailscale-https" ||
     receipt.sshControlSessionRequired !== false ||
     receipt.passwordPrompt !== false ||
-    released?.version !== "0.1.6" ||
-    released.source !== "738bd835b8c86c7cf7b3abfb2945240635f51fe7" ||
-    released.artifactSetSha256 !==
-      "aea00a0d9e1b7ed05a1346428cdf8cc277cbe40f93cfcd86d40fc9b45c559460"
+    !matchesReleasedPredecessor(released)
   )
     throw Error(
       "Actual released Local-first and password-free Tailscale journey required",
@@ -690,11 +700,7 @@ function validateLocalAcceptance(local, packet, inventory) {
   if (
     local.localOnly !== true ||
     local.remoteTested !== false ||
-    local.releasedPredecessor?.version !== "0.1.6" ||
-    local.releasedPredecessor.source !==
-      "738bd835b8c86c7cf7b3abfb2945240635f51fe7" ||
-    local.releasedPredecessor.artifactSetSha256 !==
-      "aea00a0d9e1b7ed05a1346428cdf8cc277cbe40f93cfcd86d40fc9b45c559460"
+    !matchesReleasedPredecessor(local.releasedPredecessor)
   )
     throw Error("Actual approved released Local predecessor required");
   return packet.version === 4
@@ -731,10 +737,7 @@ function validateJoinedAcceptance(receipt, packet, inventory) {
       scenario === "upgrade" &&
       value.ownerEnrollment === "existing-owner-ui-v1" &&
       value.predecessor?.ownerAuthMode === "password-v1" &&
-      value.predecessor.version === "0.1.6" &&
-      value.predecessor.source === "738bd835b8c86c7cf7b3abfb2945240635f51fe7" &&
-      value.predecessor.artifactSetSha256 ===
-        "aea00a0d9e1b7ed05a1346428cdf8cc277cbe40f93cfcd86d40fc9b45c559460";
+      matchesReleasedPredecessor(value.predecessor);
     if (
       value.scenario !== scenario ||
       value.localReceiptSha256 !== localDigest ||

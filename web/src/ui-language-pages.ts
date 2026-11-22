@@ -173,7 +173,6 @@ export const pageCopy = {
     "版本已更改",
     "버전 변경됨",
   ],
-  Strategies: ["Стратегии", "Estrategias", "策略", "전략"],
   "New strategy": [
     "Новая стратегия",
     "Nueva estrategia",
@@ -438,7 +437,6 @@ export const pageCopy = {
     "확인됨 (테스트)",
   ],
   Type: ["Тип", "Tipo", "类型", "유형"],
-  Reminder: ["Напоминание", "Recordatorio", "提醒", "알림"],
   Analysis: ["Анализ", "Análisis", "分析", "분석"],
   Analyze: ["Анализировать", "Analizar", "分析", "분석하기"],
   Prompt: ["Запрос", "Instrucción", "提示词", "요청"],
@@ -499,10 +497,6 @@ export const pageCopy = {
     "暂无新内容可分析",
     "분석할 새 내용 없음",
   ],
-  Completed: ["Завершён", "Completado", "已完成", "완료"],
-  Failed: ["Ошибка", "Fallido", "失败", "실패"],
-  Cancelled: ["Отменён", "Cancelado", "已取消", "취소됨"],
-  Queued: ["В очереди", "En cola", "排队中", "대기 중"],
   Running: ["Выполняется", "En ejecución", "运行中", "실행 중"],
   Reason: ["Причина", "Motivo", "原因", "이유"],
   Advanced: ["Дополнительно", "Avanzado", "高级", "고급"],
@@ -640,12 +634,6 @@ export const pageCopy = {
   "15 minutes": ["15 минут", "15 minutos", "15 分钟", "15분"],
   "1 hour": ["1 час", "1 hora", "1 小时", "1시간"],
   "24 hours": ["24 часа", "24 horas", "24 小时", "24시간"],
-  "Review access": [
-    "Проверить доступ",
-    "Revisar acceso",
-    "审核访问",
-    "접근 검토",
-  ],
   "Continue after sign-out": [
     "Продолжать после выхода",
     "Continuar tras cerrar sesión",
@@ -1362,7 +1350,6 @@ export const pageCopy = {
       "操作会成为带有明确权限的结构化记录。聊天消息不构成钱包授权。",
       "작업은 명시적 권한이 있는 구조화된 기록으로 저장됩니다. 채팅 메시지는 지갑 권한이 아닙니다.",
     ],
-  Active: ["Активно", "Activo", "活动", "활성"],
   "Activity events": [
     "События",
     "Eventos de actividad",
@@ -1671,7 +1658,6 @@ export const pageCopy = {
     "기능 모드",
   ],
   Capital: ["Капитал", "Capital", "资金", "자본"],
-  Change: ["Изменить", "Cambiar", "更改", "변경"],
   "Chat memory review": [
     "Проверка памяти чата",
     "Revisión de memoria del chat",
@@ -2001,7 +1987,6 @@ export const pageCopy = {
     "禁用来源",
     "소스 비활성화",
   ],
-  Disabled: ["Отключено", "Desactivado", "已禁用", "비활성화됨"],
   "Discard reminder draft": [
     "Отменить черновик напоминания",
     "Descartar borrador del recordatorio",
@@ -2185,7 +2170,6 @@ export const pageCopy = {
     "版本已过期",
     "만료된 버전",
   ],
-  Expires: ["Истекает", "Caduca", "到期", "만료"],
   Expiry: ["Срок действия", "Caducidad", "有效期", "유효 기간"],
   "Expiry (optional)": [
     "Срок действия (необязательно)",
@@ -2849,7 +2833,6 @@ export const pageCopy = {
     "未连接调度器",
     "스케줄러 연결 없음",
   ],
-  Name: ["Название", "Nombre", "名称", "이름"],
   "Names, prompts, models and memory cannot expand spending authority.": [
     "Названия, запросы, модели и память не расширяют права расходования.",
     "Los nombres, instrucciones, modelos y memoria no amplían los permisos de gasto.",
@@ -4369,7 +4352,6 @@ export const pageCopy = {
     "稍后设置",
     "나중에 설정",
   ],
-  Setup: ["Настройка", "Configuración", "设置", "설정"],
   "Setup records a preference. These previews do not create keys, connect wallets or grant permissions.":
     [
       "Настройка сохраняет предпочтение. Предпросмотр не создаёт ключей, не подключает кошелёк и не даёт прав.",
@@ -4626,7 +4608,6 @@ export const pageCopy = {
   ],
   UNREAD: ["НЕ ПРОЧИТАНО", "SIN LEER", "未读", "읽지 않음"],
   UNVERIFIED: ["НЕ ПРОВЕРЕНО", "SIN VERIFICAR", "未验证", "검증되지 않음"],
-  Unavailable: ["Недоступно", "No disponible", "不可用", "사용 불가"],
   "Unavailable model:": [
     "Недоступная модель:",
     "Modelo no disponible:",
@@ -5069,12 +5050,6 @@ export const pageCopy = {
   "· Conversation": ["· Диалог", "· Conversación", "· 对话", "· 대화"],
   "· Cost": ["· Стоимость", "· Coste", "· 费用", "· 비용"],
   "· Counted": ["· Подсчитано", "· Contado", "· 已计数", "· 계산됨"],
-  "· Destination fixture:treasury": [
-    "· Назначение fixture:treasury",
-    "· Destino fixture:treasury",
-    "· 目标 fixture:treasury",
-    "· 대상 fixture:treasury",
-  ],
   "· Digest": ["· Хеш", "· Resumen", "· 摘要", "· 해시"],
   "· Epoch": ["· Эпоха", "· Época", "· 纪元", "· 에포크"],
   "· Expires": ["· Истекает", "· Caduca", "· 到期", "· 만료"],
