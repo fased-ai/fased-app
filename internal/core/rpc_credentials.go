@@ -24,6 +24,7 @@ type RPCCredentialCommand struct {
 	Revision   int64                `json:"revision"`
 	Ref        string               `json:"ref"`
 	Action     string               `json:"action"`
+	Portable   bool                 `json:"portable,omitempty"`
 	Key        string               `json:"key,omitempty"`
 	Passphrase string               `json:"passphrase,omitempty"`
 	Backup     *RPCCredentialBackup `json:"backup,omitempty"`
@@ -123,6 +124,9 @@ func (s *Store) rpcCredential(ctx context.Context, c RPCCredentialCommand, check
 	osVaultAvailable := s.osVaultSecretsAvailable(ctx)
 	view := RPCCredentialView{Locked: true, TestOnly: true, OSVaultAvailable: osVaultAvailable}
 	if !hexValue(c.AccountID, 16) || (c.Action != "status" && c.Action != "save" && c.Action != "verify" && c.Action != "check" && c.Action != "remove" && c.Action != "backup" && c.Action != "verify-backup" && c.Action != "restore") {
+		return view, fail
+	}
+	if c.Portable && c.Action != "backup" {
 		return view, fail
 	}
 	recovering := c.Action == "restore" || c.Action == "verify-backup"
@@ -322,6 +326,18 @@ func (s *Store) rpcCredential(ctx context.Context, c RPCCredentialCommand, check
 		if c.Action == "backup" {
 			if view.Stale {
 				return view, fail
+			}
+			if c.Portable {
+				if v.Version != version || account.RPC == nil {
+					return view, fail
+				}
+				portable, err := sealPortableRPCBackupWithPreKey(v.Version, account.RPC.Network, account.RPC.Endpoint, c.Passphrase, plain, preSeal)
+				if err != nil {
+					return view, fail
+				}
+				view.Backup = &portable
+				view.BackupVerified = true
+				return view, nil
 			}
 			backupVault := v
 			if v.OSProtected {

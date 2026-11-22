@@ -5151,6 +5151,12 @@ export const pageCopy = {
     "규칙 1개 반영됨",
   ],
   "Add rule": ["Добавить правило", "Añadir regla", "添加规则", "규칙 추가"],
+  "All wallets already saved": [
+    "Все кошельки уже сохранены",
+    "Todas las carteras ya están guardadas",
+    "所有钱包均已保存",
+    "모든 지갑이 이미 저장되어 있습니다",
+  ],
   "Always active": [
     "Всегда активно",
     "Siempre activa",
@@ -5163,6 +5169,7 @@ export const pageCopy = {
     "在对话中询问",
     "채팅에서 묻기",
   ],
+  Backup: ["Резервная копия", "Copia", "备份", "백업"],
   "Conversation archived": [
     "Диалог архивирован",
     "Conversación archivada",
@@ -5176,6 +5183,36 @@ export const pageCopy = {
     "대화가 삭제되었습니다",
   ],
   Delete: ["Удалить", "Eliminar", "删除", "삭제"],
+  "Download portable backup": [
+    "Скачать переносимую копию",
+    "Descargar copia portable",
+    "下载可迁移备份",
+    "휴대용 백업 다운로드",
+  ],
+  "Export wallets": [
+    "Экспортировать кошельки",
+    "Exportar carteras",
+    "导出钱包",
+    "지갑 내보내기",
+  ],
+  "Import wallets": [
+    "Импортировать кошельки",
+    "Importar carteras",
+    "导入钱包",
+    "지갑 가져오기",
+  ],
+  "Imported {imported} wallets": [
+    "Импортировано кошельков: {imported}",
+    "{imported} carteras importadas",
+    "已导入 {imported} 个钱包",
+    "지갑 {imported}개를 가져왔습니다",
+  ],
+  "Invalid wallet backup": [
+    "Недопустимая резервная копия кошельков",
+    "Copia de carteras no válida",
+    "无效的钱包备份",
+    "잘못된 지갑 백업입니다",
+  ],
   "No rules saved": [
     "Правил пока нет",
     "Sin reglas guardadas",
@@ -5205,6 +5242,24 @@ export const pageCopy = {
   ],
   Title: ["Заголовок", "Título", "标题", "제목"],
   Undo: ["Отменить", "Deshacer", "撤销", "실행 취소"],
+  "Wallet backup": [
+    "Резервная копия кошельков",
+    "Copia de carteras",
+    "钱包备份",
+    "지갑 백업",
+  ],
+  "Wallet backup file": [
+    "Файл резервной копии кошельков",
+    "Archivo de copia de carteras",
+    "钱包备份文件",
+    "지갑 백업 파일",
+  ],
+  "Wallets exported": [
+    "Кошельки экспортированы",
+    "Carteras exportadas",
+    "钱包已导出",
+    "지갑을 내보냈습니다",
+  ],
   "{count} rules recalled": [
     "Учтено правил: {count}",
     "{count} reglas recordadas",

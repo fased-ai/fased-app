@@ -48,6 +48,8 @@ export function AccountManagement() {
   const [rpcID, setRPCID] = useState("");
   const rpcAccount = view?.record.accounts.find((a) => a.id === rpcID);
   const [adding, setAdding] = useState(false);
+  const [backupOpen, setBackupOpen] = useState(false);
+  const [portableBundle, setPortableBundle] = useState<unknown>();
   const [drafts, setDrafts] = useState<
     Record<
       string,
@@ -88,6 +90,8 @@ export function AccountManagement() {
     setRPCID("");
     setEditing("");
     setAdding(false);
+    setBackupOpen(false);
+    setPortableBundle(undefined);
     setRemoteWalletAction(undefined);
     setRemoteWalletOwner("");
     setBusy(false);
@@ -171,6 +175,74 @@ export function AccountManagement() {
       if (instance.current === owner)
         setError(
           e instanceof Error ? e.message : uiText("Wallet setup failed"),
+        );
+    } finally {
+      if (instance.current === owner) setBusy(false);
+    }
+  }
+  const hasNetworkWallets = !!view?.record.accounts.some(
+    (a) => a.network === "devnet" || a.network === "mainnet-beta",
+  );
+  async function exportWallets() {
+    if (busy || !hasNetworkWallets) return;
+    const owner = core.instanceId;
+    setBusy(true);
+    setError("");
+    setNotice("");
+    try {
+      const bundle = await request<{ version: number; wallets: unknown[] }>(
+        "accounts/portable",
+      );
+      if (instance.current !== owner) return;
+      const url = URL.createObjectURL(
+        new Blob([JSON.stringify(bundle, null, 2)], {
+          type: "application/json",
+        }),
+      );
+      try {
+        const link = document.createElement("a");
+        link.href = url;
+        link.download = "fased-wallets-config.json";
+        link.click();
+      } finally {
+        setTimeout(() => URL.revokeObjectURL(url), 0);
+      }
+      setNotice(uiText("Wallets exported"));
+    } catch (e) {
+      if (instance.current === owner)
+        setError(
+          e instanceof Error ? e.message : uiText("Accounts unavailable"),
+        );
+    } finally {
+      if (instance.current === owner) setBusy(false);
+    }
+  }
+  async function importWallets() {
+    if (!view || busy || !portableBundle) return;
+    const owner = core.instanceId;
+    setBusy(true);
+    setError("");
+    setNotice("");
+    try {
+      const res = await request<
+        AccountsView & { imported: number; skipped: number }
+      >("accounts/portable", "PUT", {
+        revision: view.record.revision,
+        bundle: portableBundle,
+      });
+      if (instance.current !== owner) return;
+      acceptView(res, owner);
+      setPortableBundle(undefined);
+      setBackupOpen(false);
+      setNotice(
+        res.imported > 0
+          ? uiText("Imported {imported} wallets", { imported: res.imported })
+          : uiText("All wallets already saved"),
+      );
+    } catch (e) {
+      if (instance.current === owner)
+        setError(
+          e instanceof Error ? e.message : uiText("Invalid wallet backup"),
         );
     } finally {
       if (instance.current === owner) setBusy(false);
@@ -315,6 +387,18 @@ export function AccountManagement() {
               {uiText("Refresh")}
             </button>
             <button
+              className="secondary"
+              disabled={!view || busy}
+              onClick={() => {
+                setError("");
+                setNotice("");
+                setPortableBundle(undefined);
+                setBackupOpen(true);
+              }}
+            >
+              {uiText("Backup")}
+            </button>
+            <button
               className="primary"
               disabled={!view || busy}
               onClick={() => {
@@ -327,8 +411,8 @@ export function AccountManagement() {
           </div>
         }
       />
-      {!adding && error && <p role="alert">{error}</p>}
-      {notice && <p role="status">{notice}</p>}
+      {!adding && !backupOpen && error && <p role="alert">{error}</p>}
+      {!adding && !backupOpen && notice && <p role="status">{notice}</p>}
       {!view ? (
         <p role="status">{uiText("Loading…")}</p>
       ) : (
@@ -737,6 +821,64 @@ export function AccountManagement() {
                   {uiText(draft.mode === "watch" ? "Save" : "Attach")}
                 </button>
               </form>
+            </Dialog>
+          )}
+          {backupOpen && (
+            <Dialog
+              title={uiText("Wallet backup")}
+              onClose={() => {
+                if (!busy) setBackupOpen(false);
+              }}
+            >
+              <div className="account-form">
+                <div className="account-actions">
+                  <button
+                    type="button"
+                    className="secondary"
+                    disabled={busy || !hasNetworkWallets}
+                    onClick={() => void exportWallets()}
+                  >
+                    {uiText("Export wallets")}
+                  </button>
+                </div>
+                <label>
+                  {uiText("Wallet backup file")}
+                  <input
+                    type="file"
+                    accept="application/json,.json"
+                    aria-label={uiText("Wallet backup file")}
+                    disabled={busy}
+                    onChange={async (e) => {
+                      const file = e.target.files?.[0];
+                      const owner = core.instanceId;
+                      setPortableBundle(undefined);
+                      setError("");
+                      if (!file) return;
+                      try {
+                        if (file.size > 16384) throw new Error();
+                        const parsed: unknown = JSON.parse(await file.text());
+                        if (instance.current === owner)
+                          setPortableBundle(parsed);
+                      } catch {
+                        if (instance.current === owner)
+                          setError(uiText("Invalid wallet backup"));
+                      }
+                    }}
+                  />
+                </label>
+                {error && <p role="alert">{error}</p>}
+                {notice && <p role="status">{notice}</p>}
+                <button
+                  type="button"
+                  className="primary"
+                  disabled={
+                    busy || !portableBundle || !view.setup?.networkWatchEnabled
+                  }
+                  onClick={() => void importWallets()}
+                >
+                  {uiText("Import wallets")}
+                </button>
+              </div>
             </Dialog>
           )}
           {agents.view?.aiFixtureAvailable && (

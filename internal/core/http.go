@@ -524,6 +524,38 @@ func (h *HTTPHandler) api(w http.ResponseWriter, r *http.Request) {
 		}
 		writeJSON(w, 200, result)
 		return
+	case "/api/v1/accounts/portable":
+		if r.Method == http.MethodGet {
+			v, e := h.store.ExportPortableWallets(r.Context())
+			if e != nil {
+				writeError(w, 500, "accounts unavailable")
+				return
+			}
+			writeJSON(w, 200, v)
+			return
+		}
+		if r.Method != http.MethodPut {
+			writeError(w, 405, "method not allowed")
+			return
+		}
+		if !h.mutation(w, r) || !h.csrf(w, r, token) {
+			return
+		}
+		var input PortableWalletsImportCommand
+		if !decodeJSON(w, r, &input) {
+			return
+		}
+		v, e := h.store.ImportPortableWallets(r.Context(), input)
+		if errors.Is(e, ErrConflict) || errors.Is(e, ErrCorePaused) {
+			writeError(w, 409, e.Error())
+			return
+		}
+		if e != nil {
+			writeError(w, 400, e.Error())
+			return
+		}
+		writeJSON(w, 200, v)
+		return
 	case "/api/v1/accounts":
 		if r.Method == http.MethodGet {
 			v, e := h.store.Accounts(r.Context())

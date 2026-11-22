@@ -10,6 +10,8 @@ type Status = {
   locked: boolean;
   unlockUntil?: number;
   liveExecution: boolean;
+  backup?: { version: number; portable: boolean; purpose: string };
+  backupVerified?: boolean;
 };
 export function VenueCredential({
   accountId,
@@ -21,6 +23,7 @@ export function VenueCredential({
   const core = useCore(),
     { t } = useUI();
   const [status, setStatus] = useState<Status>();
+  const [backup, setBackup] = useState<unknown>();
   const [key, setKey] = useState(""),
     [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false),
@@ -29,6 +32,7 @@ export function VenueCredential({
   useEffect(() => {
     const epoch = ++generation.current;
     setStatus(undefined);
+    setBackup(undefined);
     setKey("");
     setPassword("");
     setError("");
@@ -66,6 +70,7 @@ export function VenueCredential({
     const epoch = ++generation.current;
     setBusy(true);
     setError("");
+    setStatus({ ...status, backupVerified: false });
     try {
       const v = await core.request<Status>("accounts/venue-credential", "PUT", {
         accountId,
@@ -75,9 +80,34 @@ export function VenueCredential({
         ...(action === "lock" ? {} : { passphrase: password }),
         ...(action === "save" ? { key } : {}),
         ...(action === "unlock" ? { seconds: 60 } : {}),
+        ...(["restore", "verify-backup"].includes(action) ? { backup } : {}),
       });
       if (v.liveExecution) throw new Error();
-      if (epoch === generation.current) setStatus(v);
+      if (epoch === generation.current) {
+        if (action === "backup") {
+          if (
+            !v.backupVerified ||
+            !v.backup?.portable ||
+            v.backup.purpose !== "jupiter"
+          )
+            throw new Error("Unexpected Jupiter backup");
+          const url = URL.createObjectURL(
+            new Blob([JSON.stringify(v.backup)], { type: "application/json" }),
+          );
+          try {
+            const link = document.createElement("a");
+            link.href = url;
+            link.download = "fased-jupiter-backup.json";
+            link.click();
+          } finally {
+            setTimeout(() => URL.revokeObjectURL(url), 0);
+          }
+          setStatus({ ...v, backup: undefined, backupVerified: false });
+        } else {
+          setStatus(v);
+          if (action === "restore") setBackup(undefined);
+        }
+      }
     } catch {
       if (epoch === generation.current) {
         setError(t("Credential operation failed"));
@@ -192,6 +222,69 @@ export function VenueCredential({
                   : "Unlocked",
             )}
           </span>
+        )}
+        <details>
+          <summary>{t("Recovery")}</summary>
+          <div className="account-actions">
+            <button
+              type="button"
+              className="secondary"
+              disabled={busy || !status?.saved || !password}
+              onClick={() => void change("backup")}
+            >
+              {t("Download portable backup")}
+            </button>
+          </div>
+          <label>
+            {t("Backup file")}
+            <input
+              type="file"
+              accept="application/json,.json"
+              aria-label={t("Backup file")}
+              disabled={busy}
+              onChange={async (e) => {
+                const file = e.target.files?.[0];
+                const epoch = generation.current;
+                setBackup(undefined);
+                setError("");
+                if (!file) return;
+                try {
+                  if (file.size > 4096) throw new Error();
+                  const parsed: unknown = JSON.parse(await file.text());
+                  if (epoch === generation.current) setBackup(parsed);
+                } catch {
+                  if (epoch === generation.current)
+                    setError(t("Invalid backup"));
+                }
+              }}
+            />
+          </label>
+          <div className="account-actions">
+            <button
+              type="button"
+              disabled={busy || !backup || !password || !status}
+              onClick={() => void change("verify-backup")}
+            >
+              {t("Verify backup")}
+            </button>
+            <button
+              type="button"
+              disabled={
+                busy ||
+                !backup ||
+                !password ||
+                !status ||
+                status.saved ||
+                !status.rpcReady
+              }
+              onClick={() => void change("restore")}
+            >
+              {t("Restore")}
+            </button>
+          </div>
+        </details>
+        {status?.backupVerified && (
+          <span role="status">{t("Backup verified")}</span>
         )}
         {error && <p role="alert">{error}</p>}
       </form>

@@ -17,6 +17,14 @@ import (
 )
 
 func TestNativePublicWalletRoutesMatchCoreMethods(t *testing.T) {
+	if !PublicRequestAllowed(httptest.NewRequest(http.MethodGet, "http://wails.localhost/api/v1/accounts/portable", nil)) ||
+		!PublicRequestAllowed(httptest.NewRequest(http.MethodPut, "http://wails.localhost/api/v1/accounts/portable", nil)) {
+		t.Error("portable wallet backup routes denied")
+	}
+	if PublicRequestAllowed(httptest.NewRequest(http.MethodPost, "http://wails.localhost/api/v1/accounts/portable", nil)) ||
+		PublicRequestAllowed(httptest.NewRequest(http.MethodGet, "http://wails.localhost/api/v1/accounts/portable?override=true", nil)) {
+		t.Error("unsupported portable wallet method/query admitted")
+	}
 	for _, row := range [][2]string{
 		{http.MethodPut, "/api/v1/accounts/setup"},
 		{http.MethodPut, "/api/v1/accounts/rpc"},
