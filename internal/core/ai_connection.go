@@ -283,12 +283,13 @@ func (s *Store) clearAIConnectionLocked(refs ...string) {
 func (s *Store) lockAIConnection() {
 	s.chatEpoch.Add(1)
 	s.provider.mu.Lock()
-	defer s.provider.mu.Unlock()
 	s.cancelProviderSignInLocked()
 	s.clearAIConnectionLocked()
 	for ref := range s.provider.accounts {
 		s.clearAIConnectionLocked(ref)
 	}
+	s.provider.mu.Unlock()
+	signalStoreChange(s)
 }
 func (s *Store) aiConnectionLocked(refs ...string) (v AIConnectionView, err error) {
 	v = AIConnectionView{CredentialMode: "test", AdmissionPolicy: openAIModelPolicy(), Provider: "openai", Model: fixtureAIModel, Locked: true, TestOnly: true, InputMicrousdPerToken: 1, OutputMicrousdPerToken: 4}
@@ -551,6 +552,7 @@ func (s *Store) ChangeAIConnection(ctx context.Context, c AIConnectionCommand) (
 		v, err := s.changeProviderSignIn(ctx, c)
 		if err == nil && c.Action == "sign-in-disconnect" && c.Ref != "" {
 			s.deleteProviderModelCache(ctx, c.Ref)
+			signalStoreChange(s)
 		}
 		return v, err
 	}
@@ -586,7 +588,11 @@ func (s *Store) ChangeAIConnection(ctx context.Context, c AIConnectionCommand) (
 	}
 	if c.Action == "remove" && c.Ref != "" {
 		s.deleteProviderModelCache(ctx, c.Ref)
+		signalStoreChange(s)
 		return v, nil
+	}
+	if c.Action == "lock" || c.Action == "save" || c.Action == "add" || c.Action == "unlock" {
+		signalStoreChange(s)
 	}
 	if c.Action == "unlock" && v.Ref != "" && len(cached) > 0 {
 		s.provider.mu.Lock()

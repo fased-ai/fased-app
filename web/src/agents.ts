@@ -38,6 +38,25 @@ export function isPlanPolicy(policy?: OpenAIModelPolicy) {
   return policy?.wireVersion === "openai-signin-v2";
 }
 
+export function hasActiveOperations(view?: {
+  recovery?: { status: string }[];
+  tasks?: { state: string }[];
+}) {
+  const terminal = new Set([
+    "completed",
+    "settled",
+    "failed",
+    "cancelled",
+    "expired",
+    "rejected",
+    "stopped",
+  ]);
+  if (view?.recovery?.some((r) => !terminal.has(r.status))) return true;
+  return !!view?.tasks?.some((t) =>
+    ["running", "queued", "pending", "submitting", "paused"].includes(t.state),
+  );
+}
+
 export function isUnmeteredPolicy(policy?: OpenAIModelPolicy) {
   return (
     isPlanPolicy(policy) ||

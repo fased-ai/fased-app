@@ -132,7 +132,7 @@ func (s *Store) ensureAgentV2(ctx context.Context) (*agentV2Store, error) {
 	if err := privateFile(dbPath); err != nil {
 		return nil, err
 	}
-	db, err := sql.Open("sqlite", dbPath)
+	db, err := sql.Open("sqlite", sqliteDSN(dbPath))
 	if err != nil {
 		return nil, err
 	}

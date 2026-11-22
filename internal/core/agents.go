@@ -1062,6 +1062,7 @@ func (s *Store) changeAgents(ctx context.Context, c AgentCommand, fixture bool) 
 	if e = tx.Commit(); e != nil {
 		return AgentView{}, e
 	}
+	signalStoreChange(s)
 	v, e := agentView(d, revision+1, profile, "", now)
 	return s.chatView(v), e
 }

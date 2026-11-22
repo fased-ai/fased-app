@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type { Account, AccountsView } from "../accounts";
-import type { AgentView } from "../agents";
+import { hasActiveOperations, type AgentView } from "../agents";
 import {
   lamportsToSOL,
   miningState,
@@ -113,8 +113,10 @@ export function WENMining() {
   const [error, setError] = useState("");
   const generation = useRef(0);
   const writing = useRef(false);
+  const activePoll = useRef(false);
 
   const active = view ?? agents.view?.wenMining;
+  activePoll.current = busy || hasActiveOperations(active);
 
   async function load() {
     const stamp = generation.current;
@@ -152,13 +154,36 @@ export function WENMining() {
     generation.current++;
     setReview(undefined);
     setError("");
-    void load();
-    const timer = window.setInterval(() => {
-      if (!writing.current) void load();
-    }, 1500);
+    let cancelled = false;
+    let timer: number | undefined;
+    const schedule = () => {
+      if (cancelled) return;
+      window.clearTimeout(timer);
+      if (document.visibilityState !== "visible") return;
+      const delay = activePoll.current ? 1500 : 15000;
+      timer = window.setTimeout(async () => {
+        if (cancelled) return;
+        if (!writing.current && document.visibilityState === "visible") {
+          await load();
+        }
+        schedule();
+      }, delay);
+    };
+    const onVisibility = () => {
+      if (document.visibilityState === "visible") {
+        if (!writing.current) void load();
+        schedule();
+      } else {
+        window.clearTimeout(timer);
+      }
+    };
+    document.addEventListener("visibilitychange", onVisibility);
+    void load().finally(schedule);
     return () => {
+      cancelled = true;
       generation.current++;
-      window.clearInterval(timer);
+      window.clearTimeout(timer);
+      document.removeEventListener("visibilitychange", onVisibility);
     };
   }, [profile, core.instanceId, core.request]);
 
