@@ -1415,10 +1415,157 @@ func (s *Store) SearchMemories(ctx context.Context, profileID, query string, lim
 	return out, nil
 }
 
+type AgentCompactResult struct {
+	Thread        AgentThread `json:"thread"`
+	Compacted     bool        `json:"compacted"`
+	CompactedMsgs int         `json:"compactedMessages"`
+	RemainingMsgs int         `json:"remainingMessages"`
+	SummaryChars  int         `json:"summaryChars"`
+}
+
+func summarizeV2Messages(existingSummary string, older []AgentV2Message, maxChars int) string {
+	if maxChars <= 0 {
+		maxChars = agentV2SummaryMaxChars
+	}
+	var olderSB strings.Builder
+	for _, m := range older {
+		if m.Role == "user" || m.Role == "assistant" {
+			line := sanitizeV2Title(m.Content, "")
+			if line == "" && len(m.ToolCalls) > 0 {
+				var names []string
+				for _, tc := range m.ToolCalls {
+					names = append(names, tc.ToolName+"("+tc.Status+")")
+				}
+				line = "tools: " + strings.Join(names, ", ")
+			}
+			if line != "" {
+				olderSB.WriteString(m.Role)
+				olderSB.WriteString(": ")
+				olderSB.WriteString(line)
+				olderSB.WriteByte('\n')
+			}
+		}
+	}
+	olderBlock := strings.TrimSpace(olderSB.String())
+	trimmedExisting := strings.TrimSpace(existingSummary)
+	if olderBlock == "" {
+		return trimmedExisting
+	}
+	if trimmedExisting != "" {
+		existingTail := strings.TrimPrefix(trimmedExisting, "...")
+		if trimmedExisting == olderBlock || strings.Contains(trimmedExisting, olderBlock) || (existingTail != "" && strings.HasSuffix(olderBlock, existingTail)) {
+			return trimmedExisting
+		}
+	}
+	var newSummary string
+	if trimmedExisting != "" && (strings.HasPrefix(olderBlock, trimmedExisting) || (strings.TrimPrefix(trimmedExisting, "...") != "" && strings.Contains(olderBlock, strings.TrimPrefix(trimmedExisting, "...")))) {
+		newSummary = olderBlock
+	} else {
+		var sb strings.Builder
+		if trimmedExisting != "" {
+			sb.WriteString(trimmedExisting)
+			sb.WriteString("\n---\n")
+		}
+		sb.WriteString(olderBlock)
+		newSummary = strings.TrimSpace(sb.String())
+	}
+	runes := []rune(newSummary)
+	if len(runes) > maxChars {
+		if maxChars > 3 {
+			// Keep the newest tail of the summary when bounding.
+			newSummary = "..." + string(runes[len(runes)-maxChars+3:])
+		} else {
+			newSummary = string(runes[len(runes)-maxChars:])
+		}
+	}
+	return newSummary
+}
+
+// CompactThread explicitly rolls completed conversation turns into the persistent
+// thread summary without deleting historical rows from `messages`.
+func (s *Store) CompactThread(ctx context.Context, threadID string, keepRecent int) (AgentCompactResult, error) {
+	detail, err := s.GetThread(ctx, threadID)
+	if err != nil {
+		return AgentCompactResult{}, err
+	}
+	msgs := detail.Messages
+	existing := strings.TrimSpace(detail.Thread.Summary)
+	if len(msgs) == 0 {
+		return AgentCompactResult{
+			Thread:       detail.Thread,
+			SummaryChars: len([]rune(existing)),
+		}, nil
+	}
+
+	var cut int
+	if keepRecent > 0 {
+		if len(msgs) <= keepRecent {
+			return AgentCompactResult{
+				Thread:        detail.Thread,
+				RemainingMsgs: len(msgs),
+				SummaryChars:  len([]rune(existing)),
+			}, nil
+		}
+		cut = len(msgs) - keepRecent
+		// Never split an assistant tool-call message from its immediately following tool messages.
+		for cut > 0 && msgs[cut].Role == "tool" {
+			cut--
+		}
+		if cut <= 0 {
+			return AgentCompactResult{
+				Thread:        detail.Thread,
+				RemainingMsgs: len(msgs),
+				SummaryChars:  len([]rune(existing)),
+			}, nil
+		}
+	} else if len(msgs) > 8 {
+		cut = len(msgs) - 6
+		for cut > 0 && msgs[cut].Role == "tool" {
+			cut--
+		}
+		if cut <= 0 {
+			cut = len(msgs)
+		}
+	} else {
+		cut = len(msgs)
+	}
+
+	older := msgs[:cut]
+	recent := msgs[cut:]
+	newSummary := summarizeV2Messages(existing, older, agentV2SummaryMaxChars)
+	if newSummary == "" || newSummary == existing {
+		return AgentCompactResult{
+			Thread:        detail.Thread,
+			RemainingMsgs: len(msgs),
+			SummaryChars:  len([]rune(existing)),
+		}, nil
+	}
+
+	v2, err := s.ensureAgentV2(ctx)
+	if err != nil {
+		return AgentCompactResult{}, err
+	}
+	if _, err := v2.db.ExecContext(ctx, `UPDATE threads SET summary=? WHERE id=?`, newSummary, detail.Thread.ID); err != nil {
+		return AgentCompactResult{}, err
+	}
+	detail.Thread.Summary = newSummary
+	return AgentCompactResult{
+		Thread:        detail.Thread,
+		Compacted:     true,
+		CompactedMsgs: len(older),
+		RemainingMsgs: len(recent),
+		SummaryChars:  len([]rune(newSummary)),
+	}, nil
+}
+
 // buildContextWindow returns an updated rolling summary (persisted on the thread if
 // compaction occurred) plus the recent suffix of messages for provider submission.
 // Historical rows in `messages` are never deleted.
 func (s *Store) buildContextWindow(ctx context.Context, detail AgentThreadDetail) (string, []AgentV2Message, error) {
+	return s.contextWindowForModel(ctx, detail, detail.Thread.Model, true)
+}
+
+func (s *Store) contextWindowForModel(ctx context.Context, detail AgentThreadDetail, modelID string, persist bool) (string, []AgentV2Message, error) {
 	msgs := detail.Messages
 	totalChars := 0
 	for _, m := range msgs {
@@ -1427,8 +1574,18 @@ func (s *Store) buildContextWindow(ctx context.Context, detail AgentThreadDetail
 			totalChars += len(tc.ArgsJSON) + len(tc.ResultJSON)
 		}
 	}
+	charLimit := agentV2CompactCharLimit
+	if m, ok := currentProviderModel(strings.TrimSpace(modelID)); ok && m.ContextTokens > 0 {
+		budget := int(m.ContextTokens * 2)
+		if budget < 8000 {
+			budget = 8000
+		}
+		if budget < charLimit {
+			charLimit = budget
+		}
+	}
 	summary := detail.Thread.Summary
-	if len(msgs) <= agentV2CompactMsgLimit && totalChars <= agentV2CompactCharLimit {
+	if len(msgs) <= agentV2CompactMsgLimit && totalChars <= charLimit {
 		return summary, msgs, nil
 	}
 	if len(msgs) <= agentV2KeepRecentMsgs {
@@ -1445,39 +1602,11 @@ func (s *Store) buildContextWindow(ctx context.Context, detail AgentThreadDetail
 	older := msgs[:cut]
 	recent := msgs[cut:]
 
-	var sb strings.Builder
-	if summary != "" {
-		sb.WriteString(strings.TrimSpace(summary))
-		sb.WriteString("\n---\n")
-	}
-	for _, m := range older {
-		if m.Role == "user" || m.Role == "assistant" {
-			line := sanitizeV2Title(m.Content, "")
-			if line == "" && len(m.ToolCalls) > 0 {
-				var names []string
-				for _, tc := range m.ToolCalls {
-					names = append(names, tc.ToolName+"("+tc.Status+")")
-				}
-				line = "tools: " + strings.Join(names, ", ")
-			}
-			if line != "" {
-				sb.WriteString(m.Role)
-				sb.WriteString(": ")
-				sb.WriteString(line)
-				sb.WriteByte('\n')
-			}
+	newSummary := summarizeV2Messages(summary, older, agentV2SummaryMaxChars)
+	if persist && newSummary != summary {
+		if v2, err := s.ensureAgentV2(ctx); err == nil {
+			_, _ = v2.db.ExecContext(ctx, `UPDATE threads SET summary=? WHERE id=?`, newSummary, detail.Thread.ID)
 		}
-	}
-	newSummary := strings.TrimSpace(sb.String())
-	if len(newSummary) > agentV2SummaryMaxChars {
-		runes := []rune(newSummary)
-		if len(runes) > agentV2SummaryMaxChars {
-			// Keep the newest tail of the summary when bounding.
-			newSummary = "..." + string(runes[len(runes)-agentV2SummaryMaxChars+3:])
-		}
-	}
-	if v2, err := s.ensureAgentV2(ctx); err == nil && newSummary != summary {
-		_, _ = v2.db.ExecContext(ctx, `UPDATE threads SET summary=? WHERE id=?`, newSummary, detail.Thread.ID)
 	}
 	return newSummary, recent, nil
 }

@@ -14,6 +14,7 @@ import {
   formatApprovalFields,
   formatToolLabel,
   formatToolSummary,
+  parseChatSlashCommand,
   parseMarkdownBlocks,
   useAgentsV2,
   type AgentApproval,
@@ -285,6 +286,9 @@ export function AgentChatV2({
   const [railOpen, setRailOpen] = useState(false);
   const [search, setSearch] = useState("");
   const [toolsEnabled, setToolsEnabled] = useState(true);
+  const [compactBusy, setCompactBusy] = useState(false);
+  const [compactNotice, setCompactNotice] = useState("");
+  const compactNoticeTimerRef = useRef<number | null>(null);
   const [editingTitle, setEditingTitle] = useState(false);
   const [titleDraft, setTitleDraft] = useState("");
   const [undoToast, setUndoToast] = useState<{
@@ -308,6 +312,22 @@ export function AgentChatV2({
       return false;
     }
   });
+
+  function clearCompactNoticeTimer() {
+    if (compactNoticeTimerRef.current !== null) {
+      window.clearTimeout(compactNoticeTimerRef.current);
+      compactNoticeTimerRef.current = null;
+    }
+  }
+
+  function showCompactNotice(msg: string) {
+    clearCompactNoticeTimer();
+    setCompactNotice(msg);
+    compactNoticeTimerRef.current = window.setTimeout(() => {
+      compactNoticeTimerRef.current = null;
+      setCompactNotice("");
+    }, 4000);
+  }
 
   function clearUndoTimer() {
     if (undoTimerRef.current !== null) {
@@ -414,8 +434,10 @@ export function AgentChatV2({
     window.addEventListener("pagehide", flushOnLeave);
     return () => {
       window.removeEventListener("pagehide", flushOnLeave);
+      clearCompactNoticeTimer();
       flushOnLeave();
       setUndoToast(null);
+      setCompactNotice("");
       setPendingDeleteIds(new Set());
     };
   }, [core.instanceId, view.profileId]);
@@ -601,11 +623,55 @@ export function AgentChatV2({
       ? t("1 rule recalled")
       : t("{count} rules recalled").replace("{count}", String(count));
 
+  async function handleCompact() {
+    if (v2.streaming || compactBusy) return;
+    const threadId = v2.detail?.thread.id || v2.activeThreadId;
+    if (!threadId) {
+      showCompactNotice(t("Nothing to compact"));
+      return;
+    }
+    setCompactBusy(true);
+    try {
+      const res = await v2.compactThread(threadId);
+      if (res) {
+        showCompactNotice(
+          t(res.compacted ? "Context compacted" : "Nothing to compact"),
+        );
+      }
+    } finally {
+      setCompactBusy(false);
+    }
+  }
+
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
     if (v2.streaming || !composerValue.trim()) return;
     if (modelMenuRef.current) modelMenuRef.current.open = false;
     const text = composerValue;
+    const cmd = parseChatSlashCommand(text);
+    if (cmd.kind === "compact") {
+      setComposerValue("");
+      await handleCompact();
+      return;
+    }
+    if (cmd.kind === "side") {
+      const threadId = v2.detail?.thread.id || v2.activeThreadId;
+      if (!cmd.question || !threadId) {
+        v2.setError(t("Ask a side question"));
+        return;
+      }
+      setComposerValue("");
+      const ok = await v2.askSideQuestion({
+        threadId,
+        content: cmd.question,
+        connectionRef: activeConnectionRef || undefined,
+        model: activeModel || undefined,
+      });
+      if (!ok) {
+        setComposerValue(text);
+      }
+      return;
+    }
     setComposerValue("");
     const ok = await v2.sendMessage({
       content: text,
@@ -822,6 +888,15 @@ export function AgentChatV2({
               )}
               <button
                 type="button"
+                className="secondary v2-compact-btn"
+                title={t("Compact conversation")}
+                disabled={v2.streaming || compactBusy}
+                onClick={() => void handleCompact()}
+              >
+                {t("Compact")}
+              </button>
+              <button
+                type="button"
                 className="icon-button"
                 aria-label={
                   v2.detail.thread.archived
@@ -885,6 +960,30 @@ export function AgentChatV2({
                 </button>
               </div>
             </div>
+          )}
+
+          {compactNotice && (
+            <div className="v2-compact-notice" role="status" aria-live="polite">
+              <span>{compactNotice}</span>
+              <button
+                type="button"
+                className="icon-button"
+                aria-label={t("Dismiss")}
+                onClick={() => {
+                  clearCompactNoticeTimer();
+                  setCompactNotice("");
+                }}
+              >
+                <X size={13} aria-hidden="true" />
+              </button>
+            </div>
+          )}
+
+          {v2.detail?.thread.summary?.trim() && (
+            <details className="v2-summary-banner">
+              <summary>{t("Compacted context")}</summary>
+              <pre>{v2.detail.thread.summary}</pre>
+            </details>
           )}
 
           {v2.error && (
@@ -970,13 +1069,22 @@ export function AgentChatV2({
                         v2.lastRecalled &&
                         v2.lastRecalled.threadId === v2.detail?.thread.id &&
                         v2.lastRecalled.count > 0;
+                      const showHandoff =
+                        m.id === lastAssistantId &&
+                        v2.lastHandoff &&
+                        v2.lastHandoff.threadId === v2.detail?.thread.id &&
+                        !!(
+                          v2.lastHandoff.fromModel ||
+                          v2.lastHandoff.fromProvider
+                        );
                       const showMeta =
                         (m.content ||
                           m.errorText ||
                           (m.approvals?.length ?? 0) > 0) &&
                         (m.model ||
                           (m.outputTokens ?? 0) > 0 ||
-                          !!showRecalled);
+                          !!showRecalled ||
+                          !!showHandoff);
                       if (!showMeta) return null;
                       return (
                         <footer className="v2-msg-meta">
@@ -994,6 +1102,18 @@ export function AgentChatV2({
                               {formatRecalledLabel(v2.lastRecalled.count)}
                             </span>
                           )}
+                          {showHandoff && v2.lastHandoff && (
+                            <span className="v2-handoff-pill">
+                              {t("Handoff from {model}").replace(
+                                "{model}",
+                                previewModel(
+                                  v2.lastHandoff.fromModel ||
+                                    v2.lastHandoff.fromProvider,
+                                  t,
+                                ),
+                              )}
+                            </span>
+                          )}
                         </footer>
                       );
                     })()}
@@ -1008,6 +1128,21 @@ export function AgentChatV2({
                 role="status"
               >
                 <div className="v2-assistant-turn">
+                  {v2.lastHandoff &&
+                    v2.lastHandoff.threadId === v2.detail?.thread.id &&
+                    (v2.lastHandoff.fromModel ||
+                      v2.lastHandoff.fromProvider) && (
+                      <span className="v2-handoff-pill">
+                        {t("Handoff from {model}").replace(
+                          "{model}",
+                          previewModel(
+                            v2.lastHandoff.fromModel ||
+                              v2.lastHandoff.fromProvider,
+                            t,
+                          ),
+                        )}
+                      </span>
+                    )}
                   {(v2.streamDraft?.recalledMemories ?? 0) > 0 && (
                     <span
                       className="v2-recalled-pill"
@@ -1061,6 +1196,49 @@ export function AgentChatV2({
 
             <div ref={scrollEndRef} />
           </div>
+
+          {v2.sideChat && v2.sideChat.threadId === v2.detail?.thread.id && (
+            <aside className="v2-side-card" aria-label={t("Side question")}>
+              <div className="v2-side-head">
+                <div className="v2-side-title">
+                  <strong>{t("Side question")}</strong>
+                  {(v2.sideChat.model || v2.sideChat.provider) && (
+                    <span className="v2-pill">
+                      {previewModel(
+                        v2.sideChat.model || v2.sideChat.provider || "",
+                        t,
+                      )}
+                    </span>
+                  )}
+                </div>
+                <button
+                  type="button"
+                  className="icon-button"
+                  aria-label={t("Dismiss")}
+                  onClick={() => v2.dismissSideChat()}
+                >
+                  <X size={14} aria-hidden="true" />
+                </button>
+              </div>
+              <p className="v2-side-question">{v2.sideChat.question}</p>
+              {v2.sideChat.error && (
+                <p className="v2-tool-err" role="alert">
+                  {v2.sideChat.error}
+                </p>
+              )}
+              {v2.sideChat.content ? (
+                <div className="v2-side-answer">
+                  <MarkdownMessage text={v2.sideChat.content} />
+                </div>
+              ) : (
+                v2.sideChat.loading && (
+                  <span className="v2-typing-pulse" aria-label={t("Working")}>
+                    ···
+                  </span>
+                )
+              )}
+            </aside>
+          )}
 
           <form
             className="chat-message-form v2-composer"

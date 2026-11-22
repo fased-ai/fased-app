@@ -14,22 +14,43 @@ const (
 	agentV2MaxToolRounds            = 8
 	agentV2PromptMemoryMaxRunes     = 3200
 	agentV2PromptMemoryItemMaxRunes = 500
+	agentV2HandoffMaxRunes          = 1600
 )
 
 type AgentStreamEvent struct {
-	Type                 string          `json:"type"`
-	ThreadID             string          `json:"threadId,omitempty"`
-	MessageID            string          `json:"messageId,omitempty"`
-	Provider             string          `json:"provider,omitempty"`
-	Model                string          `json:"model,omitempty"`
-	Delta                string          `json:"delta,omitempty"`
-	ToolCall             *AgentToolCall  `json:"toolCall,omitempty"`
-	Approval             *AgentApproval  `json:"approval,omitempty"`
-	Message              *AgentV2Message `json:"message,omitempty"`
-	AwaitingApproval     bool            `json:"awaitingApproval,omitempty"`
-	RecalledMemories     int             `json:"recalledMemories,omitempty"`
-	RecalledMemoryTitles []string        `json:"recalledMemoryTitles,omitempty"`
-	Error                string          `json:"error,omitempty"`
+	Type                 string             `json:"type"`
+	ThreadID             string             `json:"threadId,omitempty"`
+	MessageID            string             `json:"messageId,omitempty"`
+	Provider             string             `json:"provider,omitempty"`
+	Model                string             `json:"model,omitempty"`
+	HandoffFromProvider  string             `json:"handoffFromProvider,omitempty"`
+	HandoffFromModel     string             `json:"handoffFromModel,omitempty"`
+	Delta                string             `json:"delta,omitempty"`
+	ToolCall             *AgentToolCall     `json:"toolCall,omitempty"`
+	Approval             *AgentApproval     `json:"approval,omitempty"`
+	Message              *AgentV2Message    `json:"message,omitempty"`
+	SideResult           *AgentV2SideResult `json:"sideResult,omitempty"`
+	AwaitingApproval     bool               `json:"awaitingApproval,omitempty"`
+	RecalledMemories     int                `json:"recalledMemories,omitempty"`
+	RecalledMemoryTitles []string           `json:"recalledMemoryTitles,omitempty"`
+	Error                string             `json:"error,omitempty"`
+}
+
+type AgentV2SideInput struct {
+	Content       string `json:"content"`
+	ConnectionRef string `json:"connectionRef,omitempty"`
+	Model         string `json:"model,omitempty"`
+}
+
+type AgentV2SideResult struct {
+	ThreadID     string `json:"threadId"`
+	Provider     string `json:"provider"`
+	Model        string `json:"model"`
+	Content      string `json:"content"`
+	Reasoning    string `json:"reasoning,omitempty"`
+	InputTokens  int64  `json:"inputTokens,omitempty"`
+	OutputTokens int64  `json:"outputTokens,omitempty"`
+	CachedTokens int64  `json:"cachedTokens,omitempty"`
 }
 
 type AgentV2PromptInput struct {
@@ -181,6 +202,12 @@ func (s *Store) RunAgentV2Turn(ctx context.Context, threadID string, input Agent
 		return AgentV2RunResult{}, err
 	}
 
+	prevProvider, prevModel, switched := detectModelSwitch(detail.Messages, target.Provider, target.Model)
+	var handoffNote string
+	if switched {
+		handoffNote = buildModelHandoffNote(detail, prevProvider, prevModel, target.Provider, target.Model)
+	}
+
 	// Update thread title on first message or update sticky provider/model preferences when explicitly supplied.
 	var patch ThreadUpdateInput
 	needPatch := false
@@ -227,6 +254,8 @@ func (s *Store) RunAgentV2Turn(ctx context.Context, threadID string, input Agent
 		ThreadID:             threadID,
 		Provider:             target.Provider,
 		Model:                target.Model,
+		HandoffFromProvider:  prevProvider,
+		HandoffFromModel:     prevModel,
 		RecalledMemories:     len(recalled),
 		RecalledMemoryTitles: recalledTitles,
 	})
@@ -236,7 +265,7 @@ func (s *Store) RunAgentV2Turn(ctx context.Context, threadID string, input Agent
 		toolsEnabled = *input.ToolsEnabled
 	}
 
-	lastMsg, awaiting, err := s.runAgentV2Loop(ctx, threadID, content, target, toolsEnabled, agentV2MaxToolRounds, emit)
+	lastMsg, awaiting, err := s.runAgentV2LoopWithHandoff(ctx, threadID, content, handoffNote, target, toolsEnabled, agentV2MaxToolRounds, emit)
 	if err != nil {
 		return AgentV2RunResult{}, err
 	}
@@ -255,7 +284,193 @@ func (s *Store) RunAgentV2Turn(ctx context.Context, threadID string, input Agent
 	}, nil
 }
 
+func detectModelSwitch(msgs []AgentV2Message, nextProvider, nextModel string) (prevProvider, prevModel string, switched bool) {
+	nextP := strings.TrimSpace(nextProvider)
+	nextM := strings.TrimSpace(nextModel)
+	for i := len(msgs) - 1; i >= 0; i-- {
+		m := msgs[i]
+		if m.Role != "assistant" {
+			continue
+		}
+		prevP := strings.TrimSpace(m.Provider)
+		prevM := strings.TrimSpace(m.Model)
+		if prevP == "" && prevM == "" {
+			continue
+		}
+		if (prevM != "" && nextM != "" && prevM != nextM) || (prevP != "" && nextP != "" && prevP != nextP) {
+			return prevP, prevM, true
+		}
+		return "", "", false
+	}
+	return "", "", false
+}
+
+func buildModelHandoffNote(detail AgentThreadDetail, prevProvider, prevModel, nextProvider, nextModel string) string {
+	var sb strings.Builder
+	fromLabel := strings.TrimSpace(prevModel)
+	if prevProvider != "" && fromLabel != "" {
+		fromLabel = prevProvider + "/" + fromLabel
+	} else if fromLabel == "" {
+		fromLabel = prevProvider
+	}
+	toLabel := strings.TrimSpace(nextModel)
+	if nextProvider != "" && toLabel != "" {
+		toLabel = nextProvider + "/" + toLabel
+	} else if toLabel == "" {
+		toLabel = nextProvider
+	}
+	sb.WriteString("Model handoff: continuing conversation from ")
+	sb.WriteString(fromLabel)
+	sb.WriteString(" to ")
+	sb.WriteString(toLabel)
+	sb.WriteString(".\n")
+	if strings.TrimSpace(detail.Thread.Summary) != "" {
+		sb.WriteString("Summary: ")
+		sb.WriteString(sanitizeV2MemorySnippet(detail.Thread.Summary, 420))
+		sb.WriteByte('\n')
+	}
+	if len(detail.PendingApprovals) > 0 {
+		sb.WriteString(fmt.Sprintf("Pending approvals: %d\n", len(detail.PendingApprovals)))
+	}
+	var tail []string
+	for i := len(detail.Messages) - 1; i >= 0 && len(tail) < 4; i-- {
+		m := detail.Messages[i]
+		if m.Role != "user" && m.Role != "assistant" {
+			continue
+		}
+		snippet := sanitizeV2MemorySnippet(m.Content, 220)
+		if snippet == "" {
+			continue
+		}
+		tail = append(tail, m.Role+": "+snippet)
+	}
+	if len(tail) > 0 {
+		sb.WriteString("Recent turns:\n")
+		for i := len(tail) - 1; i >= 0; i-- {
+			sb.WriteString("- ")
+			sb.WriteString(tail[i])
+			sb.WriteByte('\n')
+		}
+	}
+	out := strings.TrimSpace(sb.String())
+	if utf8.RuneCountInString(out) > agentV2HandoffMaxRunes {
+		out = sanitizeV2MemorySnippet(out, agentV2HandoffMaxRunes)
+	}
+	return out
+}
+
+// RunAgentV2SideQuestion answers an ephemeral side question against the current
+// thread window without mutating `messages` or `threads.summary`.
+func (s *Store) RunAgentV2SideQuestion(ctx context.Context, threadID string, input AgentV2SideInput, emit func(AgentStreamEvent)) (AgentV2SideResult, error) {
+	content := strings.TrimSpace(input.Content)
+	if content == "" || len(content) > agentV2MaxPromptBytes || !utf8.ValidString(content) {
+		return AgentV2SideResult{}, errors.New("prompt content must be non-empty UTF-8 within 32 KiB")
+	}
+	if input.ConnectionRef != "" && !validConnectionRef(input.ConnectionRef) {
+		return AgentV2SideResult{}, errors.New("invalid AI connection reference")
+	}
+	if input.Model != "" && !validProviderModelID(input.Model) {
+		return AgentV2SideResult{}, errors.New("invalid model identifier")
+	}
+	detail, err := s.GetThread(ctx, threadID)
+	if err != nil {
+		return AgentV2SideResult{}, err
+	}
+	target, err := resolveAgentV2Provider(ctx, s, input.ConnectionRef, detail.Thread.ConnectionRef, input.Model, detail.Thread.Model, detail.Thread.ProfileID)
+	if err != nil {
+		return AgentV2SideResult{}, err
+	}
+
+	prevProvider, prevModel, switched := detectModelSwitch(detail.Messages, target.Provider, target.Model)
+	summary, windowMsgs, err := s.contextWindowForModel(ctx, detail, target.Model, false)
+	if err != nil {
+		return AgentV2SideResult{}, err
+	}
+	ephemeralMsgs := make([]AgentV2Message, len(windowMsgs), len(windowMsgs)+1)
+	copy(ephemeralMsgs, windowMsgs)
+	ephemeralMsgs = append(ephemeralMsgs, AgentV2Message{
+		ThreadID: threadID,
+		Role:     "user",
+		Content:  content,
+		Status:   "completed",
+	})
+
+	instructions := buildAgentV2Instructions(ctx, s, detail.Thread.ProfileID, summary, content)
+	if switched {
+		handoff := buildModelHandoffNote(detail, prevProvider, prevModel, target.Provider, target.Model)
+		if handoff != "" {
+			instructions += "\n\n" + handoff
+		}
+	}
+	instructions += "\n\nSide question mode: answer this ephemeral side question using the current thread context without running tools or modifying thread history."
+
+	sideMsgID, err := randomToken()
+	if err != nil {
+		return AgentV2SideResult{}, err
+	}
+
+	emitEvent(emit, AgentStreamEvent{
+		Type:                "run_started",
+		ThreadID:            threadID,
+		MessageID:           sideMsgID,
+		Provider:            target.Provider,
+		Model:               target.Model,
+		HandoffFromProvider: prevProvider,
+		HandoffFromModel:    prevModel,
+	})
+
+	turn, streamErr := streamProviderV2(ctx, s, target, providerV2Prompt{
+		Instructions: instructions,
+		Messages:     ephemeralMsgs,
+		Tools:        nil,
+	}, providerStreamCallbacks{
+		onTextDelta: func(delta string) {
+			emitEvent(emit, AgentStreamEvent{
+				Type:      "text_delta",
+				ThreadID:  threadID,
+				MessageID: sideMsgID,
+				Delta:     delta,
+			})
+		},
+		onThinkingDelta: func(delta string) {
+			emitEvent(emit, AgentStreamEvent{
+				Type:      "thinking_delta",
+				ThreadID:  threadID,
+				MessageID: sideMsgID,
+				Delta:     delta,
+			})
+		},
+	})
+	if streamErr != nil {
+		return AgentV2SideResult{}, streamErr
+	}
+
+	res := AgentV2SideResult{
+		ThreadID:     threadID,
+		Provider:     target.Provider,
+		Model:        target.Model,
+		Content:      turn.Text,
+		Reasoning:    turn.Reasoning,
+		InputTokens:  turn.InputTokens,
+		OutputTokens: turn.OutputTokens,
+		CachedTokens: turn.CachedTokens,
+	}
+	emitEvent(emit, AgentStreamEvent{
+		Type:       "side_done",
+		ThreadID:   threadID,
+		MessageID:  sideMsgID,
+		Provider:   target.Provider,
+		Model:      target.Model,
+		SideResult: &res,
+	})
+	return res, nil
+}
+
 func (s *Store) runAgentV2Loop(ctx context.Context, threadID, latestQuery string, target resolvedAgentProvider, toolsEnabled bool, maxRounds int, emit func(AgentStreamEvent)) (*AgentV2Message, bool, error) {
+	return s.runAgentV2LoopWithHandoff(ctx, threadID, latestQuery, "", target, toolsEnabled, maxRounds, emit)
+}
+
+func (s *Store) runAgentV2LoopWithHandoff(ctx context.Context, threadID, latestQuery, handoffNote string, target resolvedAgentProvider, toolsEnabled bool, maxRounds int, emit func(AgentStreamEvent)) (*AgentV2Message, bool, error) {
 	if maxRounds <= 0 {
 		maxRounds = 1
 	}
@@ -282,11 +497,14 @@ func (s *Store) runAgentV2Loop(ctx context.Context, threadID, latestQuery string
 			}
 		}
 
-		summary, windowMsgs, err := s.buildContextWindow(ctx, detail)
+		summary, windowMsgs, err := s.contextWindowForModel(ctx, detail, target.Model, true)
 		if err != nil {
 			return nil, false, err
 		}
 		instructions := buildAgentV2Instructions(ctx, s, detail.Thread.ProfileID, summary, latestQuery)
+		if round == 0 && strings.TrimSpace(handoffNote) != "" {
+			instructions += "\n\n" + strings.TrimSpace(handoffNote)
+		}
 
 		assistantMsgID, err := randomToken()
 		if err != nil {

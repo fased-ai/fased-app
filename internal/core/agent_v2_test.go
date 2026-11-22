@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -1864,5 +1865,393 @@ PRAGMA user_version=2;
 	futureDB.Close()
 	if _, err := s2.ListThreads(t.Context(), "trading-analyst", false); err == nil {
 		t.Fatal("expected schema downgrade refusal for user_version=4")
+	}
+}
+
+func TestAgentV2ManualCompactAndSummaryPreservation(t *testing.T) {
+	t.Parallel()
+	s := fixtureStore(t)
+	ts, token, csrf := startV2HTTPTestServer(t, s)
+
+	thread, err := s.CreateThread(t.Context(), "trading-analyst", "Compact Thread", "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	pairs := [][2]string{
+		{"First question about SOL", "First answer about SOL"},
+		{"Second question about USDC", "Second answer about USDC"},
+		{"Third question about risk", "Third answer about risk"},
+	}
+	for _, p := range pairs {
+		if _, err := s.AppendMessage(t.Context(), AgentV2Message{
+			ThreadID: thread.ID, Role: "user", Content: p[0], Status: "completed",
+		}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := s.AppendMessage(t.Context(), AgentV2Message{
+			ThreadID: thread.ID, Role: "assistant", Content: p[1], Status: "completed", Provider: "openai", Model: "gpt-6.2-sol",
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// Explicit keepRecent=2 summarizes older 4 messages while keeping all 6 rows in messages.
+	resp := doV2JSONRequest(t, http.MethodPost, ts.URL+"/api/v1/agents/v2/threads/"+thread.ID+"/compact", ts.URL, token, csrf, `{"keepRecent":2}`, "application/json")
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 compact response, got %d", resp.StatusCode)
+	}
+	var res AgentCompactResult
+	if err := json.NewDecoder(resp.Body).Decode(&res); err != nil {
+		t.Fatal(err)
+	}
+	if !res.Compacted || res.CompactedMsgs != 4 || res.RemainingMsgs != 2 {
+		t.Fatalf("unexpected compact result: %+v", res)
+	}
+	if !strings.Contains(res.Thread.Summary, "First question about SOL") || !strings.Contains(res.Thread.Summary, "Second answer about USDC") {
+		t.Fatalf("expected older turns in summary, got %q", res.Thread.Summary)
+	}
+
+	detail, err := s.GetThread(t.Context(), thread.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(detail.Messages) != 6 {
+		t.Fatalf("expected all 6 historical messages preserved, got %d", len(detail.Messages))
+	}
+	if detail.Thread.Summary != res.Thread.Summary {
+		t.Fatalf("summary did not persist in sqlite: got %q want %q", detail.Thread.Summary, res.Thread.Summary)
+	}
+
+	// Repeating compact with empty body on same messages (default keepRecent) summarizes up to newer boundary;
+	// calling again immediately after with no new messages must be a no-op (Compacted=false).
+	if _, err := s.CompactThread(t.Context(), thread.ID, 0); err != nil {
+		t.Fatal(err)
+	}
+	repeat, err := s.CompactThread(t.Context(), thread.ID, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if repeat.Compacted {
+		t.Fatalf("expected immediate repeat compact to be a no-op, got %+v", repeat)
+	}
+
+	// Adding another turn and compacting again must not duplicate the earlier summary block.
+	if _, err := s.AppendMessage(t.Context(), AgentV2Message{
+		ThreadID: thread.ID, Role: "user", Content: "Fourth question about fees", Status: "completed",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.AppendMessage(t.Context(), AgentV2Message{
+		ThreadID: thread.ID, Role: "assistant", Content: "Fourth answer about fees", Status: "completed",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	again, err := s.CompactThread(t.Context(), thread.ID, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !again.Compacted {
+		t.Fatalf("expected fourth turn compaction to update summary: %+v", again)
+	}
+	if count := strings.Count(again.Thread.Summary, "First question about SOL"); count != 1 {
+		t.Fatalf("expected First question once in summary (no duplicate), count=%d summary=%q", count, again.Thread.Summary)
+	}
+	if !strings.Contains(again.Thread.Summary, "Fourth question about fees") {
+		t.Fatalf("expected Fourth question in updated summary, got %q", again.Thread.Summary)
+	}
+
+	// Unknown thread returns 404.
+	missingResp := doV2JSONRequest(t, http.MethodPost, ts.URL+"/api/v1/agents/v2/threads/missing-thread/compact", ts.URL, token, csrf, `{}`, "application/json")
+	missingResp.Body.Close()
+	if missingResp.StatusCode != http.StatusNotFound {
+		t.Fatalf("expected 404 for unknown thread, got %d", missingResp.StatusCode)
+	}
+}
+
+func TestAgentV2ModelSwitchContextHandoff(t *testing.T) {
+	t.Parallel()
+	s := fixtureStore(t)
+	conn := saveTestConnection(t, s)
+
+	var capturedInstructions []string
+	turnNum := 0
+	s.agentV2TransportOverride = aiTestTransport(func(r *http.Request) (*http.Response, error) {
+		raw, _ := io.ReadAll(r.Body)
+		var payload map[string]any
+		if err := json.Unmarshal(raw, &payload); err != nil {
+			return nil, err
+		}
+		inst, _ := payload["instructions"].(string)
+		capturedInstructions = append(capturedInstructions, inst)
+		turnNum++
+		reply := fmt.Sprintf("Reply %d ok", turnNum)
+		return sseHTTPResponse(
+			`event: response.created`,
+			`data: {"type":"response.created","response":{"id":"resp_`+fmt.Sprint(turnNum)+`"}}`,
+			``,
+			`event: response.output_text.delta`,
+			`data: {"type":"response.output_text.delta","delta":"`+reply+`"}`,
+			``,
+			`event: response.completed`,
+			`data: {"type":"response.completed","response":{"id":"resp_`+fmt.Sprint(turnNum)+`","status":"completed","usage":{"input_tokens":50,"output_tokens":12}}}`,
+		), nil
+	})
+
+	thread, err := s.CreateThread(t.Context(), "trading-analyst", "Handoff Thread", conn.Ref, "gpt-6.1-terra")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var eventsTurn1 []AgentStreamEvent
+	if _, err := s.RunAgentV2Turn(t.Context(), thread.ID, AgentV2PromptInput{
+		Content:       "Check SOL volatility baseline",
+		ConnectionRef: conn.Ref,
+		Model:         "gpt-6.1-terra",
+	}, func(ev AgentStreamEvent) { eventsTurn1 = append(eventsTurn1, ev) }); err != nil {
+		t.Fatal(err)
+	}
+	if len(eventsTurn1) == 0 || eventsTurn1[0].HandoffFromModel != "" || eventsTurn1[0].HandoffFromProvider != "" {
+		t.Fatalf("unexpected handoff metadata on first turn: %+v", eventsTurn1[0])
+	}
+
+	// Switch to gpt-6.2-sol on turn 2: should inject bounded Model handoff instructions & emit SSE handoff fields.
+	var eventsTurn2 []AgentStreamEvent
+	if _, err := s.RunAgentV2Turn(t.Context(), thread.ID, AgentV2PromptInput{
+		Content:       "Continue with deeper analysis",
+		ConnectionRef: conn.Ref,
+		Model:         "gpt-6.2-sol",
+	}, func(ev AgentStreamEvent) { eventsTurn2 = append(eventsTurn2, ev) }); err != nil {
+		t.Fatal(err)
+	}
+	if len(eventsTurn2) == 0 || eventsTurn2[0].Type != "run_started" {
+		t.Fatalf("missing run_started event on turn 2: %+v", eventsTurn2)
+	}
+	if eventsTurn2[0].HandoffFromModel != "gpt-6.1-terra" || eventsTurn2[0].HandoffFromProvider != "openai" {
+		t.Fatalf("expected handoff from openai/gpt-6.1-terra, got %+v", eventsTurn2[0])
+	}
+	if len(capturedInstructions) < 2 || !strings.Contains(capturedInstructions[1], "Model handoff: continuing conversation from openai/gpt-6.1-terra to openai/gpt-6.2-sol.") {
+		t.Fatalf("expected handoff block in round-0 instructions, got %q", capturedInstructions[1])
+	}
+	if !strings.Contains(capturedInstructions[1], "Check SOL volatility baseline") {
+		t.Fatalf("expected prior turn context inside handoff block: %q", capturedInstructions[1])
+	}
+
+	// Turn 3 on same model gpt-6.2-sol must NOT emit handoff fields.
+	var eventsTurn3 []AgentStreamEvent
+	if _, err := s.RunAgentV2Turn(t.Context(), thread.ID, AgentV2PromptInput{
+		Content:       "Third message same model",
+		ConnectionRef: conn.Ref,
+		Model:         "gpt-6.2-sol",
+	}, func(ev AgentStreamEvent) { eventsTurn3 = append(eventsTurn3, ev) }); err != nil {
+		t.Fatal(err)
+	}
+	if eventsTurn3[0].HandoffFromModel != "" || eventsTurn3[0].HandoffFromProvider != "" {
+		t.Fatalf("expected no handoff on same-model turn 3, got %+v", eventsTurn3[0])
+	}
+	if strings.Contains(capturedInstructions[2], "Model handoff:") {
+		t.Fatalf("did not expect handoff instructions on same-model turn 3")
+	}
+}
+
+func TestAgentV2SideQuestionEphemeral(t *testing.T) {
+	t.Parallel()
+	s := fixtureStore(t)
+	conn := saveTestConnection(t, s)
+
+	var seenTools any
+	var seenInstructions string
+	s.agentV2TransportOverride = aiTestTransport(func(r *http.Request) (*http.Response, error) {
+		raw, _ := io.ReadAll(r.Body)
+		var payload map[string]any
+		if err := json.Unmarshal(raw, &payload); err != nil {
+			return nil, err
+		}
+		seenTools = payload["tools"]
+		seenInstructions, _ = payload["instructions"].(string)
+		return sseHTTPResponse(
+			`event: response.created`,
+			`data: {"type":"response.created","response":{"id":"resp_side"}}`,
+			``,
+			`event: response.output_text.delta`,
+			`data: {"type":"response.output_text.delta","delta":"Side answer only."}`,
+			``,
+			`event: response.completed`,
+			`data: {"type":"response.completed","response":{"id":"resp_side","status":"completed","usage":{"input_tokens":30,"output_tokens":7}}}`,
+		), nil
+	})
+
+	ts, token, csrf := startV2HTTPTestServer(t, s)
+	thread, err := s.CreateThread(t.Context(), "trading-analyst", "Side Question Thread", conn.Ref, "gpt-6.2-sol")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Seed > agentV2CompactMsgLimit (26 messages) so contextWindowForModel(persist=false) is exercised!
+	for i := 0; i < 13; i++ {
+		if _, err := s.AppendMessage(t.Context(), AgentV2Message{
+			ThreadID: thread.ID, Role: "user", Content: fmt.Sprintf("Turn %d user msg", i), Status: "completed",
+		}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := s.AppendMessage(t.Context(), AgentV2Message{
+			ThreadID: thread.ID, Role: "assistant", Content: fmt.Sprintf("Turn %d assistant msg", i), Status: "completed", Provider: "openai", Model: "gpt-6.2-sol",
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// SSE /side request
+	sseResp := doV2JSONRequest(t, http.MethodPost, ts.URL+"/api/v1/agents/v2/threads/"+thread.ID+"/side", ts.URL, token, csrf, `{"content":"Explain fee tiers quickly"}`, "text/event-stream")
+	defer sseResp.Body.Close()
+	if sseResp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 SSE side response, got %d", sseResp.StatusCode)
+	}
+	events := readV2SSEEvents(t, sseResp.Body)
+	if len(events) < 3 || events[0].Type != "run_started" {
+		t.Fatalf("expected run_started..side_done SSE events, got %+v", events)
+	}
+	lastEv := events[len(events)-1]
+	if lastEv.Type != "side_done" || lastEv.SideResult == nil || lastEv.SideResult.Content != "Side answer only." {
+		t.Fatalf("unexpected final side_done SSE event: %+v", lastEv)
+	}
+	if seenTools != nil {
+		t.Fatalf("expected tools to be nil on ephemeral /side request, got %v", seenTools)
+	}
+	if !strings.Contains(seenInstructions, "Side question mode:") {
+		t.Fatalf("expected side question mode instruction, got %q", seenInstructions)
+	}
+
+	// JSON ?stream=0 /side request also supported.
+	jsonResp := doV2JSONRequest(t, http.MethodPost, ts.URL+"/api/v1/agents/v2/threads/"+thread.ID+"/side?stream=0", ts.URL, token, csrf, `{"content":"Another quick question"}`, "application/json")
+	defer jsonResp.Body.Close()
+	if jsonResp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 JSON side response, got %d", jsonResp.StatusCode)
+	}
+	var sideOut AgentV2SideResult
+	if err := json.NewDecoder(jsonResp.Body).Decode(&sideOut); err != nil {
+		t.Fatal(err)
+	}
+	if sideOut.Content != "Side answer only." || sideOut.InputTokens != 30 || sideOut.OutputTokens != 7 {
+		t.Fatalf("unexpected JSON side response: %+v", sideOut)
+	}
+
+	// Verify /side left messages table count untouched (26) AND threads.summary untouched ("").
+	detail, err := s.GetThread(t.Context(), thread.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(detail.Messages) != 26 {
+		t.Fatalf("expected 26 messages untouched after /side, got %d", len(detail.Messages))
+	}
+	if detail.Thread.Summary != "" {
+		t.Fatalf("expected threads.summary untouched after ephemeral /side, got %q", detail.Thread.Summary)
+	}
+}
+
+func TestAgentV2UsageAggregationAndPricing(t *testing.T) {
+	t.Parallel()
+	s := fixtureStore(t)
+
+	// Fresh store must not create agents.sqlite eagerly on usage query.
+	agentsDBPath := filepath.Join(s.dir, "agents.sqlite")
+	emptyUsage, err := s.GetAgentV2Usage(t.Context(), "trading-analyst", 30)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if emptyUsage.Turns != 0 || len(emptyUsage.Models) != 0 {
+		t.Fatalf("expected zero usage on fresh store, got %+v", emptyUsage)
+	}
+	if _, statErr := os.Stat(agentsDBPath); !os.IsNotExist(statErr) {
+		t.Fatalf("expected agents.sqlite to stay uncreated on empty usage read, statErr=%v", statErr)
+	}
+
+	baseNow := time.Unix(1795250000, 0).UTC()
+	s.now = func() time.Time { return baseNow }
+	ts, token, _ := startV2HTTPTestServer(t, s)
+
+	t1, err := s.CreateThread(t.Context(), "trading-analyst", "Priced Usage", "", "gpt-6.2-sol")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tOther, err := s.CreateThread(t.Context(), "risk-manager", "Other Profile", "", "gpt-6.2-sol")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Recent turn on catalog model gpt-6.2-sol (input=2_000_000/M, cached=100_000/M, output=10_000_000/M).
+	// nonCached = 900_000, cached = 100_000, output = 50_000:
+	// microUsd = (900_000*2_000_000 + 100_000*100_000 + 50_000*10_000_000 + 999_999) / 1_000_000
+	//          = 1_800_000 + 10_000 + 500_000 = 2_310_000 microUSD ($2.31).
+	if _, err := s.AppendMessage(t.Context(), AgentV2Message{
+		ThreadID: t1.ID, Role: "assistant", Content: "sol reply", Status: "completed",
+		Provider: "openai", Model: "gpt-6.2-sol",
+		InputTokens: 1_000_000, CachedTokens: 100_000, OutputTokens: 50_000,
+		CreatedAt: baseNow.Add(-24 * time.Hour).Unix(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// Recent local model turn (costKnown must remain false, cost=0).
+	if _, err := s.AppendMessage(t.Context(), AgentV2Message{
+		ThreadID: t1.ID, Role: "assistant", Content: "local reply", Status: "completed",
+		Provider: "local", Model: "llama3.2",
+		InputTokens: 500, OutputTokens: 200,
+		CreatedAt: baseNow.Add(-2 * time.Hour).Unix(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// Old turn (>40 days ago) excluded in 30d window, included in days=0 all time.
+	if _, err := s.AppendMessage(t.Context(), AgentV2Message{
+		ThreadID: t1.ID, Role: "assistant", Content: "old reply", Status: "completed",
+		Provider: "openai", Model: "unknown-experimental",
+		InputTokens: 2000, OutputTokens: 400,
+		CreatedAt: baseNow.Add(-40 * 24 * time.Hour).Unix(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// Different profile must be excluded when filtering profileId=trading-analyst.
+	if _, err := s.AppendMessage(t.Context(), AgentV2Message{
+		ThreadID: tOther.ID, Role: "assistant", Content: "other reply", Status: "completed",
+		Provider: "openai", Model: "gpt-6.2-sol",
+		InputTokens: 5000, OutputTokens: 500,
+		CreatedAt: baseNow.Unix(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	resp30 := doV2JSONRequest(t, http.MethodGet, ts.URL+"/api/v1/agents/v2/usage?profileId=trading-analyst&days=30", ts.URL, token, "", "", "application/json")
+	defer resp30.Body.Close()
+	if resp30.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 for usage 30d, got %d", resp30.StatusCode)
+	}
+	var u30 AgentV2UsageSummary
+	if err := json.NewDecoder(resp30.Body).Decode(&u30); err != nil {
+		t.Fatal(err)
+	}
+	if u30.Turns != 2 || u30.InputTokens != 1_000_500 || u30.OutputTokens != 50_200 || u30.CachedTokens != 100_000 {
+		t.Fatalf("unexpected 30d usage totals: %+v", u30)
+	}
+	if !u30.CostKnown || u30.EstimatedCostUS != 2_310_000 || u30.UnpricedTurns != 1 {
+		t.Fatalf("unexpected 30d usage pricing: %+v", u30)
+	}
+	if len(u30.Models) != 2 || u30.Models[0].Model != "gpt-6.2-sol" || !u30.Models[0].CostKnown || u30.Models[1].CostKnown {
+		t.Fatalf("unexpected 30d usage model rows: %+v", u30.Models)
+	}
+
+	respAll := doV2JSONRequest(t, http.MethodGet, ts.URL+"/api/v1/agents/v2/usage?profileId=trading-analyst&days=0", ts.URL, token, "", "", "application/json")
+	defer respAll.Body.Close()
+	var uAll AgentV2UsageSummary
+	if err := json.NewDecoder(respAll.Body).Decode(&uAll); err != nil {
+		t.Fatal(err)
+	}
+	if uAll.Turns != 3 || uAll.UnpricedTurns != 2 || len(uAll.Models) != 3 {
+		t.Fatalf("expected 3 turns across 3 models for days=0, got %+v", uAll)
+	}
+
+	for _, bad := range []string{"days=-1", "days=366", "days=abc"} {
+		badResp := doV2JSONRequest(t, http.MethodGet, ts.URL+"/api/v1/agents/v2/usage?"+bad, ts.URL, token, "", "", "application/json")
+		badResp.Body.Close()
+		if badResp.StatusCode != http.StatusBadRequest {
+			t.Fatalf("expected 400 for %s, got %d", bad, badResp.StatusCode)
+		}
 	}
 }

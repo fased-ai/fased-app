@@ -2,10 +2,15 @@ import { describe, expect, it, vi } from "vitest";
 import {
   buildNewsChatPrompt,
   buildTaskRunChatPrompt,
+  compactThreadV2,
   formatApprovalFields,
+  formatCompactTokens,
   formatDraftMemorySummary,
   formatToolLabel,
   formatToolSummary,
+  formatUsageCostUSD,
+  getUsageV2,
+  parseChatSlashCommand,
   parseMarkdownBlocks,
   parseSSEChunkBuffer,
   parseTaskDraftMemory,
@@ -426,5 +431,53 @@ describe("buildNewsChatPrompt & buildTaskRunChatPrompt", () => {
     expect(runPrompt).toContain("task-1:1");
     expect(runPrompt).toContain("New matches: 2");
     expect(runPrompt).toContain("Spread widened to 18 bps.");
+  });
+});
+
+describe("Phase 8B-1 slash commands, usage formatters, and API helpers", () => {
+  it("parses /compact and /side slash commands cleanly while keeping regular prompts", () => {
+    expect(parseChatSlashCommand("  /compact  ")).toEqual({ kind: "compact" });
+    expect(parseChatSlashCommand("/side Why did fees spike?")).toEqual({
+      kind: "side",
+      question: "Why did fees spike?",
+    });
+    expect(parseChatSlashCommand("/side")).toEqual({
+      kind: "side",
+      question: "",
+    });
+    expect(parseChatSlashCommand("Check my balances")).toEqual({
+      kind: "message",
+      content: "Check my balances",
+    });
+  });
+
+  it("formats token counts and USD costs without inventing unpriced values", () => {
+    expect(formatCompactTokens(420)).toBe("420");
+    expect(formatCompactTokens(1500)).toBe("1.5k");
+    expect(formatCompactTokens(2_450_000)).toBe("2.5M");
+    expect(formatUsageCostUSD(0, false)).toBe("—");
+    expect(formatUsageCostUSD(0, true)).toBe("$0.00");
+    expect(formatUsageCostUSD(1200, true)).toBe("$0.0012");
+    expect(formatUsageCostUSD(2_310_000, true)).toBe("$2.31");
+  });
+
+  it("calls compactThreadV2 and getUsageV2 (including days=0)", async () => {
+    const req = vi.fn().mockResolvedValue({});
+    await compactThreadV2({ request: req }, "th 1");
+    expect(req).toHaveBeenCalledWith(
+      "agents/v2/threads/th%201/compact",
+      "POST",
+      {},
+    );
+
+    await compactThreadV2({ request: req }, "th_2", 4);
+    expect(req).toHaveBeenCalledWith("agents/v2/threads/th_2/compact", "POST", {
+      keepRecent: 4,
+    });
+
+    await getUsageV2({ request: req }, { profileId: "wen-operator", days: 0 });
+    expect(req).toHaveBeenCalledWith(
+      "agents/v2/usage?profileId=wen-operator&days=0",
+    );
   });
 });
