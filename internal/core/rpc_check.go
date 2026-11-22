@@ -167,7 +167,9 @@ func (s *Store) CheckAccountRPC(ctx context.Context, input RPCCheckRequest) (RPC
 		if !s.rpcAdmission {
 			return RPCCheckResult{}, errors.New("only the disposable RPC endpoint and network are available")
 		}
-		return checkPublicRPC(ctx, req, newPublicRPCTransport())
+		transport := newPublicRPCTransport()
+		defer transport.transport.CloseIdleConnections()
+		return checkPublicRPC(ctx, req, transport)
 	})
 }
 func (s *Store) checkAccountRPC(ctx context.Context, input RPCCheckRequest, check func(context.Context, RPCCheckRequest) (RPCCheckResult, error)) (RPCCheckResult, error) {

@@ -148,7 +148,13 @@ func newPublicRPCTransport() *publicRPCTransport {
 	return &publicRPCTransport{
 		enabled: rpcActivationEnabled,
 		transport: &http.Transport{
-			Proxy: nil, DisableKeepAlives: true, DisableCompression: true, MaxResponseHeaderBytes: 8192,
+			Proxy:                  nil,
+			DisableKeepAlives:      false,
+			DisableCompression:     false,
+			MaxIdleConns:           8,
+			MaxIdleConnsPerHost:    4,
+			IdleConnTimeout:        30 * time.Second,
+			MaxResponseHeaderBytes: 8192,
 			// Use standard TLS 1.3/1.2 elliptic curves so public Solana Mainnet RPC proxies
 			// that reject Go's default hybrid PQ key-share ClientHello negotiate cleanly.
 			TLSClientConfig: &tls.Config{

@@ -350,6 +350,9 @@ func (c *Client) Reconcile(ctx context.Context, q Quote, packet []byte) (Observa
 		return Observation{}, e
 	}
 	var status struct {
+		Context struct {
+			Slot uint64 `json:"slot"`
+		} `json:"context"`
 		Value []*struct {
 			Err          json.RawMessage `json:"err"`
 			Confirmation string          `json:"confirmationStatus"`
@@ -361,6 +364,38 @@ func (c *Client) Reconcile(ctx context.Context, q Quote, packet []byte) (Observa
 	}
 	if len(status.Value) != 1 {
 		return Observation{}, errors.New("invalid transaction status")
+	}
+	if status.Value[0] == nil {
+		var height uint64
+		if e = c.rpcCall(ctx, "getBlockHeight", []any{map[string]any{"commitment": "finalized"}}, &height); e == nil && height > q.LastValidHeight {
+			var recheck struct {
+				Context struct {
+					Slot uint64 `json:"slot"`
+				} `json:"context"`
+				Value []*struct {
+					Err          json.RawMessage `json:"err"`
+					Confirmation string          `json:"confirmationStatus"`
+					Slot         uint64          `json:"slot"`
+				} `json:"value"`
+			}
+			if e = c.rpcCall(ctx, "getSignatureStatuses", []any{[]string{signature}, map[string]any{"searchTransactionHistory": true}}, &recheck); e != nil {
+				return Observation{}, e
+			}
+			if len(recheck.Value) != 1 {
+				return Observation{}, errors.New("invalid transaction status")
+			}
+			if recheck.Value[0] == nil {
+				if recheck.Context.Slot < q.ObservedSlot {
+					return Observation{State: "unknown"}, nil
+				}
+				// Finalized block height is strictly past LastValidHeight and the
+				// signature is absent from finalized history, so the tx can never land.
+				// Anchor Slot to q.ObservedSlot so core and signer produce identical
+				// deterministic Observations across independent RPC reads.
+				return Observation{State: "failed", Slot: q.ObservedSlot}, nil
+			}
+			status = recheck
+		}
 	}
 	if status.Value[0] == nil || (status.Value[0].Confirmation != "confirmed" && status.Value[0].Confirmation != "finalized") {
 		return Observation{State: "unknown"}, nil
@@ -484,7 +519,7 @@ func settlementError(raw json.RawMessage) (any, error) {
 		return nil, nil
 	case string:
 		switch x {
-		case "AccountInUse", "AccountLoadedTwice", "AccountNotFound", "ProgramAccountNotFound", "InsufficientFundsForFee", "InvalidAccountForFee", "AlreadyProcessed", "BlockhashNotFound", "SignatureFailure", "InvalidAccountIndex", "InvalidProgramForExecution", "SanitizeFailure", "UnsupportedVersion":
+		case "AccountInUse", "AccountLoadedTwice", "AccountNotFound", "ProgramAccountNotFound", "InsufficientFundsForFee", "InvalidAccountForFee", "AlreadyProcessed", "BlockhashNotFound", "CallChainTooDeep", "MissingSignatureForFee", "InvalidAccountIndex", "SignatureFailure", "InvalidProgramForExecution", "SanitizeFailure", "ClusterMaintenance", "AccountBorrowOutstanding", "WouldExceedMaxBlockCostLimit", "UnsupportedVersion", "InvalidWritableAccount", "WouldExceedMaxAccountCostLimit", "WouldExceedAccountDataBlockLimit", "TooManyAccountLocks", "AddressLookupTableNotFound", "InvalidAddressLookupTableOwner", "InvalidAddressLookupTableData", "InvalidAddressLookupTableIndex", "InvalidRentPayingAccount", "WouldExceedMaxVoteCostLimit", "WouldExceedAccountDataTotalSize", "MaxLoadedAccountsDataSizeExceeded", "ResanitizationNeeded", "ProgramExecutionTemporarilyRestricted", "InsufficientFundsForRent":
 			return x, nil
 		}
 	case map[string]any:
@@ -502,7 +537,7 @@ func settlementError(raw json.RawMessage) (any, error) {
 		switch reason := parts[1].(type) {
 		case string:
 			switch reason {
-			case "InvalidArgument", "InvalidInstructionData", "InvalidAccountData", "InsufficientFunds", "MissingRequiredSignature", "ProgramFailedToComplete", "ComputationalBudgetExceeded":
+			case "GenericError", "InvalidArgument", "InvalidInstructionData", "InvalidAccountData", "AccountDataTooSmall", "InsufficientFunds", "IncorrectProgramId", "MissingRequiredSignature", "AccountAlreadyInitialized", "UninitializedAccount", "UnbalancedInstruction", "ModifiedProgramId", "ExternalAccountLamportSpend", "ExternalAccountDataModified", "ReadonlyLamportChange", "ReadonlyDataModified", "DuplicateAccountIndex", "ExecutableModified", "RentEpochModified", "NotEnoughAccountKeys", "AccountDataSizeChanged", "AccountNotExecutable", "AccountBorrowFailed", "AccountBorrowOutstanding", "DuplicateAccountOutOfSync", "InvalidError", "ExecutableDataModified", "ExecutableLamportChange", "ExecutableAccountNotRentExempt", "UnsupportedProgramId", "CallDepth", "MissingAccount", "ReentrancyNotAllowed", "MaxSeedLengthExceeded", "InvalidSeeds", "InvalidRealloc", "ComputationalBudgetExceeded", "PrivilegeEscalation", "ProgramEnvironmentSetupFailure", "ProgramFailedToComplete", "ProgramFailedToCompile", "Immutable", "IncorrectAuthority", "BorshIoError", "AccountNotRentExempt", "InvalidAccountOwner", "ArithmeticOverflow", "UnsupportedSysvar", "IllegalOwner", "MaxAccountsDataAllocationsExceeded", "AccountsDataAllocationTooSmall", "MaxInstructionTraceLengthExceeded", "BuiltinProgramsMustConsumeComputeUnits":
 				return x, nil
 			}
 		case map[string]any:

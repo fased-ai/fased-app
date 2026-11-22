@@ -333,7 +333,11 @@ func (s *Store) venueCredential(ctx context.Context, c VenueCredentialCommand, a
 	if status.Status == nil || status.Status.Account == nil || *status.Status.Account != *a.Signer {
 		return view, fail
 	}
-	rpcKey, e := openCredential(rpc.Ciphertext, rpc.Nonce, rpc.Salt, s.rpcAAD(a.ID, rpc), c.Passphrase)
+	rpcPassphrase := c.Passphrase
+	if rpc.OSProtected {
+		rpcPassphrase = ""
+	}
+	rpcKey, e := s.openRPCVaultKey(ctx, a.ID, rpcPassphrase, rpc)
 	defer clear(rpcKey)
 	if e != nil || !validRPCSecret(2, string(rpcKey)) || rpc.Binding != rpcBinding(a) {
 		return view, fail

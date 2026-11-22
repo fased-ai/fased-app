@@ -7,6 +7,7 @@ import (
 	"crypto/rand"
 	"crypto/subtle"
 	_ "embed"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -48,7 +49,7 @@ type browserWallet struct {
 
 type browserInput struct {
 	Unlock, UnlockConfirm, BackupPassword, BackupConfirm string
-	Seed, Recovery, Fingerprint                          string
+	Seed, Recovery, RecoveryBase64, Fingerprint          string
 }
 
 type browserResult struct {
@@ -241,6 +242,28 @@ func (w *browserWallet) ServeHTTP(out http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(out).Encode(result)
 }
 
+func decodeBrowserRecovery(action, network string, input browserInput) ([]byte, error) {
+	if action != "recover" {
+		if input.Recovery != "" || input.RecoveryBase64 != "" || input.Fingerprint != "" {
+			return nil, errors.New("unexpected recovery input")
+		}
+		return nil, nil
+	}
+	if input.Recovery != "" && input.RecoveryBase64 != "" {
+		return nil, errors.New("choose one recovery input")
+	}
+	rawRecovery := []byte(input.Recovery)
+	if input.RecoveryBase64 != "" {
+		var err error
+		rawRecovery, err = base64.StdEncoding.DecodeString(input.RecoveryBase64)
+		if err != nil {
+			return nil, errors.New("invalid recovery file")
+		}
+		defer clear(rawRecovery)
+	}
+	return signer.RecoveryDocument(rawRecovery, input.Fingerprint, network)
+}
+
 func (w *browserWallet) enroll(ctx context.Context, input browserInput) (browserResult, error) {
 	var result browserResult
 	var pair Package
@@ -263,14 +286,13 @@ func (w *browserWallet) enroll(ctx context.Context, input browserInput) (browser
 	} else if input.Seed != "" {
 		return result, errors.New("unexpected seed")
 	}
+	backup, err := decodeBrowserRecovery(w.intent.Action, w.intent.Network, input)
+	if err != nil {
+		return result, err
+	}
+	in.Backup = backup
 	if w.intent.Action == "recover" {
-		in.Backup, err = signer.RecoveryDocument([]byte(input.Recovery), input.Fingerprint, w.intent.Network)
-		if err != nil {
-			return result, err
-		}
 		in.Fingerprint = input.Fingerprint
-	} else if input.Recovery != "" || input.Fingerprint != "" {
-		return result, errors.New("unexpected recovery input")
 	}
 	if err = in.Validate(); err != nil {
 		return result, err

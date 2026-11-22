@@ -510,3 +510,35 @@ func TestSwapRecoveryRecordVersionPreservesOwnerAndRefusesPredecessor(t *testing
 		})
 	}
 }
+
+func TestSwapRecoveryDroppedTransactionPastLastValidHeightReleasesHold(t *testing.T) {
+	t.Parallel()
+	h := newSwapHarness(t)
+	p := h.quote(t)
+	v := h.submit(t, p)
+	h.chain.Unknown = true
+	h.chain.BlockHeight = p.Proposal.Quote.LastValidHeight
+	if e := h.store.advanceOnchain(t.Context()); e != nil {
+		t.Fatal(e)
+	}
+	v = h.command(t, "swap-view", SwapCommand{})
+	if v.Runs[0].Swap.State != "unknown" || v.Tasks[0].State != "held" || h.chain.Submissions != 1 {
+		t.Fatalf("expected unknown held state at LastValidHeight, got %+v", v)
+	}
+	nextQuote := h.quote(t)
+	if _, e := h.vault.ApproveSwap(nextQuote.Proposal); !errors.Is(e, signer.ErrHeld) {
+		t.Fatalf("expected signer hold while tx unresolved, got %v", e)
+	}
+	h.chain.BlockHeight = p.Proposal.Quote.LastValidHeight + 1
+	v = h.command(t, "swap-reconcile", SwapCommand{ID: v.Tasks[0].ID})
+	if v.Runs[0].Swap.State != "failed" || v.Tasks[0].State != "completed" || v.Runs[0].Swap.Observation == nil || v.Runs[0].Swap.Observation.Slot != p.Proposal.Quote.ObservedSlot || h.chain.Submissions != 1 {
+		t.Fatalf("expected expired dropped tx to settle failed, got %+v", v)
+	}
+	receipt, e := h.vault.SwapReceipt(p.Proposal.Quote.ID)
+	if e != nil || receipt.State != "failed" {
+		t.Fatalf("expected signer receipt failed, got %+v err=%v", receipt, e)
+	}
+	if _, e = h.vault.ApproveSwap(nextQuote.Proposal); e != nil {
+		t.Fatalf("expected signer hold released after dropped tx expiry, got %v", e)
+	}
+}

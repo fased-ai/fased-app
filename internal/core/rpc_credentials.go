@@ -103,6 +103,7 @@ func (s *Store) readRPCVault(id string) (rpcVault, error) {
 }
 func (s *Store) RPCCredential(ctx context.Context, c RPCCredentialCommand) (RPCCredentialView, error) {
 	transport := newPublicRPCTransport()
+	defer transport.transport.CloseIdleConnections()
 	var check func(context.Context, RPCCheckRequest, []byte, func() error) (RPCCheckResult, error)
 	if transport.enabled && s.rpcAdmission {
 		check = func(ctx context.Context, in RPCCheckRequest, key []byte, valid func() error) (RPCCheckResult, error) {

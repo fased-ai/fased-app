@@ -162,6 +162,7 @@ func (s *Store) executeWalletRead(ctx context.Context, account Account, revision
 	if read == nil {
 		read = func(ctx context.Context, a Account, address string, key []byte, valid func() error, selection *WalletSelection) (WalletSnapshot, error) {
 			next := newPublicRPCTransport()
+			defer next.transport.CloseIdleConnections()
 			if !next.enabled {
 				return WalletSnapshot{}, errors.New("Wallet reads disabled")
 			}
