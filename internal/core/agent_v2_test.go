@@ -3,6 +3,7 @@ package core
 import (
 	"bufio"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"io"
@@ -1569,5 +1570,299 @@ func TestAgentV2MemoryUpdatePinnedPromptAndDraftFiltering(t *testing.T) {
 	}
 	if len(noDraftBody.Memories) != 2 {
 		t.Fatalf("expected 2 non-draft memories with excludeDrafts=1, got %d (%+v)", len(noDraftBody.Memories), noDraftBody.Memories)
+	}
+}
+
+func TestAgentV2ScheduledTaskMirrorAndIdempotency(t *testing.T) {
+	t.Parallel()
+	s := fixtureStore(t)
+	clock := time.Unix(1800000000, 0)
+	s.now = func() time.Time { return clock }
+
+	// Lazy invariant before any runs or V2 calls.
+	linksBefore, err := s.ListTaskThreadLinks(t.Context(), "trading-analyst")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(linksBefore.ByTask) != 0 || len(linksBefore.ByRun) != 0 {
+		t.Fatalf("expected empty links initially, got %+v", linksBefore)
+	}
+	if _, err := os.Stat(filepath.Join(s.dir, "agents.sqlite")); !os.IsNotExist(err) {
+		t.Fatalf("ListTaskThreadLinks created agents.sqlite prematurely: %v", err)
+	}
+
+	v := agentApply(t, s, AgentCommand{
+		Action:          "task-create",
+		ProfileID:       "trading-analyst",
+		Name:            "SOL Spread Check",
+		Text:            "Review SOL/USDC spread before sizing orders",
+		IntervalSeconds: 60,
+		MaxRuns:         3,
+	})
+	task := v.Tasks[len(v.Tasks)-1]
+
+	// Run 1 via manual task-run.
+	v = agentApply(t, s, AgentCommand{
+		Action:    "task-run",
+		ProfileID: "trading-analyst",
+		ID:        task.ID,
+	})
+	if len(v.Runs) != 1 {
+		t.Fatalf("expected 1 run, got %d", len(v.Runs))
+	}
+	run1 := v.Runs[0]
+
+	threads, err := s.ListThreads(t.Context(), "trading-analyst", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(threads) != 1 {
+		t.Fatalf("expected 1 mirrored thread, got %+v", threads)
+	}
+	th := threads[0]
+	if th.SourceKind != "task" || th.SourceRef != task.ID || th.Title != task.Name {
+		t.Fatalf("unexpected task thread metadata: %+v", th)
+	}
+
+	// Run 2 via scheduler tick after advancing clock.
+	clock = clock.Add(120 * time.Second)
+	if err := s.RunAgentTasks(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	v, err = s.Agents(t.Context(), "trading-analyst", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(v.Runs) != 2 {
+		t.Fatalf("expected 2 runs after RunAgentTasks, got %d", len(v.Runs))
+	}
+	run2 := v.Runs[1]
+
+	detail, err := s.GetThread(t.Context(), th.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(detail.Messages) != 2 {
+		t.Fatalf("expected 2 scheduler messages in mirrored thread, got %d", len(detail.Messages))
+	}
+	for i, msg := range detail.Messages {
+		if msg.Role != "assistant" || msg.Provider != "scheduler" || !strings.Contains(msg.Content, task.Name) {
+			t.Fatalf("unexpected message %d: %+v", i, msg)
+		}
+	}
+
+	// Verify idempotency on duplicate mirror call.
+	d, _, err := readAgents(t.Context(), s.db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.mirrorNewTaskRunsToV2(t.Context(), d, 0)
+	detailAfter, err := s.GetThread(t.Context(), th.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(detailAfter.Messages) != 2 {
+		t.Fatalf("idempotent re-mirror duplicated messages: got %d want 2", len(detailAfter.Messages))
+	}
+
+	// Verify ListTaskThreadLinks & HTTP GET /api/v1/agents/v2/task-threads.
+	links, err := s.ListTaskThreadLinks(t.Context(), "trading-analyst")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if links.ByTask[task.ID] != th.ID || links.ByRun[run1.ID] != th.ID || links.ByRun[run2.ID] != th.ID {
+		t.Fatalf("unexpected task thread links: %+v (thread=%s)", links, th.ID)
+	}
+
+	ts, token, _ := startV2HTTPTestServer(t, s)
+	httpResp := doV2JSONRequest(t, http.MethodGet, ts.URL+"/api/v1/agents/v2/task-threads?profileId=trading-analyst", ts.URL, token, "", "", "application/json")
+	defer httpResp.Body.Close()
+	if httpResp.StatusCode != http.StatusOK {
+		t.Fatalf("GET task-threads status=%d", httpResp.StatusCode)
+	}
+	var httpLinks TaskThreadLinks
+	if err := json.NewDecoder(httpResp.Body).Decode(&httpLinks); err != nil {
+		t.Fatal(err)
+	}
+	if httpLinks.ByTask[task.ID] != th.ID || httpLinks.ByRun[run1.ID] != th.ID || httpLinks.ByRun[run2.ID] != th.ID {
+		t.Fatalf("unexpected HTTP task-threads response: %+v", httpLinks)
+	}
+
+	// Archiving the thread spawns a fresh active thread on run 3 and updates ByTask.
+	archived := true
+	if _, err := s.UpdateThread(t.Context(), th.ID, ThreadUpdateInput{Archived: &archived}); err != nil {
+		t.Fatal(err)
+	}
+	clock = clock.Add(120 * time.Second)
+	if err := s.RunAgentTasks(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	linksAfterArchive, err := s.ListTaskThreadLinks(t.Context(), "trading-analyst")
+	if err != nil {
+		t.Fatal(err)
+	}
+	newThreadID := linksAfterArchive.ByTask[task.ID]
+	if newThreadID == "" || newThreadID == th.ID {
+		t.Fatalf("expected new active thread after archiving previous, got %q (old=%q)", newThreadID, th.ID)
+	}
+	if linksAfterArchive.ByRun[run1.ID] != "" {
+		t.Fatalf("expected archived thread run1 to be excluded from active task-threads links, got %+v", linksAfterArchive)
+	}
+}
+
+func TestAgentV2SchemaUpgradeV2ToV3(t *testing.T) {
+	t.Parallel()
+	s := fixtureStore(t)
+	dbPath := filepath.Join(s.dir, "agents.sqlite")
+	if err := privateFile(dbPath); err != nil {
+		t.Fatal(err)
+	}
+
+	// Seed a raw v2 database (without source_kind/source_ref or task_run_threads).
+	rawDB, err := sql.Open("sqlite", sqliteDSN(dbPath))
+	if err != nil {
+		t.Fatal(err)
+	}
+	seedV2SQL := `
+CREATE TABLE threads(
+	id TEXT PRIMARY KEY,
+	profile_id TEXT NOT NULL,
+	title TEXT NOT NULL,
+	connection_ref TEXT NOT NULL DEFAULT '',
+	model TEXT NOT NULL DEFAULT '',
+	summary TEXT NOT NULL DEFAULT '',
+	archived INTEGER NOT NULL DEFAULT 0,
+	created_at INTEGER NOT NULL,
+	updated_at INTEGER NOT NULL
+);
+CREATE INDEX idx_threads_profile ON threads(profile_id, archived, updated_at DESC);
+CREATE TABLE messages(
+	id TEXT PRIMARY KEY,
+	thread_id TEXT NOT NULL REFERENCES threads(id) ON DELETE CASCADE,
+	seq INTEGER NOT NULL,
+	role TEXT NOT NULL CHECK(role IN ('user','assistant','system','tool')),
+	content TEXT NOT NULL DEFAULT '',
+	reasoning TEXT NOT NULL DEFAULT '',
+	status TEXT NOT NULL DEFAULT 'completed',
+	model TEXT NOT NULL DEFAULT '',
+	provider TEXT NOT NULL DEFAULT '',
+	call_id TEXT NOT NULL DEFAULT '',
+	tool_name TEXT NOT NULL DEFAULT '',
+	input_tokens INTEGER NOT NULL DEFAULT 0,
+	output_tokens INTEGER NOT NULL DEFAULT 0,
+	cached_tokens INTEGER NOT NULL DEFAULT 0,
+	error_text TEXT NOT NULL DEFAULT '',
+	created_at INTEGER NOT NULL
+);
+CREATE UNIQUE INDEX idx_messages_thread_seq ON messages(thread_id, seq);
+CREATE TABLE tool_calls(
+	id TEXT PRIMARY KEY,
+	thread_id TEXT NOT NULL REFERENCES threads(id) ON DELETE CASCADE,
+	message_id TEXT NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+	call_id TEXT NOT NULL,
+	tool_name TEXT NOT NULL,
+	tier TEXT NOT NULL CHECK(tier IN ('read','action')),
+	args_json TEXT NOT NULL,
+	status TEXT NOT NULL CHECK(status IN ('pending','awaiting_approval','running','completed','rejected','error')),
+	result_json TEXT NOT NULL DEFAULT '',
+	error_text TEXT NOT NULL DEFAULT '',
+	created_at INTEGER NOT NULL,
+	completed_at INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE approvals(
+	id TEXT PRIMARY KEY,
+	thread_id TEXT NOT NULL REFERENCES threads(id) ON DELETE CASCADE,
+	message_id TEXT NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+	tool_call_id TEXT NOT NULL REFERENCES tool_calls(id) ON DELETE CASCADE,
+	tool_name TEXT NOT NULL,
+	title TEXT NOT NULL,
+	summary TEXT NOT NULL,
+	payload_json TEXT NOT NULL,
+	status TEXT NOT NULL CHECK(status IN ('pending','approved','rejected','expired')),
+	decision_note TEXT NOT NULL DEFAULT '',
+	created_at INTEGER NOT NULL,
+	decided_at INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE memories(
+	id TEXT PRIMARY KEY,
+	profile_id TEXT NOT NULL DEFAULT '',
+	scope TEXT NOT NULL DEFAULT 'workspace',
+	title TEXT NOT NULL DEFAULT '',
+	content TEXT NOT NULL,
+	tags TEXT NOT NULL DEFAULT '',
+	pinned INTEGER NOT NULL DEFAULT 0,
+	source TEXT NOT NULL DEFAULT 'user',
+	created_at INTEGER NOT NULL,
+	updated_at INTEGER NOT NULL
+);
+CREATE VIRTUAL TABLE memories_fts USING fts5(memory_id UNINDEXED, profile_id UNINDEXED, title, content, tags, tokenize='porter unicode61');
+CREATE TABLE provider_model_cache (
+	ref TEXT PRIMARY KEY,
+	provider TEXT NOT NULL,
+	state TEXT NOT NULL,
+	fetched_at INTEGER NOT NULL,
+	expires_at INTEGER NOT NULL,
+	sha256 TEXT NOT NULL,
+	source TEXT NOT NULL,
+	models_json TEXT NOT NULL,
+	updated_at INTEGER NOT NULL
+);
+INSERT INTO threads(id,profile_id,title,connection_ref,model,summary,archived,created_at,updated_at)
+VALUES('seed_thread_v2','trading-analyst','Existing V2 Thread','','','',0,100,200);
+INSERT INTO memories(id,profile_id,scope,title,content,tags,pinned,source,created_at,updated_at)
+VALUES('seed_mem_v2','trading-analyst','workspace','Seed Rule','Preserve seeded v2 memory','',1,'user',100,100);
+INSERT INTO memories_fts(memory_id,profile_id,title,content,tags)
+VALUES('seed_mem_v2','trading-analyst','Seed Rule','Preserve seeded v2 memory','');
+PRAGMA user_version=2;
+`
+	if _, err := rawDB.ExecContext(t.Context(), seedV2SQL); err != nil {
+		rawDB.Close()
+		t.Fatal(err)
+	}
+	if err := rawDB.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	threads, err := s.ListThreads(t.Context(), "trading-analyst", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(threads) != 1 || threads[0].ID != "seed_thread_v2" || threads[0].SourceKind != "" {
+		t.Fatalf("unexpected upgraded threads: %+v", threads)
+	}
+	mems, err := s.SearchMemories(t.Context(), "trading-analyst", "seeded", 10)
+	if err != nil || len(mems) != 1 || mems[0].ID != "seed_mem_v2" {
+		t.Fatalf("unexpected upgraded memories: %+v err=%v", mems, err)
+	}
+	links, err := s.ListTaskThreadLinks(t.Context(), "trading-analyst")
+	if err != nil || len(links.ByTask) != 0 {
+		t.Fatalf("unexpected task links after upgrade: %+v err=%v", links, err)
+	}
+
+	var uv int
+	if err := s.agentV2.db.QueryRowContext(t.Context(), `PRAGMA user_version`).Scan(&uv); err != nil {
+		t.Fatal(err)
+	}
+	if uv != 3 {
+		t.Fatalf("expected upgraded user_version=3, got %d", uv)
+	}
+
+	// Refuses downgrade when schema version is newer than binary supports.
+	s2 := fixtureStore(t)
+	db2Path := filepath.Join(s2.dir, "agents.sqlite")
+	if err := privateFile(db2Path); err != nil {
+		t.Fatal(err)
+	}
+	futureDB, err := sql.Open("sqlite", sqliteDSN(db2Path))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := futureDB.ExecContext(t.Context(), `PRAGMA user_version=4;`); err != nil {
+		futureDB.Close()
+		t.Fatal(err)
+	}
+	futureDB.Close()
+	if _, err := s2.ListThreads(t.Context(), "trading-analyst", false); err == nil {
+		t.Fatal("expected schema downgrade refusal for user_version=4")
 	}
 }

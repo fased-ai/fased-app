@@ -5,7 +5,12 @@ import { WENMiningRecoveryActions } from "./WENMining";
 import { useUI } from "../ui-preferences";
 import { useEffect, useRef, useState } from "react";
 import type { AgentRun, AgentTask, AgentView, TaskCalendar } from "../agents";
-import type { ParsedTaskDraft } from "../agents-v2";
+import {
+  buildTaskRunChatPrompt,
+  listTaskThreadsV2,
+  type ParsedTaskDraft,
+  type TaskThreadLinks,
+} from "../agents-v2";
 import { useCore } from "../core";
 import { useWorkspace, type TaskComposerDraft } from "../workspace";
 import { RefreshCw } from "../icons";
@@ -65,7 +70,8 @@ export function AgentTasks({
   onDiscuss: () => void;
 }) {
   const { t: uiText } = useUI();
-  const { instanceId } = useCore();
+  const core = useCore();
+  const { instanceId } = core;
   const tr = uiText;
   const {
     agents,
@@ -76,6 +82,7 @@ export function AgentTasks({
     taskComposerDrafts,
     setTaskComposerDrafts,
     launchChatPrompt,
+    openChatThread,
   } = useWorkspace();
   const [draftSeed, setDraftSeed] = useState<ParsedTaskDraft>();
   const composerKey = `${instanceId}:${v.profileId}`;
@@ -124,7 +131,36 @@ export function AgentTasks({
   const [createdFrom, setCreatedFrom] = useState<string[]>();
   const [strategyRequest, setStrategyRequest] = useState<string>();
   const [legacyAIReview, setLegacyAIReview] = useState(false);
+  const [taskThreads, setTaskThreads] = useState<TaskThreadLinks>({
+    byTask: {},
+    byRun: {},
+  });
   const runCards = useRef(new Map<string, HTMLElement>());
+
+  useEffect(() => {
+    if (core.mode !== "ready") {
+      setTaskThreads({ byTask: {}, byRun: {} });
+      return;
+    }
+    let cancelled = false;
+    void listTaskThreadsV2(core, v.profileId)
+      .then((res) => {
+        if (!cancelled) {
+          setTaskThreads({
+            byTask: res.byTask ?? {},
+            byRun: res.byRun ?? {},
+          });
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setTaskThreads({ byTask: {}, byRun: {} });
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [core.mode, core.instanceId, core.request, v.profileId, v.runs.length]);
   const tasks = v.tasks.filter((t) => !t.wen);
   const selectedTask = tasks.find((t) => t.id === selected);
   useEffect(() => {
@@ -396,25 +432,34 @@ export function AgentTasks({
     if (await agents.change({ action: "task-run-explain", id: run.id }))
       onDiscuss();
   }
-  function runTaskInChat(t: AgentTask) {
+  function runTaskInChat(t: AgentTask, run?: AgentRun) {
+    const answer = run?.aiRequestId
+      ? v.aiRequests.find((q) => q.id === run.aiRequestId)?.answer
+      : undefined;
     launchChatPrompt({
       profileId: v.profileId,
       title: t.name,
-      prompt: t.text || t.name,
+      prompt: run ? buildTaskRunChatPrompt(t, run, answer) : t.text || t.name,
     });
   }
   function result(run: AgentRun, inline = false) {
+    const linkedThreadId =
+      taskThreads.byRun[run.id] || taskThreads.byTask[run.taskId] || "";
     return (
       <TaskRunCard
         key={run.id}
         run={run}
         view={v}
         inline={inline}
+        threadId={linkedThreadId}
         onRegisterCard={(id, node) => {
           if (node) runCards.current.set(id, node);
           else runCards.current.delete(id);
         }}
         onDiscuss={(r) => void discuss(r)}
+        onOpenThread={(tid) =>
+          openChatThread({ profileId: v.profileId, threadId: tid })
+        }
         onRunInChat={runTaskInChat}
       />
     );
@@ -668,6 +713,21 @@ export function AgentTasks({
                     !selectedTask.wen &&
                     !selectedTask.botId && (
                       <div className="row-actions">
+                        {taskThreads.byTask[selectedTask.id] && (
+                          <button
+                            type="button"
+                            className="secondary"
+                            aria-label={`${uiText("Open thread")}: ${selectedTask.name}`}
+                            onClick={() =>
+                              openChatThread({
+                                profileId: v.profileId,
+                                threadId: taskThreads.byTask[selectedTask.id],
+                              })
+                            }
+                          >
+                            {uiText("Open thread")}
+                          </button>
+                        )}
                         <button
                           type="button"
                           className="secondary"

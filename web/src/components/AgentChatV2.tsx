@@ -25,6 +25,7 @@ import {
 import {
   ArrowUp,
   Check,
+  Clock3,
   Copy,
   History,
   Plug,
@@ -272,12 +273,15 @@ export function AgentChatV2({
     setChatModelDrafts,
     pendingChatPrompt,
     clearChatPrompt,
+    pendingChatThread,
+    clearChatThread,
   } = useWorkspace();
   const v2 = useAgentsV2(core, view.profileId);
   const { view: connection } = useAIConnection();
   const profile = view.profiles.find((p) => p.id === view.profileId)!;
 
   const consumedPromptIds = useRef(new Set<string>());
+  const consumedThreadIds = useRef(new Set<string>());
   const [railOpen, setRailOpen] = useState(false);
   const [search, setSearch] = useState("");
   const [toolsEnabled, setToolsEnabled] = useState(true);
@@ -543,6 +547,29 @@ export function AgentChatV2({
   ]);
 
   useEffect(() => {
+    if (
+      !pendingChatThread ||
+      pendingChatThread.profileId !== view.profileId ||
+      v2.streaming ||
+      consumedThreadIds.current.has(pendingChatThread.id)
+    ) {
+      return;
+    }
+    consumedThreadIds.current.add(pendingChatThread.id);
+    const next = pendingChatThread;
+    clearChatThread(next.id);
+    void v2.selectThread(next.threadId);
+    void v2.refreshThreads();
+  }, [
+    pendingChatThread,
+    view.profileId,
+    v2.streaming,
+    v2.selectThread,
+    v2.refreshThreads,
+    clearChatThread,
+  ]);
+
+  useEffect(() => {
     scrollEndRef.current?.scrollIntoView({ block: "end" });
   }, [
     v2.detail?.messages.length,
@@ -683,7 +710,16 @@ export function AgentChatV2({
                   setRailOpen(false);
                 }}
               >
-                <span className="v2-thread-title">{item.title}</span>
+                <span className="v2-thread-main">
+                  {item.sourceKind === "task" && (
+                    <Clock3
+                      size={12}
+                      className="v2-thread-source-icon"
+                      aria-hidden="true"
+                    />
+                  )}
+                  <span className="v2-thread-title">{item.title}</span>
+                </span>
                 {(item.pendingApprovals ?? 0) > 0 && (
                   <span
                     className="v2-pending-dot"
@@ -712,8 +748,10 @@ export function AgentChatV2({
         </div>
 
         {legacySessions.length > 0 && (
-          <div className="v2-legacy-rail">
-            <small>{t("Legacy reviews")}</small>
+          <details className="v2-legacy-rail">
+            <summary>
+              {t("Legacy reviews")} ({legacySessions.length})
+            </summary>
             <div className="agent-session-list">
               {legacySessions.map((s) => (
                 <button
@@ -729,7 +767,7 @@ export function AgentChatV2({
                 </button>
               ))}
             </div>
-          </div>
+          </details>
         )}
       </aside>
 
@@ -768,12 +806,19 @@ export function AgentChatV2({
                   </button>
                 </form>
               ) : (
-                <h3
-                  onDoubleClick={() => setEditingTitle(true)}
-                  title={v2.detail.thread.title}
-                >
-                  {v2.detail.thread.title}
-                </h3>
+                <>
+                  <h3
+                    onDoubleClick={() => setEditingTitle(true)}
+                    title={v2.detail.thread.title}
+                  >
+                    {v2.detail.thread.title}
+                  </h3>
+                  {v2.detail.thread.sourceKind === "task" && (
+                    <span className="v2-pill v2-thread-source-pill">
+                      {t("Task")}
+                    </span>
+                  )}
+                </>
               )}
               <button
                 type="button"

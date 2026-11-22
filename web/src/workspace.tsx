@@ -27,6 +27,11 @@ export type PendingChatPrompt = {
   title?: string;
   prompt: string;
 };
+export type PendingChatThread = {
+  id: string;
+  profileId: string;
+  threadId: string;
+};
 export type AgentSettingsDraft = {
   values: {
     name: string;
@@ -310,6 +315,8 @@ function useWorkspaceState() {
   const [resetOpen, setResetOpen] = useState(false);
   const [pendingChatPrompt, setPendingChatPrompt] =
     useState<PendingChatPrompt | null>(null);
+  const [pendingChatThread, setPendingChatThread] =
+    useState<PendingChatThread | null>(null);
   const [query, setQuery] = useState("");
   const [storageError, setStorageError] = useState(false);
   const [toast, setToast] = useState("");
@@ -371,6 +378,20 @@ function useWorkspaceState() {
   );
   const clearChatPrompt = useCallback((id: string) => {
     setPendingChatPrompt((cur) => (cur?.id === id ? null : cur));
+  }, []);
+  const openChatThread = useCallback(
+    (input: { profileId: string; threadId: string }) => {
+      setPendingChatThread({
+        id: crypto.randomUUID(),
+        profileId: input.profileId,
+        threadId: input.threadId,
+      });
+      navigate("agents/chat");
+    },
+    [navigate],
+  );
+  const clearChatThread = useCallback((id: string) => {
+    setPendingChatThread((cur) => (cur?.id === id ? null : cur));
   }, []);
   const notify = useCallback(
     (
@@ -496,6 +517,9 @@ function useWorkspaceState() {
       pendingChatPrompt,
       launchChatPrompt,
       clearChatPrompt,
+      pendingChatThread,
+      openChatThread,
+      clearChatThread,
     }),
     [
       core,
@@ -539,6 +563,9 @@ function useWorkspaceState() {
       pendingChatPrompt,
       launchChatPrompt,
       clearChatPrompt,
+      pendingChatThread,
+      openChatThread,
+      clearChatThread,
     ],
   );
 }

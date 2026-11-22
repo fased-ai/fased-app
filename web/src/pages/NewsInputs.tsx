@@ -1,6 +1,7 @@
 import { useUI } from "../ui-preferences";
 import { useState } from "react";
 import { Dialog } from "../components/shared";
+import { buildNewsChatPrompt } from "../agents-v2";
 import { RefreshCw, Settings2 } from "../icons";
 import type { AgentView } from "../agents";
 import { useWorkspace } from "../workspace";
@@ -78,7 +79,7 @@ export function NewsInputs({
   onDiscuss: () => void;
 }) {
   const { t } = useUI();
-  const { agents } = useWorkspace();
+  const { agents, launchChatPrompt } = useWorkspace();
   const [settings, setSettings] = useState(false);
   const [adding, setAdding] = useState(false);
   const [selected, setSelected] = useState("");
@@ -221,6 +222,19 @@ export function NewsInputs({
                 {item.title}
               </a>
               <div className="news-headline-actions">
+                <button
+                  type="button"
+                  className="text-button"
+                  onClick={() =>
+                    launchChatPrompt({
+                      profileId: v.profileId,
+                      title: item.title.slice(0, 80),
+                      prompt: buildNewsChatPrompt(source?.name || f.url, item),
+                    })
+                  }
+                >
+                  {t("Ask in Chat")}
+                </button>
                 <button
                   className="text-button"
                   disabled={agents.busy}

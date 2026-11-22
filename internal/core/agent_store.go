@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"unicode"
@@ -13,7 +14,7 @@ import (
 )
 
 const (
-	agentV2SchemaVersion    = 2
+	agentV2SchemaVersion    = 3
 	agentV2MaxPromptBytes   = 32 * 1024
 	agentV2CompactMsgLimit  = 24
 	agentV2CompactCharLimit = 48000
@@ -28,11 +29,18 @@ type AgentThread struct {
 	ConnectionRef    string `json:"connectionRef,omitempty"`
 	Model            string `json:"model,omitempty"`
 	Summary          string `json:"summary,omitempty"`
+	SourceKind       string `json:"sourceKind,omitempty"`
+	SourceRef        string `json:"sourceRef,omitempty"`
 	Archived         bool   `json:"archived"`
 	CreatedAt        int64  `json:"createdAt"`
 	UpdatedAt        int64  `json:"updatedAt"`
 	MessageCount     int    `json:"messageCount,omitempty"`
 	PendingApprovals int    `json:"pendingApprovals,omitempty"`
+}
+
+type TaskThreadLinks struct {
+	ByTask map[string]string `json:"byTask"`
+	ByRun  map[string]string `json:"byRun"`
 }
 
 type AgentV2Message struct {
@@ -167,11 +175,23 @@ CREATE TABLE threads(
 	connection_ref TEXT NOT NULL DEFAULT '',
 	model TEXT NOT NULL DEFAULT '',
 	summary TEXT NOT NULL DEFAULT '',
+	source_kind TEXT NOT NULL DEFAULT '',
+	source_ref TEXT NOT NULL DEFAULT '',
 	archived INTEGER NOT NULL DEFAULT 0,
 	created_at INTEGER NOT NULL,
 	updated_at INTEGER NOT NULL
 );
 CREATE INDEX idx_threads_profile ON threads(profile_id, archived, updated_at DESC);
+CREATE INDEX idx_threads_source ON threads(profile_id, source_kind, source_ref, archived, updated_at DESC);
+
+CREATE TABLE task_run_threads(
+	run_id TEXT PRIMARY KEY,
+	task_id TEXT NOT NULL,
+	thread_id TEXT NOT NULL REFERENCES threads(id) ON DELETE CASCADE,
+	message_id TEXT NOT NULL,
+	created_at INTEGER NOT NULL
+);
+CREATE INDEX idx_task_run_threads_task ON task_run_threads(task_id);
 
 CREATE TABLE messages(
 	id TEXT PRIMARY KEY,
@@ -261,7 +281,7 @@ CREATE TABLE IF NOT EXISTS provider_model_cache (
 	updated_at INTEGER NOT NULL
 );
 
-PRAGMA user_version=2;
+PRAGMA user_version=3;
 `
 		if _, err := tx.ExecContext(ctx, schemaSQL); err != nil {
 			return nil, fmt.Errorf("init agents.sqlite schema: %w", err)
@@ -269,6 +289,7 @@ PRAGMA user_version=2;
 		if err := tx.Commit(); err != nil {
 			return nil, err
 		}
+		version = 3
 	}
 	if version == 1 {
 		tx, err := db.BeginTx(ctx, nil)
@@ -293,6 +314,35 @@ PRAGMA user_version=2;
 `
 		if _, err := tx.ExecContext(ctx, upgradeSQL); err != nil {
 			return nil, fmt.Errorf("upgrade agents.sqlite schema v1->v2: %w", err)
+		}
+		if err := tx.Commit(); err != nil {
+			return nil, err
+		}
+		version = 2
+	}
+	if version == 2 {
+		tx, err := db.BeginTx(ctx, nil)
+		if err != nil {
+			return nil, err
+		}
+		defer tx.Rollback()
+		upgradeV3SQL := `
+ALTER TABLE threads ADD COLUMN source_kind TEXT NOT NULL DEFAULT '';
+ALTER TABLE threads ADD COLUMN source_ref TEXT NOT NULL DEFAULT '';
+CREATE INDEX IF NOT EXISTS idx_threads_source ON threads(profile_id, source_kind, source_ref, archived, updated_at DESC);
+CREATE TABLE IF NOT EXISTS task_run_threads(
+	run_id TEXT PRIMARY KEY,
+	task_id TEXT NOT NULL,
+	thread_id TEXT NOT NULL REFERENCES threads(id) ON DELETE CASCADE,
+	message_id TEXT NOT NULL,
+	created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_task_run_threads_task ON task_run_threads(task_id);
+
+PRAGMA user_version=3;
+`
+		if _, err := tx.ExecContext(ctx, upgradeV3SQL); err != nil {
+			return nil, fmt.Errorf("upgrade agents.sqlite schema v2->v3: %w", err)
 		}
 		if err := tx.Commit(); err != nil {
 			return nil, err
@@ -414,7 +464,7 @@ func (s *Store) ListThreads(ctx context.Context, profileID string, includeArchiv
 	}
 	profileID = strings.TrimSpace(profileID)
 	query := `
-SELECT t.id, t.profile_id, t.title, t.connection_ref, t.model, t.summary, t.archived, t.created_at, t.updated_at,
+SELECT t.id, t.profile_id, t.title, t.connection_ref, t.model, t.summary, t.source_kind, t.source_ref, t.archived, t.created_at, t.updated_at,
 	(SELECT COUNT(*) FROM messages m WHERE m.thread_id = t.id),
 	(SELECT COUNT(*) FROM approvals a WHERE a.thread_id = t.id AND a.status = 'pending')
 FROM threads t
@@ -435,11 +485,61 @@ LIMIT 200`
 	for rows.Next() {
 		var t AgentThread
 		var arch int
-		if err := rows.Scan(&t.ID, &t.ProfileID, &t.Title, &t.ConnectionRef, &t.Model, &t.Summary, &arch, &t.CreatedAt, &t.UpdatedAt, &t.MessageCount, &t.PendingApprovals); err != nil {
+		if err := rows.Scan(&t.ID, &t.ProfileID, &t.Title, &t.ConnectionRef, &t.Model, &t.Summary, &t.SourceKind, &t.SourceRef, &arch, &t.CreatedAt, &t.UpdatedAt, &t.MessageCount, &t.PendingApprovals); err != nil {
 			return nil, err
 		}
 		t.Archived = arch != 0
 		out = append(out, t)
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) ListTaskThreadLinks(ctx context.Context, profileID string) (TaskThreadLinks, error) {
+	out := TaskThreadLinks{
+		ByTask: map[string]string{},
+		ByRun:  map[string]string{},
+	}
+	if s == nil {
+		return out, nil
+	}
+	s.agentV2Mu.Lock()
+	v2 := s.agentV2
+	s.agentV2Mu.Unlock()
+	if v2 == nil {
+		if s.dir == "" {
+			return out, nil
+		}
+		if _, err := os.Stat(filepath.Join(s.dir, "agents.sqlite")); errors.Is(err, os.ErrNotExist) {
+			return out, nil
+		}
+		var err error
+		v2, err = s.ensureAgentV2(ctx)
+		if err != nil {
+			return out, err
+		}
+	}
+	profileID = strings.TrimSpace(profileID)
+	rows, err := v2.db.QueryContext(ctx, `
+SELECT r.run_id, r.task_id, r.thread_id
+FROM task_run_threads r
+JOIN threads t ON t.id = r.thread_id
+WHERE (? = '' OR t.profile_id = ?)
+  AND t.archived = 0
+ORDER BY r.created_at DESC, r.run_id DESC
+LIMIT 500`, profileID, profileID)
+	if err != nil {
+		return out, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var runID, taskID, threadID string
+		if err := rows.Scan(&runID, &taskID, &threadID); err != nil {
+			return out, err
+		}
+		out.ByRun[runID] = threadID
+		if _, exists := out.ByTask[taskID]; !exists {
+			out.ByTask[taskID] = threadID
+		}
 	}
 	return out, rows.Err()
 }
@@ -451,9 +551,9 @@ func (s *Store) getThreadRow(ctx context.Context, v2 *agentV2Store, id string) (
 	var t AgentThread
 	var arch int
 	err := v2.db.QueryRowContext(ctx,
-		`SELECT id,profile_id,title,connection_ref,model,summary,archived,created_at,updated_at FROM threads WHERE id=?`,
+		`SELECT id,profile_id,title,connection_ref,model,summary,source_kind,source_ref,archived,created_at,updated_at FROM threads WHERE id=?`,
 		id,
-	).Scan(&t.ID, &t.ProfileID, &t.Title, &t.ConnectionRef, &t.Model, &t.Summary, &arch, &t.CreatedAt, &t.UpdatedAt)
+	).Scan(&t.ID, &t.ProfileID, &t.Title, &t.ConnectionRef, &t.Model, &t.Summary, &t.SourceKind, &t.SourceRef, &arch, &t.CreatedAt, &t.UpdatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return AgentThread{}, ErrThreadNotFound
 	}

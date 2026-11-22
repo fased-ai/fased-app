@@ -31,10 +31,26 @@
   background: var(--wt-raised);
   border-left-color: var(--wt-violet);
 }
+.v2-thread-main {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  flex: 1;
+}
+.v2-thread-source-icon {
+  flex: 0 0 auto;
+  color: var(--wt-muted);
+}
 .v2-thread-title {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.v2-thread-source-pill {
+  flex-shrink: 0;
+  background: var(--wt-surface);
+  color: var(--wt-muted);
 }
 .v2-pending-dot {
   flex: 0 0 auto;
@@ -62,14 +78,16 @@
 }
 .v2-legacy-rail {
   margin-top: auto;
-  padding-top: 12px;
+  padding-top: 10px;
   border-top: 1px solid var(--line);
   display: grid;
   gap: 6px;
 }
-.v2-legacy-rail > small {
+.v2-legacy-rail > summary {
+  cursor: pointer;
   color: var(--wt-muted);
   font-size: 11px;
+  user-select: none;
 }
 .v2-rename-form {
   display: flex;

@@ -20,16 +20,20 @@ export function TaskRunCard({
   run,
   view: v,
   inline = false,
+  threadId,
   onRegisterCard,
   onDiscuss,
+  onOpenThread,
   onRunInChat,
 }: {
   run: AgentRun;
   view: AgentView;
   inline?: boolean;
+  threadId?: string;
   onRegisterCard?: (id: string, node: HTMLElement | null) => void;
   onDiscuss: (run: AgentRun) => void;
-  onRunInChat?: (task: AgentTask) => void;
+  onOpenThread?: (threadId: string) => void;
+  onRunInChat?: (task: AgentTask, run?: AgentRun) => void;
 }) {
   const { t: uiText } = useUI();
   const { agents } = useWorkspace();
@@ -195,8 +199,17 @@ export function TaskRunCard({
           })}
         </ul>
       )}
-      {(canDiscuss || canRunInChat) && (
+      {(canDiscuss || canRunInChat || (threadId && onOpenThread)) && (
         <div className="row-actions">
+          {threadId && onOpenThread && (
+            <button
+              type="button"
+              className="secondary"
+              onClick={() => onOpenThread(threadId)}
+            >
+              {uiText("Open thread")}
+            </button>
+          )}
           {canDiscuss && (
             <button
               className="secondary"
@@ -210,7 +223,7 @@ export function TaskRunCard({
             <button
               type="button"
               className="text-button"
-              onClick={() => onRunInChat(task)}
+              onClick={() => onRunInChat(task, run)}
             >
               {uiText("Run in Chat")}
             </button>
