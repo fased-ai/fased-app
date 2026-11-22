@@ -8,6 +8,7 @@ import (
 	"errors"
 	"net/http"
 	"net/url"
+	"strings"
 	"testing"
 	"time"
 )
@@ -125,5 +126,60 @@ func TestRouterSignInPKCECancelExpiryAndCallbackIsolation(t *testing.T) {
 		s.provider.mu.Lock()
 		s.cancelProviderSignInLocked()
 		s.provider.mu.Unlock()
+	}
+}
+
+func TestRouterSignInHardeningWhitespaceFullURLAndNoCancelOnTypo(t *testing.T) {
+	t.Parallel()
+	// Remote mode: typo preserves pending attempt, whitespace + full callback URL both succeed.
+	for _, validInput := range []string{
+		"  fixture-router-code \n",
+		"http://127.0.0.1:43210/auth/callback?code=fixture-router-code&extra=ignored#frag",
+	} {
+		s := fixtureStore(t)
+		start, err := s.ChangeAIConnection(t.Context(), AIConnectionCommand{Action: "sign-in-start", Provider: "openrouter", Remote: true})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := s.ChangeAIConnection(t.Context(), AIConnectionCommand{
+			Action:     "sign-in-complete",
+			SignInID:   start.SignIn.ID,
+			Callback:   "bad?code=x",
+			Passphrase: testVaultPassword,
+		}); err == nil {
+			t.Fatal("invalid remote router callback accepted")
+		}
+		if s.provider.signIn == nil || s.provider.signIn.view.ID != start.SignIn.ID {
+			t.Fatal("remote typo cancelled pending OpenRouter sign-in attempt")
+		}
+		acc, err := s.ChangeAIConnection(t.Context(), AIConnectionCommand{
+			Action:     "sign-in-complete",
+			SignInID:   start.SignIn.ID,
+			Callback:   validInput,
+			Passphrase: testVaultPassword,
+		})
+		if err != nil || acc.Provider != "openrouter" || acc.Catalog.State != "ready" {
+			t.Fatalf("remote router retry failed for %q: err=%v acc=%+v", validInput, err, acc)
+		}
+	}
+
+	// Local mode: accepts harmless extra query param + fragment, rejects wrong state or duplicate code.
+	s := fixtureStore(t)
+	start, err := s.ChangeAIConnection(t.Context(), AIConnectionCommand{Action: "sign-in-start", Provider: "openrouter", Remote: false})
+	if err != nil || start.SignIn == nil {
+		t.Fatal(err)
+	}
+	a := s.provider.signIn
+	if _, _, err := providerSignInCallback(a, a.redirect+"?code=fixture-router-code&state="+a.state+"&iss=https://openrouter.ai#done"); err != nil {
+		t.Fatalf("local router callback with extra param + fragment refused: %v", err)
+	}
+	for _, bad := range []string{
+		a.redirect + "?code=fixture-router-code&state=wrong",
+		a.redirect + "?code=a&code=b&state=" + a.state,
+		"https://evil.invalid/auth/callback?code=fixture-router-code&state=" + a.state,
+	} {
+		if _, _, err := providerSignInCallback(a, bad); err == nil || !strings.Contains(err.Error(), "sign-in") && !strings.Contains(err.Error(), "callback") {
+			t.Fatalf("unsafe local router callback accepted: %s", bad)
+		}
 	}
 }

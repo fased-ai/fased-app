@@ -287,14 +287,39 @@ export function AgentChatV2({
   const composerValue = chatDrafts.get(threadDraftKey) ?? "";
   const modelSelection = chatModelDrafts.get(threadDraftKey);
 
+  const allConnections = connection?.connections?.length
+    ? connection.connections
+    : connection?.ref
+      ? [connection]
+      : [];
+  const defaultUnlocked =
+    allConnections.find(
+      (a) => a.ref === connection?.ref && !a.locked && !a.planPaused,
+    ) ??
+    allConnections.find((a) => !a.locked && !a.planPaused) ??
+    null;
+
   const activeConnectionRef =
     modelSelection?.connectionRef ??
     v2.detail?.thread.connectionRef ??
     (profile.provider === "none"
-      ? ""
-      : profile.connectionRef || connection?.ref || "");
+      ? defaultUnlocked?.ref || ""
+      : profile.connectionRef || defaultUnlocked?.ref || "");
+  const activeAccount = activeConnectionRef
+    ? (allConnections.find((a) => a.ref === activeConnectionRef) ?? null)
+    : null;
   const activeModel =
-    modelSelection?.model ?? v2.detail?.thread.model ?? profile.model ?? "";
+    (modelSelection?.model ??
+      v2.detail?.thread.model ??
+      (profile.provider !== "none" && profile.model ? profile.model : "")) ||
+    activeAccount?.catalog?.models.find(
+      (m) =>
+        m.connectionRef === activeAccount.ref && m.selectable && m.recommended,
+    )?.id ||
+    activeAccount?.catalog?.models.find(
+      (m) => m.connectionRef === activeAccount.ref && m.selectable,
+    )?.id ||
+    "";
 
   function setComposerValue(nextText: string) {
     setChatDrafts((cur) => {
@@ -405,9 +430,16 @@ export function AgentChatV2({
     !v2.detail &&
     !welcomeDismissed;
 
+  const activeProviderName = activeAccount?.provider
+    ? connection?.catalog?.providers.find(
+        (p) => p.id === activeAccount.provider,
+      )?.name || activeAccount.provider
+    : "";
   const modelSummaryLabel =
     previewModel(activeModel, t) ||
-    (connection?.provider ? connection.provider : t("Auto model"));
+    activeAccount?.name ||
+    activeProviderName ||
+    t("Auto model");
 
   return (
     <section
@@ -798,15 +830,20 @@ export function AgentChatV2({
                       const account =
                         connection?.connections?.find((a) => a.ref === ref) ??
                         (connection?.ref === ref ? connection : null);
-                      const recommended = account?.catalog?.models.find(
-                        (item) =>
-                          item.connectionRef === ref &&
-                          item.selectable &&
-                          item.recommended,
-                      );
+                      const nextModel =
+                        account?.catalog?.models.find(
+                          (item) =>
+                            item.connectionRef === ref &&
+                            item.selectable &&
+                            item.recommended,
+                        ) ??
+                        account?.catalog?.models.find(
+                          (item) =>
+                            item.connectionRef === ref && item.selectable,
+                        );
                       setModelSelection({
                         connectionRef: ref,
-                        model: ref ? (recommended?.id ?? "") : "",
+                        model: ref ? (nextModel?.id ?? "") : "",
                       });
                     }}
                   />

@@ -243,7 +243,8 @@ export function AgentProfileSettings({ view: v }: { view: AgentView }) {
                             connection?.catalog?.providers.find(
                               (p) => p.id === a.provider,
                             )?.name ||
-                            "OpenAI"}
+                            a.provider ||
+                            uiText("Provider")}
                         </option>
                       ))}
                     {accountRef &&

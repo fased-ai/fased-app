@@ -634,7 +634,11 @@ export function WorkspaceDialogs() {
                         setNewModel(
                           chosen?.catalog?.models.find(
                             (item) => item.selectable && item.recommended,
-                          )?.id || "",
+                          )?.id ||
+                            chosen?.catalog?.models.find(
+                              (item) => item.selectable,
+                            )?.id ||
+                            "",
                         );
                       }}
                     >

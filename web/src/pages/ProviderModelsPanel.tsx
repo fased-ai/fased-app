@@ -13,11 +13,18 @@ export function ProviderModelsPanel({
   onRefresh: () => void;
 }) {
   const { t: uiText } = useUI();
+  const models = (view.catalog?.models ?? []).filter(
+    (m) => m.connectionRef === view.ref && m.provider === provider,
+  );
+  const needsRefresh =
+    !view.locked &&
+    (view.catalog?.state !== "ready" ||
+      models.some((m) => m.availability === "stale"));
   return (
     <section className="provider-models" aria-label={uiText("Models")}>
       <header>
         <h3>{uiText("Models")}</h3>
-        {!view.locked && view.catalog?.state !== "ready" && (
+        {needsRefresh && (
           <button
             type="button"
             className="secondary"
@@ -29,26 +36,24 @@ export function ProviderModelsPanel({
         )}
       </header>
       <ul>
-        {view.catalog?.models
-          .filter(
-            (m) => m.connectionRef === view.ref && m.provider === provider,
-          )
-          .map((m) => (
-            <li key={m.id}>
-              <span>{m.name}</span>
-              <small>
-                {uiText(
-                  m.selectable
-                    ? m.recommended
-                      ? "Recommended"
-                      : "Ready"
+        {models.map((m) => (
+          <li key={m.id}>
+            <span>{m.name}</span>
+            <small>
+              {uiText(
+                m.selectable
+                  ? m.recommended
+                    ? "Recommended"
+                    : "Ready"
+                  : m.availability === "stale"
+                    ? "Stale"
                     : m.availability === "currency-unsupported"
                       ? "Pricing unavailable"
                       : "Unavailable",
-                )}
-              </small>
-            </li>
-          ))}
+              )}
+            </small>
+          </li>
+        ))}
       </ul>
     </section>
   );

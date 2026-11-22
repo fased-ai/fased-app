@@ -82,19 +82,42 @@ func (s *Store) startRouterSignIn(c AIConnectionCommand) (AIConnectionView, erro
 	return s.aiConnectionLocked()
 }
 func routerSignInCallback(a *providerSignInAttempt, callback string) (string, error) {
+	callback = strings.TrimSpace(callback)
 	if a.view.Remote {
+		if strings.HasPrefix(callback, "http://") || strings.HasPrefix(callback, "https://") {
+			u, err := url.Parse(callback)
+			if u != nil {
+				u.Fragment = ""
+			}
+			if err != nil || len(callback) > 4096 || u.Host == "" || u.RawPath != "" || u.User != nil || u.Opaque != "" || u.ForceQuery {
+				logProviderDiag("openrouter-callback", map[string]any{"remote": true, "reason": "url_parse"})
+				return "", errors.New("enter the authorization code")
+			}
+			q, err := url.ParseQuery(u.RawQuery)
+			if err != nil || len(q["code"]) != 1 || !validSignInValue(q.Get("code"), 2048) {
+				logProviderDiag("openrouter-callback", map[string]any{"remote": true, "reason": "missing_code"})
+				return "", errors.New("enter the authorization code")
+			}
+			return q.Get("code"), nil
+		}
 		if !validSignInValue(callback, 2048) || strings.ContainsAny(callback, "?/#&=") {
+			logProviderDiag("openrouter-callback", map[string]any{"remote": true, "reason": "invalid_code"})
 			return "", errors.New("enter the authorization code")
 		}
 		return callback, nil
 	}
 	u, err := url.Parse(callback)
+	if u != nil {
+		u.Fragment = ""
+	}
 	base, _ := url.Parse(a.redirect)
-	if err != nil || len(callback) > 4096 || u.Scheme != base.Scheme || u.Host != base.Host || u.Path != base.Path || u.RawPath != "" || u.User != nil || u.Fragment != "" || u.Opaque != "" || u.ForceQuery {
+	if err != nil || len(callback) > 4096 || u.Scheme != base.Scheme || u.Host != base.Host || u.Path != base.Path || u.RawPath != "" || u.User != nil || u.Opaque != "" || u.ForceQuery {
+		logProviderDiag("openrouter-callback", map[string]any{"remote": false, "reason": "url_parse"})
 		return "", errors.New("invalid sign-in callback")
 	}
 	q, err := url.ParseQuery(u.RawQuery)
-	if err != nil || len(q) != 2 || len(q["state"]) != 1 || q.Get("state") != a.state || len(q["code"]) != 1 || !validSignInValue(q.Get("code"), 2048) {
+	if err != nil || len(q["state"]) != 1 || q.Get("state") != a.state || len(q["code"]) != 1 || !validSignInValue(q.Get("code"), 2048) {
+		logProviderDiag("openrouter-callback", map[string]any{"remote": false, "reason": "state_or_code_mismatch"})
 		return "", errors.New("sign-in state or code mismatch")
 	}
 	return q.Get("code"), nil
@@ -106,13 +129,12 @@ func (s *Store) completeRouterSignIn(ctx context.Context, c AIConnectionCommand)
 		s.provider.mu.Unlock()
 		return AIConnectionView{}, ErrConflict
 	}
-	callback := c.Callback
+	callback := strings.TrimSpace(c.Callback)
 	if callback == "" {
-		callback = a.callback
+		callback = strings.TrimSpace(a.callback)
 	}
 	code, err := routerSignInCallback(a, callback)
 	if err != nil {
-		s.cancelProviderSignInLocked()
 		s.provider.mu.Unlock()
 		return AIConnectionView{}, err
 	}
@@ -133,6 +155,11 @@ func (s *Store) completeRouterSignIn(ctx context.Context, c AIConnectionCommand)
 		}
 	}()
 	if err != nil || !validAICredential(mode, key) {
+		errText := ""
+		if err != nil {
+			errText = err.Error()
+		}
+		logProviderDiag("openrouter-sign-in-complete", map[string]any{"reason": "exchange_or_key_invalid", "err": errText})
 		return AIConnectionView{}, errors.New("Sign-in incomplete; review OpenRouter keys before reconnecting")
 	}
 	tx, err := s.db.BeginTx(ctx, nil)
@@ -163,6 +190,7 @@ func (s *Store) completeRouterSignIn(ctx context.Context, c AIConnectionCommand)
 	s.cancelProviderSignInLocked()
 	s.provider.mu.Unlock()
 	if err != nil {
+		logProviderDiag("openrouter-sign-in-complete", map[string]any{"reason": "vault_save_failed", "err": err.Error()})
 		return AIConnectionView{}, err
 	}
 	// Release the SQLite write lock before refresh, just like ordinary key setup.
@@ -183,6 +211,7 @@ func exchangeRouterSignIn(ctx context.Context, wire http.RoundTripper, code, ver
 	client := http.Client{Transport: wire, CheckRedirect: func(*http.Request, []*http.Request) error { return errors.New("sign-in redirect refused") }}
 	res, err := client.Do(req)
 	if err != nil {
+		logProviderDiag("openrouter-exchange", map[string]any{"err": err.Error()})
 		return "", errors.New("sign-in exchange unavailable")
 	}
 	defer res.Body.Close()
@@ -190,12 +219,19 @@ func exchangeRouterSignIn(ctx context.Context, wire http.RoundTripper, code, ver
 	defer clear(raw)
 	media, _, _ := mime.ParseMediaType(res.Header.Get("Content-Type"))
 	if err != nil || res.StatusCode != 200 || len(raw) > 4096 || media != "application/json" || res.Header.Get("Content-Encoding") != "" || !uniqueAIJSON(raw) {
+		oauthErr, oauthDesc := extractOAuthError(raw)
+		logProviderDiag("openrouter-exchange", map[string]any{
+			"status": res.StatusCode, "contentType": res.Header.Get("Content-Type"),
+			"contentEncoding": res.Header.Get("Content-Encoding"), "bodyBytes": len(raw),
+			"oauthError": oauthErr, "oauthErrorDesc": oauthDesc,
+		})
 		return "", errors.New("sign-in exchange refused")
 	}
 	var data struct {
 		Key string `json:"key"`
 	}
 	if json.Unmarshal(raw, &data) != nil {
+		logProviderDiag("openrouter-exchange", map[string]any{"status": res.StatusCode, "reason": "json_invalid"})
 		return "", errors.New("sign-in key invalid")
 	}
 	return data.Key, nil

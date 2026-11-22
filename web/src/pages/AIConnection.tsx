@@ -290,7 +290,6 @@ export function AIConnectionSettings({
               provider,
               ...(provider === "google" ? { googleProject } : {}),
               ref: view.ref,
-              ...(provider === "google" ? { googleProject } : {}),
               remote: core.connection?.location === "remote",
             }
           : action === "sign-in-complete"

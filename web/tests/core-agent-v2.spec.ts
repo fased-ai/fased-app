@@ -1,6 +1,7 @@
 import { expect, test } from "@playwright/test";
 import {
   installCoreFixture,
+  openProviders,
   start,
   stop,
   url,
@@ -217,5 +218,44 @@ test("Chat task_draft approval surfaces in Tasks panel and launches back in Chat
   await expect(page.locator(".v2-markdown").last()).toContainText(
     "Fixture agent reviewed",
     { timeout: 12000 },
+  );
+});
+
+test("Non-OpenAI provider surfaces its own model in Chat composer without OpenAI fallback", async ({
+  page,
+}) => {
+  test.setTimeout(60000);
+  await stop();
+  await start(true, "127.0.0.1:0", "local", false);
+
+  await page.goto(url);
+  await openProviders(page);
+
+  const providers = page.getByRole("region", {
+    name: "Providers",
+    exact: true,
+  });
+  await providers.locator('[data-provider="openrouter"] > button').click();
+  await providers
+    .getByLabel("API key", { exact: true })
+    .fill("fased-test-openrouter-disposable-ui");
+  await providers
+    .getByLabel("Vault passphrase", { exact: true })
+    .fill("disposable-v2-router-vault");
+  await providers.getByRole("button", { name: "Save", exact: true }).click();
+  await expect(
+    providers.getByRole("region", { name: "Models", exact: true }),
+  ).toContainText("Gemini 3.8 Flash", { timeout: 12000 });
+
+  await providers.getByRole("button", { name: "Back", exact: true }).click();
+
+  const composerForm = page.locator("form.v2-composer");
+  const replyModel = composerForm.getByLabel("Reply model", { exact: true });
+  await expect(replyModel).toContainText("google/gemini-3.8-flash");
+  await expect(replyModel).not.toContainText("openai");
+
+  await replyModel.click();
+  await expect(composerForm.getByLabel("Model", { exact: true })).toHaveValue(
+    "google/gemini-3.8-flash",
   );
 });

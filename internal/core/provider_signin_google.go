@@ -83,12 +83,19 @@ func googleOAuthHTTP(ctx context.Context, wire http.RoundTripper, method, endpoi
 	client := http.Client{Transport: wire, CheckRedirect: func(*http.Request, []*http.Request) error { return errors.New("Google OAuth redirect refused") }}
 	res, err := client.Do(req)
 	if err != nil {
+		logProviderDiag("google-oauth-http", map[string]any{"method": method, "endpoint": safeEndpointPath(endpoint), "err": err.Error()})
 		return errors.New("Google OAuth unavailable")
 	}
 	defer res.Body.Close()
 	raw, err := io.ReadAll(io.LimitReader(res.Body, 65537))
 	defer clear(raw)
 	if err != nil || len(raw) > 65536 || res.StatusCode != 200 || res.Header.Get("Content-Encoding") != "" {
+		oauthErr, oauthDesc := extractOAuthError(raw)
+		logProviderDiag("google-oauth-http", map[string]any{
+			"method": method, "endpoint": safeEndpointPath(endpoint), "status": res.StatusCode,
+			"contentType": res.Header.Get("Content-Type"), "contentEncoding": res.Header.Get("Content-Encoding"),
+			"bodyBytes": len(raw), "oauthError": oauthErr, "oauthErrorDesc": oauthDesc,
+		})
 		return errors.New("Google OAuth refused; reconnect or retry the credential operation")
 	}
 	if target == nil {
@@ -96,6 +103,10 @@ func googleOAuthHTTP(ctx context.Context, wire http.RoundTripper, method, endpoi
 	}
 	kind, _, err := mime.ParseMediaType(res.Header.Get("Content-Type"))
 	if err != nil || kind != "application/json" || !uniqueAIJSON(raw, 32768) || json.Unmarshal(raw, target) != nil {
+		logProviderDiag("google-oauth-http", map[string]any{
+			"method": method, "endpoint": safeEndpointPath(endpoint), "status": res.StatusCode,
+			"contentType": res.Header.Get("Content-Type"), "reason": "json_refused",
+		})
 		return errors.New("Google OAuth response refused")
 	}
 	return nil
@@ -206,24 +217,43 @@ func (s *Store) startGoogleSignIn(c AIConnectionCommand) (AIConnectionView, erro
 func googleSignInCallback(a *providerSignInAttempt, callback string) (string, error) {
 	callback = strings.TrimSpace(callback)
 	u, err := url.Parse(callback)
+	if u != nil {
+		u.Fragment = ""
+	}
 	base, _ := url.Parse(a.redirect)
-	if err != nil || len(callback) > 4096 || u.Scheme != base.Scheme || u.Host != base.Host || u.Path != base.Path || u.RawPath != "" || u.User != nil || u.Fragment != "" || u.Opaque != "" || u.ForceQuery {
+	if err != nil || len(callback) > 4096 || u.Scheme != base.Scheme || u.Host != base.Host || u.Path != base.Path || u.RawPath != "" || u.User != nil || u.Opaque != "" || u.ForceQuery {
+		logProviderDiag("google-callback", map[string]any{"remote": a.view.Remote, "reason": "url_parse"})
 		return "", errors.New("Google callback refused")
 	}
 	q, err := url.ParseQuery(u.RawQuery)
-	if err != nil || len(q["code"]) != 1 || len(q["state"]) != 1 || q.Get("state") != a.state || !validSignInValue(q.Get("code"), 2048) {
+	if err != nil || len(q["state"]) != 1 || q.Get("state") != a.state {
+		logProviderDiag("google-callback", map[string]any{"remote": a.view.Remote, "reason": "state_mismatch"})
 		return "", errors.New("Google callback state/code refused")
 	}
-	for key, values := range q {
-		if len(values) != 1 || (key != "code" && key != "state" && key != "scope" && key != "authuser" && key != "prompt" && key != "iss" && key != "hd") {
+	for _, key := range []string{"code", "state", "scope", "authuser", "prompt", "iss", "hd", "error", "error_description"} {
+		if values, present := q[key]; present && len(values) != 1 {
+			logProviderDiag("google-callback", map[string]any{"remote": a.view.Remote, "reason": "duplicate_param", "param": key})
 			return "", errors.New("Google callback fields refused")
 		}
 	}
-	if iss := q.Get("iss"); iss != "" && iss != googleIssuer {
+	if iss := strings.TrimSuffix(strings.TrimSpace(q.Get("iss")), "/"); iss != "" && iss != googleIssuer {
+		logProviderDiag("google-callback", map[string]any{"remote": a.view.Remote, "reason": "issuer_mismatch"})
 		return "", errors.New("Google callback issuer refused")
 	}
+	if oauthErr := q.Get("error"); oauthErr != "" {
+		logProviderDiag("google-callback", map[string]any{
+			"remote": a.view.Remote, "reason": "provider_error",
+			"oauthError": oauthErr, "oauthErrorDesc": q.Get("error_description"),
+		})
+		return "", errors.New("Google sign-in was not authorized")
+	}
 	if hd := q.Get("hd"); hd != "" && !validSignInValue(hd, 256) {
+		logProviderDiag("google-callback", map[string]any{"remote": a.view.Remote, "reason": "invalid_hd"})
 		return "", errors.New("Google callback fields refused")
+	}
+	if len(q["code"]) != 1 || !validSignInValue(q.Get("code"), 2048) {
+		logProviderDiag("google-callback", map[string]any{"remote": a.view.Remote, "reason": "missing_code"})
+		return "", errors.New("Google callback state/code refused")
 	}
 	return q.Get("code"), nil
 }
@@ -295,19 +325,30 @@ func (s *Store) completeGoogleSignIn(ctx context.Context, c AIConnectionCommand)
 	}
 	code, err := googleSignInCallback(a, callback)
 	if err != nil {
-		s.cancelProviderSignInLocked()
 		s.provider.mu.Unlock()
 		return AIConnectionView{}, err
 	}
 	a.busy = true
+	settled := false
 	previous, verifier, redirect, nonce, wire := *a.google, a.verifier, a.redirect, a.nonce, a.wire
 	s.provider.mu.Unlock()
+	defer func() {
+		if !settled {
+			s.provider.mu.Lock()
+			if s.provider.signIn == a {
+				a.busy = false
+			}
+			s.provider.mu.Unlock()
+		}
+	}()
 	credential, err := exchangeGoogle(ctx, wire, previous, code, verifier, redirect, nonce, s.now())
 	if err != nil {
+		logProviderDiag("google-sign-in-complete", map[string]any{"reason": "token_exchange_failed", "err": err.Error()})
 		s.provider.mu.Lock()
 		if s.provider.signIn == a {
 			s.cancelProviderSignInLocked()
 		}
+		settled = true
 		s.provider.mu.Unlock()
 		return AIConnectionView{}, err
 	}
@@ -321,11 +362,19 @@ func (s *Store) completeGoogleSignIn(ctx context.Context, c AIConnectionCommand)
 	}
 	s.provider.mu.Lock()
 	if s.provider.signIn != a || !s.providerSignInAvailableLocked() || a.view.ExpiresAt <= s.now().Unix() || a.ref != "" && s.credentialLocked(a.ref).epoch != a.epoch {
+		if s.provider.signIn == a && (a.view.ExpiresAt <= s.now().Unix() || a.ref != "" && s.credentialLocked(a.ref).epoch != a.epoch) {
+			s.cancelProviderSignInLocked()
+			settled = true
+		}
 		s.provider.mu.Unlock()
 		return AIConnectionView{}, ErrConflict
 	}
 	v, err := s.saveGoogleCredentialLocked(ctx, credential, c.Passphrase, a.ref, a.name, a.fixture, a.digest)
+	if err != nil {
+		logProviderDiag("google-sign-in-complete", map[string]any{"reason": "vault_save_failed", "err": err.Error()})
+	}
 	s.cancelProviderSignInLocked()
+	settled = true
 	s.provider.mu.Unlock()
 	if err != nil {
 		return v, err
@@ -443,25 +492,37 @@ func (a authenticatedAITransport) ensureGoogleAccess(request *http.Request) erro
 		s.provider.signInRenewals = map[string]bool{}
 	}
 	s.provider.signInRenewals[a.ref] = true
-	digest, epoch, previous := state.digest, state.epoch, append([]byte(nil), state.key...)
+	digest, epoch, osProt, previous := state.digest, state.epoch, state.osProtected, append([]byte(nil), state.key...)
 	wire := s.googleOAuthWire(credential)
 	s.provider.mu.Unlock()
 	defer clear(previous)
 	defer func() { s.provider.mu.Lock(); delete(s.provider.signInRenewals, a.ref); s.provider.mu.Unlock() }()
 	renewed, err := exchangeGoogle(ctx, wire, credential, "", "", "", "", s.now())
 	if err != nil {
+		logProviderDiag("google-auto-refresh", map[string]any{"ref": a.ref, "err": err.Error()})
 		return err
 	}
-	if renewed.RefreshToken != credential.RefreshToken {
+	rotated := renewed.RefreshToken != credential.RefreshToken
+	if rotated && !osProt {
 		return errors.New("Google refresh token rotated; use protected Refresh")
 	}
+	raw, _ := json.Marshal(renewed)
+	defer clear(raw)
 	s.provider.mu.Lock()
 	defer s.provider.mu.Unlock()
 	state = s.credentialLocked(a.ref)
 	if state.epoch != epoch || state.digest != digest || !bytes.Equal(state.key, previous) || ctx.Err() != nil {
 		return ErrConflict
 	}
+	if rotated && osProt {
+		nextDigest, err := s.persistOSProtectedOAuthLocked(ctx, a.ref, "google", "google-oauth", raw, digest)
+		if err != nil {
+			logProviderDiag("google-auto-refresh-os-vault", map[string]any{"ref": a.ref, "err": err.Error()})
+			return err
+		}
+		state.digest = nextDigest
+	}
 	clear(state.key)
-	state.key, _ = json.Marshal(renewed)
+	state.key = append([]byte(nil), raw...)
 	return nil
 }

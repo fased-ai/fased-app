@@ -225,3 +225,97 @@ func TestDynamicDiscoveryOpenRouterAndLocalNewModels(t *testing.T) {
 		t.Fatalf("local dynamic chat failed: %+v", q)
 	}
 }
+
+func TestDynamicDiscoveryAnthropicGoogleOpenRouterAndLocalNames(t *testing.T) {
+	t.Parallel()
+	s := fixtureStore(t)
+
+	// 1. Anthropic pagination preserves display_name on dynamically discovered models.
+	ant := addNativeAccount(t, s, "anthropic", false)
+	antRT := aiTestTransport(func(r *http.Request) (*http.Response, error) {
+		return fixtureAdmissionResponse(r, map[string]any{
+			"data": []map[string]any{
+				{
+					"id":           "claude-sonnet-6-0",
+					"type":         "model",
+					"lifecycle":    "active",
+					"line":         "sonnet",
+					"display_name": "Claude Sonnet 6.0",
+					"created_at":   "2026-10-08T00:00:00Z",
+				},
+			},
+			"has_more": false,
+			"last_id":  "claude-sonnet-6-0",
+		}), nil
+	})
+	antView, err := s.refreshProviderModels(t.Context(), ant.Ref, antRT)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m := modelChoice(antView, "claude-sonnet-6-0"); !m.Selectable || m.Name != "Claude Sonnet 6.0" || !isDiscoveredPolicy(m.Policy) {
+		t.Fatalf("anthropic display_name discovery mismatch: %+v", m)
+	}
+
+	// 2. Google strips models/ prefix and preserves display_name / name.
+	goo := addNativeAccount(t, s, "google", false)
+	gooRT := aiTestTransport(func(r *http.Request) (*http.Response, error) {
+		return fixtureAdmissionResponse(r, map[string]any{
+			"object": "list",
+			"data": []map[string]any{
+				{"id": "models/gemini-4.0-pro", "display_name": "Gemini 4.0 Pro", "created": 1744588800},
+			},
+		}), nil
+	})
+	gooView, err := s.refreshProviderModels(t.Context(), goo.Ref, gooRT)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m := modelChoice(gooView, "gemini-4.0-pro"); !m.Selectable || m.Name != "Gemini 4.0 Pro" || !isDiscoveredPolicy(m.Policy) {
+		t.Fatalf("google display_name discovery mismatch: %+v", m)
+	}
+
+	// 3. OpenRouter preserves model name.
+	or := addNativeAccount(t, s, "openrouter", false)
+	orRT := aiTestTransport(func(r *http.Request) (*http.Response, error) {
+		return fixtureAdmissionResponse(r, map[string]any{
+			"data": []map[string]any{
+				{"id": "anthropic/claude-9-opus", "name": "Anthropic: Claude 9 Opus", "created": 1744588800},
+			},
+		}), nil
+	})
+	orView, err := s.refreshProviderModels(t.Context(), or.Ref, orRT)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m := modelChoice(orView, "anthropic/claude-9-opus"); !m.Selectable || m.Name != "Anthropic: Claude 9 Opus" || !isDiscoveredPolicy(m.Policy) {
+		t.Fatalf("openrouter name discovery mismatch: %+v", m)
+	}
+
+	// 4. Local Ollama accepts omitted "object" field and preserves display name, while rejecting invalid "object".
+	loc := addLocalFixtureAccount(t, s)
+	locRT := aiTestTransport(func(r *http.Request) (*http.Response, error) {
+		return fixtureAdmissionResponse(r, map[string]any{
+			"data": []map[string]any{
+				{"id": "qwen3:32b", "name": "Qwen 3 32B", "owned_by": "library", "created": 1},
+			},
+		}), nil
+	})
+	locView, err := s.refreshProviderModels(t.Context(), loc.Ref, locRT)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m := modelChoice(locView, "qwen3:32b"); !m.Selectable || m.Name != "Qwen 3 32B" {
+		t.Fatalf("local omitted-object discovery mismatch: %+v", m)
+	}
+
+	badLocRT := aiTestTransport(func(r *http.Request) (*http.Response, error) {
+		return fixtureAdmissionResponse(r, map[string]any{
+			"object": "response",
+			"data":   []map[string]any{{"id": "qwen3:32b", "object": "model", "owned_by": "local"}},
+		}), nil
+	})
+	badLocView, err := s.refreshProviderModels(t.Context(), loc.Ref, badLocRT)
+	if err != nil || badLocView.Catalog.State != "failed" || modelChoice(badLocView, "qwen3:32b").Selectable {
+		t.Fatalf("invalid local object field accepted: err=%v catalog=%+v", err, badLocView.Catalog)
+	}
+}

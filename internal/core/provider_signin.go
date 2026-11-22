@@ -1133,12 +1133,16 @@ func (s *Store) openAISignInWire() http.RoundTripper {
 }
 
 func (s *Store) persistOSProtectedSignInLocked(ctx context.Context, ref string, raw []byte, expected [32]byte) ([32]byte, error) {
+	return s.persistOSProtectedOAuthLocked(ctx, ref, "openai", "openai-signin", raw, expected)
+}
+
+func (s *Store) persistOSProtectedOAuthLocked(ctx context.Context, ref, provider, mode string, raw []byte, expected [32]byte) ([32]byte, error) {
 	col, err := s.readAIVaultCollection()
 	if err != nil {
 		return [32]byte{}, err
 	}
 	for i, env := range col.Accounts {
-		if env.Ref != ref || env.Version != 5 || env.Provider != "openai" || env.Mode != "openai-signin" || !env.OSProtected {
+		if env.Ref != ref || env.Version != 5 || env.Provider != provider || env.Mode != mode || !env.OSProtected {
 			continue
 		}
 		encoded, _ := json.Marshal(env)
