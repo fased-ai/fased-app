@@ -33,6 +33,149 @@ install_packages() {
     *) die 'Unsupported OS package manager.' ;;
   esac
 }
+darwin_entry() {
+  [[ $(/usr/bin/id -u) != 0 ]] || die 'Run Fased on macOS from your ordinary user account, without sudo.'
+  [[ -z $operator ]] || die '--operator is only for Linux root bootstrap.'
+  [[ $action != refresh-helper && -z $previous_helper ]] || die '--refresh-helper is only supported on Linux.'
+  [[ -z $candidate_dir && -z $candidate_packet ]] || die '--candidate-dir is only supported on Linux.'
+  [[ -z $wallet_instance && -z $wallet_network && $action != wallets ]] || die 'Wallets enrollment is not yet supported on macOS.'
+  [[ $profile != remote ]] || die 'Managed Remote requires a supported Linux host; use --server on macOS.'
+
+  local darwin_cpu target darwin_archive_url='' darwin_archive_sha256=''
+  darwin_cpu=$(/usr/bin/uname -m)
+  case "$darwin_cpu" in
+    arm64|aarch64) target=darwin-arm64 ;;
+    x86_64|amd64) target=darwin-amd64 ;;
+    *) die 'No verified package for this macOS CPU.' ;;
+  esac
+  @DARWIN_TARGET_BINDINGS@
+  [[ $darwin_archive_sha256 =~ ^[a-f0-9]{64}$ ]] || die 'No authenticated macOS package checksum is pinned.'
+  if [[ $development_only == 0 ]]; then
+    [[ $darwin_archive_url == "https://github.com/fased-ai/fased-app/releases/download/v${entry_version}/fased-app-${target}.zip" && -z $fixture_ca_base64 ]] || die 'Untrusted macOS installer source.'
+  elif [[ $development_only == 1 ]]; then
+    [[ $darwin_archive_url =~ ^https://127\.0\.0\.1:[0-9]+/ && -n $fixture_ca_base64 ]] || die 'Invalid controlled macOS fixture.'
+    printf 'Fased: unpublished disposable-trust test installer.\n' >&2
+  else
+    die 'Invalid installer binding.'
+  fi
+
+  local app_root="$HOME/Library/Application Support/Fased App/app"
+  local server_root="$HOME/Library/Application Support/Fased App/server"
+  if [[ $action != install ]]; then
+    case "$action" in
+      uninstall|status|start|stop|open) ;;
+      *) die "The --${action} action is not yet supported on macOS." ;;
+    esac
+    local installed_bin=''
+    if [[ $profile == server ]]; then
+      installed_bin="$server_root/fased-app"
+      [[ -x $installed_bin ]] || die 'No installed Fased server binary was found.'
+      case "$action" in
+        uninstall)
+          if [[ $purge == 1 ]]; then exec "$installed_bin" server uninstall --purge; fi
+          exec "$installed_bin" server uninstall ;;
+        status)
+          exec "$installed_bin" server status ;;
+        *)
+          die "Use 'fased-app server status|uninstall' or launchctl for macOS Server." ;;
+      esac
+    else
+      if [[ -x "$app_root/fased-app" ]]; then
+        installed_bin="$app_root/fased-app"
+      elif [[ -z ${profile} && $action == status && -x "$server_root/fased-app" ]]; then
+        exec "$server_root/fased-app" server status
+      fi
+      [[ -n $installed_bin ]] || die 'No installed Fased Local binary was found.'
+      case "$action" in
+        uninstall) exec "$installed_bin" uninstall ;;
+        open) exec "$installed_bin" open ;;
+        start|stop|status) exec "$installed_bin" service "$action" ;;
+      esac
+    fi
+  fi
+
+  if ! { exec 3<>/dev/tty; } 2>/dev/null; then
+    die 'Run this command in an interactive terminal.'
+  fi
+  if [[ -z ${profile} ]]; then
+    local choice
+    printf 'Fased\n  Local\n  Server\n  Connect\nChoose [local/server/connect, default local]: ' >&3
+    IFS= read -r choice <&3
+    choice=$(printf '%s' "$choice" | /usr/bin/tr '[:upper:]' '[:lower:]')
+    case "$choice" in
+      ""|local) profile=local ;;
+      server|connect) profile=$choice ;;
+      *) die 'Choose Local, Server, or Connect.' ;;
+    esac
+  fi
+  if [[ $profile == server ]]; then
+    if [[ -z $server_transport ]]; then
+      local choice
+      printf 'Fased Server\n  ssh        — SSH tunnel (loopback only)\n  tailscale  — Tailscale private HTTPS\n  cloudflare — Cloudflare Tunnel HTTPS\n  domain     — Your own domain (Caddy auto-HTTPS)\nTransport [ssh/tailscale/cloudflare/domain, default ssh]: ' >&3
+      IFS= read -r choice <&3
+      choice=$(printf '%s' "$choice" | /usr/bin/tr '[:upper:]' '[:lower:]')
+      case "$choice" in
+        ""|ssh) server_transport=ssh ;;
+        tailscale|cloudflare|domain) server_transport=$choice ;;
+        *) die 'Choose ssh, tailscale, cloudflare, or domain.' ;;
+      esac
+    fi
+    if [[ ( $server_transport == cloudflare || $server_transport == domain ) && -z $server_domain ]]; then
+      printf 'HTTPS domain (e.g. fased.example.com): ' >&3
+      IFS= read -r server_domain <&3
+      [[ ${#server_domain} -le 253 && $server_domain == *.* && $server_domain =~ ^[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?)+$ ]] || die 'Invalid server HTTPS domain.'
+    fi
+  fi
+
+  local cache_root="$HOME/Library/Caches/fased-install" work actual
+  /bin/mkdir -p -m 0700 "$cache_root"
+  [[ ! -L $cache_root && $(/usr/bin/stat -f '%u:%Lp' "$cache_root") == "$(/usr/bin/id -u):700" ]] || die 'Installer cache must be private and owned by you.'
+  work=$(/usr/bin/mktemp -d "$cache_root/entry.XXXXXXXX")
+  trap '/bin/rm -rf -- "$work"' EXIT
+
+  local darwin_curl_args
+  darwin_curl_args=(-q --fail --silent --show-error --location --proto '=https' --proto-redir '=https' --tlsv1.2 --noproxy '*' --connect-timeout 10 --max-time 180 --max-filesize 268435456 -H 'Accept-Encoding: identity')
+  if [[ $development_only == 1 ]]; then
+    printf '%s' "$fixture_ca_base64" | /usr/bin/base64 -D > "$work/ca.pem"
+    darwin_curl_args+=(--cacert "$work/ca.pem")
+  fi
+  printf 'Downloading and verifying Fased for macOS…\n' >&2
+  /usr/bin/curl "${darwin_curl_args[@]}" --output "$work/archive.zip" "$darwin_archive_url"
+  read -r actual _ < <(/usr/bin/shasum -a 256 "$work/archive.zip")
+  [[ $actual == "$darwin_archive_sha256" ]] || die 'macOS archive checksum differs; nothing was executed.'
+  /bin/mkdir -p -m 0700 "$work/extract"
+  /usr/bin/ditto -xk "$work/archive.zip" "$work/extract"
+
+  local bundle_dir=''
+  if [[ -x "$work/extract/Fased App.app/Contents/MacOS/fased-app" && -f "$work/extract/Fased App.app/Contents/MacOS/bundle.json" ]]; then
+    bundle_dir="$work/extract/Fased App.app/Contents/MacOS"
+  elif [[ -x "$work/extract/fased-app-${target}/fased-app" && -f "$work/extract/fased-app-${target}/bundle.json" ]]; then
+    bundle_dir="$work/extract/fased-app-${target}"
+  else
+    die 'Verified macOS archive is missing fased-app or bundle.json.'
+  fi
+  local bundle_engine="$bundle_dir/fased-app"
+
+  case "$profile" in
+    local)
+      "$bundle_engine" install --bundle "$bundle_dir" --listen "$listen" --autostart
+      local bin_dir="$HOME/.local/bin"
+      /bin/mkdir -p "$bin_dir" 2>/dev/null || true
+      if [[ -d $bin_dir && ! -e "$bin_dir/fased" && ! -L "$bin_dir/fased" && -x "$app_root/fased-app" ]]; then
+        /bin/ln -s "$app_root/fased-app" "$bin_dir/fased" 2>/dev/null || true
+      fi
+      ;;
+    server)
+      local srv_args
+      srv_args=(server install --transport "$server_transport" --listen "$listen")
+      if [[ -n $server_domain ]]; then srv_args+=(--domain "$server_domain"); fi
+      "$bundle_engine" "${srv_args[@]}"
+      ;;
+    connect)
+      "$bundle_engine" connect <&3
+      ;;
+  esac
+}
 profile='' operator='' action=install listen='127.0.0.1:7331'
 wallet_instance='' wallet_network=''
 server_transport='' server_domain='' purge=0
@@ -45,7 +188,7 @@ while (($#)); do
     --remote) profile=remote; shift ;;
     --server) profile=server; shift ;;
     --connect) profile=connect; shift ;;
-    --transport) (($# >= 2)) || die 'Missing server transport.'; server_transport=${2,,}; shift 2 ;;
+    --transport) (($# >= 2)) || die 'Missing server transport.'; server_transport=$(printf '%s' "$2" | /usr/bin/tr '[:upper:]' '[:lower:]'); shift 2 ;;
     --domain) (($# >= 2)) || die 'Missing server domain.'; server_domain=$2; shift 2 ;;
     --open|--start|--stop|--status|--recover|--update|--setup|--wallets)
       [[ $action == install ]] || die 'Choose one management action.'
@@ -79,7 +222,8 @@ if [[ $purge == 1 ]]; then
   [[ $action == uninstall ]] || die '--purge requires --uninstall.'
 fi
 if [[ $action == uninstall ]]; then
-  [[ $profile == server ]] || die '--uninstall is currently supported with --server.'
+  [[ $profile == server || $profile == local ]] || die '--uninstall requires --local or --server.'
+  [[ $purge == 0 || $profile == server ]] || die '--purge is only supported with --server --uninstall.'
 fi
 if [[ $action == wallets ]]; then
   [[ $profile == remote && $wallet_instance =~ ^[A-Za-z0-9_-]{43}$ && ( $wallet_network == devnet || $wallet_network == mainnet-beta ) ]] || die 'Wallets setup requires Remote, the exact workspace and network.'
@@ -95,6 +239,10 @@ fi
 [[ $listen =~ ^127\.0\.0\.1:([0-9]{4,5})$ ]] || die 'Use a fixed loopback port.'
 port=${BASH_REMATCH[1]}
 [[ $port == "$((10#$port))" ]] && ((10#$port >= 1024 && 10#$port <= 65535)) || die 'Invalid listener port.'
+if [[ $(/usr/bin/uname -s) == Darwin ]]; then
+  darwin_entry
+  exit $?
+fi
 [[ -r /etc/os-release ]] || die 'OS release metadata is missing.'
 # Read only fixed data fields; never evaluate os-release as shell code.
 ID='' ID_LIKE='' VERSION_ID='' seen_id_like=0
@@ -141,11 +289,12 @@ if [[ -z $profile ]]; then
   if [[ $action == install ]]; then
     printf 'Fased\n  Local\n  Remote\n  Server\n  Connect\n  Update\nChoose [local/remote/server/connect/update, default %s]: ' "$suggested" >&3
     IFS= read -r choice <&3
-    case "${choice,,}" in "") profile=$suggested ;; local|remote|server|connect) profile=${choice,,} ;; update) action=update ;; *) die 'Choose Local, Remote, Server, Connect or Update.' ;; esac
+    choice=$(printf '%s' "$choice" | /usr/bin/tr '[:upper:]' '[:lower:]')
+    case "$choice" in "") profile=$suggested ;; local|remote|server|connect) profile=$choice ;; update) action=update ;; *) die 'Choose Local, Remote, Server, Connect or Update.' ;; esac
   fi
   if [[ -z $profile ]]; then
     printf 'Installation [local/remote, default %s]: ' "$suggested" >&3
-    IFS= read -r choice <&3; profile=${choice:-$suggested}; profile=${profile,,}
+    IFS= read -r choice <&3; profile=$(printf '%s' "${choice:-$suggested}" | /usr/bin/tr '[:upper:]' '[:lower:]')
     [[ $profile == local || $profile == remote ]] || die 'Choose Local or Remote.'
   fi
 fi
@@ -165,11 +314,20 @@ if [[ $action == uninstall && $profile == server ]]; then
   if [[ $purge == 1 ]]; then uninstall_args+=(--purge); fi
   exec "$installed_bin" "${uninstall_args[@]}"
 fi
+if [[ $action == uninstall && $profile == local ]]; then
+  installed_bin=''
+  for candidate in "$HOME/.local/share/fased-app/app/fased-app" "$HOME/.local/bin/fased"; do
+    if [[ -x $candidate ]]; then installed_bin=$candidate; break; fi
+  done
+  [[ -n $installed_bin ]] || die 'No installed Fased Local binary was found; run fased uninstall.'
+  exec "$installed_bin" uninstall
+fi
 if [[ $profile == server && $action == install ]]; then
   if [[ -z $server_transport ]]; then
     printf 'Fased Server\n  ssh        — SSH tunnel (loopback only)\n  tailscale  — Tailscale private HTTPS\n  cloudflare — Cloudflare Tunnel HTTPS\n  domain     — Your own domain (Caddy auto-HTTPS)\nTransport [ssh/tailscale/cloudflare/domain, default ssh]: ' >&3
     IFS= read -r choice <&3
-    case "${choice,,}" in "") server_transport=ssh ;; ssh|tailscale|cloudflare|domain) server_transport=${choice,,} ;; *) die 'Choose ssh, tailscale, cloudflare, or domain.' ;; esac
+    choice=$(printf '%s' "$choice" | /usr/bin/tr '[:upper:]' '[:lower:]')
+    case "$choice" in "") server_transport=ssh ;; ssh|tailscale|cloudflare|domain) server_transport=$choice ;; *) die 'Choose ssh, tailscale, cloudflare, or domain.' ;; esac
   fi
   if [[ ( $server_transport == cloudflare || $server_transport == domain ) && -z $server_domain ]]; then
     printf 'HTTPS domain (e.g. fased.example.com): ' >&3

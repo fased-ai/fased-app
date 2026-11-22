@@ -29,3 +29,8 @@ func InstalledNativeUpdateSessionIdentity(int, string, string) (Manifest, string
 func InstalledRemoteAccountsIdentity(int, string, string) (Manifest, string, error) {
 	return Manifest{}, "", errors.New("protected Remote custody accounts require Linux")
 }
+
+// VerifyPackageOwnerTarget is only supported on Linux custody package hosts.
+func VerifyPackageOwnerTarget(Manifest) error {
+	return unsupported
+}

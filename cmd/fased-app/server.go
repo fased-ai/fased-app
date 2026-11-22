@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -22,26 +23,29 @@ import (
 )
 
 type serverInitPlan struct {
-	Transport     string            `json:"transport"`
-	Listen        string            `json:"listen"`
-	DataDir       string            `json:"dataDir"`
-	PublicOrigin  string            `json:"publicOrigin,omitempty"`
-	ServiceUnit   string            `json:"serviceUnit"`
-	CompanionFile string            `json:"companionFile,omitempty"`
-	CompanionBody string            `json:"companionBody,omitempty"`
-	Commands      []string          `json:"commands"`
-	WrittenFiles  map[string]string `json:"writtenFiles,omitempty"`
+	ServiceManager string            `json:"serviceManager,omitempty"`
+	ServiceFile    string            `json:"serviceFile,omitempty"`
+	Transport      string            `json:"transport"`
+	Listen         string            `json:"listen"`
+	DataDir        string            `json:"dataDir"`
+	PublicOrigin   string            `json:"publicOrigin,omitempty"`
+	ServiceUnit    string            `json:"serviceUnit"`
+	CompanionFile  string            `json:"companionFile,omitempty"`
+	CompanionBody  string            `json:"companionBody,omitempty"`
+	Commands       []string          `json:"commands"`
+	WrittenFiles   map[string]string `json:"writtenFiles,omitempty"`
 }
 
 type serverConfig struct {
-	Version       int    `json:"version"`
-	Transport     string `json:"transport"`
-	Listen        string `json:"listen"`
-	PublicOrigin  string `json:"publicOrigin,omitempty"`
-	DataDir       string `json:"dataDir"`
-	BinaryPath    string `json:"binaryPath"`
-	UnitPath      string `json:"unitPath"`
-	CompanionPath string `json:"companionPath,omitempty"`
+	Version        int    `json:"version"`
+	ServiceManager string `json:"serviceManager,omitempty"`
+	Transport      string `json:"transport"`
+	Listen         string `json:"listen"`
+	PublicOrigin   string `json:"publicOrigin,omitempty"`
+	DataDir        string `json:"dataDir"`
+	BinaryPath     string `json:"binaryPath"`
+	UnitPath       string `json:"unitPath"`
+	CompanionPath  string `json:"companionPath,omitempty"`
 }
 
 const serverConfigFile = "server-config.json"
@@ -67,25 +71,11 @@ func runSystemctlUser(ctx context.Context, args ...string) error {
 }
 
 func defaultUserSystemdDir() (string, error) {
-	if base := os.Getenv("XDG_CONFIG_HOME"); base != "" {
-		return filepath.Join(base, "systemd", "user"), nil
-	}
-	home, err := os.UserHomeDir()
-	if err != nil || home == "" {
-		return "", errors.New("cannot determine user systemd directory")
-	}
-	return filepath.Join(home, ".config", "systemd", "user"), nil
+	return defaultServerServiceDirForOS("linux")
 }
 
 func defaultServerPrefix() (string, error) {
-	if base := os.Getenv("XDG_DATA_HOME"); base != "" {
-		return filepath.Join(base, "fased-app"), nil
-	}
-	home, err := os.UserHomeDir()
-	if err != nil || home == "" {
-		return "", errors.New("cannot determine server installation prefix")
-	}
-	return filepath.Join(home, ".local", "share", "fased-app"), nil
+	return defaultServerPrefixForOS(runtime.GOOS)
 }
 
 func installServerBinary(targetPath string) (string, error) {
@@ -96,8 +86,9 @@ func installServerBinary(targetPath string) (string, error) {
 	exePath, exeErr := os.Executable()
 	if exeErr == nil && exePath != "" {
 		if targetStat, tErr := os.Stat(absTarget); tErr == nil {
+			normTarget := filepath.ToSlash(absTarget)
 			if exeStat, eErr := os.Stat(exePath); eErr == nil && os.SameFile(targetStat, exeStat) &&
-				!strings.HasPrefix(absTarget, "/tmp/") && !strings.Contains(absTarget, "/.cache/fased-install/") {
+				!strings.HasPrefix(normTarget, "/tmp/") && !strings.Contains(normTarget, "/.cache/fased-install/") {
 				return absTarget, nil
 			}
 		}
@@ -105,8 +96,12 @@ func installServerBinary(targetPath string) (string, error) {
 	if err = os.MkdirAll(filepath.Dir(absTarget), 0700); err != nil {
 		return "", err
 	}
-	srcPath := "/proc/self/exe"
-	src, err := os.Open(srcPath)
+	var src *os.File
+	if runtime.GOOS == "linux" {
+		src, err = os.Open("/proc/self/exe")
+	} else {
+		err = os.ErrNotExist
+	}
 	if err != nil {
 		if exePath == "" {
 			return "", err
@@ -141,12 +136,44 @@ func installServerBinary(targetPath string) (string, error) {
 		return "", err
 	}
 	if err = os.Rename(tmpPath, absTarget); err != nil {
-		return "", err
+		if runtime.GOOS == "windows" {
+			backupPath := absTarget + ".old"
+			_ = os.Remove(backupPath)
+			if _, statErr := os.Stat(absTarget); statErr == nil {
+				if mvErr := os.Rename(absTarget, backupPath); mvErr == nil {
+					if err = os.Rename(tmpPath, absTarget); err != nil {
+						_ = os.Rename(backupPath, absTarget)
+					} else {
+						_ = os.Remove(backupPath)
+					}
+				}
+			}
+		}
+		if err != nil {
+			return "", err
+		}
 	}
 	cleanup = false
 
-	// Offer ~/.local/bin/fased convenience symlink if unoccupied.
-	if home, hErr := os.UserHomeDir(); hErr == nil && home != "" {
+	// Offer user CLI shim / symlink if unoccupied.
+	if runtime.GOOS == "windows" {
+		base := strings.TrimSpace(os.Getenv("LOCALAPPDATA"))
+		if base == "" {
+			if home, hErr := os.UserHomeDir(); hErr == nil && home != "" {
+				base = filepath.Join(home, "AppData", "Local")
+			}
+		}
+		if base != "" {
+			binDir := filepath.Join(base, "Fased App", "bin")
+			if os.MkdirAll(binDir, 0700) == nil {
+				shimPath := filepath.Join(binDir, "fased.cmd")
+				if _, lErr := os.Lstat(shimPath); errors.Is(lErr, os.ErrNotExist) {
+					shimBody := fmt.Sprintf("@echo off\r\n\"%s\" %%*\r\n", absTarget)
+					_ = os.WriteFile(shimPath, []byte(shimBody), 0700)
+				}
+			}
+		}
+	} else if home, hErr := os.UserHomeDir(); hErr == nil && home != "" {
 		binDir := filepath.Join(home, ".local", "bin")
 		if os.MkdirAll(binDir, 0755) == nil {
 			linkPath := filepath.Join(binDir, "fased")
@@ -197,6 +224,14 @@ func validateLoopbackListen(listen string) (string, int, error) {
 }
 
 func buildServerInitPlan(transport, domain, listen, dataDir, binPath string) (serverInitPlan, error) {
+	return buildServerInitPlanForManager(transport, domain, listen, dataDir, binPath, defaultServerServiceManager())
+}
+
+func buildServerInitPlanForManager(transport, domain, listen, dataDir, binPath, serviceManager string) (serverInitPlan, error) {
+	manager, err := normalizeServerServiceManager(serviceManager)
+	if err != nil {
+		return serverInitPlan{}, err
+	}
 	transport = strings.ToLower(strings.TrimSpace(transport))
 	domain = strings.TrimSpace(domain)
 	domain = strings.TrimPrefix(strings.TrimPrefix(domain, "https://"), "http://")
@@ -276,10 +311,14 @@ func buildServerInitPlan(transport, domain, listen, dataDir, binPath string) (se
 			strings.TrimPrefix(origin, "https://"),
 			normListen,
 		)
-		commands = append(commands,
-			"sudo install -m 0644 Caddyfile /etc/caddy/Caddyfile",
-			"sudo systemctl reload caddy",
-		)
+		if manager == "systemd" {
+			commands = append(commands,
+				"sudo install -m 0644 Caddyfile /etc/caddy/Caddyfile",
+				"sudo systemctl reload caddy",
+			)
+		} else {
+			commands = append(commands, "caddy run --config Caddyfile")
+		}
 	case "ssh":
 		if domain != "" {
 			return serverInitPlan{}, errors.New("ssh transport runs on loopback only; omit --domain")
@@ -289,8 +328,7 @@ func buildServerInitPlan(transport, domain, listen, dataDir, binPath string) (se
 		return serverInitPlan{}, errors.New("transport must be tailscale, cloudflare, domain, or ssh")
 	}
 
-	execArgs := []string{
-		binPath,
+	serveArgs := []string{
 		"serve",
 		"--instance-location", "remote",
 		"--remote-transport", transport,
@@ -298,20 +336,32 @@ func buildServerInitPlan(transport, domain, listen, dataDir, binPath string) (se
 		"--data-dir", absData,
 	}
 	if publicOrigin != "" {
-		execArgs = append(execArgs, "--public-origin", publicOrigin)
+		serveArgs = append(serveArgs, "--public-origin", publicOrigin)
 	}
-	serviceUnit := formatServerUnit(transport, strings.Join(execArgs, " "), absData, true, "multi-user.target")
+	execArgs := append([]string{binPath}, serveArgs...)
+	serviceFile := serverServiceFileName(manager)
+	var serviceUnit string
+	switch manager {
+	case "launchd":
+		serviceUnit = formatLaunchdServerPlist(execArgs)
+	case "windows":
+		serviceUnit = formatWindowsServerTaskXML(serverWindowsTaskUserID(), binPath, serveArgs)
+	default:
+		serviceUnit = formatServerUnit(transport, strings.Join(execArgs, " "), absData, true, "multi-user.target")
+	}
 
 	commands = append(commands, fmt.Sprintf("%s pair --data-dir %s", binPath, absData))
 	return serverInitPlan{
-		Transport:     transport,
-		Listen:        normListen,
-		DataDir:       absData,
-		PublicOrigin:  publicOrigin,
-		ServiceUnit:   serviceUnit,
-		CompanionFile: companionFile,
-		CompanionBody: companionBody,
-		Commands:      commands,
+		ServiceManager: manager,
+		ServiceFile:    serviceFile,
+		Transport:      transport,
+		Listen:         normListen,
+		DataDir:        absData,
+		PublicOrigin:   publicOrigin,
+		ServiceUnit:    serviceUnit,
+		CompanionFile:  companionFile,
+		CompanionBody:  companionBody,
+		Commands:       commands,
 	}, nil
 }
 
@@ -364,8 +414,9 @@ func serverInitCommand(args []string, defaultDataDir string, out, errOut io.Writ
 	domain := f.String("domain", "", "HTTPS domain for cloudflare, domain, or optional tailscale (*.ts.net)")
 	listen := f.String("listen", "127.0.0.1:7331", "loopback listener")
 	dataDir := f.String("data-dir", defaultDataDir, "private instance state directory")
-	outputDir := f.String("output-dir", "", "optional directory to write systemd unit and proxy config")
-	binPath := f.String("binary", "", "path to fased-app binary for systemd ExecStart")
+	serviceManager := f.String("service-manager", "auto", "service manager: auto, systemd, launchd, or windows")
+	outputDir := f.String("output-dir", "", "optional directory to write service unit and proxy config")
+	binPath := f.String("binary", "", "path to fased-app binary for service definition")
 	jsonOut := f.Bool("json", false, "output JSON")
 	if err := f.Parse(args); err != nil {
 		return err
@@ -383,7 +434,7 @@ func serverInitCommand(args []string, defaultDataDir string, out, errOut io.Writ
 		}
 	}
 
-	plan, err := buildServerInitPlan(*transport, *domain, *listen, *dataDir, resolvedBin)
+	plan, err := buildServerInitPlanForManager(*transport, *domain, *listen, *dataDir, resolvedBin, *serviceManager)
 	if err != nil {
 		return err
 	}
@@ -397,7 +448,7 @@ func serverInitCommand(args []string, defaultDataDir string, out, errOut io.Writ
 			return err
 		}
 		written := map[string]string{}
-		unitPath := filepath.Join(outAbs, "fased-server.service")
+		unitPath := filepath.Join(outAbs, plan.ServiceFile)
 		if err := os.WriteFile(unitPath, []byte(plan.ServiceUnit), 0600); err != nil {
 			return err
 		}
@@ -425,7 +476,7 @@ func serverInitCommand(args []string, defaultDataDir string, out, errOut io.Writ
 			fmt.Fprintf(out, "Wrote %s: %s\n", k, p)
 		}
 	} else {
-		fmt.Fprintf(out, "\n--- fased-server.service ---\n%s", plan.ServiceUnit)
+		fmt.Fprintf(out, "\n--- %s ---\n%s", plan.ServiceFile, plan.ServiceUnit)
 		if plan.CompanionFile != "" {
 			fmt.Fprintf(out, "\n--- %s ---\n%s", plan.CompanionFile, plan.CompanionBody)
 		}
@@ -437,12 +488,26 @@ func serverInitCommand(args []string, defaultDataDir string, out, errOut io.Writ
 	return nil
 }
 
+func resolveServerServiceDir(manager, serviceDirFlag, systemdDirFlag string) (string, error) {
+	s1 := strings.TrimSpace(serviceDirFlag)
+	s2 := strings.TrimSpace(systemdDirFlag)
+	if s1 != "" && s2 != "" && s1 != s2 {
+		return "", errors.New("specify at most one of --service-dir or --systemd-dir")
+	}
+	if s1 != "" {
+		return s1, nil
+	}
+	if s2 != "" {
+		return s2, nil
+	}
+	return defaultServerServiceDirForManager(manager)
+}
+
 func serverInstallCommand(args []string, defaultDataDir string, out, errOut io.Writer) error {
 	prefixDefault, prefixErr := defaultServerPrefix()
 	if prefixErr != nil {
 		prefixDefault = filepath.Join(defaultDataDir, "bin")
 	}
-	systemdDefault, systemdErr := defaultUserSystemdDir()
 
 	f := flag.NewFlagSet("server install", flag.ContinueOnError)
 	f.SetOutput(errOut)
@@ -451,9 +516,11 @@ func serverInstallCommand(args []string, defaultDataDir string, out, errOut io.W
 	listen := f.String("listen", "127.0.0.1:7331", "loopback listener")
 	dataDir := f.String("data-dir", defaultDataDir, "private instance state directory")
 	prefix := f.String("prefix", prefixDefault, "server binary installation directory")
-	systemdDir := f.String("systemd-dir", systemdDefault, "systemd unit directory")
+	serviceManager := f.String("service-manager", "auto", "service manager: auto, systemd, launchd, or windows")
+	serviceDir := f.String("service-dir", "", "service unit/plist/task directory")
+	systemdDir := f.String("systemd-dir", "", "systemd unit directory (alias for --service-dir)")
 	binPath := f.String("binary", "", "explicit fased-app binary path (skips copying current binary)")
-	start := f.Bool("start", true, "enable and start fased-server.service")
+	start := f.Bool("start", true, "enable and start Fased server service")
 	noQR := f.Bool("no-qr", false, "omit terminal QR code when auto-pairing")
 	jsonOut := f.Bool("json", false, "output JSON")
 	if err := f.Parse(args); err != nil {
@@ -462,11 +529,17 @@ func serverInstallCommand(args []string, defaultDataDir string, out, errOut io.W
 	if f.NArg() != 0 {
 		return errors.New("unexpected positional arguments")
 	}
-	if *systemdDir == "" {
-		if systemdErr != nil {
-			return systemdErr
-		}
-		return errors.New("systemd directory required")
+
+	manager, err := normalizeServerServiceManager(*serviceManager)
+	if err != nil {
+		return err
+	}
+	resolvedServiceDir, err := resolveServerServiceDir(manager, *serviceDir, *systemdDir)
+	if err != nil {
+		return err
+	}
+	if resolvedServiceDir == "" {
+		return errors.New("service directory required")
 	}
 
 	chosenTransport := strings.ToLower(strings.TrimSpace(*transport))
@@ -481,7 +554,7 @@ func serverInstallCommand(args []string, defaultDataDir string, out, errOut io.W
 	if err != nil {
 		return err
 	}
-	absSystemd, err := filepath.Abs(*systemdDir)
+	absServiceDir, err := filepath.Abs(resolvedServiceDir)
 	if err != nil {
 		return err
 	}
@@ -492,28 +565,32 @@ func serverInstallCommand(args []string, defaultDataDir string, out, errOut io.W
 		if pErr != nil {
 			return pErr
 		}
-		resolvedBin, err = serverBinaryInstaller(filepath.Join(absPrefix, "fased-app"))
+		resolvedBin, err = serverBinaryInstaller(filepath.Join(absPrefix, serverBinaryName(runtime.GOOS)))
 		if err != nil {
 			return err
 		}
 	}
 
-	plan, err := buildServerInitPlan(chosenTransport, *domain, *listen, absData, resolvedBin)
+	plan, err := buildServerInitPlanForManager(chosenTransport, *domain, *listen, absData, resolvedBin, manager)
 	if err != nil {
 		return err
 	}
-	if absSystemd != "/etc/systemd/system" {
+	if manager == "systemd" && absServiceDir != "/etc/systemd/system" {
 		plan.ServiceUnit = buildUserServiceUnit(plan, resolvedBin)
 	}
 
 	if err = core.EnsurePrivateDirectory(absData); err != nil {
 		return err
 	}
-	if err = os.MkdirAll(absSystemd, 0700); err != nil {
+	if err = os.MkdirAll(absServiceDir, 0700); err != nil {
 		return err
 	}
-	unitPath := filepath.Join(absSystemd, "fased-server.service")
-	if err = os.WriteFile(unitPath, []byte(plan.ServiceUnit), 0600); err != nil {
+	unitPath := filepath.Join(absServiceDir, plan.ServiceFile)
+	unitBytes := []byte(plan.ServiceUnit)
+	if manager == "windows" {
+		unitBytes = encodeWindowsTaskXMLUTF16(plan.ServiceUnit)
+	}
+	if err = os.WriteFile(unitPath, unitBytes, 0600); err != nil {
 		return err
 	}
 
@@ -532,20 +609,23 @@ func serverInstallCommand(args []string, defaultDataDir string, out, errOut io.W
 			case "cloudflared.yml":
 				plan.Commands[i] = strings.ReplaceAll(c, "cloudflared.yml", companionPath)
 			case "Caddyfile":
-				plan.Commands[i] = strings.ReplaceAll(c, "install -m 0644 Caddyfile ", "install -m 0644 "+companionPath+" ")
+				updated := strings.ReplaceAll(c, "install -m 0644 Caddyfile ", "install -m 0644 "+companionPath+" ")
+				updated = strings.ReplaceAll(updated, "--config Caddyfile", "--config "+companionPath)
+				plan.Commands[i] = updated
 			}
 		}
 	}
 
 	cfg := serverConfig{
-		Version:       1,
-		Transport:     plan.Transport,
-		Listen:        plan.Listen,
-		PublicOrigin:  plan.PublicOrigin,
-		DataDir:       absData,
-		BinaryPath:    resolvedBin,
-		UnitPath:      unitPath,
-		CompanionPath: companionPath,
+		Version:        1,
+		ServiceManager: manager,
+		Transport:      plan.Transport,
+		Listen:         plan.Listen,
+		PublicOrigin:   plan.PublicOrigin,
+		DataDir:        absData,
+		BinaryPath:     resolvedBin,
+		UnitPath:       unitPath,
+		CompanionPath:  companionPath,
 	}
 	if err = core.WritePrivateJSON(filepath.Join(absData, serverConfigFile), cfg); err != nil {
 		return err
@@ -560,10 +640,7 @@ func serverInstallCommand(args []string, defaultDataDir string, out, errOut io.W
 	if *start {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
-		if err = serverSystemctl(ctx, "daemon-reload"); err != nil {
-			return err
-		}
-		if err = serverSystemctl(ctx, "enable", "--now", "fased-server.service"); err != nil {
+		if err = enableAndStartServerService(ctx, manager, unitPath); err != nil {
 			return err
 		}
 		started = true
@@ -603,15 +680,16 @@ func serverInstallCommand(args []string, defaultDataDir string, out, errOut io.W
 
 	if *jsonOut {
 		payload := map[string]any{
-			"installed":    true,
-			"started":      started,
-			"transport":    cfg.Transport,
-			"listen":       cfg.Listen,
-			"dataDir":      cfg.DataDir,
-			"binaryPath":   cfg.BinaryPath,
-			"unitPath":     cfg.UnitPath,
-			"publicOrigin": cfg.PublicOrigin,
-			"commands":     plan.Commands,
+			"installed":      true,
+			"started":        started,
+			"serviceManager": manager,
+			"transport":      cfg.Transport,
+			"listen":         cfg.Listen,
+			"dataDir":        cfg.DataDir,
+			"binaryPath":     cfg.BinaryPath,
+			"unitPath":       cfg.UnitPath,
+			"publicOrigin":   cfg.PublicOrigin,
+			"commands":       plan.Commands,
 		}
 		if cfg.CompanionPath != "" {
 			payload["companionPath"] = cfg.CompanionPath
@@ -626,7 +704,7 @@ func serverInstallCommand(args []string, defaultDataDir string, out, errOut io.W
 		return json.NewEncoder(out).Encode(payload)
 	}
 
-	fmt.Fprintf(out, "Installed fased-server.service (%s on %s)\n", cfg.Transport, cfg.Listen)
+	fmt.Fprintf(out, "Installed %s (%s on %s)\n", plan.ServiceFile, cfg.Transport, cfg.Listen)
 	if cfg.PublicOrigin != "" {
 		fmt.Fprintf(out, "Origin:  %s\n", cfg.PublicOrigin)
 	}
@@ -653,12 +731,12 @@ func serverInstallCommand(args []string, defaultDataDir string, out, errOut io.W
 }
 
 func serverUninstallCommand(args []string, defaultDataDir string, out, errOut io.Writer) error {
-	systemdDefault, _ := defaultUserSystemdDir()
-
 	f := flag.NewFlagSet("server uninstall", flag.ContinueOnError)
 	f.SetOutput(errOut)
 	dataDir := f.String("data-dir", defaultDataDir, "private instance state directory")
-	systemdDir := f.String("systemd-dir", systemdDefault, "systemd unit directory")
+	serviceManager := f.String("service-manager", "auto", "service manager: auto, systemd, launchd, or windows")
+	serviceDir := f.String("service-dir", "", "service unit/plist/task directory")
+	systemdDir := f.String("systemd-dir", "", "systemd unit directory (alias for --service-dir)")
 	purge := f.Bool("purge", false, "delete all instance state including keys and database")
 	jsonOut := f.Bool("json", false, "output JSON")
 	if err := f.Parse(args); err != nil {
@@ -672,22 +750,36 @@ func serverUninstallCommand(args []string, defaultDataDir string, out, errOut io
 		return err
 	}
 
-	unitPath := ""
-	if *systemdDir != "" {
-		unitPath = filepath.Join(*systemdDir, "fased-server.service")
+	manager, err := normalizeServerServiceManager(*serviceManager)
+	if err != nil {
+		return err
 	}
+	rawManager := strings.ToLower(strings.TrimSpace(*serviceManager))
+
+	unitPath := ""
 	cfgPath := filepath.Join(absData, serverConfigFile)
 	if raw, rErr := core.ReadPrivateFile(cfgPath); rErr == nil {
 		var cfg serverConfig
-		if json.Unmarshal(raw, &cfg) == nil && cfg.UnitPath != "" {
-			unitPath = cfg.UnitPath
+		if json.Unmarshal(raw, &cfg) == nil {
+			if cfg.UnitPath != "" {
+				unitPath = cfg.UnitPath
+			}
+			if (rawManager == "" || rawManager == "auto") && cfg.ServiceManager != "" {
+				if norm, nErr := normalizeServerServiceManager(cfg.ServiceManager); nErr == nil {
+					manager = norm
+				}
+			}
+		}
+	}
+	if unitPath == "" {
+		if resolvedDir, dErr := resolveServerServiceDir(manager, *serviceDir, *systemdDir); dErr == nil && resolvedDir != "" {
+			unitPath = filepath.Join(resolvedDir, serverServiceFileName(manager))
 		}
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
-	_ = serverSystemctl(ctx, "disable", "--now", "fased-server.service")
-	_ = serverSystemctl(ctx, "daemon-reload")
+	_ = stopAndDisableServerService(ctx, manager)
 
 	removedUnit := false
 	if unitPath != "" {
