@@ -104,7 +104,11 @@ func (s *Store) readVenue(id string) (v venueEnvelope, err error) {
 	return v, nil
 }
 func openCredential(ciphertext, nonce, salt, aad []byte, password string) ([]byte, error) {
-	k := passwordHash(password, salt)
+	return openCredentialWithPreKey(ciphertext, nonce, salt, aad, password, preDerivedKDF{})
+}
+
+func openCredentialWithPreKey(ciphertext, nonce, salt, aad []byte, password string, pre preDerivedKDF) ([]byte, error) {
+	k := pre.keyFor(password, salt)
 	defer clear(k)
 	b, e := aes.NewCipher(k)
 	if e != nil {
@@ -240,6 +244,23 @@ func (s *Store) venueCredential(ctx context.Context, c VenueCredentialCommand, a
 	if closed || admittedGeneration != nil && *admittedGeneration != initialGeneration {
 		return view, ErrUnauthorized
 	}
+	var preVenueOpen, preRPCOpen, preVenueSeal preDerivedKDF
+	defer preVenueOpen.clear()
+	defer preRPCOpen.clear()
+	defer preVenueSeal.clear()
+	if c.Action != "status" && c.Action != "lock" && validPassword(c.Passphrase) {
+		if existing, err := s.readVenue(c.AccountID); err == nil {
+			preVenueOpen = derivePasswordKeyForSalt(c.Passphrase, existing.Salt)
+		}
+		if rv, err := s.readRPCVault(c.AccountID); err == nil && !rv.OSProtected {
+			preRPCOpen = derivePasswordKeyForSalt(c.Passphrase, rv.Salt)
+		}
+		if c.Action == "save" {
+			if p, err := deriveNewPasswordKey(c.Passphrase); err == nil {
+				preVenueSeal = p
+			}
+		}
+	}
 	tx, e := s.db.BeginTx(ctx, nil)
 	if e != nil {
 		return view, fail
@@ -311,7 +332,7 @@ func (s *Store) venueCredential(ctx context.Context, c VenueCredentialCommand, a
 	// RPC removal/rotation/password changes must never strand this operation.
 	var key []byte
 	if saved {
-		key, e = openCredential(v.Ciphertext, v.Nonce, v.Salt, s.venueAAD(a.ID, v), c.Passphrase)
+		key, e = openCredentialWithPreKey(v.Ciphertext, v.Nonce, v.Salt, s.venueAAD(a.ID, v), c.Passphrase, preVenueOpen)
 		defer clear(key)
 		if e != nil || !validJupiterKey(key) {
 			return view, fail
@@ -337,7 +358,7 @@ func (s *Store) venueCredential(ctx context.Context, c VenueCredentialCommand, a
 	if rpc.OSProtected {
 		rpcPassphrase = ""
 	}
-	rpcKey, e := s.openRPCVaultKey(ctx, a.ID, rpcPassphrase, rpc)
+	rpcKey, e := s.openRPCVaultKeyWithPreKey(ctx, a.ID, rpcPassphrase, rpc, preRPCOpen)
 	defer clear(rpcKey)
 	if e != nil || !validRPCSecret(2, string(rpcKey)) || rpc.Binding != rpcBinding(a) {
 		return view, fail
@@ -351,13 +372,15 @@ func (s *Store) venueCredential(ctx context.Context, c VenueCredentialCommand, a
 		if v.Ref, e = randomToken(); e != nil {
 			return view, fail
 		}
-		if _, e = rand.Read(v.Salt); e != nil {
+		if len(preVenueSeal.key) == 32 && len(preVenueSeal.salt) == 16 {
+			copy(v.Salt, preVenueSeal.salt)
+		} else if _, e = rand.Read(v.Salt); e != nil {
 			return view, fail
 		}
 		if _, e = rand.Read(v.Nonce); e != nil {
 			return view, fail
 		}
-		k := passwordHash(c.Passphrase, v.Salt)
+		k := preVenueSeal.keyFor(c.Passphrase, v.Salt)
 		block, _ := aes.NewCipher(k)
 		clear(k)
 		g, _ := cipher.NewGCM(block)

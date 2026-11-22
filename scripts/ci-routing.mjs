@@ -54,7 +54,7 @@ function versionOnly(base, head) {
 }
 
 const releaseScriptFile =
-  /^scripts\/(?:release-acceptance(?:\.test)?\.mjs|staged-acceptance-contract\.json|prepare-ubuntu-release(?:\.test)?\.mjs|publish-ubuntu-release\.mjs|publisher-journal\.mjs|release-ubuntu\.mjs|release-source\.mjs|attested-release\.test\.mjs|staged-package-guest\.(?:py|test\.py))$/;
+  /^scripts\/(?:install-entry\.test\.mjs|release-acceptance(?:\.test)?\.mjs|staged-acceptance-contract\.json|prepare-ubuntu-release(?:\.test)?\.mjs|publish-ubuntu-release\.mjs|publisher-journal\.mjs|release-ubuntu\.mjs|release-source\.mjs|attested-release\.test\.mjs|staged-package-guest\.(?:py|test\.py))$/;
 const agentCoreFile =
   /^internal\/core\/(?:agent_(?!strategies(?:_|\.))|ai_|provider_|news_)[a-z0-9_]+\.(?:go|json)$/;
 

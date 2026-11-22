@@ -667,6 +667,21 @@ func (s *Store) changeAIConnection(ctx context.Context, c AIConnectionCommand) (
 		}
 		return s.aiConnectionLocked(c.Ref)
 	}
+	var preOpen, preSeal preDerivedKDF
+	defer preOpen.clear()
+	defer preSeal.clear()
+	if c.Passphrase != "" && validPassword(c.Passphrase) {
+		if c.Ref != "" && (c.Action == "unlock" || c.Action == "remove" || c.Action == "save" || c.Action == "task-access-allow") {
+			if env, err := s.readAIVault(c.Ref); err == nil && !env.OSProtected {
+				preOpen = derivePasswordKeyForSalt(c.Passphrase, env.Salt)
+			}
+		}
+		if c.Action == "save" || c.Action == "add" {
+			if p, err := deriveNewPasswordKey(c.Passphrase); err == nil {
+				preSeal = p
+			}
+		}
+	}
 	tx, e := s.db.BeginTx(ctx, nil)
 	if e != nil {
 		return AIConnectionView{}, e
@@ -705,7 +720,7 @@ func (s *Store) changeAIConnection(ctx context.Context, c AIConnectionCommand) (
 		if c.Action != "task-access-revoke" && !s.aiCredentialModeAllowed(v.CredentialMode) && !(s.pilotTargetLocked(v.Ref) && v.CredentialMode == "openai") {
 			return v, errors.New("credential mode unavailable; real credentials disabled")
 		}
-		return s.changeTaskAccess(ctx, tx, c, v)
+		return s.changeTaskAccess(ctx, tx, c, v, preOpen)
 	}
 	if c.Action != "save" && c.Action != "add" && c.Action != "unlock" && c.Action != "remove" {
 		return v, errors.New("unknown credential operation")
@@ -745,7 +760,7 @@ func (s *Store) changeAIConnection(ctx context.Context, c AIConnectionCommand) (
 		if err != nil {
 			return v, errors.New("credential vault unavailable")
 		}
-		plain, err := s.openAIVaultWithContext(ctx, env, c.Passphrase)
+		plain, err := s.openAIVaultWithPreKey(ctx, env, c.Passphrase, preOpen)
 		defer clear(plain)
 		if err != nil {
 			return v, errors.New("vault unlock failed")
@@ -811,13 +826,13 @@ func (s *Store) changeAIConnection(ctx context.Context, c AIConnectionCommand) (
 	if !validAgentText(c.Name, 80, false) {
 		return v, errors.New("invalid connection name")
 	}
-	return s.persistAIConnectionLocked(ctx, c, col, provider, mode, bootstrap)
+	return s.persistAIConnectionLocked(ctx, c, col, provider, mode, bootstrap, preSeal)
 }
 
 // Caller holds the metadata transaction and credential mutex, and has validated
 // authority, key class and account identity. OAuth-issued API keys use the same
 // encrypted envelope as manually entered API keys, never ChatGPT plan authority.
-func (s *Store) persistAIConnectionLocked(ctx context.Context, c AIConnectionCommand, col aiVaultCollection, provider, mode string, bootstrap bool) (AIConnectionView, error) {
+func (s *Store) persistAIConnectionLocked(ctx context.Context, c AIConnectionCommand, col aiVaultCollection, provider, mode string, bootstrap bool, preSeal preDerivedKDF) (AIConnectionView, error) {
 	var v AIConnectionView
 	var e error
 	env := aiVaultEnvelope{Name: strings.TrimSpace(c.Name), Version: 1, Salt: make([]byte, 16), Nonce: make([]byte, 12)}
@@ -842,14 +857,22 @@ func (s *Store) persistAIConnectionLocked(ctx context.Context, c AIConnectionCom
 	if bootstrap {
 		env.Ref = s.pilot.binding.ConnectionRef
 	}
-	if _, e = rand.Read(env.Salt); e != nil {
-		return v, e
+	var key []byte
+	var osProtected bool
+	if c.Passphrase != "" && len(preSeal.key) == 32 && len(preSeal.salt) == 16 {
+		copy(env.Salt, preSeal.salt)
+		key, osProtected = preSeal.keyFor(c.Passphrase, env.Salt), false
+	} else {
+		if _, e = rand.Read(env.Salt); e != nil {
+			return v, e
+		}
+		key, osProtected, e = s.vaultSealKey(ctx, c.Passphrase, env.Salt, true)
+		if e != nil {
+			return v, e
+		}
 	}
 	if _, e = rand.Read(env.Nonce); e != nil {
-		return v, e
-	}
-	key, osProtected, e := s.vaultSealKey(ctx, c.Passphrase, env.Salt, true)
-	if e != nil {
+		clear(key)
 		return v, e
 	}
 	env.OSProtected = osProtected
@@ -1210,6 +1233,44 @@ func deriveOSVaultKey(osKey, salt []byte) []byte {
 	return h.Sum(nil)
 }
 
+type preDerivedKDF struct {
+	salt []byte
+	key  []byte
+}
+
+func (p *preDerivedKDF) clear() {
+	if p != nil {
+		clear(p.key)
+		p.key = nil
+		p.salt = nil
+	}
+}
+
+func derivePasswordKeyForSalt(passphrase string, salt []byte) preDerivedKDF {
+	if !validPassword(passphrase) || len(salt) != 16 {
+		return preDerivedKDF{}
+	}
+	return preDerivedKDF{salt: append([]byte(nil), salt...), key: passwordHash(passphrase, salt)}
+}
+
+func deriveNewPasswordKey(passphrase string) (preDerivedKDF, error) {
+	if !validPassword(passphrase) {
+		return preDerivedKDF{}, nil
+	}
+	salt := make([]byte, 16)
+	if _, err := rand.Read(salt); err != nil {
+		return preDerivedKDF{}, err
+	}
+	return preDerivedKDF{salt: salt, key: passwordHash(passphrase, salt)}, nil
+}
+
+func (p preDerivedKDF) keyFor(passphrase string, salt []byte) []byte {
+	if len(p.key) == 32 && bytes.Equal(p.salt, salt) {
+		return append([]byte(nil), p.key...)
+	}
+	return passwordHash(passphrase, salt)
+}
+
 func (s *Store) vaultSealKey(ctx context.Context, passphrase string, salt []byte, create bool) ([]byte, bool, error) {
 	if passphrase != "" {
 		if !validPassword(passphrase) {
@@ -1265,6 +1326,10 @@ func (s *Store) openAIVault(v aiVaultEnvelope, passphrase string) ([]byte, error
 }
 
 func (s *Store) openAIVaultWithContext(ctx context.Context, v aiVaultEnvelope, passphrase string) ([]byte, error) {
+	return s.openAIVaultWithPreKey(ctx, v, passphrase, preDerivedKDF{})
+}
+
+func (s *Store) openAIVaultWithPreKey(ctx context.Context, v aiVaultEnvelope, passphrase string, pre preDerivedKDF) ([]byte, error) {
 	if !validAIVaultMode(v) {
 		return nil, errors.New("vault mode unavailable")
 	}
@@ -1284,7 +1349,7 @@ func (s *Store) openAIVaultWithContext(ctx context.Context, v aiVaultEnvelope, p
 		if !validPassword(passphrase) {
 			return nil, errors.New("vault unlock failed")
 		}
-		key = passwordHash(passphrase, v.Salt)
+		key = pre.keyFor(passphrase, v.Salt)
 	}
 	block, _ := aes.NewCipher(key)
 	clear(key)
