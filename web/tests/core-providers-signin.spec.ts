@@ -86,7 +86,7 @@ test("OpenAI test connection shares encrypted storage, bound consent and restart
     ciphertext,
   );
 
-  await page.goto(url + "/#agents/chat");
+  await page.goto(url + "/#agents/review");
   await revealControl(
     page,
     page.getByLabel("Conversation name"),
@@ -213,7 +213,7 @@ test("optional provider fixture requires scoped disclosure and budgets, preserve
   const login = spawn(binary, ["login", "--data-dir", dir, "--password-stdin"]);
   login.stdin!.end(fixturePassword + "\n");
   expect((await once(login, "exit"))[0]).toBe(0);
-  await page.goto(url + "/#agents/chat");
+  await page.goto(url + "/#agents/review");
   await revealControl(
     page,
     page.getByLabel("Conversation name"),
@@ -299,7 +299,7 @@ test("optional provider fixture requires scoped disclosure and budgets, preserve
     .getByLabel("Owner password", { exact: true })
     .fill(fixturePassword);
   await page.getByRole("button", { name: "Sign in", exact: true }).click();
-  await page.goto(url + "/#agents/chat");
+  await page.goto(url + "/#agents/review");
   await expect(page.getByText("completed", { exact: true })).toBeVisible();
   await expect(page.getByText("cancelled", { exact: true })).toBeVisible();
   const saved = await privateCLI(["agents"]);
@@ -405,7 +405,7 @@ test("optional provider fixture requires scoped disclosure and budgets, preserve
     })
     .toBe("openai");
   await page.evaluate(() => {
-    window.location.hash = "agents/chat";
+    window.location.hash = "agents/review";
   });
   await checkSearch();
   await revealControl(page, page.getByLabel("Search conversations"), "");
@@ -460,7 +460,7 @@ test("OpenAI model admission binds token and tariff evidence across UI CLI tasks
     outputMicrousdPerMillion: currentModel.output,
   });
   const price = (n: number) => `$${(n / 1000000).toFixed(2)}`;
-  await page.goto(url + "/#agents/chat");
+  await page.goto(url + "/#agents/review");
   await revealControl(
     page,
     page.getByLabel("Conversation name"),
@@ -664,7 +664,7 @@ test("OpenAI model admission binds token and tariff evidence across UI CLI tasks
   expect((await privateCLI(["ai-connection"])).locked).toBe(true);
   expect(view.providerCallsEnabled).toBe(true);
   expect(view.financialExecution).toBe(false);
-  await page.goto(url + "/#agents/chat");
+  await page.goto(url + "/#agents/review");
   await revealControl(
     page,
     page.getByText("Model and tariff admission", { exact: true }).first(),
@@ -694,7 +694,7 @@ test("reviewed task credential allowance is scoped, finite and revocable in Prov
   test.setTimeout(75000);
   await stop();
   await start(true);
-  await page.goto(url + "/#agents/chat");
+  await page.goto(url + "/#agents/review");
   const claim = JSON.parse(
     await readFile(join(dir, "claim-code.json"), "utf8"),
   );
@@ -1140,7 +1140,7 @@ for (const location of ["local", "remote"]) {
       passphrase,
     });
     const before = await privateCLI(["agents"]);
-    await page.goto(url + "/#agents/chat");
+    await page.goto(url + "/#agents/review");
     await page.getByRole("button", { name: "New agent", exact: true }).click();
     const creation = page.getByRole("dialog", {
       name: "New agent",
@@ -1656,7 +1656,7 @@ test("shared Add Provider binds native accounts and latest models across Chat an
       (await read()).profiles.find((p: any) => p.id === profileId)
         .connectionRef,
     ).toBe(refs[provider]);
-    await page.goto(url + "/#agents/chat");
+    await page.goto(url + "/#agents/review");
     await page.getByLabel("Agent", { exact: true }).selectOption(profileId);
     await page
       .getByLabel("Message", { exact: true })
@@ -1886,7 +1886,7 @@ test("local provider connects in UI and shares configured agent Chat without API
   page.setDefaultTimeout(10000);
   await stop();
   await start(true);
-  await page.goto(url + "/#agents/chat");
+  await page.goto(url + "/#agents/review");
   const claim = JSON.parse(
     await readFile(join(dir, "claim-code.json"), "utf8"),
   );
@@ -1977,10 +1977,9 @@ test("local provider connects in UI and shares configured agent Chat without API
     editor.getByRole("heading", { name: "Local server", exact: true }),
   ).toBeVisible();
   await page.getByRole("button", { name: "Back", exact: true }).click();
-  await page
-    .getByRole("navigation", { name: "Main navigation", exact: true })
-    .getByRole("link", { name: "Chat", exact: true })
-    .click();
+  await page.evaluate(() => {
+    window.location.hash = "agents/review";
+  });
   await expect(page.getByLabel("Message", { exact: true })).toBeVisible();
   await page
     .getByLabel("Message", { exact: true })
@@ -2266,7 +2265,7 @@ test("Providers page preserves agent drafts and shares account models without ge
     fullPage: true,
   });
   await page.evaluate(() => {
-    window.location.hash = "agents/chat";
+    window.location.hash = "agents/review";
   });
   await openConversationList(page);
   await page
@@ -2295,7 +2294,7 @@ test("Providers page preserves agent drafts and shares account models without ge
     .getByRole("button", { name: "Back", exact: true })
     .click();
   await page.evaluate(() => {
-    window.location.hash = "agents/chat";
+    window.location.hash = "agents/review";
   });
   await expect(
     page.getByRole("textbox", { name: "Message", exact: true }),
@@ -2416,10 +2415,9 @@ test("New cloud accounts use the Providers page and shared agent Chat without ge
     connectionRef: account.ref,
     model: account.catalog.models[0].id,
   });
-  await page
-    .getByRole("navigation", { name: "Main navigation", exact: true })
-    .getByRole("link", { name: "Chat", exact: true })
-    .click();
+  await page.evaluate(() => {
+    window.location.hash = "agents/review";
+  });
   await openConversationList(page);
   await page
     .getByRole("button", { name: "New conversation", exact: true })
@@ -2670,10 +2668,9 @@ test("Named local servers share setup models and agent Chat without retargeting 
     connectionRef: account.ref,
     model,
   });
-  await page
-    .getByRole("navigation", { name: "Main navigation", exact: true })
-    .getByRole("link", { name: "Chat", exact: true })
-    .click();
+  await page.evaluate(() => {
+    window.location.hash = "agents/review";
+  });
   await openConversationList(page);
   await page
     .getByRole("button", { name: "New conversation", exact: true })
@@ -2813,10 +2810,9 @@ test("Qwen API keeps its region and model through Providers, agent and Chat", as
     connectionRef: account.ref,
     model: "qwen3.8-flash",
   });
-  await page
-    .getByRole("navigation", { name: "Main navigation", exact: true })
-    .getByRole("link", { name: "Chat", exact: true })
-    .click();
+  await page.evaluate(() => {
+    window.location.hash = "agents/review";
+  });
   await openConversationList(page);
   await page
     .getByRole("button", { name: "New conversation", exact: true })
@@ -2986,10 +2982,9 @@ test("Kimi regional USD account shares agent Chat and preserves mainland records
     connectionRef: account.ref,
     model: "moonshot-intl/kimi-k3.1-pro",
   });
-  await page
-    .getByRole("navigation", { name: "Main navigation", exact: true })
-    .getByRole("link", { name: "Chat", exact: true })
-    .click();
+  await page.evaluate(() => {
+    window.location.hash = "agents/review";
+  });
   await openConversationList(page);
   await page
     .getByRole("button", { name: "New conversation", exact: true })
@@ -3166,10 +3161,9 @@ test("Google API sign-in uses project models in agent Chat and preserves its API
     connectionRef: account.ref,
     model: "gemini-3.8-flash",
   });
-  await page
-    .getByRole("navigation", { name: "Main navigation", exact: true })
-    .getByRole("link", { name: "Chat", exact: true })
-    .click();
+  await page.evaluate(() => {
+    window.location.hash = "agents/review";
+  });
   await openConversationList(page);
   await page
     .getByRole("button", { name: "New conversation", exact: true })
@@ -3340,10 +3334,9 @@ test("Kimi Code membership connects models agent and normal Chat without task au
     connectionRef: account.ref,
     model: "kimi-code/k3.1-pro",
   });
-  await page
-    .getByRole("navigation", { name: "Main navigation", exact: true })
-    .getByRole("link", { name: "Chat", exact: true })
-    .click();
+  await page.evaluate(() => {
+    window.location.hash = "agents/review";
+  });
   await openConversationList(page);
   await page
     .getByRole("button", { name: "New conversation", exact: true })
@@ -3516,10 +3509,9 @@ test("Anthropic workspace account joins models agent Chat and preserves existing
     connectionRef: account.ref,
     model: "claude-haiku-5-5",
   });
-  await page
-    .getByRole("navigation", { name: "Main navigation", exact: true })
-    .getByRole("link", { name: "Chat", exact: true })
-    .click();
+  await page.evaluate(() => {
+    window.location.hash = "agents/review";
+  });
   await openConversationList(page);
   await page
     .getByRole("button", { name: "New conversation", exact: true })
@@ -3682,10 +3674,9 @@ test("Ollama Cloud key joins models agent Chat and task access without an invent
     connectionRef: account.ref,
     model: "ollama-cloud/gemma4:31b",
   });
-  await page
-    .getByRole("navigation", { name: "Main navigation", exact: true })
-    .getByRole("link", { name: "Chat", exact: true })
-    .click();
+  await page.evaluate(() => {
+    window.location.hash = "agents/review";
+  });
   await openConversationList(page);
   await page
     .getByRole("button", { name: "New conversation", exact: true })
@@ -3772,10 +3763,9 @@ test("Ollama Cloud key joins models agent Chat and task access without an invent
       connectionRef: relayAccount.ref,
       model: "gemma4:cloud",
     });
-    await page
-      .getByRole("navigation", { name: "Main navigation", exact: true })
-      .getByRole("link", { name: "Chat", exact: true })
-      .click();
+    await page.evaluate(() => {
+      window.location.hash = "agents/review";
+    });
     await openConversationList(page);
     await page
       .getByRole("button", { name: "New conversation", exact: true })

@@ -90,6 +90,7 @@ test("versioned paper strategies join reviewed Tasks and CLI through pause edit 
     child = spawn(binary, [
       "serve",
       "--ai-fixture",
+      "--require-password",
       "--listen",
       listen,
       "--data-dir",

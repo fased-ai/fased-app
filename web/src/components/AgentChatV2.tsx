@@ -645,16 +645,19 @@ export function AgentChatV2({
                         ))}
                       </div>
                     )}
-                    {(m.model || (m.outputTokens ?? 0) > 0) && (
-                      <footer className="v2-msg-meta">
-                        {m.model && <span>{previewModel(m.model, t)}</span>}
-                        {(m.outputTokens ?? 0) > 0 && (
-                          <span>
-                            {(m.inputTokens ?? 0) + (m.outputTokens ?? 0)} tok
-                          </span>
-                        )}
-                      </footer>
-                    )}
+                    {(m.content ||
+                      m.errorText ||
+                      (m.approvals?.length ?? 0) > 0) &&
+                      (m.model || (m.outputTokens ?? 0) > 0) && (
+                        <footer className="v2-msg-meta">
+                          {m.model && <span>{previewModel(m.model, t)}</span>}
+                          {(m.outputTokens ?? 0) > 0 && (
+                            <span>
+                              {(m.inputTokens ?? 0) + (m.outputTokens ?? 0)} tok
+                            </span>
+                          )}
+                        </footer>
+                      )}
                   </div>
                 )}
               </article>

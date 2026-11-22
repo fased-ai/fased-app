@@ -324,6 +324,7 @@ func run(args []string, in *os.File, out, errOut io.Writer) error {
 			if e != nil {
 				return e
 			}
+			server.ConfigureRequirePassword(*requirePassword)
 			return serveStarted(server, out)
 		}
 		if *aiFixture && !installedProviderFixture {

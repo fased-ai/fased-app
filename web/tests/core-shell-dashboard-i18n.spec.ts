@@ -40,7 +40,7 @@ test("existing pages localize controls and keep owner drafts records and Meteora
     if (!ownedFixtureOrigins.has(new URL(r.url()).origin))
       external.push(r.url());
   });
-  await page.goto(url + "/#agents/chat");
+  await page.goto(url + "/#agents/review");
   const claim = JSON.parse(
     await readFile(join(dir, "claim-code.json"), "utf8"),
   );
@@ -133,7 +133,7 @@ test("existing pages localize controls and keep owner drafts records and Meteora
       ["wallets/overview", accounts],
       ["overview", null],
       ["agents/tasks", null],
-      ["agents/chat", null],
+      ["agents/review", null],
     ] as const) {
       await page.evaluate((hash) => {
         location.hash = hash;
@@ -143,7 +143,7 @@ test("existing pages localize controls and keep owner drafts records and Meteora
         await expect(page.locator(".settings-primary > section")).toHaveCount(
           2,
         );
-      if (route === "agents/chat")
+      if (route === "agents/review")
         await expect(page.locator(".chat-input textarea")).toHaveValue(
           "Owner draft — 250 SOL",
         );
@@ -155,7 +155,7 @@ test("existing pages localize controls and keep owner drafts records and Meteora
       ).toBe(true);
       if (
         route === "settings" ||
-        route === "agents/chat" ||
+        route === "agents/review" ||
         route === "agents/tasks"
       )
         await captureScreenshot(page, {
@@ -191,7 +191,7 @@ test("Meteora shell preserves drafts and records through navigation theme langua
       external.push(r.url());
   });
   await page.emulateMedia({ colorScheme: "dark" });
-  await page.goto(url + "/#chat");
+  await page.goto(url + "/#agents/review");
   const claim = JSON.parse(
     await readFile(join(dir, "claim-code.json"), "utf8"),
   );
@@ -283,6 +283,9 @@ test("Meteora shell preserves drafts and records through navigation theme langua
     .getByRole("navigation", { name: "Main navigation", exact: true })
     .getByRole("link", { name: "Chat", exact: true })
     .click();
+  await page.evaluate(() => {
+    window.location.hash = "agents/review";
+  });
   await expect(message).toHaveValue(
     "Do not translate or discard this unsent draft.",
   );
@@ -390,7 +393,7 @@ test("R1 workspace uses a compact branded shell and on-demand chat task memory c
   test.setTimeout(90000);
   await stop();
   await start(true);
-  await page.goto(url + "/#agents/chat");
+  await page.goto(url + "/#agents/review");
   const claim = JSON.parse(
     await readFile(join(dir, "claim-code.json"), "utf8"),
   );
@@ -512,7 +515,7 @@ test("R1 workspace uses a compact branded shell and on-demand chat task memory c
     fullPage: true,
   });
   await page.evaluate(() => {
-    window.location.hash = "agents/chat";
+    window.location.hash = "agents/review";
   });
   await revealControl(page, page.getByLabel("Message", { exact: true }), "");
   await page
@@ -694,6 +697,9 @@ test("shared WEN Overview Wallets and Settings preserve fixture authority and re
   await expect(page.locator('[data-widget="mining"]')).toHaveCount(0);
   await checkLayout("dashboard", ".dashboard-grid");
   await page.locator('.shell-top-nav>a[href="#agents/chat"]').click();
+  await page.evaluate(() => {
+    window.location.hash = "agents/review";
+  });
   await revealControl(
     page,
     page.getByLabel("Conversation name", { exact: true }),
@@ -1177,6 +1183,9 @@ test("Dashboard drag and resize autosave without a duplicate home rail shortcut"
     .getByRole("navigation", { name: "Main navigation", exact: true })
     .getByRole("link", { name: "Chat", exact: true })
     .click();
+  await page.evaluate(() => {
+    window.location.hash = "agents/review";
+  });
   await page.getByRole("link", { name: "Fased", exact: true }).click();
   await expect(
     page.getByRole("heading", { name: "Dashboard", exact: true }),
@@ -1501,7 +1510,7 @@ test("Dashboard joins provider agent Chat reviewed task result and memory withou
         (await read()).profiles.find((x: { id: string }) => x.id === p).model,
     )
     .toBe("gpt-6.1-terra");
-  await page.goto(url + "/#agents/chat");
+  await page.goto(url + "/#agents/review");
   await expect(
     page.getByRole("button", { name: "Start chat", exact: true }),
   ).toHaveCount(0);
@@ -1559,6 +1568,9 @@ test("Dashboard joins provider agent Chat reviewed task result and memory withou
     page.getByRole("heading", { name: "Dashboard", exact: true }),
   ).toBeVisible();
   await page.locator('.shell-top-nav>a[href="#agents/chat"]').click();
+  await page.evaluate(() => {
+    window.location.hash = "agents/review";
+  });
   await expect(input).toHaveValue("Preserve this draft across Dashboard");
   await input.fill("Help me draft a reminder to inspect SOL risk");
   await page.getByRole("button", { name: "Send", exact: true }).click();

@@ -39,7 +39,7 @@ test("agent memory and archives keep recall sources journals and results through
     if (!ownedFixtureOrigins.has(new URL(r.url()).origin))
       external.push(r.url());
   });
-  await page.goto(url + "/#agents/chat");
+  await page.goto(url + "/#agents/review");
   const claim = JSON.parse(
     await readFile(join(dir, "claim-code.json"), "utf8"),
   );
@@ -581,7 +581,10 @@ test("reviewed memory restoration shares inert UI CLI drafts, expiry, current-on
   expect(v.memories[0].text).toBe("Current owner preference");
   expect(v.memories[0].history).toHaveLength(4);
   // Explicitly refresh after the CLI write; do not race the five-second poll.
-  await page.getByRole("button", { name: "Search", exact: true }).click();
+  await page
+    .locator(".memory-search")
+    .getByRole("button", { name: "Search", exact: true })
+    .click();
   await expect(card(original.id).locator(":scope > p")).toHaveText(
     "Current owner preference",
   );
@@ -638,7 +641,7 @@ test("chat memory requires explicit source-backed UI and CLI save and survives r
     if (!ownedFixtureOrigins.has(new URL(r.url()).origin))
       external.push(r.url());
   });
-  await page.goto(url + "/#agents/chat");
+  await page.goto(url + "/#agents/review");
   await revealControl(page, page.getByLabel("Agent", { exact: true }), "");
   await page
     .getByLabel("Agent", { exact: true })
@@ -964,7 +967,7 @@ test("profile memory recall shares read-only UI and CLI search, source inspectio
   page.on("request", (r) => {
     if (!fixtureOrigins.has(new URL(r.url()).origin)) external.push(r.url());
   });
-  await page.goto(url + "/#agents/chat");
+  await page.goto(url + "/#agents/review");
   await revealControl(page, page.getByLabel("Agent", { exact: true }), "");
   await page
     .getByLabel("Agent", { exact: true })
@@ -995,12 +998,17 @@ test("profile memory recall shares read-only UI and CLI search, source inspectio
     await expect(
       page.getByLabel("Agent", { exact: true }).locator("option:checked"),
     ).toHaveText("Trading Analyst");
+    const memorySearch = page.locator(".memory-search");
     await revealControl(
       page,
-      page.getByRole("searchbox", { name: "Search", exact: true }),
+      memorySearch.getByRole("searchbox", { name: "Search", exact: true }),
     );
-    await page.getByRole("searchbox", { name: "Search", exact: true }).fill(q);
-    await page.getByRole("button", { name: "Search", exact: true }).click();
+    await memorySearch
+      .getByRole("searchbox", { name: "Search", exact: true })
+      .fill(q);
+    await memorySearch
+      .getByRole("button", { name: "Search", exact: true })
+      .click();
     const result = await recall(q);
     await expect(page.locator("article[aria-label^='Memory ']")).toHaveCount(
       result.memories.length,
@@ -1282,7 +1290,7 @@ test("manual AI memory selection shares exact UI/CLI disclosure, consent and res
     text: "Foreign private preference",
     source: "foreign",
   });
-  await page.goto(url + "/#agents/chat");
+  await page.goto(url + "/#agents/review");
   await revealControl(page, page.getByLabel("Agent", { exact: true }), "");
   await page
     .getByLabel("Agent", { exact: true })
@@ -1507,7 +1515,7 @@ test("manual AI memory selection shares exact UI/CLI disclosure, consent and res
   await start();
   origins.add(new URL(url).origin);
   await login();
-  await page.goto(url + "/#agents/chat");
+  await page.goto(url + "/#agents/review");
   await revealControl(
     page,
     page.getByLabel("Owner password", { exact: true }),
@@ -1709,7 +1717,7 @@ test("saved AI request draft shares editable UI/CLI settings, fresh consent and 
   await command({ action: "session-create", name: "Other draft conversation" });
   await command({ action: "memory-delete", id: note.id });
   await command({ action: "news-source-disable", id: source.id });
-  await page.goto(url + "/#agents/chat");
+  await page.goto(url + "/#agents/review");
   const profile = page.getByLabel("Agent", { exact: true });
   await revealControl(page, page.getByLabel("Agent", { exact: true }), "");
   await page
@@ -2042,7 +2050,7 @@ test("saved AI request draft shares editable UI/CLI settings, fresh consent and 
   await start();
   origins.add(new URL(url).origin);
   await login();
-  await page.goto(url + "/#agents/chat");
+  await page.goto(url + "/#agents/review");
   await revealControl(
     page,
     page.getByLabel("Owner password", { exact: true }),
@@ -2189,7 +2197,7 @@ test("local agent evidence inspection shares UI/CLI sources, inert reads and res
   origins.add(new URL(url).origin);
   await login();
   const openChat = async (signIn = false) => {
-    await page.goto(url + "/#agents/chat");
+    await page.goto(url + "/#agents/review");
     if (signIn) {
       await revealControl(
         page,
@@ -2601,7 +2609,7 @@ test("reviewed AI evidence shares UI/CLI disclosure, explicit consent and scoped
     source: "foreign",
   });
   const openChat = async (signIn = false) => {
-    await page.goto(url + "/#agents/chat");
+    await page.goto(url + "/#agents/review");
     if (signIn) {
       await revealControl(
         page,

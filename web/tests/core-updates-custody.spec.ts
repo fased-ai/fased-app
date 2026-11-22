@@ -1566,7 +1566,7 @@ test("live read-only Solana RPC presets and OS-protected RPC keys work without p
     .getByRole("button", { name: "Claim workspace", exact: true })
     .click();
   await expect(
-    page.getByRole("heading", { name: "Dashboard", exact: true }),
+    page.getByRole("heading", { name: "Chat", exact: true }),
   ).toBeVisible();
 
   const pubAddress = "11111111111111111111111111111111";

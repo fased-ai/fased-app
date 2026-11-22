@@ -1036,7 +1036,7 @@ test("bounded AI schedules share consent and execution with CLI, survive restart
   const login = spawn(binary, ["login", "--data-dir", dir, "--password-stdin"]);
   login.stdin!.end(fixturePassword + "\n");
   expect((await once(login, "exit"))[0]).toBe(0);
-  await page.goto(url + "/#agents/chat");
+  await page.goto(url + "/#agents/review");
   await revealControl(
     page,
     page.getByLabel("Conversation name"),
@@ -1219,7 +1219,7 @@ test("chat reminder drafts require shared UI and CLI review before scheduling an
     if (!ownedFixtureOrigins.has(new URL(r.url()).origin))
       external.push(r.url());
   });
-  await page.goto(url + "/#agents/chat");
+  await page.goto(url + "/#agents/review");
   await revealControl(page, page.getByLabel("Agent", { exact: true }), "");
   await page
     .getByLabel("Agent", { exact: true })
@@ -1405,7 +1405,7 @@ test("chat reminder drafts require shared UI and CLI review before scheduling an
   });
   await stop();
   await start(false);
-  await page.goto(url + "/#agents/chat");
+  await page.goto(url + "/#agents/review");
   await revealControl(
     page,
     page.getByLabel("Owner password", { exact: true }),
@@ -1700,7 +1700,7 @@ test("task run chat shares historical UI and CLI capture, explicit fixture expla
   await stop();
   await start();
   await login();
-  await page.goto(url + "/#agents/chat");
+  await page.goto(url + "/#agents/review");
   await revealControl(
     page,
     page.getByLabel("Owner password", { exact: true }),
@@ -1744,7 +1744,7 @@ test("activity and notifications open the exact task run", async ({
   page,
   isMobile,
 }) => {
-  await page.goto(url + "/#agents/chat");
+  await page.goto(url + "/#agents/review");
   const claim = JSON.parse(
     await readFile(join(dir, "claim-code.json"), "utf8"),
   );
@@ -1904,7 +1904,7 @@ test("normal Tasks joins optional News analysis and granted analysis-only result
     .fill("Preserve this unfinished reminder");
   // Leaving Tasks must preserve input without retaining a reviewed action.
   await page.evaluate(() => {
-    window.location.hash = "agents/chat";
+    window.location.hash = "agents/review";
   });
   await expect(editor).toHaveCount(0);
   await page.evaluate(() => {
@@ -2057,7 +2057,7 @@ test("normal Tasks joins optional News analysis and granted analysis-only result
     fullPage: false,
   });
   await result.getByRole("button", { name: "Discuss", exact: true }).click();
-  await expect(page).toHaveURL(/#agents\/chat/);
+  await expect(page).toHaveURL(/#agents\/review/);
   let message = page
     .locator(".chat-message")
     .filter({ hasText: "Optional paper analysis" })

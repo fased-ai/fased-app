@@ -79,7 +79,7 @@ test("normal Chat grants bounded replies, streams Send and retains scoped histor
   await provider.getByRole("button", { name: "Save", exact: true }).click();
   await expect(provider.getByRole("status")).toContainText("Unlocked");
   const connection = await privateCLI(["ai-connection"]);
-  await page.goto(url + "/#agents/chat");
+  await page.goto(url + "/#agents/review");
   await revealControl(
     page,
     page.getByLabel("Conversation name"),
@@ -223,7 +223,7 @@ test("normal Chat keeps a draft when its selected connection locks and stops a p
   test.setTimeout(60000);
   await stop();
   await start(true);
-  await page.goto(url + "/#agents/chat");
+  await page.goto(url + "/#agents/review");
   const claim = JSON.parse(
     await readFile(join(dir, "claim-code.json"), "utf8"),
   );
@@ -323,7 +323,7 @@ test("periodic refresh follows the requested profile while a selection is pendin
     if (new URL(r.url()).pathname === "/api/v1/agents" && r.method() !== "GET")
       writes.push(r.method());
   });
-  await page.goto(url + "/#agents/chat");
+  await page.goto(url + "/#agents/review");
   const claim = JSON.parse(
     await readFile(join(dir, "claim-code.json"), "utf8"),
   );
@@ -435,7 +435,7 @@ test("chat drafts stay with their conversation through search switching and a pe
     if (new URL(r.url()).pathname === "/api/v1/agents" && r.method() === "POST")
       writes.push(r.postDataJSON());
   });
-  await page.goto(url + "/#agents/chat");
+  await page.goto(url + "/#agents/review");
   const claim = JSON.parse(
     await readFile(join(dir, "claim-code.json"), "utf8"),
   );
@@ -800,7 +800,7 @@ test("conversation search follows matching records and closes hidden conversatio
   await expect(
     page.getByRole("button", { name: "Sign out", exact: true }),
   ).toBeVisible();
-  await page.goto(url + "/#agents/chat");
+  await page.goto(url + "/#agents/review");
   const profile = page.getByLabel("Agent", { exact: true });
   await revealControl(page, page.getByLabel("Agent", { exact: true }), "");
   await page
@@ -953,7 +953,7 @@ test("local agents share UI and CLI records, isolate profiles and survive core r
   const login = spawn(binary, ["login", "--data-dir", dir, "--password-stdin"]);
   login.stdin!.end(fixturePassword + "\n");
   expect((await once(login, "exit"))[0]).toBe(0);
-  await page.goto(url + "/#agents/chat");
+  await page.goto(url + "/#agents/review");
   await page.getByRole("button", { name: "New agent", exact: true }).click();
   await revealControl(page, page.getByLabel("Name", { exact: true }), "");
   await page
@@ -1147,7 +1147,7 @@ test("local agents share UI and CLI records, isolate profiles and survive core r
   });
   await stop();
   await start();
-  await page.goto(url + "/#agents/chat");
+  await page.goto(url + "/#agents/review");
   await revealControl(
     page,
     page.getByLabel("Owner password", { exact: true }),
@@ -1182,7 +1182,7 @@ test("new conversation keeps its selected account and model through first Send",
 }) => {
   await stop();
   await start(true);
-  await page.goto(url + "/#agents/chat");
+  await page.goto(url + "/#agents/review");
   const claim = JSON.parse(
     await readFile(join(dir, "claim-code.json"), "utf8"),
   );
@@ -1401,7 +1401,7 @@ test("naming an empty conversation keeps its draft and selected account", async 
 }) => {
   await stop();
   await start(true);
-  await page.goto(url + "/#agents/chat");
+  await page.goto(url + "/#agents/review");
   const claim = JSON.parse(
     await readFile(join(dir, "claim-code.json"), "utf8"),
   );
@@ -1576,7 +1576,7 @@ test("configured agent joins account Chat task result and memory without partial
   page.on("request", (r) => {
     if (!origins.has(new URL(r.url()).origin)) external.push(r.url());
   });
-  await page.goto(url + "/#agents/chat");
+  await page.goto(url + "/#agents/review");
   const claim = JSON.parse(
     await readFile(join(dir, "claim-code.json"), "utf8"),
   );
@@ -1760,7 +1760,7 @@ test("first Send retains its exact draft when conversation changes during accoun
   test.setTimeout(60000);
   await stop();
   await start(true);
-  await page.goto(url + "/#agents/chat");
+  await page.goto(url + "/#agents/review");
   const claim = JSON.parse(
     await readFile(join(dir, "claim-code.json"), "utf8"),
   );
@@ -1868,7 +1868,7 @@ test("Chat Options closes on Escape before the native toggle event without losin
     revision: initial.revision,
     name: "Options keyboard",
   });
-  await page.goto(url + "/#agents/chat");
+  await page.goto(url + "/#agents/review");
   const form = page.locator(".chat-message-form");
   const input = page.getByLabel("Message", { exact: true });
   await input.fill("Preserve this keyboard draft");

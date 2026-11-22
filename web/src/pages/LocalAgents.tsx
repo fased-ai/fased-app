@@ -122,8 +122,7 @@ function LocalAgentEditor({
           onDiscuss={() => {
             setLegacySessionId("");
             setLegacySearch("");
-            setUseLegacyChat(false);
-            navigate("agents/chat");
+            navigate("agents/review");
           }}
         />
       )}
@@ -165,8 +164,8 @@ function LocalAgentEditor({
           view={v}
           onOpenChatSession={(sessionId) => {
             setLegacySessionId(sessionId);
-            setUseLegacyChat(true);
-            navigate("agents/chat");
+            setLegacySearch("");
+            navigate("agents/review");
           }}
         />
       )}
@@ -178,8 +177,7 @@ function LocalAgentEditor({
           onDiscuss={() => {
             setLegacySessionId("");
             setLegacySearch("");
-            setUseLegacyChat(false);
-            navigate("agents/chat");
+            navigate("agents/review");
           }}
         />
       )}
