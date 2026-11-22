@@ -86,6 +86,10 @@ export async function openConversationList(
     name: "Conversations",
     exact: true,
   });
+  const rail = page.locator("aside.conversation-rail");
+  await expect
+    .poll(async () => (await toggle.isVisible()) || (await rail.isVisible()))
+    .toBe(true);
   if (
     (await toggle.isVisible()) &&
     (await toggle.getAttribute("aria-expanded")) !== "true"

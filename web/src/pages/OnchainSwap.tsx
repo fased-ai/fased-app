@@ -1,7 +1,7 @@
 import "./OnchainSwap.css";
 import { useEffect, useRef, useState } from "react";
 import type { Account, AccountsView } from "../accounts";
-import { hasActiveOperations, type AgentView } from "../agents";
+import { hasActiveOperations, useVisiblePoll, type AgentView } from "../agents";
 import type {
   OnchainView,
   SwapCommand,
@@ -123,14 +123,13 @@ export function OnchainSwap() {
   const [selected, setSelected] = useState("");
   const generation = useRef(0);
   const writing = useRef(false);
-  const activePoll = useRef(false);
   const input = draft.pair === "usdc-sol" ? USDC : WRAPPED_SOL;
   const output = input === USDC ? WRAPPED_SOL : USDC;
   const amount = atomic(draft.amount, input);
   const expired =
     !!review && review.proposal.quote.expiresAt * 1000 <= Date.now();
   const active = view ?? agents.view?.onchain;
-  activePoll.current = busy || hasActiveOperations(active);
+  const hasActive = busy || hasActiveOperations(active);
   const order =
     active?.tasks.find((x) => x.id === selected) ?? active?.tasks.at(-1);
   const result = active?.runs.find((x) => x.taskId === order?.id)?.swap;
@@ -142,6 +141,7 @@ export function OnchainSwap() {
     const current = () =>
       stamp === generation.current && sequence === readSequence.current;
     let failure = "";
+    let nextActive = false;
     try {
       // Accounts are usable independently of the agent/result read. In
       // particular, a transient native agent failure must not hide wallets.
@@ -161,10 +161,12 @@ export function OnchainSwap() {
         );
         if (!current()) return;
         setView(v.onchain);
+        nextActive = hasActiveOperations(v.onchain);
       } catch (e) {
         failure ||= e instanceof Error ? e.message : t("Unavailable");
       }
       if (current()) setReadError(failure);
+      return nextActive;
     } finally {
       if (reading.current === stamp) reading.current = null;
     }
@@ -244,38 +246,16 @@ export function OnchainSwap() {
       setDraft(emptyDraft);
     }
     setLoaded(storageKey);
-    let cancelled = false;
-    let timer: number | undefined;
-    const schedule = () => {
-      if (cancelled) return;
-      window.clearTimeout(timer);
-      if (document.visibilityState !== "visible") return;
-      const delay = activePoll.current ? 1500 : 15000;
-      timer = window.setTimeout(async () => {
-        if (cancelled) return;
-        if (!writing.current && document.visibilityState === "visible") {
-          await read();
-        }
-        schedule();
-      }, delay);
-    };
-    const onVisibility = () => {
-      if (document.visibilityState === "visible") {
-        if (!writing.current) void read();
-        schedule();
-      } else {
-        window.clearTimeout(timer);
-      }
-    };
-    document.addEventListener("visibilitychange", onVisibility);
-    void read().finally(schedule);
     return () => {
-      cancelled = true;
       generation.current++;
-      window.clearTimeout(timer);
-      document.removeEventListener("visibilitychange", onVisibility);
     };
   }, [storageKey, core.request]);
+  useVisiblePoll({
+    resetKey: storageKey,
+    request: core.request,
+    active: hasActive,
+    onPoll: read,
+  });
   useEffect(() => {
     if (loaded === storageKey) {
       try {

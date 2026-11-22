@@ -761,6 +761,88 @@ export type AgentCommand = {
   authorizationSeconds?: number;
 };
 
+/**
+ * Polls on mount and adapts delay between active (1500ms) and visible idle (3000ms),
+ * pausing timer ticks while the document is hidden.
+ */
+export function useVisiblePoll({
+  resetKey,
+  request,
+  active,
+  idleMs = 3000,
+  activeMs = 1500,
+  onPoll,
+}: {
+  resetKey: string;
+  request?: unknown;
+  active: boolean;
+  idleMs?: number;
+  activeMs?: number;
+  onPoll: () => Promise<boolean | void>;
+}) {
+  const pollRef = useRef(onPoll);
+  pollRef.current = onPoll;
+  const activeRef = useRef(active);
+  activeRef.current = active;
+  const rescheduleRef = useRef<(() => void) | null>(null);
+  const prevActive = useRef(active);
+
+  useEffect(() => {
+    let cancelled = false;
+    let timer: number | undefined;
+    let inFlight = false;
+
+    const schedule = () => {
+      if (cancelled || inFlight) return;
+      window.clearTimeout(timer);
+      if (document.visibilityState !== "visible") return;
+      const delay = activeRef.current ? activeMs : idleMs;
+      timer = window.setTimeout(() => void tick(), delay);
+    };
+
+    const tick = async () => {
+      if (cancelled || inFlight) return;
+      inFlight = true;
+      try {
+        const fetchedActive = await pollRef.current();
+        if (fetchedActive === true) {
+          activeRef.current = true;
+        }
+      } finally {
+        inFlight = false;
+        schedule();
+      }
+    };
+
+    rescheduleRef.current = schedule;
+
+    const onVisibility = () => {
+      if (document.visibilityState === "visible") {
+        void tick();
+      } else {
+        window.clearTimeout(timer);
+      }
+    };
+
+    document.addEventListener("visibilitychange", onVisibility);
+    void tick();
+
+    return () => {
+      cancelled = true;
+      rescheduleRef.current = null;
+      window.clearTimeout(timer);
+      document.removeEventListener("visibilitychange", onVisibility);
+    };
+  }, [resetKey, request, idleMs, activeMs]);
+
+  useEffect(() => {
+    if (active && !prevActive.current) {
+      rescheduleRef.current?.();
+    }
+    prevActive.current = active;
+  }, [active]);
+}
+
 export function useAgents(core: ReturnType<typeof useCore>) {
   const [view, setView] = useState<AgentView | null>(null);
   const [error, setError] = useState("");
