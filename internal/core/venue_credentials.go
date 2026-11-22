@@ -21,22 +21,36 @@ import (
 // format; Jupiter has a separate purpose-bound envelope and never receives the
 // RPC key. Neither is decrypted by ordinary startup.
 type VenueCredentialCommand struct {
-	AccountID  string `json:"accountId"`
-	Revision   int64  `json:"revision"`
-	Action     string `json:"action"`
+	AccountID  string                 `json:"accountId"`
+	Revision   int64                  `json:"revision"`
+	Action     string                 `json:"action"`
+	Ref        string                 `json:"ref"`
+	Key        string                 `json:"key,omitempty"`
+	Passphrase string                 `json:"passphrase,omitempty"`
+	Seconds    int                    `json:"seconds,omitempty"`
+	Backup     *VenueCredentialBackup `json:"backup,omitempty"`
+}
+type VenueCredentialBackup struct {
+	Version    int    `json:"version"`
+	Portable   bool   `json:"portable"`
+	Purpose    string `json:"purpose"`
+	Network    string `json:"network"`
 	Ref        string `json:"ref"`
-	Key        string `json:"key,omitempty"`
-	Passphrase string `json:"passphrase,omitempty"`
-	Seconds    int    `json:"seconds,omitempty"`
+	Binding    string `json:"binding"`
+	Salt       []byte `json:"salt"`
+	Nonce      []byte `json:"nonce"`
+	Ciphertext []byte `json:"ciphertext"`
 }
 type VenueCredentialView struct {
-	RPCReady      bool   `json:"rpcReady"`
-	Ref           string `json:"ref"`
-	Saved         bool   `json:"saved"`
-	Stale         bool   `json:"stale"`
-	Locked        bool   `json:"locked"`
-	UnlockUntil   int64  `json:"unlockUntil,omitempty"`
-	LiveExecution bool   `json:"liveExecution"`
+	RPCReady       bool                   `json:"rpcReady"`
+	Ref            string                 `json:"ref"`
+	Saved          bool                   `json:"saved"`
+	Stale          bool                   `json:"stale"`
+	Locked         bool                   `json:"locked"`
+	UnlockUntil    int64                  `json:"unlockUntil,omitempty"`
+	LiveExecution  bool                   `json:"liveExecution"`
+	Backup         *VenueCredentialBackup `json:"backup,omitempty"`
+	BackupVerified bool                   `json:"backupVerified,omitempty"`
 }
 type venueEnvelope struct {
 	Version    int    `json:"version"`
@@ -85,6 +99,117 @@ func venueBinding(a Account, rpc rpcVault) string {
 }
 func (s *Store) venueAAD(id string, v venueEnvelope) []byte {
 	return []byte("fased-venue-jupiter-v1:" + s.instanceID + ":" + id + ":" + v.Ref + ":" + v.Binding)
+}
+
+func portableVenueBinding(network string) string {
+	return onchain.Hash(struct {
+		Purpose string
+		Network string
+	}{"jupiter", network})
+}
+
+func portableVenueAAD(b VenueCredentialBackup) []byte {
+	return []byte("fased-venue-jupiter-portable-v1:" + b.Network + ":" + b.Ref + ":" + b.Binding)
+}
+
+func validVenueBackup(b VenueCredentialBackup) bool {
+	return b.Version == 1 && b.Portable && b.Purpose == "jupiter" && solanaGenesis(b.Network) != "" && validConnectionRef(b.Ref) && b.Binding == portableVenueBinding(b.Network) && len(b.Salt) == 16 && len(b.Nonce) == 12 && len(b.Ciphertext) >= 17 && len(b.Ciphertext) <= 528
+}
+
+func sealVenueBackupWithPreKey(network, passphrase string, plain []byte, pre preDerivedKDF) (VenueCredentialBackup, error) {
+	if solanaGenesis(network) == "" || !validPassword(passphrase) || !validJupiterKey(plain) {
+		return VenueCredentialBackup{}, errors.New("connection key operation refused")
+	}
+	ref, err := randomToken()
+	if err != nil {
+		return VenueCredentialBackup{}, err
+	}
+	salt := make([]byte, 16)
+	var key []byte
+	if len(pre.key) == 32 && len(pre.salt) == 16 {
+		copy(salt, pre.salt)
+		key = pre.keyFor(passphrase, salt)
+	} else {
+		if _, err = rand.Read(salt); err != nil {
+			return VenueCredentialBackup{}, err
+		}
+		key = passwordHash(passphrase, salt)
+	}
+	nonce := make([]byte, 12)
+	if _, err = rand.Read(nonce); err != nil {
+		clear(key)
+		return VenueCredentialBackup{}, err
+	}
+	b := VenueCredentialBackup{
+		Version:  1,
+		Portable: true,
+		Purpose:  "jupiter",
+		Network:  network,
+		Ref:      ref,
+		Binding:  portableVenueBinding(network),
+		Salt:     salt,
+		Nonce:    nonce,
+	}
+	block, err := aes.NewCipher(key)
+	clear(key)
+	if err != nil {
+		return VenueCredentialBackup{}, err
+	}
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return VenueCredentialBackup{}, err
+	}
+	b.Ciphertext = gcm.Seal(nil, b.Nonce, plain, portableVenueAAD(b))
+	return b, nil
+}
+
+func openVenueBackupWithPreKey(b *VenueCredentialBackup, network, passphrase string, pre preDerivedKDF) ([]byte, error) {
+	fail := errors.New("connection backup does not match this wallet or password")
+	if b == nil || !validVenueBackup(*b) || b.Network != network || !validPassword(passphrase) {
+		return nil, fail
+	}
+	plain, err := openCredentialWithPreKey(b.Ciphertext, b.Nonce, b.Salt, portableVenueAAD(*b), passphrase, pre)
+	if err != nil || !validJupiterKey(plain) {
+		clear(plain)
+		return nil, fail
+	}
+	return plain, nil
+}
+
+// Publish a private encrypted Jupiter backup without clobbering an existing file.
+func WriteVenueBackup(path string, b *VenueCredentialBackup) error {
+	if b == nil || !validVenueBackup(*b) {
+		return errors.New("invalid connection backup")
+	}
+	if e := EnsurePrivateDirectory(filepath.Dir(path)); e != nil {
+		return e
+	}
+	f, e := os.CreateTemp(filepath.Dir(path), ".venue-backup-*")
+	if e != nil {
+		return e
+	}
+	name := f.Name()
+	defer os.Remove(name)
+	info, e := f.Stat()
+	if e == nil {
+		e = protectPath(name, info)
+	}
+	if e != nil {
+		f.Close()
+		return e
+	}
+	e = json.NewEncoder(f).Encode(b)
+	if e == nil {
+		e = f.Sync()
+	}
+	closeErr := f.Close()
+	if e != nil {
+		return e
+	}
+	if closeErr != nil {
+		return closeErr
+	}
+	return os.Link(name, path)
 }
 func (s *Store) readVenue(id string) (v venueEnvelope, err error) {
 	info, err := os.Lstat(s.venuePath(id))
@@ -224,7 +349,11 @@ func (s *Store) VenueCredential(ctx context.Context, c VenueCredentialCommand) (
 func (s *Store) venueCredential(ctx context.Context, c VenueCredentialCommand, admittedGeneration *uint64) (VenueCredentialView, error) {
 	fail := errors.New("connection key operation refused")
 	view := VenueCredentialView{Locked: true}
-	if !hexValue(c.AccountID, 16) || (c.Action != "status" && c.Action != "save" && c.Action != "unlock" && c.Action != "lock" && c.Action != "remove") {
+	if !hexValue(c.AccountID, 16) || (c.Action != "status" && c.Action != "save" && c.Action != "unlock" && c.Action != "lock" && c.Action != "remove" && c.Action != "backup" && c.Action != "verify-backup" && c.Action != "restore") {
+		return view, fail
+	}
+	recovering := c.Action == "verify-backup" || c.Action == "restore"
+	if recovering != (c.Backup != nil) {
 		return view, fail
 	}
 	if c.Action == "status" || c.Action == "lock" {
@@ -244,10 +373,11 @@ func (s *Store) venueCredential(ctx context.Context, c VenueCredentialCommand, a
 	if closed || admittedGeneration != nil && *admittedGeneration != initialGeneration {
 		return view, ErrUnauthorized
 	}
-	var preVenueOpen, preRPCOpen, preVenueSeal preDerivedKDF
+	var preVenueOpen, preRPCOpen, preVenueSeal, preBackupOpen preDerivedKDF
 	defer preVenueOpen.clear()
 	defer preRPCOpen.clear()
 	defer preVenueSeal.clear()
+	defer preBackupOpen.clear()
 	if c.Action != "status" && c.Action != "lock" && validPassword(c.Passphrase) {
 		if existing, err := s.readVenue(c.AccountID); err == nil {
 			preVenueOpen = derivePasswordKeyForSalt(c.Passphrase, existing.Salt)
@@ -255,7 +385,10 @@ func (s *Store) venueCredential(ctx context.Context, c VenueCredentialCommand, a
 		if rv, err := s.readRPCVault(c.AccountID); err == nil && !rv.OSProtected {
 			preRPCOpen = derivePasswordKeyForSalt(c.Passphrase, rv.Salt)
 		}
-		if c.Action == "save" {
+		if recovering && c.Backup != nil && len(c.Backup.Salt) == 16 {
+			preBackupOpen = derivePasswordKeyForSalt(c.Passphrase, c.Backup.Salt)
+		}
+		if c.Action == "save" || c.Action == "backup" || c.Action == "restore" {
 			if p, err := deriveNewPasswordKey(c.Passphrase); err == nil {
 				preVenueSeal = p
 			}
@@ -328,8 +461,20 @@ func (s *Store) venueCredential(ctx context.Context, c VenueCredentialCommand, a
 	if c.Action == "lock" {
 		return view, nil
 	}
-	// Retiring a retained Jupiter ciphertext authenticates that ciphertext alone.
-	// RPC removal/rotation/password changes must never strand this operation.
+	if c.Action == "verify-backup" {
+		restored, err := openVenueBackupWithPreKey(c.Backup, a.Network, c.Passphrase, preBackupOpen)
+		clear(restored)
+		if err != nil {
+			return view, fail
+		}
+		view.BackupVerified = true
+		return view, nil
+	}
+	if c.Action == "restore" && saved {
+		return view, errors.New("preserve the existing connection key; remove it explicitly before restore")
+	}
+	// Retiring or exporting a retained Jupiter ciphertext authenticates that ciphertext alone.
+	// RPC removal/rotation/password changes must never strand these operations.
 	var key []byte
 	if saved {
 		key, e = openCredentialWithPreKey(v.Ciphertext, v.Nonce, v.Salt, s.venueAAD(a.ID, v), c.Passphrase, preVenueOpen)
@@ -343,6 +488,24 @@ func (s *Store) venueCredential(ctx context.Context, c VenueCredentialCommand, a
 			return view, fail
 		}
 		return VenueCredentialView{Locked: true, RPCReady: rpcReady}, nil
+	}
+	if c.Action == "backup" {
+		if !saved {
+			return view, fail
+		}
+		backup, err := sealVenueBackupWithPreKey(a.Network, c.Passphrase, key, preVenueSeal)
+		if err != nil {
+			return view, fail
+		}
+		return VenueCredentialView{
+			RPCReady:       rpcReady,
+			Ref:            v.Ref,
+			Saved:          true,
+			Stale:          view.Stale,
+			Locked:         true,
+			Backup:         &backup,
+			BackupVerified: true,
+		}, nil
 	}
 	if !s.rpcAdmission || s.onchain == nil {
 		return view, errors.New("live connection keys disabled")
@@ -364,8 +527,17 @@ func (s *Store) venueCredential(ctx context.Context, c VenueCredentialCommand, a
 		return view, fail
 	}
 
-	if c.Action == "save" {
-		if !validJupiterKey([]byte(c.Key)) {
+	if c.Action == "save" || c.Action == "restore" {
+		secret := []byte(c.Key)
+		if c.Action == "restore" {
+			restored, err := openVenueBackupWithPreKey(c.Backup, a.Network, c.Passphrase, preBackupOpen)
+			if err != nil {
+				return view, fail
+			}
+			secret = restored
+		}
+		defer clear(secret)
+		if !validJupiterKey(secret) {
 			return view, fail
 		}
 		v = venueEnvelope{Version: 1, Purpose: "jupiter", Binding: venueBinding(a, rpc), Salt: make([]byte, 16), Nonce: make([]byte, 12)}
@@ -384,9 +556,7 @@ func (s *Store) venueCredential(ctx context.Context, c VenueCredentialCommand, a
 		block, _ := aes.NewCipher(k)
 		clear(k)
 		g, _ := cipher.NewGCM(block)
-		plain := []byte(c.Key)
-		defer clear(plain)
-		v.Ciphertext = g.Seal(nil, v.Nonce, plain, s.venueAAD(a.ID, v))
+		v.Ciphertext = g.Seal(nil, v.Nonce, secret, s.venueAAD(a.ID, v))
 		if WritePrivateJSON(s.venuePath(a.ID), v) != nil {
 			return view, fail
 		}

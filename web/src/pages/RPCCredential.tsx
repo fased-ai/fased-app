@@ -4,7 +4,12 @@ import { useUI } from "../ui-preferences";
 type Status = {
   canVerify?: boolean;
   canCheck?: boolean;
-  backup?: { accountId: string; instanceId: string };
+  backup?: {
+    version?: number;
+    portable?: boolean;
+    accountId?: string;
+    instanceId?: string;
+  };
   backupVerified?: boolean;
   ref: string;
   saved: boolean;
@@ -68,7 +73,7 @@ export function RPCCredential({
       generation.current++;
     };
   }, [core.instanceId, accountId, revision]);
-  async function change(action: string) {
+  async function change(action: string, options?: { portable?: boolean }) {
     if (
       busy ||
       !status ||
@@ -95,6 +100,7 @@ export function RPCCredential({
         revision,
         ref: status.ref,
         action,
+        ...(action === "backup" && options?.portable ? { portable: true } : {}),
         ...(secret ? { passphrase: secret } : {}),
         ...(action === "save" ? { key } : {}),
         ...(["restore", "verify-backup"].includes(action) ? { backup } : {}),
@@ -109,10 +115,13 @@ export function RPCCredential({
         )
           throw new Error("Unexpected RPC capability");
         if (action === "backup") {
+          const isPortable = !!options?.portable;
           if (
             !v.backupVerified ||
-            v.backup?.accountId !== accountId ||
-            v.backup.instanceId !== core.instanceId
+            (isPortable
+              ? v.backup?.version !== 3 || v.backup.portable !== true
+              : v.backup?.accountId !== accountId ||
+                v.backup.instanceId !== core.instanceId)
           )
             throw new Error("Unexpected RPC backup");
           const url = URL.createObjectURL(
@@ -121,7 +130,9 @@ export function RPCCredential({
           try {
             const link = document.createElement("a");
             link.href = url;
-            link.download = "fased-rpc-backup.json";
+            link.download = isPortable
+              ? "fased-rpc-portable-backup.json"
+              : "fased-rpc-backup.json";
             link.click();
           } finally {
             setTimeout(() => URL.revokeObjectURL(url), 0);
@@ -245,13 +256,23 @@ export function RPCCredential({
               />
             </label>
           )}
-          <button
-            type="button"
-            disabled={busy || !status?.saved || status.stale || !backupSecret}
-            onClick={() => void change("backup")}
-          >
-            {t("Download backup")}
-          </button>
+          <div className="account-actions">
+            <button
+              type="button"
+              disabled={busy || !status?.saved || status.stale || !backupSecret}
+              onClick={() => void change("backup")}
+            >
+              {t("Download backup")}
+            </button>
+            <button
+              type="button"
+              className="secondary"
+              disabled={busy || !status?.saved || status.stale || !backupSecret}
+              onClick={() => void change("backup", { portable: true })}
+            >
+              {t("Download portable backup")}
+            </button>
+          </div>
           <p className="account-note">
             {t("Requires this instance and wallet settings.")}
           </p>
@@ -269,7 +290,7 @@ export function RPCCredential({
                 setError("");
                 if (!file) return;
                 try {
-                  if (file.size > 2048) throw new Error();
+                  if (file.size > 4096) throw new Error();
                   const parsed: unknown = JSON.parse(await file.text());
                   if (epoch === generation.current) setBackup(parsed);
                 } catch {

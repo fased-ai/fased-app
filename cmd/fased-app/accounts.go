@@ -26,6 +26,9 @@ func accountsCommand(args []string, in *os.File, out, errOut io.Writer) error {
 	dir := flags.String("data-dir", base, "private instance directory")
 	remote := flags.Bool("remote", false, "use the connected Tailscale instance")
 	venueSecret := flags.Bool("venue-credential-stdin", false, "manage encrypted Jupiter/RPC connection lease from private JSON input")
+	venueBackupOut := flags.String("venue-backup-out", "", "new private encrypted Jupiter backup file")
+	exportPortable := flags.Bool("export-portable", false, "export portable public wallet and RPC configuration JSON; no secrets")
+	importPortable := flags.Bool("import-portable-stdin", false, "import portable public wallet and RPC configuration JSON from stdin; no secrets")
 	backupOut := flags.String("rpc-backup-out", "", "new private encrypted RPC backup file")
 	rpcSecret := flags.Bool("rpc-credential-stdin", false, "manage disposable RPC credentials from private JSON input")
 	rpcConfig := flags.Bool("rpc-stdin", false, "save/remove disposable wallet RPC settings from JSON")
@@ -39,14 +42,23 @@ func accountsCommand(args []string, in *os.File, out, errOut io.Writer) error {
 	if flags.NArg() != 0 {
 		return errors.New("unexpected account arguments")
 	}
-	if *remote && (*venueSecret || *backupOut != "" || *rpcSecret || *rpcConfig || *rpcCheck || *update || *setup) {
+	if *remote && (*venueSecret || *venueBackupOut != "" || *importPortable || *backupOut != "" || *rpcSecret || *rpcConfig || *rpcCheck || *update || *setup) {
 		return errors.New("connected Remote accounts currently support listing and read-only wallet observations")
 	}
-	if *walletRead && (*venueSecret || *rpcSecret || *rpcConfig || *rpcCheck || *update || *setup || *backupOut != "") {
+	if *exportPortable && (*walletRead || *venueSecret || *venueBackupOut != "" || *importPortable || *rpcSecret || *rpcConfig || *rpcCheck || *update || *setup || *backupOut != "") {
+		return errors.New("choose one account operation")
+	}
+	if *importPortable && (*walletRead || *venueSecret || *venueBackupOut != "" || *rpcSecret || *rpcConfig || *rpcCheck || *update || *setup || *backupOut != "") {
+		return errors.New("choose one account operation")
+	}
+	if *walletRead && (*venueSecret || *venueBackupOut != "" || *rpcSecret || *rpcConfig || *rpcCheck || *update || *setup || *backupOut != "") {
 		return errors.New("choose one account operation")
 	}
 	if *backupOut != "" && !*rpcSecret {
 		return errors.New("backup output requires RPC credential input")
+	}
+	if *venueBackupOut != "" && !*venueSecret {
+		return errors.New("backup output requires venue credential input")
 	}
 	if *venueSecret && (*rpcSecret || *rpcConfig || *rpcCheck || *update || *setup || *backupOut != "") {
 		return errors.New("choose one account operation")
@@ -92,6 +104,30 @@ func accountsCommand(args []string, in *os.File, out, errOut io.Writer) error {
 		}
 		return json.NewEncoder(out).Encode(result)
 	}
+	if *exportPortable {
+		var bundle core.PortableWalletsBundle
+		if err := c.Do(ctx, http.MethodGet, "/api/v1/accounts/portable", nil, &bundle); err != nil {
+			return err
+		}
+		return json.NewEncoder(out).Encode(bundle)
+	}
+	if *importPortable {
+		b, err := io.ReadAll(io.LimitReader(in, 16385))
+		if err != nil || len(b) > 16384 {
+			return errors.New("invalid portable wallet bundle")
+		}
+		var input core.PortableWalletsImportCommand
+		d := json.NewDecoder(bytes.NewReader(b))
+		d.DisallowUnknownFields()
+		if d.Decode(&input) != nil || d.Decode(new(any)) != io.EOF {
+			return errors.New("invalid portable wallet bundle")
+		}
+		var result core.PortableWalletsImportResult
+		if err = c.Do(ctx, http.MethodPut, "/api/v1/accounts/portable", input, &result); err != nil {
+			return err
+		}
+		return json.NewEncoder(out).Encode(result)
+	}
 	if *venueSecret {
 		b, err := io.ReadAll(io.LimitReader(in, 4097))
 		defer clear(b)
@@ -104,9 +140,18 @@ func accountsCommand(args []string, in *os.File, out, errOut io.Writer) error {
 		if d.Decode(&input) != nil || d.Decode(new(any)) != io.EOF {
 			return errors.New("invalid connection key input")
 		}
+		if (input.Action == "backup") != (*venueBackupOut != "") {
+			return errors.New("backup requires a new private output file")
+		}
 		var result core.VenueCredentialView
 		if err = c.Do(ctx, http.MethodPut, "/api/v1/accounts/venue-credential", input, &result); err != nil {
 			return err
+		}
+		if input.Action == "backup" {
+			if err = core.WriteVenueBackup(*venueBackupOut, result.Backup); err != nil {
+				return err
+			}
+			result.Backup = nil
 		}
 		return json.NewEncoder(out).Encode(result)
 	}
