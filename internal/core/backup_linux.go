@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 
 	"github.com/fased-ai/fased-app/internal/update"
 	"golang.org/x/sys/unix"
@@ -45,9 +46,7 @@ func (s *Store) BackupMetadata(ctx context.Context, p update.Preflight) (update.
 	// Keep the actual paused SQLite owner and all legitimate writers fenced
 	// through serialization, verification and publication, including other
 	// Store connections. Serialize reads the connection's complete WAL view.
-	if s.agentV2 != nil && s.agentV2.db != nil {
-		_, _ = s.agentV2.db.ExecContext(ctx, "PRAGMA wal_checkpoint(PASSIVE)")
-	}
+	checkpointOptionalSidecarWAL(ctx, filepath.Join(s.dir, "agents.sqlite"))
 	c, e := s.db.Conn(ctx)
 	if e != nil {
 		return zero, e
@@ -470,4 +469,21 @@ func serializeMetadataConnection(ctx context.Context, c *sql.Conn) ([]byte, erro
 		return err
 	})
 	return image, e
+}
+
+func checkpointOptionalSidecarWAL(ctx context.Context, path string) {
+	st, err := os.Lstat(path)
+	if err != nil || !st.Mode().IsRegular() {
+		return
+	}
+	walSt, err := os.Lstat(path + "-wal")
+	if err != nil || !walSt.Mode().IsRegular() || walSt.Size() == 0 {
+		return
+	}
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		return
+	}
+	defer db.Close()
+	_, _ = db.ExecContext(ctx, "PRAGMA wal_checkpoint(PASSIVE)")
 }

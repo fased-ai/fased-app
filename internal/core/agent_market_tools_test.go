@@ -195,10 +195,14 @@ func TestGetSwapQuoteTool(t *testing.T) {
 			if q.Get("inputMint") != "So11111111111111111111111111111111111111112" || q.Get("amount") != "1500000000" || q.Get("slippageBps") != "75" {
 				t.Fatalf("unexpected quote query: %v", q)
 			}
+			outMint := q.Get("outputMint")
+			if outMint == "" {
+				outMint = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
+			}
 			return marketJSONResponse(http.StatusOK, `{
 				"inputMint":"So11111111111111111111111111111111111111112",
 				"inAmount":"1500000000",
-				"outputMint":"EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+				"outputMint":"`+outMint+`",
 				"outAmount":"105089868",
 				"otherAmountThreshold":"104307600",
 				"swapMode":"ExactIn",
