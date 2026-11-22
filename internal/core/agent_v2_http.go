@@ -123,6 +123,28 @@ func (h *HTTPHandler) agentsV2API(w http.ResponseWriter, r *http.Request, token 
 		}
 		writeJSON(w, 200, map[string]any{"tools": agentV2ToolSpecs()})
 
+	case rel == "/usage":
+		if r.Method != http.MethodGet {
+			writeError(w, 405, "method not allowed")
+			return
+		}
+		q := r.URL.Query()
+		days := 30
+		if rawDays := strings.TrimSpace(q.Get("days")); rawDays != "" {
+			d, err := strconv.Atoi(rawDays)
+			if err != nil || d < 0 || d > 365 {
+				writeError(w, 400, "days must be an integer between 0 and 365")
+				return
+			}
+			days = d
+		}
+		summary, err := h.store.GetAgentV2Usage(r.Context(), q.Get("profileId"), days)
+		if err != nil {
+			writeError(w, 400, err.Error())
+			return
+		}
+		writeJSON(w, 200, summary)
+
 	case rel == "/task-threads":
 		if r.Method != http.MethodGet {
 			writeError(w, 405, "method not allowed")
@@ -178,6 +200,24 @@ func (h *HTTPHandler) agentsV2API(w http.ResponseWriter, r *http.Request, token 
 				return
 			}
 			h.agentV2MessagesAPI(w, r, token, threadID)
+			return
+		}
+		if strings.HasSuffix(sub, "/compact") {
+			threadID := strings.TrimSuffix(sub, "/compact")
+			if threadID == "" || strings.Contains(threadID, "/") {
+				writeError(w, 404, "thread not found")
+				return
+			}
+			h.agentV2CompactAPI(w, r, token, threadID)
+			return
+		}
+		if strings.HasSuffix(sub, "/side") {
+			threadID := strings.TrimSuffix(sub, "/side")
+			if threadID == "" || strings.Contains(threadID, "/") {
+				writeError(w, 404, "thread not found")
+				return
+			}
+			h.agentV2SideAPI(w, r, token, threadID)
 			return
 		}
 		if sub == "" || strings.Contains(sub, "/") {
@@ -419,6 +459,122 @@ func (h *HTTPHandler) agentV2MessagesAPI(w http.ResponseWriter, r *http.Request,
 
 	emit, _ := startV2SSE(w)
 	_, err = h.store.RunAgentV2Turn(r.Context(), threadID, in, emit)
+	if err != nil && r.Context().Err() == nil {
+		emit(AgentStreamEvent{
+			Type:     "error",
+			ThreadID: threadID,
+			Error:    err.Error(),
+		})
+	}
+}
+
+func (h *HTTPHandler) agentV2CompactAPI(w http.ResponseWriter, r *http.Request, token, threadID string) {
+	if r.Method != http.MethodPost {
+		writeError(w, 405, "method not allowed")
+		return
+	}
+	if !h.v2Mutation(w, r, token, false) {
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, 4*1024)
+	defer r.Body.Close()
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		writeError(w, 400, "invalid request body")
+		return
+	}
+	var req struct {
+		KeepRecent int `json:"keepRecent"`
+	}
+	if trimmed := strings.TrimSpace(string(body)); trimmed != "" {
+		if mediaType, _, err := mime.ParseMediaType(r.Header.Get("Content-Type")); err != nil || mediaType != "application/json" {
+			writeError(w, 415, "JSON content type required")
+			return
+		}
+		decoder := json.NewDecoder(strings.NewReader(trimmed))
+		decoder.DisallowUnknownFields()
+		if err := decoder.Decode(&req); err != nil {
+			writeError(w, 400, "invalid JSON request")
+			return
+		}
+		if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+			writeError(w, 400, "one JSON object required")
+			return
+		}
+		if req.KeepRecent < 0 || req.KeepRecent > 200 {
+			writeError(w, 400, "keepRecent must be between 0 and 200")
+			return
+		}
+	}
+	res, err := h.store.CompactThread(r.Context(), threadID, req.KeepRecent)
+	if errors.Is(err, ErrThreadNotFound) {
+		writeError(w, 404, err.Error())
+		return
+	}
+	if err != nil {
+		writeError(w, 400, err.Error())
+		return
+	}
+	writeJSON(w, 200, res)
+}
+
+func (h *HTTPHandler) agentV2SideAPI(w http.ResponseWriter, r *http.Request, token, threadID string) {
+	if r.Method != http.MethodPost {
+		writeError(w, 405, "method not allowed")
+		return
+	}
+	if !h.v2Mutation(w, r, token, true) {
+		return
+	}
+	var in AgentV2SideInput
+	if !decodeV2JSON(w, r, &in, 48*1024) {
+		return
+	}
+	content := strings.TrimSpace(in.Content)
+	if content == "" || len(content) > agentV2MaxPromptBytes || !utf8.ValidString(content) {
+		writeError(w, 400, "prompt content must be non-empty UTF-8 within 32 KiB")
+		return
+	}
+	if in.ConnectionRef != "" && !validConnectionRef(in.ConnectionRef) {
+		writeError(w, 400, "invalid AI connection reference")
+		return
+	}
+	if in.Model != "" && !validProviderModelID(in.Model) {
+		writeError(w, 400, "invalid model identifier")
+		return
+	}
+	detail, err := h.store.GetThread(r.Context(), threadID)
+	if errors.Is(err, ErrThreadNotFound) {
+		writeError(w, 404, err.Error())
+		return
+	}
+	if err != nil {
+		writeError(w, 500, "thread unavailable")
+		return
+	}
+	if _, err := resolveAgentV2Provider(r.Context(), h.store, in.ConnectionRef, detail.Thread.ConnectionRef, in.Model, detail.Thread.Model, detail.Thread.ProfileID); err != nil {
+		writeError(w, 400, err.Error())
+		return
+	}
+	release, ok := h.acquireAgentV2Turn(w, r)
+	if !ok {
+		return
+	}
+	defer release()
+
+	if !v2WantsSSE(r) {
+		_ = http.NewResponseController(w).SetWriteDeadline(time.Time{})
+		res, err := h.store.RunAgentV2SideQuestion(r.Context(), threadID, in, nil)
+		if err != nil {
+			writeError(w, 400, err.Error())
+			return
+		}
+		writeJSON(w, 200, res)
+		return
+	}
+
+	emit, _ := startV2SSE(w)
+	_, err = h.store.RunAgentV2SideQuestion(r.Context(), threadID, in, emit)
 	if err != nil && r.Context().Err() == nil {
 		emit(AgentStreamEvent{
 			Type:     "error",

@@ -98,21 +98,106 @@ export type AgentThreadDetail = {
   pendingApprovals: AgentApproval[];
 };
 
+export type AgentCompactResult = {
+  thread: AgentThread;
+  compacted: boolean;
+  compactedMessages: number;
+  remainingMessages: number;
+  summaryChars: number;
+};
+
+export type AgentV2SideResult = {
+  threadId: string;
+  provider: string;
+  model: string;
+  content: string;
+  reasoning?: string;
+  inputTokens?: number;
+  outputTokens?: number;
+  cachedTokens?: number;
+};
+
+export type AgentV2UsageModelRow = {
+  provider: string;
+  model: string;
+  turns: number;
+  inputTokens: number;
+  cachedTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+  estimatedCostMicroUsd: number;
+  costKnown: boolean;
+};
+
+export type AgentV2UsageSummary = {
+  profileId?: string;
+  days: number;
+  since?: number;
+  turns: number;
+  inputTokens: number;
+  cachedTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+  estimatedCostMicroUsd: number;
+  costKnown: boolean;
+  unpricedTurns?: number;
+  models: AgentV2UsageModelRow[];
+};
+
 export type AgentStreamEvent = {
   type: string;
   threadId?: string;
   messageId?: string;
   provider?: string;
   model?: string;
+  handoffFromProvider?: string;
+  handoffFromModel?: string;
   delta?: string;
   toolCall?: AgentToolCall;
   approval?: AgentApproval;
   message?: AgentV2Message;
+  sideResult?: AgentV2SideResult;
   awaitingApproval?: boolean;
   recalledMemories?: number;
   recalledMemoryTitles?: string[];
   error?: string;
 };
+
+export type ChatSlashCommand =
+  | { kind: "compact" }
+  | { kind: "side"; question: string }
+  | { kind: "message"; content: string };
+
+export function parseChatSlashCommand(raw: string): ChatSlashCommand {
+  const trimmed = raw.trim();
+  if (/^\/compact(?:\s|$)/i.test(trimmed)) {
+    return { kind: "compact" };
+  }
+  const sideMatch = trimmed.match(/^\/side(?:\s+([\s\S]*))?$/i);
+  if (sideMatch) {
+    return { kind: "side", question: (sideMatch[1] ?? "").trim() };
+  }
+  return { kind: "message", content: raw };
+}
+
+export function formatUsageCostUSD(microUsd: number, costKnown = true): string {
+  if (!costKnown) return "—";
+  const usd = Math.max(0, microUsd) / 1_000_000;
+  if (usd === 0) return "$0.00";
+  if (usd < 0.01) return `$${usd.toFixed(4)}`;
+  return `$${usd.toFixed(2)}`;
+}
+
+export function formatCompactTokens(count: number): string {
+  const n = Math.max(0, Math.round(count));
+  if (n >= 1_000_000) {
+    return `${(n / 1_000_000).toFixed(n >= 10_000_000 ? 0 : 1)}M`;
+  }
+  if (n >= 1_000) {
+    return `${(n / 1_000).toFixed(n >= 10_000 ? 0 : 1)}k`;
+  }
+  return String(n);
+}
 
 export type SSEFrame = { event: string; data: string };
 
@@ -836,6 +921,44 @@ export function deleteMemoryV2(
   );
 }
 
+export function compactThreadV2(
+  core: Pick<AgentV2CoreClient, "request">,
+  threadId: string,
+  keepRecent?: number,
+) {
+  return core.request<AgentCompactResult>(
+    `agents/v2/threads/${encodeURIComponent(threadId)}/compact`,
+    "POST",
+    keepRecent !== undefined ? { keepRecent } : {},
+  );
+}
+
+export function getUsageV2(
+  core: Pick<AgentV2CoreClient, "request">,
+  params: { profileId?: string; days?: number } = {},
+) {
+  const qs = new URLSearchParams();
+  if (params.profileId) qs.set("profileId", params.profileId);
+  if (params.days !== undefined) qs.set("days", String(params.days));
+  const suffix = qs.toString();
+  return core.request<AgentV2UsageSummary>(
+    suffix ? `agents/v2/usage?${suffix}` : "agents/v2/usage",
+  );
+}
+
+export function streamSideQuestionV2(
+  core: Pick<AgentV2CoreClient, "stream">,
+  threadId: string,
+  input: { content: string; connectionRef?: string; model?: string },
+  options: { signal?: AbortSignal; onEvent: (frame: SSEFrame) => void },
+) {
+  return core.stream(
+    `agents/v2/threads/${encodeURIComponent(threadId)}/side`,
+    input,
+    options,
+  );
+}
+
 export type StreamDraft = {
   messageId: string;
   provider?: string;
@@ -852,6 +975,23 @@ export type RecalledMemoriesInfo = {
   threadId: string;
   count: number;
   titles: string[];
+};
+
+export type HandoffInfo = {
+  threadId: string;
+  fromProvider: string;
+  fromModel: string;
+};
+
+export type SideChatDraft = {
+  threadId: string;
+  question: string;
+  content: string;
+  reasoning: string;
+  provider?: string;
+  model?: string;
+  loading: boolean;
+  error?: string;
 };
 
 function mergeToolCall(list: AgentToolCall[], next: AgentToolCall) {
@@ -881,12 +1021,15 @@ export function useAgentsV2(core: AgentV2CoreClient, profileId: string) {
   const [lastRecalled, setLastRecalled] = useState<RecalledMemoriesInfo | null>(
     null,
   );
+  const [lastHandoff, setLastHandoff] = useState<HandoffInfo | null>(null);
+  const [sideChat, setSideChat] = useState<SideChatDraft | null>(null);
   const [resolvingApprovalId, setResolvingApprovalId] = useState("");
   const [error, setError] = useState("");
 
   const generation = useRef(0);
   const callerSelectedRef = useRef(false);
   const abortController = useRef<AbortController | null>(null);
+  const sideAbortController = useRef<AbortController | null>(null);
 
   const refreshThreads = useCallback(
     async (archived = showArchived) => {
@@ -933,11 +1076,15 @@ export function useAgentsV2(core: AgentV2CoreClient, profileId: string) {
     callerSelectedRef.current = false;
     abortController.current?.abort();
     abortController.current = null;
+    sideAbortController.current?.abort();
+    sideAbortController.current = null;
     setThreads([]);
     setActiveThreadId("");
     setDetail(null);
     setStreamDraft(null);
     setLastRecalled(null);
+    setLastHandoff(null);
+    setSideChat(null);
     setStreaming(false);
     setError("");
     if (core.mode !== "ready") return;
@@ -966,9 +1113,12 @@ export function useAgentsV2(core: AgentV2CoreClient, profileId: string) {
     async (id: string) => {
       callerSelectedRef.current = true;
       abortController.current?.abort();
+      sideAbortController.current?.abort();
       setStreaming(false);
       setStreamDraft(null);
       setLastRecalled(null);
+      setLastHandoff(null);
+      setSideChat(null);
       setActiveThreadId(id);
       if (!id) {
         setDetail(null);
@@ -982,9 +1132,12 @@ export function useAgentsV2(core: AgentV2CoreClient, profileId: string) {
   const startNewThread = useCallback(() => {
     callerSelectedRef.current = true;
     abortController.current?.abort();
+    sideAbortController.current?.abort();
     setStreaming(false);
     setStreamDraft(null);
     setLastRecalled(null);
+    setLastHandoff(null);
+    setSideChat(null);
     setActiveThreadId("");
     setDetail(null);
     setError("");
@@ -993,6 +1146,12 @@ export function useAgentsV2(core: AgentV2CoreClient, profileId: string) {
   const stopStreaming = useCallback(() => {
     abortController.current?.abort();
     abortController.current = null;
+  }, []);
+
+  const dismissSideChat = useCallback(() => {
+    sideAbortController.current?.abort();
+    sideAbortController.current = null;
+    setSideChat(null);
   }, []);
 
   const applySSEFrame = useCallback((frame: SSEFrame) => {
@@ -1016,6 +1175,15 @@ export function useAgentsV2(core: AgentV2CoreClient, profileId: string) {
               threadId: ev.threadId,
               count: recalledCount,
               titles: recalledTitles,
+            }
+          : null,
+      );
+      setLastHandoff(
+        ev.threadId && (ev.handoffFromModel || ev.handoffFromProvider)
+          ? {
+              threadId: ev.threadId,
+              fromProvider: ev.handoffFromProvider ?? "",
+              fromModel: ev.handoffFromModel ?? "",
             }
           : null,
       );
@@ -1149,6 +1317,7 @@ export function useAgentsV2(core: AgentV2CoreClient, profileId: string) {
       callerSelectedRef.current = true;
       setError("");
       setLastRecalled(null);
+      setLastHandoff(null);
 
       let threadId = input.forceNewThread ? "" : activeThreadId;
       let createdFresh = false;
@@ -1311,6 +1480,154 @@ export function useAgentsV2(core: AgentV2CoreClient, profileId: string) {
     [activeThreadId, core, refreshThreads, showArchived],
   );
 
+  const compactThread = useCallback(
+    async (threadId = activeThreadId): Promise<AgentCompactResult | null> => {
+      if (core.mode !== "ready" || !threadId) return null;
+      setError("");
+      try {
+        const res = await compactThreadV2(core, threadId);
+        setThreads((prev) =>
+          prev.map((item) => (item.id === threadId ? res.thread : item)),
+        );
+        setDetail((cur) =>
+          cur && cur.thread.id === threadId
+            ? { ...cur, thread: res.thread }
+            : cur,
+        );
+        return res;
+      } catch (e) {
+        setError(
+          e instanceof Error ? e.message : "Could not compact conversation",
+        );
+        return null;
+      }
+    },
+    [activeThreadId, core],
+  );
+
+  const askSideQuestion = useCallback(
+    async (input: {
+      threadId?: string;
+      content: string;
+      connectionRef?: string;
+      model?: string;
+    }): Promise<boolean> => {
+      const targetId = input.threadId || activeThreadId;
+      const trimmed = input.content.trim();
+      if (core.mode !== "ready" || !targetId || !trimmed) return false;
+      sideAbortController.current?.abort();
+      const ctrl = new AbortController();
+      sideAbortController.current = ctrl;
+      setError("");
+      setSideChat({
+        threadId: targetId,
+        question: trimmed,
+        content: "",
+        reasoning: "",
+        loading: true,
+      });
+
+      const applySideFrame = (frame: SSEFrame) => {
+        let ev: AgentStreamEvent;
+        try {
+          ev = JSON.parse(frame.data) as AgentStreamEvent;
+        } catch {
+          return;
+        }
+        const kind = ev.type || frame.event;
+        if (kind === "error" && ev.error) {
+          setSideChat((cur) =>
+            cur && cur.threadId === targetId
+              ? { ...cur, loading: false, error: ev.error }
+              : cur,
+          );
+          return;
+        }
+        if (kind === "run_started") {
+          setSideChat((cur) =>
+            cur && cur.threadId === targetId
+              ? {
+                  ...cur,
+                  provider: ev.provider ?? cur.provider,
+                  model: ev.model ?? cur.model,
+                }
+              : cur,
+          );
+          return;
+        }
+        if (kind === "thinking_delta" && ev.delta) {
+          setSideChat((cur) =>
+            cur && cur.threadId === targetId
+              ? { ...cur, reasoning: cur.reasoning + ev.delta }
+              : cur,
+          );
+          return;
+        }
+        if (kind === "text_delta" && ev.delta) {
+          setSideChat((cur) =>
+            cur && cur.threadId === targetId
+              ? { ...cur, content: cur.content + ev.delta }
+              : cur,
+          );
+          return;
+        }
+        if (kind === "side_done" && ev.sideResult) {
+          const done = ev.sideResult;
+          setSideChat((cur) =>
+            cur && cur.threadId === targetId
+              ? {
+                  ...cur,
+                  provider: done.provider,
+                  model: done.model,
+                  content: done.content,
+                  reasoning: done.reasoning ?? cur.reasoning,
+                  loading: false,
+                }
+              : cur,
+          );
+        }
+      };
+
+      try {
+        await streamSideQuestionV2(
+          core,
+          targetId,
+          {
+            content: trimmed,
+            ...(input.connectionRef
+              ? { connectionRef: input.connectionRef }
+              : {}),
+            ...(input.model ? { model: input.model } : {}),
+          },
+          { signal: ctrl.signal, onEvent: applySideFrame },
+        );
+        setSideChat((cur) =>
+          cur && cur.threadId === targetId ? { ...cur, loading: false } : cur,
+        );
+        return true;
+      } catch (e) {
+        if (e instanceof Error && e.name === "AbortError") {
+          setSideChat((cur) =>
+            cur && cur.threadId === targetId ? { ...cur, loading: false } : cur,
+          );
+          return true;
+        }
+        const msg = e instanceof Error ? e.message : "Side question failed";
+        setSideChat((cur) =>
+          cur && cur.threadId === targetId
+            ? { ...cur, loading: false, error: msg }
+            : cur,
+        );
+        return false;
+      } finally {
+        if (sideAbortController.current === ctrl) {
+          sideAbortController.current = null;
+        }
+      }
+    },
+    [activeThreadId, core],
+  );
+
   const removeThread = useCallback(
     async (threadId: string) => {
       await deleteThreadV2(core, threadId);
@@ -1333,6 +1650,8 @@ export function useAgentsV2(core: AgentV2CoreClient, profileId: string) {
     streaming,
     streamDraft,
     lastRecalled,
+    lastHandoff,
+    sideChat,
     resolvingApprovalId,
     error,
     setError,
@@ -1341,6 +1660,9 @@ export function useAgentsV2(core: AgentV2CoreClient, profileId: string) {
     startNewThread,
     sendMessage,
     stopStreaming,
+    compactThread,
+    askSideQuestion,
+    dismissSideChat,
     decideApproval,
     renameThread,
     archiveThread,

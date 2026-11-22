@@ -463,3 +463,85 @@ test("Scheduled reminder runs mirror into Agent V2 threads and News Ask in Chat 
     { timeout: 12000 },
   );
 });
+
+test("T3Code slash /side, manual /compact persistence across reload, and Settings Usage & Cost", async ({
+  page,
+}) => {
+  test.setTimeout(60000);
+  await stop();
+  await start(true, "127.0.0.1:0", "local", false);
+
+  await page.goto(url + "/#agents/chat");
+  await expect(
+    page.getByRole("heading", { name: "Chat", exact: true }),
+  ).toBeVisible();
+
+  const composer = page.getByLabel("Message", { exact: true });
+  await composer.fill("Hello fixture thread");
+  await page.getByRole("button", { name: "Send", exact: true }).click();
+  await expect(page.locator(".v2-markdown").first()).toContainText(
+    "Fixture response ready",
+    { timeout: 12000 },
+  );
+  await expect(page.locator(".v2-message")).toHaveCount(2);
+
+  // Ephemeral /side renders an above-composer card without mutating thread messages or summary.
+  await composer.fill("/side Quick fee check");
+  await page.getByRole("button", { name: "Send", exact: true }).click();
+  const sideCard = page.getByRole("complementary", {
+    name: "Side question",
+    exact: true,
+  });
+  await expect(sideCard).toBeVisible({ timeout: 12000 });
+  await expect(sideCard).toContainText("Quick fee check");
+  await expect(sideCard).toContainText("Fixture response ready", {
+    timeout: 12000,
+  });
+  await expect(page.locator(".v2-message")).toHaveCount(2);
+
+  await sideCard.getByRole("button", { name: "Dismiss", exact: true }).click();
+  await expect(sideCard).toHaveCount(0);
+
+  // /compact persists thread summary in sqlite and keeps it visible after reload.
+  await composer.fill("/compact");
+  await page.getByRole("button", { name: "Send", exact: true }).click();
+  const summaryBanner = page.locator("details.v2-summary-banner");
+  await expect(summaryBanner).toBeVisible({ timeout: 12000 });
+  await expect(summaryBanner.locator("summary")).toHaveText(
+    "Compacted context",
+  );
+  await summaryBanner.locator("summary").click();
+  await expect(summaryBanner.locator("pre")).toContainText(
+    "Hello fixture thread",
+  );
+  await expect(summaryBanner.locator("pre")).not.toContainText(
+    "Quick fee check",
+  );
+
+  await page.reload();
+  await expect(summaryBanner).toBeVisible({ timeout: 12000 });
+  await summaryBanner.locator("summary").click();
+  await expect(summaryBanner.locator("pre")).toContainText(
+    "Hello fixture thread",
+  );
+
+  // Agent settings Usage & Cost aggregates stored token telemetry and switches windows cleanly.
+  await page.goto(url + "/#agents/settings");
+  const usagePanel = page.getByRole("region", {
+    name: "Usage & Cost",
+    exact: true,
+  });
+  await expect(usagePanel).toBeVisible({ timeout: 12000 });
+  await expect(usagePanel).toContainText("fixture-v2", { timeout: 12000 });
+  await usagePanel.getByRole("button", { name: "7d", exact: true }).click();
+  await expect(
+    usagePanel.getByRole("button", { name: "7d", exact: true }),
+  ).toHaveAttribute("aria-pressed", "true");
+  await usagePanel
+    .getByRole("button", { name: "All time", exact: true })
+    .click();
+  await expect(
+    usagePanel.getByRole("button", { name: "All time", exact: true }),
+  ).toHaveAttribute("aria-pressed", "true");
+  await expect(usagePanel).toContainText("fixture-v2");
+});

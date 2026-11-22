@@ -1,6 +1,7 @@
 import type { FormEvent } from "react";
 import { Plug } from "../icons";
 import { AgentRulesMemoryPanel } from "../components/AgentRulesMemoryPanel";
+import { AgentUsagePanel } from "../components/AgentUsagePanel";
 import { useCore } from "../core";
 import { useUI } from "../ui-preferences";
 import { useWorkspace, type AgentSettingsDraft } from "../workspace";
@@ -302,6 +303,7 @@ export function AgentProfileSettings({ view: v }: { view: AgentView }) {
           </form>
         </section>
         <AgentRulesMemoryPanel profileId={v.profileId} />
+        <AgentUsagePanel profileId={v.profileId} />
       </div>
     </div>
   );
