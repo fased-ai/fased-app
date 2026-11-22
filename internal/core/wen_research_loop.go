@@ -601,6 +601,7 @@ func (s *Store) PrepareNextWENResearchAI(ctx context.Context, c WENResearchAINex
 		if e = tx.Commit(); e != nil {
 			return out, e
 		}
+		signalStoreChange(s)
 		return out, errors.New("context_too_large; preserved transcript is held")
 	}
 	if e = validateAIModelPolicy(q, now); e != nil {
@@ -622,6 +623,7 @@ func (s *Store) PrepareNextWENResearchAI(ctx context.Context, c WENResearchAINex
 	if e = tx.Commit(); e != nil {
 		return out, e
 	}
+	signalStoreChange(s)
 	return WENResearchAIReview{researchReviewSchema(*t), rev + 1, *t, q, "unchanged", false}, nil
 }
 

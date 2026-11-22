@@ -14,8 +14,8 @@ import (
 )
 
 // WalletReadResponseLimit bounds the same wallet projection in native and CLI
-// clients: balances, recent activity and supported transaction balance changes.
-const WalletReadResponseLimit int64 = 256 * 1024
+// clients: balances (up to 1024 token accounts per program), activity and tx detail.
+const WalletReadResponseLimit int64 = 2 * 1024 * 1024
 
 type WalletReadCommand struct {
 	Selection  *WalletSelection `json:"selection,omitempty"`

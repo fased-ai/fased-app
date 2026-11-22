@@ -58,9 +58,25 @@ func policyProvider(p *OpenAIModelPolicy) string {
 	}
 	return p.Provider
 }
+
+var canonicalProviderOrder = []string{
+	"openai",
+	"anthropic",
+	"google",
+	"xai",
+	"openrouter",
+	"moonshot",
+	"moonshot-intl",
+	"kimi-code",
+	"qwen",
+	"opencode",
+	"ollama-cloud",
+	"local",
+}
+
 func providerEntries() []ProviderEntry {
 	out := []ProviderEntry{}
-	for _, id := range []string{"openai", "anthropic", "xai", "moonshot", "moonshot-intl", "kimi-code", "ollama-cloud", "google", "openrouter", "qwen", "opencode", "local"} {
+	for _, id := range canonicalProviderOrder {
 		p, _ := providerDefinitionFor(id)
 		methods := []ProviderMethod{{ID: "api-key", Name: "API key"}}
 		if id == "local" {
@@ -729,7 +745,10 @@ func registryForProvider(id string) modelRegistry {
 }
 func allProviderModels() []currentModel {
 	out := append([]currentModel(nil), currentModels.Models...)
-	for _, id := range []string{"anthropic", "xai", "moonshot", "moonshot-intl", "kimi-code", "ollama-cloud", "google", "openrouter", "qwen", "opencode"} {
+	for _, id := range canonicalProviderOrder {
+		if id == "openai" || id == "local" {
+			continue
+		}
 		out = append(out, registryForProvider(id).Models...)
 	}
 	out = append(out, localRegistry().Models...)

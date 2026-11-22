@@ -519,12 +519,32 @@ func settlementError(raw json.RawMessage) (any, error) {
 		return nil, nil
 	case string:
 		switch x {
-		case "AccountInUse", "AccountLoadedTwice", "AccountNotFound", "ProgramAccountNotFound", "InsufficientFundsForFee", "InvalidAccountForFee", "AlreadyProcessed", "BlockhashNotFound", "CallChainTooDeep", "MissingSignatureForFee", "InvalidAccountIndex", "SignatureFailure", "InvalidProgramForExecution", "SanitizeFailure", "ClusterMaintenance", "AccountBorrowOutstanding", "WouldExceedMaxBlockCostLimit", "UnsupportedVersion", "InvalidWritableAccount", "WouldExceedMaxAccountCostLimit", "WouldExceedAccountDataBlockLimit", "TooManyAccountLocks", "AddressLookupTableNotFound", "InvalidAddressLookupTableOwner", "InvalidAddressLookupTableData", "InvalidAddressLookupTableIndex", "InvalidRentPayingAccount", "WouldExceedMaxVoteCostLimit", "WouldExceedAccountDataTotalSize", "MaxLoadedAccountsDataSizeExceeded", "ResanitizationNeeded", "ProgramExecutionTemporarilyRestricted", "InsufficientFundsForRent":
+		case "AccountInUse", "AccountLoadedTwice", "AccountNotFound", "ProgramAccountNotFound", "InsufficientFundsForFee", "InvalidAccountForFee", "AlreadyProcessed", "BlockhashNotFound", "CallChainTooDeep", "MissingSignatureForFee", "InvalidAccountIndex", "SignatureFailure", "InvalidProgramForExecution", "SanitizeFailure", "ClusterMaintenance", "AccountBorrowOutstanding", "WouldExceedMaxBlockCostLimit", "UnsupportedVersion", "InvalidWritableAccount", "WouldExceedMaxAccountCostLimit", "WouldExceedAccountDataBlockLimit", "TooManyAccountLocks", "AddressLookupTableNotFound", "InvalidAddressLookupTableOwner", "InvalidAddressLookupTableData", "InvalidAddressLookupTableIndex", "InvalidRentPayingAccount", "WouldExceedMaxVoteCostLimit", "WouldExceedAccountDataTotalSize", "MaxLoadedAccountsDataSizeExceeded", "ResanitizationNeeded":
 			return x, nil
 		}
 	case map[string]any:
 		if len(x) != 1 {
 			return nil, invalid
+		}
+		if idx, present := x["DuplicateInstruction"]; present {
+			n, ok := idx.(float64)
+			if !ok || n < 0 || n > 255 || n != float64(uint8(n)) {
+				return nil, invalid
+			}
+			return x, nil
+		}
+		for _, accountKey := range []string{"InsufficientFundsForRent", "ProgramExecutionTemporarilyRestricted"} {
+			if rawDetails, present := x[accountKey]; present {
+				details, ok := rawDetails.(map[string]any)
+				if !ok || len(details) != 1 {
+					return nil, invalid
+				}
+				n, ok := details["account_index"].(float64)
+				if !ok || n < 0 || n > 255 || n != float64(uint8(n)) {
+					return nil, invalid
+				}
+				return x, nil
+			}
 		}
 		parts, ok := x["InstructionError"].([]any)
 		if !ok || len(parts) != 2 {
@@ -541,9 +561,13 @@ func settlementError(raw json.RawMessage) (any, error) {
 				return x, nil
 			}
 		case map[string]any:
-			code, ok := reason["Custom"].(float64)
-			if len(reason) == 1 && ok && code >= 0 && code <= 4294967295 && code == float64(uint32(code)) {
-				return x, nil
+			if len(reason) == 1 {
+				if code, ok := reason["Custom"].(float64); ok && code >= 0 && code <= 4294967295 && code == float64(uint32(code)) {
+					return x, nil
+				}
+				if msg, ok := reason["BorshIoError"].(string); ok && len(msg) > 0 && len(msg) <= 256 {
+					return x, nil
+				}
 			}
 		}
 	}

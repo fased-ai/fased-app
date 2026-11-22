@@ -139,6 +139,8 @@ const toolLabels: Record<string, string> = {
   workspace_status: "Workspace status",
   list_wallets: "Wallets",
   get_wallet_balances: "Wallet balances",
+  get_portfolio_summary: "Portfolio",
+  fetch_web_page: "Web page",
   get_token_price: "Token price",
   get_swap_quote: "Swap quote",
   list_tasks: "Tasks",
@@ -233,6 +235,54 @@ export function formatToolSummary(
         : solRaw;
     const count = Array.isArray(parsed.tokens) ? parsed.tokens.length : 0;
     return `${solLabel} SOL${count > 0 ? ` · ${count} ${count === 1 ? "token" : "tokens"}` : ""}`;
+  }
+
+  if (toolName === "get_portfolio_summary") {
+    const wallets =
+      typeof parsed.walletCount === "number" &&
+      Number.isFinite(parsed.walletCount)
+        ? parsed.walletCount
+        : null;
+    if (wallets === null) return "";
+    const parts = [`${wallets} ${wallets === 1 ? "wallet" : "wallets"}`];
+    if (
+      typeof parsed.activeTasks === "number" &&
+      Number.isFinite(parsed.activeTasks) &&
+      parsed.activeTasks > 0
+    ) {
+      parts.push(
+        `${parsed.activeTasks} ${parsed.activeTasks === 1 ? "task" : "tasks"}`,
+      );
+    }
+    if (
+      typeof parsed.pendingApprovals === "number" &&
+      Number.isFinite(parsed.pendingApprovals) &&
+      parsed.pendingApprovals > 0
+    ) {
+      parts.push(`${parsed.pendingApprovals} pending`);
+    }
+    return parts.join(" · ");
+  }
+
+  if (toolName === "fetch_web_page") {
+    const title = typeof parsed.title === "string" ? parsed.title.trim() : "";
+    if (title) {
+      return title.length > 60 ? `${title.slice(0, 57)}...` : title;
+    }
+    const rawUrl =
+      typeof parsed.finalUrl === "string"
+        ? parsed.finalUrl
+        : typeof parsed.url === "string"
+          ? parsed.url
+          : "";
+    if (rawUrl) {
+      try {
+        const host = new URL(rawUrl).hostname;
+        if (host) return host;
+      } catch {
+        // Ignore unparseable URL fallback.
+      }
+    }
   }
 
   return "";

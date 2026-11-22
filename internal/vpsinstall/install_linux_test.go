@@ -237,7 +237,7 @@ func (h *memoryHost) run(_ context.Context, b []byte, a ...string) (out []byte, 
 		delete(h.files, a[len(a)-1])
 	case "/usr/bin/mv":
 		from, to := a[len(a)-2], a[len(a)-1]
-		if _, ok := h.files[to]; ok {
+		if _, ok := h.files[to]; ok && !contains(a, "--force") {
 			return nil, os.ErrExist
 		}
 		for p, f := range h.files {

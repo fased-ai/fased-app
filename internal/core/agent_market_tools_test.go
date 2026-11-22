@@ -195,10 +195,14 @@ func TestGetSwapQuoteTool(t *testing.T) {
 			if q.Get("inputMint") != "So11111111111111111111111111111111111111112" || q.Get("amount") != "1500000000" || q.Get("slippageBps") != "75" {
 				t.Fatalf("unexpected quote query: %v", q)
 			}
+			outMint := q.Get("outputMint")
+			if outMint == "" {
+				outMint = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
+			}
 			return marketJSONResponse(http.StatusOK, `{
 				"inputMint":"So11111111111111111111111111111111111111112",
 				"inAmount":"1500000000",
-				"outputMint":"EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+				"outputMint":"`+outMint+`",
 				"outAmount":"105089868",
 				"otherAmountThreshold":"104307600",
 				"swapMode":"ExactIn",
@@ -399,5 +403,146 @@ func TestAgentV2MarketToolsLoop(t *testing.T) {
 	}
 	if len(res.Detail.Messages[1].ToolCalls) != 2 {
 		t.Fatalf("expected 2 completed Tier-1 market tool calls, got %#v", res.Detail.Messages[1].ToolCalls)
+	}
+}
+
+type marketTransportFunc func(*http.Request) (*http.Response, error)
+
+func (f marketTransportFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+func TestMarketToolsSafetyFilteringAndRetry(t *testing.T) {
+	t.Parallel()
+
+	// 1. isBase58Mint requires valid 32-byte decoded key, not just 32-44 base58 chars.
+	if !isBase58Mint("So11111111111111111111111111111111111111112") || !isBase58Mint("EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v") {
+		t.Fatal("expected valid Solana mints accepted")
+	}
+	if isBase58Mint(strings.Repeat("2", 32)) || isBase58Mint(strings.Repeat("z", 44)) || isBase58Mint("So1111111111111111111111111111111111111111O") {
+		t.Fatal("expected invalid decoded-length or non-base58 strings rejected")
+	}
+
+	// 2. toolGetWalletBalances filters zero balances, orders known first, caps at 25, reports tokenCount/tokensTruncated.
+	s := fixtureStore(t)
+	s.rpcAdmission = true
+	acctID := strings.Repeat("d", 32)
+	rec, err := s.accountsRecord(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec.Accounts = append(rec.Accounts, Account{
+		Version:   2,
+		ID:        acctID,
+		Name:      "Watch Wallet",
+		Mode:      "watch",
+		Network:   "devnet",
+		PublicKey: strings.Repeat("02", 32),
+	})
+	vRec, err := s.UpdateAccounts(t.Context(), rec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.ConfigureAccountRPC(t.Context(), RPCConfigInput{
+		AccountID: acctID,
+		Revision:  vRec.Record.Revision,
+		Endpoint:  "https://api.devnet.solana.com",
+		Network:   "devnet",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	tokens := make([]WalletTokenBalance, 0, 32)
+	tokens = append(tokens,
+		WalletTokenBalance{Mint: "ZeroMint1111111111111111111111111111111111", Amount: "0", Decimals: 6, Program: "spl-token"},
+		WalletTokenBalance{Mint: "EmptyMint111111111111111111111111111111111", Amount: "0000", Decimals: 6, Program: "spl-token"},
+	)
+	for i := 0; i < 28; i++ {
+		tokens = append(tokens, WalletTokenBalance{
+			Mint:     "UnkMint" + strings.Repeat(string(rune('a'+i%26)), 36),
+			Amount:   "5000",
+			Decimals: 6,
+			Program:  "spl-token",
+		})
+	}
+	// Put known USDC late in input to verify known tokens sort ahead of unknown tokens.
+	tokens = append(tokens, WalletTokenBalance{
+		Mint:     "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+		Amount:   "2500000",
+		Decimals: 6,
+		Program:  "spl-token",
+	})
+	s.walletReadFixture = func(_ context.Context, a Account, addr string, _ []byte, _ func() error, _ *WalletSelection) (WalletSnapshot, error) {
+		return WalletSnapshot{
+			Version:   2,
+			AccountID: a.ID,
+			Network:   a.Network,
+			Address:   addr,
+			Slot:      "42",
+			Lamports:  "1000000000",
+			Tokens:    tokens,
+		}, nil
+	}
+	balOut, err := toolGetWalletBalances(t.Context(), s, "", json.RawMessage(`{"accountId":"`+acctID+`"}`))
+	if err != nil {
+		t.Fatalf("toolGetWalletBalances failed: %v", err)
+	}
+	balMap := balOut.(map[string]any)
+	gotTokens := balMap["tokens"].([]map[string]any)
+	if len(gotTokens) != 25 || balMap["tokenCount"] != 29 || balMap["tokensTruncated"] != true {
+		t.Fatalf("unexpected wallet balance capping/counts: len=%d count=%v truncated=%v", len(gotTokens), balMap["tokenCount"], balMap["tokensTruncated"])
+	}
+	if gotTokens[0]["symbol"] != "USDC" {
+		t.Fatalf("expected known token USDC prioritized first, got %#v", gotTokens[0])
+	}
+
+	// 3. resolveSolanaSwapToken rejects missing decimals field in Jupiter Price v3 response.
+	const customMint = "9xQeWvG816bUx9EPjHmaT23yvVM2ZWbrrpZb9PusVFin"
+	s2 := fixtureStore(t)
+	s2.providerFixture = false
+	s2.marketDataTransport = marketTransportFunc(func(r *http.Request) (*http.Response, error) {
+		return marketJSONResponse(http.StatusOK, `{"`+customMint+`":{"usdPrice":1.25}}`), nil
+	})
+	if _, err := resolveSolanaSwapToken(t.Context(), newPublicMarketClient(s2), customMint, false); err == nil {
+		t.Fatal("expected resolveSolanaSwapToken to reject omitted decimals field")
+	}
+
+	// 4. toolGetSwapQuote validates InputMint and InAmount against request.
+	s2.marketDataTransport = marketTransportFunc(func(r *http.Request) (*http.Response, error) {
+		return marketJSONResponse(http.StatusOK, `{
+			"inputMint":"EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+			"inAmount":"1000000000",
+			"outputMint":"EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+			"outAmount":"70000000"
+		}`), nil
+	})
+	if _, err := toolGetSwapQuote(t.Context(), s2, "", json.RawMessage(`{"fromToken":"SOL","toToken":"USDC","amount":"1"}`)); err == nil || !strings.Contains(err.Error(), "input mint mismatch") {
+		t.Fatalf("expected input mint mismatch error, got %v", err)
+	}
+	s2.marketDataTransport = marketTransportFunc(func(r *http.Request) (*http.Response, error) {
+		return marketJSONResponse(http.StatusOK, `{
+			"inputMint":"So11111111111111111111111111111111111111112",
+			"inAmount":"999",
+			"outputMint":"EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+			"outAmount":"70000000"
+		}`), nil
+	})
+	if _, err := toolGetSwapQuote(t.Context(), s2, "", json.RawMessage(`{"fromToken":"SOL","toToken":"USDC","amount":"1"}`)); err == nil || !strings.Contains(err.Error(), "input amount mismatch") {
+		t.Fatalf("expected input amount mismatch error, got %v", err)
+	}
+
+	// 5. fetchMarketJSON retries once on HTTP 429 and succeeds.
+	var mu sync.Mutex
+	attempts := 0
+	client := &http.Client{Transport: marketTransportFunc(func(r *http.Request) (*http.Response, error) {
+		mu.Lock()
+		attempts++
+		n := attempts
+		mu.Unlock()
+		if n == 1 {
+			return marketJSONResponse(http.StatusTooManyRequests, `{"error":"rate limited"}`), nil
+		}
+		return marketJSONResponse(http.StatusOK, `{"ok":true}`), nil
+	})}
+	var payload map[string]bool
+	if err := fetchMarketJSON(t.Context(), client, "https://lite-api.jup.ag/price/v3", &payload); err != nil || !payload["ok"] || attempts != 2 {
+		t.Fatalf("expected single 429 retry to succeed in 2 attempts, attempts=%d payload=%v err=%v", attempts, payload, err)
 	}
 }

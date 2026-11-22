@@ -43,7 +43,7 @@ func TestCredentialVerifierTransportFence(t *testing.T) {
 		t.Fatal(err)
 	}
 	transport := verifier.client.http.Transport
-	for _, method := range []string{"sendTransaction", "simulateTransaction", "getGenesisHash", "getBlockHeight", "getAccountInfo", "requestAirdrop", "sendRawTransaction", "getTransaction ", "getSignatureStatuses\",\"method\":\"sendTransaction"} {
+	for _, method := range []string{"sendTransaction", "simulateTransaction", "getGenesisHash", "getLatestBlockhash", "getAccountInfo", "requestAirdrop", "sendRawTransaction", "getTransaction ", "getSignatureStatuses\",\"method\":\"sendTransaction"} {
 		if response, err := transport.RoundTrip(scopedRequest(t, access.RPCOrigin, method)); err == nil {
 			response.Body.Close()
 			t.Fatalf("method admitted: %q", method)
@@ -74,14 +74,14 @@ func TestCredentialVerifierTransportFence(t *testing.T) {
 	if calls != 0 || borrows != 0 {
 		t.Fatal("denied request reached credentials or network")
 	}
-	for _, method := range []string{"getSignatureStatuses", "getTransaction"} {
+	for _, method := range []string{"getSignatureStatuses", "getTransaction", "getBlockHeight"} {
 		response, err := transport.RoundTrip(scopedRequest(t, access.RPCOrigin, method))
 		if err != nil {
 			t.Fatal(err)
 		}
 		response.Body.Close()
 	}
-	if calls != 2 || borrows != 2 {
+	if calls != 3 || borrows != 3 {
 		t.Fatal("receipt reads unavailable")
 	}
 }

@@ -70,3 +70,25 @@ func TestClientAuthenticationSuccessStillAcceptsSession(t *testing.T) {
 		t.Fatal("successful owner authentication lost its session")
 	}
 }
+
+func TestRatePeerKeyExtractsRightmostIPFromMultiHopXFF(t *testing.T) {
+	t.Parallel()
+	h := &HTTPHandler{remoteProxyTrust: true, publicHost: "fased.example.com"}
+
+	req1, _ := http.NewRequest(http.MethodPost, clientAuthOrigin, nil)
+	req1.Host = "fased.example.com"
+	req1.RemoteAddr = "127.0.0.1:4567"
+	req1.Header.Set("X-Forwarded-For", "198.51.100.1, 203.0.113.9")
+	if got := h.ratePeerKey(req1); got != "proxy:203.0.113.9" {
+		t.Fatalf("expected rightmost comma-separated IP proxy:203.0.113.9, got %q", got)
+	}
+
+	req2, _ := http.NewRequest(http.MethodPost, clientAuthOrigin, nil)
+	req2.Host = "fased.example.com"
+	req2.RemoteAddr = "127.0.0.1:4567"
+	req2.Header.Add("X-Forwarded-For", "198.51.100.1")
+	req2.Header.Add("X-Forwarded-For", "203.0.113.42, 2001:db8::5")
+	if got := h.ratePeerKey(req2); got != "proxy:2001:db8::5" {
+		t.Fatalf("expected rightmost multi-header IP proxy:2001:db8::5, got %q", got)
+	}
+}

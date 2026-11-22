@@ -94,10 +94,15 @@ darwin_entry() {
     fi
   fi
 
-  if ! { exec 3<>/dev/tty; } 2>/dev/null; then
-    die 'Run this command in an interactive terminal.'
+  local has_tty=0
+  if { exec 3<>/dev/tty; } 2>/dev/null; then
+    has_tty=1
+  fi
+  if [[ ${profile:-} != server ]]; then
+    [[ $has_tty == 1 ]] || die 'Run this command in an interactive terminal.'
   fi
   if [[ -z ${profile} ]]; then
+    [[ $has_tty == 1 ]] || die 'Run this command in an interactive terminal.'
     local choice
     printf 'Fased\n  Local\n  Server\n  Connect\nChoose [local/server/connect, default local]: ' >&3
     IFS= read -r choice <&3
@@ -172,6 +177,7 @@ darwin_entry() {
       "$bundle_engine" "${srv_args[@]}"
       ;;
     connect)
+      [[ $has_tty == 1 ]] || die 'Run this command in an interactive terminal.'
       "$bundle_engine" connect <&3
       ;;
   esac
@@ -280,8 +286,12 @@ elif [[ $development_only == 1 ]]; then
   [[ $installer_url =~ ^https://127\.0\.0\.1:[0-9]+/fased-install$ && -n $fixture_ca_base64 ]] || die 'Invalid controlled fixture.'
   printf 'Fased: unpublished disposable-trust test installer.\n' >&2
 else die 'Invalid installer binding.'; fi
-if ! { exec 3<>/dev/tty; } 2>/dev/null; then
-  die 'Run this command in an interactive terminal.'
+has_tty=0
+if { exec 3<>/dev/tty; } 2>/dev/null; then
+  has_tty=1
+fi
+if [[ ${profile:-} != server ]]; then
+  [[ $has_tty == 1 ]] || die 'Run this command in an interactive terminal.'
 fi
 if [[ -z $profile ]]; then
   suggested=local
@@ -306,7 +316,8 @@ if [[ $(/usr/bin/id -u) == 0 && $profile != remote && $profile != server && -z $
 fi
 if [[ $action == uninstall && $profile == server ]]; then
   installed_bin=''
-  for candidate in "$HOME/.local/share/fased-app/fased-app" "$HOME/.local/bin/fased-app" /usr/local/bin/fased-app; do
+  data_home=${XDG_DATA_HOME:-$HOME/.local/share}
+  for candidate in "$data_home/fased-app/fased-app" "$HOME/.local/share/fased-app/fased-app" "$HOME/.local/bin/fased-app" /usr/local/bin/fased-app; do
     if [[ -x $candidate ]]; then installed_bin=$candidate; break; fi
   done
   [[ -n $installed_bin ]] || die 'No installed Fased server binary was found.'
@@ -509,6 +520,7 @@ owner_install() {
     owner_maintenance_setup "$installer"
     if [[ -n ${FASED_PROTECTED_INSTALLER:-} ]]; then installer=$FASED_PROTECTED_INSTALLER; fi
   fi
+  if ! { : <&3; } 2>/dev/null; then exec 3</dev/null; fi
   "$installer" "${verifier_args[@]}" <&3
 }
 
@@ -664,7 +676,7 @@ if [[ $profile == remote && $action == install && $development_only == 0 ]]; the
     die 'Public release verification returned an invalid result.'
   fi
 fi
-if [[ -z $root_package_instance ]]; then
+if [[ -z $root_package_instance && $profile != server ]]; then
   if [[ -e $policy || -L $policy ]]; then
     [[ ! -L $policy && -f $policy_receipt ]] || die 'Foreign bootstrap authorization.'
     read -r expected < "$policy_receipt"
@@ -689,6 +701,9 @@ fi
 if [[ $profile == local ]]; then
   runtime="/run/user/$owner_uid"
   [[ -d $runtime && ! -L $runtime && $(/usr/bin/stat -c '%u:%a' "$runtime") == "$owner_uid:700" ]] || die 'Sign in to the ordinary Local desktop account and retry.'
+elif [[ $profile == server ]]; then
+  runtime="/run/user/$owner_uid"
+  [[ -d $runtime && ! -L $runtime && $(/usr/bin/stat -c '%u:%a' "$runtime") == "$owner_uid:700" ]] || runtime=''
 else runtime=''; fi
 # Offer one explicitly approved bootstrap public key, never a copied key list.
 # The unprivileged wizard confirms it and writes only its own recovery account.
@@ -698,6 +713,7 @@ if [[ $profile == remote && $action == install && $ssh_user == root && -f /root/
   if [[ ${#recovery_candidates[@]} == 1 ]]; then recovery_key=${recovery_candidates[0]}; fi
 fi
 body="$(declare -f die owner_install); owner_install"
+if [[ $has_tty != 1 ]]; then exec 3</dev/null; fi
 /usr/sbin/runuser -u "$operator" -- /usr/bin/env -i HOME="$owner_home" USER="$operator" LOGNAME="$operator" PATH=/usr/sbin:/usr/bin:/sbin:/bin SSH_CONNECTION="${SSH_CONNECTION:-}" FASED_INSTALL_SSH_USER="$ssh_user" FASED_PROTECTED_INSTALLER="$protected_installer" FASED_BOOTSTRAP_RECOVERY_KEY="$recovery_key" action="$action" wallet_instance="${wallet_instance:-}" wallet_network="${wallet_network:-}" server_transport="${server_transport:-}" server_domain="${server_domain:-}" entry_version="$entry_version" installer_url="$installer_url" installer_sha256="$installer_sha256" seed_base64="$seed_base64" seed_sha256="$seed_sha256" fixture_ca_base64="$fixture_ca_base64" development_only="$development_only" listen="$listen" profile="$profile" XDG_RUNTIME_DIR="$runtime" DBUS_SESSION_BUS_ADDRESS="${runtime:+unix:path=$runtime/bus}" /bin/bash -c "$body" <&3
 
 # The root-owned command contains only fixed OS identity/drop operations. All

@@ -47,7 +47,7 @@ func TestWalletReadClientPreservesBoundedProjection(t *testing.T) {
 func TestWalletReadClientRefusesOversizedProjection(t *testing.T) {
 	t.Parallel()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		_ = json.NewEncoder(w).Encode(map[string]string{"value": strings.Repeat("x", 256*1024)})
+		_ = json.NewEncoder(w).Encode(map[string]string{"value": strings.Repeat("x", int(WalletReadResponseLimit))})
 	}))
 	defer server.Close()
 	client := Client{Endpoint: Endpoint{URL: server.URL}, HTTP: server.Client()}

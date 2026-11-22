@@ -717,8 +717,8 @@ func TestAgentV2SSEToolLoopAndApprovals(t *testing.T) {
 		t.Fatal(err)
 	}
 	toolsResp.Body.Close()
-	if len(toolsBody.Tools) != 13 {
-		t.Fatalf("expected 13 registered tools, got %d", len(toolsBody.Tools))
+	if len(toolsBody.Tools) != 15 {
+		t.Fatalf("expected 15 registered tools, got %d", len(toolsBody.Tools))
 	}
 
 	// Create thread -> 201.
@@ -1276,4 +1276,154 @@ func TestAgentV2MultiProviderParity(t *testing.T) {
 			t.Fatalf("unexpected fallback sequence: %+v", calls)
 		}
 	})
+}
+
+func TestAgentV2PauseSlotsAndApprovalErrorPropagation(t *testing.T) {
+	t.Parallel()
+	s := fixtureStore(t)
+	s.providerFixture = true
+	ts, token, csrf := startV2HTTPTestServer(t, s)
+	h := ts.Config.Handler.(*HTTPHandler)
+
+	thread, err := s.CreateThread(t.Context(), "trading-analyst", "Guardrails", "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// 1. aiSlots saturated returns 429 on /messages.
+	h.aiSlots <- struct{}{}
+	h.aiSlots <- struct{}{}
+	slotResp := doV2JSONRequest(t, http.MethodPost, ts.URL+"/api/v1/agents/v2/threads/"+thread.ID+"/messages", ts.URL, token, csrf, `{"content":"hello"}`, "application/json")
+	slotResp.Body.Close()
+	<-h.aiSlots
+	<-h.aiSlots
+	if slotResp.StatusCode != http.StatusTooManyRequests {
+		t.Fatalf("expected 429 when aiSlots full, got %d", slotResp.StatusCode)
+	}
+
+	// 2. Non-SSE ResolveAgentV2Approval propagates resume errors as 400 rather than returning 200.
+	swapResp := doV2JSONRequest(t, http.MethodPost, ts.URL+"/api/v1/agents/v2/threads/"+thread.ID+"/messages", ts.URL, token, csrf, `{"content":"Propose a small swap"}`, "application/json")
+	var swapRun AgentV2RunResult
+	if err := json.NewDecoder(swapResp.Body).Decode(&swapRun); err != nil {
+		t.Fatal(err)
+	}
+	swapResp.Body.Close()
+	if swapResp.StatusCode != http.StatusOK || !swapRun.AwaitingApproval || len(swapRun.PendingApprovals) != 1 {
+		t.Fatalf("expected draft_swap pending approval, status=%d run=%+v", swapResp.StatusCode, swapRun)
+	}
+
+	// Disable fixture provider before resuming so resolveAgentV2Provider errors in JSON mode (emit == nil).
+	s.providerFixture = false
+	apResp := doV2JSONRequest(t, http.MethodPost, ts.URL+"/api/v1/agents/v2/approvals/"+swapRun.PendingApprovals[0].ID, ts.URL, token, csrf, `{"decision":"approve","resume":true}`, "application/json")
+	apResp.Body.Close()
+	if apResp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("expected 400 when non-SSE approval resume fails, got %d", apResp.StatusCode)
+	}
+
+	// 3. v2Mutation returns 409 when core is paused for update/backup.
+	_ = pausedBackup(t, s)
+	pausedResp := doV2JSONRequest(t, http.MethodPost, ts.URL+"/api/v1/agents/v2/threads/"+thread.ID+"/messages", ts.URL, token, csrf, `{"content":"while paused"}`, "application/json")
+	pausedResp.Body.Close()
+	if pausedResp.StatusCode != http.StatusConflict {
+		t.Fatalf("expected 409 when core paused, got %d", pausedResp.StatusCode)
+	}
+}
+
+func TestAgentV2ToolGetPortfolioSummary(t *testing.T) {
+	t.Parallel()
+	s := fixtureStore(t)
+
+	// Configure a watch wallet without RPC so portfolio summary cleanly summarizes status & counts.
+	view, err := s.Accounts(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.rpcAdmission = true
+	if _, err := s.UpdateAccounts(t.Context(), AccountsRecord{
+		Version:  view.Record.Version,
+		Revision: view.Record.Revision,
+		Accounts: []Account{{
+			Version:   2,
+			ID:        "11111111111111111111111111111111",
+			Name:      "Primary Watch",
+			Mode:      "watch",
+			Network:   "mainnet-beta",
+			PublicKey: strings.Repeat("11", 32),
+		}},
+		Proposals: []ProposalDraft{},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	s.rpcAdmission = false
+
+	entry, ok := lookupAgentV2Tool("get_portfolio_summary")
+	if !ok || entry.spec.Tier != toolTierRead {
+		t.Fatalf("get_portfolio_summary tool missing or wrong tier: ok=%v spec=%+v", ok, entry.spec)
+	}
+	resAny, err := entry.execute(t.Context(), s, "trading-analyst", json.RawMessage(`{"network":"mainnet-beta"}`))
+	if err != nil {
+		t.Fatalf("get_portfolio_summary failed: %v", err)
+	}
+	res := resAny.(map[string]any)
+	if res["walletCount"] != 1 || res["signingEnabled"] != false {
+		t.Fatalf("unexpected portfolio summary: %+v", res)
+	}
+	wallets := res["wallets"].([]map[string]any)
+	if len(wallets) != 1 || wallets[0]["name"] != "Primary Watch" || wallets[0]["status"] != "rpc_not_configured" {
+		t.Fatalf("unexpected wallet entry: %+v", wallets)
+	}
+}
+
+func TestAgentV2ToolFetchWebPageAndSSRFGuards(t *testing.T) {
+	t.Parallel()
+	s := fixtureStore(t)
+	s.marketDataTransport = aiTestTransport(func(r *http.Request) (*http.Response, error) {
+		if r.URL.Path == "/redirect-ssrf" {
+			return &http.Response{
+				StatusCode: http.StatusFound,
+				Header:     http.Header{"Location": []string{"https://169.254.169.254/latest/meta-data/"}},
+				Body:       io.NopCloser(strings.NewReader("")),
+				Request:    r,
+			}, nil
+		}
+		htmlBody := `<!doctype html><html><head><title>Solana &amp; Ecosystem Note</title><style>body{color:#fff}</style></head><body><script>alert("xss")</script><h1>Hello   World</h1><p>Bounded summary paragraph.</p></body></html>`
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"text/html; charset=utf-8"}},
+			Body:       io.NopCloser(strings.NewReader(htmlBody)),
+			Request:    r,
+		}, nil
+	})
+
+	entry, ok := lookupAgentV2Tool("fetch_web_page")
+	if !ok || entry.spec.Tier != toolTierRead {
+		t.Fatalf("fetch_web_page tool missing or wrong tier: ok=%v spec=%+v", ok, entry.spec)
+	}
+	resAny, err := entry.execute(t.Context(), s, "", json.RawMessage(`{"url":"https://docs.fased.invalid/guide","maxChars":500}`))
+	if err != nil {
+		t.Fatalf("fetch_web_page valid HTML failed: %v", err)
+	}
+	res := resAny.(map[string]any)
+	if res["title"] != "Solana & Ecosystem Note" || res["untrusted"] != true {
+		t.Fatalf("unexpected title/untrusted: %+v", res)
+	}
+	txt := res["text"].(string)
+	if !strings.Contains(txt, "Hello World") || !strings.Contains(txt, "Bounded summary paragraph.") || strings.Contains(txt, "alert(") || strings.Contains(txt, "color:#fff") {
+		t.Fatalf("script/style not stripped or text missing: %q", txt)
+	}
+
+	for _, badURL := range []string{
+		"http://example.com/",
+		"https://127.0.0.1/",
+		"https://169.254.169.254/latest/meta-data/",
+		"https://10.0.0.1/",
+		"https://service.local/",
+		"https://metadata.google.internal/",
+		"https://docs.fased.invalid/redirect-ssrf",
+	} {
+		argsJSON, _ := json.Marshal(map[string]any{"url": badURL})
+		if _, err := entry.execute(t.Context(), s, "", argsJSON); err == nil {
+			t.Fatalf("SSRF guard failed to block %q", badURL)
+		}
+	}
 }

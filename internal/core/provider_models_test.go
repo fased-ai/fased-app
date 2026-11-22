@@ -73,9 +73,9 @@ func TestProviderModelsAccountIsolationFreshnessAndFailure(t *testing.T) {
 	}
 	// Keep interactive access while expiring only the account-list evidence.
 	s.provider.mu.Lock()
-	s.provider.accounts[b.Ref].expires += 3600
+	s.provider.accounts[b.Ref].expires += int64(providerModelCacheTTL/time.Second) + 3600
 	s.provider.mu.Unlock()
-	later := s.now().Add(16 * time.Minute)
+	later := s.now().Add(providerModelCacheTTL + time.Minute)
 	s.now = func() time.Time { return later }
 	bv, _ = s.AIConnection(b.Ref)
 	if modelChoice(bv, "gpt-6.2-astra").Availability != "stale" {

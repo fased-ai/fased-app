@@ -24,7 +24,7 @@ function bytesToBase64(bytes) {
 }
 el("backup-upload").addEventListener("change", async () => {
   const file = el("backup-upload").files[0];
-  if (!file || file.size > 36 * 1024 * 1024) {
+  if (!file || file.size === 0 || file.size > 24 * 1024 * 1024) {
     uploadedRecoveryBase64 = "";
     el("backup-upload").value = "";
     el("status").textContent = "Choose a valid encrypted backup file.";
