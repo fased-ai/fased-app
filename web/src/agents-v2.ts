@@ -234,6 +234,7 @@ const toolLabels: Record<string, string> = {
   list_wallets: "Wallets",
   get_wallet_balances: "Wallet balances",
   get_portfolio_summary: "Portfolio",
+  web_search: "Web search",
   fetch_web_page: "Web page",
   get_token_price: "Token price",
   get_swap_quote: "Swap quote",
@@ -241,6 +242,7 @@ const toolLabels: Record<string, string> = {
   search_memories: "Memory",
   search_news: "News",
   list_strategies: "Strategies",
+  delegate_to_agent: "Delegate",
   save_memory: "Save memory",
   draft_task: "Draft task",
   draft_swap: "Swap draft",
@@ -356,6 +358,34 @@ export function formatToolSummary(
       parts.push(`${parsed.pendingApprovals} pending`);
     }
     return parts.join(" · ");
+  }
+
+  if (toolName === "web_search") {
+    const list = Array.isArray(parsed.results) ? parsed.results : [];
+    const count =
+      typeof parsed.count === "number" && Number.isFinite(parsed.count)
+        ? parsed.count
+        : list.length;
+    const first =
+      list[0] && typeof list[0] === "object"
+        ? (list[0] as Record<string, unknown>)
+        : null;
+    const domain =
+      first && typeof first.domain === "string" ? first.domain.trim() : "";
+    const countLabel = `${count} ${count === 1 ? "result" : "results"}`;
+    return domain ? `${countLabel} · ${domain}` : countLabel;
+  }
+
+  if (toolName === "delegate_to_agent") {
+    const agent =
+      typeof parsed.agentName === "string" && parsed.agentName.trim()
+        ? parsed.agentName.trim()
+        : typeof parsed.agentId === "string"
+          ? parsed.agentId.trim()
+          : "";
+    const model = typeof parsed.model === "string" ? parsed.model.trim() : "";
+    if (!agent) return "";
+    return model ? `${agent} · ${model}` : agent;
   }
 
   if (toolName === "fetch_web_page") {
@@ -632,7 +662,109 @@ export function formatApprovalFields(
 export type InlineSegment =
   | { kind: "text"; text: string }
   | { kind: "bold"; text: string }
-  | { kind: "code"; text: string };
+  | { kind: "code"; text: string }
+  | { kind: "link"; text: string; url: string };
+
+export function isSafePublicHttpsUrl(raw: string): boolean {
+  try {
+    const u = new URL(raw.trim());
+    return (
+      u.protocol === "https:" && !!u.hostname && !u.username && !u.password
+    );
+  } catch {
+    return false;
+  }
+}
+
+export type MessageCitation = {
+  title: string;
+  url: string;
+  domain: string;
+};
+
+export function extractMessageCitations(
+  toolCalls?: AgentToolCall[],
+): MessageCitation[] {
+  if (!toolCalls?.length) return [];
+  const out: MessageCitation[] = [];
+  const seen = new Set<string>();
+  const add = (title: string, rawUrl: string, domainHint = "") => {
+    if (out.length >= 6 || !isSafePublicHttpsUrl(rawUrl)) return;
+    const u = new URL(rawUrl.trim());
+    const canon = u.toString();
+    if (seen.has(canon)) return;
+    seen.add(canon);
+    const domain = domainHint.trim() || u.hostname.toLowerCase();
+    const cleanTitle = title.trim() || domain;
+    out.push({ title: cleanTitle, url: canon, domain });
+  };
+
+  for (const tc of toolCalls) {
+    if (out.length >= 6 || tc.status !== "completed" || !tc.resultJson) {
+      continue;
+    }
+    let parsed: Record<string, unknown> | null = null;
+    try {
+      const val = JSON.parse(tc.resultJson);
+      if (val && typeof val === "object" && !Array.isArray(val)) {
+        parsed = val as Record<string, unknown>;
+      }
+    } catch {
+      continue;
+    }
+    if (!parsed) continue;
+
+    if (tc.toolName === "web_search" && Array.isArray(parsed.results)) {
+      for (const item of parsed.results) {
+        if (!item || typeof item !== "object" || Array.isArray(item)) continue;
+        const row = item as Record<string, unknown>;
+        const url = typeof row.url === "string" ? row.url : "";
+        const title = typeof row.title === "string" ? row.title : "";
+        const domain = typeof row.domain === "string" ? row.domain : "";
+        add(title, url, domain);
+        if (out.length >= 6) break;
+      }
+    } else if (tc.toolName === "fetch_web_page") {
+      const url =
+        typeof parsed.finalUrl === "string"
+          ? parsed.finalUrl
+          : typeof parsed.url === "string"
+            ? parsed.url
+            : "";
+      const title = typeof parsed.title === "string" ? parsed.title : "";
+      add(title, url);
+    }
+  }
+  return out;
+}
+
+export function parseDelegatedToolSummary(
+  resultJson?: string,
+): { agentName: string; model?: string; summary: string } | null {
+  if (!resultJson) return null;
+  try {
+    const parsed = JSON.parse(resultJson);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return null;
+    }
+    const obj = parsed as Record<string, unknown>;
+    const summary = typeof obj.summary === "string" ? obj.summary.trim() : "";
+    if (!summary) return null;
+    const agentName =
+      typeof obj.agentName === "string" && obj.agentName.trim()
+        ? obj.agentName.trim()
+        : typeof obj.agentId === "string" && obj.agentId.trim()
+          ? obj.agentId.trim()
+          : "Agent";
+    const model =
+      typeof obj.model === "string" && obj.model.trim()
+        ? obj.model.trim()
+        : undefined;
+    return { agentName, model, summary };
+  } catch {
+    return null;
+  }
+}
 
 export type MarkdownBlock =
   | { kind: "code"; lang: string; code: string }
@@ -642,7 +774,8 @@ export type MarkdownBlock =
 export function parseInlineMarkdown(line: string): InlineSegment[] {
   const segments: InlineSegment[] = [];
   let rest = line;
-  const token = /(\*\*[^*]+\*\*|`[^`]+`)/;
+  const token =
+    /(\*\*[^*]+\*\*|`[^`]+`|\[[^\]\n]+\]\((?:[^()\s]+|\([^()\s]*\))+\))/;
   while (rest.length > 0) {
     const m = token.exec(rest);
     if (!m || m.index === undefined) {
@@ -657,6 +790,15 @@ export function parseInlineMarkdown(line: string): InlineSegment[] {
       segments.push({ kind: "bold", text: raw.slice(2, -2) });
     } else if (raw.startsWith("`") && raw.endsWith("`")) {
       segments.push({ kind: "code", text: raw.slice(1, -1) });
+    } else if (raw.startsWith("[")) {
+      const mid = raw.indexOf("](");
+      const label = mid > 1 ? raw.slice(1, mid) : "";
+      const url = mid > 1 ? raw.slice(mid + 2, -1) : "";
+      if (label && isSafePublicHttpsUrl(url)) {
+        segments.push({ kind: "link", text: label, url: url.trim() });
+      } else {
+        segments.push({ kind: "text", text: raw });
+      }
     }
     rest = rest.slice(m.index + raw.length);
   }

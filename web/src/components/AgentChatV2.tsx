@@ -3,6 +3,7 @@ import { previewModel } from "../ui-language-preview";
 import { useUI } from "../ui-preferences";
 import { useCore } from "../core";
 import { useWorkspace, type ChatModelDraft } from "../workspace";
+import { useVoiceInput } from "../voice-input";
 import {
   AIModelPicker,
   ConnectionPicker,
@@ -11,10 +12,12 @@ import {
 import type { AgentView } from "../agents";
 import {
   deleteThreadV2,
+  extractMessageCitations,
   formatApprovalFields,
   formatToolLabel,
   formatToolSummary,
   parseChatSlashCommand,
+  parseDelegatedToolSummary,
   parseMarkdownBlocks,
   useAgentsV2,
   type AgentApproval,
@@ -28,7 +31,10 @@ import {
   Check,
   Clock3,
   Copy,
+  Globe2,
   History,
+  Mic,
+  MicOff,
   Plug,
   Plus,
   RotateCcw,
@@ -49,6 +55,18 @@ function renderInline(segments: InlineSegment[]) {
         <code key={i} className="v2-inline-code">
           {seg.text}
         </code>
+      );
+    if (seg.kind === "link")
+      return (
+        <a
+          key={i}
+          href={seg.url}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="v2-inline-link"
+        >
+          {seg.text}
+        </a>
       );
     return <span key={i}>{seg.text}</span>;
   });
@@ -135,6 +153,10 @@ function ToolCallRow({ tc }: { tc: AgentToolCall }) {
     tc.status === "completed"
       ? formatToolSummary(tc.toolName, tc.resultJson)
       : "";
+  const delegated =
+    tc.toolName === "delegate_to_agent" && tc.status === "completed"
+      ? parseDelegatedToolSummary(tc.resultJson)
+      : null;
   return (
     <details className="v2-tool-call" data-status={tc.status}>
       <summary>
@@ -147,6 +169,17 @@ function ToolCallRow({ tc }: { tc: AgentToolCall }) {
         </span>
       </summary>
       <div className="v2-tool-body">
+        {delegated && (
+          <div className="v2-delegate-summary">
+            <strong>
+              {t("Delegated to {agent}").replace(
+                "{agent}",
+                delegated.agentName,
+              )}
+            </strong>
+            <MarkdownMessage text={delegated.summary} />
+          </div>
+        )}
         {tc.argsJson && tc.argsJson !== "{}" && (
           <pre className="v2-tool-pre">{formatPrettyJSON(tc.argsJson)}</pre>
         )}
@@ -264,7 +297,7 @@ export function AgentChatV2({
   view: AgentView;
   onOpenLegacySession: (sessionId: string) => void;
 }) {
-  const { t } = useUI();
+  const { t, language } = useUI();
   const core = useCore();
   const {
     setProvidersOpen,
@@ -280,6 +313,26 @@ export function AgentChatV2({
   const v2 = useAgentsV2(core, view.profileId);
   const { view: connection } = useAIConnection();
   const profile = view.profiles.find((p) => p.id === view.profileId)!;
+
+  function setComposerValueForVoice(nextText: string) {
+    setChatDrafts((cur) => {
+      const next = new Map(cur);
+      const key = `${core.instanceId}:${view.profileId}:v2:${v2.activeThreadId || "new"}`;
+      if (nextText) next.set(key, nextText);
+      else next.delete(key);
+      return next;
+    });
+  }
+
+  const voice = useVoiceInput({
+    language,
+    onTranscript: setComposerValueForVoice,
+    onError: (key) => v2.setError(t(key)),
+  });
+
+  useEffect(() => {
+    voice.stop();
+  }, [view.profileId, v2.activeThreadId, voice.stop]);
 
   const consumedPromptIds = useRef(new Set<string>());
   const consumedThreadIds = useRef(new Set<string>());
@@ -645,6 +698,7 @@ export function AgentChatV2({
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
+    voice.stop();
     if (v2.streaming || !composerValue.trim()) return;
     if (modelMenuRef.current) modelMenuRef.current.open = false;
     const text = composerValue;
@@ -1026,101 +1080,129 @@ export function AgentChatV2({
               </section>
             )}
 
-            {visibleMessages.map((m) => (
-              <article key={m.id} className={`v2-message v2-message-${m.role}`}>
-                {m.role === "user" ? (
-                  <div className="v2-user-bubble">{m.content}</div>
-                ) : (
-                  <div className="v2-assistant-turn">
-                    {m.reasoning && (
-                      <details className="v2-thinking">
-                        <summary>{t("Thinking")}</summary>
-                        <pre>{m.reasoning}</pre>
-                      </details>
-                    )}
-                    {(m.toolCalls?.length ?? 0) > 0 && (
-                      <div className="v2-tool-list">
-                        {m.toolCalls!.map((tc) => (
-                          <ToolCallRow key={tc.id} tc={tc} />
-                        ))}
-                      </div>
-                    )}
-                    {m.content && <MarkdownMessage text={m.content} />}
-                    {m.errorText && (
-                      <p className="v2-tool-err">{m.errorText}</p>
-                    )}
-                    {(m.approvals?.length ?? 0) > 0 && (
-                      <div className="v2-approvals-list">
-                        {m.approvals!.map((ap) => (
-                          <ApprovalCard
-                            key={ap.id}
-                            approval={ap}
-                            busy={
-                              v2.streaming || v2.resolvingApprovalId === ap.id
-                            }
-                            onDecide={v2.decideApproval}
-                          />
-                        ))}
-                      </div>
-                    )}
-                    {(() => {
-                      const showRecalled =
-                        m.id === lastAssistantId &&
-                        v2.lastRecalled &&
-                        v2.lastRecalled.threadId === v2.detail?.thread.id &&
-                        v2.lastRecalled.count > 0;
-                      const showHandoff =
-                        m.id === lastAssistantId &&
-                        v2.lastHandoff &&
-                        v2.lastHandoff.threadId === v2.detail?.thread.id &&
-                        !!(
-                          v2.lastHandoff.fromModel ||
-                          v2.lastHandoff.fromProvider
-                        );
-                      const showMeta =
-                        (m.content ||
-                          m.errorText ||
-                          (m.approvals?.length ?? 0) > 0) &&
-                        (m.model ||
-                          (m.outputTokens ?? 0) > 0 ||
-                          !!showRecalled ||
-                          !!showHandoff);
-                      if (!showMeta) return null;
-                      return (
-                        <footer className="v2-msg-meta">
-                          {m.model && <span>{previewModel(m.model, t)}</span>}
-                          {(m.outputTokens ?? 0) > 0 && (
-                            <span>
-                              {(m.inputTokens ?? 0) + (m.outputTokens ?? 0)} tok
-                            </span>
-                          )}
-                          {showRecalled && v2.lastRecalled && (
-                            <span
-                              className="v2-recalled-pill"
-                              title={v2.lastRecalled.titles.join(", ")}
+            {visibleMessages.map((m) => {
+              const citations =
+                m.role === "assistant"
+                  ? extractMessageCitations(m.toolCalls)
+                  : [];
+              return (
+                <article
+                  key={m.id}
+                  className={`v2-message v2-message-${m.role}`}
+                >
+                  {m.role === "user" ? (
+                    <div className="v2-user-bubble">{m.content}</div>
+                  ) : (
+                    <div className="v2-assistant-turn">
+                      {m.reasoning && (
+                        <details className="v2-thinking">
+                          <summary>{t("Thinking")}</summary>
+                          <pre>{m.reasoning}</pre>
+                        </details>
+                      )}
+                      {(m.toolCalls?.length ?? 0) > 0 && (
+                        <div className="v2-tool-list">
+                          {m.toolCalls!.map((tc) => (
+                            <ToolCallRow key={tc.id} tc={tc} />
+                          ))}
+                        </div>
+                      )}
+                      {m.content && <MarkdownMessage text={m.content} />}
+                      {citations.length > 0 && (
+                        <div className="v2-citations" aria-label={t("Sources")}>
+                          <Globe2 size={13} aria-hidden="true" />
+                          {citations.map((c) => (
+                            <a
+                              key={c.url}
+                              href={c.url}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="v2-citation-chip"
+                              title={c.title}
                             >
-                              {formatRecalledLabel(v2.lastRecalled.count)}
-                            </span>
-                          )}
-                          {showHandoff && v2.lastHandoff && (
-                            <span className="v2-handoff-pill">
-                              {t("Handoff from {model}").replace(
-                                "{model}",
-                                previewModel(
-                                  v2.lastHandoff.fromModel ||
-                                    v2.lastHandoff.fromProvider,
-                                  t,
-                                ),
-                              )}
-                            </span>
-                          )}
-                        </footer>
-                      );
-                    })()}
-                  </div>
-                )}
-              </article>
-            ))}
+                              <span>{c.title}</span>
+                              <small>{c.domain}</small>
+                            </a>
+                          ))}
+                        </div>
+                      )}
+                      {m.errorText && (
+                        <p className="v2-tool-err">{m.errorText}</p>
+                      )}
+                      {(m.approvals?.length ?? 0) > 0 && (
+                        <div className="v2-approvals-list">
+                          {m.approvals!.map((ap) => (
+                            <ApprovalCard
+                              key={ap.id}
+                              approval={ap}
+                              busy={
+                                v2.streaming || v2.resolvingApprovalId === ap.id
+                              }
+                              onDecide={v2.decideApproval}
+                            />
+                          ))}
+                        </div>
+                      )}
+                      {(() => {
+                        const showRecalled =
+                          m.id === lastAssistantId &&
+                          v2.lastRecalled &&
+                          v2.lastRecalled.threadId === v2.detail?.thread.id &&
+                          v2.lastRecalled.count > 0;
+                        const showHandoff =
+                          m.id === lastAssistantId &&
+                          v2.lastHandoff &&
+                          v2.lastHandoff.threadId === v2.detail?.thread.id &&
+                          !!(
+                            v2.lastHandoff.fromModel ||
+                            v2.lastHandoff.fromProvider
+                          );
+                        const showMeta =
+                          (m.content ||
+                            m.errorText ||
+                            (m.approvals?.length ?? 0) > 0) &&
+                          (m.model ||
+                            (m.outputTokens ?? 0) > 0 ||
+                            !!showRecalled ||
+                            !!showHandoff);
+                        if (!showMeta) return null;
+                        return (
+                          <footer className="v2-msg-meta">
+                            {m.model && <span>{previewModel(m.model, t)}</span>}
+                            {(m.outputTokens ?? 0) > 0 && (
+                              <span>
+                                {(m.inputTokens ?? 0) + (m.outputTokens ?? 0)}{" "}
+                                tok
+                              </span>
+                            )}
+                            {showRecalled && v2.lastRecalled && (
+                              <span
+                                className="v2-recalled-pill"
+                                title={v2.lastRecalled.titles.join(", ")}
+                              >
+                                {formatRecalledLabel(v2.lastRecalled.count)}
+                              </span>
+                            )}
+                            {showHandoff && v2.lastHandoff && (
+                              <span className="v2-handoff-pill">
+                                {t("Handoff from {model}").replace(
+                                  "{model}",
+                                  previewModel(
+                                    v2.lastHandoff.fromModel ||
+                                      v2.lastHandoff.fromProvider,
+                                    t,
+                                  ),
+                                )}
+                              </span>
+                            )}
+                          </footer>
+                        );
+                      })()}
+                    </div>
+                  )}
+                </article>
+              );
+            })}
 
             {v2.streaming && (
               <article
@@ -1341,6 +1423,27 @@ export function AgentChatV2({
             </div>
 
             <div className="composer-actions">
+              {voice.supported && !v2.streaming && (
+                <button
+                  type="button"
+                  className={`icon-button v2-voice-btn ${voice.listening ? "is-listening" : ""}`}
+                  aria-label={
+                    voice.listening ? t("Stop recording") : t("Voice input")
+                  }
+                  title={
+                    voice.listening ? t("Stop recording") : t("Voice input")
+                  }
+                  aria-pressed={voice.listening}
+                  disabled={v2.loading}
+                  onClick={() => voice.toggle(composerValue)}
+                >
+                  {voice.listening ? (
+                    <MicOff size={16} aria-hidden="true" />
+                  ) : (
+                    <Mic size={16} aria-hidden="true" />
+                  )}
+                </button>
+              )}
               {v2.streaming ? (
                 <button
                   type="button"

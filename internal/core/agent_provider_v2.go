@@ -1196,6 +1196,17 @@ func runFixtureProviderV2(_ context.Context, prompt providerV2Prompt, cb provide
 
 	if hasRecentToolResult {
 		reply := fmt.Sprintf("Fixture agent reviewed `%s` (%s): %s", lastToolName, lastToolStatus, sanitizeV2Title(lastToolOutput, "completed"))
+		if lastToolName == "web_search" {
+			reply = "Fixture agent reviewed `web_search` (completed): see [Solana Documentation](https://docs.solana.invalid/fees) and [Jupiter Docs](https://docs.jup.invalid/routing)."
+		} else if lastToolName == "delegate_to_agent" {
+			var dep struct {
+				AgentName string `json:"agentName"`
+				Summary   string `json:"summary"`
+			}
+			if json.Unmarshal([]byte(lastToolOutput), &dep) == nil && strings.TrimSpace(dep.Summary) != "" {
+				reply = fmt.Sprintf("Fixture agent reviewed specialist **%s**: %s", dep.AgentName, dep.Summary)
+			}
+		}
 		for _, chunk := range splitFixtureChunks(reply, 18) {
 			if cb.onTextDelta != nil {
 				cb.onTextDelta(chunk)
@@ -1210,8 +1221,48 @@ func runFixtureProviderV2(_ context.Context, prompt providerV2Prompt, cb provide
 		}, nil
 	}
 
+	if !hasFixtureTool(prompt.Tools, "delegate_to_agent") && strings.Contains(prompt.Instructions, "Delegation mode:") {
+		reply := "Specialist analysis: SOL volatility remains moderate with 50 bps slippage guardrail recommended."
+		for _, chunk := range splitFixtureChunks(reply, 18) {
+			if cb.onTextDelta != nil {
+				cb.onTextDelta(chunk)
+			}
+		}
+		return providerTurnResult{
+			ResponseID:   "fixture-resp-delegate",
+			Text:         reply,
+			InputTokens:  28,
+			OutputTokens: 16,
+			FinishReason: "completed",
+		}, nil
+	}
+
 	if len(prompt.Tools) > 0 {
 		switch {
+		case hasFixtureTool(prompt.Tools, "web_search") && (strings.Contains(lastUser, "web search") || strings.Contains(lastUser, "search the web") || strings.Contains(lastUser, "search web")):
+			return providerTurnResult{
+				ResponseID: "fixture-resp-web-search",
+				ToolCalls: []providerToolCall{{
+					CallID:   "fixture_call_web_search_1",
+					Name:     "web_search",
+					ArgsJSON: `{"query":"solana transaction fees","limit":3}`,
+				}},
+				InputTokens:  42,
+				OutputTokens: 18,
+				FinishReason: "tool_calls",
+			}, nil
+		case hasFixtureTool(prompt.Tools, "delegate_to_agent") && (strings.Contains(lastUser, "delegate") || strings.Contains(lastUser, "ask analyst") || strings.Contains(lastUser, "trading analyst")):
+			return providerTurnResult{
+				ResponseID: "fixture-resp-delegate-call",
+				ToolCalls: []providerToolCall{{
+					CallID:   "fixture_call_delegate_1",
+					Name:     "delegate_to_agent",
+					ArgsJSON: `{"agent":"trading-analyst","task":"Analyze SOL risk and volatility setup."}`,
+				}},
+				InputTokens:  44,
+				OutputTokens: 20,
+				FinishReason: "tool_calls",
+			}, nil
 		case strings.Contains(lastUser, "draft a task") || strings.Contains(lastUser, "draft task") || strings.Contains(lastUser, "monitor sol"):
 			return providerTurnResult{
 				ResponseID: "fixture-resp-task",
@@ -1324,6 +1375,15 @@ func runFixtureProviderV2(_ context.Context, prompt providerV2Prompt, cb provide
 		OutputTokens: 18,
 		FinishReason: "completed",
 	}, nil
+}
+
+func hasFixtureTool(tools []AgentToolSpec, name string) bool {
+	for _, spec := range tools {
+		if spec.Name == name {
+			return true
+		}
+	}
+	return false
 }
 
 func splitFixtureChunks(s string, size int) []string {

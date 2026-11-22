@@ -3,6 +3,7 @@ import {
   buildNewsChatPrompt,
   buildTaskRunChatPrompt,
   compactThreadV2,
+  extractMessageCitations,
   formatApprovalFields,
   formatCompactTokens,
   formatDraftMemorySummary,
@@ -10,7 +11,10 @@ import {
   formatToolSummary,
   formatUsageCostUSD,
   getUsageV2,
+  isSafePublicHttpsUrl,
   parseChatSlashCommand,
+  parseDelegatedToolSummary,
+  parseInlineMarkdown,
   parseMarkdownBlocks,
   parseSSEChunkBuffer,
   parseTaskDraftMemory,
@@ -479,5 +483,133 @@ describe("Phase 8B-1 slash commands, usage formatters, and API helpers", () => {
     expect(req).toHaveBeenCalledWith(
       "agents/v2/usage?profileId=wen-operator&days=0",
     );
+  });
+});
+
+describe("Phase 8B-2 web search citations, safe links, and delegation formatting", () => {
+  it("parses safe https markdown links while rejecting javascript/http URLs", () => {
+    expect(isSafePublicHttpsUrl("https://docs.solana.com/fees")).toBe(true);
+    expect(isSafePublicHttpsUrl("http://insecure.example.com")).toBe(false);
+    expect(isSafePublicHttpsUrl("javascript:alert(1)")).toBe(false);
+    expect(isSafePublicHttpsUrl("https://user:pass@example.com")).toBe(false);
+
+    expect(
+      parseInlineMarkdown(
+        "Read [Solana Docs](https://docs.solana.com/fees) and ignore [bad](javascript:alert(1)).",
+      ),
+    ).toEqual([
+      { kind: "text", text: "Read " },
+      {
+        kind: "link",
+        text: "Solana Docs",
+        url: "https://docs.solana.com/fees",
+      },
+      { kind: "text", text: " and ignore " },
+      { kind: "text", text: "[bad](javascript:alert(1))" },
+      { kind: "text", text: "." },
+    ]);
+  });
+
+  it("extracts deduplicated HTTPS citations from web_search and fetch_web_page results", () => {
+    const citations = extractMessageCitations([
+      {
+        id: "tc1",
+        threadId: "t1",
+        messageId: "m1",
+        callId: "c1",
+        toolName: "web_search",
+        tier: "read",
+        argsJson: "{}",
+        status: "completed",
+        createdAt: 1,
+        resultJson: JSON.stringify({
+          results: [
+            {
+              title: "Solana Fees",
+              url: "https://docs.solana.com/fees",
+              domain: "docs.solana.com",
+            },
+            {
+              title: "Bad Link",
+              url: "http://bad.example.com",
+              domain: "bad.example.com",
+            },
+          ],
+        }),
+      },
+      {
+        id: "tc2",
+        threadId: "t1",
+        messageId: "m1",
+        callId: "c2",
+        toolName: "fetch_web_page",
+        tier: "read",
+        argsJson: "{}",
+        status: "completed",
+        createdAt: 2,
+        resultJson: JSON.stringify({
+          title: "Duplicate Solana Fees",
+          finalUrl: "https://docs.solana.com/fees",
+        }),
+      },
+      {
+        id: "tc3",
+        threadId: "t1",
+        messageId: "m1",
+        callId: "c3",
+        toolName: "fetch_web_page",
+        tier: "read",
+        argsJson: "{}",
+        status: "completed",
+        createdAt: 3,
+        resultJson: JSON.stringify({
+          title: "Jupiter Docs",
+          finalUrl: "https://station.jup.ag/docs",
+        }),
+      },
+    ]);
+
+    expect(citations).toEqual([
+      {
+        title: "Solana Fees",
+        url: "https://docs.solana.com/fees",
+        domain: "docs.solana.com",
+      },
+      {
+        title: "Jupiter Docs",
+        url: "https://station.jup.ag/docs",
+        domain: "station.jup.ag",
+      },
+    ]);
+  });
+
+  it("formats web_search and delegate_to_agent labels and summaries", () => {
+    expect(formatToolLabel("web_search")).toBe("Web search");
+    expect(formatToolLabel("delegate_to_agent")).toBe("Delegate");
+
+    expect(
+      formatToolSummary(
+        "web_search",
+        JSON.stringify({
+          count: 2,
+          results: [{ domain: "docs.solana.com" }],
+        }),
+      ),
+    ).toBe("2 results · docs.solana.com");
+
+    const delegatedRaw = JSON.stringify({
+      agentId: "trading-analyst",
+      agentName: "Trading Analyst",
+      model: "gpt-6.2-sol",
+      summary: "Volatility remains moderate.",
+    });
+    expect(formatToolSummary("delegate_to_agent", delegatedRaw)).toBe(
+      "Trading Analyst · gpt-6.2-sol",
+    );
+    expect(parseDelegatedToolSummary(delegatedRaw)).toEqual({
+      agentName: "Trading Analyst",
+      model: "gpt-6.2-sol",
+      summary: "Volatility remains moderate.",
+    });
   });
 });

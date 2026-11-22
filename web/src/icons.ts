@@ -33,6 +33,8 @@ export {
   LockKeyhole,
   Menu,
   MessageSquare,
+  Mic,
+  MicOff,
   Monitor,
   MoreHorizontal,
   Newspaper,
