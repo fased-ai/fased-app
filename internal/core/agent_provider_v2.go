@@ -123,6 +123,7 @@ func resolveAgentV2Provider(ctx context.Context, s *Store, explicitRef, threadRe
 			Name:       v.Name,
 			AuthMethod: v.AuthMethod,
 			Model:      model,
+			Fixture:    s.providerFixture && v.TestOnly,
 		}, nil
 	}
 
@@ -1245,6 +1246,18 @@ func runFixtureProviderV2(_ context.Context, prompt providerV2Prompt, cb provide
 
 	if len(prompt.Tools) > 0 {
 		switch {
+		case hasFixtureTool(prompt.Tools, "request_secret") && (strings.Contains(lastUser, "request secret") || strings.Contains(lastUser, "secret card")):
+			return providerTurnResult{
+				ResponseID: "fixture-resp-request-secret",
+				ToolCalls: []providerToolCall{{
+					CallID:   "fixture_call_secret_1",
+					Name:     "request_secret",
+					ArgsJSON: `{"kind":"provider_api_key","provider":"anthropic","label":"Anthropic API key","reason":"Connect Anthropic for portfolio review"}`,
+				}},
+				InputTokens:  44,
+				OutputTokens: 20,
+				FinishReason: "tool_calls",
+			}, nil
 		case hasFixtureTool(prompt.Tools, "web_search") && (strings.Contains(lastUser, "web search") || strings.Contains(lastUser, "search the web") || strings.Contains(lastUser, "search web")):
 			return providerTurnResult{
 				ResponseID: "fixture-resp-web-search",
@@ -1369,6 +1382,9 @@ func runFixtureProviderV2(_ context.Context, prompt providerV2Prompt, cb provide
 	}
 
 	reply := "Fixture response ready. Ask about wallets, status, or propose a draft swap."
+	if strings.Contains(lastUser, "render visual") || strings.Contains(lastUser, "visual report") {
+		reply = "Visual snapshot ready:\n\n```fased-visual\n{\"type\":\"metrics\",\"title\":\"Portfolio Snapshot\",\"items\":[{\"label\":\"SOL\",\"value\":\"$184.20\",\"delta\":\"+4.2%\",\"tone\":\"positive\"},{\"label\":\"USDC\",\"value\":\"$1,250.00\"}]}\n```\n\n```fased-html\n<section><h4>Fee Breakdown</h4><p>Priority fee: <strong>0.0002 SOL</strong></p><script>window.__fasedXss=1</script><a href=\"javascript:alert(1)\">blocked</a></section>\n```"
+	}
 	for _, chunk := range splitFixtureChunks(reply, 18) {
 		if cb.onTextDelta != nil {
 			cb.onTextDelta(chunk)

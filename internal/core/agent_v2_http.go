@@ -157,6 +157,64 @@ func (h *HTTPHandler) agentsV2API(w http.ResponseWriter, r *http.Request, token 
 		}
 		writeJSON(w, 200, links)
 
+	case rel == "/model-manifest":
+		switch r.Method {
+		case http.MethodGet:
+			writeJSON(w, 200, h.store.ModelManifestStatus(r.Context()))
+		case http.MethodPut:
+			if !h.v2Mutation(w, r, token, true) {
+				return
+			}
+			var req struct {
+				URL      string          `json:"url"`
+				Source   string          `json:"source"`
+				Manifest json.RawMessage `json:"manifest"`
+			}
+			if !decodeV2JSON(w, r, &req, 640*1024) {
+				return
+			}
+			var (
+				status ModelManifestStatus
+				err    error
+			)
+			hasURL := strings.TrimSpace(req.URL) != ""
+			hasManifest := len(strings.TrimSpace(string(req.Manifest))) > 0 && string(req.Manifest) != "null"
+			switch {
+			case hasURL && !hasManifest:
+				status, err = h.store.FetchAndSaveModelManifest(r.Context(), req.URL)
+			case hasManifest && !hasURL:
+				status, err = h.store.SaveModelManifest(r.Context(), req.Manifest, req.Source)
+			default:
+				writeError(w, 400, "provide either url or manifest")
+				return
+			}
+			if errors.Is(err, ErrCorePaused) {
+				writeError(w, 409, err.Error())
+				return
+			}
+			if err != nil {
+				writeError(w, 400, err.Error())
+				return
+			}
+			writeJSON(w, 200, status)
+		case http.MethodDelete:
+			if !h.v2Mutation(w, r, token, false) {
+				return
+			}
+			status, err := h.store.ClearModelManifest(r.Context())
+			if errors.Is(err, ErrCorePaused) {
+				writeError(w, 409, err.Error())
+				return
+			}
+			if err != nil {
+				writeError(w, 400, err.Error())
+				return
+			}
+			writeJSON(w, 200, status)
+		default:
+			writeError(w, 405, "method not allowed")
+		}
+
 	case rel == "/threads":
 		switch r.Method {
 		case http.MethodGet:
@@ -593,9 +651,10 @@ func (h *HTTPHandler) agentV2ApprovalAPI(w http.ResponseWriter, r *http.Request,
 		return
 	}
 	var req struct {
-		Decision string `json:"decision"`
-		Note     string `json:"note"`
-		Resume   *bool  `json:"resume"`
+		Decision string                   `json:"decision"`
+		Note     string                   `json:"note"`
+		Secret   *AgentV2SecretSubmission `json:"secret,omitempty"`
+		Resume   *bool                    `json:"resume"`
 	}
 	if !decodeV2JSON(w, r, &req, 16*1024) {
 		return
@@ -629,7 +688,7 @@ func (h *HTTPHandler) agentV2ApprovalAPI(w http.ResponseWriter, r *http.Request,
 
 	if !v2WantsSSE(r) {
 		_ = http.NewResponseController(w).SetWriteDeadline(time.Time{})
-		res, err := h.store.ResolveAgentV2Approval(r.Context(), approvalID, req.Decision, req.Note, resume, nil)
+		res, err := h.store.ResolveAgentV2ApprovalWithSecret(r.Context(), approvalID, req.Decision, req.Note, req.Secret, resume, nil)
 		if errors.Is(err, ErrApprovalNotFound) {
 			writeError(w, 404, err.Error())
 			return
@@ -647,7 +706,7 @@ func (h *HTTPHandler) agentV2ApprovalAPI(w http.ResponseWriter, r *http.Request,
 	}
 
 	emit, _ := startV2SSE(w)
-	_, err = h.store.ResolveAgentV2Approval(r.Context(), approvalID, req.Decision, req.Note, resume, emit)
+	_, err = h.store.ResolveAgentV2ApprovalWithSecret(r.Context(), approvalID, req.Decision, req.Note, req.Secret, resume, emit)
 	if err != nil && r.Context().Err() == nil {
 		emit(AgentStreamEvent{
 			Type:     "error",

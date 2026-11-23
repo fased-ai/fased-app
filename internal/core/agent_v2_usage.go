@@ -37,6 +37,10 @@ type AgentV2UsageSummary struct {
 }
 
 func estimateV2ModelCostMicroUSD(provider, modelID string, input, cached, output int64) (int64, bool) {
+	return estimateV2ModelCostMicroUSDForDir("", provider, modelID, input, cached, output)
+}
+
+func estimateV2ModelCostMicroUSDForDir(dir, provider, modelID string, input, cached, output int64) (int64, bool) {
 	if strings.EqualFold(strings.TrimSpace(provider), "local") {
 		return 0, false
 	}
@@ -44,7 +48,14 @@ func estimateV2ModelCostMicroUSD(provider, modelID string, input, cached, output
 	if modelID == "" {
 		return 0, false
 	}
-	m, ok := currentProviderModel(modelID)
+	var m currentModel
+	var ok bool
+	if dir != "" && modelManifestLookup != nil {
+		m, ok = modelManifestLookup(dir, provider, modelID)
+	}
+	if !ok {
+		m, ok = currentProviderModel(modelID)
+	}
 	if !ok {
 		return 0, false
 	}
@@ -137,7 +148,7 @@ GROUP BY 1, 2
 			return AgentV2UsageSummary{}, err
 		}
 		row.TotalTokens = row.InputTokens + row.OutputTokens
-		cost, known := estimateV2ModelCostMicroUSD(row.Provider, row.Model, row.InputTokens, row.CachedTokens, row.OutputTokens)
+		cost, known := estimateV2ModelCostMicroUSDForDir(s.dir, row.Provider, row.Model, row.InputTokens, row.CachedTokens, row.OutputTokens)
 		row.EstimatedCostUS = cost
 		row.CostKnown = known
 

@@ -10,6 +10,7 @@ import {
   useAIConnection,
 } from "../pages/AIConnection";
 import type { AgentView } from "../agents";
+import { parseFasedVisualSpec, parseSafeVisualHTML } from "../agent-visuals";
 import {
   deleteThreadV2,
   extractMessageCitations,
@@ -24,6 +25,7 @@ import {
   type AgentThread,
   type AgentToolCall,
   type AgentV2Message,
+  type AgentV2SecretSubmission,
   type InlineSegment,
 } from "../agents-v2";
 import {
@@ -33,6 +35,7 @@ import {
   Copy,
   Globe2,
   History,
+  KeyRound,
   Mic,
   MicOff,
   Plug,
@@ -45,6 +48,7 @@ import {
   X,
   Zap,
 } from "../icons";
+import { AgentVisualBlock } from "./AgentVisualBlock";
 import "./agent-chat-v2.css";
 
 function renderInline(segments: InlineSegment[]) {
@@ -104,6 +108,46 @@ function MarkdownMessage({ text }: { text: string }) {
     <div className="v2-markdown">
       {blocks.map((block, idx) => {
         if (block.kind === "code") {
+          const lang = block.lang.trim().toLowerCase();
+          if (
+            lang === "fased-visual" &&
+            parseFasedVisualSpec(block.code) !== null
+          ) {
+            return (
+              <AgentVisualBlock
+                key={idx}
+                lang={lang}
+                code={block.code}
+                defaultView="preview"
+              />
+            );
+          }
+          if (
+            lang === "fased-html" &&
+            parseSafeVisualHTML(block.code).length > 0
+          ) {
+            return (
+              <AgentVisualBlock
+                key={idx}
+                lang={lang}
+                code={block.code}
+                defaultView="preview"
+              />
+            );
+          }
+          if (
+            (lang === "html" || lang === "svg") &&
+            parseSafeVisualHTML(block.code).length > 0
+          ) {
+            return (
+              <AgentVisualBlock
+                key={idx}
+                lang={lang}
+                code={block.code}
+                defaultView="code"
+              />
+            );
+          }
           return <CodeBlock key={idx} lang={block.lang} code={block.code} />;
         }
         if (block.kind === "list") {
@@ -192,6 +236,27 @@ function ToolCallRow({ tc }: { tc: AgentToolCall }) {
   );
 }
 
+type SecretCardPayload = {
+  kind?: string;
+  provider?: string;
+  accountName?: string;
+  rpcEndpoint?: string;
+  label?: string;
+  reason?: string;
+  osVaultAvailable?: boolean;
+};
+
+function parseSecretCardPayload(raw: string): SecretCardPayload | null {
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? (parsed as SecretCardPayload)
+      : null;
+  } catch {
+    return null;
+  }
+}
+
 function ApprovalCard({
   approval,
   busy,
@@ -203,21 +268,48 @@ function ApprovalCard({
     id: string,
     decision: "approve" | "reject",
     note: string,
+    secret?: AgentV2SecretSubmission,
   ) => Promise<boolean>;
 }) {
   const { t } = useUI();
   const [note, setNote] = useState("");
+  const [secretValue, setSecretValue] = useState("");
+  const [passphrase, setPassphrase] = useState("");
   const fields = formatApprovalFields(approval.toolName, approval.payloadJson);
   const pending = approval.status === "pending";
+  const isSecretRequest = approval.toolName === "request_secret";
+  const secretPayload = isSecretRequest
+    ? parseSecretCardPayload(approval.payloadJson)
+    : null;
+  const needsPassphrase =
+    isSecretRequest && secretPayload?.osVaultAvailable === false;
+
+  async function submitSecret(e: FormEvent) {
+    e.preventDefault();
+    const val = secretValue.trim();
+    if (!val || busy) return;
+    const pass = passphrase;
+    setSecretValue("");
+    setPassphrase("");
+    const ok = await onDecide(approval.id, "approve", "", {
+      value: val,
+      ...(pass ? { passphrase: pass } : {}),
+    });
+    if (ok && secretPayload?.kind === "provider_api_key") {
+      window.dispatchEvent(new Event("ai-connection-changed"));
+    }
+  }
 
   return (
     <article
-      className={`v2-approval-card v2-approval-${approval.status}`}
+      className={`v2-approval-card v2-approval-${approval.status}${isSecretRequest ? " v2-secret-card" : ""}`}
       aria-label={approval.title}
     >
       <div className="v2-approval-head">
         <span className="v2-approval-title">
-          {approval.status === "approved" ? (
+          {isSecretRequest ? (
+            <KeyRound size={16} aria-hidden="true" />
+          ) : approval.status === "approved" ? (
             <ShieldCheck size={16} aria-hidden="true" />
           ) : (
             <Shield size={16} aria-hidden="true" />
@@ -225,11 +317,17 @@ function ApprovalCard({
           <strong>{approval.title}</strong>
         </span>
         <span className={`v2-pill v2-pill-${approval.status}`}>
-          {pending
-            ? t("Approval required")
-            : approval.status === "approved"
-              ? t("Approved")
-              : t("Rejected")}
+          {isSecretRequest
+            ? pending
+              ? t("Secret required")
+              : approval.status === "approved"
+                ? t("Saved encrypted")
+                : t("Rejected")
+            : pending
+              ? t("Approval required")
+              : approval.status === "approved"
+                ? t("Approved")
+                : t("Rejected")}
         </span>
       </div>
       {fields.length > 0 && (
@@ -245,7 +343,59 @@ function ApprovalCard({
       {!pending && approval.decisionNote && (
         <p className="v2-approval-note">{approval.decisionNote}</p>
       )}
-      {pending && (
+      {pending && isSecretRequest && (
+        <form
+          className="v2-secret-inputs"
+          onSubmit={(e) => void submitSecret(e)}
+        >
+          <div className="v2-secret-fields">
+            <input
+              type="password"
+              autoComplete="new-password"
+              aria-label={t("API key or token")}
+              placeholder={t("API key or token")}
+              value={secretValue}
+              disabled={busy}
+              maxLength={512}
+              onChange={(e) => setSecretValue(e.target.value)}
+            />
+            {needsPassphrase && (
+              <input
+                type="password"
+                autoComplete="new-password"
+                aria-label={t("Vault passphrase")}
+                placeholder={t("Vault passphrase")}
+                value={passphrase}
+                disabled={busy}
+                maxLength={256}
+                onChange={(e) => setPassphrase(e.target.value)}
+              />
+            )}
+          </div>
+          <div className="v2-secret-actions">
+            <button
+              type="submit"
+              className="primary"
+              disabled={busy || !secretValue.trim()}
+            >
+              {t("Save encrypted")}
+            </button>
+            <button
+              type="button"
+              className="secondary"
+              disabled={busy}
+              onClick={() => {
+                setSecretValue("");
+                setPassphrase("");
+                void onDecide(approval.id, "reject", "");
+              }}
+            >
+              {t("Decline")}
+            </button>
+          </div>
+        </form>
+      )}
+      {pending && !isSecretRequest && (
         <div className="v2-approval-actions">
           <input
             type="text"

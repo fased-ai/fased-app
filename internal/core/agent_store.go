@@ -1575,8 +1575,13 @@ func (s *Store) contextWindowForModel(ctx context.Context, detail AgentThreadDet
 		}
 	}
 	charLimit := agentV2CompactCharLimit
-	if m, ok := currentProviderModel(strings.TrimSpace(modelID)); ok && m.ContextTokens > 0 {
-		budget := int(m.ContextTokens * 2)
+	trimmedModel := strings.TrimSpace(modelID)
+	modelMeta, modelOK := s.resolveManifestModel("", trimmedModel)
+	if !modelOK {
+		modelMeta, modelOK = currentProviderModel(trimmedModel)
+	}
+	if modelOK && modelMeta.ContextTokens > 0 {
+		budget := int(modelMeta.ContextTokens * 2)
 		if budget < 8000 {
 			budget = 8000
 		}

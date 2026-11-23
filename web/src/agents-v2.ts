@@ -243,6 +243,7 @@ const toolLabels: Record<string, string> = {
   search_news: "News",
   list_strategies: "Strategies",
   delegate_to_agent: "Delegate",
+  request_secret: "Secret request",
   save_memory: "Save memory",
   draft_task: "Draft task",
   draft_swap: "Swap draft",
@@ -407,6 +408,19 @@ export function formatToolSummary(
         // Ignore unparseable URL fallback.
       }
     }
+  }
+
+  if (toolName === "request_secret") {
+    const target =
+      typeof parsed.provider === "string" && parsed.provider.trim()
+        ? parsed.provider.trim()
+        : typeof parsed.accountName === "string" && parsed.accountName.trim()
+          ? parsed.accountName.trim()
+          : "";
+    if (parsed.status === "saved") {
+      return target ? `Saved encrypted · ${target}` : "Saved encrypted";
+    }
+    if (target) return target;
   }
 
   return "";
@@ -639,6 +653,21 @@ export function formatApprovalFields(
       });
     if (obj.description)
       fields.push({ label: "Details", value: String(obj.description) });
+    return fields;
+  }
+
+  if (toolName === "request_secret") {
+    const fields: ApprovalField[] = [];
+    if (obj.label) fields.push({ label: "Label", value: String(obj.label) });
+    if (obj.provider)
+      fields.push({ label: "Provider", value: String(obj.provider) });
+    if (obj.accountName)
+      fields.push({ label: "Wallet", value: String(obj.accountName) });
+    if (obj.network)
+      fields.push({ label: "Network", value: String(obj.network) });
+    if (obj.rpcEndpoint)
+      fields.push({ label: "RPC", value: String(obj.rpcEndpoint) });
+    if (obj.reason) fields.push({ label: "Reason", value: String(obj.reason) });
     return fields;
   }
 
@@ -944,6 +973,71 @@ export function buildTaskRunChatPrompt(
   if (answer) lines.push("", "Recorded analysis:", answer);
   lines.push("", "Summarize next steps and open risks.");
   return lines.join("\n");
+}
+
+export type AgentV2SecretSubmission = {
+  value: string;
+  passphrase?: string;
+  name?: string;
+};
+
+export type ModelManifestEntry = {
+  provider: string;
+  id: string;
+  name?: string;
+  contextTokens?: number;
+  outputTokens?: number;
+  input?: number;
+  cached?: number;
+  output?: number;
+  currency?: string;
+  reasoning?: string;
+  capabilities?: string[];
+};
+
+export type ModelManifestStatus = {
+  loaded: boolean;
+  source?: string;
+  updatedAt?: number;
+  sha256?: string;
+  modelCount: number;
+  models?: ModelManifestEntry[];
+};
+
+export type MCPDiscovery = {
+  name: string;
+  version: string;
+  protocolVersion: string;
+  scopes: string[];
+  endpoint: string;
+  toolCount: number;
+  resourceCount: number;
+};
+
+export function getModelManifestV2(core: Pick<AgentV2CoreClient, "request">) {
+  return core.request<ModelManifestStatus>("agents/v2/model-manifest");
+}
+
+export function saveModelManifestV2(
+  core: Pick<AgentV2CoreClient, "request">,
+  payload: { url?: string; manifest?: unknown; source?: string },
+) {
+  return core.request<ModelManifestStatus>(
+    "agents/v2/model-manifest",
+    "PUT",
+    payload,
+  );
+}
+
+export function clearModelManifestV2(core: Pick<AgentV2CoreClient, "request">) {
+  return core.request<ModelManifestStatus>(
+    "agents/v2/model-manifest",
+    "DELETE",
+  );
+}
+
+export function getMCPDiscovery(core: Pick<AgentV2CoreClient, "request">) {
+  return core.request<MCPDiscovery>("mcp");
 }
 
 export function createThreadV2(
@@ -1555,6 +1649,7 @@ export function useAgentsV2(core: AgentV2CoreClient, profileId: string) {
       approvalId: string,
       decision: "approve" | "reject",
       note = "",
+      secret?: AgentV2SecretSubmission,
     ): Promise<boolean> => {
       if (core.mode !== "ready") return false;
       setError("");
@@ -1565,7 +1660,12 @@ export function useAgentsV2(core: AgentV2CoreClient, profileId: string) {
       try {
         await core.stream(
           `agents/v2/approvals/${encodeURIComponent(approvalId)}`,
-          { decision, note: note.trim() || undefined, resume: true },
+          {
+            decision,
+            note: note.trim() || undefined,
+            ...(secret ? { secret } : {}),
+            resume: true,
+          },
           { signal: ctrl.signal, onEvent: applySSEFrame },
         );
         return true;

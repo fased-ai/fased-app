@@ -22,6 +22,12 @@ import (
 //go:embed provider_models.json
 var providerModelSource []byte
 
+// Nil-safe hooks registered by model_manifest.go so fixture-core-storage composition stays decoupled.
+var (
+	modelManifestLookup      func(dir, provider, modelID string) (currentModel, bool)
+	modelManifestCatalogHook func(dir string, v AIConnectionView, catalog *ProviderCatalog)
+)
+
 type currentModel struct {
 	CacheWrite           int64  `json:"cacheWrite,omitempty"`
 	Contract             string `json:"contract,omitempty"`

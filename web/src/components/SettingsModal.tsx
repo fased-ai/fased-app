@@ -6,7 +6,17 @@ import {
   type Connection,
 } from "../ai-connection";
 import {
+  clearModelManifestV2,
+  getMCPDiscovery,
+  getModelManifestV2,
+  saveModelManifestV2,
+  type MCPDiscovery,
+  type ModelManifestStatus,
+} from "../agents-v2";
+import {
   ArrowRight,
+  Check,
+  Copy,
   ExternalLink,
   LockKeyhole,
   Monitor,
@@ -76,6 +86,12 @@ export function SettingsModal() {
     step?: 1 | 2 | 3;
   } | null>(null);
   const [wizardOpen, setWizardOpen] = useState(false);
+  const [mcp, setMcp] = useState<MCPDiscovery | null>(null);
+  const [mcpCopied, setMcpCopied] = useState(false);
+  const [manifest, setManifest] = useState<ModelManifestStatus | null>(null);
+  const [manifestUrl, setManifestUrl] = useState("");
+  const [manifestBusy, setManifestBusy] = useState(false);
+  const [manifestError, setManifestError] = useState("");
 
   useEffect(() => {
     if (settingsModalTab) {
@@ -99,6 +115,28 @@ export function SettingsModal() {
       void refresh();
     }
   }, [settingsModalTab, activeTab, core.mode, refresh]);
+
+  useEffect(() => {
+    if (
+      !settingsModalTab ||
+      activeTab !== "diagnostics" ||
+      core.mode !== "ready"
+    ) {
+      return;
+    }
+    let cancelled = false;
+    void Promise.allSettled([
+      getMCPDiscovery(core),
+      getModelManifestV2(core),
+    ]).then(([mcpRes, manifestRes]) => {
+      if (cancelled) return;
+      if (mcpRes.status === "fulfilled") setMcp(mcpRes.value);
+      if (manifestRes.status === "fulfilled") setManifest(manifestRes.value);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [settingsModalTab, activeTab, core]);
 
   if (!settingsModalTab) return null;
 
@@ -517,6 +555,146 @@ export function SettingsModal() {
                     </div>
                   </dl>
                 </div>
+
+                <div className="settings-modal-card">
+                  <div className="settings-modal-row">
+                    <strong>{t("MCP endpoint")}</strong>
+                    <span className="pill">{t("Read & draft")}</span>
+                  </div>
+                  <div className="settings-endpoint-row">
+                    <code className="mono">
+                      {`${window.location.origin}${mcp?.endpoint ?? "/api/v1/mcp"}`}
+                    </code>
+                    <button
+                      type="button"
+                      className="secondary"
+                      onClick={() => {
+                        const target = `${window.location.origin}${mcp?.endpoint ?? "/api/v1/mcp"}`;
+                        void navigator.clipboard?.writeText(target);
+                        setMcpCopied(true);
+                        setTimeout(() => setMcpCopied(false), 1200);
+                      }}
+                    >
+                      {mcpCopied ? <Check size={13} /> : <Copy size={13} />}
+                      <span>{mcpCopied ? t("Copied") : t("Copy")}</span>
+                    </button>
+                  </div>
+                  {mcp && (
+                    <dl className="settings-detail-kv">
+                      <div>
+                        <dt>{t("Tools")}</dt>
+                        <dd>{mcp.toolCount}</dd>
+                      </div>
+                      <div>
+                        <dt>{t("Resources")}</dt>
+                        <dd>{mcp.resourceCount}</dd>
+                      </div>
+                    </dl>
+                  )}
+                </div>
+
+                <div className="settings-modal-card">
+                  <div className="settings-modal-row">
+                    <strong>{t("Model manifest")}</strong>
+                    <span className="pill">
+                      {manifest?.loaded
+                        ? t("{count} models", { count: manifest.modelCount })
+                        : t("Built-in")}
+                    </span>
+                  </div>
+                  {manifest?.loaded && (
+                    <dl className="settings-detail-kv">
+                      {manifest.source && (
+                        <div>
+                          <dt>{t("Source")}</dt>
+                          <dd>{manifest.source}</dd>
+                        </div>
+                      )}
+                      {manifest.sha256 && (
+                        <div>
+                          <dt>{t("SHA-256")}</dt>
+                          <dd className="mono">
+                            {manifest.sha256.slice(0, 12)}
+                          </dd>
+                        </div>
+                      )}
+                    </dl>
+                  )}
+                  <form
+                    className="settings-inline-form"
+                    onSubmit={async (e) => {
+                      e.preventDefault();
+                      const rawUrl = manifestUrl.trim();
+                      if (!rawUrl || manifestBusy) return;
+                      setManifestBusy(true);
+                      setManifestError("");
+                      try {
+                        const updated = await saveModelManifestV2(core, {
+                          url: rawUrl,
+                        });
+                        setManifest(updated);
+                        setManifestUrl("");
+                        window.dispatchEvent(
+                          new Event("ai-connection-changed"),
+                        );
+                      } catch (err) {
+                        setManifestError(
+                          err instanceof Error
+                            ? err.message
+                            : "Could not import model manifest",
+                        );
+                      } finally {
+                        setManifestBusy(false);
+                      }
+                    }}
+                  >
+                    <input
+                      type="url"
+                      aria-label={t("Manifest URL")}
+                      placeholder={t("Manifest URL")}
+                      value={manifestUrl}
+                      disabled={manifestBusy}
+                      onChange={(e) => setManifestUrl(e.target.value)}
+                    />
+                    <button
+                      type="submit"
+                      className="primary"
+                      disabled={manifestBusy || !manifestUrl.trim()}
+                    >
+                      {t("Import")}
+                    </button>
+                    {manifest?.loaded && (
+                      <button
+                        type="button"
+                        className="secondary"
+                        disabled={manifestBusy}
+                        onClick={async () => {
+                          setManifestBusy(true);
+                          setManifestError("");
+                          try {
+                            const updated = await clearModelManifestV2(core);
+                            setManifest(updated);
+                            window.dispatchEvent(
+                              new Event("ai-connection-changed"),
+                            );
+                          } catch (err) {
+                            setManifestError(
+                              err instanceof Error
+                                ? err.message
+                                : "Could not clear model manifest",
+                            );
+                          } finally {
+                            setManifestBusy(false);
+                          }
+                        }}
+                      >
+                        {t("Clear")}
+                      </button>
+                    )}
+                  </form>
+                  {manifestError && <p role="alert">{manifestError}</p>}
+                </div>
+
                 <UpdateStatusPanel />
               </>
             )}
