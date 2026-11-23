@@ -15,6 +15,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/fased-ai/fased-app/internal/providers"
 )
 
 type interactiveCLIRunner interface {
@@ -24,61 +26,11 @@ type interactiveCLIRunner interface {
 const antigravityLoginCommand = "antigravity acp --login"
 const antigravityInstallHint = "Install Antigravity desktop or run antigravity acp"
 
-func validCustomCLIBinaryPath(p string) bool {
-	p = strings.TrimSpace(p)
-	if p == "" || len(p) > 260 {
-		return false
-	}
-	if strings.ContainsAny(p, "\x00\r\n") {
-		return false
-	}
-	for _, seg := range strings.FieldsFunc(p, func(r rune) bool { return r == '/' || r == '\\' }) {
-		if seg == ".." {
-			return false
-		}
-	}
-	return true
-}
-
-func validCLIConfigDir(p string) bool {
-	return validCustomCLIBinaryPath(p)
-}
-
-func expandCLIUserPath(p string) string {
-	p = strings.TrimSpace(p)
-	if p == "" {
-		return ""
-	}
-	if p == "~" || strings.HasPrefix(p, "~/") || strings.HasPrefix(p, `~\`) {
-		home, err := os.UserHomeDir()
-		if err == nil && home != "" {
-			if p == "~" {
-				return home
-			}
-			return filepath.Join(home, p[2:])
-		}
-	}
-	return p
-}
-
+func validCustomCLIBinaryPath(p string) bool { return providers.ValidCustomCLIBinaryPath(p) }
+func validCLIConfigDir(p string) bool        { return providers.ValidCLIConfigDir(p) }
+func expandCLIUserPath(p string) string      { return providers.ExpandCLIUserPath(p) }
 func isElectronGUIAntigravity(binPath string) bool {
-	if binPath == "" {
-		return false
-	}
-	resolved, err := filepath.EvalSymlinks(binPath)
-	if err != nil || resolved == "" {
-		resolved = binPath
-	}
-	if strings.Contains(resolved, ".app/Contents/MacOS/") {
-		return true
-	}
-	dir := filepath.Dir(resolved)
-	for _, marker := range []string{"resources.pak", "LICENSE.electron.txt", "chrome_100_percent.pak"} {
-		if info, err := os.Stat(filepath.Join(dir, marker)); err == nil && !info.IsDir() {
-			return true
-		}
-	}
-	return false
+	return providers.IsElectronGUIAntigravity(binPath)
 }
 
 func antigravityPlatformArch() string {

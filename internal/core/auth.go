@@ -2,20 +2,17 @@ package core
 
 import (
 	"context"
-	"crypto/hmac"
 	"crypto/rand"
-	"crypto/sha256"
 	"crypto/subtle"
 	"database/sql"
-	"encoding/base64"
 	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
-	"unicode/utf8"
 
-	"golang.org/x/crypto/argon2"
+	"github.com/fased-ai/fased-app/internal/auth"
+	"github.com/fased-ai/fased-app/internal/vault"
 )
 
 const SessionLifetime = 12 * time.Hour
@@ -26,9 +23,9 @@ const (
 )
 
 const (
-	prodKDFTime    uint32 = 3
-	prodKDFMemory  uint32 = 64 * 1024
-	prodKDFThreads uint8  = 2
+	prodKDFTime    uint32 = vault.ProdKDFTime
+	prodKDFMemory  uint32 = vault.ProdKDFMemory
+	prodKDFThreads uint8  = vault.ProdKDFThreads
 )
 
 var (
@@ -38,11 +35,11 @@ var (
 )
 
 func passwordHash(password string, salt []byte) []byte {
-	return argon2.IDKey([]byte(password), salt, kdfTime, kdfMemory, kdfThreads, 32)
+	return vault.DeriveKey(password, salt, kdfTime, kdfMemory, kdfThreads)
 }
 
 func validPassword(password string) bool {
-	return utf8.RuneCountInString(password) >= 12 && len(password) <= 1024
+	return auth.ValidPassword(password)
 }
 
 func (s *Store) compareAndSetUnclaimedCode(ctx context.Context, previous, next string, expires int64) (bool, error) {
@@ -220,7 +217,5 @@ func (s *Store) Logout(ctx context.Context, token string) error {
 	return err
 }
 func csrfToken(token string) string {
-	mac := hmac.New(sha256.New, []byte(token))
-	_, _ = mac.Write([]byte("fased-core-csrf-v1"))
-	return base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
+	return auth.CSRFToken(token)
 }

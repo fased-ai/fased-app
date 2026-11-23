@@ -7,82 +7,32 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+
+	"github.com/fased-ai/fased-app/internal/agents"
 )
 
-type AgentV2UsageModelRow struct {
-	Provider        string `json:"provider"`
-	Model           string `json:"model"`
-	Turns           int64  `json:"turns"`
-	InputTokens     int64  `json:"inputTokens"`
-	CachedTokens    int64  `json:"cachedTokens"`
-	OutputTokens    int64  `json:"outputTokens"`
-	TotalTokens     int64  `json:"totalTokens"`
-	EstimatedCostUS int64  `json:"estimatedCostMicroUsd"`
-	CostKnown       bool   `json:"costKnown"`
-}
-
-type AgentV2UsageSummary struct {
-	ProfileID       string                 `json:"profileId,omitempty"`
-	Days            int                    `json:"days"`
-	Since           int64                  `json:"since,omitempty"`
-	Turns           int64                  `json:"turns"`
-	InputTokens     int64                  `json:"inputTokens"`
-	CachedTokens    int64                  `json:"cachedTokens"`
-	OutputTokens    int64                  `json:"outputTokens"`
-	TotalTokens     int64                  `json:"totalTokens"`
-	EstimatedCostUS int64                  `json:"estimatedCostMicroUsd"`
-	CostKnown       bool                   `json:"costKnown"`
-	UnpricedTurns   int64                  `json:"unpricedTurns,omitempty"`
-	Models          []AgentV2UsageModelRow `json:"models"`
-}
+type AgentV2UsageModelRow = agents.UsageModelRow
+type AgentV2UsageSummary = agents.UsageSummary
 
 func estimateV2ModelCostMicroUSD(provider, modelID string, input, cached, output int64) (int64, bool) {
 	return estimateV2ModelCostMicroUSDForDir("", provider, modelID, input, cached, output)
 }
 
 func estimateV2ModelCostMicroUSDForDir(dir, provider, modelID string, input, cached, output int64) (int64, bool) {
-	if strings.EqualFold(strings.TrimSpace(provider), "local") {
-		return 0, false
-	}
-	modelID = strings.TrimSpace(modelID)
-	if modelID == "" {
-		return 0, false
-	}
-	var m currentModel
-	var ok bool
-	if dir != "" && modelManifestLookup != nil {
-		m, ok = modelManifestLookup(dir, provider, modelID)
-	}
-	if !ok {
-		m, ok = currentProviderModel(modelID)
-	}
-	if !ok {
-		return 0, false
-	}
-	if m.Currency != "" && !strings.EqualFold(m.Currency, "USD") {
-		return 0, false
-	}
-	if m.Input <= 0 || m.Output <= 0 {
-		return 0, false
-	}
-	if input < 0 {
-		input = 0
-	}
-	if cached < 0 {
-		cached = 0
-	}
-	if cached > input {
-		cached = input
-	}
-	if output < 0 {
-		output = 0
-	}
-	nonCached := input - cached
-	total := nonCached*m.Input + cached*m.Cached + output*m.Output
-	if total == 0 {
-		return 0, true
-	}
-	return (total + 999999) / 1000000, true
+	return agents.EstimateModelCostMicroUSD(provider, modelID, input, cached, output, func(p, id string) (agents.ModelPricing, bool) {
+		var m currentModel
+		var ok bool
+		if dir != "" && modelManifestLookup != nil {
+			m, ok = modelManifestLookup(dir, p, id)
+		}
+		if !ok {
+			m, ok = currentProviderModel(id)
+		}
+		if !ok {
+			return agents.ModelPricing{}, false
+		}
+		return agents.ModelPricing{Input: m.Input, Cached: m.Cached, Output: m.Output, Currency: m.Currency}, true
+	})
 }
 
 // GetAgentV2Usage aggregates assistant turn counts, token usage, and estimated USD

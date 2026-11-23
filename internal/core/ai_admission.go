@@ -14,6 +14,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/fased-ai/fased-app/internal/providers"
 )
 
 const admittedOpenAIModel = "gpt-6.1-terra"
@@ -263,49 +265,7 @@ func admissionJSON(ctx context.Context, rt http.RoundTripper, method, path strin
 // Duplicate usage/identity keys are ambiguous evidence, even if encoding/json
 // would select their final value. Bounds are independent of the provider schema.
 func uniqueAIJSON(raw []byte, budgets ...int) bool {
-	budget := 4096
-	if len(budgets) > 0 {
-		budget = budgets[0]
-	}
-	d := json.NewDecoder(bytes.NewReader(raw))
-	d.UseNumber()
-	tokens := 0
-	var value func(int) bool
-	value = func(depth int) bool {
-		tokens++
-		if depth > 16 || tokens > budget {
-			return false
-		}
-		t, e := d.Token()
-		if e != nil {
-			return false
-		}
-		open, container := t.(json.Delim)
-		if !container {
-			return true
-		}
-		keys := map[string]bool{}
-		for d.More() {
-			if open == '{' {
-				key, err := d.Token()
-				name, ok := key.(string)
-				if err != nil || !ok || keys[name] {
-					return false
-				}
-				keys[name] = true
-			}
-			if !value(depth + 1) {
-				return false
-			}
-		}
-		close, err := d.Token()
-		return err == nil && ((open == '{' && close == json.Delim('}')) || (open == '[' && close == json.Delim(']')))
-	}
-	if !value(0) {
-		return false
-	}
-	_, e := d.Token()
-	return e == io.EOF
+	return providers.UniqueJSON(raw, budgets...)
 }
 
 func admitOpenAI(ctx context.Context, q *AgentAIRequest, rt http.RoundTripper, now func() time.Time) bool {

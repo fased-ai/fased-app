@@ -421,6 +421,25 @@ func ValidManagedAccountRef(r AccountRef) bool {
     await writeFile(path.join(localRoot, file), bytes);
     storage["localprovider/" + file] = sha(bytes);
   }
+  for (const pkg of [
+    "vault",
+    "auth",
+    "httpapi",
+    "scheduler",
+    "news",
+    "providers",
+    "agents",
+  ]) {
+    const pkgRoot = path.join(archivedRoot, "internal", pkg);
+    await mkdir(pkgRoot, { recursive: true });
+    for (const file of (await readdir(path.join("internal", pkg))).filter(
+      (name) => name.endsWith(".go") && !name.endsWith("_test.go"),
+    )) {
+      const bytes = await readFile(path.join("internal", pkg, file));
+      await writeFile(path.join(pkgRoot, file), bytes);
+      storage[`${pkg}/${file}`] = sha(bytes);
+    }
+  }
   const strategyRoot = path.join(archivedRoot, "internal/wenstrategy");
   await mkdir(path.join(strategyRoot, "testdata"), { recursive: true });
   for (const file of [
