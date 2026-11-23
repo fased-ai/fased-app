@@ -15,7 +15,14 @@ var routeV2 = [8]byte{187, 100, 250, 204, 49, 196, 175, 20}
 var sharedRouteV2 = [8]byte{209, 152, 83, 147, 124, 254, 216, 233}
 
 func ValidateInstructions(q Quote) error {
-	if len(q.Instructions) < 1 || len(q.Instructions) > 4 {
+	maxIxs := 4
+	if q.WrapAndUnwrapSol {
+		if q.InputMint != SOL && q.OutputMint != SOL {
+			return errors.New("wrapAndUnwrapSol requires native SOL input or output")
+		}
+		maxIxs = 6
+	}
+	if len(q.Instructions) < 1 || len(q.Instructions) > maxIxs {
 		return errors.New("unsupported swap instruction count")
 	}
 	source, e := TokenAccount(q.Owner, q.InputMint)
@@ -23,6 +30,10 @@ func ValidateInstructions(q Quote) error {
 		return e
 	}
 	dest, e := TokenAccount(q.Owner, q.OutputMint)
+	if e != nil {
+		return e
+	}
+	wsolATA, e := TokenAccount(q.Owner, SOL)
 	if e != nil {
 		return e
 	}
@@ -36,6 +47,9 @@ func ValidateInstructions(q Quote) error {
 	}
 	swaps := 0
 	setup := map[string]bool{}
+	systemTransfers := 0
+	syncNatives := 0
+	closes := 0
 	for i, ix := range q.Instructions {
 		data, e := base64.StdEncoding.Strict().DecodeString(ix.Data)
 		if e != nil || len(data) > 1024 || len(ix.Accounts) > 48 {
@@ -61,8 +75,37 @@ func ValidateInstructions(q Quote) error {
 				return errors.New("token setup differs from wallet/mints")
 			}
 			setup[ata] = true
+		case System:
+			if !q.WrapAndUnwrapSol || q.InputMint != SOL || swaps != 0 || systemTransfers != 0 || len(data) != 12 || binary.LittleEndian.Uint32(data[:4]) != 2 || binary.LittleEndian.Uint64(data[4:12]) != amount || len(ix.Accounts) != 2 {
+				return errors.New("unsupported system setup instruction")
+			}
+			a := ix.Accounts
+			if a[0].Pubkey != q.Owner || !a[0].IsSigner || !a[0].IsWritable || a[1].Pubkey != wsolATA || !a[1].IsWritable || a[1].IsSigner {
+				return errors.New("native SOL wrap transfer differs from wallet/wSOL ATA")
+			}
+			systemTransfers++
+		case Token:
+			if !q.WrapAndUnwrapSol {
+				return errors.New("token program instruction requires wrapAndUnwrapSol")
+			}
+			if swaps == 0 {
+				if q.InputMint != SOL || syncNatives != 0 || len(data) != 1 || data[0] != 17 || len(ix.Accounts) != 1 || ix.Accounts[0].Pubkey != wsolATA || !ix.Accounts[0].IsWritable || ix.Accounts[0].IsSigner {
+					return errors.New("invalid wSOL sync instruction")
+				}
+				syncNatives++
+			} else {
+				if closes != 0 || i != len(q.Instructions)-1 || len(data) != 1 || data[0] != 9 || len(ix.Accounts) != 3 {
+					return errors.New("invalid post-swap token close instruction")
+				}
+				a := ix.Accounts
+				if a[0].Pubkey != wsolATA || !a[0].IsWritable || a[0].IsSigner || a[1].Pubkey != q.Owner || !a[1].IsWritable || a[2].Pubkey != q.Owner || !a[2].IsSigner {
+					return errors.New("wSOL close recipient or authority differs from wallet")
+				}
+				closes++
+			}
 		case Jupiter:
-			if swaps != 0 || i != len(q.Instructions)-1 || len(data) < 38 {
+			atEnd := i == len(q.Instructions)-1 || (q.WrapAndUnwrapSol && i == len(q.Instructions)-2)
+			if swaps != 0 || !atEnd || len(data) < 38 {
 				return errors.New("one final Jupiter RouteV2 required")
 			}
 			swaps++
@@ -128,15 +171,32 @@ func Message(q Quote) ([]byte, error) {
 	if e != nil {
 		return nil, e
 	}
-	cu := make([]byte, 5)
-	cu[0] = 2
-	binary.LittleEndian.PutUint32(cu[1:], 1_400_000)
-	price := make([]byte, 9)
-	price[0] = 3
 	if q.MaxFeeLamports < 5000 || q.MaxFeeLamports > 1_000_000 {
 		return nil, errors.New("invalid fee cap")
 	}
-	binary.LittleEndian.PutUint64(price[1:], (q.MaxFeeLamports-5000)*1_000_000/1_400_000)
+	cuLimit := uint32(1_400_000)
+	if q.ComputeUnits > 0 {
+		if q.ComputeUnits < 50_000 || q.ComputeUnits > 1_400_000 {
+			return nil, errors.New("compute unit limit outside supported bounds")
+		}
+		cuLimit = q.ComputeUnits
+	}
+	maxMicro := (q.MaxFeeLamports - 5000) * 1_000_000 / uint64(cuLimit)
+	var microPrice uint64
+	if q.ComputeUnits > 0 || q.PriorityFeeMicroLamports > 0 {
+		if q.PriorityFeeMicroLamports > maxMicro {
+			return nil, errors.New("priority fee exceeds max fee cap")
+		}
+		microPrice = q.PriorityFeeMicroLamports
+	} else {
+		microPrice = maxMicro
+	}
+	cu := make([]byte, 5)
+	cu[0] = 2
+	binary.LittleEndian.PutUint32(cu[1:], cuLimit)
+	price := make([]byte, 9)
+	price[0] = 3
+	binary.LittleEndian.PutUint64(price[1:], microPrice)
 	ixs := append([]Instruction{{Compute, nil, base64.StdEncoding.EncodeToString(cu)}, {Compute, nil, base64.StdEncoding.EncodeToString(price)}}, q.Instructions...)
 	flags := map[string]bool{q.Owner: true}
 	for _, ix := range ixs {

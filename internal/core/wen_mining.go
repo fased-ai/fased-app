@@ -5,15 +5,22 @@ package core
 // Ordinary startup leaves mining activation strictly OFF (s.wenMining == nil).
 import (
 	"context"
+	"crypto/aes"
+	"crypto/cipher"
+	"crypto/rand"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"math/big"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/fased-ai/fased-app/internal/onchain"
 	"github.com/fased-ai/fased-app/internal/signer"
@@ -77,19 +84,28 @@ type WENMiningOperation struct {
 	ExpiresAt            int64                 `json:"expiresAt"`
 }
 
+type WENMiningPreparedEntry struct {
+	RangeIndex     uint8  `json:"rangeIndex"`
+	AmountLamports string `json:"amountLamports"`
+	Nonce          uint64 `json:"nonce"`
+	Commitment     string `json:"commitment"`
+}
+
 type WENMiningPrepared struct {
-	Commitment   string                `json:"commitment"`
-	Nonce        uint64                `json:"nonce"`
-	Selection    uint8                 `json:"selection"`
-	Instructions []WENPaperInstruction `json:"instructions"`
+	Commitment   string                   `json:"commitment"`
+	Nonce        uint64                   `json:"nonce"`
+	Selection    uint8                    `json:"selection"`
+	Entries      []WENMiningPreparedEntry `json:"entries,omitempty"`
+	Instructions []WENPaperInstruction    `json:"instructions"`
 }
 
 type WENMiningObservation struct {
-	State         string          `json:"state"`
-	Slot          uint64          `json:"slot"`
-	AccountSHA256 string          `json:"accountSha256,omitempty"`
-	ReceiptSHA256 string          `json:"receiptSha256,omitempty"`
-	Receipt       *wenpm1.Receipt `json:"receipt,omitempty"`
+	State         string           `json:"state"`
+	Slot          uint64           `json:"slot"`
+	AccountSHA256 string           `json:"accountSha256,omitempty"`
+	ReceiptSHA256 string           `json:"receiptSha256,omitempty"`
+	Receipt       *wenpm1.Receipt  `json:"receipt,omitempty"`
+	Receipts      []wenpm1.Receipt `json:"receipts,omitempty"`
 }
 
 type WENMiningTaskPolicy struct {
@@ -359,7 +375,8 @@ func (s *Store) wenMiningAccount(ctx context.Context, accountID, proposalID stri
 	return *account, *live.Status.Account, ownerAddress, approved, nil
 }
 
-func wenMiningWalletLedger(d agentDocument, accountID string, excludeTaskID string) (spent, unsettled, fees uint64) {
+func wenMiningWalletLedger(d agentDocument, accountID string, excludeTaskID string, now int64) (spent, unsettled, dailyTurnover, feesPaid, feeHolds uint64) {
+	ny, nm, nd := time.Unix(now, 0).UTC().Date()
 	for _, r := range d.Runs {
 		if r.WENMining == nil || r.TaskID == excludeTaskID {
 			continue
@@ -379,16 +396,27 @@ func wenMiningWalletLedger(d agentDocument, accountID string, excludeTaskID stri
 			continue
 		}
 		fee, _ := parseUintLamports(task.WENMining.Operation.EstimatedFeeLamports)
+		sameDay := false
+		if r.At > 0 {
+			ry, rm, rd := time.Unix(r.At, 0).UTC().Date()
+			sameDay = ry == ny && rm == nm && rd == nd
+		}
 		switch r.WENMining.State {
 		case "confirmed":
 			spent += amt
-			fees += fee
+			feesPaid += fee
+			if sameDay {
+				dailyTurnover += amt
+			}
 		case "queued", "paused", "validating", "prepared", "sending", "submitted", "unknown":
 			unsettled += amt
-			fees += fee
+			feeHolds += fee
+			if sameDay {
+				dailyTurnover += amt
+			}
 		}
 	}
-	return spent, unsettled, fees
+	return spent, unsettled, dailyTurnover, feesPaid, feeHolds
 }
 
 func checkWENMiningPolicyLimits(d agentDocument, op WENMiningOperation, doc wenstrategy.Document, excludeTaskID string, now int64) error {
@@ -410,7 +438,7 @@ func checkWENMiningPolicyLimits(d agentDocument, op WENMiningOperation, doc wens
 	if amount > maxOp {
 		return errors.New("operation exceeds wallet per-operation limit")
 	}
-	spent, unsettled, fees := wenMiningWalletLedger(d, op.Policy.AccountID, excludeTaskID)
+	spent, unsettled, dailyTurnover, feesPaid, feeHolds := wenMiningWalletLedger(d, op.Policy.AccountID, excludeTaskID, now)
 	totalAfter := new(big.Int).Add(new(big.Int).SetUint64(spent), new(big.Int).SetUint64(unsettled))
 	totalAfter.Add(totalAfter, new(big.Int).SetUint64(amount))
 	if totalAfter.Cmp(new(big.Int).SetUint64(budget)) > 0 {
@@ -421,17 +449,18 @@ func checkWENMiningPolicyLimits(d agentDocument, op WENMiningOperation, doc wens
 		return errors.New("invalid estimated fee")
 	}
 	avail := uint64(0)
-	if budget > spent+unsettled+fees {
-		avail = budget - spent - unsettled - fees
+	if budget > spent+unsettled+feesPaid+feeHolds {
+		avail = budget - spent - unsettled - feesPaid - feeHolds
 	}
+	deductionHolds := unsettled / 10
 	state := wenstrategy.BudgetState{
 		TotalTurnoverLamports:    strconv.FormatUint(spent+unsettled, 10),
-		DailyTurnoverLamports:    strconv.FormatUint(spent+unsettled, 10),
+		DailyTurnoverLamports:    strconv.FormatUint(dailyTurnover, 10),
 		UnsettledLamports:        strconv.FormatUint(unsettled, 10),
-		UserFeesPaidLamports:     strconv.FormatUint(fees, 10),
-		UserFeeHoldsLamports:     "0",
+		UserFeesPaidLamports:     strconv.FormatUint(feesPaid, 10),
+		UserFeeHoldsLamports:     strconv.FormatUint(feeHolds, 10),
 		ActualDeductionsLamports: "0",
-		DeductionHoldsLamports:   "0",
+		DeductionHoldsLamports:   strconv.FormatUint(deductionHolds, 10),
 		AvailableLamports:        strconv.FormatUint(avail, 10),
 	}
 	res := wenstrategy.Reservation{
@@ -465,113 +494,449 @@ func (s *Store) loadWENMiningStrategy(ctx context.Context, profile, digest strin
 	return WENVersion{}, wenstrategy.Document{}, errors.New("saved WEN strategy version not found")
 }
 
-// BuildWENMiningPrepared builds deterministic unsigned PM1 v1 Open/Commit/Reveal
-// instruction templates and commitment hash for a controlled WEN mining operation.
-func BuildWENMiningPrepared(op WENMiningOperation) (WENMiningPrepared, uint64, error) {
+var wenSaltDirLocks sync.Map
+
+func wenSaltDirMutex(dir string) *sync.Mutex {
+	v, _ := wenSaltDirLocks.LoadOrStore(dir, &sync.Mutex{})
+	return v.(*sync.Mutex)
+}
+
+type wenSaltKeyFile struct {
+	Version int    `json:"version"`
+	Key     string `json:"key"`
+}
+
+type wenSaltEntry struct {
+	Nonce      []byte `json:"nonce"`
+	Ciphertext []byte `json:"ciphertext"`
+}
+
+type wenSaltFile struct {
+	Version int                     `json:"version"`
+	Entries map[string]wenSaltEntry `json:"entries"`
+}
+
+func wenSaltAAD(instanceID, opID string) []byte {
+	return []byte("wen-mining-salt:v1\x00" + instanceID + "\x00" + opID)
+}
+
+func loadOrCreateWENSaltMasterKey(dir string, create bool) ([]byte, error) {
+	if dir == "" {
+		return nil, errors.New("salt directory unavailable")
+	}
+	keyPath := filepath.Join(dir, "wen-mining-salt.key")
+	raw, err := ReadPrivateFile(keyPath)
+	if err == nil {
+		defer clear(raw)
+		var doc wenSaltKeyFile
+		if jErr := json.Unmarshal(raw, &doc); jErr != nil || doc.Version != 1 {
+			return nil, errors.New("corrupted WEN mining salt key")
+		}
+		key, decErr := base64.StdEncoding.DecodeString(doc.Key)
+		if decErr != nil || len(key) != 32 {
+			clear(key)
+			return nil, errors.New("invalid WEN mining salt key")
+		}
+		return key, nil
+	}
+	if !errors.Is(err, os.ErrNotExist) || !create {
+		return nil, err
+	}
+	key := make([]byte, 32)
+	if _, rErr := rand.Read(key); rErr != nil {
+		return nil, rErr
+	}
+	encoded := base64.StdEncoding.EncodeToString(key)
+	if wErr := WritePrivateJSON(keyPath, wenSaltKeyFile{Version: 1, Key: encoded}); wErr != nil {
+		clear(key)
+		return nil, wErr
+	}
+	return key, nil
+}
+
+func readWENSaltFile(dir string) (wenSaltFile, error) {
+	doc := wenSaltFile{Version: 1, Entries: map[string]wenSaltEntry{}}
+	saltsPath := filepath.Join(dir, "wen-mining-salts.json")
+	raw, err := ReadPrivateFile(saltsPath)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return doc, nil
+		}
+		return wenSaltFile{}, err
+	}
+	if len(raw) == 0 {
+		return doc, nil
+	}
+	if err := json.Unmarshal(raw, &doc); err != nil || doc.Version != 1 {
+		return wenSaltFile{}, errors.New("corrupted WEN mining salt store")
+	}
+	if doc.Entries == nil {
+		doc.Entries = map[string]wenSaltEntry{}
+	}
+	return doc, nil
+}
+
+func saveWENMiningSaltsAt(dir, instanceID, opID string, salts map[uint8]wenpm1.Key) error {
+	if opID == "" || len(salts) == 0 {
+		return errors.New("operation ID and salts required")
+	}
+	mu := wenSaltDirMutex(dir)
+	mu.Lock()
+	defer mu.Unlock()
+	key, err := loadOrCreateWENSaltMasterKey(dir, true)
+	if err != nil {
+		return err
+	}
+	defer clear(key)
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return err
+	}
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return err
+	}
+	plainMap := make(map[string]string, len(salts))
+	for idx, salt := range salts {
+		plainMap[strconv.Itoa(int(idx))] = hex.EncodeToString(salt[:])
+	}
+	plainBytes, err := json.Marshal(plainMap)
+	if err != nil {
+		return err
+	}
+	defer clear(plainBytes)
+	nonce := make([]byte, gcm.NonceSize())
+	if _, err := rand.Read(nonce); err != nil {
+		return err
+	}
+	doc, err := readWENSaltFile(dir)
+	if err != nil {
+		return err
+	}
+	doc.Entries[opID] = wenSaltEntry{
+		Nonce:      nonce,
+		Ciphertext: gcm.Seal(nil, nonce, plainBytes, wenSaltAAD(instanceID, opID)),
+	}
+	return WritePrivateJSON(filepath.Join(dir, "wen-mining-salts.json"), doc)
+}
+
+func loadWENMiningSaltsAt(dir, instanceID, opID string) (map[uint8]wenpm1.Key, error) {
+	if opID == "" {
+		return nil, errors.New("operation ID required")
+	}
+	mu := wenSaltDirMutex(dir)
+	mu.Lock()
+	defer mu.Unlock()
+	doc, err := readWENSaltFile(dir)
+	if err != nil {
+		return nil, err
+	}
+	entry, ok := doc.Entries[opID]
+	if !ok {
+		return nil, os.ErrNotExist
+	}
+	key, err := loadOrCreateWENSaltMasterKey(dir, false)
+	if err != nil {
+		return nil, err
+	}
+	defer clear(key)
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return nil, err
+	}
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return nil, err
+	}
+	plainBytes, err := gcm.Open(nil, entry.Nonce, entry.Ciphertext, wenSaltAAD(instanceID, opID))
+	if err != nil {
+		return nil, errors.New("unable to decrypt WEN mining salts")
+	}
+	defer clear(plainBytes)
+	var rawMap map[string]string
+	if err := json.Unmarshal(plainBytes, &rawMap); err != nil || len(rawMap) == 0 {
+		return nil, errors.New("corrupted WEN mining salt payload")
+	}
+	salts := make(map[uint8]wenpm1.Key, len(rawMap))
+	for k, v := range rawMap {
+		idx, iErr := strconv.Atoi(k)
+		b, hErr := hex.DecodeString(v)
+		if iErr != nil || idx < 0 || idx >= 5 || hErr != nil || len(b) != len(wenpm1.Key{}) {
+			clear(b)
+			return nil, errors.New("invalid WEN mining salt entry")
+		}
+		var salt wenpm1.Key
+		copy(salt[:], b)
+		clear(b)
+		salts[uint8(idx)] = salt
+	}
+	return salts, nil
+}
+
+func deleteWENMiningSaltsAt(dir, opID string) error {
+	if dir == "" || opID == "" {
+		return nil
+	}
+	mu := wenSaltDirMutex(dir)
+	mu.Lock()
+	defer mu.Unlock()
+	doc, err := readWENSaltFile(dir)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		return err
+	}
+	if _, ok := doc.Entries[opID]; !ok {
+		return nil
+	}
+	delete(doc.Entries, opID)
+	return WritePrivateJSON(filepath.Join(dir, "wen-mining-salts.json"), doc)
+}
+
+func (s *Store) SaveWENMiningSalts(opID string, salts map[uint8]wenpm1.Key) error {
+	if s == nil {
+		return errors.New("store unavailable")
+	}
+	return saveWENMiningSaltsAt(s.dir, s.instanceID, opID, salts)
+}
+
+func (s *Store) LoadWENMiningSalts(opID string) (map[uint8]wenpm1.Key, error) {
+	if s == nil {
+		return nil, errors.New("store unavailable")
+	}
+	return loadWENMiningSaltsAt(s.dir, s.instanceID, opID)
+}
+
+func (s *Store) DeleteWENMiningSalts(opID string) error {
+	if s == nil {
+		return nil
+	}
+	return deleteWENMiningSaltsAt(s.dir, opID)
+}
+
+func wenMiningOwnerKey(op WENMiningOperation, fallback wenpm1.Key) wenpm1.Key {
+	if raw, err := hex.DecodeString(op.Policy.PublicKey); err == nil && len(raw) == len(wenpm1.Key{}) {
+		var key wenpm1.Key
+		copy(key[:], raw)
+		return key
+	}
+	return fallback
+}
+
+func wenMiningMultiReceiptHash(encoded [][]byte) string {
+	if len(encoded) == 1 {
+		return wenHash(encoded[0])
+	}
+	buf := make([]byte, 0, len(encoded)*128)
+	var lenBuf [4]byte
+	for _, item := range encoded {
+		binary.LittleEndian.PutUint32(lenBuf[:], uint32(len(item)))
+		buf = append(buf, lenBuf[:]...)
+		buf = append(buf, item...)
+	}
+	return wenHash(buf)
+}
+
+// BuildWENMiningPreparedWithSalts builds unsigned PM1 v1 Open plus per-range
+// Commit/Reveal instruction templates across all non-zero allocation ranges,
+// generating cryptographically random 32-byte salts and uint64 nonces.
+func BuildWENMiningPreparedWithSalts(op WENMiningOperation) (WENMiningPrepared, map[uint8]wenpm1.Key, uint64, error) {
 	ledger, golden, err := wenpm1.CanonicalFixture()
 	if err != nil {
-		return WENMiningPrepared{}, 0, err
-	}
-	var selection uint8
-	var amount uint64
-	for i, raw := range op.AllocationsLamports {
-		v, e := parseUintLamports(raw)
-		if e != nil {
-			return WENMiningPrepared{}, 0, e
-		}
-		if v > amount {
-			amount = v
-			selection = uint8(i)
-		}
+		return WENMiningPrepared{}, nil, 0, err
 	}
 	total, err := parseUintLamports(op.AmountLamports)
 	if err != nil || total == 0 {
-		return WENMiningPrepared{}, 0, errors.New("invalid operation amount")
+		return WENMiningPrepared{}, nil, 0, errors.New("invalid operation amount")
 	}
-	salt := wenpm1.Key(sha256.Sum256([]byte("wen-mining-controlled-salt:" + op.ID)))
-	nonceBytes := sha256.Sum256([]byte("wen-mining-controlled-nonce:" + op.ID))
-	nonce := binary.LittleEndian.Uint64(nonceBytes[:8])
-	slot := golden.Slot
-	values := wenpm1.CommitmentValues{
-		Slot:      slot,
-		Owner:     golden.Owner,
-		Amount:    total,
-		Nonce:     nonce,
-		Selection: selection,
-		Salt:      salt,
-	}
-	commitment, err := wenpm1.Commitment(ledger.Binding, values)
-	if err != nil {
-		return WENMiningPrepared{}, 0, err
-	}
-	prepared := WENMiningPrepared{
-		Commitment:   commitment.String(),
-		Nonce:        nonce,
-		Selection:    selection,
-		Instructions: []WENPaperInstruction{},
-	}
-	requests := []wenpm1.Request{
-		wenpm1.Open{Slot: slot},
-		wenpm1.Commit{Slot: slot, Amount: total, Nonce: nonce, Commitment: commitment},
-		wenpm1.Reveal{Slot: slot, Entry: 0, Selection: selection, Salt: salt},
-	}
-	names := []string{"open", "commit", "reveal"}
-	for n, req := range requests {
-		accounts := map[string]wenpm1.Key{}
-		if n == 1 {
-			accounts["owner"] = golden.Owner
-			accounts["system"] = wenpm1.SystemProgram()
+	var amounts [5]uint64
+	var sum uint64
+	var nonZero int
+	for i, raw := range op.AllocationsLamports {
+		v, e := parseUintLamports(raw)
+		if e != nil {
+			return WENMiningPrepared{}, nil, 0, e
 		}
+		amounts[i] = v
+		sum += v
+		if v > 0 {
+			nonZero++
+		}
+	}
+	if nonZero == 0 || sum != total {
+		return WENMiningPrepared{}, nil, 0, errors.New("allocation ranges must sum exactly to operation amount")
+	}
+	slot := golden.Slot
+	ownerKey := wenMiningOwnerKey(op, golden.Owner)
+	prepared := WENMiningPrepared{
+		Entries:      make([]WENMiningPreparedEntry, 0, nonZero),
+		Instructions: make([]WENPaperInstruction, 0, 1+nonZero*2),
+	}
+	appendInstruction := func(opName string, req wenpm1.Request, accounts map[string]wenpm1.Key) error {
 		tmpl, e := wenpm1.BuildInstruction(ledger.Binding, req, accounts)
 		if e != nil {
-			return WENMiningPrepared{}, 0, e
+			return e
 		}
 		if _, e = wenpm1.DecodeRequest(tmpl.Data, ledger.Binding); e != nil {
-			return WENMiningPrepared{}, 0, e
+			return e
 		}
 		b, e := json.Marshal(tmpl)
 		if e != nil {
-			return WENMiningPrepared{}, 0, e
+			return e
 		}
 		prepared.Instructions = append(prepared.Instructions, WENPaperInstruction{
-			Operation:      names[n],
+			Operation:      opName,
 			RequestSHA256:  wenHash(tmpl.Data),
 			TemplateSHA256: wenHash(b),
 		})
+		return nil
 	}
-	return prepared, slot, nil
+	if err = appendInstruction("open", wenpm1.Open{Slot: slot}, map[string]wenpm1.Key{}); err != nil {
+		return WENMiningPrepared{}, nil, 0, err
+	}
+	salts := make(map[uint8]wenpm1.Key, nonZero)
+	var primaryAmount uint64
+	for i, allocAmt := range amounts {
+		if allocAmt == 0 {
+			continue
+		}
+		var salt wenpm1.Key
+		if _, err = rand.Read(salt[:]); err != nil {
+			return WENMiningPrepared{}, nil, 0, err
+		}
+		var nonceBuf [8]byte
+		if _, err = rand.Read(nonceBuf[:]); err != nil {
+			return WENMiningPrepared{}, nil, 0, err
+		}
+		nonce := binary.LittleEndian.Uint64(nonceBuf[:])
+		if nonce == 0 {
+			nonce = 1
+		}
+		rangeIdx := uint8(i)
+		entryIdx := uint32(len(prepared.Entries))
+		commitment, cErr := wenpm1.Commitment(ledger.Binding, wenpm1.CommitmentValues{
+			Slot:      slot,
+			Owner:     ownerKey,
+			Amount:    allocAmt,
+			Nonce:     nonce,
+			Selection: rangeIdx,
+			Salt:      salt,
+		})
+		if cErr != nil {
+			return WENMiningPrepared{}, nil, 0, cErr
+		}
+		salts[rangeIdx] = salt
+		prepared.Entries = append(prepared.Entries, WENMiningPreparedEntry{
+			RangeIndex:     rangeIdx,
+			AmountLamports: strconv.FormatUint(allocAmt, 10),
+			Nonce:          nonce,
+			Commitment:     commitment.String(),
+		})
+		if err = appendInstruction(
+			"commit-r"+strconv.Itoa(i),
+			wenpm1.Commit{Slot: slot, Amount: allocAmt, Nonce: nonce, Commitment: commitment},
+			map[string]wenpm1.Key{"owner": ownerKey, "system": wenpm1.SystemProgram()},
+		); err != nil {
+			return WENMiningPrepared{}, nil, 0, err
+		}
+		if err = appendInstruction(
+			"reveal-r"+strconv.Itoa(i),
+			wenpm1.Reveal{Slot: slot, Entry: entryIdx, Selection: rangeIdx, Salt: salt},
+			map[string]wenpm1.Key{},
+		); err != nil {
+			return WENMiningPrepared{}, nil, 0, err
+		}
+		if allocAmt > primaryAmount {
+			primaryAmount = allocAmt
+			prepared.Commitment = commitment.String()
+			prepared.Nonce = nonce
+			prepared.Selection = rangeIdx
+		}
+	}
+	return prepared, salts, slot, nil
 }
 
-// ProjectWENMiningReceipt builds and validates a canonical PM1 v1 receipt projection
-// for controlled test reconciliation. Never invents payouts or settlement rewards.
-func ProjectWENMiningReceipt(op WENMiningOperation, prepared WENMiningPrepared) (WENMiningObservation, error) {
+// BuildWENMiningPrepared builds unsigned PM1 v1 Open/Commit/Reveal templates.
+// Callers needing receipt projection should call BuildWENMiningPreparedWithSalts
+// and persist salts via Store.SaveWENMiningSalts.
+func BuildWENMiningPrepared(op WENMiningOperation) (WENMiningPrepared, uint64, error) {
+	prepared, salts, slot, err := BuildWENMiningPreparedWithSalts(op)
+	for k := range salts {
+		delete(salts, k)
+	}
+	return prepared, slot, err
+}
+
+// ProjectWENMiningReceipt requires explicitly persisted random salts;
+// deterministic derivation from op.ID is permanently retired.
+func ProjectWENMiningReceipt(_ WENMiningOperation, _ WENMiningPrepared) (WENMiningObservation, error) {
+	return WENMiningObservation{}, errors.New("persisted mining salts required for receipt projection")
+}
+
+// ProjectWENMiningReceiptWithSalts builds and validates canonical PM1 v1 receipt
+// projections across all committed range entries using persisted random salts.
+func ProjectWENMiningReceiptWithSalts(op WENMiningOperation, prepared WENMiningPrepared, salts map[uint8]wenpm1.Key) (WENMiningObservation, error) {
 	ledger, golden, err := wenpm1.CanonicalFixture()
 	if err != nil {
 		return WENMiningObservation{}, err
 	}
 	total, err := parseUintLamports(op.AmountLamports)
-	if err != nil {
-		return WENMiningObservation{}, err
+	if err != nil || total == 0 {
+		return WENMiningObservation{}, errors.New("invalid operation amount")
 	}
-	salt := wenpm1.Key(sha256.Sum256([]byte("wen-mining-controlled-salt:" + op.ID)))
-	commitment, err := wenpm1.Commitment(ledger.Binding, wenpm1.CommitmentValues{
-		Slot:      op.Slot,
-		Owner:     golden.Owner,
-		Amount:    total,
-		Nonce:     prepared.Nonce,
-		Selection: prepared.Selection,
-		Salt:      salt,
-	})
-	if err != nil || commitment.String() != prepared.Commitment {
-		return WENMiningObservation{}, errors.New("commitment mismatch")
+	if len(prepared.Entries) == 0 || len(salts) == 0 {
+		return WENMiningObservation{}, errors.New("prepared range entries and persisted salts required")
 	}
-	sel := prepared.Selection
+	ownerKey := wenMiningOwnerKey(op, golden.Owner)
+	entries := make([]wenpm1.Entry, 0, len(prepared.Entries))
+	var sum uint64
+	primaryIdx := 0
+	for i, item := range prepared.Entries {
+		if item.RangeIndex >= 5 {
+			return WENMiningObservation{}, errors.New("invalid range index")
+		}
+		allocAmt, pErr := parseUintLamports(item.AmountLamports)
+		if pErr != nil || allocAmt == 0 {
+			return WENMiningObservation{}, errors.New("invalid range allocation amount")
+		}
+		salt, ok := salts[item.RangeIndex]
+		if !ok {
+			return WENMiningObservation{}, errors.New("missing salt for prepared range entry")
+		}
+		commitment, cErr := wenpm1.Commitment(ledger.Binding, wenpm1.CommitmentValues{
+			Slot:      op.Slot,
+			Owner:     ownerKey,
+			Amount:    allocAmt,
+			Nonce:     item.Nonce,
+			Selection: item.RangeIndex,
+			Salt:      salt,
+		})
+		if cErr != nil || commitment.String() != item.Commitment {
+			return WENMiningObservation{}, errors.New("commitment mismatch")
+		}
+		sum += allocAmt
+		sel := item.RangeIndex
+		entries = append(entries, wenpm1.Entry{
+			Owner:      ownerKey,
+			Nonce:      item.Nonce,
+			Amount:     allocAmt,
+			Commitment: commitment,
+			Selection:  &sel,
+		})
+		if item.RangeIndex == prepared.Selection && item.Nonce == prepared.Nonce && item.Commitment == prepared.Commitment {
+			primaryIdx = i
+		}
+	}
+	if sum != total {
+		return WENMiningObservation{}, errors.New("prepared range entries do not match total amount")
+	}
 	ledger.EligibleStake = 0
 	ledger.LifetimeCommitted = 0
 	ledger.Annual = wenpm1.Annual{}
 	ledger.Rounds = []wenpm1.Round{{
 		Slot:       op.Slot,
-		Entries:    []wenpm1.Entry{{Owner: golden.Owner, Nonce: prepared.Nonce, Amount: total, Commitment: commitment, Selection: &sel}},
+		Entries:    entries,
 		TotalStake: total,
 	}}
 	data, err := wenpm1.EncodeAccount(ledger)
@@ -582,24 +947,32 @@ func ProjectWENMiningReceipt(op WENMiningOperation, prepared WENMiningPrepared) 
 	if err != nil {
 		return WENMiningObservation{}, err
 	}
-	receipt, err := wenpm1.ProjectReceipt(decoded, op.Slot, 0)
-	if err != nil {
-		return WENMiningObservation{}, err
+	verifiedList := make([]wenpm1.Receipt, 0, len(entries))
+	rawReceipts := make([][]byte, 0, len(entries))
+	for i := range entries {
+		receipt, rErr := wenpm1.ProjectReceipt(decoded, op.Slot, uint32(i))
+		if rErr != nil {
+			return WENMiningObservation{}, rErr
+		}
+		rawReceipt, eErr := wenpm1.EncodeReceipt(receipt)
+		if eErr != nil {
+			return WENMiningObservation{}, eErr
+		}
+		verified, dErr := wenpm1.DecodeReceipt(rawReceipt, ledger.Binding)
+		if dErr != nil {
+			return WENMiningObservation{}, dErr
+		}
+		verifiedList = append(verifiedList, verified)
+		rawReceipts = append(rawReceipts, rawReceipt)
 	}
-	rawReceipt, err := wenpm1.EncodeReceipt(receipt)
-	if err != nil {
-		return WENMiningObservation{}, err
-	}
-	verified, err := wenpm1.DecodeReceipt(rawReceipt, ledger.Binding)
-	if err != nil {
-		return WENMiningObservation{}, err
-	}
+	primaryVerified := verifiedList[primaryIdx]
 	return WENMiningObservation{
 		State:         "confirmed",
 		Slot:          op.Slot,
 		AccountSHA256: wenHash(data),
-		ReceiptSHA256: wenHash(rawReceipt),
-		Receipt:       &verified,
+		ReceiptSHA256: wenMiningMultiReceiptHash(rawReceipts),
+		Receipt:       &primaryVerified,
+		Receipts:      verifiedList,
 	}, nil
 }
 
@@ -608,27 +981,61 @@ func verifyWENMiningObservation(op WENMiningOperation, prepared WENMiningPrepare
 		return errors.New("non-terminal observation")
 	}
 	if obs.State == "failed" {
-		if obs.Receipt != nil || obs.ReceiptSHA256 != "" {
+		if obs.Receipt != nil || len(obs.Receipts) > 0 || obs.ReceiptSHA256 != "" {
 			return errors.New("failed observation carries a confirmed receipt")
 		}
 		return nil
 	}
-	if obs.Receipt == nil || !hexValue(obs.ReceiptSHA256, 32) || !hexValue(obs.AccountSHA256, 32) || obs.Slot != op.Slot {
+	if !hexValue(obs.ReceiptSHA256, 32) || !hexValue(obs.AccountSHA256, 32) || obs.Slot != op.Slot {
 		return errors.New("confirmed mining receipt is incomplete")
 	}
-	ledger, _, err := wenpm1.CanonicalFixture()
+	ledger, golden, err := wenpm1.CanonicalFixture()
 	if err != nil {
 		return err
 	}
-	raw, err := wenpm1.EncodeReceipt(*obs.Receipt)
-	if err != nil || wenHash(raw) != obs.ReceiptSHA256 {
+	receipts := obs.Receipts
+	if len(receipts) == 0 {
+		if obs.Receipt == nil {
+			return errors.New("confirmed mining receipt missing")
+		}
+		receipts = []wenpm1.Receipt{*obs.Receipt}
+	}
+	rawReceipts := make([][]byte, 0, len(receipts))
+	var sum uint64
+	ownerKey := wenMiningOwnerKey(op, golden.Owner)
+	for _, rec := range receipts {
+		raw, eErr := wenpm1.EncodeReceipt(rec)
+		if eErr != nil {
+			return errors.New("mining receipt encoding failed")
+		}
+		if _, dErr := wenpm1.DecodeReceipt(raw, ledger.Binding); dErr != nil {
+			return errors.New("mining receipt failed canonical PM1 validation")
+		}
+		if rec.Slot != op.Slot || rec.Owner != ownerKey || rec.Selection == nil {
+			return errors.New("mining receipt identity or slot differs from approved operation")
+		}
+		sum += rec.Amount
+		rawReceipts = append(rawReceipts, raw)
+	}
+	if wenMiningMultiReceiptHash(rawReceipts) != obs.ReceiptSHA256 {
 		return errors.New("mining receipt digest mismatch")
 	}
-	if _, err := wenpm1.DecodeReceipt(raw, ledger.Binding); err != nil {
-		return errors.New("mining receipt failed canonical PM1 validation")
-	}
 	total, err := parseUintLamports(op.AmountLamports)
-	if err != nil || obs.Receipt.Amount != total || obs.Receipt.Slot != op.Slot || obs.Receipt.Nonce != prepared.Nonce || obs.Receipt.Selection == nil || *obs.Receipt.Selection != prepared.Selection {
+	if err != nil || sum != total {
+		return errors.New("mining receipt total does not match approved operation")
+	}
+	if len(prepared.Entries) > 0 {
+		if len(receipts) != len(prepared.Entries) {
+			return errors.New("mining receipts missing prepared range entry")
+		}
+		for i, entry := range prepared.Entries {
+			allocAmt, pErr := parseUintLamports(entry.AmountLamports)
+			rec := receipts[i]
+			if pErr != nil || rec.Amount != allocAmt || rec.Nonce != entry.Nonce || *rec.Selection != entry.RangeIndex {
+				return errors.New("mining receipt range allocation does not match approved operation")
+			}
+		}
+	} else if obs.Receipt == nil || obs.Receipt.Nonce != prepared.Nonce || obs.Receipt.Selection == nil || *obs.Receipt.Selection != prepared.Selection {
 		return errors.New("mining receipt does not match approved operation")
 	}
 	return nil
@@ -871,7 +1278,7 @@ func (s *Store) changeWENMining(ctx context.Context, c AgentCommand) (WENMiningV
 		if c.WENMining.Request != nil || c.WENMining.Digest != "" {
 			return WENMiningView{}, errors.New("one unattempted mining operation required")
 		}
-		_, run, err := s.originalWENMining(ctx, c.ProfileID, c.WENMining.ID)
+		task, run, err := s.originalWENMining(ctx, c.ProfileID, c.WENMining.ID)
 		if err != nil {
 			return WENMiningView{}, err
 		}
@@ -884,6 +1291,7 @@ func (s *Store) changeWENMining(ctx context.Context, c AgentCommand) (WENMiningV
 		}); err != nil {
 			return WENMiningView{}, err
 		}
+		_ = s.DeleteWENMiningSalts(task.WENMining.Operation.ID)
 		return s.wenMiningView(ctx, c.ProfileID, "")
 
 	case "wen-mining-reconcile":

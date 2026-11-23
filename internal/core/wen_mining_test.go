@@ -1,7 +1,9 @@
 package core
 
 import (
+	"bytes"
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -18,6 +20,7 @@ import (
 	fasedapp "github.com/fased-ai/fased-app"
 	"github.com/fased-ai/fased-app/internal/signer"
 	"github.com/fased-ai/fased-app/internal/update"
+	"github.com/fased-ai/fased-app/internal/wenpm1"
 )
 
 type controlledWENVenue struct {
@@ -28,19 +31,45 @@ type controlledWENVenue struct {
 	reconcileState  string
 	reconcileCalls  int
 	submittedOps    map[string]bool
+	dir             string
+	instanceID      string
+	salts           map[string]map[uint8]wenpm1.Key
 }
 
 func newControlledWENVenue() *controlledWENVenue {
 	return &controlledWENVenue{
 		reconcileState: "confirmed",
 		submittedOps:   map[string]bool{},
+		salts:          map[string]map[uint8]wenpm1.Key{},
+	}
+}
+
+func newControlledWENVenueForStore(s *Store) *controlledWENVenue {
+	return &controlledWENVenue{
+		reconcileState: "confirmed",
+		submittedOps:   map[string]bool{},
+		dir:            s.dir,
+		instanceID:     s.instanceID,
+		salts:          map[string]map[uint8]wenpm1.Key{},
 	}
 }
 
 func (v *controlledWENVenue) Prepare(_ context.Context, op WENMiningOperation) (WENMiningPrepared, uint64, string, error) {
-	prepared, slot, err := BuildWENMiningPrepared(op)
+	prepared, salts, slot, err := BuildWENMiningPreparedWithSalts(op)
 	if err != nil {
 		return WENMiningPrepared{}, 0, "", err
+	}
+	if v.dir != "" {
+		if err := saveWENMiningSaltsAt(v.dir, v.instanceID, op.ID, salts); err != nil {
+			return WENMiningPrepared{}, 0, "", err
+		}
+	} else {
+		v.mu.Lock()
+		if v.salts == nil {
+			v.salts = map[string]map[uint8]wenpm1.Key{}
+		}
+		v.salts[op.ID] = salts
+		v.mu.Unlock()
 	}
 	return prepared, slot, "5000", nil
 }
@@ -61,15 +90,26 @@ func (v *controlledWENVenue) Submit(_ context.Context, op WENMiningOperation, _ 
 
 func (v *controlledWENVenue) Reconcile(_ context.Context, op WENMiningOperation, prepared WENMiningPrepared) (WENMiningObservation, error) {
 	v.mu.Lock()
-	defer v.mu.Unlock()
 	v.reconcileCalls++
-	switch v.reconcileState {
+	state := v.reconcileState
+	dir := v.dir
+	instanceID := v.instanceID
+	salts := v.salts[op.ID]
+	v.mu.Unlock()
+	switch state {
 	case "unknown":
 		return WENMiningObservation{State: "unknown", Slot: op.Slot}, nil
 	case "failed":
 		return WENMiningObservation{State: "failed", Slot: op.Slot}, nil
 	default:
-		return ProjectWENMiningReceipt(op, prepared)
+		if dir != "" {
+			loaded, err := loadWENMiningSaltsAt(dir, instanceID, op.ID)
+			if err != nil {
+				return WENMiningObservation{}, err
+			}
+			salts = loaded
+		}
+		return ProjectWENMiningReceiptWithSalts(op, prepared, salts)
 	}
 }
 
@@ -158,7 +198,7 @@ func setupWENMiningHarness(t *testing.T, perRound, totalTurnover, maxUnsettled s
 	h := &wenMiningHarness{
 		dir:   dir,
 		store: s,
-		venue: newControlledWENVenue(),
+		venue: newControlledWENVenueForStore(s),
 		ref:   ref,
 		now:   now,
 	}
@@ -329,8 +369,15 @@ func TestWENMiningReviewedAuthorityOneOperationReceiptAndNoDuplicate(t *testing.
 	if run.State != "confirmed" || !run.Attempted || run.Observation == nil || run.Observation.Receipt == nil {
 		t.Fatalf("expected confirmed PM1 receipt, got %+v", run)
 	}
-	if run.Observation.Receipt.Amount != 200000000 || view.WENMining.Tasks[0].State != "completed" {
-		t.Fatalf("receipt mismatch: %+v", run.Observation.Receipt)
+	if run.Observation.Receipt.Amount != 120000000 || len(run.Observation.Receipts) != 5 || view.WENMining.Tasks[0].State != "completed" {
+		t.Fatalf("receipt mismatch: receipt=%+v count=%d", run.Observation.Receipt, len(run.Observation.Receipts))
+	}
+	var receiptSum uint64
+	for _, rec := range run.Observation.Receipts {
+		receiptSum += rec.Amount
+	}
+	if receiptSum != 200000000 {
+		t.Fatalf("expected 5-range receipt sum 200000000, got %d", receiptSum)
 	}
 	if len(view.Notices) != 1 || view.Notices[0].RunID != taskID+":1" {
 		t.Fatalf("expected one notice for confirmed mining run, got %+v", view.Notices)
@@ -615,7 +662,7 @@ func TestWENMiningBrowserServer(t *testing.T) {
 		cur := ref
 		return signer.Response{Status: signer.Status{FixtureOnly: true, Locked: true, Account: &cur}}, nil
 	}
-	venue := newControlledWENVenue()
+	venue := newControlledWENVenueForStore(server.Store)
 	modeFile := filepath.Join(dir, "venue-mode")
 	readMode := func() string {
 		b, _ := os.ReadFile(modeFile)
@@ -704,4 +751,305 @@ func (d *dynamicWENVenue) Reconcile(ctx context.Context, op WENMiningOperation, 
 	}
 	d.inner.mu.Unlock()
 	return d.inner.Reconcile(ctx, op, p)
+}
+
+func TestWENMiningRandomCommitmentsAndEncryptedSaltStorage(t *testing.T) {
+	t.Parallel()
+	h := setupWENMiningHarness(t, "500000000", "2000000000", "500000000")
+
+	reviewOnce := func() *WENMiningReview {
+		agents, err := h.store.Agents(t.Context(), "wen-operator", "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		v, err := h.store.ChangeAgents(t.Context(), AgentCommand{
+			Revision:  agents.Revision,
+			Action:    "wen-mining-review",
+			ProfileID: "wen-operator",
+			WENMining: &WENMiningCommand{Request: &WENMiningRequest{
+				AccountID:            h.account.ID,
+				StrategyDigest:       h.strategyDigest,
+				AmountLamports:       "200000000",
+				WalletBudgetLamports: "1000000000",
+				MaxOperationLamports: "500000000",
+				PolicyExpiresAt:      h.now.Unix() + 3600,
+			}},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return v.WENMining.Review
+	}
+
+	r1 := reviewOnce()
+	r2 := reviewOnce()
+	if r1.Prepared.Commitment == r2.Prepared.Commitment || r1.Prepared.Nonce == r2.Prepared.Nonce {
+		t.Fatalf("expected non-deterministic commitments/nonces across reviews: r1=%+v r2=%+v", r1.Prepared, r2.Prepared)
+	}
+
+	salts1, err := h.store.LoadWENMiningSalts(r1.Operation.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(salts1) != 5 {
+		t.Fatalf("expected 5 salts persisted, got %d", len(salts1))
+	}
+
+	// Verify key and encrypted salt files use 0600 permissions and bind AAD to instanceID.
+	for _, name := range []string{"wen-mining-salt.key", "wen-mining-salts.json"} {
+		st, err := os.Stat(filepath.Join(h.dir, name))
+		if err != nil {
+			t.Fatalf("missing %s: %v", name, err)
+		}
+		if perm := st.Mode().Perm(); perm != 0600 {
+			t.Fatalf("%s permissions=%#o, want 0600", name, perm)
+		}
+	}
+	if _, err := loadWENMiningSaltsAt(h.dir, "wrong-instance", r1.Operation.ID); err == nil {
+		t.Fatal("expected AAD failure when decrypting salt with wrong instanceID")
+	}
+
+	// Verify ProjectWENMiningReceipt refuses projection without persisted random salts.
+	if _, err := ProjectWENMiningReceipt(r1.Operation, r1.Prepared); err == nil {
+		t.Fatal("ProjectWENMiningReceipt unexpectedly succeeded without salts")
+	}
+
+	// Submit r1 and confirm plaintext salts never leak into SQLite or public view JSON.
+	agents, _ := h.store.Agents(t.Context(), "wen-operator", "")
+	submitted, err := h.store.ChangeAgents(t.Context(), AgentCommand{
+		Revision:  agents.Revision,
+		Action:    "wen-mining-submit",
+		ProfileID: "wen-operator",
+		WENMining: &WENMiningCommand{ID: r1.Operation.ID, Digest: r1.Digest},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	viewJSON, _ := json.Marshal(submitted)
+	saltFileBytes, _ := os.ReadFile(filepath.Join(h.dir, "wen-mining-salts.json"))
+	sqliteBytes, _ := os.ReadFile(filepath.Join(h.dir, "core.sqlite"))
+	for idx, salt := range salts1 {
+		saltHex := hex.EncodeToString(salt[:])
+		if bytes.Contains(viewJSON, []byte(saltHex)) || bytes.Contains(saltFileBytes, []byte(saltHex)) || bytes.Contains(sqliteBytes, []byte(saltHex)) {
+			t.Fatalf("plaintext salt for range %d leaked to disk/view", idx)
+		}
+	}
+
+	// Cancel unattempted task and verify salt entry is deleted.
+	taskID := wenMiningPrefix + r1.Operation.ID
+	if _, err := h.store.ChangeAgents(t.Context(), AgentCommand{
+		Revision:  submitted.Revision,
+		Action:    "wen-mining-cancel",
+		ProfileID: "wen-operator",
+		WENMining: &WENMiningCommand{ID: taskID},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.store.LoadWENMiningSalts(r1.Operation.ID); err == nil {
+		t.Fatal("expected salt deletion after cancelling operation")
+	}
+}
+
+func TestWENMiningFiveRangeCommitmentsAndReceipts(t *testing.T) {
+	t.Parallel()
+	h := setupWENMiningHarness(t, "500000000", "1000000000", "500000000")
+
+	agents, _ := h.store.Agents(t.Context(), "wen-operator", "")
+	revView, err := h.store.ChangeAgents(t.Context(), AgentCommand{
+		Revision:  agents.Revision,
+		Action:    "wen-mining-review",
+		ProfileID: "wen-operator",
+		WENMining: &WENMiningCommand{Request: &WENMiningRequest{
+			AccountID:            h.account.ID,
+			StrategyDigest:       h.strategyDigest,
+			AmountLamports:       "200000000",
+			WalletBudgetLamports: "1000000000",
+			MaxOperationLamports: "500000000",
+			PolicyExpiresAt:      h.now.Unix() + 3600,
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rev := revView.WENMining.Review
+	if len(rev.Prepared.Entries) != 5 {
+		t.Fatalf("expected 5 prepared range entries, got %d", len(rev.Prepared.Entries))
+	}
+	// 1 Open + 5 Commit + 5 Reveal = 11 instructions.
+	if len(rev.Prepared.Instructions) != 11 {
+		t.Fatalf("expected 11 PM1 instructions (Open + 5 Commit + 5 Reveal), got %d", len(rev.Prepared.Instructions))
+	}
+	wantAllocs := []string{"10000000", "30000000", "120000000", "30000000", "10000000"}
+	for i, want := range wantAllocs {
+		if rev.Prepared.Entries[i].AmountLamports != want || rev.Operation.AllocationsLamports[i] != want {
+			t.Fatalf("range %d allocation=%s/%s want %s", i, rev.Prepared.Entries[i].AmountLamports, rev.Operation.AllocationsLamports[i], want)
+		}
+	}
+
+	if _, err := h.store.ChangeAgents(t.Context(), AgentCommand{
+		Revision:  revView.Revision,
+		Action:    "wen-mining-submit",
+		ProfileID: "wen-operator",
+		WENMining: &WENMiningCommand{ID: rev.Operation.ID, Digest: rev.Digest},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.store.advanceWENMining(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	after, _ := h.store.Agents(t.Context(), "wen-operator", "")
+	run := after.WENMining.Runs[0].WENMining
+	if run.Observation == nil || len(run.Observation.Receipts) != 5 || run.Observation.Receipt == nil {
+		t.Fatalf("expected 5-range observation receipts, got %+v", run.Observation)
+	}
+	expectedOwner := wenMiningOwnerKey(rev.Operation, wenpm1.Key{})
+	var sum uint64
+	for i, rec := range run.Observation.Receipts {
+		sum += rec.Amount
+		if rec.Owner != expectedOwner {
+			t.Fatalf("receipt %d owner=%s want %s", i, rec.Owner.String(), expectedOwner.String())
+		}
+		if rec.Selection == nil || *rec.Selection != uint8(i) {
+			t.Fatalf("receipt %d selection=%v want %d", i, rec.Selection, i)
+		}
+	}
+	if sum != 200000000 || run.Observation.Receipt.Amount != 120000000 {
+		t.Fatalf("unexpected 5-range totals: sum=%d primary=%d", sum, run.Observation.Receipt.Amount)
+	}
+
+	// Negative check: verifyWENMiningObservation rejects missing or tampered receipts.
+	tampered := *run.Observation
+	tampered.Receipts = append([]wenpm1.Receipt{}, run.Observation.Receipts[:4]...)
+	if err := verifyWENMiningObservation(rev.Operation, rev.Prepared, tampered); err == nil {
+		t.Fatal("verifyWENMiningObservation accepted incomplete 4/5 receipt list")
+	}
+}
+
+func TestWENMiningUTCDayRolloverAndHoldsAccounting(t *testing.T) {
+	t.Parallel()
+	dir := fixtureDir(t)
+	s, err := OpenStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+	curNow := time.Date(2026, 11, 20, 23, 55, 0, 0, time.UTC)
+	s.now = func() time.Time { return curNow }
+	claimFixture(t, s)
+
+	ref := testRef()
+	ref.Version = 2
+	ref.Network = "devnet"
+	venue := newControlledWENVenueForStore(s)
+	venue.submitUncertain = true
+	venue.reconcileState = "unknown"
+	s.rpcAdmission = true
+	s.custodyNetwork = "devnet"
+	s.fixture = func(_ context.Context, r signer.Request) (signer.Response, error) {
+		cur := ref
+		return signer.Response{Status: signer.Status{FixtureOnly: true, Locked: true, Account: &cur}}, nil
+	}
+	accountsView, err := s.SetupAccount(t.Context(), AccountSetupCommand{
+		Action:    "attach",
+		Name:      "Devnet Miner",
+		Network:   "devnet",
+		Reference: &ref,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	account := accountsView.Record.Accounts[0]
+	accountsView, err = s.ConfigureAccountRPC(t.Context(), RPCConfigInput{
+		AccountID: account.ID,
+		Revision:  accountsView.Record.Revision,
+		Endpoint:  "https://devnet.helius-rpc.com",
+		Network:   "devnet",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	account = accountsView.Record.Accounts[0]
+
+	raw := strings.Replace(wenMiningTestStrategy("500000000", "1000000000", "1000000000"), `"dailyTurnoverLamports": "1000000000"`, `"dailyTurnoverLamports": "500000000"`, 1)
+	lib, err := s.ChangeWENResearch(t.Context(), WENResearchCommand{
+		Revision: 0,
+		Profile:  "wen-operator",
+		Action:   "save",
+		Raw:      raw,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	strategyDigest := lib.Versions[0].Digest
+	if err := s.ConfigureControlledWENMining(func(Account) (ControlledWENMiningVenue, error) {
+		return venue, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	h := &wenMiningHarness{
+		dir:            dir,
+		store:          s,
+		venue:          venue,
+		account:        account,
+		ref:            ref,
+		strategyDigest: strategyDigest,
+		now:            curNow,
+	}
+	// Submit 400M on 2026-11-20T23:55:00Z and leave it unsettled (unknown).
+	_, _ = h.reviewAndSubmit(t, "400000000", "1000000000", "500000000")
+	if err := s.advanceWENMining(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+
+	d, _, err := s.swapSnapshot(t.Context(), "wen-operator")
+	if err != nil {
+		t.Fatal(err)
+	}
+	spent, unsettled, dailyTurnover, feesPaid, feeHolds := wenMiningWalletLedger(d, account.ID, "", curNow.Unix())
+	if spent != 0 || unsettled != 400000000 || dailyTurnover != 400000000 || feesPaid != 0 || feeHolds != 5000 {
+		t.Fatalf("unexpected day-1 ledger: spent=%d unsettled=%d daily=%d feesPaid=%d feeHolds=%d", spent, unsettled, dailyTurnover, feesPaid, feeHolds)
+	}
+
+	// Same UTC day: 200M exceeds dailyTurnoverLamports (400M + 200M > 500M).
+	agents, _ := s.Agents(t.Context(), "wen-operator", "")
+	if _, err := s.ChangeAgents(t.Context(), AgentCommand{
+		Revision:  agents.Revision,
+		Action:    "wen-mining-review",
+		ProfileID: "wen-operator",
+		WENMining: &WENMiningCommand{Request: &WENMiningRequest{
+			AccountID:            account.ID,
+			StrategyDigest:       strategyDigest,
+			AmountLamports:       "200000000",
+			WalletBudgetLamports: "1000000000",
+			MaxOperationLamports: "500000000",
+			PolicyExpiresAt:      curNow.Unix() + 3600,
+		}},
+	}); err == nil {
+		t.Fatal("operation exceeding dailyTurnoverLamports accepted on same UTC day")
+	}
+
+	// Advance clock across 00:00Z -> DailyTurnoverLamports resets to 0 while TotalTurnover retains 400M.
+	curNow = curNow.Add(10 * time.Minute)
+	h.now = curNow
+	spent, unsettled, dailyTurnover, feesPaid, feeHolds = wenMiningWalletLedger(d, account.ID, "", curNow.Unix())
+	if spent != 0 || unsettled != 400000000 || dailyTurnover != 0 || feesPaid != 0 || feeHolds != 5000 {
+		t.Fatalf("unexpected rollover ledger: spent=%d unsettled=%d daily=%d feesPaid=%d feeHolds=%d", spent, unsettled, dailyTurnover, feesPaid, feeHolds)
+	}
+	// New 400M fits within lifetime budget (400M + 400M <= 1B) AND fresh daily cap (400M <= 500M).
+	if _, err := s.ChangeAgents(t.Context(), AgentCommand{
+		Revision:  agents.Revision,
+		Action:    "wen-mining-review",
+		ProfileID: "wen-operator",
+		WENMining: &WENMiningCommand{Request: &WENMiningRequest{
+			AccountID:            account.ID,
+			StrategyDigest:       strategyDigest,
+			AmountLamports:       "400000000",
+			WalletBudgetLamports: "1000000000",
+			MaxOperationLamports: "500000000",
+			PolicyExpiresAt:      curNow.Unix() + 3600,
+		}},
+	}); err != nil {
+		t.Fatalf("expected review allowed after UTC midnight rollover, got: %v", err)
+	}
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"encoding/base64"
+	"encoding/binary"
 	"strings"
 	"testing"
 	"time"
@@ -274,5 +275,165 @@ func TestSwapSettlementRecognizesSolanaRuntimeErrors(t *testing.T) {
 		if e == nil && r.State == "failed" {
 			t.Fatalf("expected %v not to settle as failed, got r=%+v err=%v", errVal, r, e)
 		}
+	}
+}
+
+func TestSwapDynamicComputeUnitsAndBoundedPriorityFee(t *testing.T) {
+	// Case 1: median priority fee (5000) within MaxFeeLamports, 210000 CU -> 252000 CU.
+	c, client, q, key := fixture(t)
+	c.SimulateUnits = 210000
+	c.RecentPriorityFees = []uint64{2000, 10000, 5000}
+	q.MaxFeeLamports = 15000
+	q, e := client.Prepare(t.Context(), q)
+	if e != nil {
+		t.Fatal(e)
+	}
+	if q.ComputeUnits != 252000 {
+		t.Fatalf("ComputeUnits=%d, want 252000", q.ComputeUnits)
+	}
+	if q.PriorityFeeMicroLamports != 5000 {
+		t.Fatalf("PriorityFeeMicroLamports=%d, want 5000", q.PriorityFeeMicroLamports)
+	}
+	msg, e := onchain.Message(q)
+	if e != nil {
+		t.Fatal(e)
+	}
+	pkt, e := onchain.Signed(q, ed25519.Sign(key, msg))
+	if e != nil {
+		t.Fatal(e)
+	}
+	if _, e = client.Send(t.Context(), q, pkt); e != nil {
+		t.Fatal(e)
+	}
+	if r, e := client.Reconcile(t.Context(), q, pkt); e != nil || r.State != "confirmed" {
+		t.Fatalf("reconcile failed: r=%+v err=%v", r, e)
+	}
+
+	// Case 2: low clamp (50_000) & high clamp (1_400_000) + spike priority clamping.
+	cLow, clLow, qLow, _ := fixture(t)
+	cLow.SimulateUnits = 1000
+	qLow, e = clLow.Prepare(t.Context(), qLow)
+	if e != nil || qLow.ComputeUnits != 50_000 {
+		t.Fatalf("expected low clamp 50000, got %d err=%v", qLow.ComputeUnits, e)
+	}
+
+	cHigh, clHigh, qHigh, _ := fixture(t)
+	cHigh.SimulateUnits = 1_300_000
+	qHigh, e = clHigh.Prepare(t.Context(), qHigh)
+	if e != nil || qHigh.ComputeUnits != 1_400_000 {
+		t.Fatalf("expected high clamp 1400000, got %d err=%v", qHigh.ComputeUnits, e)
+	}
+
+	cSpike, clSpike, qSpike, _ := fixture(t)
+	cSpike.SimulateUnits = 210000
+	cSpike.RecentPriorityFees = []uint64{999_999_999}
+	qSpike.MaxFeeLamports = 10000
+	qSpike, e = clSpike.Prepare(t.Context(), qSpike)
+	if e != nil {
+		t.Fatal(e)
+	}
+	wantMaxMicro := (uint64(10000) - 5000) * 1_000_000 / uint64(qSpike.ComputeUnits)
+	if qSpike.PriorityFeeMicroLamports != wantMaxMicro || qSpike.FeeLamports > 10000 {
+		t.Fatalf("expected priority clamped to %d and fee<=10000, got micro=%d fee=%d", wantMaxMicro, qSpike.PriorityFeeMicroLamports, qSpike.FeeLamports)
+	}
+}
+
+func TestSwapWrapAndUnwrapNativeSOLAndNegativeChecks(t *testing.T) {
+	// SOL -> USDC with MissingInputATA + WrapAndUnwrapSol.
+	c, client, q, key := fixture(t)
+	c.MissingInputATA = true
+	q.InputMint = onchain.SOL
+	q.OutputMint = onchain.USDC
+	q.Amount = "100000000"
+	q.WrapAndUnwrapSol = true
+	q, e := client.Prepare(t.Context(), q)
+	if e != nil {
+		t.Fatal(e)
+	}
+	if len(q.Instructions) != 5 || q.RentLamports != 2_039_280 {
+		t.Fatalf("expected 5 instructions (ATA, Transfer, SyncNative, Swap, Close) and 1 ATA rent, got %d ixs rent=%d", len(q.Instructions), q.RentLamports)
+	}
+	msg, e := onchain.Message(q)
+	if e != nil {
+		t.Fatal(e)
+	}
+	pkt, e := onchain.Signed(q, ed25519.Sign(key, msg))
+	if e != nil {
+		t.Fatal(e)
+	}
+	if _, e = client.Send(t.Context(), q, pkt); e != nil {
+		t.Fatal(e)
+	}
+	if r, e := client.Reconcile(t.Context(), q, pkt); e != nil || r.State != "confirmed" || r.Input != q.Amount || r.Output != q.Output {
+		t.Fatalf("native SOL->USDC reconcile mismatch: r=%+v err=%v", r, e)
+	}
+
+	// USDC -> SOL with WrapAndUnwrapSol.
+	c2, client2, q2, key2 := fixture(t)
+	q2.InputMint = onchain.USDC
+	q2.OutputMint = onchain.SOL
+	q2.Amount = "12500000"
+	q2.WrapAndUnwrapSol = true
+	q2, e = client2.Prepare(t.Context(), q2)
+	if e != nil {
+		t.Fatal(e)
+	}
+	msg2, _ := onchain.Message(q2)
+	pkt2, _ := onchain.Signed(q2, ed25519.Sign(key2, msg2))
+	if _, e = client2.Send(t.Context(), q2, pkt2); e != nil {
+		t.Fatal(e)
+	}
+	if r, e := client2.Reconcile(t.Context(), q2, pkt2); e != nil || r.State != "confirmed" || r.Input != q2.Amount || r.Output != q2.Output || c2.Submissions != 1 {
+		t.Fatalf("USDC->native SOL reconcile mismatch: r=%+v err=%v", r, e)
+	}
+
+	// Negative instruction checks.
+	attacker := onchain.Base58(make([]byte, 32))
+	wsolATA, _ := onchain.TokenAccount(q.Owner, onchain.SOL)
+	swapIx := q.Instructions[3]
+
+	// 1. System transfer to non-wSOL destination.
+	badTransfer := make([]byte, 12)
+	binary.LittleEndian.PutUint32(badTransfer[:4], 2)
+	binary.LittleEndian.PutUint64(badTransfer[4:12], 100000000)
+	badQ := q
+	badQ.Instructions = []onchain.Instruction{
+		{
+			ProgramID: onchain.System,
+			Accounts: []onchain.Meta{
+				{Pubkey: q.Owner, IsSigner: true, IsWritable: true},
+				{Pubkey: attacker, IsSigner: false, IsWritable: true},
+			},
+			Data: base64.StdEncoding.EncodeToString(badTransfer),
+		},
+		swapIx,
+	}
+	if onchain.ValidateInstructions(badQ) == nil {
+		t.Fatal("accepted System transfer to non-wSOL destination")
+	}
+
+	// 2. Wrong CloseAccount recipient.
+	badClose := q
+	badClose.Instructions = []onchain.Instruction{
+		swapIx,
+		{
+			ProgramID: onchain.Token,
+			Accounts: []onchain.Meta{
+				{Pubkey: wsolATA, IsSigner: false, IsWritable: true},
+				{Pubkey: attacker, IsSigner: false, IsWritable: true},
+				{Pubkey: q.Owner, IsSigner: true, IsWritable: false},
+			},
+			Data: base64.StdEncoding.EncodeToString([]byte{9}),
+		},
+	}
+	if onchain.ValidateInstructions(badClose) == nil {
+		t.Fatal("accepted CloseAccount sending rent to non-owner")
+	}
+
+	// 3. System / Token CloseAccount rejected when WrapAndUnwrapSol == false.
+	noWrap := q
+	noWrap.WrapAndUnwrapSol = false
+	if onchain.ValidateInstructions(noWrap) == nil {
+		t.Fatal("accepted System/Token instructions with WrapAndUnwrapSol=false")
 	}
 }

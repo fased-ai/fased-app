@@ -637,3 +637,164 @@ func TestVenueCredentialWithOSProtectedRPCVault(t *testing.T) {
 		t.Fatalf("VenueCredential unlock with OS-protected RPC vault failed: %+v err=%v", unlocked, err)
 	}
 }
+
+func TestVenueCredentialOrdinaryManagedWallet(t *testing.T) {
+	t.Parallel()
+	if runtime.GOOS != "linux" {
+		t.Skip("ordinary owner custody is Linux-only")
+	}
+	dir := fixtureDir(t)
+	s, err := OpenStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	claimFixture(t, s)
+
+	signerDir := filepath.Join(t.TempDir(), "signer")
+	if err := os.Mkdir(signerDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	tls := onchaintest.NewHTTPS(t, "https://mainnet.helius-rpc.com")
+	v, err := signer.OpenControlledOwnerCustody(signerDir, strings.Repeat("a", 32), "mainnet-beta")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer v.Close()
+	if err := v.ConfigureControlledOrdinarySwapObserver(onchaintest.Client(tls.Chain)); err != nil {
+		t.Fatal(err)
+	}
+	if err := v.Create([]byte("disposable-ordinary-venue-password")); err != nil {
+		t.Fatal(err)
+	}
+	ref := *v.Status().Account
+	s.custodyOwnerSupported = true
+	s.custodyNetwork = ref.Network
+	s.rpcAdmission = true
+	s.fixture = func(context.Context, signer.Request) (signer.Response, error) {
+		return signer.Response{Status: v.Status()}, nil
+	}
+	s.onchain = &onchainRuntime{
+		venue:  func(Account) (swapVenue, error) { return onchaintest.Client(tls.Chain), nil },
+		quotes: map[string]swapEntry{},
+		signer: s.fixture,
+	}
+	if err := s.configureCredentialVenue(func(a onchain.CredentialAccess) (swapVenue, error) {
+		return onchain.NewControlledAuthenticatedClient(tls.Transport, a)
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	r, err := s.accountsRecord(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ordinaryID := strings.Repeat("d", 32)
+	watchID := strings.Repeat("e", 32)
+	r.Accounts = append(r.Accounts,
+		Account{Version: 4, ID: ordinaryID, Name: "Ordinary Managed", Mode: "managed", Network: ref.Network, PublicKey: ref.PublicKey, Signer: &ref},
+		Account{Version: 2, ID: watchID, Name: "Watch Only", Mode: "watch", Network: ref.Network, PublicKey: strings.Repeat("09", 32)},
+	)
+	updated, err := s.UpdateAccounts(t.Context(), r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfgd, err := s.ConfigureAccountRPC(t.Context(), RPCConfigInput{
+		AccountID: ordinaryID,
+		Revision:  updated.Record.Revision,
+		Endpoint:  tls.RPCOrigin,
+		Network:   ref.Network,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.RPCCredential(t.Context(), RPCCredentialCommand{
+		AccountID:  ordinaryID,
+		Revision:   cfgd.Record.Revision,
+		Action:     "save",
+		Key:        tls.RPCKey,
+		Passphrase: venuePassword,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Watch-only wallets must remain refused.
+	if _, err := s.VenueCredential(t.Context(), VenueCredentialCommand{
+		AccountID: watchID,
+		Revision:  cfgd.Record.Revision,
+		Action:    "status",
+	}); err == nil {
+		t.Fatal("accepted VenueCredential on watch-only wallet")
+	}
+
+	// Status, save, lock, unlock, backup, verify-backup, remove all work on v4 "managed" wallet.
+	status, err := s.VenueCredential(t.Context(), VenueCredentialCommand{
+		AccountID: ordinaryID,
+		Revision:  cfgd.Record.Revision,
+		Action:    "status",
+	})
+	if err != nil || !status.RPCReady || status.Saved || !status.Locked {
+		t.Fatalf("unexpected initial status for v4 managed wallet: %+v err=%v", status, err)
+	}
+	saved, err := s.VenueCredential(t.Context(), VenueCredentialCommand{
+		AccountID:  ordinaryID,
+		Revision:   cfgd.Record.Revision,
+		Action:     "save",
+		Key:        tls.JupiterKey,
+		Passphrase: venuePassword,
+	})
+	if err != nil || !saved.Saved || !saved.Locked {
+		t.Fatalf("save failed on v4 managed wallet: %+v err=%v", saved, err)
+	}
+	unlocked, err := s.VenueCredential(t.Context(), VenueCredentialCommand{
+		AccountID:  ordinaryID,
+		Revision:   cfgd.Record.Revision,
+		Ref:        saved.Ref,
+		Action:     "unlock",
+		Passphrase: venuePassword,
+		Seconds:    60,
+	})
+	if err != nil || unlocked.Locked || unlocked.UnlockUntil == 0 {
+		t.Fatalf("unlock failed on v4 managed wallet: %+v err=%v", unlocked, err)
+	}
+	locked, err := s.VenueCredential(t.Context(), VenueCredentialCommand{
+		AccountID: ordinaryID,
+		Revision:  cfgd.Record.Revision,
+		Ref:       saved.Ref,
+		Action:    "lock",
+	})
+	if err != nil || !locked.Locked {
+		t.Fatalf("lock failed on v4 managed wallet: %+v err=%v", locked, err)
+	}
+	backed, err := s.VenueCredential(t.Context(), VenueCredentialCommand{
+		AccountID:  ordinaryID,
+		Revision:   cfgd.Record.Revision,
+		Ref:        saved.Ref,
+		Action:     "backup",
+		Passphrase: venuePassword,
+	})
+	if err != nil || backed.Backup == nil {
+		t.Fatalf("backup failed on v4 managed wallet: %+v err=%v", backed, err)
+	}
+	verified, err := s.VenueCredential(t.Context(), VenueCredentialCommand{
+		AccountID:  ordinaryID,
+		Revision:   cfgd.Record.Revision,
+		Ref:        saved.Ref,
+		Action:     "verify-backup",
+		Backup:     backed.Backup,
+		Passphrase: venuePassword,
+	})
+	if err != nil || !verified.BackupVerified {
+		t.Fatalf("verify-backup failed on v4 managed wallet: %+v err=%v", verified, err)
+	}
+	removed, err := s.VenueCredential(t.Context(), VenueCredentialCommand{
+		AccountID:  ordinaryID,
+		Revision:   cfgd.Record.Revision,
+		Ref:        saved.Ref,
+		Action:     "remove",
+		Passphrase: venuePassword,
+	})
+	if err != nil || removed.Saved || !removed.Locked {
+		t.Fatalf("remove failed on v4 managed wallet: %+v err=%v", removed, err)
+	}
+}

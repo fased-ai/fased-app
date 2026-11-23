@@ -284,7 +284,7 @@ func (s *Store) changeOnchain(ctx context.Context, c AgentCommand) (OnchainView,
 		}
 		key, _ := hex.DecodeString(a.PublicKey)
 		input := c.Swap.Request
-		q := onchain.Quote{Version: onchain.Version, ID: randomTokenHex(), ProfileID: c.ProfileID, InstanceID: s.instanceID, AccountID: a.ID, Network: a.Network, Owner: onchain.Base58(key), RPCSHA256: swapRPCBinding(a), InputMint: input.InputMint, OutputMint: input.OutputMint, Amount: input.Amount, SlippageBPS: input.SlippageBPS, MaxFeeLamports: input.MaxFeeLamports, CreatedAt: now, ExpiresAt: now + 45}
+		q := onchain.Quote{Version: onchain.Version, ID: randomTokenHex(), ProfileID: c.ProfileID, InstanceID: s.instanceID, AccountID: a.ID, Network: a.Network, Owner: onchain.Base58(key), RPCSHA256: swapRPCBinding(a), InputMint: input.InputMint, OutputMint: input.OutputMint, Amount: input.Amount, SlippageBPS: input.SlippageBPS, MaxFeeLamports: input.MaxFeeLamports, WrapAndUnwrapSol: input.WrapAndUnwrapSol, CreatedAt: now, ExpiresAt: now + 45}
 		venue, e := s.onchain.venue(a)
 		if e != nil {
 			return OnchainView{}, e

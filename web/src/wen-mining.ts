@@ -47,10 +47,18 @@ export type WENMiningOperation = {
   expiresAt: number;
 };
 
+export type WENMiningPreparedEntry = {
+  rangeIndex: number;
+  amountLamports: string;
+  nonce: number;
+  commitment: string;
+};
+
 export type WENMiningPrepared = {
   commitment: string;
   nonce: number;
   selection: number;
+  entries?: WENMiningPreparedEntry[];
   instructions: {
     operation: string;
     requestSha256: string;
@@ -58,18 +66,21 @@ export type WENMiningPrepared = {
   }[];
 };
 
+export type WENMiningReceipt = {
+  amount: string | number;
+  nonce: string | number;
+  slot: string | number;
+  settled: boolean;
+  selection: number | null;
+};
+
 export type WENMiningObservation = {
   state: string;
   slot: number;
   accountSha256?: string;
   receiptSha256?: string;
-  receipt?: {
-    amount: string | number;
-    nonce: string | number;
-    slot: string | number;
-    settled: boolean;
-    selection: number | null;
-  };
+  receipt?: WENMiningReceipt;
+  receipts?: WENMiningReceipt[];
 };
 
 export type WENMiningTaskPolicy = {

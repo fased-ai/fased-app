@@ -17,7 +17,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strings"
 	"sync"
 	"time"
 
@@ -279,7 +278,7 @@ func (w *browserWallet) enroll(ctx context.Context, input browserInput) (browser
 	in := signer.OwnerInput{Intent: w.intent, SignerID: signerID, Phase: "prepare", Unlock: []byte(input.Unlock), BackupPassword: []byte(input.BackupPassword)}
 	defer in.Clear()
 	if w.intent.Action == "import" {
-		in.Seed, err = hex.DecodeString(strings.TrimSpace(input.Seed))
+		in.Seed, err = parseImportSeed(input.Seed)
 		if err != nil {
 			return result, err
 		}

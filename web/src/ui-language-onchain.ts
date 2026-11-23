@@ -157,4 +157,18 @@ export const onchainCopy = {
   Submitting: ["Отправка", "Enviando", "正在提交", "제출 중"],
   Submitted: ["Отправлено", "Enviada", "已提交", "제출됨"],
   Validating: ["Проверка", "Validando", "正在验证", "검증 중"],
+  "Mining active": [
+    "Майнинг активен",
+    "Minería activa",
+    "挖矿已启用",
+    "채굴 활성",
+  ],
+  Ranges: ["Диапазоны", "Rangos", "区间", "구간"],
+  "Max fee (lamports)": [
+    "Макс. комиссия (лампорты)",
+    "Comisión máx. (lamports)",
+    "最高费用（lamports）",
+    "최대 수수료(lamports)",
+  ],
+  "Native SOL": ["Нативный SOL", "SOL nativo", "原生 SOL", "네이티브 SOL"],
 } satisfies Record<string, [string, string, string, string]>;

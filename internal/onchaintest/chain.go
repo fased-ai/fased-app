@@ -19,22 +19,26 @@ import (
 )
 
 type Chain struct {
-	SettlementMode   string
-	CustomErr        any
-	BlockHeight      uint64
-	RevealAfterReads int
-	mu               sync.Mutex
-	SimulationFails  bool
-	DropSubmission   bool
-	Unknown          bool
-	WrongNetwork     bool
-	TamperBuild      bool
-	RejectSubmit     bool
-	Submissions      int
-	Reads            int
-	Quote            onchain.Quote
-	Packet           []byte
-	Calls            []string
+	SettlementMode     string
+	CustomErr          any
+	BlockHeight        uint64
+	RevealAfterReads   int
+	SimulateUnits      uint64
+	RecentPriorityFees []uint64
+	MissingInputATA    bool
+	mu                 sync.Mutex
+	SimulationFails    bool
+	DropSubmission     bool
+	Unknown            bool
+	WrongNetwork       bool
+	TamperBuild        bool
+	RejectSubmit       bool
+	Submissions        int
+	Reads              int
+	Quote              onchain.Quote
+	Packet             []byte
+	Calls              []string
+	lastFee            uint64
 }
 
 func (*Chain) ControlledFixture() bool { return true }
@@ -73,17 +77,71 @@ func (c *Chain) RoundTrip(r *http.Request) (*http.Response, error) {
 			return nil, errors.New("fixture Jupiter credential missing")
 		}
 		v := r.URL.Query()
-		if v.Get("wrapAndUnwrapSol") != "false" || v.Get("transactionVersion") != "0" {
+		wrap := v.Get("wrapAndUnwrapSol") == "true"
+		if (v.Get("wrapAndUnwrapSol") != "false" && !wrap) || v.Get("transactionVersion") != "0" {
 			return nil, errors.New("unsupported fixture request")
 		}
 		bps, _ := strconv.Atoi(v.Get("slippageBps"))
 		q := Quote(v.Get("taker"), v.Get("inputMint"), v.Get("outputMint"), v.Get("amount"), uint16(bps))
+		q.WrapAndUnwrapSol = wrap
 		if c.TamperBuild {
 			q.OutputMint = q.InputMint
 		}
+		setup := []onchain.Instruction{}
+		var cleanup any
+		if wrap {
+			wsolATA, _ := onchain.TokenAccount(q.Owner, onchain.SOL)
+			createATA := onchain.Instruction{
+				ProgramID: onchain.AssociatedToken,
+				Accounts: []onchain.Meta{
+					{Pubkey: q.Owner, IsSigner: true, IsWritable: true},
+					{Pubkey: wsolATA, IsSigner: false, IsWritable: true},
+					{Pubkey: q.Owner, IsSigner: false, IsWritable: false},
+					{Pubkey: onchain.SOL, IsSigner: false, IsWritable: false},
+					{Pubkey: onchain.System, IsSigner: false, IsWritable: false},
+					{Pubkey: onchain.Token, IsSigner: false, IsWritable: false},
+				},
+				Data: base64.StdEncoding.EncodeToString([]byte{1}),
+			}
+			setup = append(setup, createATA)
+			if q.InputMint == onchain.SOL {
+				amt, _ := onchain.Uint(q.Amount)
+				transferData := make([]byte, 12)
+				binary.LittleEndian.PutUint32(transferData[:4], 2)
+				binary.LittleEndian.PutUint64(transferData[4:12], amt)
+				setup = append(setup,
+					onchain.Instruction{
+						ProgramID: onchain.System,
+						Accounts: []onchain.Meta{
+							{Pubkey: q.Owner, IsSigner: true, IsWritable: true},
+							{Pubkey: wsolATA, IsSigner: false, IsWritable: true},
+						},
+						Data: base64.StdEncoding.EncodeToString(transferData),
+					},
+					onchain.Instruction{
+						ProgramID: onchain.Token,
+						Accounts: []onchain.Meta{
+							{Pubkey: wsolATA, IsSigner: false, IsWritable: true},
+						},
+						Data: base64.StdEncoding.EncodeToString([]byte{17}),
+					},
+				)
+			}
+			closeIx := onchain.Instruction{
+				ProgramID: onchain.Token,
+				Accounts: []onchain.Meta{
+					{Pubkey: wsolATA, IsSigner: false, IsWritable: true},
+					{Pubkey: q.Owner, IsSigner: false, IsWritable: true},
+					{Pubkey: q.Owner, IsSigner: true, IsWritable: false},
+				},
+				Data: base64.StdEncoding.EncodeToString([]byte{9}),
+			}
+			cleanup = closeIx
+			q.Instructions = append(append([]onchain.Instruction{}, setup...), q.Instructions[0], closeIx)
+		}
 		c.Quote = q
 		c.Calls = append(c.Calls, "build")
-		result = map[string]any{"inputMint": q.InputMint, "outputMint": q.OutputMint, "inAmount": q.Amount, "outAmount": q.Output, "slippageBps": q.SlippageBPS, "setupInstructions": []any{}, "swapInstruction": q.Instructions[0], "cleanupInstruction": nil, "otherInstructions": []any{}, "tipInstruction": nil, "transactionVersion": 0}
+		result = map[string]any{"inputMint": q.InputMint, "outputMint": q.OutputMint, "inAmount": q.Amount, "outAmount": q.Output, "slippageBps": q.SlippageBPS, "setupInstructions": setup, "swapInstruction": q.Instructions[len(setup)], "cleanupInstruction": cleanup, "otherInstructions": []any{}, "tipInstruction": nil, "transactionVersion": 0}
 		return response(r, result), nil
 	}
 	if r.URL.Host != "rpc.fased-fixture.invalid" || r.Method != "POST" {
@@ -118,6 +176,10 @@ func (c *Chain) RoundTrip(r *http.Request) (*http.Response, error) {
 		q := c.Quote
 		mint := q.OutputMint
 		source, _ := onchain.TokenAccount(q.Owner, q.InputMint)
+		if c.MissingInputATA && address == source {
+			result = map[string]any{"context": context, "value": nil}
+			break
+		}
 		if address == source {
 			mint = q.InputMint
 		}
@@ -131,8 +193,26 @@ func (c *Chain) RoundTrip(r *http.Request) (*http.Response, error) {
 		result = map[string]any{"context": context, "value": map[string]any{"owner": onchain.Token, "executable": false, "data": []string{base64.StdEncoding.EncodeToString(data), "base64"}}}
 	case "getBalance":
 		result = map[string]any{"context": context, "value": 10_000_000_000}
+	case "getRecentPrioritizationFees":
+		rows := make([]map[string]any, 0, len(c.RecentPriorityFees))
+		for _, fee := range c.RecentPriorityFees {
+			rows = append(rows, map[string]any{"slot": 10, "prioritizationFee": fee})
+		}
+		result = rows
 	case "getFeeForMessage":
-		result = map[string]any{"context": context, "value": 5000}
+		fee := uint64(5000)
+		var encoded string
+		if len(call.Params) > 0 && json.Unmarshal(call.Params[0], &encoded) == nil {
+			if msg, decErr := base64.StdEncoding.Strict().DecodeString(encoded); decErr == nil {
+				if cuLimit, microPrice, ok := decodeComputeBudget(msg); ok {
+					c.Quote.ComputeUnits = cuLimit
+					c.Quote.PriorityFeeMicroLamports = microPrice
+					fee = 5000 + (uint64(cuLimit)*microPrice+999_999)/1_000_000
+				}
+			}
+		}
+		c.lastFee = fee
+		result = map[string]any{"context": context, "value": fee}
 	case "getMinimumBalanceForRentExemption":
 		result = 2_039_280
 	case "simulateTransaction":
@@ -140,7 +220,11 @@ func (c *Chain) RoundTrip(r *http.Request) (*http.Response, error) {
 		if c.SimulationFails {
 			failure = map[string]any{"InstructionError": []any{0, "Custom"}}
 		}
-		result = map[string]any{"context": context, "value": map[string]any{"err": failure, "unitsConsumed": 210000}}
+		units := c.SimulateUnits
+		if units == 0 {
+			units = 210000
+		}
+		result = map[string]any{"context": context, "value": map[string]any{"err": failure, "unitsConsumed": units}}
 	case "getBlockHeight":
 		result = 20
 		if c.BlockHeight > 0 {
@@ -154,7 +238,18 @@ func (c *Chain) RoundTrip(r *http.Request) (*http.Response, error) {
 			return nil, errors.New("invalid signed packet")
 		}
 		q := c.Quote
-		q.MaxFeeLamports = 5000
+		fee := uint64(5000)
+		if cuLimit, microPrice, ok := decodeComputeBudget(packet[65:]); ok {
+			q.ComputeUnits = cuLimit
+			q.PriorityFeeMicroLamports = microPrice
+			computed := 5000 + (uint64(cuLimit)*microPrice+999_999)/1_000_000
+			if computed > fee {
+				fee = computed
+			}
+		} else if c.lastFee > fee {
+			fee = c.lastFee
+		}
+		q.MaxFeeLamports = fee
 		q.Blockhash = onchain.ControlledBlockhash
 		if _, e := onchain.VerifyPacket(q, packet); e != nil {
 			return nil, e
@@ -203,12 +298,46 @@ func (c *Chain) RoundTrip(r *http.Request) (*http.Response, error) {
 		balance := func(mint string, n uint64, index int) any {
 			return map[string]any{"accountIndex": index, "mint": mint, "owner": q.Owner, "uiTokenAmount": map[string]any{"amount": strconv.FormatUint(n, 10)}}
 		}
-		result = map[string]any{"slot": 11, "transaction": []string{base64.StdEncoding.EncodeToString(c.Packet), "base64"}, "meta": map[string]any{"fee": 5000, "err": nil, "preTokenBalances": []any{balance(q.InputMint, 1_000_000_000_000, keyIndex(source)), balance(q.OutputMint, 0, keyIndex(dest))}, "postTokenBalances": []any{balance(q.InputMint, 1_000_000_000_000-amount, keyIndex(source)), balance(q.OutputMint, output, keyIndex(dest))}}}
+		fee := uint64(5000)
+		if c.lastFee > fee {
+			fee = c.lastFee
+		}
+		nKeys := int(c.Packet[65+4])
+		preBalances := make([]uint64, nKeys)
+		postBalances := make([]uint64, nKeys)
+		preBalances[0] = 10_000_000_000
+		postBalances[0] = preBalances[0] - fee
+		if q.WrapAndUnwrapSol && q.InputMint == onchain.SOL {
+			postBalances[0] -= amount
+		} else if q.WrapAndUnwrapSol && q.OutputMint == onchain.SOL {
+			postBalances[0] += output
+		}
+		result = map[string]any{"slot": 11, "transaction": []string{base64.StdEncoding.EncodeToString(c.Packet), "base64"}, "meta": map[string]any{"fee": fee, "err": nil, "preBalances": preBalances, "postBalances": postBalances, "preTokenBalances": []any{balance(q.InputMint, 1_000_000_000_000, keyIndex(source)), balance(q.OutputMint, 0, keyIndex(dest))}, "postTokenBalances": []any{balance(q.InputMint, 1_000_000_000_000-amount, keyIndex(source)), balance(q.OutputMint, output, keyIndex(dest))}}}
 		c.setErrorEvidence(result.(map[string]any)["meta"].(map[string]any), "meta")
 	default:
 		return nil, errors.New("unexpected fixture RPC method")
 	}
 	return response(r, map[string]any{"jsonrpc": "2.0", "id": id, "result": result}), nil
+}
+
+func decodeComputeBudget(msg []byte) (uint32, uint64, bool) {
+	if len(msg) < 6 {
+		return 0, 0, false
+	}
+	off := 5 + int(msg[4])*32 + 32 + 1
+	if len(msg) < off+20 {
+		return 0, 0, false
+	}
+	if msg[off+1] != 0 || msg[off+2] != 5 || msg[off+3] != 2 {
+		return 0, 0, false
+	}
+	cuLimit := binary.LittleEndian.Uint32(msg[off+4 : off+8])
+	off += 8
+	if msg[off+1] != 0 || msg[off+2] != 9 || msg[off+3] != 3 {
+		return 0, 0, false
+	}
+	microPrice := binary.LittleEndian.Uint64(msg[off+4 : off+12])
+	return cuLimit, microPrice, true
 }
 func response(r *http.Request, v any) *http.Response {
 	b, _ := json.Marshal(v)

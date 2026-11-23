@@ -14,8 +14,10 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"reflect"
+	"slices"
 	"strconv"
 	"sync/atomic"
 	"time"
@@ -53,6 +55,74 @@ func NewControlledClient(rt ControlledTransport) (*Client, error) {
 	return c, nil
 }
 
+func isPublicUnicastIP(ip netip.Addr) bool {
+	return ip.IsValid() && ip.IsGlobalUnicast() && !ip.IsPrivate() && !ip.IsLoopback() && !ip.IsLinkLocalUnicast() && !ip.IsLinkLocalMulticast() && !ip.IsMulticast() && !ip.IsUnspecified()
+}
+
+func interleavePublicIPs(ips []netip.Addr) ([]netip.Addr, error) {
+	if len(ips) == 0 {
+		return nil, errors.New("RPC address unavailable")
+	}
+	var v4, v6 []netip.Addr
+	for _, ip := range ips {
+		if !isPublicUnicastIP(ip) {
+			return nil, errors.New("private network address denied")
+		}
+		if ip.Is4() {
+			v4 = append(v4, ip)
+		} else {
+			v6 = append(v6, ip)
+		}
+	}
+	out := make([]netip.Addr, 0, min(len(ips), 6))
+	for i := 0; len(out) < 6 && (i < len(v4) || i < len(v6)); i++ {
+		if i < len(v4) {
+			out = append(out, v4[i])
+		}
+		if len(out) < 6 && i < len(v6) {
+			out = append(out, v6[i])
+		}
+	}
+	return out, nil
+}
+
+func dialPublicAddress(
+	ctx context.Context,
+	network, address string,
+	lookup func(context.Context, string, string) ([]netip.Addr, error),
+	dial func(context.Context, string, string) (net.Conn, error),
+) (net.Conn, error) {
+	host, port, e := net.SplitHostPort(address)
+	if e != nil {
+		return nil, e
+	}
+	rawIPs, e := lookup(ctx, "ip", host)
+	if e != nil {
+		return nil, errors.New("RPC address unavailable")
+	}
+	targets, e := interleavePublicIPs(rawIPs)
+	if e != nil {
+		return nil, e
+	}
+	var lastErr error
+	for _, ip := range targets {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		attemptCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+		conn, dErr := dial(attemptCtx, network, net.JoinHostPort(ip.String(), port))
+		cancel()
+		if dErr == nil {
+			return conn, nil
+		}
+		lastErr = dErr
+	}
+	if lastErr != nil {
+		return nil, lastErr
+	}
+	return nil, errors.New("RPC address unavailable")
+}
+
 // NewClient has no transport/CA override. Core admission remains separate; a
 // valid endpoint or API key never enables execution. Tests inject transport
 // inside this package, never through instance settings, HTTP or CLI input.
@@ -61,22 +131,23 @@ func NewClient(rpc, key string) (*Client, error) {
 	if e != nil || u.Scheme != "https" || u.Hostname() == "" || u.User != nil || u.Fragment != "" || len(rpc) > 2048 || len(key) > 512 {
 		return nil, errors.New("HTTPS RPC and bounded Jupiter credential required")
 	}
-	t := &http.Transport{TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS13}, Proxy: nil, TLSHandshakeTimeout: 5 * time.Second, ResponseHeaderTimeout: 5 * time.Second, DialContext: func(ctx context.Context, network, address string) (net.Conn, error) {
-		host, port, e := net.SplitHostPort(address)
-		if e != nil {
-			return nil, e
-		}
-		ips, e := net.DefaultResolver.LookupNetIP(ctx, "ip", host)
-		if e != nil || len(ips) == 0 {
-			return nil, errors.New("RPC address unavailable")
-		}
-		for _, ip := range ips {
-			if !ip.IsGlobalUnicast() || ip.IsPrivate() || ip.IsLoopback() || ip.IsLinkLocalUnicast() {
-				return nil, errors.New("private network address denied")
-			}
-		}
-		return (&net.Dialer{Timeout: 5 * time.Second}).DialContext(ctx, network, net.JoinHostPort(ips[0].String(), port))
-	}}
+	t := &http.Transport{
+		TLSClientConfig: &tls.Config{
+			MinVersion:       tls.VersionTLS13,
+			CurvePreferences: []tls.CurveID{tls.X25519, tls.CurveP256, tls.CurveP384},
+		},
+		Proxy:                 nil,
+		TLSHandshakeTimeout:   5 * time.Second,
+		ResponseHeaderTimeout: 5 * time.Second,
+		ForceAttemptHTTP2:     true,
+		MaxIdleConns:          16,
+		MaxIdleConnsPerHost:   8,
+		IdleConnTimeout:       60 * time.Second,
+		DialContext: func(ctx context.Context, network, address string) (net.Conn, error) {
+			dialer := &net.Dialer{Timeout: 2 * time.Second, KeepAlive: 30 * time.Second}
+			return dialPublicAddress(ctx, network, address, net.DefaultResolver.LookupNetIP, dialer.DialContext)
+		},
+	}
 	return &Client{rpc: rpc, key: key, http: &http.Client{Transport: t, Timeout: 10 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return errors.New("swap redirects denied") }}}, nil
 }
 func (c *Client) request(ctx context.Context, method, target string, body []byte, key bool) ([]byte, error) {
@@ -172,7 +243,16 @@ func (c *Client) Prepare(ctx context.Context, q Quote) (Quote, error) {
 	if e := c.admitNetwork(q); e != nil {
 		return q, e
 	}
-	if !ValidRequest(Request{q.AccountID, q.InputMint, q.OutputMint, q.Amount, q.SlippageBPS, q.MaxFeeLamports}) {
+	req := Request{
+		AccountID:        q.AccountID,
+		InputMint:        q.InputMint,
+		OutputMint:       q.OutputMint,
+		Amount:           q.Amount,
+		SlippageBPS:      q.SlippageBPS,
+		MaxFeeLamports:   q.MaxFeeLamports,
+		WrapAndUnwrapSol: q.WrapAndUnwrapSol,
+	}
+	if !ValidRequest(req) {
 		return q, errors.New("invalid swap request")
 	}
 	genesis := map[string]string{"mainnet-beta": "5eykt4UsFv8P8NJdTREpY1vzqKqZKvdpKuc147dw2N9d", "devnet": "EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG"}[q.Network]
@@ -180,7 +260,7 @@ func (c *Client) Prepare(ctx context.Context, q Quote) (Quote, error) {
 	if genesis == "" || c.rpcCall(ctx, "getGenesisHash", []any{}, &actualGenesis) != nil || actualGenesis != genesis {
 		return q, errors.New("RPC network differs from wallet")
 	}
-	values := url.Values{"inputMint": {q.InputMint}, "outputMint": {q.OutputMint}, "amount": {q.Amount}, "taker": {q.Owner}, "slippageBps": {strconv.Itoa(int(q.SlippageBPS))}, "wrapAndUnwrapSol": {"false"}, "maxAccounts": {"24"}, "transactionVersion": {"0"}}
+	values := url.Values{"inputMint": {q.InputMint}, "outputMint": {q.OutputMint}, "amount": {q.Amount}, "taker": {q.Owner}, "slippageBps": {strconv.Itoa(int(q.SlippageBPS))}, "wrapAndUnwrapSol": {strconv.FormatBool(q.WrapAndUnwrapSol)}, "maxAccounts": {"24"}, "transactionVersion": {"0"}}
 	raw, e := c.request(ctx, "GET", buildURL+"?"+values.Encode(), nil, true)
 	if e != nil {
 		return q, e
@@ -198,7 +278,11 @@ func (c *Client) Prepare(ctx context.Context, q Quote) (Quote, error) {
 		Other              []Instruction `json:"otherInstructions"`
 		Tip                *Instruction  `json:"tipInstruction"`
 	}
-	if json.Unmarshal(raw, &build) != nil || build.TransactionVersion == nil || *build.TransactionVersion != 0 || build.InputMint != q.InputMint || build.OutputMint != q.OutputMint || build.InAmount != q.Amount || build.SlippageBPS != q.SlippageBPS || len(build.Setup) > 2 || build.Cleanup != nil || build.Tip != nil || len(build.Other) > 0 {
+	maxSetup := 2
+	if q.WrapAndUnwrapSol {
+		maxSetup = 4
+	}
+	if json.Unmarshal(raw, &build) != nil || build.TransactionVersion == nil || *build.TransactionVersion != 0 || build.InputMint != q.InputMint || build.OutputMint != q.OutputMint || build.InAmount != q.Amount || build.SlippageBPS != q.SlippageBPS || len(build.Setup) > maxSetup || (!q.WrapAndUnwrapSol && build.Cleanup != nil) || build.Tip != nil || len(build.Other) > 0 {
 		return q, errors.New("unsupported Jupiter build or changed quote parameters")
 	}
 	q.Output = build.OutAmount
@@ -206,7 +290,10 @@ func (c *Client) Prepare(ctx context.Context, q Quote) (Quote, error) {
 	if e != nil {
 		return q, e
 	}
-	q.Instructions = append(build.Setup, build.Swap)
+	q.Instructions = append(append([]Instruction{}, build.Setup...), build.Swap)
+	if build.Cleanup != nil {
+		q.Instructions = append(q.Instructions, *build.Cleanup)
+	}
 	var latest struct {
 		Context struct {
 			Slot uint64 `json:"slot"`
@@ -228,28 +315,84 @@ func (c *Client) Prepare(ctx context.Context, q Quote) (Quote, error) {
 	}
 	dest, _ := TokenAccount(q.Owner, q.OutputMint)
 	amount, _ := Uint(q.Amount)
-	if _, e = c.token(ctx, source, q.Owner, q.InputMint, amount); e != nil {
-		return q, e
+	hasATASetup := func(ata string) bool {
+		for _, ix := range build.Setup {
+			if ix.ProgramID == AssociatedToken && len(ix.Accounts) > 1 && ix.Accounts[1].Pubkey == ata {
+				return true
+			}
+		}
+		return false
+	}
+	var needsRentCount uint64
+	if q.WrapAndUnwrapSol && q.InputMint == SOL {
+		srcExists, sErr := c.token(ctx, source, q.Owner, SOL, 0)
+		if sErr != nil {
+			return q, sErr
+		}
+		if !srcExists {
+			if !hasATASetup(source) {
+				return q, errors.New("source wSOL setup missing")
+			}
+			needsRentCount++
+		}
+	} else {
+		if _, e = c.token(ctx, source, q.Owner, q.InputMint, amount); e != nil {
+			return q, e
+		}
 	}
 	exists, e := c.token(ctx, dest, q.Owner, q.OutputMint, 0)
 	if e != nil {
 		return q, e
 	}
 	if !exists {
-		found := false
-		for _, ix := range build.Setup {
-			if ix.ProgramID == AssociatedToken && len(ix.Accounts) > 1 && ix.Accounts[1].Pubkey == dest {
-				found = true
-			}
-		}
-		if !found {
+		if !hasATASetup(dest) {
 			return q, errors.New("destination token setup missing")
 		}
-		if e = c.rpcCall(ctx, "getMinimumBalanceForRentExemption", []any{165, map[string]any{"commitment": "confirmed"}}, &q.RentLamports); e != nil {
+		needsRentCount++
+	}
+	if needsRentCount > 0 {
+		var perAccountRent uint64
+		if e = c.rpcCall(ctx, "getMinimumBalanceForRentExemption", []any{165, map[string]any{"commitment": "confirmed"}}, &perAccountRent); e != nil {
 			return q, e
 		}
+		q.RentLamports = perAccountRent * needsRentCount
 		if q.RentLamports > 6_000_000 {
 			return q, errors.New("token rent exceeds supported bound")
+		}
+	}
+	// Pre-simulate at default CU budget to tighten ComputeUnitLimit and choose
+	// a bounded median priority fee without exceeding MaxFeeLamports.
+	q.ComputeUnits = 0
+	q.PriorityFeeMicroLamports = 0
+	preSim, e := c.Simulate(ctx, q)
+	if e != nil {
+		return q, e
+	}
+	units := (preSim.Units*12 + 9) / 10
+	if units < 50_000 {
+		units = 50_000
+	}
+	if units > 1_400_000 {
+		units = 1_400_000
+	}
+	q.ComputeUnits = uint32(units)
+	if q.MaxFeeLamports > 5000 {
+		var rows []struct {
+			Slot     uint64 `json:"slot"`
+			Priority uint64 `json:"prioritizationFee"`
+		}
+		if c.rpcCall(ctx, "getRecentPrioritizationFees", []any{[]string{q.Owner, Jupiter}}, &rows) == nil && len(rows) > 0 {
+			fees := make([]uint64, len(rows))
+			for i, row := range rows {
+				fees[i] = row.Priority
+			}
+			slices.Sort(fees)
+			median := fees[len(fees)/2]
+			maxMicro := (q.MaxFeeLamports - 5000) * 1_000_000 / uint64(q.ComputeUnits)
+			if median > maxMicro {
+				median = maxMicro
+			}
+			q.PriorityFeeMicroLamports = median
 		}
 	}
 	message, e := Message(q)
@@ -274,7 +417,14 @@ func (c *Client) Prepare(ctx context.Context, q Quote) (Quote, error) {
 	if e = c.rpcCall(ctx, "getBalance", []any{q.Owner, map[string]any{"commitment": "confirmed"}}, &balance); e != nil {
 		return q, e
 	}
-	if balance.Value < q.FeeLamports+q.RentLamports {
+	requiredSOL := q.FeeLamports + q.RentLamports
+	if q.WrapAndUnwrapSol && q.InputMint == SOL {
+		if amount > ^uint64(0)-requiredSOL {
+			return q, errors.New("required SOL exceeds supported range")
+		}
+		requiredSOL += amount
+	}
+	if balance.Value < requiredSOL {
 		return q, errors.New("insufficient SOL for fee and rent")
 	}
 	q.Digest = QuoteDigest(q)
@@ -412,10 +562,12 @@ func (c *Client) Reconcile(ctx context.Context, q Quote, packet []byte) (Observa
 		Slot        uint64            `json:"slot"`
 		Transaction []json.RawMessage `json:"transaction"`
 		Meta        struct {
-			Err  json.RawMessage `json:"err"`
-			Fee  uint64          `json:"fee"`
-			Pre  []balance       `json:"preTokenBalances"`
-			Post []balance       `json:"postTokenBalances"`
+			Err          json.RawMessage `json:"err"`
+			Fee          uint64          `json:"fee"`
+			PreBalances  []uint64        `json:"preBalances"`
+			PostBalances []uint64        `json:"postBalances"`
+			Pre          []balance       `json:"preTokenBalances"`
+			Post         []balance       `json:"postTokenBalances"`
 		} `json:"meta"`
 	}
 	if e = c.rpcCall(ctx, "getTransaction", []any{signature, map[string]any{"encoding": "base64", "commitment": "confirmed", "maxSupportedTransactionVersion": 0}}, &tx); e != nil {
@@ -481,6 +633,33 @@ func (c *Client) Reconcile(ctx context.Context, q Quote, packet []byte) (Observa
 		}
 		return n, nil
 	}
+	amount, _ := Uint(q.Amount)
+	minimum, _ := Uint(q.MinimumOutput)
+	if q.WrapAndUnwrapSol && q.InputMint == SOL {
+		if len(tx.Meta.PreBalances) == 0 || len(tx.Meta.PostBalances) == 0 {
+			return Observation{}, errors.New("native SOL balance metadata missing")
+		}
+		pre0, post0 := tx.Meta.PreBalances[0], tx.Meta.PostBalances[0]
+		if pre0 < post0 {
+			return Observation{}, errors.New("settlement exceeds reviewed swap limits")
+		}
+		spent := pre0 - post0
+		if spent < amount+tx.Meta.Fee || spent > amount+tx.Meta.Fee+q.RentLamports {
+			return Observation{}, errors.New("native SOL settlement exceeds reviewed limits")
+		}
+		preOut, e := value(tx.Meta.Pre, q.OutputMint)
+		if e != nil {
+			return Observation{}, e
+		}
+		postOut, e := value(tx.Meta.Post, q.OutputMint)
+		if e != nil {
+			return Observation{}, e
+		}
+		if postOut < preOut || postOut-preOut < minimum {
+			return Observation{}, errors.New("settlement exceeds reviewed swap limits")
+		}
+		return Observation{State: "confirmed", Slot: tx.Slot, Input: fmt.Sprint(amount), Output: fmt.Sprint(postOut - preOut)}, nil
+	}
 	preIn, e := value(tx.Meta.Pre, q.InputMint)
 	if e != nil {
 		return Observation{}, e
@@ -488,6 +667,23 @@ func (c *Client) Reconcile(ctx context.Context, q Quote, packet []byte) (Observa
 	postIn, e := value(tx.Meta.Post, q.InputMint)
 	if e != nil {
 		return Observation{}, e
+	}
+	if preIn < postIn || preIn-postIn != amount {
+		return Observation{}, errors.New("settlement exceeds reviewed swap limits")
+	}
+	if q.WrapAndUnwrapSol && q.OutputMint == SOL {
+		if len(tx.Meta.PreBalances) == 0 || len(tx.Meta.PostBalances) == 0 {
+			return Observation{}, errors.New("native SOL balance metadata missing")
+		}
+		pre0, post0 := tx.Meta.PreBalances[0], tx.Meta.PostBalances[0]
+		if post0+tx.Meta.Fee < pre0 {
+			return Observation{}, errors.New("native SOL output missing")
+		}
+		netOut := post0 + tx.Meta.Fee - pre0
+		if netOut < minimum {
+			return Observation{}, errors.New("settlement exceeds reviewed swap limits")
+		}
+		return Observation{State: "confirmed", Slot: tx.Slot, Input: fmt.Sprint(amount), Output: fmt.Sprint(netOut)}, nil
 	}
 	preOut, e := value(tx.Meta.Pre, q.OutputMint)
 	if e != nil {
@@ -497,9 +693,7 @@ func (c *Client) Reconcile(ctx context.Context, q Quote, packet []byte) (Observa
 	if e != nil {
 		return Observation{}, e
 	}
-	amount, _ := Uint(q.Amount)
-	minimum, _ := Uint(q.MinimumOutput)
-	if preIn < postIn || preIn-postIn != amount || postOut < preOut || postOut-preOut < minimum {
+	if postOut < preOut || postOut-preOut < minimum {
 		return Observation{}, errors.New("settlement exceeds reviewed swap limits")
 	}
 	return Observation{State: "confirmed", Slot: tx.Slot, Input: fmt.Sprint(amount), Output: fmt.Sprint(postOut - preOut)}, nil

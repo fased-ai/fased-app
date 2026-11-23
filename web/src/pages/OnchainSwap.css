@@ -5,3 +5,13 @@
   display: grid;
   gap: 14px;
 }
+.wt .onchain-workspace label.check-row {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+}
+.wt .onchain-workspace label.check-row input {
+  width: auto;
+  margin: 0;
+}
