@@ -625,7 +625,7 @@ test("shared WEN Overview Wallets and Settings preserve fixture authority and re
     await expect(layout).toBeVisible();
     await expect(page.locator("html")).toHaveCSS(
       "background-color",
-      "rgb(23, 22, 30)",
+      "rgb(13, 13, 18)",
     );
     await expect(
       layout
@@ -633,7 +633,7 @@ test("shared WEN Overview Wallets and Settings preserve fixture authority and re
           selector === ".dashboard-grid" ? ".dashboard-widget" : ".panel",
         )
         .first(),
-    ).toHaveCSS("background-color", "rgb(34, 32, 45)");
+    ).toHaveCSS("background-color", "rgb(22, 22, 33)");
     expect(
       await page.evaluate(
         () => document.documentElement.scrollWidth <= innerWidth,
@@ -842,7 +842,7 @@ test("shared WEN remaining agent pages preserve news provenance paper budgets an
     ).toBe(isMobile || name === "strategies" ? 1 : 2);
     await expect(page.locator("html")).toHaveCSS(
       "background-color",
-      "rgb(23, 22, 30)",
+      "rgb(13, 13, 18)",
     );
     expect(
       await page.evaluate(
@@ -1221,8 +1221,8 @@ test("Dashboard drag and resize autosave without a duplicate home rail shortcut"
     };
   });
   expect(geometry.gridGap).toBe("12px");
-  expect(geometry.surface).toBe("rgb(34, 32, 45)");
-  expect(geometry.border).toBe("rgb(52, 49, 63)");
+  expect(geometry.surface).toBe("rgb(22, 22, 33)");
+  expect(geometry.border).toBe("rgb(37, 37, 54)");
   if (!isMobile) {
     expect(geometry.headerHeight).toBe(50);
     expect(geometry.navFontSize).toBe("14px");
@@ -2020,4 +2020,63 @@ test("ordinary customer pages exclude test tools and connect Dashboard accounts"
   expect(after.memories).toEqual(initial.memories);
   expect(after.aiRequests).toEqual(initial.aiRequests);
   expect(external).toEqual([]);
+});
+
+test("unified bottom-left Settings modal switches tabs cleanly without overflow", async ({
+  page,
+  isMobile,
+}) => {
+  await page.emulateMedia({ colorScheme: "dark" });
+  await page.goto(url + "/#overview");
+  await openOwnerSetup(
+    page,
+    JSON.parse(await readFile(join(dir, "claim-code.json"), "utf8")).code,
+  );
+  await page.getByLabel("Create owner password").fill(fixturePassword);
+  await page
+    .getByRole("button", { name: "Claim workspace", exact: true })
+    .click();
+  await expect(
+    page.getByRole("button", { name: "Sign out", exact: true }),
+  ).toBeVisible();
+
+  await expect(page.locator("html")).toHaveCSS(
+    "background-color",
+    "rgb(13, 13, 18)",
+  );
+
+  if (isMobile) {
+    await page
+      .getByRole("button", { name: "Preferences", exact: true })
+      .click();
+  } else {
+    const rail = page.locator("#shell-rail");
+    expect((await rail.textContent())?.trim()).toBe("");
+    await rail.getByRole("button", { name: "Settings", exact: true }).click();
+  }
+
+  const dialog = page.getByRole("dialog", {
+    name: /Settings \//,
+  });
+  await expect(dialog).toBeVisible();
+
+  for (const tabName of [
+    "Providers",
+    "Instance",
+    "Updates",
+    "Diagnostics",
+    "General",
+  ]) {
+    await dialog
+      .locator(".settings-modal-tabs")
+      .getByRole("button", { name: tabName, exact: true })
+      .click();
+    await expect(dialog.locator(".dialog-heading h2")).toContainText(tabName);
+    expect(
+      await dialog.evaluate((el) => el.scrollWidth <= el.clientWidth + 1),
+    ).toBe(true);
+  }
+
+  await page.keyboard.press("Escape");
+  await expect(dialog).toHaveCount(0);
 });

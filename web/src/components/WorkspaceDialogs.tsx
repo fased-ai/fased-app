@@ -24,6 +24,7 @@ import {
   type WalletMode,
 } from "../state";
 import { Badge, Dialog } from "../components/shared";
+import { SettingsModal } from "./SettingsModal";
 import { useWorkspace } from "../workspace";
 export function WorkspaceDialogs() {
   const [updateReadEpoch, setUpdateReadEpoch] = useState(0);
@@ -107,6 +108,7 @@ export function WorkspaceDialogs() {
   }, [providersOpen, resumeAgent, refreshConnections, setProfileOpen]);
   return (
     <>
+      <SettingsModal />
       {setupOpen &&
         (connected ? (
           <Dialog

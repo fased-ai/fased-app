@@ -17,9 +17,13 @@ import { planFailureDetails } from "../agents";
 import { useEffect, useRef, useState } from "react";
 import { useWorkspace } from "../workspace";
 import { Dialog, ToggleSwitch } from "../components/shared";
+import { AddProviderWizard } from "../components/AddProviderWizard";
 import { TaskAccessSettings } from "./TaskAccess";
 import { OpenAIPilotSettings } from "./OpenAIPilot";
 import {
+  defaultLocalEndpoint,
+  PROVIDER_API_KEY_URLS,
+  toggleConnectionEnabled,
   useAIConnection,
   type Connection,
   type CredentialMode,
@@ -40,15 +44,6 @@ export {
   ConnectionPicker,
   AIModelPicker,
   AIAdmissionReview,
-};
-
-const defaultLocalEndpoint = "http://127.0.0.1:11434/v1";
-const PROVIDER_API_KEY_URLS: Record<string, string> = {
-  openai: "https://platform.openai.com/api-keys",
-  anthropic: "https://console.anthropic.com/settings/keys",
-  google: "https://aistudio.google.com/apikey",
-  xai: "https://console.x.ai",
-  openrouter: "https://openrouter.ai/settings/keys",
 };
 
 export function AIConnectionSettings({
@@ -95,6 +90,7 @@ export function AIConnectionSettings({
   const copiedTimer = useRef<number | null>(null);
   const [callback, setCallback] = useState("");
   const [editOpen, setEditOpen] = useState(false);
+  const [wizardOpen, setWizardOpen] = useState(false);
 
   useEffect(() => {
     return () => {
@@ -608,32 +604,16 @@ export function AIConnectionSettings({
   }
 
   async function toggleAccountEnabled(ref: string, disabled: boolean) {
-    const previous = root;
-    if (previous) {
-      setView({
-        ...previous,
-        ...(previous.ref === ref ? { disabled } : {}),
-        connections: previous.connections?.map((c) =>
-          c.ref === ref ? { ...c, disabled } : c,
-        ),
-      });
-    }
     setBusy(true);
-    setError("");
     try {
-      const next = await core.request<Connection>("ai/connection", "POST", {
-        action: "set-enabled",
+      await toggleConnectionEnabled(
+        core,
+        root,
+        setView,
+        setError,
         ref,
         disabled,
-      });
-      const refreshed = next.connections
-        ? next
-        : await core.request<Connection>("ai/connection");
-      setView(refreshed);
-      window.dispatchEvent(new Event("ai-connection-changed"));
-    } catch (e) {
-      if (previous) setView(previous);
-      setError(e instanceof Error ? e.message : "Could not save connection");
+      );
     } finally {
       setBusy(false);
     }
@@ -1186,7 +1166,14 @@ export function AIConnectionSettings({
                       setCallback("");
                     }}
                   >
-                    <span>
+                    {a.accentColor && (
+                      <i
+                        className="provider-accent-dot"
+                        style={{ backgroundColor: a.accentColor }}
+                        aria-hidden="true"
+                      />
+                    )}
+                    <span className="provider-account-copy">
                       {a.name || p.name}
                       <small>
                         {p.family &&
@@ -1209,6 +1196,16 @@ export function AIConnectionSettings({
                 ))}
             </div>
           ))}
+          {root && (
+            <button
+              type="button"
+              className="secondary providers-guided-btn"
+              disabled={busy || !!signIn || root.pilotEnrollment}
+              onClick={() => setWizardOpen(true)}
+            >
+              {uiText("Guided setup")}
+            </button>
+          )}
         </aside>
         <section
           className="panel ai-connection provider-editor"
@@ -1698,6 +1695,18 @@ export function AIConnectionSettings({
           )}
         </section>
       </div>
+      {wizardOpen && (
+        <AddProviderWizard
+          initialProvider={provider}
+          onAdded={(ref) => {
+            if (ref) {
+              selectionChosen.current = true;
+              setSelected(ref);
+            }
+          }}
+          onClose={() => setWizardOpen(false)}
+        />
+      )}
     </section>
   );
 }

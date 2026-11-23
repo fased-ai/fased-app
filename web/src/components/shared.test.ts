@@ -57,5 +57,17 @@ describe("shared WEN primitives", () => {
     );
     expect(checked).toContain("checked");
     expect(checked).toContain("Maintenance window");
+
+    const hiddenLabel = renderToStaticMarkup(
+      createElement(ToggleSwitch, {
+        checked: true,
+        onChange: noop,
+        label: "Navigation rail",
+        hideLabel: true,
+      }),
+    );
+    expect(hiddenLabel).toContain(
+      '<span class="sr-only">Navigation rail</span>',
+    );
   });
 });

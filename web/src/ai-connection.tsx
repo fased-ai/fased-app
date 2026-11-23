@@ -189,6 +189,62 @@ export function AIConnectionProvider({ children }: { children: ReactNode }) {
   );
 }
 
+export const defaultLocalEndpoint = "http://127.0.0.1:11434/v1";
+
+export const PROVIDER_API_KEY_URLS: Record<string, string> = {
+  openai: "https://platform.openai.com/api-keys",
+  anthropic: "https://console.anthropic.com/settings/keys",
+  google: "https://aistudio.google.com/apikey",
+  xai: "https://console.x.ai",
+  openrouter: "https://openrouter.ai/settings/keys",
+};
+
+export const ACCENT_SWATCHES = [
+  { hex: "#ff4f7c", cssVar: "--swatch-coral", name: "Coral" },
+  { hex: "#27c5da", cssVar: "--swatch-cyan", name: "Cyan" },
+  { hex: "#8b6fff", cssVar: "--swatch-violet", name: "Violet" },
+  { hex: "#5be0a5", cssVar: "--swatch-ok", name: "Mint" },
+  { hex: "#f3c677", cssVar: "--swatch-warn", name: "Amber" },
+  { hex: "#3b82f6", cssVar: "--swatch-blue", name: "Blue" },
+] as const;
+
+export async function toggleConnectionEnabled(
+  core: ReturnType<typeof useCore>,
+  previous: Connection | null,
+  setView: Dispatch<SetStateAction<Connection | null>>,
+  setError: Dispatch<SetStateAction<string>>,
+  ref: string,
+  disabled: boolean,
+): Promise<boolean> {
+  if (previous) {
+    setView({
+      ...previous,
+      ...(previous.ref === ref ? { disabled } : {}),
+      connections: previous.connections?.map((c) =>
+        c.ref === ref ? { ...c, disabled } : c,
+      ),
+    });
+  }
+  setError("");
+  try {
+    const next = await core.request<Connection>("ai/connection", "POST", {
+      action: "set-enabled",
+      ref,
+      disabled,
+    });
+    const refreshed = next.connections
+      ? next
+      : await core.request<Connection>("ai/connection");
+    setView(refreshed);
+    window.dispatchEvent(new Event("ai-connection-changed"));
+    return true;
+  } catch (e) {
+    if (previous) setView(previous);
+    setError(e instanceof Error ? e.message : "Could not save connection");
+    return false;
+  }
+}
+
 export function useAIConnection(): AIConnectionContextValue {
   const shared = useContext(AIConnectionContext);
   const fallback = useAIConnectionState(shared === null);

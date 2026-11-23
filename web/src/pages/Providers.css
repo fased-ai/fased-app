@@ -58,15 +58,20 @@
   padding-left: 22px;
   color: var(--wt-muted);
 }
-.wt .provider-account span {
+.wt .provider-account .provider-account-copy {
   display: flex;
   flex-direction: column;
   gap: 3px;
   min-width: 0;
+  flex: 1;
   overflow-wrap: anywhere;
 }
 .wt .provider-account small {
   font-size: 11px;
+}
+.wt .providers-guided-btn {
+  width: 100%;
+  margin-top: 8px;
 }
 .wt .provider-account[aria-pressed="true"],
 .wt .provider-brand-button[aria-pressed="true"] {
@@ -197,7 +202,7 @@
   width: 6px;
   height: 6px;
   border-radius: 50%;
-  background: var(--wt-aqua);
+  background: var(--wt-cyan);
 }
 .wt .provider-models header {
   display: flex;
@@ -221,8 +226,8 @@
   border: 1px solid var(--wt-border);
 }
 .wt .provider-model-pill[data-state="recommended"] {
-  color: var(--wt-aqua);
-  border-color: var(--wt-aqua);
+  color: var(--wt-cyan);
+  border-color: var(--wt-cyan);
 }
 .wt .provider-model-pill[data-state="stale"] {
   color: var(--wt-warn);
@@ -310,7 +315,7 @@
   background: var(--wt-muted);
 }
 .wt .cli-status-dot[data-state="ready"] {
-  background: var(--wt-aqua);
+  background: var(--wt-cyan);
 }
 .wt .cli-status-account {
   margin: 0;
@@ -349,7 +354,7 @@
   font-size: 18px;
   font-weight: 700;
   letter-spacing: 0.1em;
-  color: var(--wt-aqua);
+  color: var(--wt-cyan);
 }
 .wt .cli-version-pill {
   font-variant-numeric: tabular-nums;

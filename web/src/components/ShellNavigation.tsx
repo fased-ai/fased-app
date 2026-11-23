@@ -18,13 +18,14 @@ import {
   Plug,
   Search,
   Server,
+  Settings,
   Settings2,
   TrendingUp,
   Wallet,
 } from "../icons";
 import logo from "../assets/fased-logo.svg";
 import { useWorkspace } from "../workspace";
-import { AppearanceSettings, useUI } from "../ui-preferences";
+import { useUI } from "../ui-preferences";
 import { Dialog } from "./shared";
 
 export const shellPages = [
@@ -51,15 +52,16 @@ export function ShellNavigation() {
     contextOpen,
     setContextOpen,
     setProvidersOpen,
+    openSettingsModal,
   } = useWorkspace();
   const { preferences, update, t } = useUI();
   const [more, setMore] = useState(false);
-  const [dialog, setDialog] = useState<"preferences" | "search" | null>(null);
+  const [searchOpen, setSearchOpen] = useState(false);
   const moreButton = useRef<HTMLButtonElement>(null),
     moreBox = useRef<HTMLDivElement>(null);
   useEffect(() => {
     setMore(false);
-    setDialog(null);
+    setSearchOpen(false);
   }, [route]);
   useEffect(() => {
     if (!more) return;
@@ -201,7 +203,7 @@ export function ShellNavigation() {
                 <button
                   onClick={() => {
                     closeMore();
-                    setDialog("search");
+                    setSearchOpen(true);
                   }}
                 >
                   <Search size={18} />
@@ -221,7 +223,7 @@ export function ShellNavigation() {
             )}
           </div>
         </nav>
-        <button className="shell-search" onClick={() => setDialog("search")}>
+        <button className="shell-search" onClick={() => setSearchOpen(true)}>
           <Search size={16} />
           {t("Search Fased")}
         </button>
@@ -229,13 +231,6 @@ export function ShellNavigation() {
           {(core.mode !== "ready" || agents.view?.aiFixtureAvailable) && (
             <span className="shell-demo">{t("Demo")}</span>
           )}
-          <span className="shell-desktop-utility">
-            {utility("Providers", Plug, () =>
-              core.mode === "ready"
-                ? setProvidersOpen(true)
-                : navigate("settings"),
-            )}
-          </span>
           <span className="shell-desktop-utility">
             {utility("Wallets", Wallet, () => navigate("wallets/overview"))}
           </span>
@@ -252,11 +247,13 @@ export function ShellNavigation() {
               />
             )}
           </span>
-          {utility("Preferences", Settings2, () => setDialog("preferences"))}
+          {utility("Preferences", Settings2, () =>
+            openSettingsModal("general"),
+          )}
           <button
             className="shell-instance"
             aria-label={t("Instance location")}
-            onClick={() => navigate("settings")}
+            onClick={() => openSettingsModal("instance")}
           >
             {core.connection?.location === "remote" ? (
               <Server size={14} />
@@ -306,22 +303,11 @@ export function ShellNavigation() {
           >
             <History size={19} />
           </a>
+          {utility("Settings", Settings, () => openSettingsModal("general"))}
         </div>
       </nav>
-      {dialog === "preferences" && (
-        <Dialog title={t("Preferences")} onClose={() => setDialog(null)}>
-          <AppearanceSettings />
-          <a
-            className="text-button"
-            href="#settings"
-            onClick={() => setDialog(null)}
-          >
-            {t("All settings")}
-          </a>
-        </Dialog>
-      )}
-      {dialog === "search" && (
-        <Dialog title={t("Search Fased")} onClose={() => setDialog(null)}>
+      {searchOpen && (
+        <Dialog title={t("Search Fased")} onClose={() => setSearchOpen(false)}>
           <label className="shell-search-field">
             {t("Search workspace")}
             <input
@@ -336,7 +322,7 @@ export function ShellNavigation() {
                 <a
                   key={item.path}
                   href={`#${item.path}`}
-                  onClick={() => setDialog(null)}
+                  onClick={() => setSearchOpen(false)}
                 >
                   {t(item.title)}
                 </a>

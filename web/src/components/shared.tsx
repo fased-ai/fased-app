@@ -68,11 +68,13 @@ export function Dialog({
   children,
   onClose,
   wide = false,
+  className = "",
 }: {
   title: string;
   children: ReactNode;
   onClose: () => void;
   wide?: boolean;
+  className?: string;
 }) {
   const { t } = useUI();
   const ref = useRef<HTMLDialogElement>(null);
@@ -92,7 +94,9 @@ export function Dialog({
   return (
     <dialog
       ref={ref}
-      className={wide ? "dialog wide" : "dialog"}
+      className={[wide ? "dialog wide" : "dialog", className]
+        .filter(Boolean)
+        .join(" ")}
       onCancel={onClose}
       onClick={(e) => {
         if (e.target === e.currentTarget) onClose();
@@ -119,11 +123,13 @@ export function ToggleSwitch({
   onChange,
   label,
   disabled = false,
+  hideLabel = false,
 }: {
   checked: boolean;
   onChange: (checked: boolean) => void;
   label: string;
   disabled?: boolean;
+  hideLabel?: boolean;
 }) {
   return (
     <label className="wt-switch">
@@ -135,7 +141,7 @@ export function ToggleSwitch({
         onChange={(e) => onChange(e.target.checked)}
       />
       <span className="wt-switch-track" aria-hidden="true" />
-      <span className="wt-switch-label">{label}</span>
+      <span className={hideLabel ? "sr-only" : "wt-switch-label"}>{label}</span>
     </label>
   );
 }

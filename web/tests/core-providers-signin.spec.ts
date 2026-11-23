@@ -2103,7 +2103,7 @@ test("Providers page preserves agent drafts and shares account models without ge
   await page.unroute(providerReads);
   await expect(providers.locator(".provider-editor")).toHaveCSS(
     "background-color",
-    "rgb(34, 32, 45)",
+    "rgb(22, 22, 33)",
   );
   await expect(providers.locator(".provider-editor")).toHaveCSS(
     "border-radius",
@@ -4574,4 +4574,183 @@ test("Host CLI subscription detection, connect, and device-code auth modal", asy
       disabled: true,
     });
   await expect(editor.getByRole("status")).toContainText("Disabled");
+});
+
+test("unified Settings Providers inline toggle and 3-step Add provider wizard work end-to-end", async ({
+  page,
+  isMobile,
+}) => {
+  await page.goto(url + "/#overview");
+  await openOwnerSetup(
+    page,
+    JSON.parse(await readFile(join(dir, "claim-code.json"), "utf8")).code,
+  );
+  await page.getByLabel("Create owner password").fill(fixturePassword);
+  await page
+    .getByRole("button", { name: "Claim workspace", exact: true })
+    .click();
+  await expect(
+    page.getByRole("button", { name: "Sign out", exact: true }),
+  ).toBeVisible();
+
+  const postedActions: Record<string, any>[] = [];
+  let savedAccount: Record<string, any> | null = null;
+  const baseConnection = await privateCLI(["ai-connection"]);
+  const hostClis = [
+    {
+      provider: "google",
+      binary: "antigravity",
+      label: "Antigravity ACP",
+      transport: "acp",
+      version: "1.5.13",
+      binaryPath: "/home/user/.t3/tools/antigravity-acp/antigravity",
+      installed: true,
+      authenticated: true,
+      account: "Google AI Ultra",
+      supportsDevice: false,
+      loginCommand: "antigravity acp --login",
+      installHint: "Install Antigravity desktop or run antigravity acp",
+      models: ["gemini-4-neon", "gemini-3.8-flash"],
+    },
+  ];
+  const rootPayload = () => ({
+    ...baseConnection,
+    ...(savedAccount ?? {}),
+    osVaultAvailable: true,
+    signInAvailable: true,
+    liveCallsEnabled: true,
+    hostClis,
+    connections: savedAccount ? [savedAccount] : [],
+  });
+
+  await page.route("**/api/v1/ai/connection", async (route) => {
+    if (route.request().method() === "GET") {
+      await route.fulfill({ json: rootPayload() });
+      return;
+    }
+    const body = route.request().postDataJSON() as Record<string, any>;
+    postedActions.push(body);
+    if (body.action === "cli-connect") {
+      savedAccount = {
+        ...baseConnection,
+        ref: "acct-wiz-1",
+        name: body.name || "Antigravity ACP",
+        provider: body.provider || "google",
+        authMethod: "cli",
+        credentialMode: "cli",
+        binary: body.binary || "antigravity",
+        binaryPath: body.binaryPath || "",
+        configDir: body.configDir || "",
+        accentColor: body.accentColor || "",
+        cliVersion: "1.5.13",
+        disabled: false,
+        osVaultAvailable: true,
+        osProtected: true,
+        locked: false,
+        testOnly: false,
+        liveCallsEnabled: true,
+        model: "gemini-3.8-flash",
+        catalog: {
+          ...baseConnection.catalog,
+          state: "ready",
+          models: [
+            {
+              id: "gemini-3.8-flash",
+              name: "Gemini 3.8 Flash",
+              provider: "google",
+              method: "cli",
+              connectionRef: "acct-wiz-1",
+              recommended: true,
+              selectable: true,
+              availability: "available",
+            },
+          ],
+        },
+      };
+    } else if (body.action === "set-enabled" && savedAccount) {
+      savedAccount = { ...savedAccount, disabled: !!body.disabled };
+    }
+    await route.fulfill({ json: rootPayload() });
+  });
+
+  if (isMobile) {
+    await page
+      .getByRole("button", { name: "Preferences", exact: true })
+      .click();
+  } else {
+    await page
+      .locator("#shell-rail")
+      .getByRole("button", { name: "Settings", exact: true })
+      .click();
+  }
+
+  const settingsDialog = page.getByRole("dialog", { name: /Settings \// });
+  await settingsDialog
+    .locator(".settings-modal-tabs")
+    .getByRole("button", { name: "Providers", exact: true })
+    .click();
+  await settingsDialog
+    .getByRole("button", { name: "Add provider", exact: true })
+    .click();
+
+  const wizard = page.getByRole("dialog", {
+    name: "Add provider",
+    exact: true,
+  });
+  await expect(wizard).toBeVisible();
+  await wizard
+    .getByRole("group", { name: "Provider", exact: true })
+    .getByRole("button", { name: /Google/ })
+    .click();
+  await wizard.getByRole("button", { name: "Next", exact: true }).click();
+
+  await wizard.getByLabel("Label", { exact: true }).fill("Ultra ACP");
+  await wizard
+    .getByRole("group", { name: "Accent color", exact: true })
+    .getByRole("button", { name: "#27c5da", exact: true })
+    .click();
+  await wizard.getByRole("button", { name: "Next", exact: true }).click();
+
+  await expect(wizard.locator(".cli-status-card")).toContainText("v1.5.13");
+  await expect(wizard.locator(".cli-status-card")).toContainText(
+    "Google AI Ultra",
+  );
+  await wizard.getByLabel("Binary path", { exact: true }).fill("/opt/ag/acp");
+  await wizard
+    .getByLabel("Config directory", { exact: true })
+    .fill("~/.config/ag-ultra");
+  await wizard
+    .getByRole("button", { name: "Add instance", exact: true })
+    .click();
+
+  await expect
+    .poll(() => postedActions.find((a) => a.action === "cli-connect"))
+    .toEqual({
+      action: "cli-connect",
+      provider: "google",
+      binary: "antigravity",
+      name: "Ultra ACP",
+      binaryPath: "/opt/ag/acp",
+      configDir: "~/.config/ag-ultra",
+      accentColor: "#27c5da",
+    });
+
+  await expect(
+    settingsDialog.locator(".settings-providers-list"),
+  ).toContainText("Ultra ACP");
+  await expect(
+    settingsDialog.locator(".settings-providers-detail"),
+  ).toContainText("/opt/ag/acp");
+
+  const inlineSwitch = settingsDialog
+    .locator(".settings-provider-row")
+    .getByRole("checkbox", { name: "Enabled Ultra ACP", exact: true });
+  await expect(inlineSwitch).toBeChecked();
+  await inlineSwitch.uncheck();
+  await expect
+    .poll(() => postedActions.find((a) => a.action === "set-enabled"))
+    .toEqual({ action: "set-enabled", ref: "acct-wiz-1", disabled: true });
+  await expect(
+    settingsDialog.locator(".settings-providers-detail"),
+  ).toContainText("Disabled");
 });
