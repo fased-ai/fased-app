@@ -1091,10 +1091,23 @@ export async function runInstalledAgentPhase(
       exact: true,
     });
     await providerPage.locator('[data-account="' + c.ref + '"]').click();
-    const access = providerPage.locator("details").filter({
-      has: page.locator("summary", { hasText: /^Background access$/ }),
+    const accessButton = providerPage.getByRole("button", {
+      name: "Background access",
+      exact: true,
     });
-    await access.locator(":scope > summary").click();
+    let access;
+    if ((await accessButton.count()) > 0) {
+      await accessButton.click();
+      access = providerPage.getByRole("dialog", {
+        name: "Background access",
+        exact: true,
+      });
+    } else {
+      access = providerPage.locator("details").filter({
+        has: page.locator("summary", { hasText: /^Background access$/ }),
+      });
+      await access.locator(":scope > summary").click();
+    }
     await access
       .getByRole("checkbox", { name: "Installed bounded task", exact: true })
       .check();

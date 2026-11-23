@@ -63,8 +63,12 @@ test("OpenAI test connection shares encrypted storage, bound consent and restart
   await panel.getByLabel("Vault passphrase").fill(passphrase);
   await panel.getByRole("button", { name: "Save" }).click();
   await expect(panel.getByRole("status")).toContainText("Unlocked");
+  await panel.getByRole("button", { name: "Edit", exact: true }).click();
   await expect(panel.getByLabel("API key")).toHaveValue("");
   await expect(panel.getByLabel("Vault passphrase")).toHaveValue("");
+  await panel
+    .getByRole("button", { name: "Close dialog", exact: true })
+    .click();
   let connection = await privateCLI(["ai-connection"]);
   expect(connection.locked).toBe(false);
   expect(connection.liveCallsEnabled).toBe(false);
@@ -1351,10 +1355,13 @@ for (const location of ["local", "remote"]) {
         exact: true,
       });
       await accessEditor.locator(`[data-account="${account.ref}"]`).click();
-      const background = accessEditor
-        .getByText("Background access", { exact: true })
-        .locator("..");
-      await background.locator(":scope > summary").click();
+      await accessEditor
+        .getByRole("button", { name: "Background access", exact: true })
+        .click();
+      const background = accessEditor.getByRole("dialog", {
+        name: "Background access",
+        exact: true,
+      });
       await background.getByLabel("Plan summary", { exact: true }).check();
       await background
         .getByRole("button", { name: "Review access", exact: true })
@@ -1836,10 +1843,8 @@ test("scoped pilot controls keep review allow and revoke exact while ordinary co
   await expect(
     editor.getByRole("button", { name: "Add provider", exact: true }),
   ).toBeDisabled();
-  const credentials = editor
-    .locator("details.connection-options")
-    .filter({ has: page.locator("summary", { hasText: /^Edit$/ }) });
-  await credentials.getByText("Edit", { exact: true }).click();
+  await editor.getByRole("button", { name: "Edit", exact: true }).click();
+  const credentials = editor.getByRole("dialog", { name: "Edit", exact: true });
   await credentials
     .getByLabel("API key", { exact: true })
     .fill("fased-test-pilot-replacement-refused");
@@ -1851,11 +1856,11 @@ test("scoped pilot controls keep review allow and revoke exact while ordinary co
   ).toBeDisabled();
   await credentials.getByLabel("API key", { exact: true }).fill("");
   await credentials.getByLabel("Vault passphrase", { exact: true }).fill("");
-  await credentials.getByText("Edit", { exact: true }).click();
-  await editor.getByText("Pilot", { exact: true }).click();
-  const pilot = editor
-    .locator("details")
-    .filter({ has: page.locator("summary", { hasText: /^Pilot$/ }) });
+  await credentials
+    .getByRole("button", { name: "Close dialog", exact: true })
+    .click();
+  await editor.getByRole("button", { name: "Pilot", exact: true }).click();
+  const pilot = editor.getByRole("dialog", { name: "Pilot", exact: true });
   await pilot.getByRole("button", { name: "Review", exact: true }).click();
   await expect(pilot).toContainText("$0.50");
   await expect(pilot).toContainText("4 attempts");
@@ -2655,6 +2660,9 @@ test("Named local servers share setup models and agent Chat without retargeting 
   await expect(editor.getByLabel("Endpoint", { exact: true })).toHaveValue(
     "http://127.0.0.1:1234/v1",
   );
+  await editor
+    .getByRole("button", { name: "Close dialog", exact: true })
+    .click();
   await page.getByRole("button", { name: "Back", exact: true }).click();
   await page.getByRole("button", { name: "New agent", exact: true }).click();
   const creation = page.getByRole("dialog", { name: "New agent", exact: true });
@@ -3484,7 +3492,6 @@ test("Anthropic workspace account joins models agent Chat and preserves existing
   await providers
     .getByLabel("Vault passphrase", { exact: true })
     .fill("disposable-kimi-region-vault");
-  await providers.getByText("Options", { exact: true }).click();
   await providers
     .getByLabel("Workspace (optional)", { exact: true })
     .fill("wrkspc_01JwQvzr7rXLA5AGx3HKfFUJ");
@@ -4196,4 +4203,140 @@ test("passwordless OS-protected providers and task access work without a vault p
   await expect
     .poll(() => postedActions.some((a) => a.action === "remove"))
     .toBe(true);
+});
+
+test("remote passwordless sign-in auto-completes from guided modal without details clutter", async ({
+  page,
+}) => {
+  await page.goto(url + "/#overview");
+  const claim = JSON.parse(
+    await readFile(join(dir, "claim-code.json"), "utf8"),
+  );
+  await openOwnerSetup(page, claim.code);
+  await page.getByLabel("Create owner password").fill(fixturePassword);
+  await page
+    .getByRole("button", { name: "Claim workspace", exact: true })
+    .click();
+  await expect(
+    page.getByRole("heading", { name: "Dashboard", exact: true }),
+  ).toBeVisible();
+  const token = await page.evaluate(() =>
+    sessionStorage.getItem("fased.core.session.v1"),
+  );
+  const baseConnection = await (
+    await page.request.get(url + "/api/v1/ai/connection", {
+      headers: { Authorization: `Bearer ${token}` },
+    })
+  ).json();
+
+  let savedAccount: Record<string, any> | undefined;
+  let signIn: Record<string, any> | undefined;
+  const postedActions: Record<string, any>[] = [];
+  const rootPayload = () => ({
+    ...baseConnection,
+    ...(savedAccount ?? {}),
+    credentialModes: ["openai", "openrouter", "local"],
+    osVaultAvailable: true,
+    signInAvailable: true,
+    liveCallsEnabled: true,
+    persistentTaskAccessAvailable: true,
+    connections: savedAccount ? [savedAccount] : [],
+    ...(signIn ? { signIn } : {}),
+  });
+
+  await page.route("**/api/v1/ai/connection", async (route) => {
+    if (route.request().method() === "GET") {
+      await route.fulfill({ json: rootPayload() });
+      return;
+    }
+    const body = route.request().postDataJSON() as Record<string, any>;
+    postedActions.push(body);
+    const now = Math.floor(Date.now() / 1000);
+    if (body.action === "sign-in-start") {
+      signIn = {
+        id: "si-remote-os-1",
+        provider: "openai",
+        state: "waiting",
+        url: "https://auth.openai.com/api/accounts/authorize?state=mock-remote-1",
+        expiresAt: now + 300,
+        remote: true,
+      };
+    } else if (body.action === "sign-in-complete") {
+      signIn = undefined;
+      savedAccount = {
+        ...baseConnection,
+        ref: "acct-remote-os-1",
+        name: "Remote OpenAI",
+        provider: "openai",
+        authMethod: "sign-in",
+        credentialMode: "openai",
+        credentialModes: ["openai", "openrouter", "local"],
+        osVaultAvailable: true,
+        osProtected: true,
+        locked: false,
+        testOnly: false,
+        liveCallsEnabled: true,
+        persistentTaskAccessAvailable: true,
+        model: "gpt-6.2-sol",
+        catalog: {
+          ...baseConnection.catalog,
+          state: "ready",
+          models: [
+            {
+              id: "gpt-6.2-sol",
+              name: "GPT-6.2 Sol",
+              provider: "openai",
+              method: "sign-in",
+              connectionRef: "acct-remote-os-1",
+              recommended: true,
+              selectable: true,
+              availability: "ready",
+            },
+          ],
+        },
+      };
+    }
+    await route.fulfill({ json: rootPayload() });
+  });
+
+  await openProviders(page);
+  const editor = page.getByRole("region", { name: "Providers", exact: true });
+  await expect(editor).toBeVisible();
+  await editor.getByRole("button", { name: "Sign in", exact: true }).click();
+  await editor
+    .getByRole("button", { name: "Continue with ChatGPT", exact: true })
+    .click();
+
+  const modal = editor.getByRole("dialog", { name: "OpenAI", exact: true });
+  await expect(modal).toBeVisible();
+  await expect(
+    modal.getByRole("link", { name: "Open sign-in", exact: true }),
+  ).toBeVisible();
+  await expect(modal).toContainText("127.0.0.1");
+  await expect(
+    modal.getByRole("button", { name: "Paste", exact: true }),
+  ).toBeVisible();
+
+  await modal
+    .getByLabel("Redirect URL", { exact: true })
+    .fill(
+      "  http://127.0.0.1:48123/auth/callback?code=cb_12345&state=mock-remote-1  ",
+    );
+  await expect
+    .poll(
+      () =>
+        postedActions.find((a) => a.action === "sign-in-complete")?.callback,
+    )
+    .toBe(
+      "http://127.0.0.1:48123/auth/callback?code=cb_12345&state=mock-remote-1",
+    );
+  await expect(modal).toHaveCount(0);
+  await expect(editor.locator(".provider-editor details")).toHaveCount(0);
+  await expect(editor.locator("details")).toHaveCount(0);
+  await expect(
+    editor.getByRole("button", { name: "Edit", exact: true }),
+  ).toBeVisible();
+  await expect(
+    editor.getByRole("button", { name: "Background access", exact: true }),
+  ).toBeVisible();
 });

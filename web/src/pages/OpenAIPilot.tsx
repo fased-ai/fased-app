@@ -4,6 +4,8 @@ import { useWorkspace } from "../workspace";
 import { useUI } from "../ui-preferences";
 import type { Connection } from "./AIConnection";
 import type { AILimits } from "../agents";
+import { Dialog } from "../components/shared";
+import { ShieldCheck } from "../icons";
 
 export type PilotAllowance = {
   id: string;
@@ -46,11 +48,14 @@ export function pilotCommand(
 
 export function OpenAIPilotSettings({
   connection,
+  defaultOpen = false,
 }: {
   connection: Connection;
+  defaultOpen?: boolean;
 }) {
   const { core, agents } = useWorkspace();
   const { t } = useUI();
+  const [open, setOpen] = useState(defaultOpen);
   const [review, setReview] = useState<PilotAllowance>();
   const [passphrase, setPassphrase] = useState("");
   const [error, setError] = useState("");
@@ -67,6 +72,9 @@ export function OpenAIPilotSettings({
       generation.current++;
     };
   }, [connection.ref, core.instanceId, v?.profileId, v?.revision]);
+  useEffect(() => {
+    setOpen(false);
+  }, [connection.ref, core.instanceId]);
   if (!connection.pilotAvailable) return null;
   const allowance = review ?? connection.pilot;
   async function change(
@@ -103,105 +111,128 @@ export function OpenAIPilotSettings({
     }
   }
   return (
-    <details className="connection-options">
-      <summary>{t("Pilot")}</summary>
-      {error && <p role="alert">{error}</p>}
-      {allowance && (
-        <dl className="pilot-facts">
-          <dt>{t("Model")}</dt>
-          <dd>{previewModel(allowance.model, t)}</dd>
-          <dt>{t("Limits")}</dt>
-          <dd>
-            {t("{count} attempts · {minutes} minutes", {
-              count: allowance.maxRequests,
-              minutes: (allowance.expiresAt - allowance.createdAt) / 60,
-            })}{" "}
-            · ${(allowance.budgetMicrousd / 1000000).toFixed(2)}
-          </dd>
-          <dt>{t("Used")}</dt>
-          <dd>
-            {allowance.usedRequests} · $
-            {(allowance.allocatedMicrousd / 1000000).toFixed(4)}
-          </dd>
-          <dt>{t("Chat / task")}</dt>
-          <dd>
-            3 / 1 · ${(allowance.laneBudgetMicrousd / 1000000).toFixed(2)} / $
-            {(allowance.laneBudgetMicrousd / 1000000).toFixed(2)}
-          </dd>
-          <dt>{t("Per request")}</dt>
-          <dd>
-            {allowance.limits.maxInputTokens} /{" "}
-            {allowance.limits.maxOutputTokens} ·{" "}
-            {allowance.limits.deadlineSeconds}s · $
-            {(allowance.limits.budgetMicrousd / 1000000).toFixed(2)}
-          </dd>
-          <dt>{t("Expires")}</dt>
-          <dd>{new Date(allowance.expiresAt * 1000).toLocaleTimeString()}</dd>
-        </dl>
-      )}
-      {connection.pilot && (
-        <p role="status">
-          {t(connection.pilotState === "active" ? "Active" : "Stopped")}
-        </p>
-      )}
-      {review ? (
-        <form
-          autoComplete="off"
-          onSubmit={(e) => {
-            e.preventDefault();
-            void change("pilot-allow");
-          }}
-        >
-          <label>
-            {t("Vault passphrase")}
-            <input
-              type="password"
-              autoComplete="off"
-              value={passphrase}
-              onChange={(e) => setPassphrase(e.target.value)}
-              maxLength={1024}
-            />
-          </label>
-          <div className="pilot-actions">
-            <button
-              className="primary"
-              disabled={busy || passphrase.length < 12}
-            >
-              {t("Allow pilot")}
-            </button>
-            <button
-              type="button"
-              className="secondary"
-              disabled={busy}
-              onClick={() => {
-                setReview(undefined);
-                setPassphrase("");
-              }}
-            >
-              {t("Cancel")}
-            </button>
+    <>
+      <button
+        type="button"
+        className="provider-action-btn"
+        aria-expanded={open}
+        onClick={() => setOpen(true)}
+      >
+        <ShieldCheck size={14} />
+        <span>{t("Pilot")}</span>
+        {connection.pilotState === "active" && (
+          <span className="provider-action-dot" aria-hidden="true" />
+        )}
+      </button>
+      {open && (
+        <Dialog title={t("Pilot")} onClose={() => setOpen(false)}>
+          <div className="dialog-body">
+            {error && <p role="alert">{error}</p>}
+            {allowance && (
+              <dl className="pilot-facts">
+                <dt>{t("Model")}</dt>
+                <dd>{previewModel(allowance.model, t)}</dd>
+                <dt>{t("Limits")}</dt>
+                <dd>
+                  {t("{count} attempts · {minutes} minutes", {
+                    count: allowance.maxRequests,
+                    minutes: (allowance.expiresAt - allowance.createdAt) / 60,
+                  })}{" "}
+                  · ${(allowance.budgetMicrousd / 1000000).toFixed(2)}
+                </dd>
+                <dt>{t("Used")}</dt>
+                <dd>
+                  {allowance.usedRequests} · $
+                  {(allowance.allocatedMicrousd / 1000000).toFixed(4)}
+                </dd>
+                <dt>{t("Chat / task")}</dt>
+                <dd>
+                  3 / 1 · ${(allowance.laneBudgetMicrousd / 1000000).toFixed(2)}{" "}
+                  / ${(allowance.laneBudgetMicrousd / 1000000).toFixed(2)}
+                </dd>
+                <dt>{t("Per request")}</dt>
+                <dd>
+                  {allowance.limits.maxInputTokens} /{" "}
+                  {allowance.limits.maxOutputTokens} ·{" "}
+                  {allowance.limits.deadlineSeconds}s · $
+                  {(allowance.limits.budgetMicrousd / 1000000).toFixed(2)}
+                </dd>
+                <dt>{t("Expires")}</dt>
+                <dd>
+                  {new Date(allowance.expiresAt * 1000).toLocaleTimeString()}
+                </dd>
+              </dl>
+            )}
+            {connection.pilot && (
+              <p role="status">
+                {t(connection.pilotState === "active" ? "Active" : "Stopped")}
+              </p>
+            )}
+            {review ? (
+              <form
+                autoComplete="off"
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  void change("pilot-allow");
+                }}
+              >
+                <label>
+                  {t("Vault passphrase")}
+                  <input
+                    type="password"
+                    autoComplete="off"
+                    value={passphrase}
+                    onChange={(e) => setPassphrase(e.target.value)}
+                    maxLength={1024}
+                  />
+                </label>
+                <div className="pilot-actions">
+                  <button
+                    className="primary"
+                    disabled={busy || passphrase.length < 12}
+                  >
+                    {t("Allow pilot")}
+                  </button>
+                  <button
+                    type="button"
+                    className="secondary"
+                    disabled={busy}
+                    onClick={() => {
+                      setReview(undefined);
+                      setPassphrase("");
+                    }}
+                  >
+                    {t("Cancel")}
+                  </button>
+                </div>
+              </form>
+            ) : !connection.pilot ? (
+              <div className="agent-actions">
+                <button
+                  type="button"
+                  className="secondary"
+                  disabled={busy || !v || connection.locked}
+                  onClick={() => void change("pilot-review")}
+                >
+                  {t("Review")}
+                </button>
+              </div>
+            ) : null}
+            {connection.pilot && (
+              <div className="agent-actions">
+                <button
+                  type="button"
+                  className="secondary"
+                  disabled={busy || connection.pilotState !== "active"}
+                  onClick={() => void change("pilot-revoke")}
+                >
+                  {t("Revoke")}
+                </button>
+              </div>
+            )}
           </div>
-        </form>
-      ) : !connection.pilot ? (
-        <button
-          type="button"
-          className="secondary"
-          disabled={busy || !v || connection.locked}
-          onClick={() => void change("pilot-review")}
-        >
-          {t("Review")}
-        </button>
-      ) : null}
-      {connection.pilot && (
-        <button
-          type="button"
-          className="secondary"
-          disabled={busy || connection.pilotState !== "active"}
-          onClick={() => void change("pilot-revoke")}
-        >
-          {t("Revoke")}
-        </button>
+        </Dialog>
       )}
-    </details>
+    </>
   );
 }

@@ -166,3 +166,117 @@
   gap: 4px;
   margin-left: auto;
 }
+.wt .provider-action-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 12px;
+}
+.wt .provider-action-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 32px;
+  padding: 5px 12px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--wt-border);
+  background: var(--wt-raised);
+  color: var(--wt-text);
+  font-size: 13px;
+  font-weight: 500;
+}
+.wt .provider-action-btn:hover:not(:disabled) {
+  border-color: var(--wt-btn-hover-border);
+  background: var(--wt-btn-hover);
+}
+.wt .provider-action-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--wt-aqua);
+}
+.wt .provider-models header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+.wt .provider-models header h3 {
+  margin: 0;
+}
+.wt .provider-model-pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--wt-muted);
+  background: var(--wt-raised);
+  border: 1px solid var(--wt-border);
+}
+.wt .provider-model-pill[data-state="recommended"] {
+  color: var(--wt-aqua);
+  border-color: var(--wt-aqua);
+}
+.wt .provider-model-pill[data-state="stale"] {
+  color: var(--wt-warn);
+  border-color: var(--wt-warn);
+}
+.wt .signin-modal {
+  gap: 14px;
+}
+.wt .signin-steps {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 12px;
+}
+.wt .signin-step {
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr);
+  gap: 10px;
+  align-items: start;
+}
+.wt .signin-step-num {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: var(--wt-raised);
+  border: 1px solid var(--wt-border);
+  color: var(--wt-text);
+  font-size: 12px;
+  font-weight: 600;
+  display: grid;
+  place-items: center;
+}
+.wt .signin-callout {
+  margin: 0;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  background: var(--wt-bg);
+  border: 1px solid var(--wt-border);
+  color: var(--wt-muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+.wt .signin-paste-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.wt .signin-paste-row input {
+  flex: 1;
+  min-width: 0;
+}
+.wt .agent-field {
+  display: grid;
+  gap: 6px;
+}
+.wt .agent-field-label {
+  font-size: 12px;
+  color: var(--wt-muted);
+}

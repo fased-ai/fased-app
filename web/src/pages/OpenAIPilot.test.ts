@@ -53,6 +53,17 @@ describe("Scoped pilot controls", () => {
         }),
       ),
     ).toBe("");
+    const buttonHtml = renderToStaticMarkup(
+      createElement(OpenAIPilotSettings, {
+        connection: {
+          ref: "fixture-ref",
+          pilotAvailable: true,
+          pilot: allowance,
+          pilotState: "active",
+        } as Connection,
+      }),
+    );
+    expect(buttonHtml).toContain("Pilot");
     const html = renderToStaticMarkup(
       createElement(OpenAIPilotSettings, {
         connection: {
@@ -61,6 +72,7 @@ describe("Scoped pilot controls", () => {
           pilot: allowance,
           pilotState: "active",
         } as Connection,
+        defaultOpen: true,
       }),
     );
     expect(html).toContain("Pilot");

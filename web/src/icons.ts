@@ -21,6 +21,7 @@ export {
   ChevronRight,
   Circle,
   CircleHelp,
+  ClipboardPaste,
   Clock3,
   Copy,
   Download,
