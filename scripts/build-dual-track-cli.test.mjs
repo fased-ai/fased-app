@@ -71,6 +71,14 @@ test("rendered install.ps1 pins desktop release URLs and SHA-256s for amd64 and 
   );
   assert.ok(rendered.includes(sha256(amd64Archive)));
   assert.ok(rendered.includes(sha256(arm64Archive)));
+  assert.ok(
+    rendered.includes("@(@($Local, $Server, $Connect) | Where-Object { $_ })"),
+  );
+  assert.ok(
+    rendered.includes(
+      "@(@($Open, $Start, $Stop, $Status, $Uninstall) | Where-Object { $_ })",
+    ),
+  );
   assert.match(rendered, /function Invoke-DetachedUninstall/);
   assert.match(
     rendered,
@@ -147,6 +155,26 @@ test("rendered install-cli.sh passes syntax checks, pins 4 Unix targets, and rej
     "--no-autostart",
   ]);
   assert.equal(statusNoAuto.status, 1);
+
+  const serverPrep = spawnSync("bash", [
+    "-c",
+    rendered,
+    "install-cli.sh",
+    "--server",
+    "--prepare-host",
+  ]);
+  assert.equal(serverPrep.status, 1);
+  assert.match(serverPrep.stderr.toString(), /--prepare-host/);
+
+  const statusPrep = spawnSync("bash", [
+    "-c",
+    rendered,
+    "install-cli.sh",
+    "--local",
+    "--status",
+    "--prepare-host",
+  ]);
+  assert.equal(statusPrep.status, 1);
 });
 
 test("buildDesktopReleaseManifest matches update.ParseDesktopManifest structure", () => {

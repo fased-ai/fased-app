@@ -28,6 +28,7 @@ import {
   buildWindowsSigntoolVerifyArgs,
   findWindowsSigntool,
 } from "./signing-helpers.mjs";
+import { cleanupUbuntuPreparation } from "./ubuntu-preparation.mjs";
 
 function sha256Hex(buf) {
   return createHash("sha256").update(buf).digest("hex");
@@ -599,6 +600,7 @@ export async function runHostSmoke({
   let winCertStore = "";
   let server = null;
   let installed = false;
+  let preparedUbuntuPolicy = false;
   let liveScriptPath = "";
 
   try {
@@ -736,12 +738,19 @@ export async function runHostSmoke({
     );
 
     // 2. Valid archive installs, passes /api/v1/health, version --json, shim, and status.
-    const liveRun = await runInstallerCommand(
-      liveScriptPath,
+    const liveArgs =
       process.platform === "win32"
         ? ["-Local", "-NoAutostart", "-Listen", `127.0.0.1:${listenPort}`]
-        : ["--local", "--no-autostart", "--listen", `127.0.0.1:${listenPort}`],
-    );
+        : ["--local", "--no-autostart", "--listen", `127.0.0.1:${listenPort}`];
+    if (
+      process.platform === "linux" &&
+      process.env.GITHUB_ACTIONS === "true" &&
+      !existsSync("/etc/apparmor.d/fased-app-bwrap-v1")
+    ) {
+      liveArgs.push("--prepare-host");
+      preparedUbuntuPolicy = true;
+    }
+    const liveRun = await runInstallerCommand(liveScriptPath, liveArgs);
     assert.equal(
       liveRun.status,
       0,
@@ -859,6 +868,13 @@ export async function runHostSmoke({
         );
       } catch {
         // Best-effort uninstall in finally.
+      }
+    }
+    if (preparedUbuntuPolicy) {
+      try {
+        await cleanupUbuntuPreparation();
+      } catch {
+        // Best-effort Ubuntu AppArmor teardown in finally.
       }
     }
     try {

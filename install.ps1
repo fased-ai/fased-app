@@ -43,13 +43,13 @@ if (-not ($EntryVersion -match '^[0-9]+\.[0-9]+\.[0-9]+([-+][a-zA-Z0-9.-]+)?$') 
   Fail 'No trusted installer release is published yet.'
 }
 
-$selectedProfiles = @($Local, $Server, $Connect) | Where-Object { $_ }
+$selectedProfiles = @(@($Local, $Server, $Connect) | Where-Object { $_ })
 if ($selectedProfiles.Count -gt 1) {
   Fail 'Choose at most one of -Local, -Server, or -Connect.'
 }
 $Profile = if ($Local) { 'local' } elseif ($Server) { 'server' } elseif ($Connect) { 'connect' } else { '' }
 
-$selectedActions = @($Open, $Start, $Stop, $Status, $Uninstall) | Where-Object { $_ }
+$selectedActions = @(@($Open, $Start, $Stop, $Status, $Uninstall) | Where-Object { $_ })
 if ($selectedActions.Count -gt 1) {
   Fail 'Choose only one management action.'
 }
@@ -160,7 +160,7 @@ function Ensure-UserPath {
   $current = [Environment]::GetEnvironmentVariable('Path', 'User')
   $parts = @()
   if (-not [string]::IsNullOrWhiteSpace($current)) {
-    $parts = $current -split ';' | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+    $parts = @($current -split ';' | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
   }
   $alreadyPresent = $false
   foreach ($part in $parts) {
@@ -202,16 +202,18 @@ function Invoke-DetachedUninstall {
   $tmpRoot = if (-not [string]::IsNullOrWhiteSpace($env:TEMP)) { $env:TEMP } else { [System.IO.Path]::GetTempPath() }
   $stageDir = Join-Path $tmpRoot ('fased-uninstall-' + [Guid]::NewGuid().ToString('N'))
   New-Item -ItemType Directory -Path $stageDir -Force | Out-Null
+  $exitCode = 1
   try {
     $tmpExe = Join-Path $stageDir ([System.IO.Path]::GetFileName($BinaryPath))
     Copy-Item -LiteralPath $BinaryPath -Destination $tmpExe -Force
     & $tmpExe @Arguments
-    return $LASTEXITCODE
+    $exitCode = $LASTEXITCODE
   } finally {
     if (Test-Path -LiteralPath $stageDir) {
       Remove-Item -LiteralPath $stageDir -Recurse -Force -ErrorAction SilentlyContinue
     }
   }
+  exit $exitCode
 }
 
 if ($Action -ne 'install') {
@@ -222,7 +224,7 @@ if ($Action -ne 'install') {
     if ($Action -eq 'uninstall') {
       $uArgs = @('server', 'uninstall')
       if ($Purge) { $uArgs += '--purge' }
-      exit (Invoke-DetachedUninstall -BinaryPath $ServerBin -Arguments $uArgs)
+      Invoke-DetachedUninstall -BinaryPath $ServerBin -Arguments $uArgs
     }
     if ($Action -eq 'status') {
       & $ServerBin 'server' 'status'
@@ -238,7 +240,7 @@ if ($Action -ne 'install') {
       Fail 'No installed Fased Local binary was found.'
     }
     switch ($Action) {
-      'uninstall' { exit (Invoke-DetachedUninstall -BinaryPath $AppBin -Arguments @('uninstall')) }
+      'uninstall' { Invoke-DetachedUninstall -BinaryPath $AppBin -Arguments @('uninstall') }
       'open'      { & $AppBin 'open'; exit $LASTEXITCODE }
       'start'     { & $AppBin 'service' 'start'; exit $LASTEXITCODE }
       'stop'      { & $AppBin 'service' 'stop'; exit $LASTEXITCODE }

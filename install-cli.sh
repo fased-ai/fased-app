@@ -10,11 +10,11 @@ fixture_ca_base64='@FIXTURE_CA_BASE64@'
 
 die() { printf 'Fased: %s\n' "$*" >&2; exit 1; }
 usage() {
-  printf 'Usage: install-cli.sh [--local|--server|--connect] [--transport tailscale|cloudflare|domain|ssh] [--domain HOST] [--open|--start|--stop|--status|--uninstall] [--purge] [--no-autostart] [--listen 127.0.0.1:PORT]\n'
+  printf 'Usage: install-cli.sh [--local|--server|--connect] [--transport tailscale|cloudflare|domain|ssh] [--domain HOST] [--open|--start|--stop|--status|--uninstall] [--purge] [--no-autostart] [--prepare-host] [--listen 127.0.0.1:PORT]\n'
 }
 
 profile='' action=install listen='127.0.0.1:7331'
-server_transport='' server_domain='' purge=0 no_autostart=0
+server_transport='' server_domain='' purge=0 no_autostart=0 prepare_host=0
 while (($#)); do
   case "$1" in
     --local) profile=local; shift ;;
@@ -31,6 +31,7 @@ while (($#)); do
       action=uninstall; shift ;;
     --purge) purge=1; shift ;;
     --no-autostart) no_autostart=1; shift ;;
+    --prepare-host) prepare_host=1; shift ;;
     --listen) (($# >= 2)) || die 'Missing listener.'; listen=$2; shift 2 ;;
     --help|-h) usage; exit 0 ;;
     *) die "Unknown option: $1" ;;
@@ -60,6 +61,9 @@ if [[ $action == uninstall ]]; then
 fi
 if [[ $no_autostart == 1 ]]; then
   [[ $action == install && $profile != server && $profile != connect ]] || die '--no-autostart is only supported with --local install.'
+fi
+if [[ $prepare_host == 1 ]]; then
+  [[ $action == install && $profile != server && $profile != connect ]] || die '--prepare-host is only supported with --local install.'
 fi
 [[ $listen =~ ^127\.0\.0\.1:([0-9]{4,5})$ ]] || die 'Use a fixed loopback port (127.0.0.1:PORT).'
 port=${BASH_REMATCH[1]}
@@ -224,6 +228,9 @@ case "$profile" in
     local_args=(install --bundle "$bundle_dir" --listen "$listen")
     if [[ $no_autostart == 0 ]]; then
       local_args+=(--autostart)
+    fi
+    if [[ $prepare_host == 1 ]]; then
+      local_args+=(--prepare-host)
     fi
     "$bundle_engine" "${local_args[@]}"
     bin_dir="$HOME/.local/bin"
