@@ -5542,4 +5542,16 @@ export const pageCopy = {
   ],
   Tools: ["Инструменты", "Herramientas", "工具", "도구"],
   Resources: ["Ресурсы", "Recursos", "资源", "리소스"],
+  "Shadow home path": [
+    "Изолированный каталог",
+    "Directorio aislado",
+    "影子主目录",
+    "섀도우 홈 경로",
+  ],
+  "Launch arguments": [
+    "Аргументы запуска",
+    "Argumentos de inicio",
+    "启动参数",
+    "실행 인수",
+  ],
 } satisfies Record<string, [string, string, string, string]>;

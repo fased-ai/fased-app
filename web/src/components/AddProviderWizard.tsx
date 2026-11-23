@@ -55,6 +55,8 @@ export function AddProviderWizard({
   const [cliBinary, setCliBinary] = useState(initialBinary || "");
   const [binaryPath, setBinaryPath] = useState("");
   const [configDir, setConfigDir] = useState("");
+  const [shadowHome, setShadowHome] = useState("");
+  const [launchArgs, setLaunchArgs] = useState("");
   const [key, setKey] = useState("");
   const [workspace, setWorkspace] = useState("");
   const [googleProject, setGoogleProject] = useState("");
@@ -131,6 +133,8 @@ export function AddProviderWizard({
   function selectProvider(nextProvider: string) {
     setProvider(nextProvider);
     setCliBinary("");
+    setShadowHome("");
+    setLaunchArgs("");
     setMethodTouched(false);
     setError("");
     setKey("");
@@ -199,6 +203,10 @@ export function AddProviderWizard({
         ...(cleanName ? { name: cleanName } : {}),
         ...(binaryPath.trim() ? { binaryPath: binaryPath.trim() } : {}),
         ...(configDir.trim() ? { configDir: configDir.trim() } : {}),
+        ...(cliStatus?.binary === "codex" && shadowHome.trim()
+          ? { shadowHome: shadowHome.trim() }
+          : {}),
+        ...(launchArgs.trim() ? { launchArgs: launchArgs.trim() } : {}),
         ...(accentColor ? { accentColor } : {}),
         ...(needsPassphrase && passphrase ? { passphrase } : {}),
       });
@@ -586,6 +594,29 @@ export function AddProviderWizard({
                         autoComplete="off"
                         spellCheck={false}
                         onChange={(e) => setConfigDir(e.target.value)}
+                      />
+                    </label>
+                    {cliStatus.binary === "codex" && (
+                      <label>
+                        {t("Shadow home path")}
+                        <input
+                          value={shadowHome}
+                          maxLength={260}
+                          autoComplete="off"
+                          spellCheck={false}
+                          placeholder="~/.codex-fased/personal"
+                          onChange={(e) => setShadowHome(e.target.value)}
+                        />
+                      </label>
+                    )}
+                    <label>
+                      {t("Launch arguments")}
+                      <input
+                        value={launchArgs}
+                        maxLength={512}
+                        autoComplete="off"
+                        spellCheck={false}
+                        onChange={(e) => setLaunchArgs(e.target.value)}
                       />
                     </label>
                   </>
