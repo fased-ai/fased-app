@@ -392,7 +392,7 @@ func formatServerUnit(transport, execLine, absData string, protectHome bool, wan
 		extra += "ProtectHome=read-only\n"
 	}
 	if wantedBy == "multi-user.target" {
-		extra += "PrivateDevices=yes\nProtectKernelTunables=yes\nProtectKernelModules=yes\nProtectKernelLogs=yes\nProtectControlGroups=yes\nProtectClock=yes\nProtectHostname=yes\nLockPersonality=yes\nRestrictSUIDSGID=yes\nCapabilityBoundingSet=\n"
+		extra += "PrivateDevices=yes\nProtectKernelTunables=yes\nProtectKernelModules=yes\nProtectKernelLogs=yes\nProtectControlGroups=yes\nProtectClock=yes\nProtectHostname=yes\nProtectProc=invisible\nLockPersonality=yes\nLimitCORE=0\nSystemCallArchitectures=native\nSystemCallFilter=@system-service\nRestrictSUIDSGID=yes\nCapabilityBoundingSet=\n"
 	}
 	return fmt.Sprintf(`[Unit]
 Description=Fased Remote Server (%s)

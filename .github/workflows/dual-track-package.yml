@@ -27,36 +27,10 @@ jobs:
       - run: npm run build
       - name: Validate install entry scripts
         run: |
-          /bin/bash -n install.sh
-          node --test scripts/install-entry.test.mjs scripts/linux-desktop-package.test.mjs
-      - name: Cross-build headless CLI archives
-        shell: bash
-        run: |
-          set -euo pipefail
-          out=".evidence/dual-track-cli"
-          rm -rf "$out"
-          mkdir -p "$out"
-          for target in linux:amd64 linux:arm64 darwin:arm64 darwin:amd64 windows:amd64 windows:arm64; do
-            os="${target%%:*}"
-            arch="${target##*:}"
-            ext=""
-            if [[ "$os" == "windows" ]]; then ext=".exe"; fi
-            stage="$out/fased-app-${os}-${arch}"
-            mkdir -p "$stage"
-            GOOS="$os" GOARCH="$arch" CGO_ENABLED=0 go build -trimpath -o "${stage}/fased-app${ext}" ./cmd/fased-app
-            if [[ "$os" == "linux" ]]; then
-              GOOS="$os" GOARCH="$arch" CGO_ENABLED=0 go build -trimpath -o "${stage}/fased-signer" ./cmd/fased-signer
-            fi
-            cp LICENSE NOTICE "$stage/"
-            if [[ "$os" == "windows" ]]; then
-              (cd "$out" && python3 -c "import shutil; shutil.make_archive('fased-app-${os}-${arch}', 'zip', '.', 'fased-app-${os}-${arch}')")
-            else
-              tar -C "$out" -czf "$out/fased-app-${os}-${arch}.tar.gz" "fased-app-${os}-${arch}"
-            fi
-            rm -rf "$stage"
-          done
-          cp install.sh install.ps1 "$out/"
-          (cd "$out" && sha256sum fased-app-*.tar.gz fased-app-*.zip install.sh install.ps1 > SHA256SUMS.txt)
+          /bin/bash -n install.sh install-cli.sh
+          node --test scripts/install-entry.test.mjs scripts/linux-desktop-package.test.mjs scripts/build-dual-track-cli.test.mjs
+      - name: Cross-build headless CLI archives and installers
+        run: node scripts/build-dual-track-cli.mjs
       - uses: actions/upload-artifact@v4
         with:
           name: fased-cli-archives
@@ -106,7 +80,13 @@ jobs:
       - name: Linux desktop packaging unit checks
         if: runner.os == 'Linux'
         run: node --test scripts/linux-desktop-package.test.mjs
-      - run: npm run package:native
+      - name: Build native installer packages (optional signing hooks)
+        env:
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_NOTARY_KEYCHAIN_PROFILE: ${{ secrets.APPLE_NOTARY_KEYCHAIN_PROFILE }}
+          WINDOWS_SIGN_CERT_PFX_PATH: ${{ secrets.WINDOWS_SIGN_CERT_PFX_PATH }}
+          WINDOWS_SIGN_CERT_PASSWORD: ${{ secrets.WINDOWS_SIGN_CERT_PASSWORD }}
+        run: npm run package:native
       - uses: actions/upload-artifact@v4
         with:
           name: fased-desktop-${{ matrix.os }}

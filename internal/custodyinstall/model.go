@@ -217,6 +217,17 @@ func parseAccount(line, name, comment string) (Identity, error) {
 
 // Numeric identities and fixed canonical paths avoid shell/unit interpolation.
 func definitions(m Manifest) map[string][]byte {
+	return definitionsFromLayout(m, m.Layout == PackageLayout)
+}
+
+// legacyPackageDefinitions retains pre-0.1.37 PackageLayout unit bytes so
+// verified in-place upgrades from earlier releases pass topology and loaded
+// service inspection cleanly before any maintenance refresh.
+func legacyPackageDefinitions(m Manifest) map[string][]byte {
+	return definitionsFromLayout(m, false)
+}
+
+func definitionsFromLayout(m Manifest, hardened bool) map[string][]byte {
 	if m.InspectionBridge != "" {
 		return fixtureUnits(m, false)
 	}
@@ -230,6 +241,12 @@ func definitions(m Manifest) map[string][]byte {
 		if m.Layout == PackageLayout {
 			description = "Fased " + role
 			service += "LimitCORE=0\n"
+			if hardened {
+				service += "PrivateDevices=yes\nProtectKernelLogs=yes\nProtectClock=yes\nProtectHostname=yes\nProtectProc=invisible\nLockPersonality=yes\nSystemCallArchitectures=native\nSystemCallFilter=@system-service\n"
+				if role == "signer" {
+					service += "PrivateNetwork=yes\nMemoryDenyWriteExecute=yes\n"
+				}
+			}
 			ordering = "Requires=" + packageRecoveryUnit(m) + "\nAfter=" + packageRecoveryUnit(m) + "\n"
 			if role == "application" && m.Location == "remote" {
 				if socket, _, err := tailnet.ProtectedSocketUnit("package-"+m.ID, m.Owner); err == nil {

@@ -39,6 +39,32 @@ func TestNativeSignerInventoryIsOptionalVerifiedAndLinuxOnly(t *testing.T) {
 	}
 }
 
+func TestHeadlessEngineeringSignerInventoryIsVerifiedAndLinuxOnly(t *testing.T) {
+	t.Parallel()
+	if runtime.GOOS != "linux" {
+		t.Skip("Linux headless signer")
+	}
+	dir, m := bundleFixture(t)
+	if err := os.WriteFile(filepath.Join(dir, "fased-signer"), []byte("inert headless signer"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	var err error
+	m.Files["fased-signer"], err = Inspect(filepath.Join(dir, "fased-signer"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeBundleManifest(t, dir, m)
+	if _, err := Verify(dir); err != nil {
+		t.Fatal("headless engineering signer refused:", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "fased-signer"), []byte("tampered"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Verify(dir); err == nil {
+		t.Fatal("tampered headless signer accepted")
+	}
+}
+
 func TestBundlePinnedManifestAndGuideCompatibility(t *testing.T) {
 	t.Parallel()
 	dir, m := bundleFixture(t)
