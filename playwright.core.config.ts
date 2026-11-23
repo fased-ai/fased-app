@@ -13,6 +13,8 @@ export default defineConfig({
     "core-news-playbooks.spec.ts",
     "core-updates-custody.spec.ts",
     "core-shell-dashboard-i18n.spec.ts",
+    "core-a11y.spec.ts",
+    "core-concurrency.spec.ts",
     "research-ai.spec.ts",
     "research-fixture.spec.ts",
     "research-loop.spec.ts",

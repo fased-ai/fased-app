@@ -1,0 +1,35 @@
+name: Provider Contract Canary
+
+on:
+  schedule:
+    - cron: "17 9 * * 1"
+  workflow_dispatch:
+    inputs:
+      strict_network:
+        description: "Fail even when shared CI IPs hit HTTP 403/429 challenges"
+        type: boolean
+        required: false
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  contract-canary:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Verify offline recorded cassettes and live keyless provider contracts
+        env:
+          STRICT_NETWORK: ${{ inputs.strict_network }}
+        run: |
+          node --test scripts/check-contract-canary.test.mjs
+          if [ "$STRICT_NETWORK" = "true" ]; then
+            node scripts/check-contract-canary.mjs --live --strict
+          else
+            node scripts/check-contract-canary.mjs --live
+          fi
