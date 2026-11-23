@@ -262,6 +262,9 @@ func (l *ledger) apply(r journalRecord) error {
 		case "update-install":
 			expected.ID = r.ID
 			expected.Installation = r.Installation
+		case "journal-compact":
+			expected.OriginalHash = r.OriginalHash
+			expected.Outcome = r.Outcome
 		default:
 			return errors.New("managed key history admits maintenance only")
 		}
@@ -477,6 +480,17 @@ func (l *ledger) apply(r journalRecord) error {
 		}
 		l.ref = *r.Account
 		l.policy = nil // New owner policy/grants, lifetime spent remains.
+	case "journal-compact":
+		if !validCompactionAnchor(r) {
+			return errors.New("invalid journal compaction anchor")
+		}
+		expected := journalRecord{Version: r.Version, Sequence: r.Sequence, Previous: r.Previous, Hash: r.Hash, At: r.At, Kind: r.Kind, OriginalHash: r.OriginalHash, Outcome: r.Outcome}
+		if l.ref.Version == 3 {
+			expected.Admission = l.ordinaryAdmission
+		}
+		if recordHash(expected) != recordHash(r) {
+			return errors.New("unexpected journal compaction fields")
+		}
 	default:
 		return errors.New("unknown fixture journal transition")
 	}

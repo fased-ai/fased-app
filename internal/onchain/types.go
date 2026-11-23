@@ -12,17 +12,25 @@ import (
 )
 
 const (
-	Version         = "jupiter-build-swap-v1"
-	SOL             = "So11111111111111111111111111111111111111112"
-	USDC            = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
-	Jupiter         = "JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4"
-	Token           = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
-	AssociatedToken = "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL"
-	System          = "11111111111111111111111111111111"
-	Compute         = "ComputeBudget111111111111111111111111111111"
-	EventAuthority  = "D8cy77BBepLMngZx6ZukaTff5hCt1HrWyKk3Hnd9oitf"
-	MaxDocument     = 32 * 1024
+	Version                   = "jupiter-build-swap-v1"
+	SOL                       = "So11111111111111111111111111111111111111112"
+	USDC                      = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
+	Jupiter                   = "JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4"
+	Token                     = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+	AssociatedToken           = "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL"
+	System                    = "11111111111111111111111111111111"
+	Compute                   = "ComputeBudget111111111111111111111111111111"
+	EventAuthority            = "D8cy77BBepLMngZx6ZukaTff5hCt1HrWyKk3Hnd9oitf"
+	AddressLookupTableProgram = "AddressLookupTab1e1111111111111111111111111"
+	MaxDocument               = 32 * 1024
 )
+
+// AddressLookupTable captures resolved on-chain Solana ALT accounts bound into
+// QuoteDigest and signed v0 transactions at review time.
+type AddressLookupTable struct {
+	AccountKey string   `json:"accountKey"`
+	Addresses  []string `json:"addresses"`
+}
 
 type Meta struct {
 	Pubkey     string `json:"pubkey"`
@@ -44,34 +52,35 @@ type Request struct {
 	WrapAndUnwrapSol bool   `json:"wrapAndUnwrapSol,omitempty"`
 }
 type Quote struct {
-	Version                  string        `json:"version"`
-	ID                       string        `json:"id"`
-	ProfileID                string        `json:"profileId"`
-	InstanceID               string        `json:"instanceId"`
-	AccountID                string        `json:"accountId"`
-	Network                  string        `json:"network"`
-	Owner                    string        `json:"owner"`
-	RPCSHA256                string        `json:"rpcSha256"`
-	InputMint                string        `json:"inputMint"`
-	OutputMint               string        `json:"outputMint"`
-	Amount                   string        `json:"amount"`
-	Output                   string        `json:"output"`
-	MinimumOutput            string        `json:"minimumOutput"`
-	SlippageBPS              uint16        `json:"slippageBps"`
-	MaxFeeLamports           uint64        `json:"maxFeeLamports,string"`
-	WrapAndUnwrapSol         bool          `json:"wrapAndUnwrapSol,omitempty"`
-	ComputeUnits             uint32        `json:"computeUnits,omitempty"`
-	PriorityFeeMicroLamports uint64        `json:"priorityFeeMicroLamports,omitempty,string"`
-	FeeLamports              uint64        `json:"feeLamports,string"`
-	RentLamports             uint64        `json:"rentLamports,string"`
-	Blockhash                string        `json:"blockhash"`
-	LastValidHeight          uint64        `json:"lastValidHeight,string"`
-	ObservedSlot             uint64        `json:"observedSlot,string"`
-	CreatedAt                int64         `json:"createdAt"`
-	ExpiresAt                int64         `json:"expiresAt"`
-	Instructions             []Instruction `json:"instructions"`
-	TransactionSHA256        string        `json:"transactionSha256"`
-	Digest                   string        `json:"digest"`
+	Version                  string               `json:"version"`
+	ID                       string               `json:"id"`
+	ProfileID                string               `json:"profileId"`
+	InstanceID               string               `json:"instanceId"`
+	AccountID                string               `json:"accountId"`
+	Network                  string               `json:"network"`
+	Owner                    string               `json:"owner"`
+	RPCSHA256                string               `json:"rpcSha256"`
+	InputMint                string               `json:"inputMint"`
+	OutputMint               string               `json:"outputMint"`
+	Amount                   string               `json:"amount"`
+	Output                   string               `json:"output"`
+	MinimumOutput            string               `json:"minimumOutput"`
+	SlippageBPS              uint16               `json:"slippageBps"`
+	MaxFeeLamports           uint64               `json:"maxFeeLamports,string"`
+	WrapAndUnwrapSol         bool                 `json:"wrapAndUnwrapSol,omitempty"`
+	ComputeUnits             uint32               `json:"computeUnits,omitempty"`
+	PriorityFeeMicroLamports uint64               `json:"priorityFeeMicroLamports,omitempty,string"`
+	FeeLamports              uint64               `json:"feeLamports,string"`
+	RentLamports             uint64               `json:"rentLamports,string"`
+	Blockhash                string               `json:"blockhash"`
+	LastValidHeight          uint64               `json:"lastValidHeight,string"`
+	ObservedSlot             uint64               `json:"observedSlot,string"`
+	CreatedAt                int64                `json:"createdAt"`
+	ExpiresAt                int64                `json:"expiresAt"`
+	Instructions             []Instruction        `json:"instructions"`
+	AddressLookupTables      []AddressLookupTable `json:"addressLookupTables,omitempty"`
+	TransactionSHA256        string               `json:"transactionSha256"`
+	Digest                   string               `json:"digest"`
 }
 type Simulation struct {
 	Slot  uint64 `json:"slot,string"`

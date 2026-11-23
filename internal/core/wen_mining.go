@@ -1554,12 +1554,16 @@ func (s *Store) reconcileWENMining(ctx context.Context, profile, id string) erro
 	if err = verifyWENMiningObservation(op, t.WENMining.Prepared, obs); err != nil {
 		return err
 	}
-	return s.writeWENMining(ctx, profile, id, func(_ *AgentTask, run *AgentRun) error {
+	if err = s.writeWENMining(ctx, profile, id, func(_ *AgentTask, run *AgentRun) error {
 		o := obs
 		run.WENMining.Observation = &o
 		wenMiningEvent(run.WENMining, obs.State, s.now().Unix())
 		return nil
-	})
+	}); err != nil {
+		return err
+	}
+	_ = s.DeleteWENMiningSalts(op.ID)
+	return nil
 }
 
 func (s *Store) recoverWENMining(ctx context.Context) error {

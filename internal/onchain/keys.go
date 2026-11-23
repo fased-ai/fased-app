@@ -80,3 +80,24 @@ func TokenAccount(owner, mint string) (string, error) {
 	}
 	return "", errors.New("token account derivation failed")
 }
+
+// JupiterProgramAuthority derives Jupiter Aggregator V6's authority PDA
+// for shared_accounts_route_v2: findProgramAddress(["authority", id], Jupiter).
+func JupiterProgramAuthority(id byte) (string, error) {
+	prog, err := Key(Jupiter)
+	if err != nil {
+		return "", err
+	}
+	for bump := 255; bump >= 0; bump-- {
+		data := make([]byte, 0, len("authority")+2+len(prog)+len("ProgramDerivedAddress"))
+		data = append(data, "authority"...)
+		data = append(data, id, byte(bump))
+		data = append(data, prog...)
+		data = append(data, "ProgramDerivedAddress"...)
+		h := sha256.Sum256(data)
+		if _, e := new(edwards25519.Point).SetBytes(h[:]); e != nil {
+			return Base58(h[:]), nil
+		}
+	}
+	return "", errors.New("jupiter program authority derivation failed")
+}

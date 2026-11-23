@@ -54,7 +54,12 @@ func (v *Vault) ApproveSwap(p SwapProposal) (*SwapReceipt, error) {
 			return nil, ErrHeld
 		}
 	}
-	if len(v.ledger.swaps) >= 64 {
+	if len(v.ledger.swaps) >= MaxRetainedSwaps || (v.ledger.main != nil && v.ledger.main.seq >= CompactionTriggerRecords) {
+		if _, ce := v.compactOperationsJournalLocked(CompactionRetainRecentSwaps); ce != nil {
+			return nil, ce
+		}
+	}
+	if len(v.ledger.swaps) >= MaxRetainedSwaps {
 		return nil, errors.New("swap history capacity reached")
 	}
 	if _, ok := v.ledger.swaps[p.Quote.ID]; ok {

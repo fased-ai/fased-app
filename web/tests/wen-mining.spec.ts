@@ -1,5 +1,6 @@
 import { openPasswordSignIn } from "../../scripts/fixture-owner-setup.mjs";
 import { expect, test } from "@playwright/test";
+import { auditPageAccessibility } from "./helpers/a11y-audit";
 import { spawn, type ChildProcess } from "node:child_process";
 import { once } from "node:events";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
@@ -169,6 +170,26 @@ test("Controlled WEN mining shares reviewed authority, PM1 receipt, uncertain re
         { timeout: 15000 },
       )
       .toBe("confirmed");
+
+    const allocRegion = page.getByRole("region", {
+      name: "Allocation histogram",
+    });
+    const marketRegion = page.getByRole("region", {
+      name: "Market distribution",
+    });
+    await expect(allocRegion).toBeVisible();
+    await expect(marketRegion).toBeVisible();
+    await page
+      .getByRole("button", { name: "Center Focus", exact: true })
+      .click();
+    await expect(allocRegion.getByText("40%")).toBeVisible();
+    expect(
+      await page.evaluate(
+        () => document.documentElement.scrollWidth <= window.innerWidth,
+      ),
+    ).toBe(true);
+    const a11y = await auditPageAccessibility(page, { checkContrast: true });
+    expect(a11y.violations).toEqual([]);
   } finally {
     await stop();
     await rm(dir, { recursive: true, force: true });

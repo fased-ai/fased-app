@@ -14,7 +14,35 @@ import (
 var routeV2 = [8]byte{187, 100, 250, 204, 49, 196, 175, 20}
 var sharedRouteV2 = [8]byte{209, 152, 83, 147, 124, 254, 216, 233}
 
+func validateAddressLookupTables(tables []AddressLookupTable) error {
+	if len(tables) > 4 {
+		return errors.New("address lookup table count exceeds bound")
+	}
+	seen := make(map[string]bool, len(tables))
+	for _, tbl := range tables {
+		if _, e := Key(tbl.AccountKey); e != nil {
+			return e
+		}
+		if seen[tbl.AccountKey] {
+			return errors.New("duplicate address lookup table")
+		}
+		seen[tbl.AccountKey] = true
+		if len(tbl.Addresses) > 256 {
+			return errors.New("address lookup table exceeds 256 entries")
+		}
+		for _, addr := range tbl.Addresses {
+			if _, e := Key(addr); e != nil {
+				return e
+			}
+		}
+	}
+	return nil
+}
+
 func ValidateInstructions(q Quote) error {
+	if e := validateAddressLookupTables(q.AddressLookupTables); e != nil {
+		return e
+	}
 	maxIxs := 4
 	if q.WrapAndUnwrapSol {
 		if q.InputMint != SOL && q.OutputMint != SOL {
@@ -52,7 +80,7 @@ func ValidateInstructions(q Quote) error {
 	closes := 0
 	for i, ix := range q.Instructions {
 		data, e := base64.StdEncoding.Strict().DecodeString(ix.Data)
-		if e != nil || len(data) > 1024 || len(ix.Accounts) > 48 {
+		if e != nil || len(data) > 1024 || len(ix.Accounts) > 64 {
 			return errors.New("invalid swap instruction")
 		}
 		for _, a := range ix.Accounts {
@@ -129,7 +157,36 @@ func ValidateInstructions(q Quote) error {
 					return errors.New("Jupiter token/wallet account binding differs")
 				}
 			} else {
-				return errors.New("shared-account routes require their own accepted policy")
+				progAuth, e := JupiterProgramAuthority(data[8])
+				if e != nil {
+					return e
+				}
+				progSource, e := TokenAccount(progAuth, q.InputMint)
+				if e != nil {
+					return e
+				}
+				progDest, e := TokenAccount(progAuth, q.OutputMint)
+				if e != nil {
+					return e
+				}
+				if len(a) < 12 ||
+					a[0].Pubkey != progAuth || a[0].IsSigner || a[0].IsWritable ||
+					a[1].Pubkey != q.Owner || !a[1].IsSigner ||
+					a[2].Pubkey != source || !a[2].IsWritable || a[2].IsSigner ||
+					a[3].Pubkey != progSource || !a[3].IsWritable || a[3].IsSigner ||
+					a[4].Pubkey != progDest || !a[4].IsWritable || a[4].IsSigner ||
+					a[5].Pubkey != dest || !a[5].IsWritable || a[5].IsSigner ||
+					a[6].Pubkey != q.InputMint || a[6].IsSigner ||
+					a[7].Pubkey != q.OutputMint || a[7].IsSigner ||
+					a[8].Pubkey != Token || a[8].IsSigner ||
+					a[9].Pubkey != Token || a[9].IsSigner {
+					return errors.New("Jupiter shared-account binding differs")
+				}
+				validTail := (a[10].Pubkey == EventAuthority && a[11].Pubkey == Jupiter) ||
+					(len(a) >= 13 && a[10].Pubkey == Jupiter && a[11].Pubkey == EventAuthority && a[12].Pubkey == Jupiter)
+				if !validTail {
+					return errors.New("Jupiter shared-account tail binding differs")
+				}
 			}
 		default:
 			return errors.New("unapproved swap instruction program")
@@ -156,9 +213,8 @@ func short(n int) []byte {
 	}
 }
 
-// Message constructs v0 with inline keys and no lookup tables. We never sign
-// externally serialized messages. Oversized routes fail instead of resolving
-// mutable unreviewed lookup tables or silently using another route/version.
+// Message constructs a Solana v0 message from validated instructions and
+// review-bound AddressLookupTables. We never sign externally serialized messages.
 func Message(q Quote) ([]byte, error) {
 	if e := ValidateInstructions(q); e != nil {
 		return nil, e
@@ -210,10 +266,51 @@ func Message(q Quote) ([]byte, error) {
 			flags[a.Pubkey] = flags[a.Pubkey] || a.IsWritable
 		}
 	}
+
+	pinned := map[string]bool{q.Owner: true}
+	for _, ix := range ixs {
+		pinned[ix.ProgramID] = true
+	}
+	if src, srcErr := TokenAccount(q.Owner, q.InputMint); srcErr == nil {
+		pinned[src] = true
+	}
+	if dst, dstErr := TokenAccount(q.Owner, q.OutputMint); dstErr == nil {
+		pinned[dst] = true
+	}
+
+	type resolvedLookup struct {
+		accountKey   string
+		writable     []byte
+		writableKeys []string
+		readonly     []byte
+		readonlyKeys []string
+	}
+	assigned := map[string]bool{}
+	usedLookups := make([]resolvedLookup, 0, len(q.AddressLookupTables))
+	for _, tbl := range q.AddressLookupTables {
+		entry := resolvedLookup{accountKey: tbl.AccountKey}
+		for pos, addr := range tbl.Addresses {
+			if _, used := flags[addr]; !used || pinned[addr] || assigned[addr] {
+				continue
+			}
+			assigned[addr] = true
+			if flags[addr] {
+				entry.writable = append(entry.writable, byte(pos))
+				entry.writableKeys = append(entry.writableKeys, addr)
+			} else {
+				entry.readonly = append(entry.readonly, byte(pos))
+				entry.readonlyKeys = append(entry.readonlyKeys, addr)
+			}
+		}
+		if len(entry.writable) > 0 || len(entry.readonly) > 0 {
+			usedLookups = append(usedLookups, entry)
+		}
+	}
+
 	keys := []string{q.Owner}
 	rest := []string{}
 	for k := range flags {
-		if k != q.Owner {
+		if k != q.Owner && !assigned[k] {
 			rest = append(rest, k)
 		}
 	}
@@ -235,6 +332,25 @@ func Message(q Quote) ([]byte, error) {
 			readonly++
 		}
 	}
+	nextIdx := len(keys)
+	for _, u := range usedLookups {
+		for _, k := range u.writableKeys {
+			if nextIdx >= 255 {
+				return nil, errors.New("route exceeds maximum transaction accounts")
+			}
+			indexes[k] = byte(nextIdx)
+			nextIdx++
+		}
+	}
+	for _, u := range usedLookups {
+		for _, k := range u.readonlyKeys {
+			if nextIdx >= 255 {
+				return nil, errors.New("route exceeds maximum transaction accounts")
+			}
+			indexes[k] = byte(nextIdx)
+			nextIdx++
+		}
+	}
 	message := []byte{0x80, 1, 0, byte(readonly)}
 	message = append(message, short(len(keys))...)
 	message = append(message, owner...)
@@ -254,7 +370,15 @@ func Message(q Quote) ([]byte, error) {
 		message = append(message, short(len(data))...)
 		message = append(message, data...)
 	}
-	message = append(message, 0)
+	message = append(message, short(len(usedLookups))...)
+	for _, u := range usedLookups {
+		tk, _ := Key(u.accountKey)
+		message = append(message, tk...)
+		message = append(message, short(len(u.writable))...)
+		message = append(message, u.writable...)
+		message = append(message, short(len(u.readonly))...)
+		message = append(message, u.readonly...)
+	}
 	if len(message)+65 > 1232 {
 		return nil, errors.New("route exceeds supported transaction size")
 	}
