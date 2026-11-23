@@ -146,6 +146,9 @@ func validSignInValue(value string, bound int) bool {
 	return true
 }
 func aiVaultCiphertextBound(v aiVaultEnvelope) int {
+	if v.Version == 8 {
+		return 512 + 16
+	}
 	if v.Version == 7 {
 		return 1024 + 16
 	}
@@ -158,6 +161,9 @@ func aiVaultCiphertextBound(v aiVaultEnvelope) int {
 	return 512
 }
 func (s *Store) aiVaultModeAllowed(v aiVaultEnvelope) bool {
+	if v.Version == 8 {
+		return v.TestOnly && (s.providerFixture || s.provider.cliRunner != nil) || !v.TestOnly && (s.provider.apiCredentials || s.provider.cliRunner != nil)
+	}
 	if v.Version == 6 {
 		return v.TestOnly && s.providerFixture || !v.TestOnly && s.provider.apiCredentials
 	}

@@ -284,11 +284,23 @@ func discoveredProviderCatalog(v AIConnectionView, d modelDiscovery, now int64) 
 			m.Method = "sign-in"
 			m.Policy = chatModelPolicyForMethod(entry.ID, "sign-in")
 		}
+		if v.AuthMethod == "cli" {
+			m.Method = "cli"
+		}
 		record, listed := records[entry.ID]
 		switch {
 		case entry.Currency != "" && entry.Currency != "USD":
 			m.Policy = nil
 			m.Availability = "currency-unsupported"
+		case v.AuthMethod == "cli" && v.Ref != "" && !v.Locked:
+			if v.TestOnly {
+				m.Availability = "fixture"
+			} else if !v.LiveCallsEnabled {
+				m.Availability = "disabled"
+			} else {
+				m.Availability = "available"
+			}
+			m.Selectable = true
 		case v.AuthMethod == "sign-in" && !v.PlanUse && !v.Locked:
 			m.Availability = "plan-access-required"
 		case now < registry.ReviewedAt:
@@ -370,6 +382,36 @@ func discoveredProviderCatalog(v AIConnectionView, d modelDiscovery, now int64) 
 			m.Selectable = true
 		}
 		catalog.Models = append(catalog.Models, m)
+	}
+	if v.AuthMethod == "cli" && v.Ref != "" && !v.Locked {
+		avail := "available"
+		if v.TestOnly {
+			avail = "fixture"
+		} else if !v.LiveCallsEnabled {
+			avail = "disabled"
+		}
+		if spec, ok := cliSpecForProvider(provider); ok {
+			existing := make(map[string]bool, len(catalog.Models))
+			for _, m := range catalog.Models {
+				existing[m.ID] = true
+			}
+			for _, modelID := range spec.Models {
+				if existing[modelID] {
+					continue
+				}
+				catalog.Models = append(catalog.Models, ProviderModel{
+					ID:            modelID,
+					Name:          modelID,
+					Provider:      provider,
+					Method:        "cli",
+					ConnectionRef: v.Ref,
+					Availability:  avail,
+					Selectable:    true,
+					Policy:        chatModelPolicy(modelID),
+				})
+			}
+		}
+		catalog.State = "ready"
 	}
 	if catalog.State == "" {
 		catalog.State = "unverified"
@@ -680,6 +722,9 @@ func (s *Store) refreshStaleProviderModels(ctx context.Context) {
 			continue
 		}
 		if acc.AuthMethod == "sign-in" && !acc.PlanUse {
+			continue
+		}
+		if acc.AuthMethod == "cli" {
 			continue
 		}
 		if acc.Catalog.State == "ready" && acc.Catalog.ExpiresAt > now {

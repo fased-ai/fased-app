@@ -9,6 +9,8 @@ import {
   Pencil,
   ClipboardPaste,
   ExternalLink,
+  Copy,
+  TerminalSquare,
 } from "../icons";
 import { useUI } from "../ui-preferences";
 import { planFailureDetails } from "../agents";
@@ -21,6 +23,8 @@ import {
   useAIConnection,
   type Connection,
   type CredentialMode,
+  type HostCLIStatus,
+  type CLIAuthView,
 } from "../ai-connection";
 import {
   ConnectionPicker,
@@ -83,8 +87,34 @@ export function AIConnectionSettings({
   }, [assignedAccount]);
   const [newProvider, setNewProvider] = useState("openai");
   const [newMethod, setNewMethod] = useState("api-key");
+  const [cliName, setCliName] = useState("");
+  const [copiedText, setCopiedText] = useState("");
+  const copiedTimer = useRef<number | null>(null);
   const [callback, setCallback] = useState("");
   const [editOpen, setEditOpen] = useState(false);
+
+  useEffect(() => {
+    return () => {
+      if (copiedTimer.current !== null) {
+        window.clearTimeout(copiedTimer.current);
+      }
+    };
+  }, []);
+
+  async function copyText(text: string) {
+    try {
+      await navigator.clipboard?.writeText?.(text);
+      setCopiedText(text);
+      if (copiedTimer.current !== null) {
+        window.clearTimeout(copiedTimer.current);
+      }
+      copiedTimer.current = window.setTimeout(() => {
+        setCopiedText("");
+      }, 1500);
+    } catch {
+      // Clipboard write unavailable; user can select code directly.
+    }
+  }
 
   useEffect(() => {
     if (!providersPreset) return;
@@ -106,6 +136,7 @@ export function AIConnectionSettings({
     setEndpoint(defaultLocalEndpoint);
     setKey("");
     setPassphrase("");
+    setCliName("");
     setCallback("");
     clearProvidersPreset();
   }, [providersPreset, clearProvidersPreset, root?.signInAvailable]);
@@ -160,7 +191,8 @@ export function AIConnectionSettings({
         ? {
             ...root,
             provider: newProvider,
-            authMethod: newMethod as "api-key" | "sign-in" | "local" | "oauth",
+            authMethod: newMethod as
+              "api-key" | "sign-in" | "local" | "oauth" | "cli",
             ref: "",
             locked: true,
             planPaused: false,
@@ -230,6 +262,14 @@ export function AIConnectionSettings({
         : view.authMethod || "api-key"
       : newMethod;
   const signIn = root?.signIn;
+  const cliStatus: HostCLIStatus | undefined = root?.hostClis?.find(
+    (c) => c.provider === provider,
+  );
+  const cliAuth: CLIAuthView | null = root?.cliAuth ?? null;
+  const cliAuthLabel = cliAuth
+    ? root?.hostClis?.find((c) => c.provider === cliAuth.provider)?.label ||
+      cliAuth.binary
+    : "";
   const signInAvailable =
     provider === "google"
       ? root?.googleSignInAvailable === true
@@ -328,12 +368,40 @@ export function AIConnectionSettings({
                   ref: view.ref,
                   ...(needsPassphrase ? { passphrase: secret } : {}),
                 };
+      const cliCommand =
+        action === "cli-probe"
+          ? { action: "cli-probe" }
+          : action === "cli-auth-start"
+            ? {
+                action: "cli-auth-start",
+                provider: cliAuth?.provider || provider,
+                ...(view.ref ? { ref: view.ref } : {}),
+              }
+            : action === "cli-auth-cancel"
+              ? { action: "cli-auth-cancel", signInId: cliAuth?.id }
+              : {
+                  action: "cli-connect",
+                  provider: cliAuth?.provider || provider,
+                  ...(view.ref ? { ref: view.ref } : {}),
+                  ...(cliName.trim() ? { name: cliName.trim() } : {}),
+                  ...(needsPassphrase ? { passphrase: secret } : {}),
+                };
       const next = await core.request<Connection>(
         "ai/connection",
         "POST",
-        action.startsWith("sign-in-") ? signInCommand : command,
+        action.startsWith("sign-in-")
+          ? signInCommand
+          : action.startsWith("cli-")
+            ? cliCommand
+            : command,
       );
-      if (action !== "sign-in-start" && action !== "sign-in-cancel") {
+      if (
+        action !== "sign-in-start" &&
+        action !== "sign-in-cancel" &&
+        action !== "cli-probe" &&
+        action !== "cli-auth-start" &&
+        action !== "cli-auth-cancel"
+      ) {
         setSelected(next.ref);
         setCallback("");
       }
@@ -341,9 +409,11 @@ export function AIConnectionSettings({
         action === "save" ||
         action === "remove" ||
         action === "sign-in-disconnect" ||
-        action === "sign-in-start"
+        action === "sign-in-start" ||
+        action === "cli-connect"
       ) {
         setEditOpen(false);
+        setCliName("");
       }
       const refreshed = next.connections
         ? next
@@ -352,7 +422,9 @@ export function AIConnectionSettings({
       window.dispatchEvent(new Event("ai-connection-changed"));
       if (
         !hadConnections &&
-        (action === "save" || action === "sign-in-complete")
+        (action === "save" ||
+          action === "sign-in-complete" ||
+          action === "cli-connect")
       ) {
         const activeProfile = agents.view?.profiles.find(
           (p) => p.id === agents.view?.profileId,
@@ -408,6 +480,7 @@ export function AIConnectionSettings({
 
   const autoCompletedSignIn = useRef("");
   const autoAttemptedCallback = useRef("");
+  const autoConnectedCliAuth = useRef("");
   const autoCompleteFn = useRef(change);
   autoCompleteFn.current = change;
   useEffect(() => {
@@ -417,6 +490,33 @@ export function AIConnectionSettings({
     }, 1000);
     return () => clearInterval(timer);
   }, [signIn?.id, signIn?.remote, signIn?.state, refresh]);
+  useEffect(() => {
+    if (
+      !cliAuth ||
+      (cliAuth.state !== "starting" && cliAuth.state !== "awaiting-code")
+    ) {
+      return;
+    }
+    const timer = window.setInterval(() => {
+      void refresh();
+    }, 2000);
+    return () => clearInterval(timer);
+  }, [cliAuth?.id, cliAuth?.state, refresh]);
+  useEffect(() => {
+    if (!cliAuth) {
+      autoConnectedCliAuth.current = "";
+      return;
+    }
+    if (
+      cliAuth.state === "authenticated" &&
+      !needsPassphrase &&
+      !busy &&
+      autoConnectedCliAuth.current !== cliAuth.id
+    ) {
+      autoConnectedCliAuth.current = cliAuth.id;
+      void autoCompleteFn.current("cli-connect");
+    }
+  }, [cliAuth?.id, cliAuth?.state, needsPassphrase, busy]);
   useEffect(() => {
     if (!signIn) {
       autoCompletedSignIn.current = "";
@@ -460,6 +560,7 @@ export function AIConnectionSettings({
     setSelected("new");
     setNewProvider(id);
     setGoogleProject("");
+    setCliName("");
     setNewMethod(
       id === "local"
         ? "local"
@@ -479,6 +580,12 @@ export function AIConnectionSettings({
       <form
         onSubmit={(e) => {
           e.preventDefault();
+          if (method === "cli") {
+            if (cliStatus?.installed && cliStatus.authenticated) {
+              void change("cli-connect");
+            }
+            return;
+          }
           void change(method === "sign-in" ? "sign-in-complete" : "save");
         }}
         autoComplete="off"
@@ -495,7 +602,88 @@ export function AIConnectionSettings({
             />
           </label>
         )}
-        {method !== "sign-in" && (
+        {method === "cli" && (
+          <>
+            <div className="cli-status-card">
+              <div className="cli-status-head">
+                <TerminalSquare size={15} />
+                <strong>{cliStatus?.label || providerName}</strong>
+                <span
+                  className="provider-model-pill"
+                  data-state={cliStatus?.authenticated ? "ready" : "stale"}
+                >
+                  {uiText(
+                    cliStatus?.authenticated
+                      ? "Connected"
+                      : cliStatus?.installed
+                        ? "Sign in required"
+                        : "Not installed",
+                  )}
+                </span>
+              </div>
+              {cliStatus?.account && (
+                <p className="cli-status-account">{cliStatus.account}</p>
+              )}
+            </div>
+            {cliStatus && !cliStatus.installed && (
+              <div className="cli-hint-row">
+                <code>{cliStatus.installHint}</code>
+                <button
+                  type="button"
+                  className="icon-button"
+                  aria-label={
+                    copiedText === cliStatus.installHint
+                      ? uiText("Copied")
+                      : uiText("Copy")
+                  }
+                  title={
+                    copiedText === cliStatus.installHint
+                      ? uiText("Copied")
+                      : uiText("Copy")
+                  }
+                  onClick={() => void copyText(cliStatus.installHint)}
+                >
+                  <Copy size={14} />
+                </button>
+              </div>
+            )}
+            {cliStatus && cliStatus.installed && !cliStatus.authenticated && (
+              <div className="cli-hint-row">
+                <code>{cliStatus.loginCommand}</code>
+                <button
+                  type="button"
+                  className="icon-button"
+                  aria-label={
+                    copiedText === cliStatus.loginCommand
+                      ? uiText("Copied")
+                      : uiText("Copy")
+                  }
+                  title={
+                    copiedText === cliStatus.loginCommand
+                      ? uiText("Copied")
+                      : uiText("Copy")
+                  }
+                  onClick={() => void copyText(cliStatus.loginCommand)}
+                >
+                  <Copy size={14} />
+                </button>
+              </div>
+            )}
+            {cliStatus?.installed && cliStatus.authenticated && !view?.ref && (
+              <label>
+                {uiText("Name")}
+                <input
+                  value={cliName}
+                  maxLength={80}
+                  autoComplete="off"
+                  placeholder={cliStatus.label}
+                  onChange={(e) => setCliName(e.target.value)}
+                />
+              </label>
+            )}
+          </>
+        )}
+        {method !== "sign-in" && method !== "cli" && (
           <label>
             {uiText(isLocal ? "API key (optional)" : "API key")}
             <input
@@ -537,18 +725,19 @@ export function AIConnectionSettings({
               />
             </label>
           )}
-        {needsPassphrase && (
-          <label>
-            {uiText("Vault passphrase")}
-            <input
-              type="password"
-              autoComplete="off"
-              value={passphrase}
-              maxLength={1024}
-              onChange={(e) => setPassphrase(e.target.value)}
-            />
-          </label>
-        )}
+        {needsPassphrase &&
+          (method !== "cli" || !!cliStatus?.authenticated) && (
+            <label>
+              {uiText("Vault passphrase")}
+              <input
+                type="password"
+                autoComplete="off"
+                value={passphrase}
+                maxLength={1024}
+                onChange={(e) => setPassphrase(e.target.value)}
+              />
+            </label>
+          )}
         <div className="agent-actions">
           {method === "sign-in" ? (
             <>
@@ -596,6 +785,65 @@ export function AIConnectionSettings({
                     onClick={() => void change("sign-in-disconnect")}
                   >
                     {uiText("Disconnect")}
+                  </button>
+                </>
+              )}
+            </>
+          ) : method === "cli" ? (
+            <>
+              {cliStatus && !cliStatus.installed ? (
+                <button
+                  type="button"
+                  className="secondary"
+                  disabled={busy}
+                  onClick={() => void change("cli-probe")}
+                >
+                  <RefreshCw size={14} className={busy ? "spin" : ""} />
+                  <span>{uiText("Check again")}</span>
+                </button>
+              ) : cliStatus && !cliStatus.authenticated ? (
+                <>
+                  {(cliStatus.supportsDevice || provider === "anthropic") && (
+                    <button
+                      type="button"
+                      className="primary"
+                      disabled={busy || !!cliAuth}
+                      onClick={() => void change("cli-auth-start")}
+                    >
+                      {uiText("Sign in via CLI")}
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    className="secondary"
+                    disabled={busy}
+                    onClick={() => void change("cli-probe")}
+                  >
+                    <RefreshCw size={14} className={busy ? "spin" : ""} />
+                    <span>{uiText("Check again")}</span>
+                  </button>
+                </>
+              ) : (
+                <>
+                  <button
+                    className="primary"
+                    disabled={
+                      busy ||
+                      !view ||
+                      !cliStatus?.authenticated ||
+                      (needsPassphrase && passphrase.length < 12)
+                    }
+                  >
+                    {uiText(view?.ref ? "Reconnect" : "Connect CLI")}
+                  </button>
+                  <button
+                    type="button"
+                    className="secondary"
+                    disabled={busy}
+                    onClick={() => void change("cli-probe")}
+                  >
+                    <RefreshCw size={14} className={busy ? "spin" : ""} />
+                    <span>{uiText("Check again")}</span>
                   </button>
                 </>
               )}
@@ -827,9 +1075,11 @@ export function AIConnectionSettings({
                         {uiText(
                           a.authMethod === "oauth" || a.authMethod === "sign-in"
                             ? "Sign in"
-                            : a.authMethod === "local"
-                              ? "Server"
-                              : "API key",
+                            : a.authMethod === "cli"
+                              ? "CLI"
+                              : a.authMethod === "local"
+                                ? "Server"
+                                : "API key",
                         )}
                       </small>
                     </span>
@@ -865,6 +1115,7 @@ export function AIConnectionSettings({
                     methodChosen.current = false;
                     setSelected("new");
                     setNewProvider(provider);
+                    setCliName("");
                     setNewMethod(
                       provider === "local"
                         ? "local"
@@ -915,26 +1166,28 @@ export function AIConnectionSettings({
               </div>
             )}
             {!view?.ref &&
-              hasSignIn &&
-              (provider !== "google" || signInAvailable) && (
+              (hasSignIn || !!cliStatus) &&
+              (provider !== "google" || signInAvailable || !!cliStatus) && (
                 <div
                   className="segmented-control"
                   role="group"
                   aria-label={uiText("Connection")}
                 >
-                  <button
-                    type="button"
-                    aria-pressed={newMethod === "sign-in"}
-                    disabled={busy || !!signIn || !signInAvailable}
-                    onClick={() => {
-                      methodChosen.current = true;
-                      setNewMethod("sign-in");
-                      setKey("");
-                      setPassphrase("");
-                    }}
-                  >
-                    {uiText("Sign in")}
-                  </button>
+                  {hasSignIn && (provider !== "google" || signInAvailable) && (
+                    <button
+                      type="button"
+                      aria-pressed={newMethod === "sign-in"}
+                      disabled={busy || !!signIn || !signInAvailable}
+                      onClick={() => {
+                        methodChosen.current = true;
+                        setNewMethod("sign-in");
+                        setKey("");
+                        setPassphrase("");
+                      }}
+                    >
+                      {uiText("Sign in")}
+                    </button>
+                  )}
                   <button
                     type="button"
                     aria-pressed={newMethod === "api-key"}
@@ -949,6 +1202,29 @@ export function AIConnectionSettings({
                   >
                     {uiText("API key")}
                   </button>
+                  {cliStatus && (
+                    <button
+                      type="button"
+                      aria-pressed={newMethod === "cli"}
+                      disabled={busy || !!signIn || !!cliAuth}
+                      onClick={() => {
+                        methodChosen.current = true;
+                        setNewMethod("cli");
+                        setKey("");
+                        setPassphrase("");
+                        setCallback("");
+                      }}
+                    >
+                      {cliStatus.authenticated && (
+                        <span
+                          className="cli-status-dot"
+                          data-state="ready"
+                          aria-hidden="true"
+                        />
+                      )}
+                      {uiText("CLI")}
+                    </button>
+                  )}
                 </div>
               )}
             <p
@@ -1038,75 +1314,103 @@ export function AIConnectionSettings({
                 </p>
                 {error && <p role="alert">{uiText(error)}</p>}
                 {signIn.remote ? (
-                  <ol className="signin-steps">
-                    <li className="signin-step">
-                      <span className="signin-step-num" aria-hidden="true">
-                        1
-                      </span>
-                      <a
-                        className={signInReady ? "secondary" : "primary"}
-                        href={signIn.url}
-                        target="_blank"
-                        rel="noopener noreferrer"
+                  <>
+                    <ol className="signin-steps">
+                      <li className="signin-step">
+                        <span className="signin-step-num" aria-hidden="true">
+                          1
+                        </span>
+                        <a
+                          className={signInReady ? "secondary" : "primary"}
+                          href={signIn.url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                        >
+                          <ExternalLink size={14} />
+                          <span>{uiText("Open sign-in")}</span>
+                        </a>
+                      </li>
+                      <li className="signin-step">
+                        <span className="signin-step-num" aria-hidden="true">
+                          2
+                        </span>
+                        <p className="signin-callout">
+                          {uiText(
+                            signIn.provider === "openrouter"
+                              ? "Copy the code from the finished tab"
+                              : "Copy the 127.0.0.1 URL from the finished tab — connection error is normal",
+                          )}
+                        </p>
+                      </li>
+                      <li className="signin-step">
+                        <span className="signin-step-num" aria-hidden="true">
+                          3
+                        </span>
+                        <label>
+                          {uiText(
+                            signIn.provider === "openrouter"
+                              ? "Code"
+                              : "Redirect URL",
+                          )}
+                          <div className="signin-paste-row">
+                            <input
+                              aria-label={uiText(
+                                signIn.provider === "openrouter"
+                                  ? "Code"
+                                  : "Redirect URL",
+                              )}
+                              placeholder={
+                                signIn.provider === "openrouter"
+                                  ? undefined
+                                  : "http://127.0.0.1:.../auth/callback?..."
+                              }
+                              value={callback}
+                              maxLength={4096}
+                              autoComplete="off"
+                              spellCheck={false}
+                              onChange={(e) => setCallback(e.target.value)}
+                            />
+                            <button
+                              type="button"
+                              className="icon-button"
+                              aria-label={uiText("Paste")}
+                              title={uiText("Paste")}
+                              disabled={busy}
+                              onClick={() => void pasteCallback()}
+                            >
+                              <ClipboardPaste size={15} />
+                            </button>
+                          </div>
+                        </label>
+                      </li>
+                    </ol>
+                    <div className="cli-hint-row">
+                      <code>{`fased-app ai-connection --remote --sign-in ${signIn.provider}`}</code>
+                      <button
+                        type="button"
+                        className="icon-button"
+                        aria-label={
+                          copiedText ===
+                          `fased-app ai-connection --remote --sign-in ${signIn.provider}`
+                            ? uiText("Copied")
+                            : uiText("Copy")
+                        }
+                        title={
+                          copiedText ===
+                          `fased-app ai-connection --remote --sign-in ${signIn.provider}`
+                            ? uiText("Copied")
+                            : uiText("Copy")
+                        }
+                        onClick={() =>
+                          void copyText(
+                            `fased-app ai-connection --remote --sign-in ${signIn.provider}`,
+                          )
+                        }
                       >
-                        <ExternalLink size={14} />
-                        <span>{uiText("Open sign-in")}</span>
-                      </a>
-                    </li>
-                    <li className="signin-step">
-                      <span className="signin-step-num" aria-hidden="true">
-                        2
-                      </span>
-                      <p className="signin-callout">
-                        {uiText(
-                          signIn.provider === "openrouter"
-                            ? "Copy the code from the finished tab"
-                            : "Copy the 127.0.0.1 URL from the finished tab — connection error is normal",
-                        )}
-                      </p>
-                    </li>
-                    <li className="signin-step">
-                      <span className="signin-step-num" aria-hidden="true">
-                        3
-                      </span>
-                      <label>
-                        {uiText(
-                          signIn.provider === "openrouter"
-                            ? "Code"
-                            : "Redirect URL",
-                        )}
-                        <div className="signin-paste-row">
-                          <input
-                            aria-label={uiText(
-                              signIn.provider === "openrouter"
-                                ? "Code"
-                                : "Redirect URL",
-                            )}
-                            placeholder={
-                              signIn.provider === "openrouter"
-                                ? undefined
-                                : "http://127.0.0.1:.../auth/callback?..."
-                            }
-                            value={callback}
-                            maxLength={4096}
-                            autoComplete="off"
-                            spellCheck={false}
-                            onChange={(e) => setCallback(e.target.value)}
-                          />
-                          <button
-                            type="button"
-                            className="icon-button"
-                            aria-label={uiText("Paste")}
-                            title={uiText("Paste")}
-                            disabled={busy}
-                            onClick={() => void pasteCallback()}
-                          >
-                            <ClipboardPaste size={15} />
-                          </button>
-                        </div>
-                      </label>
-                    </li>
-                  </ol>
+                        <Copy size={14} />
+                      </button>
+                    </div>
+                  </>
                 ) : (
                   <a
                     className={signInReady ? "secondary" : "primary"}
@@ -1148,6 +1452,103 @@ export function AIConnectionSettings({
                     className="secondary"
                     disabled={busy}
                     onClick={() => void change("sign-in-cancel")}
+                  >
+                    {uiText("Cancel")}
+                  </button>
+                </div>
+              </form>
+            </Dialog>
+          )}
+          {cliAuth && !signIn && (
+            <Dialog
+              title={cliAuthLabel}
+              onClose={() => void change("cli-auth-cancel")}
+            >
+              <form
+                className="dialog-body signin-modal"
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  void change("cli-connect");
+                }}
+                autoComplete="off"
+              >
+                <p role="status">
+                  {uiText(
+                    cliAuth.state === "failed"
+                      ? "Unavailable"
+                      : cliAuth.state === "authenticated"
+                        ? "Connected"
+                        : "Waiting for sign-in",
+                  )}
+                </p>
+                {cliAuth.state === "failed" && cliAuth.message && (
+                  <p role="alert">{cliAuth.message}</p>
+                )}
+                {cliAuth.verificationUrl && (
+                  <a
+                    className="primary"
+                    href={cliAuth.verificationUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                  >
+                    <ExternalLink size={14} />
+                    <span>{uiText("Open sign-in")}</span>
+                  </a>
+                )}
+                {cliAuth.userCode && (
+                  <div
+                    className="cli-code-box"
+                    aria-label={uiText("Device code")}
+                  >
+                    <code>{cliAuth.userCode}</code>
+                    <button
+                      type="button"
+                      className="icon-button"
+                      aria-label={
+                        copiedText === cliAuth.userCode
+                          ? uiText("Copied")
+                          : uiText("Copy")
+                      }
+                      title={
+                        copiedText === cliAuth.userCode
+                          ? uiText("Copied")
+                          : uiText("Copy")
+                      }
+                      onClick={() => void copyText(cliAuth.userCode || "")}
+                    >
+                      <Copy size={15} />
+                    </button>
+                  </div>
+                )}
+                {cliAuth.state === "authenticated" && needsPassphrase && (
+                  <label>
+                    {uiText("Vault passphrase")}
+                    <input
+                      type="password"
+                      autoComplete="off"
+                      value={passphrase}
+                      maxLength={1024}
+                      onChange={(e) => setPassphrase(e.target.value)}
+                    />
+                  </label>
+                )}
+                <div className="agent-actions">
+                  {cliAuth.state === "authenticated" && (
+                    <button
+                      type="submit"
+                      className="primary"
+                      disabled={
+                        busy || (needsPassphrase && passphrase.length < 12)
+                      }
+                    >
+                      {uiText("Connect CLI")}
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    className="secondary"
+                    disabled={busy}
+                    onClick={() => void change("cli-auth-cancel")}
                   >
                     {uiText("Cancel")}
                   </button>

@@ -16,10 +16,34 @@ import type { PilotAllowance } from "./pages/OpenAIPilot";
 import type { TaskAccessAllowance } from "./pages/TaskAccess";
 
 export type CredentialMode =
-  Exclude<Provider, "none"> | "test" | "openai-signin" | "google-oauth";
+  Exclude<Provider, "none"> | "test" | "openai-signin" | "google-oauth" | "cli";
+
+export type HostCLIStatus = {
+  provider: string;
+  binary: string;
+  label: string;
+  installed: boolean;
+  authenticated: boolean;
+  account?: string;
+  supportsDevice: boolean;
+  loginCommand: string;
+  installHint: string;
+  models?: string[];
+};
+
+export type CLIAuthView = {
+  id: string;
+  provider: string;
+  binary: string;
+  state: "starting" | "awaiting-code" | "authenticated" | "failed";
+  verificationUrl?: string;
+  userCode?: string;
+  message?: string;
+  expiresAt: number;
+};
 
 export type Connection = {
-  authMethod?: "api-key" | "sign-in" | "local" | "oauth";
+  authMethod?: "api-key" | "sign-in" | "local" | "oauth" | "cli";
   endpoint?: string;
   googleProject?: string;
   workspace?: string;
@@ -37,6 +61,8 @@ export type Connection = {
     expiresAt: number;
     remote: boolean;
   };
+  hostClis?: HostCLIStatus[];
+  cliAuth?: CLIAuthView | null;
   pilotEnrollment?: boolean;
   pilotAvailable?: boolean;
   pilot?: PilotAllowance;

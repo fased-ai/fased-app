@@ -192,6 +192,9 @@ func streamProviderV2(ctx context.Context, s *Store, target resolvedAgentProvide
 	if !s.aiExecutionAvailable(s.providerFixture) && s.agentV2TransportOverride == nil {
 		return providerTurnResult{}, errors.New("provider calls are disabled on this instance")
 	}
+	if target.AuthMethod == "cli" {
+		return streamProviderCLIV2(ctx, s, target, prompt, cb)
+	}
 	baseRT := s.agentV2TransportOverride
 	if baseRT == nil {
 		baseRT = s.providerRuntimeTransport()

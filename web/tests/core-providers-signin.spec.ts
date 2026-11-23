@@ -4340,3 +4340,197 @@ test("remote passwordless sign-in auto-completes from guided modal without detai
     editor.getByRole("button", { name: "Background access", exact: true }),
   ).toBeVisible();
 });
+
+test("Host CLI subscription detection, connect, and device-code auth modal", async ({
+  page,
+}) => {
+  await page.goto(url + "/#overview");
+  const claim = JSON.parse(
+    await readFile(join(dir, "claim-code.json"), "utf8"),
+  );
+  await openOwnerSetup(page, claim.code);
+  await page.getByLabel("Create owner password").fill(fixturePassword);
+  await page
+    .getByRole("button", { name: "Claim workspace", exact: true })
+    .click();
+  await expect(
+    page.getByRole("heading", { name: "Dashboard", exact: true }),
+  ).toBeVisible();
+  const token = await page.evaluate(() =>
+    sessionStorage.getItem("fased.core.session.v1"),
+  );
+  const baseConnection = await (
+    await page.request.get(url + "/api/v1/ai/connection", {
+      headers: { Authorization: `Bearer ${token}` },
+    })
+  ).json();
+
+  let savedAccount: Record<string, any> | undefined;
+  let cliAuth: Record<string, any> | null = null;
+  const postedActions: Record<string, any>[] = [];
+  const hostClis = [
+    {
+      provider: "openai",
+      binary: "codex",
+      label: "Codex CLI",
+      installed: true,
+      authenticated: true,
+      account: "Logged in using ChatGPT",
+      supportsDevice: true,
+      loginCommand: "codex login --device-auth",
+      installHint: "npm install -g @openai/codex",
+      models: ["gpt-5.4"],
+    },
+    {
+      provider: "anthropic",
+      binary: "claude",
+      label: "Claude Code",
+      installed: true,
+      authenticated: false,
+      supportsDevice: false,
+      loginCommand: "claude auth login",
+      installHint: "npm install -g @anthropic-ai/claude-code",
+      models: ["claude-sonnet-4-6"],
+    },
+    {
+      provider: "google",
+      binary: "gemini",
+      label: "Gemini CLI",
+      installed: false,
+      authenticated: false,
+      supportsDevice: false,
+      loginCommand: "gemini",
+      installHint: "npm install -g @google/gemini-cli",
+      models: ["gemini-2.5-pro"],
+    },
+  ];
+
+  const rootPayload = () => ({
+    ...baseConnection,
+    ...(savedAccount ?? {}),
+    credentialModes: ["openai", "anthropic", "google", "local"],
+    osVaultAvailable: true,
+    signInAvailable: true,
+    liveCallsEnabled: true,
+    persistentTaskAccessAvailable: true,
+    hostClis,
+    ...(cliAuth ? { cliAuth } : {}),
+    connections: savedAccount ? [savedAccount] : [],
+  });
+
+  await page.route("**/api/v1/ai/connection", async (route) => {
+    if (route.request().method() === "GET") {
+      await route.fulfill({ json: rootPayload() });
+      return;
+    }
+    const body = route.request().postDataJSON() as Record<string, any>;
+    postedActions.push(body);
+    const now = Math.floor(Date.now() / 1000);
+    if (body.action === "cli-connect") {
+      cliAuth = null;
+      savedAccount = {
+        ...baseConnection,
+        ref: "acct-cli-openai-1",
+        name: body.name || "Codex CLI",
+        provider: body.provider || "openai",
+        authMethod: "cli",
+        credentialMode: "cli",
+        osVaultAvailable: true,
+        osProtected: true,
+        locked: false,
+        testOnly: false,
+        liveCallsEnabled: true,
+        model: "gpt-5.4",
+        catalog: {
+          ...baseConnection.catalog,
+          state: "ready",
+          models: [
+            {
+              id: "gpt-5.4",
+              name: "GPT-5.4",
+              provider: "openai",
+              method: "cli",
+              connectionRef: "acct-cli-openai-1",
+              recommended: true,
+              selectable: true,
+              availability: "available",
+            },
+          ],
+        },
+      };
+    } else if (body.action === "cli-auth-start") {
+      cliAuth = {
+        id: "cli-auth-1",
+        provider: body.provider || "anthropic",
+        binary: body.provider === "anthropic" ? "claude" : "codex",
+        state: "awaiting-code",
+        verificationUrl: "https://auth.example.com/device",
+        userCode: "ABCD-1234",
+        expiresAt: now + 300,
+      };
+    } else if (body.action === "cli-auth-cancel") {
+      cliAuth = null;
+    }
+    await route.fulfill({ json: rootPayload() });
+  });
+
+  await openProviders(page);
+  const editor = page.getByRole("region", { name: "Providers", exact: true });
+  await expect(editor).toBeVisible();
+
+  await editor.getByRole("button", { name: "CLI", exact: true }).click();
+  await expect(editor.locator(".cli-status-card")).toContainText("Codex CLI");
+  await expect(editor.locator(".cli-status-card")).toContainText("Connected");
+  await expect(editor.locator(".cli-status-card")).toContainText(
+    "Logged in using ChatGPT",
+  );
+  await editor
+    .getByRole("button", { name: "Connect CLI", exact: true })
+    .click();
+
+  await expect
+    .poll(() => postedActions.find((a) => a.action === "cli-connect"))
+    .toEqual({ action: "cli-connect", provider: "openai" });
+  await expect(editor.getByRole("status")).toContainText("Unlocked");
+
+  await editor
+    .getByRole("button", { name: "Add provider", exact: true })
+    .click();
+  await page.getByRole("button", { name: /^Anthropic$/ }).click();
+  await editor.getByRole("button", { name: "CLI", exact: true }).click();
+  await expect(editor.locator(".cli-status-card")).toContainText("Claude Code");
+  await expect(editor.locator(".cli-status-card")).toContainText(
+    "Sign in required",
+  );
+  await editor
+    .getByRole("button", { name: "Sign in via CLI", exact: true })
+    .click();
+
+  const authDialog = editor.getByRole("dialog", {
+    name: "Claude Code",
+    exact: true,
+  });
+  await expect(authDialog).toBeVisible();
+  await expect(
+    authDialog.getByRole("link", { name: "Open sign-in", exact: true }),
+  ).toHaveAttribute("href", "https://auth.example.com/device");
+  await expect(authDialog.getByLabel("Device code")).toContainText("ABCD-1234");
+  await authDialog.getByRole("button", { name: "Cancel", exact: true }).click();
+  await expect
+    .poll(() => postedActions.some((a) => a.action === "cli-auth-cancel"))
+    .toBe(true);
+  await expect(authDialog).toHaveCount(0);
+
+  await page.getByRole("button", { name: /^Google$/ }).click();
+  await editor.getByRole("button", { name: "CLI", exact: true }).click();
+  await expect(editor.locator(".cli-status-card")).toContainText("Gemini CLI");
+  await expect(editor.locator(".cli-status-card")).toContainText(
+    "Not installed",
+  );
+  await editor
+    .getByRole("button", { name: "Check again", exact: true })
+    .click();
+  await expect
+    .poll(() => postedActions.some((a) => a.action === "cli-probe"))
+    .toBe(true);
+});
