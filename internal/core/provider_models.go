@@ -286,12 +286,15 @@ func discoveredProviderCatalog(v AIConnectionView, d modelDiscovery, now int64) 
 		}
 		if v.AuthMethod == "cli" {
 			m.Method = "cli"
+			m.Policy = dynamicModelPolicy(provider, entry.ID, "cli")
 		}
 		record, listed := records[entry.ID]
 		switch {
 		case entry.Currency != "" && entry.Currency != "USD":
 			m.Policy = nil
 			m.Availability = "currency-unsupported"
+		case v.Disabled:
+			m.Availability = "disabled"
 		case v.AuthMethod == "cli" && v.Ref != "" && !v.Locked:
 			if v.TestOnly {
 				m.Availability = "fixture"
@@ -355,6 +358,8 @@ func discoveredProviderCatalog(v AIConnectionView, d modelDiscovery, now int64) 
 		switch {
 		case pol == nil:
 			m.Availability = "currency-unsupported"
+		case v.Disabled:
+			m.Availability = "disabled"
 		case v.AuthMethod == "sign-in" && !v.PlanUse && !v.Locked:
 			m.Availability = "plan-access-required"
 		case v.Ref == "":
@@ -385,20 +390,37 @@ func discoveredProviderCatalog(v AIConnectionView, d modelDiscovery, now int64) 
 	}
 	if v.AuthMethod == "cli" && v.Ref != "" && !v.Locked {
 		avail := "available"
-		if v.TestOnly {
+		selectable := true
+		if v.Disabled {
+			avail = "disabled"
+			selectable = false
+		} else if v.TestOnly {
 			avail = "fixture"
 		} else if !v.LiveCallsEnabled {
 			avail = "disabled"
 		}
-		if spec, ok := cliSpecForProvider(provider); ok {
+		var cliModels []string
+		for _, cli := range v.HostCLIs {
+			if cli.Provider == provider && (v.Binary == "" || cli.Binary == v.Binary) {
+				cliModels = append(cliModels, cli.Models...)
+				break
+			}
+		}
+		if len(cliModels) == 0 {
+			if spec, ok := cliSpecForTarget(provider, v.Binary); ok {
+				cliModels = append(cliModels, spec.Models...)
+			}
+		}
+		if len(cliModels) > 0 {
 			existing := make(map[string]bool, len(catalog.Models))
 			for _, m := range catalog.Models {
 				existing[m.ID] = true
 			}
-			for _, modelID := range spec.Models {
+			for _, modelID := range cliModels {
 				if existing[modelID] {
 					continue
 				}
+				existing[modelID] = true
 				catalog.Models = append(catalog.Models, ProviderModel{
 					ID:            modelID,
 					Name:          modelID,
@@ -406,8 +428,8 @@ func discoveredProviderCatalog(v AIConnectionView, d modelDiscovery, now int64) 
 					Method:        "cli",
 					ConnectionRef: v.Ref,
 					Availability:  avail,
-					Selectable:    true,
-					Policy:        chatModelPolicy(modelID),
+					Selectable:    selectable,
+					Policy:        dynamicModelPolicy(provider, modelID, "cli"),
 				})
 			}
 		}

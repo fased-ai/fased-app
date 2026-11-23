@@ -144,6 +144,8 @@ func validateAIModelPolicy(q AgentAIRequest, now int64) error {
 			method = "sign-in"
 		} else if localPolicy(q.Policy) {
 			method = "local"
+		} else if cliPolicy(q.Policy) {
+			method = "cli"
 		}
 		selected := dynamicModelPolicy(policyProvider(q.Policy), q.Model, method)
 		if selected == nil {
@@ -156,6 +158,13 @@ func validateAIModelPolicy(q AgentAIRequest, now int64) error {
 			selected := legacySignInModelPolicy(q.Model)
 			if selected == nil {
 				return errors.New("sign-in model policy unavailable")
+			}
+			p = *selected
+		}
+		if cliPolicy(q.Policy) {
+			selected := chatModelPolicyForMethod(q.Model, "cli")
+			if selected == nil {
+				return errors.New("CLI subscription model policy unavailable")
 			}
 			p = *selected
 		}

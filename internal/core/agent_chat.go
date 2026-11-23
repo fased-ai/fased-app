@@ -79,7 +79,8 @@ func isDiscoveredPolicy(p *OpenAIModelPolicy) bool {
 	}
 	prov := policyProvider(p)
 	return p.ID == fmt.Sprintf("%s-discovered-v1:%s", prov, p.Model) ||
-		(prov == "openai" && p.ID == fmt.Sprintf("openai-discovered-v1:%s:sign-in-plan-v2", p.Model))
+		(prov == "openai" && p.ID == fmt.Sprintf("openai-discovered-v1:%s:sign-in-plan-v2", p.Model)) ||
+		(cliPolicy(p) && validCLIProvider(prov) && p.ID == fmt.Sprintf("%s-discovered-v1:%s:cli-v1", prov, p.Model))
 }
 func registryCeilingPricing(reg modelRegistry) (input, cached, output int64, ok bool) {
 	for _, m := range reg.Models {
@@ -134,6 +135,14 @@ func dynamicModelPolicy(provider, model, method string) *OpenAIModelPolicy {
 		p.WireVersion = localWire
 		p.ModelSource = reg.Sources["discovery"]
 		p.TokenSource = reg.Sources["discovery"]
+		return &p
+	case method == "cli" && validCLIProvider(provider):
+		p.ID += ":cli-v1"
+		p.Provider = provider
+		p.WireVersion = cliWire
+		p.Reasoning = ""
+		p.TariffSource = "local:cli-subscription"
+		p.TokenSource = "local:cli-reported-usage"
 		return &p
 	case provider == "openai" && method == "sign-in":
 		p.ID += ":sign-in-plan-v2"
@@ -219,6 +228,19 @@ func chatModelPolicyForMethod(model, method string) *OpenAIModelPolicy {
 	}
 	if method == "" || method == "api-key" || method == "local" && localPolicy(p) {
 		return p
+	}
+	if method == "cli" && p != nil && validCLIProvider(policyProvider(p)) {
+		copy := *p
+		copy.ID += ":cli-v1"
+		copy.Provider = policyProvider(p)
+		copy.WireVersion = cliWire
+		copy.CacheMode = ""
+		copy.BillableOutputTokens = 0
+		copy.MaxRequestBudgetMicrousd = 0
+		copy.InputMicrousdPerMillion, copy.CachedMicrousdPerMillion, copy.OutputMicrousdPerMillion = 0, 0, 0
+		copy.TariffSource = "local:cli-subscription"
+		copy.TokenSource = "local:cli-reported-usage"
+		return &copy
 	}
 	m, current := currentProviderModel(model)
 	if method != "sign-in" || p == nil || !current || modelProvider(m) != "openai" {

@@ -16,7 +16,7 @@ import { useUI } from "../ui-preferences";
 import { planFailureDetails } from "../agents";
 import { useEffect, useRef, useState } from "react";
 import { useWorkspace } from "../workspace";
-import { Dialog } from "../components/shared";
+import { Dialog, ToggleSwitch } from "../components/shared";
 import { TaskAccessSettings } from "./TaskAccess";
 import { OpenAIPilotSettings } from "./OpenAIPilot";
 import {
@@ -88,6 +88,9 @@ export function AIConnectionSettings({
   const [newProvider, setNewProvider] = useState("openai");
   const [newMethod, setNewMethod] = useState("api-key");
   const [cliName, setCliName] = useState("");
+  const [cliBinary, setCliBinary] = useState("");
+  const [cliBinaryPath, setCliBinaryPath] = useState("");
+  const [cliConfigDir, setCliConfigDir] = useState("");
   const [copiedText, setCopiedText] = useState("");
   const copiedTimer = useRef<number | null>(null);
   const [callback, setCallback] = useState("");
@@ -137,6 +140,9 @@ export function AIConnectionSettings({
     setKey("");
     setPassphrase("");
     setCliName("");
+    setCliBinary("");
+    setCliBinaryPath("");
+    setCliConfigDir("");
     setCallback("");
     clearProvidersPreset();
   }, [providersPreset, clearProvidersPreset, root?.signInAvailable]);
@@ -262,12 +268,23 @@ export function AIConnectionSettings({
         : view.authMethod || "api-key"
       : newMethod;
   const signIn = root?.signIn;
-  const cliStatus: HostCLIStatus | undefined = root?.hostClis?.find(
-    (c) => c.provider === provider,
-  );
+  const providerClis: HostCLIStatus[] =
+    root?.hostClis?.filter((c) => c.provider === provider) || [];
+  const cliStatus: HostCLIStatus | undefined = view?.ref
+    ? providerClis.find((c) => !view.binary || c.binary === view.binary) ||
+      providerClis[0]
+    : (cliBinary
+        ? providerClis.find((c) => c.binary === cliBinary)
+        : undefined) ||
+      providerClis.find((c) => c.installed && c.authenticated) ||
+      providerClis.find((c) => c.installed) ||
+      providerClis[0];
   const cliAuth: CLIAuthView | null = root?.cliAuth ?? null;
   const cliAuthLabel = cliAuth
-    ? root?.hostClis?.find((c) => c.provider === cliAuth.provider)?.label ||
+    ? root?.hostClis?.find(
+        (c) => c.provider === cliAuth.provider && c.binary === cliAuth.binary,
+      )?.label ||
+      root?.hostClis?.find((c) => c.provider === cliAuth.provider)?.label ||
       cliAuth.binary
     : "";
   const signInAvailable =
@@ -294,7 +311,7 @@ export function AIConnectionSettings({
       : signIn.state === "callback-ready"
     : false;
   const statusText = view?.ref
-    ? `${uiText(view.planPaused ? "Paused" : view.locked ? (view.taskAccess ? "Chat locked" : "Locked") : "Unlocked")} · ${providerName}`
+    ? `${uiText(view.disabled ? "Disabled" : view.planPaused ? "Paused" : view.locked ? (view.taskAccess ? "Chat locked" : "Locked") : "Unlocked")} · ${providerName}`
     : uiText(
         root && !view && selected && selected !== "new"
           ? "Unavailable"
@@ -368,6 +385,8 @@ export function AIConnectionSettings({
                   ref: view.ref,
                   ...(needsPassphrase ? { passphrase: secret } : {}),
                 };
+      const selectedBinary =
+        cliAuth?.binary || (providerClis.length > 1 ? cliStatus?.binary : "");
       const cliCommand =
         action === "cli-probe"
           ? { action: "cli-probe" }
@@ -375,6 +394,7 @@ export function AIConnectionSettings({
             ? {
                 action: "cli-auth-start",
                 provider: cliAuth?.provider || provider,
+                ...(selectedBinary ? { binary: selectedBinary } : {}),
                 ...(view.ref ? { ref: view.ref } : {}),
               }
             : action === "cli-auth-cancel"
@@ -382,8 +402,15 @@ export function AIConnectionSettings({
               : {
                   action: "cli-connect",
                   provider: cliAuth?.provider || provider,
+                  ...(selectedBinary ? { binary: selectedBinary } : {}),
                   ...(view.ref ? { ref: view.ref } : {}),
                   ...(cliName.trim() ? { name: cliName.trim() } : {}),
+                  ...(cliBinaryPath.trim()
+                    ? { binaryPath: cliBinaryPath.trim() }
+                    : {}),
+                  ...(cliConfigDir.trim()
+                    ? { configDir: cliConfigDir.trim() }
+                    : {}),
                   ...(needsPassphrase ? { passphrase: secret } : {}),
                 };
       const next = await core.request<Connection>(
@@ -414,6 +441,8 @@ export function AIConnectionSettings({
       ) {
         setEditOpen(false);
         setCliName("");
+        setCliBinaryPath("");
+        setCliConfigDir("");
       }
       const refreshed = next.connections
         ? next
@@ -573,6 +602,41 @@ export function AIConnectionSettings({
     setKey("");
     setPassphrase("");
     setCallback("");
+    setCliBinary("");
+    setCliBinaryPath("");
+    setCliConfigDir("");
+  }
+
+  async function toggleAccountEnabled(ref: string, disabled: boolean) {
+    const previous = root;
+    if (previous) {
+      setView({
+        ...previous,
+        ...(previous.ref === ref ? { disabled } : {}),
+        connections: previous.connections?.map((c) =>
+          c.ref === ref ? { ...c, disabled } : c,
+        ),
+      });
+    }
+    setBusy(true);
+    setError("");
+    try {
+      const next = await core.request<Connection>("ai/connection", "POST", {
+        action: "set-enabled",
+        ref,
+        disabled,
+      });
+      const refreshed = next.connections
+        ? next
+        : await core.request<Connection>("ai/connection");
+      setView(refreshed);
+      window.dispatchEvent(new Event("ai-connection-changed"));
+    } catch (e) {
+      if (previous) setView(previous);
+      setError(e instanceof Error ? e.message : "Could not save connection");
+    } finally {
+      setBusy(false);
+    }
   }
 
   function renderCredentialForm() {
@@ -604,10 +668,41 @@ export function AIConnectionSettings({
         )}
         {method === "cli" && (
           <>
+            {providerClis.length > 1 && !view?.ref && (
+              <div
+                className="segmented-control"
+                role="group"
+                aria-label={uiText("Runtime")}
+              >
+                {providerClis.map((c) => (
+                  <button
+                    key={c.binary}
+                    type="button"
+                    aria-pressed={cliStatus?.binary === c.binary}
+                    disabled={busy || !!signIn || !!cliAuth}
+                    onClick={() => setCliBinary(c.binary)}
+                  >
+                    {c.authenticated && (
+                      <span
+                        className="cli-status-dot"
+                        data-state="ready"
+                        aria-hidden="true"
+                      />
+                    )}
+                    {c.label}
+                  </button>
+                ))}
+              </div>
+            )}
             <div className="cli-status-card">
               <div className="cli-status-head">
                 <TerminalSquare size={15} />
                 <strong>{cliStatus?.label || providerName}</strong>
+                {cliStatus?.version && (
+                  <span className="provider-model-pill cli-version-pill">
+                    {`v${cliStatus.version}`}
+                  </span>
+                )}
                 <span
                   className="provider-model-pill"
                   data-state={cliStatus?.authenticated ? "ready" : "stale"}
@@ -670,16 +765,39 @@ export function AIConnectionSettings({
               </div>
             )}
             {cliStatus?.installed && cliStatus.authenticated && !view?.ref && (
-              <label>
-                {uiText("Name")}
-                <input
-                  value={cliName}
-                  maxLength={80}
-                  autoComplete="off"
-                  placeholder={cliStatus.label}
-                  onChange={(e) => setCliName(e.target.value)}
-                />
-              </label>
+              <>
+                <label>
+                  {uiText("Name")}
+                  <input
+                    value={cliName}
+                    maxLength={80}
+                    autoComplete="off"
+                    placeholder={cliStatus.label}
+                    onChange={(e) => setCliName(e.target.value)}
+                  />
+                </label>
+                <label>
+                  {uiText("Binary path")}
+                  <input
+                    value={cliBinaryPath}
+                    maxLength={260}
+                    autoComplete="off"
+                    spellCheck={false}
+                    placeholder={cliStatus.binaryPath || cliStatus.binary}
+                    onChange={(e) => setCliBinaryPath(e.target.value)}
+                  />
+                </label>
+                <label>
+                  {uiText("Config directory")}
+                  <input
+                    value={cliConfigDir}
+                    maxLength={260}
+                    autoComplete="off"
+                    spellCheck={false}
+                    onChange={(e) => setCliConfigDir(e.target.value)}
+                  />
+                </label>
+              </>
             )}
           </>
         )}
@@ -1055,6 +1173,7 @@ export function AIConnectionSettings({
                   <button
                     key={a.ref}
                     data-account={a.ref}
+                    data-disabled={a.disabled ? "true" : undefined}
                     type="button"
                     className="provider-account"
                     aria-pressed={view?.ref === a.ref}
@@ -1081,6 +1200,8 @@ export function AIConnectionSettings({
                                 ? "Server"
                                 : "API key",
                         )}
+                        {a.cliVersion ? ` · v${a.cliVersion}` : ""}
+                        {a.disabled ? ` · ${uiText("Disabled")}` : ""}
                       </small>
                     </span>
                     {a.locked && <LockKeyhole size={14} />}
@@ -1116,6 +1237,9 @@ export function AIConnectionSettings({
                     setSelected("new");
                     setNewProvider(provider);
                     setCliName("");
+                    setCliBinary("");
+                    setCliBinaryPath("");
+                    setCliConfigDir("");
                     setNewMethod(
                       provider === "local"
                         ? "local"
@@ -1215,7 +1339,7 @@ export function AIConnectionSettings({
                         setCallback("");
                       }}
                     >
-                      {cliStatus.authenticated && (
+                      {providerClis.some((c) => c.authenticated) && (
                         <span
                           className="cli-status-dot"
                           data-state="ready"
@@ -1269,6 +1393,14 @@ export function AIConnectionSettings({
                   />
                 )}
                 <OpenAIPilotSettings connection={view} />
+                <ToggleSwitch
+                  checked={!view.disabled}
+                  disabled={busy || !!signIn}
+                  label={uiText("Enabled")}
+                  onChange={(checked) =>
+                    void toggleAccountEnabled(view.ref, !checked)
+                  }
+                />
               </div>
             )}
             {view?.planFailure && !editOpen && !signIn && (

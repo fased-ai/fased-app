@@ -19,16 +19,24 @@ import (
 
 const localWire = "local-responses-v1"
 const localUsageCostBasis = "local-reported-usage"
+const cliWire = "cli-subscription-v1"
+const cliUsageCostBasis = "cli-reported-usage"
 
+func cliPolicy(p *OpenAIModelPolicy) bool {
+	return p != nil && p.WireVersion == cliWire
+}
 func localPolicy(p *OpenAIModelPolicy) bool {
 	return p != nil && p.Provider == "local" && p.WireVersion == localWire
 }
 func localRequest(q AgentAIRequest) bool { return localPolicy(q.Policy) }
 func unmeteredPolicy(p *OpenAIModelPolicy) bool {
-	return localPolicy(p) || planSignInPolicy(p) || kimiCodePolicy(p) || ollamaCloudPolicy(p)
+	return localPolicy(p) || planSignInPolicy(p) || kimiCodePolicy(p) || ollamaCloudPolicy(p) || cliPolicy(p)
 }
 func unmeteredRequest(q AgentAIRequest) bool { return unmeteredPolicy(q.Policy) }
 func reportedUsageBasis(q AgentAIRequest) string {
+	if cliPolicy(q.Policy) {
+		return cliUsageCostBasis
+	}
 	if ollamaCloudPolicy(q.Policy) || ollamaRelayPolicy(q.Policy) {
 		return "ollama-cloud-reported-usage"
 	}

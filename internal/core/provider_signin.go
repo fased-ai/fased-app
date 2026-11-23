@@ -147,7 +147,7 @@ func validSignInValue(value string, bound int) bool {
 }
 func aiVaultCiphertextBound(v aiVaultEnvelope) int {
 	if v.Version == 8 {
-		return 512 + 16
+		return 1024 + 16
 	}
 	if v.Version == 7 {
 		return 1024 + 16

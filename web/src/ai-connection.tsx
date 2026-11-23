@@ -22,6 +22,9 @@ export type HostCLIStatus = {
   provider: string;
   binary: string;
   label: string;
+  transport?: "cli" | "acp";
+  version?: string;
+  binaryPath?: string;
   installed: boolean;
   authenticated: boolean;
   account?: string;
@@ -48,6 +51,12 @@ export type Connection = {
   googleProject?: string;
   workspace?: string;
   googleSignInAvailable?: boolean;
+  disabled?: boolean;
+  binary?: string;
+  binaryPath?: string;
+  configDir?: string;
+  accentColor?: string;
+  cliVersion?: string;
   planUse?: boolean;
   planPaused?: boolean;
   planFailure?: string;

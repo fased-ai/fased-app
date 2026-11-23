@@ -233,7 +233,7 @@ func (s *Store) aiRequestConnectionValid(q AgentAIRequest) bool {
 	defer s.provider.mu.Unlock()
 	state := s.credentialLocked(q.ConnectionRef)
 	v, e := s.aiConnectionLocked(q.ConnectionRef)
-	if e != nil || v.Ref != q.ConnectionRef {
+	if e != nil || v.Ref != q.ConnectionRef || v.Disabled {
 		return false
 	}
 	if !s.pilotRequestLocked(q, q.pilotID != "") {
@@ -252,7 +252,7 @@ func (s *Store) reserveTaskAccess(q *AgentAIRequest) bool {
 	defer s.provider.mu.Unlock()
 	state := s.credentialLocked(q.ConnectionRef)
 	v, e := s.aiConnectionLocked(q.ConnectionRef)
-	if e != nil || v.Ref != q.ConnectionRef {
+	if e != nil || v.Ref != q.ConnectionRef || v.Disabled {
 		return false
 	}
 	if q.TaskID == "" {

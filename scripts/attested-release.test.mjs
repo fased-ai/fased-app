@@ -158,6 +158,9 @@ function fixture(t, packetFormat = 2) {
       });
     }
     candidateRuns++;
+    if (args.includes("--inspect-public-package")) {
+      return `native ${sha(files["fased-release.json"])} ${c.version} ${packet.installer.sha256}\n`;
+    }
     return JSON.stringify({
       version: 4,
       metadataVerified: !args.includes("--verify-candidate"),
@@ -576,4 +579,23 @@ test("format-4 publisher refuses a missing, lightweight or foreign tag before wr
     );
     assert.equal(f.mutations, 0);
   }
+});
+
+test("format-4 public readback refuses altered --inspect-public-package output", async (t) => {
+  const f = fixture(t, 4);
+  await assert.rejects(
+    publishAttested(f.c, f.directory, {
+      api: f.api,
+      execute: (program, args, options) => {
+        if (args.includes("--inspect-public-package")) {
+          return "native wrong 0.0.0 mismatch\n";
+        }
+        return f.execute(program, args, options);
+      },
+      verifyAcceptance: f.verifyAcceptance,
+      fetchResponse: f.fetchResponse,
+      stateRoot: path.join(f.parent, "publisher"),
+    }),
+    /Public installer\/readback differs from release/,
+  );
 });

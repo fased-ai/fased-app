@@ -4394,8 +4394,23 @@ test("Host CLI subscription detection, connect, and device-code auth modal", asy
     },
     {
       provider: "google",
+      binary: "antigravity",
+      label: "Antigravity ACP",
+      transport: "acp",
+      version: "1.5.13",
+      binaryPath: "/home/user/.t3/tools/antigravity-acp/antigravity",
+      installed: true,
+      authenticated: false,
+      supportsDevice: false,
+      loginCommand: "antigravity acp --login",
+      installHint: "Install Antigravity desktop or run antigravity acp",
+      models: ["gemini-4-neon", "gemini-4-carbon", "gemini-3.8-flash"],
+    },
+    {
+      provider: "google",
       binary: "gemini",
       label: "Gemini CLI",
+      transport: "cli",
       installed: false,
       authenticated: false,
       supportsDevice: false,
@@ -4470,6 +4485,11 @@ test("Host CLI subscription detection, connect, and device-code auth modal", asy
       };
     } else if (body.action === "cli-auth-cancel") {
       cliAuth = null;
+    } else if (body.action === "set-enabled" && savedAccount) {
+      savedAccount = {
+        ...savedAccount,
+        disabled: !!body.disabled,
+      };
     }
     await route.fulfill({ json: rootPayload() });
   });
@@ -4523,6 +4543,14 @@ test("Host CLI subscription detection, connect, and device-code auth modal", asy
 
   await page.getByRole("button", { name: /^Google$/ }).click();
   await editor.getByRole("button", { name: "CLI", exact: true }).click();
+  await expect(editor.locator(".cli-status-card")).toContainText(
+    "Antigravity ACP",
+  );
+  await expect(editor.locator(".cli-status-card")).toContainText("v1.5.13");
+  await expect(editor.locator(".cli-status-card")).toContainText(
+    "Sign in required",
+  );
+  await editor.getByRole("button", { name: "Gemini CLI", exact: true }).click();
   await expect(editor.locator(".cli-status-card")).toContainText("Gemini CLI");
   await expect(editor.locator(".cli-status-card")).toContainText(
     "Not installed",
@@ -4533,4 +4561,17 @@ test("Host CLI subscription detection, connect, and device-code auth modal", asy
   await expect
     .poll(() => postedActions.some((a) => a.action === "cli-probe"))
     .toBe(true);
+
+  await editor.locator('[data-account="acct-cli-openai-1"]').click();
+  const enabledSwitch = editor.getByRole("checkbox", { name: "Enabled" });
+  await expect(enabledSwitch).toBeChecked();
+  await enabledSwitch.uncheck();
+  await expect
+    .poll(() => postedActions.find((a) => a.action === "set-enabled"))
+    .toEqual({
+      action: "set-enabled",
+      ref: "acct-cli-openai-1",
+      disabled: true,
+    });
+  await expect(editor.getByRole("status")).toContainText("Disabled");
 });

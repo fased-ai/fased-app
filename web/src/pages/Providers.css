@@ -73,6 +73,9 @@
   background: var(--shell-active);
   color: var(--wt-coral);
 }
+.wt .provider-account[data-disabled="true"] {
+  opacity: 0.62;
+}
 .wt .provider-account:hover,
 .wt .provider-brand-button:hover {
   background: var(--shell-hover);
@@ -347,4 +350,10 @@
   font-weight: 700;
   letter-spacing: 0.1em;
   color: var(--wt-aqua);
+}
+.wt .cli-version-pill {
+  font-variant-numeric: tabular-nums;
+}
+.wt .provider-action-bar .wt-switch {
+  margin-left: auto;
 }

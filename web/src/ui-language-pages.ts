@@ -5392,6 +5392,20 @@ export const pageCopy = {
     "通过 CLI 登录",
     "CLI로 로그인",
   ],
+  "Binary path": [
+    "Путь к бинарнику",
+    "Ruta del binario",
+    "二进制文件路径",
+    "바이너리 경로",
+  ],
+  "Config directory": [
+    "Каталог конфигурации",
+    "Directorio de configuración",
+    "配置目录",
+    "설정 디렉터리",
+  ],
+  Enabled: ["Включён", "Habilitado", "已启用", "사용 중"],
+  Runtime: ["Среда", "Entorno", "运行时", "런타임"],
   "{count} rules recalled": [
     "Учтено правил: {count}",
     "{count} reglas recordadas",

@@ -170,15 +170,24 @@ func TestProviderCLIProbeAndConnectAllVendors(t *testing.T) {
 	if err != nil {
 		t.Fatalf("cli-probe failed: %v", err)
 	}
-	if len(view.HostCLIs) != 4 {
-		t.Fatalf("expected 4 host CLIs, got %d", len(view.HostCLIs))
+	if len(view.HostCLIs) != 5 {
+		t.Fatalf("expected 5 host CLIs, got %d", len(view.HostCLIs))
 	}
 	byProvider := map[string]HostCLIStatus{}
+	byBinary := map[string]HostCLIStatus{}
 	for _, st := range view.HostCLIs {
+		byBinary[st.Binary] = st
+		if st.Provider == "google" && st.Binary == "antigravity" {
+			// In this mock runner antigravity is not configured for ACP; gemini is checked below.
+			continue
+		}
 		byProvider[st.Provider] = st
 		if !st.Installed || !st.Authenticated {
-			t.Fatalf("expected %s installed+authenticated, got %+v", st.Provider, st)
+			t.Fatalf("expected %s (%s) installed+authenticated, got %+v", st.Provider, st.Binary, st)
 		}
+	}
+	if _, ok := byBinary["antigravity"]; !ok {
+		t.Fatal("expected antigravity runtime in HostCLIs")
 	}
 	if byProvider["anthropic"].Account != "owner@example.com" {
 		t.Fatalf("expected claude email account, got %q", byProvider["anthropic"].Account)
