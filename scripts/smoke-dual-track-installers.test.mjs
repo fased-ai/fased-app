@@ -7,6 +7,7 @@ import os from "node:os";
 import path from "node:path";
 import {
   createLoopbackFixtureTLS,
+  resolveOpenSSLBinary,
   runInstallerCommand,
   startLoopbackArchiveServer,
   verifyChecksumsAndManifest,
@@ -156,5 +157,18 @@ test("createLoopbackFixtureTLS and startLoopbackArchiveServer serve exact and ta
   } finally {
     if (server) await server.close();
     rmSync(workDir, { recursive: true, force: true });
+  }
+});
+
+test("resolveOpenSSLBinary probes cleanly across platforms without ReferenceError", () => {
+  assert.equal(resolveOpenSSLBinary("linux"), "openssl");
+  try {
+    const bin = resolveOpenSSLBinary("win32");
+    assert.ok(typeof bin === "string" && bin.length > 0);
+  } catch (err) {
+    assert.match(
+      String(err),
+      /Unable to locate openssl executable on Windows host/,
+    );
   }
 });

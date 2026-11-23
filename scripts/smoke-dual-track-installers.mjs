@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { execFileSync, spawn } from "node:child_process";
+import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
   chmodSync,
@@ -306,7 +306,11 @@ function verifyDesktopPackages({ packagesDir, workDir, cliDir, arch }) {
         encoding: "utf8",
         timeout: 20000,
       });
-      assert.match(listing, /\/usr\/lib\/fased-app\/fased-app/);
+      assert.match(listing, /\.\/opt\/fased-app\/fased-app/);
+      assert.match(
+        listing,
+        /\.\/usr\/bin\/fased-app -> \/opt\/fased-app\/fased-app/,
+      );
       out.checked.push(debName);
     }
     const appImageName = files.find((f) => f.endsWith(".AppImage"));
