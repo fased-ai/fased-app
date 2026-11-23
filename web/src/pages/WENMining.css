@@ -27,6 +27,27 @@
   gap: 6px;
 }
 
+.wt .wen-toggle-pill {
+  border: 1px solid var(--line);
+  background: var(--wt-bg);
+  color: var(--wt-text);
+  border-radius: 8px;
+  min-height: 30px;
+  padding: 5px 10px;
+  transition: none;
+}
+
+.wt .wen-toggle-pill:hover:not(:disabled) {
+  background: var(--wt-raised);
+  border-color: var(--wt-muted);
+}
+
+.wt .wen-toggle-pill.is-active {
+  border-color: var(--wt-cyan);
+  background: var(--wt-raised);
+  color: var(--wt-text);
+}
+
 .wt .wen-chart-panel {
   display: grid;
   gap: 12px;

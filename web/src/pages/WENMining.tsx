@@ -313,7 +313,11 @@ export function WENMining() {
                 <button
                   key={chip}
                   type="button"
-                  className={amountSOL === chip ? "primary" : "secondary"}
+                  className={
+                    amountSOL === chip
+                      ? "wen-toggle-pill is-active"
+                      : "wen-toggle-pill"
+                  }
                   disabled={busy}
                   onClick={() => {
                     setAmountSOL(chip);
@@ -334,7 +338,9 @@ export function WENMining() {
                   key={preset.id}
                   type="button"
                   className={
-                    preset.id === activePreset.id ? "primary" : "secondary"
+                    preset.id === activePreset.id
+                      ? "wen-toggle-pill is-active"
+                      : "wen-toggle-pill"
                   }
                   aria-pressed={preset.id === activePreset.id}
                   disabled={busy}
