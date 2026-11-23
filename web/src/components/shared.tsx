@@ -79,9 +79,14 @@ export function Dialog({
   const titleId = useId();
   useEffect(() => {
     const el = ref.current;
+    const previousFocus =
+      document.activeElement instanceof HTMLElement
+        ? document.activeElement
+        : null;
     el?.showModal();
     return () => {
       el?.close();
+      if (previousFocus?.isConnected) previousFocus.focus();
     };
   }, []);
   return (
@@ -97,6 +102,7 @@ export function Dialog({
       <div className="dialog-heading">
         <h2 id={titleId}>{title}</h2>
         <button
+          type="button"
           className="icon-button"
           aria-label={t("Close dialog")}
           onClick={onClose}
@@ -106,6 +112,31 @@ export function Dialog({
       </div>
       {children}
     </dialog>
+  );
+}
+export function ToggleSwitch({
+  checked,
+  onChange,
+  label,
+  disabled = false,
+}: {
+  checked: boolean;
+  onChange: (checked: boolean) => void;
+  label: string;
+  disabled?: boolean;
+}) {
+  return (
+    <label className="wt-switch">
+      <input
+        type="checkbox"
+        className="wt-switch-input"
+        checked={checked}
+        disabled={disabled}
+        onChange={(e) => onChange(e.target.checked)}
+      />
+      <span className="wt-switch-track" aria-hidden="true" />
+      <span className="wt-switch-label">{label}</span>
+    </label>
   );
 }
 export function DemoChart() {

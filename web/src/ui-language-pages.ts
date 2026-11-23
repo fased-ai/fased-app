@@ -5316,12 +5316,25 @@ export const pageCopy = {
     "暂无用量记录",
     "사용 내역이 없습니다",
   ],
+  "Copy the 127.0.0.1 URL from the finished tab — connection error is normal": [
+    "Скопируйте адрес 127.0.0.1 из открывшейся вкладки — ошибка подключения ожидаема",
+    "Copia la URL 127.0.0.1 de la pestaña finalizada — el error de conexión es normal",
+    "从完成的标签页复制 127.0.0.1 网址 — 连接错误属正常现象",
+    "완료된 탭의 127.0.0.1 주소를 복사하세요 — 연결 오류는 정상입니다",
+  ],
+  "Copy the code from the finished tab": [
+    "Скопируйте код из открывшейся вкладки",
+    "Copia el código de la pestaña finalizada",
+    "从完成的标签页复制授权码",
+    "완료된 탭에서 코드를 복사하세요",
+  ],
   "Nothing to compact": [
     "Нечего сжимать",
     "Nada que compactar",
     "暂无可压缩内容",
     "압축할 내용이 없습니다",
   ],
+  Paste: ["Вставить", "Pegar", "粘贴", "붙여넣기"],
   "Side question": [
     "Побочный вопрос",
     "Pregunta aparte",
