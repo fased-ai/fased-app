@@ -636,10 +636,7 @@ for (const capability of [
       );
     });
     const form = page.locator("#rpc-capability-harness");
-    await form
-      .locator("summary")
-      .filter({ hasText: /^API key$/ })
-      .click();
+    await form.getByRole("button", { name: "API key", exact: true }).click();
     await expect.poll(() => actions.includes("status")).toBe(true);
     await expect(form.getByText("Saved", { exact: true })).toBeVisible();
     await form

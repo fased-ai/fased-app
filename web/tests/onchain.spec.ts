@@ -137,11 +137,10 @@ async function swapJourney(recoveryMode: boolean, page: Page, info: TestInfo) {
         name: "RPC · Wallet",
         exact: true,
       });
-      const rpcKeys = rpc
-        .locator("details")
-        .filter({ has: page.locator("summary", { hasText: /^API key$/ }) })
-        .first();
-      await rpcKeys.locator("summary").first().click();
+      const rpcKeys = rpc.locator('[data-section="rpc-api-key"]').first();
+      await rpcKeys
+        .getByRole("button", { name: "API key", exact: true })
+        .click();
       await rpcKeys
         .getByLabel("RPC API key", { exact: true })
         .fill("r".repeat(32));
@@ -154,11 +153,10 @@ async function swapJourney(recoveryMode: boolean, page: Page, info: TestInfo) {
       await expect(
         rpcKeys.getByRole("button", { name: "Remove key", exact: true }),
       ).toBeVisible();
-      const jupiter = rpc
-        .locator("details")
-        .filter({ has: page.locator("summary", { hasText: /^Jupiter$/ }) })
-        .first();
-      await jupiter.locator("summary").first().click();
+      const jupiter = rpc.locator('[data-section="jupiter-api-key"]').first();
+      await jupiter
+        .getByRole("button", { name: "Jupiter", exact: true })
+        .click();
       await jupiter
         .getByLabel("Jupiter API key", { exact: true })
         .fill("fased-test-onchain");

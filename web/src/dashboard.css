@@ -159,46 +159,64 @@
 .wt .widget-menu {
   position: relative;
 }
-.wt .widget-menu > summary {
-  list-style: none;
-  cursor: pointer;
-  padding: 4px;
+.wt .widget-menu-trigger {
   display: flex;
   align-items: center;
-}
-.wt .widget-menu > summary::-webkit-details-marker {
-  display: none;
+  justify-content: center;
+  padding: 4px;
 }
 .wt .widget-menu-panel {
   position: absolute;
   right: 0;
-  top: 30px;
+  top: calc(100% + 4px);
   z-index: 20;
-  min-width: 180px;
+  min-width: 212px;
   padding: 6px;
   background: var(--wt-raised);
   border: 1px solid var(--wt-border);
   border-radius: 8px;
   box-shadow: 0 8px 25px var(--shell-shadow);
 }
-.wt .widget-menu-panel button,
-.wt .widget-menu-panel label {
+.wt .widget-size-row {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 4px 6px 8px;
+  margin-bottom: 4px;
+  border-bottom: 1px solid var(--wt-border);
+}
+.wt .widget-size-label {
+  font-size: 11px;
+  color: var(--wt-muted);
+}
+.wt .widget-size-control {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  width: 100%;
+}
+.wt .widget-size-control button {
+  padding: 4px 6px;
+  min-height: 28px;
+}
+.wt .widget-menu-panel > button {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-start;
+  gap: 8px;
   width: 100%;
-  min-height: 36px;
+  min-height: 34px;
   padding: 6px 8px;
   border: 0;
+  border-radius: 6px;
   background: transparent;
   font-size: 13px;
+  color: var(--wt-text);
 }
-.wt .widget-menu-panel button:hover {
+.wt .widget-menu-panel > button:hover:not(:disabled) {
   background: var(--shell-hover);
 }
-.wt .widget-menu-panel select {
-  width: 90px;
-  padding: 4px;
+.wt .widget-menu-panel > button.widget-menu-danger:hover:not(:disabled) {
+  color: var(--wt-coral);
 }
 .wt .widget-resize {
   position: absolute;
@@ -276,7 +294,7 @@
     width: 28px;
     height: 28px;
   }
-  .wt .widget-menu > summary {
+  .wt .widget-menu-trigger {
     min-width: 28px;
     min-height: 28px;
   }
@@ -292,7 +310,7 @@
 @media (pointer: coarse) {
   .wt .dashboard-widget button,
   .wt .dashboard-widget select,
-  .wt .widget-menu > summary {
+  .wt .widget-menu-trigger {
     min-width: 44px;
     min-height: 44px;
   }

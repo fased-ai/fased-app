@@ -191,8 +191,14 @@ export async function openEvidence(page: import("@playwright/test").Page) {
 export async function openUpdateSettings(
   page: import("@playwright/test").Page,
 ) {
-  const section = page.locator("details.update-settings");
+  const section = page.locator(".update-settings");
   await expect(section).toBeVisible();
+  const disclosure = section.locator(".settings-advanced-disclosure > button");
+  if (await disclosure.count()) {
+    if ((await disclosure.getAttribute("aria-expanded")) !== "true")
+      await disclosure.click();
+    return;
+  }
   if ((await section.getAttribute("open")) === null)
     await section.locator(":scope > summary").click();
 }

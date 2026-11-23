@@ -3,7 +3,8 @@ import "./instance-connection.css";
 import { useState, useId, type FormEvent } from "react";
 import { remoteInstanceOrigin } from "../connection";
 import { useCore } from "../core";
-import { ArrowRight, Monitor, Server } from "../icons";
+import { ArrowRight, Link2, Monitor, Server } from "../icons";
+import { Disclosure } from "./shared";
 
 function transportLabel(transport?: string): string {
   switch (transport) {
@@ -25,6 +26,7 @@ function transportLabel(transport?: string): string {
 export function InstanceSummary() {
   const { t: uiText } = useUI();
   const core = useCore();
+  const [detailsOpen, setDetailsOpen] = useState(false);
   const info = core.connection;
   if (!info) return null;
   const transportTag =
@@ -59,22 +61,27 @@ export function InstanceSummary() {
           </dd>
         </div>
       </dl>
-      <details className="instance-details">
-        <summary>{uiText("Instance details")}</summary>
+      <Disclosure
+        label={uiText("Instance details")}
+        icon={<Server size={14} />}
+        open={detailsOpen}
+        onOpenChange={setDetailsOpen}
+        className="instance-details"
+      >
         <dl className="instance-facts">
-          {" "}
           <div>
             <dt>{uiText("Instance")}</dt>
             <dd className="instance-identity">{info.instanceId}</dd>
           </div>
         </dl>
-      </details>
+      </Disclosure>
     </>
   );
 }
 export function RemoteConnection({ expanded = false }: { expanded?: boolean }) {
   const { t: uiText } = useUI();
   const inputId = useId();
+  const [open, setOpen] = useState(expanded);
   const [address, setAddress] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
@@ -123,8 +130,13 @@ export function RemoteConnection({ expanded = false }: { expanded?: boolean }) {
     }
   }
   return (
-    <details className="remote-connect" open={expanded || undefined}>
-      <summary>{uiText("Connect to Remote")}</summary>
+    <Disclosure
+      label={uiText("Connect to Remote")}
+      icon={<Link2 size={14} />}
+      open={open}
+      onOpenChange={setOpen}
+      className="remote-connect"
+    >
       <form onSubmit={submit}>
         <label htmlFor={inputId}>{uiText("Instance URL")}</label>
         <input
@@ -153,6 +165,6 @@ export function RemoteConnection({ expanded = false }: { expanded?: boolean }) {
           </p>
         )}
       </form>
-    </details>
+    </Disclosure>
   );
 }

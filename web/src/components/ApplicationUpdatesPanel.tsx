@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useCore } from "../core";
 import { useUI } from "../ui-preferences";
+import { Clock3 } from "../icons";
+import { Disclosure, ToggleSwitch } from "./shared";
 import {
   applicationUpdateLabels,
   readApplicationUpdates,
@@ -16,6 +18,7 @@ export function ApplicationUpdatesPanel() {
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [review, setReview] = useState<ApplicationUpdateView | null>(null);
+  const [scheduleOpen, setScheduleOpen] = useState(false);
   const epoch = useRef(0);
   const refresh = useCallback(async () => {
     const n = ++epoch.current;
@@ -255,42 +258,41 @@ export function ApplicationUpdatesPanel() {
                       {t("Automatic installation is not active.")}
                     </p>
                   )}
-                <label className="checkbox-row">
-                  <input
-                    type="checkbox"
-                    checked={view.policy.notify}
+                <ToggleSwitch
+                  checked={view.policy.notify}
+                  disabled={busy || running}
+                  label={t("Show in inbox")}
+                  onChange={(checked) =>
+                    void policy({ ...view.policy, notify: checked })
+                  }
+                />
+                <Disclosure
+                  label={t("Schedule and version")}
+                  icon={<Clock3 size={14} />}
+                  open={scheduleOpen}
+                  onOpenChange={setScheduleOpen}
+                  className="update-schedule-disclosure"
+                >
+                  <ToggleSwitch
+                    checked={!!view.policy.window}
                     disabled={busy || running}
-                    onChange={(e) =>
-                      void policy({ ...view.policy, notify: e.target.checked })
+                    label={t("Maintenance window")}
+                    onChange={(checked) =>
+                      void policy({
+                        ...view.policy,
+                        window: checked
+                          ? {
+                              timeZone:
+                                Intl.DateTimeFormat().resolvedOptions()
+                                  .timeZone || "UTC",
+                              days: [0, 1, 2, 3, 4, 5, 6],
+                              start: "02:00",
+                              end: "04:00",
+                            }
+                          : undefined,
+                      })
                     }
                   />
-                  {t("Show in inbox")}
-                </label>
-                <details>
-                  <summary>{t("Schedule and version")}</summary>
-                  <label className="checkbox-row">
-                    <input
-                      type="checkbox"
-                      disabled={busy || running}
-                      checked={!!view.policy.window}
-                      onChange={(e) =>
-                        void policy({
-                          ...view.policy,
-                          window: e.target.checked
-                            ? {
-                                timeZone:
-                                  Intl.DateTimeFormat().resolvedOptions()
-                                    .timeZone || "UTC",
-                                days: [0, 1, 2, 3, 4, 5, 6],
-                                start: "02:00",
-                                end: "04:00",
-                              }
-                            : undefined,
-                        })
-                      }
-                    />
-                    {t("Maintenance window")}
-                  </label>
                   {view.policy.window && (
                     <div className="actions" aria-label={t("Days")}>
                       {["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].map(
@@ -428,7 +430,7 @@ export function ApplicationUpdatesPanel() {
                       </button>
                     )
                   )}
-                </details>
+                </Disclosure>
               </>
             )}
           </>

@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { useCore } from "../core";
 import { useUI } from "../ui-preferences";
+import { Disclosure } from "../components/shared";
+import { Download, KeyRound } from "../icons";
 type Status = {
   canVerify?: boolean;
   canCheck?: boolean;
@@ -26,15 +28,26 @@ export function RPCCredential({
   revision,
   configured,
   keyless = false,
+  open,
+  onOpenChange,
 }: {
   accountId: string;
   revision: number;
   configured: boolean;
   keyless?: boolean;
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
 }) {
   const core = useCore(),
     { t } = useUI();
   const [status, setStatus] = useState<Status>();
+  const [localOpen, setLocalOpen] = useState(false);
+  const [recoveryOpen, setRecoveryOpen] = useState(false);
+  const isOpen = open ?? localOpen;
+  const setIsOpen = (next: boolean) => {
+    if (onOpenChange) onOpenChange(next);
+    else setLocalOpen(next);
+  };
   const [key, setKey] = useState(""),
     [password, setPassword] = useState(""),
     [backupPassword, setBackupPassword] = useState(""),
@@ -156,8 +169,22 @@ export function RPCCredential({
   }
   if (keyless && !status?.saved) return null;
   return (
-    <details name={`wallet-connection-${accountId}`}>
-      <summary>{t("API key")}</summary>
+    <Disclosure
+      label={t("API key")}
+      icon={<KeyRound size={14} />}
+      badge={
+        status?.saved ? (
+          <span
+            className={`wt-disclosure-dot ${status.stale ? "warn" : "ok"}`}
+            aria-hidden="true"
+          />
+        ) : undefined
+      }
+      open={isOpen}
+      onOpenChange={setIsOpen}
+      className="wallet-cred-disclosure"
+      dataSection="rpc-api-key"
+    >
       <form
         className="account-form"
         onSubmit={(e) => {
@@ -240,8 +267,14 @@ export function RPCCredential({
             </>
           )}
         </div>
-        <details>
-          <summary>{t("Recovery")}</summary>
+        <Disclosure
+          label={t("Recovery")}
+          icon={<Download size={14} />}
+          open={recoveryOpen}
+          onOpenChange={setRecoveryOpen}
+          className="wallet-recovery-disclosure"
+          dataSection="rpc-recovery"
+        >
           {!needsPassphrase && (
             <label>
               {t("Backup password")}
@@ -321,7 +354,7 @@ export function RPCCredential({
           >
             {t("Restore")}
           </button>
-        </details>
+        </Disclosure>
         {status?.backupVerified && (
           <span role="status">{t("Backup verified")}</span>
         )}
@@ -336,6 +369,6 @@ export function RPCCredential({
         {verified && <span role="status">{t("Key verified")}</span>}
         {error && <p role="alert">{error}</p>}
       </form>
-    </details>
+    </Disclosure>
   );
 }

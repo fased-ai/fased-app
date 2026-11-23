@@ -2,10 +2,12 @@ import {
   createContext,
   useContext,
   useEffect,
+  useId,
   useLayoutEffect,
   useState,
   type ReactNode,
 } from "react";
+import { Monitor, Moon, Sun } from "./icons";
 import {
   ensureLanguageLoaded,
   isLanguageLoaded,
@@ -133,22 +135,37 @@ export function useUI() {
 }
 export function AppearanceSettings() {
   const { preferences, update, t, storageError } = useUI();
+  const appearanceLabelId = useId();
   return (
     <div className="appearance-settings">
-      <label>
-        {t("Appearance")}
-        <select
-          aria-label={t("Appearance")}
-          value={preferences.theme}
-          onChange={(e) => update({ theme: e.target.value as Theme })}
+      <div className="appearance-field">
+        <span className="appearance-field-label" id={appearanceLabelId}>
+          {t("Appearance")}
+        </span>
+        <div
+          className="segmented-control appearance-segmented"
+          role="group"
+          aria-labelledby={appearanceLabelId}
         >
-          {(["system", "light", "dark"] as const).map((v) => (
-            <option key={v} value={v}>
-              {t(v[0].toUpperCase() + v.slice(1))}
-            </option>
+          {(
+            [
+              ["system", "System", Monitor],
+              ["light", "Light", Sun],
+              ["dark", "Dark", Moon],
+            ] as const
+          ).map(([v, label, Icon]) => (
+            <button
+              key={v}
+              type="button"
+              aria-pressed={preferences.theme === v}
+              onClick={() => update({ theme: v })}
+            >
+              <Icon size={13} aria-hidden="true" />
+              {t(label)}
+            </button>
           ))}
-        </select>
-      </label>
+        </div>
+      </div>
       <label>
         {t("Language")}
         <select

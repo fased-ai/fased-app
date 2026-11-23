@@ -1384,6 +1384,10 @@
   border-radius: var(--radius-sm);
 }
 .wt .segmented-control button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
   min-height: 28px;
   padding: 4px 10px;
   border: 0;
@@ -1408,7 +1412,7 @@
   align-items: center;
   flex-direction: row;
   gap: 10px;
-  min-height: 32px;
+  min-height: 36px;
   cursor: pointer;
   user-select: none;
   color: var(--wt-text);
@@ -1424,8 +1428,8 @@
   top: 50%;
   transform: translateY(-50%);
   width: 34px;
-  height: 20px;
-  min-height: 0;
+  height: 100%;
+  min-height: 36px;
   padding: 0;
   border: 0;
   opacity: 0;
@@ -1478,4 +1482,76 @@
 }
 .wt .spin {
   animation: wt-spin 0.9s linear infinite;
+}
+.wt .wt-disclosure {
+  min-width: 0;
+}
+.wt .wt-disclosure-btn {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 36px;
+  padding: 7px 10px;
+  border: 1px solid var(--wt-border);
+  border-radius: var(--radius-sm);
+  background: var(--wt-bg);
+  color: var(--wt-text);
+  font-size: 13px;
+  font-weight: 500;
+  text-align: left;
+  transition:
+    background 140ms ease,
+    border-color 140ms ease;
+}
+.wt .wt-disclosure-btn:hover:not(:disabled) {
+  background: var(--shell-hover);
+  border-color: var(--wt-muted);
+}
+.wt .wt-disclosure-label,
+.wt .wt-disclosure-meta {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.wt .wt-disclosure-icon {
+  display: inline-flex;
+  align-items: center;
+  color: var(--wt-muted);
+  flex-shrink: 0;
+}
+.wt .wt-disclosure-chevron {
+  color: var(--wt-muted);
+  flex-shrink: 0;
+  transition: transform 150ms ease;
+}
+.wt
+  .wt-disclosure[data-open="true"]
+  > .wt-disclosure-btn
+  .wt-disclosure-chevron {
+  transform: rotate(180deg);
+}
+.wt .wt-disclosure-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.wt .wt-disclosure-dot.ok {
+  background: var(--wt-cyan);
+}
+.wt .wt-disclosure-dot.warn {
+  background: var(--wt-coral);
+}
+.wt .wt-disclosure-body {
+  padding-top: 10px;
+}
+@media (pointer: coarse) {
+  .wt .wt-disclosure-btn,
+  .wt label.wt-switch,
+  .wt input.wt-switch-input {
+    min-height: 44px;
+  }
 }

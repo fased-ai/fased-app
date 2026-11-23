@@ -1,6 +1,6 @@
 import { useEffect, useId, useRef, type ReactNode } from "react";
 import { useUI } from "../ui-preferences";
-import { X } from "../icons";
+import { ChevronDown, X } from "../icons";
 import { type Profile } from "../state";
 export function Badge({
   children,
@@ -137,6 +137,64 @@ export function ToggleSwitch({
       <span className="wt-switch-track" aria-hidden="true" />
       <span className="wt-switch-label">{label}</span>
     </label>
+  );
+}
+export function Disclosure({
+  label,
+  icon,
+  badge,
+  open,
+  onOpenChange,
+  className,
+  bodyClassName,
+  dataSection,
+  children,
+}: {
+  label: string;
+  icon?: ReactNode;
+  badge?: ReactNode;
+  open: boolean;
+  onOpenChange: (next: boolean) => void;
+  className?: string;
+  bodyClassName?: string;
+  dataSection?: string;
+  children: ReactNode;
+}) {
+  return (
+    <div
+      className={`wt-disclosure ${className ?? ""}`.trim()}
+      data-open={open ? "true" : "false"}
+      data-section={dataSection}
+    >
+      <button
+        type="button"
+        className="wt-disclosure-btn"
+        aria-expanded={open}
+        onClick={() => onOpenChange(!open)}
+      >
+        <span className="wt-disclosure-label">
+          {icon && (
+            <span className="wt-disclosure-icon" aria-hidden="true">
+              {icon}
+            </span>
+          )}
+          <span>{label}</span>
+        </span>
+        <span className="wt-disclosure-meta">
+          {badge}
+          <ChevronDown
+            size={14}
+            className="wt-disclosure-chevron"
+            aria-hidden="true"
+          />
+        </span>
+      </button>
+      {open && (
+        <div className={`wt-disclosure-body ${bodyClassName ?? ""}`.trim()}>
+          {children}
+        </div>
+      )}
+    </div>
   );
 }
 export function DemoChart() {

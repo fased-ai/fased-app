@@ -1608,9 +1608,8 @@ test("news chat shares saved headline UI and CLI capture, reviewed memory, expli
   await page.getByRole("button", { name: "Preferences", exact: true }).click();
   await page
     .getByRole("dialog")
-    .locator("select")
-    .first()
-    .selectOption("light");
+    .getByRole("button", { name: "Light", exact: true })
+    .click();
   await page.keyboard.press("Escape");
   await expect(panel.locator(".news-headline")).toBeVisible();
   expect(
@@ -1623,7 +1622,10 @@ test("news chat shares saved headline UI and CLI capture, reviewed memory, expli
     fullPage: true,
   });
   await page.getByRole("button", { name: "Preferences", exact: true }).click();
-  await page.getByRole("dialog").locator("select").first().selectOption("dark");
+  await page
+    .getByRole("dialog")
+    .getByRole("button", { name: "Dark", exact: true })
+    .click();
   await page.keyboard.press("Escape");
   let v = await read();
   const fetch = v.newsFetches[0],
