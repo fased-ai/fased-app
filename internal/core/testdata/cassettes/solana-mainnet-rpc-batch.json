@@ -1,0 +1,84 @@
+[
+  {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "result": "5eykt4UsFv8P8NJdTREpY1vzqKqZKvdpKuc147dw2N9d"
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 2,
+    "result": {
+      "context": {
+        "apiVersion": "2.1.11",
+        "slot": 318004200
+      },
+      "value": 2500000000
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 3,
+    "result": {
+      "context": {
+        "apiVersion": "2.1.11",
+        "slot": 318004201
+      },
+      "value": [
+        {
+          "pubkey": "7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU",
+          "account": {
+            "lamports": 2039280,
+            "owner": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA",
+            "executable": false,
+            "rentEpoch": 18446744073709551615,
+            "space": 165,
+            "data": {
+              "program": "spl-token",
+              "space": 165,
+              "parsed": {
+                "type": "account",
+                "info": {
+                  "isNative": false,
+                  "mint": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+                  "owner": "9xQeWvG816bUx9EPjHmaT23yvVM2ZWbrrpZb9PusVFin",
+                  "state": "initialized",
+                  "tokenAmount": {
+                    "amount": "150000000",
+                    "decimals": 6,
+                    "uiAmount": 150.0,
+                    "uiAmountString": "150"
+                  }
+                }
+              }
+            }
+          }
+        }
+      ]
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 4,
+    "result": {
+      "context": {
+        "apiVersion": "2.1.11",
+        "slot": 318004202
+      },
+      "value": []
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 5,
+    "result": [
+      {
+        "signature": "5VERv8NMvzbJMEkV8xnrLkEaWRtSz9CosKDYjCJjBRnbJLgp8uirBgmQpjKhoR4tjF3ZpRzrFmBV6UjKdiSZkQUW",
+        "slot": 318004190,
+        "err": null,
+        "memo": null,
+        "blockTime": 1735689600,
+        "confirmationStatus": "finalized"
+      }
+    ]
+  }
+]
