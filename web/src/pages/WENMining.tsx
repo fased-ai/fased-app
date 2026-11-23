@@ -206,7 +206,13 @@ export function WENMining() {
       <div className="section-head">
         <h1>{t("Mining")}</h1>
         <div className="row-actions">
-          <Badge>{t("Mining activation disabled")}</Badge>
+          <Badge>
+            {t(
+              view?.miningActivation
+                ? "Mining active"
+                : "Mining activation disabled",
+            )}
+          </Badge>
           <button
             type="button"
             className="icon-btn"
@@ -345,6 +351,20 @@ export function WENMining() {
                 <dd>{review.operation.slot}</dd>
                 <dt>{t("Estimated fee")}</dt>
                 <dd>{lamportsToSOL(review.operation.estimatedFeeLamports)}</dd>
+                {review.prepared.entries &&
+                  review.prepared.entries.length > 0 && (
+                    <>
+                      <dt>{t("Ranges")}</dt>
+                      <dd>
+                        {review.prepared.entries
+                          .map(
+                            (entry) =>
+                              `#${entry.rangeIndex + 1} ${lamportsToSOL(entry.amountLamports)}`,
+                          )
+                          .join(" · ")}
+                      </dd>
+                    </>
+                  )}
               </dl>
               <details>
                 <summary>{t("Evidence")}</summary>

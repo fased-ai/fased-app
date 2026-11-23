@@ -35,39 +35,43 @@ type Instruction struct {
 	Data      string `json:"data"`
 }
 type Request struct {
-	AccountID      string `json:"accountId"`
-	InputMint      string `json:"inputMint"`
-	OutputMint     string `json:"outputMint"`
-	Amount         string `json:"amount"`
-	SlippageBPS    uint16 `json:"slippageBps"`
-	MaxFeeLamports uint64 `json:"maxFeeLamports,string"`
+	AccountID        string `json:"accountId"`
+	InputMint        string `json:"inputMint"`
+	OutputMint       string `json:"outputMint"`
+	Amount           string `json:"amount"`
+	SlippageBPS      uint16 `json:"slippageBps"`
+	MaxFeeLamports   uint64 `json:"maxFeeLamports,string"`
+	WrapAndUnwrapSol bool   `json:"wrapAndUnwrapSol,omitempty"`
 }
 type Quote struct {
-	Version           string        `json:"version"`
-	ID                string        `json:"id"`
-	ProfileID         string        `json:"profileId"`
-	InstanceID        string        `json:"instanceId"`
-	AccountID         string        `json:"accountId"`
-	Network           string        `json:"network"`
-	Owner             string        `json:"owner"`
-	RPCSHA256         string        `json:"rpcSha256"`
-	InputMint         string        `json:"inputMint"`
-	OutputMint        string        `json:"outputMint"`
-	Amount            string        `json:"amount"`
-	Output            string        `json:"output"`
-	MinimumOutput     string        `json:"minimumOutput"`
-	SlippageBPS       uint16        `json:"slippageBps"`
-	MaxFeeLamports    uint64        `json:"maxFeeLamports,string"`
-	FeeLamports       uint64        `json:"feeLamports,string"`
-	RentLamports      uint64        `json:"rentLamports,string"`
-	Blockhash         string        `json:"blockhash"`
-	LastValidHeight   uint64        `json:"lastValidHeight,string"`
-	ObservedSlot      uint64        `json:"observedSlot,string"`
-	CreatedAt         int64         `json:"createdAt"`
-	ExpiresAt         int64         `json:"expiresAt"`
-	Instructions      []Instruction `json:"instructions"`
-	TransactionSHA256 string        `json:"transactionSha256"`
-	Digest            string        `json:"digest"`
+	Version                  string        `json:"version"`
+	ID                       string        `json:"id"`
+	ProfileID                string        `json:"profileId"`
+	InstanceID               string        `json:"instanceId"`
+	AccountID                string        `json:"accountId"`
+	Network                  string        `json:"network"`
+	Owner                    string        `json:"owner"`
+	RPCSHA256                string        `json:"rpcSha256"`
+	InputMint                string        `json:"inputMint"`
+	OutputMint               string        `json:"outputMint"`
+	Amount                   string        `json:"amount"`
+	Output                   string        `json:"output"`
+	MinimumOutput            string        `json:"minimumOutput"`
+	SlippageBPS              uint16        `json:"slippageBps"`
+	MaxFeeLamports           uint64        `json:"maxFeeLamports,string"`
+	WrapAndUnwrapSol         bool          `json:"wrapAndUnwrapSol,omitempty"`
+	ComputeUnits             uint32        `json:"computeUnits,omitempty"`
+	PriorityFeeMicroLamports uint64        `json:"priorityFeeMicroLamports,omitempty,string"`
+	FeeLamports              uint64        `json:"feeLamports,string"`
+	RentLamports             uint64        `json:"rentLamports,string"`
+	Blockhash                string        `json:"blockhash"`
+	LastValidHeight          uint64        `json:"lastValidHeight,string"`
+	ObservedSlot             uint64        `json:"observedSlot,string"`
+	CreatedAt                int64         `json:"createdAt"`
+	ExpiresAt                int64         `json:"expiresAt"`
+	Instructions             []Instruction `json:"instructions"`
+	TransactionSHA256        string        `json:"transactionSha256"`
+	Digest                   string        `json:"digest"`
 }
 type Simulation struct {
 	Slot  uint64 `json:"slot,string"`
@@ -110,8 +114,31 @@ func ValidRequest(r Request) bool {
 	return e == nil && r.AccountID != "" && len(r.AccountID) <= 128 && ((r.InputMint == SOL && r.OutputMint == USDC) || (r.InputMint == USDC && r.OutputMint == SOL)) && r.SlippageBPS <= 100 && r.MaxFeeLamports >= 5000 && r.MaxFeeLamports <= 1_000_000
 }
 func ValidateQuote(q Quote, now int64) error {
-	if q.Version != Version || len(q.ID) != 32 || len(q.ProfileID) == 0 || len(q.ProfileID) > 80 || len(q.InstanceID) < 32 || len(q.InstanceID) > 80 || !ValidRequest(Request{q.AccountID, q.InputMint, q.OutputMint, q.Amount, q.SlippageBPS, q.MaxFeeLamports}) || (q.Network != "mainnet-beta" && q.Network != "devnet") || len(q.RPCSHA256) != 64 || q.CreatedAt <= 0 || q.ExpiresAt <= q.CreatedAt || q.ExpiresAt-q.CreatedAt > 60 || (now > 0 && (now < q.CreatedAt || now >= q.ExpiresAt)) || q.LastValidHeight == 0 || q.FeeLamports < 5000 || q.FeeLamports > q.MaxFeeLamports || q.RentLamports > 6_000_000 || len(q.TransactionSHA256) != 64 || q.Digest != QuoteDigest(q) {
+	req := Request{
+		AccountID:        q.AccountID,
+		InputMint:        q.InputMint,
+		OutputMint:       q.OutputMint,
+		Amount:           q.Amount,
+		SlippageBPS:      q.SlippageBPS,
+		MaxFeeLamports:   q.MaxFeeLamports,
+		WrapAndUnwrapSol: q.WrapAndUnwrapSol,
+	}
+	if q.Version != Version || len(q.ID) != 32 || len(q.ProfileID) == 0 || len(q.ProfileID) > 80 || len(q.InstanceID) < 32 || len(q.InstanceID) > 80 || !ValidRequest(req) || (q.Network != "mainnet-beta" && q.Network != "devnet") || len(q.RPCSHA256) != 64 || q.CreatedAt <= 0 || q.ExpiresAt <= q.CreatedAt || q.ExpiresAt-q.CreatedAt > 60 || (now > 0 && (now < q.CreatedAt || now >= q.ExpiresAt)) || q.LastValidHeight == 0 || q.FeeLamports < 5000 || q.FeeLamports > q.MaxFeeLamports || q.RentLamports > 6_000_000 || len(q.TransactionSHA256) != 64 || q.Digest != QuoteDigest(q) {
 		return errors.New("swap review changed or expired")
+	}
+	if q.ComputeUnits != 0 && (q.ComputeUnits < 50_000 || q.ComputeUnits > 1_400_000) {
+		return errors.New("compute unit limit outside supported bounds")
+	}
+	cuLimit := uint64(1_400_000)
+	if q.ComputeUnits > 0 {
+		cuLimit = uint64(q.ComputeUnits)
+	}
+	priorityLamports := new(big.Int).Mul(new(big.Int).SetUint64(cuLimit), new(big.Int).SetUint64(q.PriorityFeeMicroLamports))
+	priorityLamports.Add(priorityLamports, big.NewInt(999_999))
+	priorityLamports.Div(priorityLamports, big.NewInt(1_000_000))
+	priorityLamports.Add(priorityLamports, big.NewInt(5000))
+	if priorityLamports.Cmp(new(big.Int).SetUint64(q.MaxFeeLamports)) > 0 {
+		return errors.New("priority fee exceeds max fee cap")
 	}
 	min, e := Minimum(q.Output, q.SlippageBPS)
 	if e != nil || q.MinimumOutput != min {

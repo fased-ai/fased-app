@@ -18,6 +18,9 @@ export type SwapQuote = {
   minimumOutput: string;
   slippageBps: number;
   maxFeeLamports: string;
+  wrapAndUnwrapSol?: boolean;
+  computeUnits?: number;
+  priorityFeeMicroLamports?: string;
   feeLamports: string;
   rentLamports: string;
   blockhash: string;
@@ -75,6 +78,7 @@ export type SwapCommand = {
     amount: string;
     slippageBps: number;
     maxFeeLamports: string;
+    wrapAndUnwrapSol?: boolean;
   };
 };
 export type SwapRecovery = {

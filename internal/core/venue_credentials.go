@@ -421,7 +421,7 @@ func (s *Store) venueCredential(ctx context.Context, c VenueCredentialCommand, a
 			break
 		}
 	}
-	if a.ID == "" || !managedNetworkAccount(a) {
+	if a.ID == "" || (!managedNetworkAccount(a) && !ordinaryNetworkAccount(a)) {
 		return view, fail
 	}
 	rpc, rpcErr := s.readRPCVault(a.ID)

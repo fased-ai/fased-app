@@ -26,12 +26,21 @@ import { useCore } from "../core";
 import { useUI } from "../ui-preferences";
 import { useWorkspace } from "../workspace";
 
-type Draft = { wallet: string; pair: string; amount: string; slippage: string };
+type Draft = {
+  wallet: string;
+  pair: string;
+  amount: string;
+  slippage: string;
+  maxFeeLamports: string;
+  wrapAndUnwrapSol: boolean;
+};
 const emptyDraft: Draft = {
   wallet: "",
   pair: "usdc-sol",
   amount: "",
   slippage: "50",
+  maxFeeLamports: "5000",
+  wrapAndUnwrapSol: false,
 };
 export function SwapResultFacts({
   result,
@@ -480,7 +489,10 @@ export function OnchainSwap() {
                       outputMint: output,
                       amount,
                       slippageBps: Number(draft.slippage),
-                      maxFeeLamports: "5000",
+                      maxFeeLamports: draft.maxFeeLamports,
+                      ...(draft.wrapAndUnwrapSol
+                        ? { wrapAndUnwrapSol: true }
+                        : {}),
                     },
                   });
                 }}
@@ -552,6 +564,28 @@ export function OnchainSwap() {
                       onChange={(e) => edit({ slippage: e.target.value })}
                     />
                   </label>
+                  <label>
+                    {t("Max fee (lamports)")}
+                    <input
+                      aria-label={t("Max fee (lamports)")}
+                      type="number"
+                      min="5000"
+                      max="1000000"
+                      value={draft.maxFeeLamports}
+                      onChange={(e) => edit({ maxFeeLamports: e.target.value })}
+                    />
+                  </label>
+                  <label className="check-row">
+                    <input
+                      type="checkbox"
+                      aria-label={t("Native SOL")}
+                      checked={draft.wrapAndUnwrapSol}
+                      onChange={(e) =>
+                        edit({ wrapAndUnwrapSol: e.target.checked })
+                      }
+                    />
+                    <span>{t("Native SOL")}</span>
+                  </label>
                 </details>
                 <button
                   className="primary"
@@ -561,7 +595,10 @@ export function OnchainSwap() {
                     !draft.wallet ||
                     !amount ||
                     !/^\d+$/.test(draft.slippage) ||
-                    Number(draft.slippage) > 100
+                    Number(draft.slippage) > 100 ||
+                    !/^\d+$/.test(draft.maxFeeLamports) ||
+                    Number(draft.maxFeeLamports) < 5000 ||
+                    Number(draft.maxFeeLamports) > 1000000
                   }
                 >
                   {t("Quote")}
