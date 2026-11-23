@@ -10,6 +10,7 @@ import type {
   WENMiningTaskPolicy,
   WENMiningView,
 } from "./wen-mining";
+import type { HyperliquidCommand, HyperliquidView } from "./hyperliquid";
 export type OpenAIModelPolicy = {
   provider?: string;
   wireVersion?: string;
@@ -579,6 +580,7 @@ export type PlaybookReview = {
 export type AgentView = {
   onchain?: OnchainView;
   wenMining?: WENMiningView;
+  hyperliquid?: HyperliquidView;
   strategies?: AgentStrategy[];
   paperExecutionAvailable?: boolean;
   chatReview?: ChatPermission;
@@ -721,6 +723,7 @@ export type AgentEvidenceView = {
 export type AgentCommand = {
   swap?: SwapCommand;
   wenMining?: WENMiningCommand;
+  hyperliquid?: HyperliquidCommand;
   strategy?: StrategyPlan;
   strategyId?: string;
   strategyVersion?: number;

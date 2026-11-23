@@ -85,6 +85,7 @@ export async function currentStorageFixture(archivedRoot) {
   const sha = (b) => createHash("sha256").update(b).digest("hex");
   for (const file of [
     "agents.go",
+    "hyperliquid.go",
     "ordinary_custody.go",
     "agent_strategies.go",
     "onchain.go",
@@ -289,6 +290,9 @@ func ValidManagedAccountRef(r AccountRef) bool {
     "onchain_state_test.go",
     "testdata/onchain-reader.json",
     "journal.go",
+    "secp256k1.go",
+    "eip712.go",
+    "hyperliquid.go",
     "ordinary_public.go",
     "history_recovery.go",
     "history_reader_test.go",
@@ -429,6 +433,7 @@ func ValidManagedAccountRef(r AccountRef) bool {
     "news",
     "providers",
     "agents",
+    "hyperliquid",
   ]) {
     const pkgRoot = path.join(archivedRoot, "internal", pkg);
     await mkdir(pkgRoot, { recursive: true });
