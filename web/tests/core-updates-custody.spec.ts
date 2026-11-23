@@ -1436,10 +1436,7 @@ for (const method of ["create", "import"] as const) {
       });
       expect(check.fixtureOnly).toBe(true);
       expect(check.liveRPC).toBe(false);
-      await rpc
-        .locator("summary")
-        .filter({ hasText: /^API key$/ })
-        .click();
+      await rpc.getByRole("button", { name: "API key", exact: true }).click();
       const rpcKey = "disposable-provider-input-not-issued-123456";
       await rpc.getByLabel("RPC API key", { exact: true }).fill(rpcKey);
       await rpc
@@ -1782,10 +1779,7 @@ test("live read-only Solana RPC presets and OS-protected RPC keys work without p
     "https://devnet.helius-rpc.com",
   );
   await rpcDialog.getByRole("button", { name: "Save", exact: true }).click();
-  await rpcDialog
-    .locator("summary")
-    .filter({ hasText: /^API key$/ })
-    .click();
+  await rpcDialog.getByRole("button", { name: "API key", exact: true }).click();
   await expect(rpcDialog.getByLabel("Vault password")).toHaveCount(0);
   await rpcDialog
     .getByLabel("RPC API key", { exact: true })
@@ -1813,10 +1807,7 @@ test("live read-only Solana RPC presets and OS-protected RPC keys work without p
     name: "RPC · Solana Watch",
     exact: true,
   });
-  await rpcDialog
-    .locator("summary")
-    .filter({ hasText: /^API key$/ })
-    .click();
+  await rpcDialog.getByRole("button", { name: "API key", exact: true }).click();
   await rpcDialog
     .getByRole("button", { name: "Remove key", exact: true })
     .click();

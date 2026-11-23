@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { useCore } from "../core";
 import { useUI } from "../ui-preferences";
+import { Disclosure } from "../components/shared";
+import { Download, Zap } from "../icons";
 
 type Status = {
   rpcReady: boolean;
@@ -16,13 +18,24 @@ type Status = {
 export function VenueCredential({
   accountId,
   revision,
+  open,
+  onOpenChange,
 }: {
   accountId: string;
   revision: number;
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
 }) {
   const core = useCore(),
     { t } = useUI();
   const [status, setStatus] = useState<Status>();
+  const [localOpen, setLocalOpen] = useState(false);
+  const [recoveryOpen, setRecoveryOpen] = useState(false);
+  const isOpen = open ?? localOpen;
+  const setIsOpen = (next: boolean) => {
+    if (onOpenChange) onOpenChange(next);
+    else setLocalOpen(next);
+  };
   const [backup, setBackup] = useState<unknown>();
   const [key, setKey] = useState(""),
     [password, setPassword] = useState("");
@@ -144,13 +157,25 @@ export function VenueCredential({
     }
   }
   return (
-    <details
-      name={`wallet-connection-${accountId}`}
-      onToggle={(e) => {
-        if (e.currentTarget.open) void refresh();
+    <Disclosure
+      label="Jupiter"
+      icon={<Zap size={14} />}
+      badge={
+        status?.saved ? (
+          <span
+            className={`wt-disclosure-dot ${status.stale ? "warn" : "ok"}`}
+            aria-hidden="true"
+          />
+        ) : undefined
+      }
+      open={isOpen}
+      onOpenChange={(next) => {
+        setIsOpen(next);
+        if (next) void refresh();
       }}
+      className="wallet-cred-disclosure"
+      dataSection="jupiter-api-key"
     >
-      <summary>Jupiter</summary>
       <form
         className="account-form"
         onSubmit={(e) => {
@@ -223,8 +248,14 @@ export function VenueCredential({
             )}
           </span>
         )}
-        <details>
-          <summary>{t("Recovery")}</summary>
+        <Disclosure
+          label={t("Recovery")}
+          icon={<Download size={14} />}
+          open={recoveryOpen}
+          onOpenChange={setRecoveryOpen}
+          className="wallet-recovery-disclosure"
+          dataSection="jupiter-recovery"
+        >
           <div className="account-actions">
             <button
               type="button"
@@ -282,12 +313,12 @@ export function VenueCredential({
               {t("Restore")}
             </button>
           </div>
-        </details>
+        </Disclosure>
         {status?.backupVerified && (
           <span role="status">{t("Backup verified")}</span>
         )}
         {error && <p role="alert">{error}</p>}
       </form>
-    </details>
+    </Disclosure>
   );
 }

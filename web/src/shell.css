@@ -388,9 +388,27 @@
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 16px;
+  align-items: end;
 }
-.wt .appearance-settings label {
+.wt .appearance-settings label,
+.wt .appearance-field-label {
   font-size: 13px;
+  color: var(--wt-muted);
+}
+.wt .appearance-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+.wt .appearance-segmented {
+  display: flex;
+  flex-wrap: wrap;
+  width: 100%;
+  max-width: 100%;
+}
+.wt .appearance-segmented button {
+  flex: 1 1 auto;
 }
 .wt .appearance-settings p {
   grid-column: 1/-1;
@@ -770,6 +788,12 @@
   padding: 14px 18px;
   color: var(--wt-text);
   text-align: left;
+}
+.wt .provider-entry-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
 }
 .wt .news-toolbar {
   gap: 8px;

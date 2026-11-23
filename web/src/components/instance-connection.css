@@ -37,24 +37,10 @@
   padding-top: 14px;
   font-size: 14px;
 }
-.remote-connect > summary {
-  cursor: pointer;
-  color: var(--wt-muted);
-  list-style: none;
-}
-.remote-connect > summary::before {
-  content: "+";
-  display: inline-block;
-  width: 20px;
-  color: var(--wt-violet);
-}
-.remote-connect[open] > summary::before {
-  content: "−";
-}
 .remote-connect form {
   display: grid;
   gap: 10px;
-  margin-top: 14px;
+  margin-top: 12px;
 }
 .remote-connect input {
   width: 100%;
@@ -151,19 +137,16 @@
   font-size: 13px;
   color: var(--wt-muted);
 }
-.instance-details summary {
-  cursor: pointer;
-}
 
 .wt .settings-workspace {
   align-items: start;
 }
-.wt .settings-advanced > summary {
-  padding: 14px 16px;
-  cursor: pointer;
-  color: var(--wt-text);
-  font-size: 14px;
+.wt .settings-advanced-disclosure > .wt-disclosure-btn {
+  padding: 12px 16px;
+  background: transparent;
+  border: 0;
+  border-radius: var(--radius);
 }
-.wt .settings-advanced[open] > .panel {
+.wt .settings-advanced-body > .panel {
   margin: 0 12px 12px;
 }

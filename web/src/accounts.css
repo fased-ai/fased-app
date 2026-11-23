@@ -199,8 +199,12 @@
   margin: 0;
   gap: 12px;
 }
-.wallet-rpc > details {
-  margin-top: 16px;
+.wallet-rpc > details,
+.wallet-rpc > .wt-disclosure {
+  margin-top: 12px;
+}
+.wallet-recovery-disclosure {
+  margin-top: 4px;
 }
 .wallet-rpc .account-actions {
   margin-top: 0;

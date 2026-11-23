@@ -7,15 +7,19 @@ import {
 } from "react";
 import { useUI } from "../ui-preferences";
 import {
+  ArrowDown,
   ArrowRight,
+  ArrowUp,
   Bot,
   Clock3,
   History,
   LayoutDashboard,
+  Maximize2,
   Menu,
   MoreHorizontal,
   Newspaper,
   Plus,
+  Trash2,
   Wallet,
   Pickaxe,
   ArrowLeftRight,
@@ -80,14 +84,11 @@ export function Overview() {
   const [storageError, setStorageError] = useState(false);
   const [adding, setAdding] = useState(false);
   const [expanded, setExpanded] = useState<WidgetID>();
+  const [openMenu, setOpenMenu] = useState<WidgetID | null>(null);
   const board = useRef<HTMLDivElement>(null);
   const dragging = useRef<WidgetID | undefined>(undefined);
   function closeMenus() {
-    board.current
-      ?.querySelectorAll<HTMLDetailsElement>(".widget-menu[open]")
-      .forEach((d) => {
-        d.open = false;
-      });
+    setOpenMenu(null);
   }
   useEffect(() => {
     const click = (e: Event) => {
@@ -482,89 +483,108 @@ export function Overview() {
                   <Icon size={16} />
                   <h2>{t(widgetNames[widget.id])}</h2>
                 </button>
-                <details className="widget-menu">
-                  <summary
+                <div className="widget-menu">
+                  <button
+                    type="button"
+                    className="icon-button widget-menu-trigger"
                     aria-label={t("{name} options", {
                       name: t(widgetNames[widget.id]),
                     })}
+                    aria-expanded={openMenu === widget.id}
+                    onClick={() =>
+                      setOpenMenu((prev) =>
+                        prev === widget.id ? null : widget.id,
+                      )
+                    }
                   >
-                    <MoreHorizontal size={17} />
-                  </summary>
-                  <div className="widget-menu-panel">
-                    <button
-                      onClick={() => {
-                        closeMenus();
-                        setExpanded(widget.id);
-                      }}
-                    >
-                      {t("Expand")}
-                    </button>
-                    <label>
-                      {t("Size")}
-                      <select
-                        aria-label={t("{name} size", {
-                          name: t(widgetNames[widget.id]),
-                        })}
-                        value={widget.size}
-                        onChange={(e) =>
+                    <MoreHorizontal size={17} aria-hidden="true" />
+                  </button>
+                  {openMenu === widget.id && (
+                    <div className="widget-menu-panel">
+                      <div className="widget-size-row">
+                        <span className="widget-size-label">{t("Size")}</span>
+                        <div
+                          className="segmented-control widget-size-control"
+                          role="group"
+                          aria-label={t("{name} size", {
+                            name: t(widgetNames[widget.id]),
+                          })}
+                        >
+                          {(["small", "wide", "tall"] as const).map((size) => (
+                            <button
+                              key={size}
+                              type="button"
+                              aria-pressed={widget.size === size}
+                              onClick={() =>
+                                save(resizeWidget(layout, widget.id, size))
+                              }
+                            >
+                              {t(size[0].toUpperCase() + size.slice(1))}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setOpenMenu(null);
+                          setExpanded(widget.id);
+                        }}
+                      >
+                        <Maximize2 size={14} aria-hidden="true" />
+                        <span>{t("Expand")}</span>
+                      </button>
+                      <button
+                        type="button"
+                        disabled={index === 0}
+                        onClick={() =>
                           save(
-                            resizeWidget(
+                            moveWidget(
                               layout,
                               widget.id,
-                              e.target.value as WidgetSize,
+                              layout.widgets[index - 1]?.id,
                             ),
                           )
                         }
                       >
-                        {(["small", "wide", "tall"] as const).map((size) => (
-                          <option key={size} value={size}>
-                            {t(size[0].toUpperCase() + size.slice(1))}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
-                    <button
-                      disabled={index === 0}
-                      onClick={() =>
-                        save(
-                          moveWidget(
-                            layout,
-                            widget.id,
-                            layout.widgets[index - 1]?.id,
-                          ),
-                        )
-                      }
-                    >
-                      {t("Move up")}
-                    </button>
-                    <button
-                      disabled={index === layout.widgets.length - 1}
-                      onClick={() =>
-                        save(
-                          moveWidget(
-                            layout,
-                            layout.widgets[index + 1].id,
-                            widget.id,
-                          ),
-                        )
-                      }
-                    >
-                      {t("Move down")}
-                    </button>
-                    <button
-                      onClick={() =>
-                        save({
-                          ...layout,
-                          widgets: layout.widgets.filter(
-                            (w) => w.id !== widget.id,
-                          ),
-                        })
-                      }
-                    >
-                      {t("Remove")}
-                    </button>
-                  </div>
-                </details>
+                        <ArrowUp size={14} aria-hidden="true" />
+                        <span>{t("Move up")}</span>
+                      </button>
+                      <button
+                        type="button"
+                        disabled={index === layout.widgets.length - 1}
+                        onClick={() =>
+                          save(
+                            moveWidget(
+                              layout,
+                              layout.widgets[index + 1].id,
+                              widget.id,
+                            ),
+                          )
+                        }
+                      >
+                        <ArrowDown size={14} aria-hidden="true" />
+                        <span>{t("Move down")}</span>
+                      </button>
+                      <button
+                        type="button"
+                        className="widget-menu-danger"
+                        onClick={() => {
+                          setOpenMenu(null);
+                          save({
+                            ...layout,
+                            widgets: layout.widgets.filter(
+                              (w) => w.id !== widget.id,
+                            ),
+                          });
+                        }}
+                      >
+                        <Trash2 size={14} aria-hidden="true" />
+                        <span>{t("Remove")}</span>
+                      </button>
+                    </div>
+                  )}
+                </div>
               </header>
               <div className="dashboard-widget-body">{body(widget.id)}</div>
               <button

@@ -115,11 +115,11 @@ test("existing pages localize controls and keep owner drafts records and Meteora
   ] of cases) {
     await page.getByRole("button", { name: preferences, exact: true }).click();
     const dialog = page.getByRole("dialog");
-    await dialog.locator("select").nth(1).selectOption(locale);
+    await dialog.locator("select").first().selectOption(locale);
     await dialog
-      .locator("select")
-      .first()
-      .selectOption(locale === "es" || locale === "ko" ? "light" : "dark");
+      .locator(".appearance-segmented button")
+      .nth(locale === "es" || locale === "ko" ? 1 : 2)
+      .click();
     await page.keyboard.press("Escape");
     preferences = nextPreferences;
     await expect(page.locator("html")).toHaveAttribute(
@@ -291,7 +291,7 @@ test("Meteora shell preserves drafts and records through navigation theme langua
   );
   await page.getByRole("button", { name: "Preferences", exact: true }).click();
   const dialog = page.getByRole("dialog");
-  await dialog.getByLabel("Appearance", { exact: true }).selectOption("light");
+  await dialog.getByRole("button", { name: "Light", exact: true }).click();
   await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
   await captureScreenshot(page, {
     path: `.evidence/shell-light-dialog-${test.info().project.name}.png`,
@@ -309,7 +309,7 @@ test("Meteora shell preserves drafts and records through navigation theme langua
     ["zh", "聊天"],
     ["ko", "채팅"],
   ]) {
-    await dialog.locator("select").nth(1).selectOption(code);
+    await dialog.locator("select").first().selectOption(code);
     await expect(page.locator("html")).toHaveAttribute(
       "lang",
       code === "zh" ? "zh-Hans" : code,
@@ -341,12 +341,12 @@ test("Meteora shell preserves drafts and records through navigation theme langua
       ),
     ).toBe(true);
   }
-  await dialog.locator("select").nth(1).selectOption("en");
-  await dialog.getByLabel("Appearance", { exact: true }).selectOption("system");
+  await dialog.locator("select").first().selectOption("en");
+  await dialog.getByRole("button", { name: "System", exact: true }).click();
   await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
   await page.emulateMedia({ colorScheme: "light" });
   await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
-  await dialog.getByLabel("Appearance", { exact: true }).selectOption("dark");
+  await dialog.getByRole("button", { name: "Dark", exact: true }).click();
   await page.keyboard.press("Escape");
   await expect(message).toHaveValue(
     "Do not translate or discard this unsent draft.",
@@ -1149,9 +1149,13 @@ test("Dashboard drag and resize autosave without a duplicate home rail shortcut"
   const original = await privateCLI(["agents"]);
   const tasks = board.locator('[data-widget="tasks"]');
   if (isMobile) {
-    await tasks.locator("summary").click();
+    await tasks
+      .getByRole("button", { name: "Tasks options", exact: true })
+      .click();
     await tasks.getByRole("button", { name: "Move up", exact: true }).click();
-    await tasks.locator("summary").click();
+    await tasks
+      .getByRole("button", { name: "Tasks options", exact: true })
+      .click();
   } else {
     await tasks
       .getByRole("button", { name: "Move Tasks", exact: true })
@@ -1161,9 +1165,16 @@ test("Dashboard drag and resize autosave without a duplicate home rail shortcut"
     "data-widget",
     "tasks",
   );
-  await tasks.locator("summary").click();
-  await tasks.getByLabel("Tasks size", { exact: true }).selectOption("tall");
-  await tasks.locator("summary").click();
+  await tasks
+    .getByRole("button", { name: "Tasks options", exact: true })
+    .click();
+  await tasks
+    .getByRole("group", { name: "Tasks size", exact: true })
+    .getByRole("button", { name: "Tall", exact: true })
+    .click();
+  await tasks
+    .getByRole("button", { name: "Tasks options", exact: true })
+    .click();
   await page.reload();
   await expect(board.locator("[data-widget]").first()).toHaveAttribute(
     "data-widget",
@@ -1396,7 +1407,7 @@ test("Dashboard joins provider agent Chat reviewed task result and memory withou
   const read = () => privateCLI(["agents", "--profile", p]);
   const original = await read();
   const news = page.locator('[data-widget="news"]');
-  await news.locator("summary").click();
+  await news.getByRole("button", { name: "News options", exact: true }).click();
   await news.getByRole("button", { name: "Remove", exact: true }).click();
   await expect(news).toHaveCount(0);
   await page.getByRole("button", { name: "Add widgets", exact: true }).click();
@@ -1405,10 +1416,13 @@ test("Dashboard joins provider agent Chat reviewed task result and memory withou
     .getByRole("button", { name: "News", exact: true })
     .click();
   await page.getByRole("button", { name: "Done", exact: true }).click();
-  await news.locator("summary").click();
-  await news.getByLabel("News size", { exact: true }).selectOption("tall");
+  await news.getByRole("button", { name: "News options", exact: true }).click();
+  await news
+    .getByRole("group", { name: "News size", exact: true })
+    .getByRole("button", { name: "Tall", exact: true })
+    .click();
   await news.getByRole("button", { name: "Move up", exact: true }).click();
-  await news.locator("summary").click();
+  await news.getByRole("button", { name: "News options", exact: true }).click();
   const order = await page
     .locator("[data-widget]")
     .evaluateAll((els) => els.map((el) => el.getAttribute("data-widget")));
@@ -1420,7 +1434,7 @@ test("Dashboard joins provider agent Chat reviewed task result and memory withou
       .evaluateAll((els) => els.map((el) => el.getAttribute("data-widget"))),
   ).toEqual(order);
   expect((await read()).revision).toBe(original.revision);
-  await news.locator("summary").click();
+  await news.getByRole("button", { name: "News options", exact: true }).click();
   await news.getByRole("button", { name: "Expand", exact: true }).click();
   await expect(
     page.getByRole("dialog", { name: "News", exact: true }),

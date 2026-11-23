@@ -12,6 +12,7 @@ import {
 import { useCore } from "../core";
 import { useWorkspace } from "../workspace";
 import { Badge, Dialog, SectionHead } from "../components/shared";
+import { Pencil, Plug } from "../icons";
 import {
   accountAddress,
   walletNetwork,
@@ -477,7 +478,7 @@ export function AccountManagement() {
                     disabled={busy}
                     onClick={() => setRPCID(a.id)}
                   >
-                    RPC
+                    <Plug size={14} aria-hidden="true" /> RPC
                   </button>
                   <button
                     className="text-button"
@@ -487,7 +488,7 @@ export function AccountManagement() {
                       setNewName(a.name);
                     }}
                   >
-                    {uiText("Rename")}
+                    <Pencil size={14} aria-hidden="true" /> {uiText("Rename")}
                   </button>
                 </div>
                 {editing === a.id && (

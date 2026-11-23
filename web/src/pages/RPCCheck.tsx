@@ -1,10 +1,10 @@
-import { Copy } from "../icons";
+import { Copy, TerminalSquare } from "../icons";
 import { VenueCredential } from "./VenueCredential";
 import { RPCCredential } from "./RPCCredential";
 import { useState, useRef, useEffect } from "react";
 import { useCore } from "../core";
 import { useUI } from "../ui-preferences";
-import { Dialog } from "../components/shared";
+import { Dialog, Disclosure } from "../components/shared";
 import {
   fixtureNetwork,
   rpcEndpoint,
@@ -31,7 +31,13 @@ export function RPCCheck({
   const [result, setResult] = useState<"" | "live" | "test">("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const [activeSection, setActiveSection] = useState<
+    "rpc" | "jupiter" | "receipt" | null
+  >(null);
   const generation = useRef(0);
+  useEffect(() => {
+    setActiveSection(null);
+  }, [core.instanceId, account.id]);
   useEffect(() => {
     generation.current++;
     setBusy(false);
@@ -188,9 +194,16 @@ export function RPCCheck({
               account.network,
             )
           }
+          open={activeSection === "rpc"}
+          onOpenChange={(next) => setActiveSection(next ? "rpc" : null)}
         />
         {account.version === 3 && (
-          <VenueCredential accountId={account.id} revision={revision} />
+          <VenueCredential
+            accountId={account.id}
+            revision={revision}
+            open={activeSection === "jupiter"}
+            onOpenChange={(next) => setActiveSection(next ? "jupiter" : null)}
+          />
         )}
         {account.version === 3 &&
           [
@@ -199,8 +212,14 @@ export function RPCCheck({
             "https://solana-mainnet.g.alchemy.com",
             "https://solana-devnet.g.alchemy.com",
           ].includes(account.rpc?.endpoint ?? "") && (
-            <details>
-              <summary>{t("Receipt reader")}</summary>
+            <Disclosure
+              label={t("Receipt reader")}
+              icon={<TerminalSquare size={14} />}
+              open={activeSection === "receipt"}
+              onOpenChange={(next) => setActiveSection(next ? "receipt" : null)}
+              className="wallet-cred-disclosure"
+              dataSection="receipt-reader"
+            >
               <div className="account-actions">
                 <code>
                   fased-app custody receipt-rpc-save --rpc-origin{" "}
@@ -219,7 +238,7 @@ export function RPCCheck({
                   <Copy size={14} />
                 </button>
               </div>
-            </details>
+            </Disclosure>
           )}
       </div>
     </Dialog>
