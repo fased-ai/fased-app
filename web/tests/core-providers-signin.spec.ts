@@ -4754,3 +4754,180 @@ test("unified Settings Providers inline toggle and 3-step Add provider wizard wo
     settingsDialog.locator(".settings-providers-detail"),
   ).toContainText("Disabled");
 });
+
+test("Add provider wizard Step 3 renders Codex shadowHome and launchArgs and shows them in Settings detail", async ({
+  page,
+  isMobile,
+}) => {
+  await page.goto(url + "/#overview");
+  await openOwnerSetup(
+    page,
+    JSON.parse(await readFile(join(dir, "claim-code.json"), "utf8")).code,
+  );
+  await page.getByLabel("Create owner password").fill(fixturePassword);
+  await page
+    .getByRole("button", { name: "Claim workspace", exact: true })
+    .click();
+  await expect(
+    page.getByRole("button", { name: "Sign out", exact: true }),
+  ).toBeVisible();
+
+  const postedActions: Record<string, any>[] = [];
+  let savedAccount: Record<string, any> | null = null;
+  const baseConnection = await privateCLI(["ai-connection"]);
+  const hostClis = [
+    {
+      provider: "openai",
+      binary: "codex",
+      label: "Codex CLI",
+      transport: "cli",
+      version: "0.171.0",
+      binaryPath: "/usr/local/bin/codex",
+      installed: true,
+      authenticated: true,
+      account: "ChatGPT Pro",
+      supportsDevice: true,
+      loginCommand: "codex login --device-auth",
+      installHint: "npm i -g @openai/codex",
+      models: ["gpt-5.4", "gpt-5.4-mini"],
+    },
+    {
+      provider: "anthropic",
+      binary: "claude",
+      label: "Claude Code CLI",
+      transport: "cli",
+      version: "2.1.329",
+      binaryPath: "/usr/local/bin/claude",
+      installed: true,
+      authenticated: true,
+      account: "Claude Max",
+      supportsDevice: false,
+      loginCommand: "claude auth login",
+      installHint: "npm i -g @anthropic-ai/claude-code",
+      models: ["claude-sonnet-4-6"],
+    },
+  ];
+  const rootPayload = () => ({
+    ...baseConnection,
+    ...(savedAccount ?? {}),
+    osVaultAvailable: true,
+    signInAvailable: true,
+    liveCallsEnabled: true,
+    hostClis,
+    connections: savedAccount ? [savedAccount] : [],
+  });
+
+  await page.route("**/api/v1/ai/connection", async (route) => {
+    if (route.request().method() === "GET") {
+      await route.fulfill({ json: rootPayload() });
+      return;
+    }
+    const body = route.request().postDataJSON() as Record<string, any>;
+    postedActions.push(body);
+    if (body.action === "cli-connect") {
+      savedAccount = {
+        ...baseConnection,
+        ref: "acct-codex-1",
+        name: body.name || "Codex CLI",
+        provider: body.provider || "openai",
+        authMethod: "cli",
+        credentialMode: "cli",
+        binary: body.binary || "codex",
+        binaryPath: body.binaryPath || "",
+        configDir: body.configDir || "",
+        shadowHome: body.shadowHome || "",
+        launchArgs: body.launchArgs || "",
+        accentColor: body.accentColor || "",
+        cliVersion: "0.171.0",
+        disabled: false,
+        osVaultAvailable: true,
+        osProtected: true,
+        locked: false,
+        testOnly: false,
+        liveCallsEnabled: true,
+        model: "gpt-5.4",
+      };
+    }
+    await route.fulfill({ json: rootPayload() });
+  });
+
+  if (isMobile) {
+    await page
+      .getByRole("button", { name: "Preferences", exact: true })
+      .click();
+  } else {
+    await page
+      .locator("#shell-rail")
+      .getByRole("button", { name: "Settings", exact: true })
+      .click();
+  }
+
+  const settingsDialog = page.getByRole("dialog", { name: /Settings \// });
+  await settingsDialog
+    .locator(".settings-modal-tabs")
+    .getByRole("button", { name: "Providers", exact: true })
+    .click();
+  await settingsDialog
+    .getByRole("button", { name: "Add provider", exact: true })
+    .click();
+
+  const wizard = page.getByRole("dialog", {
+    name: "Add provider",
+    exact: true,
+  });
+  await expect(wizard).toBeVisible();
+
+  // Verify non-Codex CLI shows Launch arguments but hides Shadow home path.
+  await wizard
+    .getByRole("group", { name: "Provider", exact: true })
+    .getByRole("button", { name: /Anthropic/ })
+    .click();
+  await wizard.getByRole("button", { name: "Next", exact: true }).click();
+  await wizard.getByRole("button", { name: "Next", exact: true }).click();
+  await expect(
+    wizard.getByLabel("Launch arguments", { exact: true }),
+  ).toBeVisible();
+  await expect(
+    wizard.getByLabel("Shadow home path", { exact: true }),
+  ).toHaveCount(0);
+
+  // Switch back to Codex and configure Shadow home path + Launch arguments.
+  await wizard.getByRole("button", { name: "Back", exact: true }).click();
+  await wizard.getByRole("button", { name: "Back", exact: true }).click();
+  await wizard
+    .getByRole("group", { name: "Provider", exact: true })
+    .getByRole("button", { name: /OpenAI/ })
+    .click();
+  await wizard
+    .getByRole("button", { name: "Configure manually", exact: true })
+    .click();
+  await wizard.getByLabel("Label", { exact: true }).fill("Codex Work");
+  await wizard.getByRole("button", { name: "Next", exact: true }).click();
+
+  await wizard.getByLabel("Config directory", { exact: true }).fill("~/.codex");
+  await wizard
+    .getByLabel("Shadow home path", { exact: true })
+    .fill("~/.codex-fased/work");
+  await wizard
+    .getByLabel("Launch arguments", { exact: true })
+    .fill("--enable web_search_request");
+  await wizard
+    .getByRole("button", { name: "Add instance", exact: true })
+    .click();
+
+  await expect
+    .poll(() => postedActions.find((a) => a.action === "cli-connect"))
+    .toEqual({
+      action: "cli-connect",
+      provider: "openai",
+      binary: "codex",
+      name: "Codex Work",
+      configDir: "~/.codex",
+      shadowHome: "~/.codex-fased/work",
+      launchArgs: "--enable web_search_request",
+    });
+
+  const detail = settingsDialog.locator(".settings-providers-detail");
+  await expect(detail).toContainText("~/.codex-fased/work");
+  await expect(detail).toContainText("--enable web_search_request");
+});

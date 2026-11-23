@@ -37,6 +37,8 @@ type AIConnectionCommand struct {
 	Binary               string                `json:"binary,omitempty"`
 	BinaryPath           string                `json:"binaryPath,omitempty"`
 	ConfigDir            string                `json:"configDir,omitempty"`
+	ShadowHome           string                `json:"shadowHome,omitempty"`
+	LaunchArgs           string                `json:"launchArgs,omitempty"`
 	AccentColor          string                `json:"accentColor,omitempty"`
 	Disabled             *bool                 `json:"disabled,omitempty"`
 	Name                 string                `json:"name,omitempty"`
@@ -64,6 +66,8 @@ type AIConnectionView struct {
 	Binary                        string                `json:"binary,omitempty"`
 	BinaryPath                    string                `json:"binaryPath,omitempty"`
 	ConfigDir                     string                `json:"configDir,omitempty"`
+	ShadowHome                    string                `json:"shadowHome,omitempty"`
+	LaunchArgs                    string                `json:"launchArgs,omitempty"`
 	AccentColor                   string                `json:"accentColor,omitempty"`
 	CLIVersion                    string                `json:"cliVersion,omitempty"`
 	PlanUse                       bool                  `json:"planUse"`
@@ -364,6 +368,8 @@ func (s *Store) aiConnectionLocked(refs ...string) (v AIConnectionView, err erro
 					v.Binary = cred.Binary
 					v.BinaryPath = cred.BinaryPath
 					v.ConfigDir = cred.ConfigDir
+					v.ShadowHome = cred.ShadowHome
+					v.LaunchArgs = cred.LaunchArgs
 				}
 			}
 			for _, cli := range v.HostCLIs {
@@ -609,7 +615,7 @@ func (s *Store) ChangeAIConnection(ctx context.Context, c AIConnectionCommand) (
 	if strings.HasPrefix(c.Action, "cli-") {
 		return s.changeProviderCLI(ctx, c)
 	}
-	if c.Binary != "" || c.BinaryPath != "" || c.ConfigDir != "" {
+	if c.Binary != "" || c.BinaryPath != "" || c.ConfigDir != "" || c.ShadowHome != "" || c.LaunchArgs != "" {
 		return AIConnectionView{}, errors.New("CLI fields require a CLI operation")
 	}
 	if c.AccentColor != "" {
@@ -821,6 +827,7 @@ func (s *Store) changeAIConnection(ctx context.Context, c AIConnectionCommand) (
 			newEncoded, _ := json.Marshal(col.Accounts[foundIdx])
 			state.digest = sha256.Sum256(newEncoded)
 		}
+		evictCodexAppServerSessions()
 		return s.aiConnectionLocked(c.Ref)
 	}
 	if taskAccessAction(c.Action) {
@@ -931,6 +938,7 @@ func (s *Store) changeAIConnection(ctx context.Context, c AIConnectionCommand) (
 		}
 		s.clearAIConnectionLocked(c.Ref)
 		delete(s.provider.accounts, c.Ref)
+		evictCodexAppServerSessions()
 		return s.aiConnectionLocked()
 	}
 	if (c.Action == "add" || c.Ref == "") && len(col.Accounts) >= aiMaxAccounts {

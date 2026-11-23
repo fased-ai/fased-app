@@ -327,15 +327,53 @@ func streamCLIWithCred(ctx context.Context, runner providerCLIRunner, target res
 		conversation = "System instructions:\n" + sysPrompt + "\n\n" + conversation
 		sysPrompt = ""
 	}
+	extraArgs, err := parseSafeCLILaunchArgs(cred.LaunchArgs)
+	if err != nil {
+		return providerTurnResult{}, err
+	}
+	extraEnv := cliConfigEnvWithShadow(cred.Provider, cred.Binary, cred.ConfigDir, cred.ShadowHome)
+	if cred.Binary == "codex" {
+		appRes, used, appErr := runCodexAppServerTurn(ctx, runner, codexAppServerTurnRequest{
+			BinPath:     binPath,
+			Cred:        cred,
+			Model:       target.Model,
+			Prompt:      conversation,
+			ExtraArgs:   extraArgs,
+			ExtraEnv:    extraEnv,
+			OnTextDelta: cb.onTextDelta,
+		})
+		if used {
+			if appErr != nil {
+				return providerTurnResult{}, appErr
+			}
+			return providerTurnResult{
+				Text:         appRes.Text,
+				InputTokens:  appRes.InputTokens,
+				CachedTokens: appRes.CachedTokens,
+				OutputTokens: appRes.OutputTokens,
+				FinishReason: "stop",
+			}, nil
+		}
+		if cred.ShadowHome != "" {
+			if _, isOS := runner.(osCLIRunner); isOS {
+				if _, prepErr := prepareCodexShadowHome(cred.ConfigDir, cred.ShadowHome); prepErr != nil {
+					return providerTurnResult{}, prepErr
+				}
+			}
+		}
+	}
+
 	args, _, err := cliExecArgs(cred.Provider, binPath, target.Model, sysPrompt)
 	if err != nil {
 		return providerTurnResult{}, err
+	}
+	if len(extraArgs) > 0 {
+		args = appendSafeCLIExecArgs(cred.Provider, args, extraArgs)
 	}
 
 	execCtx, cancel := context.WithTimeout(ctx, 5*time.Minute)
 	defer cancel()
 
-	extraEnv := cliConfigEnv(cred.Provider, cred.Binary, cred.ConfigDir)
 	var stdout, stderr io.ReadCloser
 	var waitFn func() error
 	var killFn func()
@@ -559,12 +597,33 @@ func dispatchCLIAgentAI(ctx context.Context, s *Store, q AgentAIRequest, onDelta
 	return q, true, nil
 }
 
+func appendSafeCLIExecArgs(provider string, base, extra []string) []string {
+	if len(extra) == 0 {
+		return base
+	}
+	if provider == "openai" && len(base) > 0 && base[len(base)-1] == "-" {
+		out := make([]string, 0, len(base)+len(extra))
+		out = append(out, base[:len(base)-1]...)
+		out = append(out, extra...)
+		out = append(out, "-")
+		return out
+	}
+	out := make([]string, 0, len(base)+len(extra))
+	out = append(out, base...)
+	out = append(out, extra...)
+	return out
+}
+
 func streamAntigravityACPV2(ctx context.Context, runner providerCLIRunner, target resolvedAgentProvider, cred cliProviderCredential, prompt providerV2Prompt, cb providerStreamCallbacks) (providerTurnResult, error) {
 	interactive, ok := runner.(interactiveCLIRunner)
 	if !ok {
 		return providerTurnResult{}, errors.New("Antigravity ACP requires interactive stdio support")
 	}
 	binPath, err := discoverAntigravityACP(runner, cred.BinaryPath)
+	if err != nil {
+		return providerTurnResult{}, err
+	}
+	extraArgs, err := parseSafeCLILaunchArgs(cred.LaunchArgs)
 	if err != nil {
 		return providerTurnResult{}, err
 	}
@@ -578,10 +637,11 @@ func streamAntigravityACPV2(ctx context.Context, runner providerCLIRunner, targe
 	execCtx, cancel := context.WithTimeout(ctx, 5*time.Minute)
 	defer cancel()
 
+	acpArgs := append([]string{"acp", "--stdio", "--disable-telemetry"}, extraArgs...)
 	stdin, stdout, stderr, waitFn, killFn, err := interactive.StartInteractive(
 		execCtx,
 		binPath,
-		[]string{"acp", "--stdio", "--disable-telemetry"},
+		acpArgs,
 		antigravityACPEnv(cred.ConfigDir),
 	)
 	if err != nil {

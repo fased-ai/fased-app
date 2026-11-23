@@ -16,6 +16,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 )
 
 // HostCLIStatus describes whether a supported official vendor CLI is installed
@@ -156,22 +157,36 @@ type cliProviderCredential struct {
 	Binary     string `json:"binary"`
 	BinaryPath string `json:"binaryPath,omitempty"`
 	ConfigDir  string `json:"configDir,omitempty"`
+	ShadowHome string `json:"shadowHome,omitempty"`
+	LaunchArgs string `json:"launchArgs,omitempty"`
 }
 
 func parseCLIProviderCredential(raw []byte) (cliProviderCredential, bool) {
 	var c cliProviderCredential
-	if len(raw) == 0 || len(raw) > 1024 || !uniqueAIJSON(raw, 1024) || json.Unmarshal(raw, &c) != nil {
+	if len(raw) == 0 || len(raw) > 2048 || !uniqueAIJSON(raw, 2048) || json.Unmarshal(raw, &c) != nil {
 		return cliProviderCredential{}, false
 	}
 	spec, ok := cliSpecForTarget(c.Provider, c.Binary)
 	if !ok || c.Version != 1 || c.Binary != spec.Binary {
 		return cliProviderCredential{}, false
 	}
+	c.BinaryPath = strings.TrimSpace(c.BinaryPath)
+	c.ConfigDir = strings.TrimSpace(c.ConfigDir)
+	c.ShadowHome = strings.TrimSpace(c.ShadowHome)
+	c.LaunchArgs = strings.TrimSpace(c.LaunchArgs)
 	if c.BinaryPath != "" && !validCustomCLIBinaryPath(c.BinaryPath) {
 		return cliProviderCredential{}, false
 	}
 	if c.ConfigDir != "" && !validCLIConfigDir(c.ConfigDir) {
 		return cliProviderCredential{}, false
+	}
+	if c.ShadowHome != "" && (spec.Binary != "codex" || !validCLIConfigDir(c.ShadowHome)) {
+		return cliProviderCredential{}, false
+	}
+	if c.LaunchArgs != "" {
+		if _, err := parseSafeCLILaunchArgs(c.LaunchArgs); err != nil {
+			return cliProviderCredential{}, false
+		}
 	}
 	return c, true
 }
@@ -185,17 +200,39 @@ func encodeCLIProviderCredential(provider string) ([]byte, error) {
 }
 
 func encodeCLIProviderCredentialWithConfig(provider, binary, binaryPath, configDir string) ([]byte, error) {
+	return encodeCLIProviderCredentialFull(provider, binary, binaryPath, configDir, "", "")
+}
+
+func encodeCLIProviderCredentialFull(provider, binary, binaryPath, configDir, shadowHome, launchArgs string) ([]byte, error) {
 	spec, ok := cliSpecForTarget(provider, binary)
 	if !ok {
 		return nil, errors.New("unsupported CLI subscription provider")
 	}
 	binaryPath = strings.TrimSpace(binaryPath)
 	configDir = strings.TrimSpace(configDir)
+	shadowHome = strings.TrimSpace(shadowHome)
+	launchArgs = strings.TrimSpace(launchArgs)
 	if binaryPath != "" && !validCustomCLIBinaryPath(binaryPath) {
 		return nil, errors.New("invalid CLI binary path")
 	}
 	if configDir != "" && !validCLIConfigDir(configDir) {
 		return nil, errors.New("invalid CLI config directory")
+	}
+	if shadowHome != "" {
+		if spec.Binary != "codex" {
+			return nil, errors.New("shadow home is only supported for Codex CLI")
+		}
+		if !validCLIConfigDir(shadowHome) {
+			return nil, errors.New("invalid CLI shadow home path")
+		}
+	}
+	if launchArgs != "" {
+		if !utf8.ValidString(launchArgs) {
+			return nil, errors.New("invalid launch arguments")
+		}
+		if _, err := parseSafeCLILaunchArgs(launchArgs); err != nil {
+			return nil, err
+		}
 	}
 	return json.Marshal(cliProviderCredential{
 		Version:    1,
@@ -203,6 +240,8 @@ func encodeCLIProviderCredentialWithConfig(provider, binary, binaryPath, configD
 		Binary:     spec.Binary,
 		BinaryPath: binaryPath,
 		ConfigDir:  configDir,
+		ShadowHome: shadowHome,
+		LaunchArgs: launchArgs,
 	})
 }
 
@@ -438,6 +477,10 @@ func runCLIWithOptionalEnv(ctx context.Context, runner providerCLIRunner, binary
 }
 
 func probeSingleCLIWithConfig(ctx context.Context, runner providerCLIRunner, spec cliProviderSpec, customBinaryPath, configDir string) HostCLIStatus {
+	return probeSingleCLIWithShadow(ctx, runner, spec, customBinaryPath, configDir, "")
+}
+
+func probeSingleCLIWithShadow(ctx context.Context, runner providerCLIRunner, spec cliProviderSpec, customBinaryPath, configDir, shadowHome string) HostCLIStatus {
 	if spec.Binary == "antigravity" {
 		return probeAntigravityACPWithConfig(ctx, runner, spec, customBinaryPath, configDir)
 	}
@@ -474,7 +517,14 @@ func probeSingleCLIWithConfig(ctx context.Context, runner providerCLIRunner, spe
 	status.Installed = true
 	status.BinaryPath = binPath
 	status.Version = probeCLIVersion(ctx, runner, binPath)
-	extraEnv := cliConfigEnv(spec.Provider, spec.Binary, configDir)
+	if spec.Binary == "codex" && strings.TrimSpace(shadowHome) != "" {
+		if _, isOS := runner.(osCLIRunner); isOS {
+			if _, prepErr := prepareCodexShadowHome(configDir, shadowHome); prepErr != nil {
+				return status
+			}
+		}
+	}
+	extraEnv := cliConfigEnvWithShadow(spec.Provider, spec.Binary, configDir, shadowHome)
 
 	switch spec.Provider {
 	case "anthropic":
@@ -677,6 +727,14 @@ func validHexAccentColor(s string) bool {
 }
 
 func cliConfigEnv(provider, binary, configDir string) []string {
+	return cliConfigEnvWithShadow(provider, binary, configDir, "")
+}
+
+func cliConfigEnvWithShadow(provider, binary, configDir, shadowHome string) []string {
+	shadowHome = strings.TrimSpace(shadowHome)
+	if binary == "codex" && shadowHome != "" && validCLIConfigDir(shadowHome) {
+		return []string{"CODEX_HOME=" + expandCLIUserPath(shadowHome)}
+	}
 	configDir = strings.TrimSpace(configDir)
 	if configDir == "" || !validCLIConfigDir(configDir) {
 		return nil
@@ -746,12 +804,16 @@ func mergeCLIEnv(base, extra []string) []string {
 }
 
 func resolveCLIConnectTarget(ctx context.Context, runner providerCLIRunner, provider, binary, binaryPath, configDir string) (cliProviderSpec, HostCLIStatus, bool) {
+	return resolveCLIConnectTargetWithShadow(ctx, runner, provider, binary, binaryPath, configDir, "")
+}
+
+func resolveCLIConnectTargetWithShadow(ctx context.Context, runner providerCLIRunner, provider, binary, binaryPath, configDir, shadowHome string) (cliProviderSpec, HostCLIStatus, bool) {
 	if binary != "" {
 		spec, ok := cliSpecForTarget(provider, binary)
 		if !ok {
 			return cliProviderSpec{}, HostCLIStatus{}, false
 		}
-		return spec, probeSingleCLIWithConfig(ctx, runner, spec, binaryPath, configDir), true
+		return spec, probeSingleCLIWithShadow(ctx, runner, spec, binaryPath, configDir, shadowHome), true
 	}
 	specs := cliSpecsForProvider(provider)
 	if len(specs) == 0 {
@@ -762,7 +824,7 @@ func resolveCLIConnectTarget(ctx context.Context, runner providerCLIRunner, prov
 	firstSpec := specs[0]
 	var firstStatus HostCLIStatus
 	for i, sp := range specs {
-		st := probeSingleCLIWithConfig(ctx, runner, sp, binaryPath, configDir)
+		st := probeSingleCLIWithShadow(ctx, runner, sp, binaryPath, configDir, shadowHome)
 		if i == 0 {
 			firstStatus = st
 		}
@@ -823,12 +885,23 @@ func (s *Store) changeProviderCLI(ctx context.Context, c AIConnectionCommand) (A
 		if c.ConfigDir != "" && !validCLIConfigDir(c.ConfigDir) {
 			return AIConnectionView{}, errors.New("invalid CLI config directory")
 		}
+		if c.ShadowHome != "" && !validCLIConfigDir(c.ShadowHome) {
+			return AIConnectionView{}, errors.New("invalid CLI shadow home path")
+		}
+		if strings.TrimSpace(c.LaunchArgs) != "" {
+			if _, err := parseSafeCLILaunchArgs(c.LaunchArgs); err != nil {
+				return AIConnectionView{}, err
+			}
+		}
 		if s.pilotBindingActive() {
 			return AIConnectionView{}, errors.New("pilot permits one initial OpenAI account; preserve the existing vault")
 		}
-		spec, status, ok := resolveCLIConnectTarget(ctx, s.cliRunner(), c.Provider, c.Binary, c.BinaryPath, c.ConfigDir)
+		spec, status, ok := resolveCLIConnectTargetWithShadow(ctx, s.cliRunner(), c.Provider, c.Binary, c.BinaryPath, c.ConfigDir, c.ShadowHome)
 		if !ok {
 			return AIConnectionView{}, errors.New("select a supported CLI subscription provider and vault passphrase")
+		}
+		if c.ShadowHome != "" && spec.Binary != "codex" {
+			return AIConnectionView{}, errors.New("shadow home is only supported for Codex CLI")
 		}
 		if !status.Installed {
 			return AIConnectionView{}, errors.New(spec.Label + " is not installed on this host")
@@ -840,9 +913,12 @@ func (s *Store) changeProviderCLI(ctx context.Context, c AIConnectionCommand) (A
 		if name == "" {
 			name = spec.Label
 		}
-		v, err := s.persistCLIConnectionWithSpec(ctx, spec.Provider, spec.Binary, c.BinaryPath, c.ConfigDir, name, c.AccentColor, c.Ref, c.Passphrase)
+		v, err := s.persistCLIConnectionFull(ctx, spec.Provider, spec.Binary, c.BinaryPath, c.ConfigDir, c.ShadowHome, c.LaunchArgs, name, c.AccentColor, c.Ref, c.Passphrase)
 		if err != nil {
 			return AIConnectionView{}, err
+		}
+		if c.Ref != "" {
+			evictCodexAppServerSessions()
 		}
 		signalStoreChange(s)
 		return v, nil
@@ -873,6 +949,10 @@ func (s *Store) persistCLIConnection(ctx context.Context, provider, name, existi
 }
 
 func (s *Store) persistCLIConnectionWithSpec(ctx context.Context, provider, binary, binaryPath, configDir, name, accentColor, existingRef, passphrase string) (AIConnectionView, error) {
+	return s.persistCLIConnectionFull(ctx, provider, binary, binaryPath, configDir, "", "", name, accentColor, existingRef, passphrase)
+}
+
+func (s *Store) persistCLIConnectionFull(ctx context.Context, provider, binary, binaryPath, configDir, shadowHome, launchArgs, name, accentColor, existingRef, passphrase string) (AIConnectionView, error) {
 	spec, ok := cliSpecForTarget(provider, binary)
 	if !ok {
 		return AIConnectionView{}, errors.New("unsupported CLI subscription provider")
@@ -880,7 +960,7 @@ func (s *Store) persistCLIConnectionWithSpec(ctx context.Context, provider, bina
 	if !validAgentText(name, 80, false) || !validHexAccentColor(accentColor) {
 		return AIConnectionView{}, errors.New("invalid connection name")
 	}
-	plain, err := encodeCLIProviderCredentialWithConfig(spec.Provider, spec.Binary, binaryPath, configDir)
+	plain, err := encodeCLIProviderCredentialFull(spec.Provider, spec.Binary, binaryPath, configDir, shadowHome, launchArgs)
 	if err != nil {
 		return AIConnectionView{}, err
 	}

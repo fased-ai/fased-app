@@ -464,6 +464,18 @@ export function SettingsModal() {
                               <dd>{activeAccount.configDir}</dd>
                             </div>
                           )}
+                          {activeAccount.shadowHome && (
+                            <div>
+                              <dt>{t("Shadow home path")}</dt>
+                              <dd>{activeAccount.shadowHome}</dd>
+                            </div>
+                          )}
+                          {activeAccount.launchArgs && (
+                            <div>
+                              <dt>{t("Launch arguments")}</dt>
+                              <dd>{activeAccount.launchArgs}</dd>
+                            </div>
+                          )}
                         </dl>
                         <div className="agent-actions">
                           <button

@@ -55,6 +55,8 @@ export type Connection = {
   binary?: string;
   binaryPath?: string;
   configDir?: string;
+  shadowHome?: string;
+  launchArgs?: string;
   accentColor?: string;
   cliVersion?: string;
   planUse?: boolean;
