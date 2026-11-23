@@ -43,7 +43,31 @@ execFileSync(
 );
 // Native installers are deliberately unsigned engineering outputs. No publish,
 // keychain credential, signing service or Gatekeeper bypass is part of CI.
+let signed = false;
 if (windows) {
+  const pfxPath = (process.env.WINDOWS_SIGN_CERT_PFX_PATH || "").trim();
+  const pfxPassword = process.env.WINDOWS_SIGN_CERT_PASSWORD || "";
+  const signWindows = Boolean(pfxPath && pfxPassword);
+  const signExe = (targetExe) => {
+    execFileSync(
+      "signtool.exe",
+      [
+        "sign",
+        "/fd",
+        "SHA256",
+        "/tr",
+        "http://timestamp.digicert.com",
+        "/td",
+        "SHA256",
+        "/f",
+        pfxPath,
+        "/p",
+        pfxPassword,
+        targetExe,
+      ],
+      { stdio: "inherit" },
+    );
+  };
   const fixture = resolve(".evidence/windows-package-stage");
   await mkdir(fixture, { mode: 0o700 });
   try {
@@ -59,6 +83,10 @@ if (windows) {
       fixture,
       `fased-app-windows-${process.arch === "x64" ? "amd64" : process.arch}`,
     );
+    if (signWindows) {
+      signExe(join(payload, "fased-app.exe"));
+      signExe(join(payload, "fased-desktop.exe"));
+    }
     execFileSync(
       "C:\\Program Files (x86)\\Inno Setup 6\\ISCC.exe",
       ["packaging/windows.iss"],
@@ -71,11 +99,23 @@ if (windows) {
         },
       },
     );
+    if (signWindows) {
+      const unsignedExe = join(output, "fased-app-windows-setup-unsigned.exe");
+      const signedExe = join(output, "fased-app-windows-setup.exe");
+      const { rename } = await import("node:fs/promises");
+      await rename(unsignedExe, signedExe);
+      signExe(signedExe);
+      signed = true;
+    }
   } finally {
     await rm(fixture, { recursive: true, force: true });
   }
 }
 if (process.platform === "darwin") {
+  const signingIdentity = (process.env.APPLE_SIGNING_IDENTITY || "").trim();
+  const notaryProfile = (
+    process.env.APPLE_NOTARY_KEYCHAIN_PROFILE || ""
+  ).trim();
   const fixture = resolve(".evidence/macos-package-stage");
   await mkdir(fixture, { mode: 0o700 });
   try {
@@ -90,17 +130,55 @@ if (process.platform === "darwin") {
       ["-lint", join(fixture, "Fased App.app/Contents/Info.plist")],
       { stdio: "inherit" },
     );
+    if (signingIdentity) {
+      execFileSync(
+        "codesign",
+        [
+          "--deep",
+          "--force",
+          "--options",
+          "runtime",
+          "--timestamp",
+          "--sign",
+          signingIdentity,
+          join(fixture, "Fased App.app"),
+        ],
+        { stdio: "inherit" },
+      );
+      signed = true;
+    }
+    const dmgName = signingIdentity
+      ? "fased-app-macos.dmg"
+      : "fased-app-macos-unsigned.dmg";
+    const dmgPath = join(output, dmgName);
     await createMacDiskImage([
       "create",
       "-volname",
-      "Fased App Engineering",
+      signingIdentity ? "Fased App" : "Fased App Engineering",
       "-srcfolder",
       fixture,
       "-ov",
       "-format",
       "UDZO",
-      join(output, "fased-app-macos-unsigned.dmg"),
+      dmgPath,
     ]);
+    if (signingIdentity && notaryProfile) {
+      execFileSync(
+        "xcrun",
+        [
+          "notarytool",
+          "submit",
+          dmgPath,
+          "--keychain-profile",
+          notaryProfile,
+          "--wait",
+        ],
+        { stdio: "inherit" },
+      );
+      execFileSync("xcrun", ["stapler", "staple", dmgPath], {
+        stdio: "inherit",
+      });
+    }
   } finally {
     await rm(fixture, { recursive: true, force: true });
   }
@@ -146,7 +224,8 @@ await writeFile(
       platform: process.platform,
       files,
       ...(linuxPackages ? { linuxPackages } : {}),
-      unsignedEngineering: true,
+      signed,
+      unsignedEngineering: !signed,
       publicRelease: false,
     },
     null,

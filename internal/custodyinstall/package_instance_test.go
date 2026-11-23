@@ -91,3 +91,50 @@ func TestPackageServiceIdentityIsBoundToInstance(t *testing.T) {
 		}
 	}
 }
+
+func TestPackageUnitsIncludeExtraSystemdSandboxingAndSignerIsolation(t *testing.T) {
+	t.Parallel()
+	m := Manifest{
+		Layout: PackageLayout, Version: 3, Mode: "ordinary-custody:v1", Profile: "owner-authorized:v1", Provenance: "owner-input:v1",
+		Enrollment: true, Location: "remote", PublicOrigin: "https://owner.example.ts.net", Owner: 1000, ID: strings.Repeat("a", 32),
+		Listen: "127.0.0.1:17331", CoreHash: strings.Repeat("b", 64), SignerHash: strings.Repeat("c", 64),
+	}
+	m.Root, _ = PackageRoot(m.Owner, m.Location, m.ID)
+	m.App = Identity{Name: packageAccountName(m.Owner, m.Location, m.ID, "app"), UID: 2001, GID: 2001}
+	m.Signer = Identity{Name: packageAccountName(m.Owner, m.Location, m.ID, "signer"), UID: 2002, GID: 2002}
+
+	units := definitions(m)
+	appUnit := string(units["fased-app.service"])
+	signerUnit := string(units["fased-signer.service"])
+	common := []string{
+		"LimitCORE=0\n",
+		"PrivateDevices=yes\n",
+		"ProtectKernelLogs=yes\n",
+		"ProtectClock=yes\n",
+		"ProtectHostname=yes\n",
+		"ProtectProc=invisible\n",
+		"LockPersonality=yes\n",
+		"SystemCallArchitectures=native\n",
+		"SystemCallFilter=@system-service\n",
+	}
+	for _, directive := range common {
+		if !strings.Contains(appUnit, directive) {
+			t.Fatalf("fased-app.service missing %q", strings.TrimSpace(directive))
+		}
+		if !strings.Contains(signerUnit, directive) {
+			t.Fatalf("fased-signer.service missing %q", strings.TrimSpace(directive))
+		}
+	}
+	for _, signerOnly := range []string{"PrivateNetwork=yes\n", "MemoryDenyWriteExecute=yes\n"} {
+		if !strings.Contains(signerUnit, signerOnly) {
+			t.Fatalf("fased-signer.service missing %q", strings.TrimSpace(signerOnly))
+		}
+		if strings.Contains(appUnit, signerOnly) {
+			t.Fatalf("fased-app.service must not set %q", strings.TrimSpace(signerOnly))
+		}
+	}
+	legacy := legacyPackageDefinitions(m)
+	if strings.Contains(string(legacy["fased-app.service"]), "PrivateDevices=yes") || strings.Contains(string(legacy["fased-signer.service"]), "PrivateNetwork=yes") {
+		t.Fatal("legacyPackageDefinitions unexpectedly included hardened directives")
+	}
+}

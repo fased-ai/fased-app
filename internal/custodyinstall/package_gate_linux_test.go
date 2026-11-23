@@ -926,3 +926,22 @@ func TestPackageGateRejectsInvalidPhysicalEntry(t *testing.T) {
 		t.Fatal("unknown service role was accepted")
 	}
 }
+
+func TestKnownUnitDefinitionAcceptsHardenedAndLegacyPackageUnits(t *testing.T) {
+	t.Parallel()
+	_, m := packageGateInitialRecord(t)
+	hardened := definitions(m)
+	legacy := legacyPackageDefinitions(m)
+	for _, role := range []string{"app", "signer"} {
+		name := "fased-" + role + ".service"
+		if !knownUnitDefinition(hostFile{UID: 0, Regular: true, Mode: 0644, Data: hardened[name]}, m, role) {
+			t.Fatalf("hardened %s unit was rejected", name)
+		}
+		if !knownUnitDefinition(hostFile{UID: 0, Regular: true, Mode: 0644, Data: legacy[name]}, m, role) {
+			t.Fatalf("legacy %s unit was rejected", name)
+		}
+		if knownUnitDefinition(hostFile{UID: 0, Regular: true, Mode: 0644, Data: append([]byte("# mutated\n"), hardened[name]...)}, m, role) {
+			t.Fatalf("mutated %s unit was accepted", name)
+		}
+	}
+}

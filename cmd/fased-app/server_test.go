@@ -72,6 +72,16 @@ func TestServerInitAllTransportsAndValidation(t *testing.T) {
 			if !strings.Contains(plan.ServiceUnit, tc.wantUnit) || !strings.Contains(plan.ServiceUnit, "NoNewPrivileges=yes") {
 				t.Fatalf("unexpected service unit:\n%s", plan.ServiceUnit)
 			}
+			for _, directive := range []string{
+				"ProtectProc=invisible",
+				"LimitCORE=0",
+				"SystemCallArchitectures=native",
+				"SystemCallFilter=@system-service",
+			} {
+				if !strings.Contains(plan.ServiceUnit, directive) {
+					t.Fatalf("server init unit for %s missing %s:\n%s", tc.name, directive, plan.ServiceUnit)
+				}
+			}
 			joined := strings.Join(plan.Commands, "\n")
 			if !strings.Contains(joined, tc.wantCmd) || !strings.Contains(joined, "/usr/local/bin/fased-app pair --data-dir") {
 				t.Fatalf("missing expected command in:\n%s", joined)

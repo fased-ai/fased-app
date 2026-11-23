@@ -677,6 +677,14 @@ func verifyTopology(m Manifest) error {
 	return verifyValidatedTopology(m)
 }
 
+func knownUnitDefinition(f hostFile, m Manifest, role string) bool {
+	name := "fased-" + role + ".service"
+	if known(f, definitions(m)[name], 0644) {
+		return true
+	}
+	return m.Layout == PackageLayout && known(f, legacyPackageDefinitions(m)[name], 0644)
+}
+
 func verifyValidatedTopology(m Manifest) error {
 	if err := verifyManagedIdentities(m); err != nil {
 		return err
@@ -688,9 +696,9 @@ func verifyValidatedTopology(m Manifest) error {
 	if cfg != identityConfig(m) {
 		return errors.New("installed signer configuration changed")
 	}
-	for name, b := range definitions(m) {
-		f, e := readRoot(m.Root + "/" + name)
-		if e != nil || !known(f, b, 0644) {
+	for _, role := range []string{"app", "signer"} {
+		f, e := readRoot(m.Root + "/fased-" + role + ".service")
+		if e != nil || !knownUnitDefinition(f, m, role) {
 			return errors.New("stored unit definition changed")
 		}
 	}
@@ -905,7 +913,8 @@ func inspectLoadedUnitPolicyFields(m Manifest, role string, wanted []byte, image
 	if e != nil {
 		return nil, e
 	}
-	if !known(f, wanted, 0644) {
+	accepted := known(f, wanted, 0644) || (m.Layout == PackageLayout && bytes.Equal(wanted, definitions(m)["fased-"+role+".service"]) && known(f, legacyPackageDefinitions(m)["fased-"+role+".service"], 0644))
+	if !accepted {
 		return nil, errors.New("installed system unit changed; preserving it")
 	}
 	b, e := exec.Command("/usr/bin/systemctl", "show", instanceUnit(m, role), "--property=FragmentPath,DropInPaths,User,Group,NoNewPrivileges,ProtectSystem,ExecStart,NeedDaemonReload,LimitCORE,Requires,After").Output()

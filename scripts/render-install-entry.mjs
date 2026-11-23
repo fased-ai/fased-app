@@ -268,6 +268,89 @@ export function renderWindowsEntry(template, config) {
   return result;
 }
 
+function dualTrackCliTargetValues(config) {
+  const { version, fixture = false, ca } = config;
+  if (!validVersion(version)) {
+    throw Error("Valid release version required");
+  }
+  const rawTargets = config.targets ?? [];
+  if (!Array.isArray(rawTargets) || rawTargets.length === 0) {
+    throw Error("Non-empty CLI targets array required");
+  }
+  const seen = new Set();
+  return rawTargets.map((t) => {
+    const os = t?.os;
+    const arch = t?.arch;
+    if (
+      !["darwin", "linux"].includes(os) ||
+      !["amd64", "arm64"].includes(arch)
+    ) {
+      throw Error("Supported CLI targets are darwin/linux amd64/arm64");
+    }
+    const key = `${os}-${arch}`;
+    if (seen.has(key)) {
+      throw Error("Duplicate CLI target: " + key);
+    }
+    seen.add(key);
+    if (!t.archive?.length) {
+      throw Error("Exact CLI archive bytes required");
+    }
+    const ext = os === "darwin" ? "zip" : "tar.gz";
+    const expectedUrl = `https://github.com/fased-ai/fased-app/releases/download/v${version}/fased-app-${key}.${ext}`;
+    if (fixture) {
+      if (
+        !/^https:\/\/127\.0\.0\.1:[0-9]+\//.test(t.url ?? "") ||
+        !(t.ca?.length || ca?.length)
+      ) {
+        throw Error("Wrong controlled CLI fixture profile");
+      }
+    } else if (t.url !== undefined || t.ca !== undefined) {
+      throw Error("Public CLI entry cannot override URL or CA");
+    }
+    return {
+      key,
+      ext,
+      url: fixture ? t.url : expectedUrl,
+      sha256: sha(t.archive),
+    };
+  });
+}
+
+export function renderDualTrackCliEntry(template, config) {
+  const targets = dualTrackCliTargetValues(config);
+  const caBytes = config.fixture
+    ? (config.ca ??
+      config.targets?.find((t) => t.ca?.length)?.ca ??
+      Buffer.alloc(0))
+    : Buffer.alloc(0);
+  const values = {
+    ENTRY_VERSION: config.version,
+    DEVELOPMENT_ONLY: config.fixture ? "1" : "0",
+    FIXTURE_CA_BASE64: config.fixture
+      ? Buffer.from(caBytes).toString("base64")
+      : "",
+    CLI_TARGET_BINDINGS:
+      'case "$target" in\n' +
+      targets
+        .map(
+          (t) =>
+            `${t.key})\n` +
+            `  archive_url=${shell(t.url)}\n` +
+            `  archive_sha256=${shell(t.sha256)}\n` +
+            `  archive_ext=${shell(t.ext)}\n` +
+            ";;",
+        )
+        .join("\n") +
+      '\n*) die "No authenticated CLI package for $target." ;;\nesac',
+  };
+  const result = template.replace(/@([A-Z0-9_]+)@/g, (_, key) => {
+    if (!(key in values)) throw Error("Unknown CLI installer stamp");
+    return values[key];
+  });
+  if (/@[A-Z0-9_]+@/.test(result)) throw Error("Unstamped CLI installer");
+  return result;
+}
+
 if (
   process.argv[1] &&
   import.meta.url === pathToFileURL(process.argv[1]).href
@@ -277,7 +360,23 @@ if (
       "Usage: node scripts/render-install-entry.mjs CONFIG_JSON OUTPUT",
     );
   const config = JSON.parse(await readFile(process.argv[2], "utf8"));
-  if (process.argv[3].endsWith(".ps1")) {
+  if (process.argv[3].endsWith("install-cli.sh")) {
+    const loadCliTarget = async (target) => ({
+      ...target,
+      archive: await readFile(target.archive),
+      ...(target.ca ? { ca: await readFile(target.ca) } : {}),
+    });
+    const loaded = {
+      ...config,
+      ...(config.ca ? { ca: await readFile(config.ca) } : {}),
+      targets: await Promise.all((config.targets ?? []).map(loadCliTarget)),
+    };
+    const result = renderDualTrackCliEntry(
+      await readFile(new URL("../install-cli.sh", import.meta.url), "utf8"),
+      loaded,
+    );
+    await writeFile(process.argv[3], result, { mode: 0o500, flag: "wx" });
+  } else if (process.argv[3].endsWith(".ps1")) {
     const loadWinTarget = async (target) => ({
       ...target,
       archive: await readFile(target.archive),
