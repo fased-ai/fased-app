@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net"
 	"net/http"
 	"net/netip"
@@ -239,6 +240,49 @@ func (c *Client) token(ctx context.Context, address, owner, mint string, minimum
 	}
 	return true, nil
 }
+
+// ResolveAddressLookupTable fetches and validates an active on-chain Solana
+// AddressLookupTab1e account at confirmed commitment.
+func (c *Client) ResolveAddressLookupTable(ctx context.Context, address string) (AddressLookupTable, error) {
+	if _, e := Key(address); e != nil {
+		return AddressLookupTable{}, e
+	}
+	var r struct {
+		Value *rpcAccount `json:"value"`
+	}
+	if e := c.rpcCall(ctx, "getAccountInfo", []any{address, map[string]any{"encoding": "base64", "commitment": "confirmed"}}, &r); e != nil {
+		return AddressLookupTable{}, e
+	}
+	if r.Value == nil {
+		return AddressLookupTable{}, errors.New("address lookup table missing")
+	}
+	a := r.Value
+	if a.Owner != AddressLookupTableProgram || a.Executable || len(a.Data) != 2 {
+		return AddressLookupTable{}, errors.New("unsupported address lookup table account")
+	}
+	var data, encoding string
+	if json.Unmarshal(a.Data[0], &data) != nil || json.Unmarshal(a.Data[1], &encoding) != nil || encoding != "base64" {
+		return AddressLookupTable{}, errors.New("invalid address lookup table encoding")
+	}
+	raw, e := base64.StdEncoding.Strict().DecodeString(data)
+	if e != nil || len(raw) < 56 || (len(raw)-56)%32 != 0 {
+		return AddressLookupTable{}, errors.New("invalid address lookup table data")
+	}
+	if binary.LittleEndian.Uint32(raw[0:4]) != 1 || binary.LittleEndian.Uint64(raw[4:12]) != math.MaxUint64 {
+		return AddressLookupTable{}, errors.New("address lookup table inactive or uninitialized")
+	}
+	count := (len(raw) - 56) / 32
+	if count > 256 {
+		return AddressLookupTable{}, errors.New("address lookup table exceeds 256 entries")
+	}
+	addrs := make([]string, count)
+	for i := 0; i < count; i++ {
+		start := 56 + i*32
+		addrs[i] = Base58(raw[start : start+32])
+	}
+	return AddressLookupTable{AccountKey: address, Addresses: addrs}, nil
+}
+
 func (c *Client) Prepare(ctx context.Context, q Quote) (Quote, error) {
 	if e := c.admitNetwork(q); e != nil {
 		return q, e
@@ -266,23 +310,24 @@ func (c *Client) Prepare(ctx context.Context, q Quote) (Quote, error) {
 		return q, e
 	}
 	var build struct {
-		InputMint          string        `json:"inputMint"`
-		OutputMint         string        `json:"outputMint"`
-		InAmount           string        `json:"inAmount"`
-		OutAmount          string        `json:"outAmount"`
-		SlippageBPS        uint16        `json:"slippageBps"`
-		TransactionVersion *int          `json:"transactionVersion"`
-		Setup              []Instruction `json:"setupInstructions"`
-		Swap               Instruction   `json:"swapInstruction"`
-		Cleanup            *Instruction  `json:"cleanupInstruction"`
-		Other              []Instruction `json:"otherInstructions"`
-		Tip                *Instruction  `json:"tipInstruction"`
+		InputMint           string        `json:"inputMint"`
+		OutputMint          string        `json:"outputMint"`
+		InAmount            string        `json:"inAmount"`
+		OutAmount           string        `json:"outAmount"`
+		SlippageBPS         uint16        `json:"slippageBps"`
+		TransactionVersion  *int          `json:"transactionVersion"`
+		Setup               []Instruction `json:"setupInstructions"`
+		Swap                Instruction   `json:"swapInstruction"`
+		Cleanup             *Instruction  `json:"cleanupInstruction"`
+		Other               []Instruction `json:"otherInstructions"`
+		Tip                 *Instruction  `json:"tipInstruction"`
+		AddressLookupTables []string      `json:"addressLookupTableAddresses"`
 	}
 	maxSetup := 2
 	if q.WrapAndUnwrapSol {
 		maxSetup = 4
 	}
-	if json.Unmarshal(raw, &build) != nil || build.TransactionVersion == nil || *build.TransactionVersion != 0 || build.InputMint != q.InputMint || build.OutputMint != q.OutputMint || build.InAmount != q.Amount || build.SlippageBPS != q.SlippageBPS || len(build.Setup) > maxSetup || (!q.WrapAndUnwrapSol && build.Cleanup != nil) || build.Tip != nil || len(build.Other) > 0 {
+	if json.Unmarshal(raw, &build) != nil || build.TransactionVersion == nil || *build.TransactionVersion != 0 || build.InputMint != q.InputMint || build.OutputMint != q.OutputMint || build.InAmount != q.Amount || build.SlippageBPS != q.SlippageBPS || len(build.Setup) > maxSetup || (!q.WrapAndUnwrapSol && build.Cleanup != nil) || build.Tip != nil || len(build.Other) > 0 || len(build.AddressLookupTables) > 4 {
 		return q, errors.New("unsupported Jupiter build or changed quote parameters")
 	}
 	q.Output = build.OutAmount
@@ -293,6 +338,22 @@ func (c *Client) Prepare(ctx context.Context, q Quote) (Quote, error) {
 	q.Instructions = append(append([]Instruction{}, build.Setup...), build.Swap)
 	if build.Cleanup != nil {
 		q.Instructions = append(q.Instructions, *build.Cleanup)
+	}
+	if len(build.AddressLookupTables) > 0 {
+		tables := make([]AddressLookupTable, 0, len(build.AddressLookupTables))
+		seenTables := make(map[string]bool, len(build.AddressLookupTables))
+		for _, addr := range build.AddressLookupTables {
+			if seenTables[addr] {
+				return q, errors.New("duplicate address lookup table in swap build")
+			}
+			seenTables[addr] = true
+			tbl, rErr := c.ResolveAddressLookupTable(ctx, addr)
+			if rErr != nil {
+				return q, rErr
+			}
+			tables = append(tables, tbl)
+		}
+		q.AddressLookupTables = tables
 	}
 	var latest struct {
 		Context struct {

@@ -67,8 +67,16 @@ func openNetworkStorage(dir string, readOnly bool, network string) (*storage, er
 		if _, e := s.readName("vault.pending"); !errors.Is(e, os.ErrNotExist) {
 			return nil, errors.New("cold reader refuses pending publication")
 		}
-	} else if err = s.recoverPublication(); err != nil {
-		return nil, err
+		if pending, e := s.hasPendingCompaction(); e != nil || pending {
+			return nil, errors.New("cold reader refuses pending journal compaction")
+		}
+	} else {
+		if err = s.recoverPublication(); err != nil {
+			return nil, err
+		}
+		if err = s.recoverCompaction(); err != nil {
+			return nil, err
+		}
 	}
 	ok = true
 	return s, nil

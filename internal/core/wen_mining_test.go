@@ -10,7 +10,9 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"reflect"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -1051,5 +1053,213 @@ func TestWENMiningUTCDayRolloverAndHoldsAccounting(t *testing.T) {
 		}},
 	}); err != nil {
 		t.Fatalf("expected review allowed after UTC midnight rollover, got: %v", err)
+	}
+}
+
+func TestWENMiningControlledFiveRangeRoundCommitEntryRevealClaim(t *testing.T) {
+	t.Parallel()
+	h := setupWENMiningHarness(t, "500000000", "1000000000", "500000000")
+
+	agents, _ := h.store.Agents(t.Context(), "wen-operator", "")
+	revView, err := h.store.ChangeAgents(t.Context(), AgentCommand{
+		Revision:  agents.Revision,
+		Action:    "wen-mining-review",
+		ProfileID: "wen-operator",
+		WENMining: &WENMiningCommand{Request: &WENMiningRequest{
+			AccountID:            h.account.ID,
+			StrategyDigest:       h.strategyDigest,
+			AmountLamports:       "200000000",
+			WalletBudgetLamports: "1000000000",
+			MaxOperationLamports: "500000000",
+			PolicyExpiresAt:      h.now.Unix() + 3600,
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rev := revView.WENMining.Review
+	wantAllocs := []string{"10000000", "30000000", "120000000", "30000000", "10000000"}
+	if len(rev.Prepared.Entries) != 5 || len(rev.Prepared.Instructions) != 11 {
+		t.Fatalf("unexpected prepared shape: entries=%d instructions=%d", len(rev.Prepared.Entries), len(rev.Prepared.Instructions))
+	}
+
+	salts, err := h.store.LoadWENMiningSalts(rev.Operation.ID)
+	if err != nil {
+		t.Fatalf("LoadWENMiningSalts before completion: %v", err)
+	}
+	if len(salts) != 5 {
+		t.Fatalf("expected 5 salts, got %d", len(salts))
+	}
+
+	baseLedger, golden, err := wenpm1.CanonicalFixture()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ownerKey := wenMiningOwnerKey(rev.Operation, golden.Owner)
+	verifyInstr := func(idx int, wantOp string, req wenpm1.Request, accts map[string]wenpm1.Key) {
+		t.Helper()
+		gotMeta := rev.Prepared.Instructions[idx]
+		if gotMeta.Operation != wantOp {
+			t.Fatalf("instruction[%d].Operation=%q want %q", idx, gotMeta.Operation, wantOp)
+		}
+		tmpl, buildErr := wenpm1.BuildInstruction(baseLedger.Binding, req, accts)
+		if buildErr != nil {
+			t.Fatalf("BuildInstruction(%s): %v", wantOp, buildErr)
+		}
+		decoded, decErr := wenpm1.DecodeRequest(tmpl.Data, baseLedger.Binding)
+		if decErr != nil || !reflect.DeepEqual(decoded, req) {
+			t.Fatalf("DecodeRequest(%s) mismatch: got=%+v want=%+v err=%v", wantOp, decoded, req, decErr)
+		}
+		rawTmpl, _ := json.Marshal(tmpl)
+		if gotMeta.RequestSHA256 != wenHash(tmpl.Data) || gotMeta.TemplateSHA256 != wenHash(rawTmpl) {
+			t.Fatalf("instruction[%d] (%s) digest mismatch against reconstructed PM1 template", idx, wantOp)
+		}
+	}
+
+	verifyInstr(0, "open", wenpm1.Open{Slot: rev.Operation.Slot}, map[string]wenpm1.Key{})
+
+	roundEntries := make([]wenpm1.Entry, 5)
+	for i := 0; i < 5; i++ {
+		entry := rev.Prepared.Entries[i]
+		if entry.AmountLamports != wantAllocs[i] {
+			t.Fatalf("range %d allocation=%s want %s", i, entry.AmountLamports, wantAllocs[i])
+		}
+		amt, parseErr := strconv.ParseUint(entry.AmountLamports, 10, 64)
+		if parseErr != nil {
+			t.Fatal(parseErr)
+		}
+		salt, ok := salts[uint8(i)]
+		if !ok {
+			t.Fatalf("missing salt for range %d", i)
+		}
+		comm, commErr := wenpm1.Commitment(baseLedger.Binding, wenpm1.CommitmentValues{
+			Slot:      rev.Operation.Slot,
+			Owner:     ownerKey,
+			Amount:    amt,
+			Nonce:     entry.Nonce,
+			Selection: uint8(i),
+			Salt:      salt,
+		})
+		if commErr != nil || comm.String() != entry.Commitment {
+			t.Fatalf("range %d commitment mismatch: got=%s want=%s err=%v", i, comm.String(), entry.Commitment, commErr)
+		}
+		verifyInstr(1+i*2, fmt.Sprintf("commit-r%d", i), wenpm1.Commit{
+			Slot:       rev.Operation.Slot,
+			Amount:     amt,
+			Nonce:      entry.Nonce,
+			Commitment: comm,
+		}, map[string]wenpm1.Key{"owner": ownerKey, "system": wenpm1.SystemProgram()})
+		verifyInstr(2+i*2, fmt.Sprintf("reveal-r%d", i), wenpm1.Reveal{
+			Slot:      rev.Operation.Slot,
+			Entry:     uint32(i),
+			Selection: uint8(i),
+			Salt:      salt,
+		}, map[string]wenpm1.Key{})
+
+		sel := uint8(i)
+		roundEntries[i] = wenpm1.Entry{
+			Owner:      ownerKey,
+			Nonce:      entry.Nonce,
+			Amount:     amt,
+			Commitment: comm,
+			Selection:  &sel,
+		}
+	}
+
+	if _, err := h.store.ChangeAgents(t.Context(), AgentCommand{
+		Revision:  revView.Revision,
+		Action:    "wen-mining-submit",
+		ProfileID: "wen-operator",
+		WENMining: &WENMiningCommand{ID: rev.Operation.ID, Digest: rev.Digest},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.store.advanceWENMining(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	after, _ := h.store.Agents(t.Context(), "wen-operator", "")
+	if len(after.WENMining.Runs) != 1 || after.WENMining.Runs[0].WENMining == nil {
+		t.Fatalf("missing mining run after advance: %+v", after.WENMining.Runs)
+	}
+	run := after.WENMining.Runs[0].WENMining
+	if run.State != "confirmed" || run.Observation == nil || len(run.Observation.Receipts) != 5 {
+		t.Fatalf("unexpected confirmed run state/observation: state=%s obs=%+v", run.State, run.Observation)
+	}
+	var obsSum uint64
+	for _, rec := range run.Observation.Receipts {
+		obsSum += rec.Amount
+	}
+	if obsSum != 200000000 {
+		t.Fatalf("observation receipt sum=%d want 200000000", obsSum)
+	}
+
+	// Revealed/terminal salts must be deleted cleanly after terminal confirmation.
+	if _, err := h.store.LoadWENMiningSalts(rev.Operation.ID); err == nil {
+		t.Fatal("expected revealed salts to be pruned after terminal confirmation")
+	}
+
+	// Build Observe, Settle, ClaimSol, and ClaimSat instructions and round-trip settled Ledger.
+	obsReq := wenpm1.Observe{
+		Slot:   rev.Operation.Slot,
+		Sample: 0,
+		Vote:   wenpm1.Vote{Price: 96500, SourceTime: h.now.Unix(), Sequence: 1},
+	}
+	if _, err := wenpm1.BuildInstruction(baseLedger.Binding, obsReq, map[string]wenpm1.Key{"recorder": baseLedger.Recorders[0]}); err != nil {
+		t.Fatalf("Observe BuildInstruction: %v", err)
+	}
+	if _, err := wenpm1.BuildInstruction(baseLedger.Binding, wenpm1.Settle{Slot: rev.Operation.Slot}, map[string]wenpm1.Key{}); err != nil {
+		t.Fatalf("Settle BuildInstruction: %v", err)
+	}
+	if _, err := wenpm1.BuildInstruction(baseLedger.Binding, wenpm1.ClaimSol{Slot: rev.Operation.Slot, Entry: 2}, map[string]wenpm1.Key{"beneficiary": ownerKey}); err != nil {
+		t.Fatalf("ClaimSol BuildInstruction: %v", err)
+	}
+	var destATA, mintAuth wenpm1.Key
+	destATA[0], mintAuth[0] = 0xca, 0xda
+	if _, err := wenpm1.BuildInstruction(baseLedger.Binding, wenpm1.ClaimSat{Slot: rev.Operation.Slot, Entry: 2}, map[string]wenpm1.Key{
+		"mint":        baseLedger.Mint,
+		"destination": destATA,
+		"authority":   mintAuth,
+		"token":       wenpm1.TokenProgram(),
+	}); err != nil {
+		t.Fatalf("ClaimSat BuildInstruction: %v", err)
+	}
+
+	outcome := uint8(2)
+	roundEntries[2].Exact = true
+	roundEntries[2].Principal = 120000000
+	roundEntries[2].SAT = 1000000000
+	roundEntries[2].CreditPPM = 1000000
+	roundEntries[2].SOLClaimed = true
+	roundEntries[2].SATClaimed = true
+
+	settledLedger := baseLedger
+	settledLedger.EligibleStake = 200000000
+	settledLedger.LifetimeCommitted = 200000000
+	settledLedger.Rounds = []wenpm1.Round{{
+		Slot:              rev.Operation.Slot,
+		Start:             h.now.Unix() - 60,
+		Entries:           roundEntries,
+		TotalStake:        200000000,
+		Settled:           true,
+		Outcome:           &outcome,
+		Allocations:       [6]uint64{10000000, 30000000, 120000000, 30000000, 10000000, 0},
+		ExactWinningStake: 120000000,
+		IncorrectStake:    80000000,
+	}}
+	wireLedger, err := wenpm1.EncodeAccount(settledLedger)
+	if err != nil {
+		t.Fatalf("EncodeAccount: %v", err)
+	}
+	decodedLedger, err := wenpm1.ReadAccount(baseLedger.Binding.Ledger, baseLedger.Binding.Program, wireLedger, baseLedger.Binding)
+	if err != nil {
+		t.Fatalf("ReadAccount: %v", err)
+	}
+	winReceipt, err := wenpm1.ProjectReceipt(decodedLedger, rev.Operation.Slot, 2)
+	if err != nil {
+		t.Fatalf("ProjectReceipt: %v", err)
+	}
+	if !winReceipt.Settled || !winReceipt.Exact || winReceipt.Outcome == nil || *winReceipt.Outcome != 2 ||
+		winReceipt.Principal != 120000000 || !winReceipt.SOLClaimed || !winReceipt.SATClaimed {
+		t.Fatalf("unexpected claimed receipt: %+v", winReceipt)
 	}
 }
