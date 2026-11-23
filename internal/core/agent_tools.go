@@ -384,6 +384,27 @@ func agentV2ToolRegistry() []agentToolEntry {
 			preview: previewDraftStrategy,
 			execute: executeDraftStrategy,
 		},
+		{
+			spec: AgentToolSpec{
+				Name:        "request_secret",
+				Tier:        toolTierAction,
+				Description: "Prompt the owner in chat with a masked Secret Request Card to save a provider API key or wallet RPC API key directly into the encrypted vault without pasting secrets into chat history.",
+				Parameters: map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"kind":      map[string]any{"type": "string", "description": "Secret category: provider_api_key or rpc_api_key."},
+						"provider":  map[string]any{"type": "string", "description": "Provider slug for provider_api_key (e.g., openai, anthropic, google, xai, openrouter)."},
+						"accountId": map[string]any{"type": "string", "description": "Optional wallet account ID or name for rpc_api_key."},
+						"ref":       map[string]any{"type": "string", "description": "Optional RPC credential reference hint."},
+						"label":     map[string]any{"type": "string", "description": "Short display label shown on the secret card."},
+						"reason":    map[string]any{"type": "string", "description": "Concise explanation of why this credential is needed."},
+					},
+					"required": []string{"kind"},
+				},
+			},
+			preview: previewRequestSecret,
+			execute: executeRequestSecretMissingInput,
+		},
 	}
 }
 

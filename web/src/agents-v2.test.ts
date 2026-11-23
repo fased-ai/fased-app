@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   buildNewsChatPrompt,
   buildTaskRunChatPrompt,
+  clearModelManifestV2,
   compactThreadV2,
   extractMessageCitations,
   formatApprovalFields,
@@ -10,6 +11,8 @@ import {
   formatToolLabel,
   formatToolSummary,
   formatUsageCostUSD,
+  getMCPDiscovery,
+  getModelManifestV2,
   getUsageV2,
   isSafePublicHttpsUrl,
   parseChatSlashCommand,
@@ -18,6 +21,7 @@ import {
   parseMarkdownBlocks,
   parseSSEChunkBuffer,
   parseTaskDraftMemory,
+  saveModelManifestV2,
   updateMemoryV2,
 } from "./agents-v2";
 
@@ -611,5 +615,57 @@ describe("Phase 8B-2 web search citations, safe links, and delegation formatting
       model: "gpt-6.2-sol",
       summary: "Volatility remains moderate.",
     });
+  });
+});
+
+describe("Phase 8B-3 secret cards, model manifest, and MCP helpers", () => {
+  it("formats request_secret label, summary, and approval fields without exposing secret material", () => {
+    expect(formatToolLabel("request_secret")).toBe("Secret request");
+    expect(
+      formatToolSummary(
+        "request_secret",
+        JSON.stringify({
+          status: "saved",
+          kind: "provider_api_key",
+          provider: "anthropic",
+        }),
+      ),
+    ).toBe("Saved encrypted · anthropic");
+
+    const fields = formatApprovalFields(
+      "request_secret",
+      JSON.stringify({
+        kind: "provider_api_key",
+        provider: "anthropic",
+        label: "Anthropic API key",
+        reason: "Connect Claude",
+        osVaultAvailable: false,
+      }),
+    );
+    expect(fields).toEqual([
+      { label: "Label", value: "Anthropic API key" },
+      { label: "Provider", value: "anthropic" },
+      { label: "Reason", value: "Connect Claude" },
+    ]);
+  });
+
+  it("calls getModelManifestV2, saveModelManifestV2, clearModelManifestV2, and getMCPDiscovery", async () => {
+    const req = vi.fn().mockResolvedValue({ loaded: false, modelCount: 0 });
+    await getModelManifestV2({ request: req });
+    expect(req).toHaveBeenCalledWith("agents/v2/model-manifest");
+
+    await saveModelManifestV2(
+      { request: req },
+      { url: "https://models.example.com/manifest.json" },
+    );
+    expect(req).toHaveBeenCalledWith("agents/v2/model-manifest", "PUT", {
+      url: "https://models.example.com/manifest.json",
+    });
+
+    await clearModelManifestV2({ request: req });
+    expect(req).toHaveBeenCalledWith("agents/v2/model-manifest", "DELETE");
+
+    await getMCPDiscovery({ request: req });
+    expect(req).toHaveBeenCalledWith("mcp");
   });
 });

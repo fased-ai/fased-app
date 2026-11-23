@@ -387,6 +387,9 @@ func (s *Store) aiConnectionLocked(refs ...string) (v AIConnectionView, err erro
 			d = state.discovery
 		}
 		v.Catalog = discoveredProviderCatalog(v, d, s.now().Unix())
+		if modelManifestCatalogHook != nil {
+			modelManifestCatalogHook(s.dir, v, &v.Catalog)
+		}
 		if s.pilotBindingActiveLocked() {
 			providers := v.Catalog.Providers[:0]
 			for _, p := range v.Catalog.Providers {

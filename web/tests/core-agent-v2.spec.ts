@@ -647,3 +647,140 @@ test("T3Code web_search citations, multi-agent delegation, and voice input", asy
     { timeout: 12000 },
   );
 });
+
+test("Phase 8B-3 in-thread secret request cards, sandboxed visual replies, and Settings Diagnostics MCP/manifest controls work end-to-end", async ({
+  page,
+  isMobile,
+}) => {
+  test.setTimeout(75000);
+  await stop();
+  await start(true, "127.0.0.1:0", "local", false);
+
+  await page.goto(url + "/#agents/chat");
+  await expect(
+    page.getByRole("heading", { name: "Chat", exact: true }),
+  ).toBeVisible();
+
+  // 1. In-thread Secret Request Card -> encrypted vault save -> zero secret leak on reload.
+  const composer = page.getByLabel("Message", { exact: true });
+  await composer.fill("Please request secret for Anthropic");
+  await page.getByRole("button", { name: "Send", exact: true }).click();
+
+  const secretCard = page.getByRole("article", {
+    name: "Secret request: Anthropic API key",
+    exact: true,
+  });
+  await expect(secretCard).toBeVisible({ timeout: 12000 });
+  await expect(secretCard).toContainText("Secret required");
+
+  const keyInput = secretCard.getByLabel("API key or token", { exact: true });
+  await expect(keyInput).toHaveAttribute("type", "password");
+  const testSecret = "fased-test-anthropic-secret-card-key-001";
+  await keyInput.fill(testSecret);
+
+  const passInput = secretCard.getByLabel("Vault passphrase", { exact: true });
+  if (await passInput.isVisible()) {
+    await passInput.fill("disposable-browser-preference-vault");
+  }
+
+  await secretCard
+    .getByRole("button", { name: "Save encrypted", exact: true })
+    .click();
+  await expect(secretCard).toContainText("Saved encrypted", { timeout: 12000 });
+  expect(await page.content()).not.toContain(testSecret);
+
+  await page.reload();
+  await expect(
+    page.getByRole("article", {
+      name: "Secret request: Anthropic API key",
+      exact: true,
+    }),
+  ).toContainText("Saved encrypted", { timeout: 12000 });
+  expect(await page.content()).not.toContain(testSecret);
+
+  // 2. Sandboxed Visual Replies (fased-visual + sanitized fased-html).
+  await page
+    .getByLabel("Message", { exact: true })
+    .fill("Please render visual report");
+  await page.getByRole("button", { name: "Send", exact: true }).click();
+
+  const metricsCard = page
+    .locator(".v2-visual-card")
+    .filter({ hasText: "Portfolio Snapshot" })
+    .first();
+  await expect(metricsCard).toBeVisible({ timeout: 12000 });
+  await expect(metricsCard).toContainText("$184.20");
+  await expect(metricsCard).toContainText("+4.2%");
+
+  const htmlCard = page
+    .locator(".v2-visual-card")
+    .filter({ hasText: "Fee Breakdown" })
+    .first();
+  await expect(htmlCard).toBeVisible({ timeout: 12000 });
+  await expect(htmlCard).toContainText("0.0002 SOL");
+
+  expect(
+    await page.evaluate(
+      () => (window as unknown as { __fasedXss?: number }).__fasedXss,
+    ),
+  ).toBeUndefined();
+  await expect(
+    page.locator('.v2-visual-card a[href^="javascript:"]'),
+  ).toHaveCount(0);
+
+  await metricsCard
+    .getByRole("button", { name: "Source", exact: true })
+    .click();
+  await expect(metricsCard.locator("pre")).toContainText("Portfolio Snapshot");
+  await metricsCard
+    .getByRole("button", { name: "Preview", exact: true })
+    .click();
+  await expect(metricsCard.locator(".v2-visual-metrics")).toBeVisible();
+
+  // 3. Settings / Diagnostics -> MCP endpoint & Model manifest import/clear.
+  if (isMobile) {
+    await page
+      .getByRole("button", { name: "Preferences", exact: true })
+      .click();
+  } else {
+    await page
+      .locator("#shell-rail")
+      .getByRole("button", { name: "Settings", exact: true })
+      .click();
+  }
+  const dialog = page.getByRole("dialog", { name: /Settings \// });
+  await expect(dialog).toBeVisible();
+
+  await dialog
+    .locator(".settings-modal-tabs")
+    .getByRole("button", { name: "Diagnostics", exact: true })
+    .click();
+
+  await expect(dialog).toContainText("MCP endpoint");
+  await expect(dialog).toContainText("/api/v1/mcp");
+  await expect(dialog).toContainText("Read & draft");
+  await expect(dialog).toContainText("Built-in");
+
+  // SSRF guard blocks loopback IP literals.
+  const manifestInput = dialog.getByLabel("Manifest URL", { exact: true });
+  await manifestInput.fill("https://127.0.0.1/bad.json");
+  await dialog.getByRole("button", { name: "Import", exact: true }).click();
+  await expect(dialog.getByRole("alert")).toBeVisible({ timeout: 8000 });
+
+  // Valid fixture .invalid URL imports and clears cleanly.
+  await manifestInput.fill("https://models.fased.invalid/manifest.json");
+  await dialog.getByRole("button", { name: "Import", exact: true }).click();
+  await expect(dialog).toContainText("1 models", { timeout: 12000 });
+  await expect(dialog).toContainText(
+    "https://models.fased.invalid/manifest.json",
+  );
+
+  await dialog.getByRole("button", { name: "Clear", exact: true }).click();
+  await expect(dialog).toContainText("Built-in", { timeout: 12000 });
+
+  expect(
+    await dialog.evaluate((el) => el.scrollWidth <= el.clientWidth + 1),
+  ).toBe(true);
+  await page.keyboard.press("Escape");
+  await expect(dialog).toHaveCount(0);
+});
