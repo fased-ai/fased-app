@@ -27,4 +27,3 @@ data: {"type":"response.output_item.done","sequence_number":8,"output_index":0,"
 
 event: response.completed
 data: {"type":"response.completed","sequence_number":9,"response":{"id":"resp_cassette_01","object":"response","status":"completed","model":"gpt-5.4","output":[{"id":"msg_cassette_01","type":"message","status":"completed","role":"assistant","content":[{"type":"output_text","text":"{\"answer\":\"Verified cassette replay.\"}"}]}],"usage":{"input_tokens":128,"output_tokens":14,"total_tokens":142}}}
-
