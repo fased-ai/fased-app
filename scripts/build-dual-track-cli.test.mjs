@@ -123,6 +123,24 @@ test("rendered install-cli.sh passes syntax checks, pins 4 Unix targets, and rej
     const r = spawnSync("bash", ["-c", rendered, "install-cli.sh", flag]);
     assert.equal(r.status, 1);
   }
+  const serverNoAuto = spawnSync("bash", [
+    "-c",
+    rendered,
+    "install-cli.sh",
+    "--server",
+    "--no-autostart",
+  ]);
+  assert.equal(serverNoAuto.status, 1);
+  assert.match(serverNoAuto.stderr.toString(), /--no-autostart/);
+  const statusNoAuto = spawnSync("bash", [
+    "-c",
+    rendered,
+    "install-cli.sh",
+    "--local",
+    "--status",
+    "--no-autostart",
+  ]);
+  assert.equal(statusNoAuto.status, 1);
 });
 
 test("buildDesktopReleaseManifest matches update.ParseDesktopManifest structure", () => {

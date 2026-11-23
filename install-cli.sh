@@ -10,11 +10,11 @@ fixture_ca_base64='@FIXTURE_CA_BASE64@'
 
 die() { printf 'Fased: %s\n' "$*" >&2; exit 1; }
 usage() {
-  printf 'Usage: install-cli.sh [--local|--server|--connect] [--transport tailscale|cloudflare|domain|ssh] [--domain HOST] [--open|--start|--stop|--status|--uninstall] [--purge] [--listen 127.0.0.1:PORT]\n'
+  printf 'Usage: install-cli.sh [--local|--server|--connect] [--transport tailscale|cloudflare|domain|ssh] [--domain HOST] [--open|--start|--stop|--status|--uninstall] [--purge] [--no-autostart] [--listen 127.0.0.1:PORT]\n'
 }
 
 profile='' action=install listen='127.0.0.1:7331'
-server_transport='' server_domain='' purge=0
+server_transport='' server_domain='' purge=0 no_autostart=0
 while (($#)); do
   case "$1" in
     --local) profile=local; shift ;;
@@ -30,6 +30,7 @@ while (($#)); do
       [[ $action == install ]] || die 'Choose one management action.'
       action=uninstall; shift ;;
     --purge) purge=1; shift ;;
+    --no-autostart) no_autostart=1; shift ;;
     --listen) (($# >= 2)) || die 'Missing listener.'; listen=$2; shift 2 ;;
     --help|-h) usage; exit 0 ;;
     *) die "Unknown option: $1" ;;
@@ -56,6 +57,9 @@ fi
 if [[ $action == uninstall ]]; then
   [[ $profile == server || $profile == local ]] || die '--uninstall requires --local or --server.'
   [[ $purge == 0 || $profile == server ]] || die '--purge is only supported with --server --uninstall.'
+fi
+if [[ $no_autostart == 1 ]]; then
+  [[ $action == install && $profile != server && $profile != connect ]] || die '--no-autostart is only supported with --local install.'
 fi
 [[ $listen =~ ^127\.0\.0\.1:([0-9]{4,5})$ ]] || die 'Use a fixed loopback port (127.0.0.1:PORT).'
 port=${BASH_REMATCH[1]}
@@ -133,7 +137,15 @@ has_tty=0
 if { exec 3<>/dev/tty; } 2>/dev/null; then
   has_tty=1
 fi
-if [[ ${profile:-} != server ]]; then
+needs_tty=0
+if [[ -z $profile || $profile == connect ]]; then
+  needs_tty=1
+elif [[ $profile == server ]]; then
+  if [[ -z $server_transport || ( ( $server_transport == cloudflare || $server_transport == domain ) && -z $server_domain ) ]]; then
+    needs_tty=1
+  fi
+fi
+if [[ $needs_tty == 1 ]]; then
   [[ $has_tty == 1 ]] || die 'Run this command in an interactive terminal.'
 fi
 if [[ -z $profile ]]; then
@@ -209,7 +221,11 @@ bundle_engine="$bundle_dir/fased-app"
 
 case "$profile" in
   local)
-    "$bundle_engine" install --bundle "$bundle_dir" --listen "$listen" --autostart
+    local_args=(install --bundle "$bundle_dir" --listen "$listen")
+    if [[ $no_autostart == 0 ]]; then
+      local_args+=(--autostart)
+    fi
+    "$bundle_engine" "${local_args[@]}"
     bin_dir="$HOME/.local/bin"
     mkdir -p "$bin_dir" 2>/dev/null || true
     if [[ -d $bin_dir && ! -e "$bin_dir/fased" && ! -L "$bin_dir/fased" && -x "$app_root/fased-app" ]]; then

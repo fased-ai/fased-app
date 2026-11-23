@@ -7,6 +7,16 @@ import {
   buildLinuxDesktopPackages,
   linuxArch,
 } from "./linux-desktop-package.mjs";
+import {
+  buildMacOSCodesignAppArgs,
+  buildMacOSCodesignDmgArgs,
+  buildMacOSNotarySubmitArgs,
+  buildWindowsSigntoolSignArgs,
+  buildWindowsSigntoolVerifyArgs,
+  findWindowsSigntool,
+  resolveMacOSSigningConfig,
+  resolveWindowsSigningConfig,
+} from "./signing-helpers.mjs";
 const output = resolve(".evidence/packages");
 await mkdir(output, { recursive: true });
 const windows = process.platform === "win32";
@@ -41,36 +51,38 @@ execFileSync(
   ],
   { stdio: "inherit" },
 );
-// Native installers are deliberately unsigned engineering outputs. No publish,
-// keychain credential, signing service or Gatekeeper bypass is part of CI.
+// Native installers are unsigned engineering outputs unless explicit signing
+// credentials are provided in CI environment secrets.
 let signed = false;
+let notarized = false;
 if (windows) {
-  const pfxPath = (process.env.WINDOWS_SIGN_CERT_PFX_PATH || "").trim();
-  const pfxPassword = process.env.WINDOWS_SIGN_CERT_PASSWORD || "";
-  const signWindows = Boolean(pfxPath && pfxPassword);
-  const signExe = (targetExe) => {
-    execFileSync(
-      "signtool.exe",
-      [
-        "sign",
-        "/fd",
-        "SHA256",
-        "/tr",
-        "http://timestamp.digicert.com",
-        "/td",
-        "SHA256",
-        "/f",
-        pfxPath,
-        "/p",
-        pfxPassword,
-        targetExe,
-      ],
-      { stdio: "inherit" },
-    );
-  };
+  const winSigning = resolveWindowsSigningConfig(process.env);
+  const signtool = winSigning.enabled ? findWindowsSigntool() : "";
   const fixture = resolve(".evidence/windows-package-stage");
   await mkdir(fixture, { mode: 0o700 });
   try {
+    let pfxPath = winSigning.pfxPath;
+    if (winSigning.enabled && !pfxPath && winSigning.pfxBase64) {
+      pfxPath = join(fixture, "temp-codesign.pfx");
+      await writeFile(pfxPath, Buffer.from(winSigning.pfxBase64, "base64"), {
+        mode: 0o600,
+      });
+    }
+    const signExe = (targetExe) => {
+      execFileSync(
+        signtool,
+        buildWindowsSigntoolSignArgs({
+          pfxPath,
+          password: winSigning.password,
+          timestampUrl: winSigning.timestampUrl,
+          targetExe,
+        }),
+        { stdio: "inherit" },
+      );
+      execFileSync(signtool, buildWindowsSigntoolVerifyArgs(targetExe), {
+        stdio: "inherit",
+      });
+    };
     const archive = join(
       output,
       `fased-app-windows-${process.arch === "x64" ? "amd64" : process.arch}.zip`,
@@ -83,7 +95,7 @@ if (windows) {
       fixture,
       `fased-app-windows-${process.arch === "x64" ? "amd64" : process.arch}`,
     );
-    if (signWindows) {
+    if (winSigning.enabled) {
       signExe(join(payload, "fased-app.exe"));
       signExe(join(payload, "fased-desktop.exe"));
     }
@@ -99,7 +111,7 @@ if (windows) {
         },
       },
     );
-    if (signWindows) {
+    if (winSigning.enabled) {
       const unsignedExe = join(output, "fased-app-windows-setup-unsigned.exe");
       const signedExe = join(output, "fased-app-windows-setup.exe");
       const { rename } = await import("node:fs/promises");
@@ -112,10 +124,7 @@ if (windows) {
   }
 }
 if (process.platform === "darwin") {
-  const signingIdentity = (process.env.APPLE_SIGNING_IDENTITY || "").trim();
-  const notaryProfile = (
-    process.env.APPLE_NOTARY_KEYCHAIN_PROFILE || ""
-  ).trim();
+  const macSigning = resolveMacOSSigningConfig(process.env);
   const fixture = resolve(".evidence/macos-package-stage");
   await mkdir(fixture, { mode: 0o700 });
   try {
@@ -125,36 +134,31 @@ if (process.platform === "darwin") {
       join(output, `fased-app-darwin-${arch}.zip`),
       fixture,
     ]);
-    execFileSync(
-      "plutil",
-      ["-lint", join(fixture, "Fased App.app/Contents/Info.plist")],
-      { stdio: "inherit" },
-    );
-    if (signingIdentity) {
+    const appPath = join(fixture, "Fased App.app");
+    execFileSync("plutil", ["-lint", join(appPath, "Contents/Info.plist")], {
+      stdio: "inherit",
+    });
+    if (macSigning.enabled) {
       execFileSync(
         "codesign",
-        [
-          "--deep",
-          "--force",
-          "--options",
-          "runtime",
-          "--timestamp",
-          "--sign",
-          signingIdentity,
-          join(fixture, "Fased App.app"),
-        ],
+        buildMacOSCodesignAppArgs(macSigning.identity, appPath),
+        { stdio: "inherit" },
+      );
+      execFileSync(
+        "codesign",
+        ["--verify", "--deep", "--strict", "--verbose=2", appPath],
         { stdio: "inherit" },
       );
       signed = true;
     }
-    const dmgName = signingIdentity
+    const dmgName = macSigning.enabled
       ? "fased-app-macos.dmg"
       : "fased-app-macos-unsigned.dmg";
     const dmgPath = join(output, dmgName);
     await createMacDiskImage([
       "create",
       "-volname",
-      signingIdentity ? "Fased App" : "Fased App Engineering",
+      macSigning.enabled ? "Fased App" : "Fased App Engineering",
       "-srcfolder",
       fixture,
       "-ov",
@@ -162,22 +166,35 @@ if (process.platform === "darwin") {
       "UDZO",
       dmgPath,
     ]);
-    if (signingIdentity && notaryProfile) {
+    if (macSigning.enabled) {
+      execFileSync(
+        "codesign",
+        buildMacOSCodesignDmgArgs(macSigning.identity, dmgPath),
+        { stdio: "inherit" },
+      );
+      execFileSync(
+        "codesign",
+        ["--verify", "--strict", "--verbose=2", dmgPath],
+        { stdio: "inherit" },
+      );
+    }
+    if (macSigning.enabled && macSigning.notarizationEnabled) {
       execFileSync(
         "xcrun",
-        [
-          "notarytool",
-          "submit",
+        buildMacOSNotarySubmitArgs({
           dmgPath,
-          "--keychain-profile",
-          notaryProfile,
-          "--wait",
-        ],
+          profile: macSigning.notaryProfile,
+          keychain: macSigning.notaryKeychain,
+        }),
         { stdio: "inherit" },
       );
       execFileSync("xcrun", ["stapler", "staple", dmgPath], {
         stdio: "inherit",
       });
+      execFileSync("xcrun", ["stapler", "validate", dmgPath], {
+        stdio: "inherit",
+      });
+      notarized = true;
     }
   } finally {
     await rm(fixture, { recursive: true, force: true });
@@ -225,6 +242,7 @@ await writeFile(
       files,
       ...(linuxPackages ? { linuxPackages } : {}),
       signed,
+      notarized,
       unsignedEngineering: !signed,
       publicRelease: false,
     },
