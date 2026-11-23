@@ -295,7 +295,18 @@ export async function fixtureUpdateIntentJourney({
         .getByLabel("Owner password", { exact: true })
         .fill(appPassword);
       await page.getByRole("button", { name: "Sign in", exact: true }).click();
-      await page.locator("details.update-settings > summary").click();
+      const updateSettings = page.locator(".update-settings");
+      await expect(updateSettings).toBeVisible();
+      const disclosure = updateSettings.locator(
+        ".settings-advanced-disclosure > button",
+      );
+      if (await disclosure.count()) {
+        if ((await disclosure.getAttribute("aria-expanded")) !== "true") {
+          await disclosure.click();
+        }
+      } else if ((await updateSettings.getAttribute("open")) === null) {
+        await updateSettings.locator(":scope > summary").click();
+      }
       const panel = page.getByRole("region", { name: "Updates & recovery" });
       await expect(
         panel.getByText(status.core.phase, { exact: true }),
