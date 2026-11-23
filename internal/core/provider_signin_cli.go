@@ -405,10 +405,10 @@ func (s *Store) hostCLIStatusesLocked() []HostCLIStatus {
 	runner := s.cliRunner()
 	if s.provider.cliRunner != nil && s.provider.cliCacheAt.IsZero() {
 		s.provider.cliCache = runParallelCLIProbe(context.Background(), runner)
-		s.provider.cliCacheAt = s.now()
+		s.provider.cliCacheAt = time.Now()
 		return cloneHostCLIStatuses(s.provider.cliCache)
 	}
-	if !s.provider.cliProbing && (s.provider.cliCacheAt.IsZero() || s.now().Sub(s.provider.cliCacheAt) > 60*time.Second) {
+	if !s.provider.cliProbing && (s.provider.cliCacheAt.IsZero() || time.Since(s.provider.cliCacheAt) > 60*time.Second) {
 		s.provider.cliProbing = true
 		go s.refreshHostCLICache(runner)
 	}
@@ -424,7 +424,7 @@ func (s *Store) refreshHostCLICache(runner providerCLIRunner) {
 	results := runParallelCLIProbe(ctx, runner)
 	s.provider.mu.Lock()
 	s.provider.cliCache = results
-	s.provider.cliCacheAt = s.now()
+	s.provider.cliCacheAt = time.Now()
 	s.provider.cliProbing = false
 	s.provider.mu.Unlock()
 	signalStoreChange(s)
@@ -436,7 +436,7 @@ func (s *Store) probeHostCLIs(ctx context.Context, force bool) []HostCLIStatus {
 		s.provider.mu.Unlock()
 		return nil
 	}
-	if !force && len(s.provider.cliCache) > 0 && s.now().Sub(s.provider.cliCacheAt) <= 15*time.Second {
+	if !force && len(s.provider.cliCache) > 0 && time.Since(s.provider.cliCacheAt) <= 15*time.Second {
 		cached := cloneHostCLIStatuses(s.provider.cliCache)
 		s.provider.mu.Unlock()
 		return cached
@@ -447,7 +447,7 @@ func (s *Store) probeHostCLIs(ctx context.Context, force bool) []HostCLIStatus {
 	results := runParallelCLIProbe(ctx, runner)
 	s.provider.mu.Lock()
 	s.provider.cliCache = results
-	s.provider.cliCacheAt = s.now()
+	s.provider.cliCacheAt = time.Now()
 	s.provider.cliProbing = false
 	out := cloneHostCLIStatuses(results)
 	s.provider.mu.Unlock()
