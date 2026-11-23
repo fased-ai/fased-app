@@ -318,6 +318,7 @@ func (s *Server) Close(ctx context.Context) error {
 	}
 	// Keep a stale endpoint harmless: clients verify the instance ID before sending credentials.
 	_ = os.Remove(filepath.Join(s.dir, "endpoint.json"))
+	s.Store.clearHyperliquidRuntime()
 	return errors.Join(err, s.Store.Close(), s.Lock.Close())
 }
 

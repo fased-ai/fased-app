@@ -145,6 +145,7 @@ type agentDocument struct {
 type AgentView struct {
 	Onchain                 *OnchainView        `json:"onchain,omitempty"`
 	WENMining               *WENMiningView      `json:"wenMining,omitempty"`
+	Hyperliquid             *HyperliquidView    `json:"hyperliquid,omitempty"`
 	Strategies              []AgentStrategy     `json:"strategies,omitempty"`
 	PaperExecutionAvailable bool                `json:"paperExecutionAvailable"`
 	ChatReview              *ChatPermission     `json:"chatReview,omitempty"`
@@ -181,6 +182,7 @@ type AgentView struct {
 type AgentCommand struct {
 	Swap                 *SwapCommand         `json:"swap,omitempty"`
 	WENMining            *WENMiningCommand    `json:"wenMining,omitempty"`
+	Hyperliquid          *HyperliquidCommand  `json:"hyperliquid,omitempty"`
 	Strategy             *StrategyPlan        `json:"strategy,omitempty"`
 	StrategyID           string               `json:"strategyId,omitempty"`
 	StrategyVersion      int                  `json:"strategyVersion,omitempty"`
@@ -435,6 +437,9 @@ func (s *Store) Agents(ctx context.Context, profile, query string) (AgentView, e
 	if s.wenMining != nil || len(miningProjection.Tasks) > 0 || len(miningProjection.Runs) > 0 {
 		v.WENMining = &miningProjection
 	}
+	if hl := s.hyperliquidProjection(r, nil); hl != nil {
+		v.Hyperliquid = hl
+	}
 	v.PaperExecutionAvailable = s.paperExecutionAvailable()
 	return s.chatView(v), e
 }
@@ -540,6 +545,18 @@ func (s *Store) changeAgents(ctx context.Context, c AgentCommand, fixture bool) 
 	}
 	if c.WENMining != nil {
 		return AgentView{}, errors.New("WEN mining fields require their own action")
+	}
+	if strings.HasPrefix(c.Action, "hyperliquid-") {
+		view, profileID, e := s.changeHyperliquid(ctx, c)
+		if e != nil {
+			return AgentView{}, e
+		}
+		v, e := s.Agents(ctx, profileID, "")
+		v.Hyperliquid = view
+		return v, e
+	}
+	if c.Hyperliquid != nil {
+		return AgentView{}, errors.New("hyperliquid fields require their own action")
 	}
 	if strings.HasPrefix(c.ID, swapPrefix) && (c.Action == "task-run" || c.Action == "task-pause" || c.Action == "task-resume") {
 		return s.controlSwapTask(ctx, c)

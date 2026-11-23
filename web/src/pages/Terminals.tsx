@@ -14,6 +14,7 @@ import { WENPaperJourney } from "./WENPaperJourney";
 import { WENSessionRehearsal } from "./WENSessionRehearsal";
 import { WENSessionAutomatic } from "./WENSessionAutomatic";
 import { WENMining } from "./WENMining";
+import { HyperliquidTerminal } from "./HyperliquidTerminal";
 import { OnchainSwap } from "./OnchainSwap";
 function FixtureTerminals() {
   const { t: uiText } = useUI();
@@ -228,6 +229,8 @@ export function Terminals() {
   const { tab, agents, navigate } = useWorkspace();
   if (tab === "jupiter") return <OnchainSwap />;
   if (tab === "satcoin" && agents.view?.wenMining) return <WENMining />;
+  if (tab === "hyperliquid" && agents.view?.hyperliquid)
+    return <HyperliquidTerminal />;
   // Fixture constructors retain their dedicated regression journeys. Ordinary
   // installations never mount sample charts, test runners or imitation orders.
   if (agents.view?.aiFixtureAvailable || agents.view?.sessionFixtureAvailable)

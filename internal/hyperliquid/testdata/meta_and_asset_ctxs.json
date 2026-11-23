@@ -1,0 +1,53 @@
+[
+  {
+    "universe": [
+      {
+        "name": "BTC",
+        "szDecimals": 5,
+        "maxLeverage": 40,
+        "onlyIsolated": false
+      },
+      {
+        "name": "ETH",
+        "szDecimals": 4,
+        "maxLeverage": 25,
+        "onlyIsolated": false
+      },
+      {
+        "name": "SOL",
+        "szDecimals": 2,
+        "maxLeverage": 20,
+        "onlyIsolated": false
+      }
+    ]
+  },
+  [
+    {
+      "funding": "0.0000125",
+      "openInterest": "24810.5",
+      "prevDayPx": "95100.0",
+      "dayNtlVlm": "612500000.0",
+      "oraclePx": "96200.0",
+      "markPx": "96250.0",
+      "midPx": "96251.5"
+    },
+    {
+      "funding": "0.0000180",
+      "openInterest": "182450.2",
+      "prevDayPx": "3150.0",
+      "dayNtlVlm": "295000000.0",
+      "oraclePx": "3198.0",
+      "markPx": "3200.0",
+      "midPx": "3200.2"
+    },
+    {
+      "funding": "-0.0000090",
+      "openInterest": "941200.0",
+      "prevDayPx": "188.5",
+      "dayNtlVlm": "148000000.0",
+      "oraclePx": "190.2",
+      "markPx": "190.5",
+      "midPx": "190.55"
+    }
+  ]
+]

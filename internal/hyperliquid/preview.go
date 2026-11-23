@@ -1,0 +1,116 @@
+package hyperliquid
+
+import (
+	"encoding/hex"
+	"errors"
+	"strings"
+
+	"github.com/fased-ai/fased-app/internal/signer"
+)
+
+const takerFeeMilliBps uint64 = 35 // 3.5 bps base taker estimate (35 / 100,000)
+
+func findMarket(snapshot MarketSnapshot, symbol string) (MarketMeta, bool) {
+	for _, m := range snapshot.Markets {
+		if m.Symbol == symbol {
+			return m, true
+		}
+	}
+	return MarketMeta{}, false
+}
+
+func fracDigitsCount(normalizedDecimal string) int {
+	dot := strings.IndexByte(normalizedDecimal, '.')
+	if dot < 0 {
+		return 0
+	}
+	return len(normalizedDecimal) - dot - 1
+}
+
+// PreviewOrder validates an operator OrderDraft against live/cached market metadata
+// and signer policy, returning a deterministic EIP-712 review preview without touching
+// private key material.
+func PreviewOrder(snapshot MarketSnapshot, policy signer.HyperliquidPolicy, req OrderDraft, lastNonce, nextNonce uint64, now int64) (OrderPreview, signer.HyperliquidOrderIntent, error) {
+	market, ok := findMarket(snapshot, req.Asset)
+	if !ok {
+		return OrderPreview{}, signer.HyperliquidOrderIntent{}, errors.New("unknown Hyperliquid perpetual market")
+	}
+	if market.MaxLeverage > 0 && req.Leverage > market.MaxLeverage {
+		return OrderPreview{}, signer.HyperliquidOrderIntent{}, errors.New("leverage exceeds market maximum")
+	}
+	normPrice, err := signer.NormalizeHyperliquidDecimal(req.LimitPrice)
+	if err != nil {
+		return OrderPreview{}, signer.HyperliquidOrderIntent{}, err
+	}
+	normSize, err := signer.NormalizeHyperliquidDecimal(req.Size)
+	if err != nil {
+		return OrderPreview{}, signer.HyperliquidOrderIntent{}, err
+	}
+	if market.SzDecimals >= 0 && fracDigitsCount(normSize) > market.SzDecimals {
+		return OrderPreview{}, signer.HyperliquidOrderIntent{}, errors.New("order size exceeds market szDecimals precision")
+	}
+	normMark, err := signer.NormalizeHyperliquidDecimal(market.MarkPrice)
+	if err != nil {
+		return OrderPreview{}, signer.HyperliquidOrderIntent{}, errors.New("market mark price unavailable")
+	}
+	tif := req.TimeInForce
+	if tif == "" {
+		tif = "Gtc"
+	}
+	expiresAt := now + 120
+	if policy.ExpiresAt > 0 && expiresAt > policy.ExpiresAt {
+		expiresAt = policy.ExpiresAt
+	}
+	intent := signer.HyperliquidOrderIntent{
+		Network:            policy.Network,
+		Asset:              market.Symbol,
+		AssetIndex:         market.AssetIndex,
+		IsBuy:              req.IsBuy,
+		LimitPrice:         normPrice,
+		Size:               normSize,
+		ReferenceMarkPrice: normMark,
+		Leverage:           req.Leverage,
+		ReduceOnly:         req.ReduceOnly,
+		TimeInForce:        tif,
+		Grouping:           "na",
+		ClientOrderID:      req.ClientOrderID,
+		Nonce:              nextNonce,
+		ExpiresAt:          expiresAt,
+	}
+	notional, err := signer.ValidateHyperliquidOrderIntent(intent, policy, lastNonce, now)
+	if err != nil {
+		return OrderPreview{}, signer.HyperliquidOrderIntent{}, err
+	}
+	packed, err := signer.EncodeHyperliquidOrderAction(intent)
+	if err != nil {
+		return OrderPreview{}, signer.HyperliquidOrderIntent{}, err
+	}
+	connID, err := signer.HyperliquidActionConnectionID(packed, intent.Nonce, policy.VaultAddress)
+	if err != nil {
+		return OrderPreview{}, signer.HyperliquidOrderIntent{}, err
+	}
+	digest, err := signer.HyperliquidAgentDigest(policy.Network, connID)
+	if err != nil {
+		return OrderPreview{}, signer.HyperliquidOrderIntent{}, err
+	}
+	bps, _, err := signer.PriceDeviationBps(normPrice, normMark)
+	if err != nil {
+		return OrderPreview{}, signer.HyperliquidOrderIntent{}, err
+	}
+	lev := uint64(intent.Leverage)
+	margin := (notional + lev - 1) / lev
+	fee := (notional/100_000)*takerFeeMilliBps + ((notional%100_000)*takerFeeMilliBps)/100_000
+
+	return OrderPreview{
+		Intent:               intent,
+		NormalizedPrice:      normPrice,
+		NormalizedSize:       normSize,
+		ReferenceMarkPrice:   normMark,
+		NotionalMicroUSD:     notional,
+		InitialMarginMicro:   margin,
+		EstimatedFeeMicroUSD: fee,
+		PriceDeviationBps:    bps,
+		ConnectionID:         "0x" + hex.EncodeToString(connID[:]),
+		TypedDataDigest:      "0x" + hex.EncodeToString(digest[:]),
+	}, intent, nil
+}
