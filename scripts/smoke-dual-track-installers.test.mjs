@@ -1,12 +1,13 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import https from "node:https";
 import os from "node:os";
 import path from "node:path";
 import {
   createLoopbackFixtureTLS,
+  runInstallerCommand,
   startLoopbackArchiveServer,
   verifyChecksumsAndManifest,
 } from "./smoke-dual-track-installers.mjs";
@@ -113,6 +114,45 @@ test("createLoopbackFixtureTLS and startLoopbackArchiveServer serve exact and ta
     assert.equal(bad.status, 200);
     assert.notDeepEqual(bad.body, archiveBytes);
     assert.equal(bad.body.length, archiveBytes.length);
+
+    // Verify runInstallerCommand does not block the event loop hosting the HTTPS server.
+    const scriptPath = path.join(
+      workDir,
+      process.platform === "win32" ? "fetch-child.ps1" : "fetch-child.sh",
+    );
+    const outPath = path.join(workDir, "fetched.bin");
+    if (process.platform === "win32") {
+      writeFileSync(
+        scriptPath,
+        [
+          `$out = '${outPath.replaceAll("'", "''")}'`,
+          `$ca = '${tls.certPath.replaceAll("'", "''")}'`,
+          `curl.exe --fail --silent --show-error --cacert $ca -o $out 'https://127.0.0.1:${server.port}/test-pkg.tar.gz'`,
+          `if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }`,
+        ].join("\n"),
+        { mode: 0o600 },
+      );
+    } else {
+      writeFileSync(
+        scriptPath,
+        [
+          "#!/usr/bin/env bash",
+          "set -euo pipefail",
+          `curl --fail --silent --show-error --cacert '${tls.certPath}' -o '${outPath}' 'https://127.0.0.1:${server.port}/test-pkg.tar.gz'`,
+        ].join("\n"),
+        { mode: 0o700 },
+      );
+    }
+    const childResult = await runInstallerCommand(scriptPath, [], {
+      timeoutMs: 15000,
+    });
+    assert.equal(
+      childResult.status,
+      0,
+      `runInstallerCommand failed: ${childResult.stderr}`,
+    );
+    assert.equal(childResult.timedOut, false);
+    assert.equal(sha256Hex(readFileSync(outPath)), sha256Hex(archiveBytes));
   } finally {
     if (server) await server.close();
     rmSync(workDir, { recursive: true, force: true });

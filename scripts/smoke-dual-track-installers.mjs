@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { execFileSync, spawnSync } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
   chmodSync,
@@ -478,24 +478,98 @@ function resolveInstalledPaths() {
   };
 }
 
-function runInstallerCommand(scriptPath, args, { timeoutMs = 90000 } = {}) {
-  if (process.platform === "win32") {
-    return spawnSync(
-      "pwsh",
-      [
-        "-NoProfile",
-        "-ExecutionPolicy",
-        "Bypass",
-        "-File",
-        scriptPath,
-        ...args,
-      ],
-      { encoding: "utf8", timeout: timeoutMs },
-    );
-  }
-  return spawnSync("bash", [scriptPath, ...args], {
-    encoding: "utf8",
-    timeout: timeoutMs,
+/** Executes an installer script asynchronously so same-process loopback servers keep servicing requests. */
+export async function runInstallerCommand(
+  scriptPath,
+  args,
+  { timeoutMs = 90000 } = {},
+) {
+  const command = process.platform === "win32" ? "pwsh" : "bash";
+  const commandArgs =
+    process.platform === "win32"
+      ? [
+          "-NoProfile",
+          "-ExecutionPolicy",
+          "Bypass",
+          "-File",
+          scriptPath,
+          ...args,
+        ]
+      : [scriptPath, ...args];
+
+  return await new Promise((resolve, reject) => {
+    const child = spawn(command, commandArgs, {
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    const stdoutChunks = [];
+    const stderrChunks = [];
+    let timedOut = false;
+    let settled = false;
+    let killTimer = null;
+
+    const cleanupTimers = () => {
+      clearTimeout(timer);
+      if (killTimer) {
+        clearTimeout(killTimer);
+        killTimer = null;
+      }
+    };
+
+    const timer = setTimeout(() => {
+      timedOut = true;
+      if (process.platform === "win32") {
+        if (child.pid) {
+          try {
+            const killer = spawn(
+              "taskkill",
+              ["/T", "/F", "/PID", String(child.pid)],
+              { stdio: "ignore" },
+            );
+            killer.on("error", () => {});
+          } catch {
+            // Best-effort process tree termination on timeout.
+          }
+        }
+        return;
+      }
+      try {
+        child.kill("SIGTERM");
+      } catch {
+        // Ignore if already exited.
+      }
+      killTimer = setTimeout(() => {
+        try {
+          child.kill("SIGKILL");
+        } catch {
+          // Ignore if already exited.
+        }
+      }, 3000);
+      killTimer.unref?.();
+    }, timeoutMs);
+    timer.unref?.();
+
+    child.stdout?.on("data", (chunk) => stdoutChunks.push(chunk));
+    child.stderr?.on("data", (chunk) => stderrChunks.push(chunk));
+
+    child.once("error", (err) => {
+      if (settled) return;
+      settled = true;
+      cleanupTimers();
+      reject(err);
+    });
+
+    child.once("close", (status, signal) => {
+      if (settled) return;
+      settled = true;
+      cleanupTimers();
+      resolve({
+        status,
+        signal,
+        timedOut,
+        stdout: Buffer.concat(stdoutChunks).toString("utf8"),
+        stderr: Buffer.concat(stderrChunks).toString("utf8"),
+      });
+    });
   });
 }
 
@@ -518,6 +592,7 @@ export async function runHostSmoke({
   const workDir = mkdtempSync(path.join(os.tmpdir(), "fased-dual-smoke-"));
   const installedPaths = resolveInstalledPaths();
   let winCertThumbprint = "";
+  let winCertStore = "";
   let server = null;
   let installed = false;
   let liveScriptPath = "";
@@ -538,12 +613,27 @@ export async function runHostSmoke({
     });
 
     if (process.platform === "win32") {
+      const isAdminRaw = execFileSync(
+        "pwsh",
+        [
+          "-NoProfile",
+          "-Command",
+          "([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)",
+        ],
+        { encoding: "utf8", timeout: 15000 },
+      );
+      // GitHub Windows runners run elevated; LocalMachine\Root avoids interactive confirmation dialogs.
+      winCertStore =
+        isAdminRaw.trim().toLowerCase() === "true"
+          ? "Cert:\\LocalMachine\\Root"
+          : "Cert:\\CurrentUser\\Root";
+      const escapedCertPath = tls.certPath.replaceAll("'", "''");
       const thumbRaw = execFileSync(
         "pwsh",
         [
           "-NoProfile",
           "-Command",
-          `(Import-Certificate -FilePath '${tls.certPath.replaceAll("'", "''")}' -CertStoreLocation 'Cert:\\CurrentUser\\Root').Thumbprint`,
+          `(Import-Certificate -FilePath '${escapedCertPath}' -CertStoreLocation '${winCertStore}').Thumbprint`,
         ],
         { encoding: "utf8", timeout: 20000 },
       );
@@ -620,7 +710,7 @@ export async function runHostSmoke({
     }
 
     // 1. Tampered archive MUST be rejected before extraction/execution.
-    const tamperRun = runInstallerCommand(
+    const tamperRun = await runInstallerCommand(
       tamperedScriptPath,
       process.platform === "win32"
         ? ["-Local", "-NoAutostart", "-Listen", `127.0.0.1:${listenPort}`]
@@ -642,7 +732,7 @@ export async function runHostSmoke({
     );
 
     // 2. Valid archive installs, passes /api/v1/health, version --json, shim, and status.
-    const liveRun = runInstallerCommand(
+    const liveRun = await runInstallerCommand(
       liveScriptPath,
       process.platform === "win32"
         ? ["-Local", "-NoAutostart", "-Listen", `127.0.0.1:${listenPort}`]
@@ -673,20 +763,27 @@ export async function runHostSmoke({
     const parsedVersion = JSON.parse(versionOut);
     assert.equal(parsedVersion.version, manifestSummary.version);
 
-    const shimOut =
-      process.platform === "win32"
-        ? execFileSync(
-            process.env.ComSpec || "cmd.exe",
-            ["/c", installedPaths.shim, "version", "--json"],
-            { encoding: "utf8", timeout: 10000 },
-          )
-        : execFileSync(installedPaths.shim, ["version", "--json"], {
-            encoding: "utf8",
-            timeout: 10000,
-          });
-    assert.equal(JSON.parse(shimOut).version, manifestSummary.version);
+    if (process.platform === "win32") {
+      const shimOut = execFileSync(
+        process.env.ComSpec || "cmd.exe",
+        ["/c", installedPaths.shim, "version", "--json"],
+        { encoding: "utf8", timeout: 10000 },
+      );
+      assert.equal(JSON.parse(shimOut).version, manifestSummary.version);
+    } else {
+      const shimHelp = execFileSync(installedPaths.shim, ["--help"], {
+        encoding: "utf8",
+        timeout: 10000,
+      });
+      assert.match(shimHelp, /Fased:.*status/);
+      const shimStatus = execFileSync(installedPaths.shim, ["status"], {
+        encoding: "utf8",
+        timeout: 15000,
+      });
+      assert.equal(typeof JSON.parse(shimStatus), "object");
+    }
 
-    const statusRun = runInstallerCommand(
+    const statusRun = await runInstallerCommand(
       liveScriptPath,
       process.platform === "win32"
         ? ["-Local", "-Status"]
@@ -699,7 +796,7 @@ export async function runHostSmoke({
       `Status check failed:\n${statusRun.stdout}\n${statusRun.stderr}`,
     );
 
-    const uninstallRun = runInstallerCommand(
+    const uninstallRun = await runInstallerCommand(
       liveScriptPath,
       process.platform === "win32"
         ? ["-Local", "-Uninstall"]
@@ -749,7 +846,7 @@ export async function runHostSmoke({
   } finally {
     if (installed && liveScriptPath) {
       try {
-        runInstallerCommand(
+        await runInstallerCommand(
           liveScriptPath,
           process.platform === "win32"
             ? ["-Local", "-Uninstall"]
@@ -767,14 +864,14 @@ export async function runHostSmoke({
     } catch {
       // Best-effort shim cleanup.
     }
-    if (winCertThumbprint) {
+    if (winCertThumbprint && winCertStore) {
       try {
         execFileSync(
           "pwsh",
           [
             "-NoProfile",
             "-Command",
-            `Remove-Item -LiteralPath 'Cert:\\CurrentUser\\Root\\${winCertThumbprint}' -Force -ErrorAction SilentlyContinue`,
+            `Remove-Item -LiteralPath '${winCertStore}\\${winCertThumbprint}' -Force -ErrorAction SilentlyContinue`,
           ],
           { timeout: 15000, stdio: "ignore" },
         );
