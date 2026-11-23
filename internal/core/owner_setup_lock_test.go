@@ -20,6 +20,9 @@ func TestOwnerSetupLockWithOpenStore(t *testing.T) {
 	if err != nil {
 		t.Fatal("owner setup must work while the core database is open:", err)
 	}
+	if _, err := store.Claimed(t.Context()); err != nil {
+		t.Fatal("open store read blocked while owner setup lock held:", err)
+	}
 	if second, err := LockOwnerSetup(dir); err == nil {
 		second.Close()
 		lock.Close()
