@@ -32,18 +32,18 @@ func (s *Store) providerRequestAllowed(q AgentAIRequest, fixture bool) bool {
 	}
 	if q.ConnectionRef != "" {
 		v, err := s.AIConnection(q.ConnectionRef)
-		if err != nil || v.Ref != q.ConnectionRef || v.PlanPaused {
+		if err != nil || v.Ref != q.ConnectionRef || v.PlanPaused || v.Disabled {
 			return false
 		}
 	}
 	if fixture {
 		return true
 	}
-	if (!s.provider.apiCredentials && !pilot) || q.ConnectionRef == "" || !currentModelRequest(q) || isResearchAI(q) {
+	if (!s.provider.apiCredentials && !pilot && !(s.provider.cliRunner != nil && cliPolicy(q.Policy))) || q.ConnectionRef == "" || !currentModelRequest(q) || isResearchAI(q) {
 		return false
 	}
 	v, err := s.AIConnection(q.ConnectionRef)
-	if err != nil || v.Ref != q.ConnectionRef || v.Provider != policyProvider(q.Policy) || v.PlanPaused {
+	if err != nil || v.Ref != q.ConnectionRef || v.Provider != policyProvider(q.Policy) || v.PlanPaused || v.Disabled {
 		return false
 	}
 	if v.AuthMethod == "oauth" {
@@ -51,6 +51,9 @@ func (s *Store) providerRequestAllowed(q AgentAIRequest, fixture bool) bool {
 	}
 	if v.AuthMethod == "sign-in" {
 		return v.CredentialMode == "openai-signin" && v.PlanUse && q.Policy != nil && q.Policy.WireVersion == "openai-signin-v2"
+	}
+	if v.AuthMethod == "cli" {
+		return v.CredentialMode == "cli" && !signInRequest(q) && validCLIProvider(v.Provider) && cliPolicy(q.Policy)
 	}
 	return v.CredentialMode == v.Provider && !signInRequest(q)
 }

@@ -96,7 +96,7 @@ func (s *Store) resolveAgentProvider(c *AgentCommand, profile AgentProfile) erro
 			return errors.New("select this provider account")
 		}
 		connection, err := s.AIConnection(profile.ConnectionRef)
-		if err != nil || connection.Ref == "" || connection.Locked || connection.Provider != profile.Provider {
+		if err != nil || connection.Ref == "" || connection.Locked || connection.Disabled || connection.Provider != profile.Provider {
 			return errors.New("unlock the selected connection first")
 		}
 		policy := dynamicModelPolicy(connection.Provider, profile.Model, connection.AuthMethod)

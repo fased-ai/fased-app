@@ -448,42 +448,57 @@ export async function publishAttested(
       );
       const exe = path.join(scratch, "fased-install");
       writeFileSync(exe, binary, { mode: 0o500, flag: "wx" });
-      report = JSON.parse(
-        execute(
-          exe,
-          [
-            "--seed-file",
-            path.join(directory, "first-install-seed.json"),
-            "--seed-sha256",
-            c.seedSha256,
-            "--output",
-            path.join(scratch, "acquired"),
-            "--install=false",
-            "--upgrade=false",
-          ],
-          {
-            encoding: "utf8",
-            env: verifierEnvironment(),
-            timeout: 180000,
-            maxBuffer: 2 * 1024 * 1024,
-            stdio: ["ignore", "pipe", "pipe"],
+      if (packet.version === 4) {
+        const inspected = execute(exe, ["--inspect-public-package"], {
+          encoding: "utf8",
+          env: {
+            ...verifierEnvironment(),
+            XDG_CACHE_HOME: path.join(scratch, "cache"),
           },
-        ),
-      );
-      if (
-        report.version !== 4 ||
-        !report.metadataVerified ||
-        !report.provenanceVerified ||
-        !report.bundleVerified ||
-        report.installerInvoked ||
-        report.publicActivation ||
-        report.archiveSha256 !== packet.archive.sha256 ||
-        (packet.version === 4 &&
-          (report.linuxBundleVerified !== true ||
-            report.bundleSha256 !== packet.bundleSha256)) ||
-        report.sequence !== releaseSequence(c.version)
-      )
-        throw Error("Public installer/readback differs from release");
+          timeout: 180000,
+          maxBuffer: 2 * 1024 * 1024,
+          stdio: ["ignore", "pipe", "pipe"],
+        }).trim();
+        if (
+          inspected !==
+          `native ${sha(raw)} ${c.version} ${packet.installer.sha256}`
+        )
+          throw Error("Public installer/readback differs from release");
+      } else {
+        report = JSON.parse(
+          execute(
+            exe,
+            [
+              "--seed-file",
+              path.join(directory, "first-install-seed.json"),
+              "--seed-sha256",
+              c.seedSha256,
+              "--output",
+              path.join(scratch, "acquired"),
+              "--install=false",
+              "--upgrade=false",
+            ],
+            {
+              encoding: "utf8",
+              env: verifierEnvironment(),
+              timeout: 180000,
+              maxBuffer: 2 * 1024 * 1024,
+              stdio: ["ignore", "pipe", "pipe"],
+            },
+          ),
+        );
+        if (
+          report.version !== 4 ||
+          !report.metadataVerified ||
+          !report.provenanceVerified ||
+          !report.bundleVerified ||
+          report.installerInvoked ||
+          report.publicActivation ||
+          report.archiveSha256 !== packet.archive.sha256 ||
+          report.sequence !== releaseSequence(c.version)
+        )
+          throw Error("Public installer/readback differs from release");
+      }
     } finally {
       rmSync(scratch, { recursive: true });
     }

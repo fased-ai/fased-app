@@ -5,8 +5,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
+	"os"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -278,19 +281,43 @@ func parseGeminiStreamLine(line string, fullText *strings.Builder, result *provi
 	return ""
 }
 
+func init() {
+	cliAgentAIDispatch = dispatchCLIAgentAI
+}
+
 func streamProviderCLIV2(ctx context.Context, s *Store, target resolvedAgentProvider, prompt providerV2Prompt, cb providerStreamCallbacks) (providerTurnResult, error) {
 	s.provider.mu.Lock()
 	v, err := s.aiConnectionLocked(target.Ref)
 	state := s.credentialLocked(target.Ref)
 	cred, ok := parseCLIProviderCredential(state.key)
-	lockedOut := err != nil || v.Ref != target.Ref || v.Locked || v.PlanPaused || v.AuthMethod != "cli" || !ok || cred.Provider != target.Provider
+	lockedOut := err != nil || v.Ref != target.Ref || v.Locked || v.Disabled || v.PlanPaused || v.AuthMethod != "cli" || !ok || cred.Provider != target.Provider
 	runner := s.cliRunner()
 	s.provider.mu.Unlock()
 	if lockedOut {
 		return providerTurnResult{}, errors.New("CLI subscription account is locked or unavailable")
 	}
 
-	binPath, err := runner.LookPath(cred.Binary)
+	return streamCLIWithCred(ctx, runner, target, cred, prompt, cb)
+}
+
+func streamCLIWithCred(ctx context.Context, runner providerCLIRunner, target resolvedAgentProvider, cred cliProviderCredential, prompt providerV2Prompt, cb providerStreamCallbacks) (providerTurnResult, error) {
+	if cred.Binary == "antigravity" {
+		return streamAntigravityACPV2(ctx, runner, target, cred, prompt, cb)
+	}
+
+	lookupTarget := cred.Binary
+	if cred.BinaryPath != "" {
+		if !validCustomCLIBinaryPath(cred.BinaryPath) {
+			return providerTurnResult{}, errors.New("invalid CLI binary path")
+		}
+		lookupTarget = expandCLIUserPath(cred.BinaryPath)
+	}
+	binPath, err := runner.LookPath(lookupTarget)
+	if (err != nil || binPath == "") && cred.BinaryPath != "" {
+		if _, isOS := runner.(osCLIRunner); isOS && regularExecutableFile(lookupTarget) {
+			binPath, err = lookupTarget, nil
+		}
+	}
 	if err != nil || binPath == "" {
 		return providerTurnResult{}, errors.New(cred.Binary + " CLI is not installed on this host")
 	}
@@ -308,7 +335,16 @@ func streamProviderCLIV2(ctx context.Context, s *Store, target resolvedAgentProv
 	execCtx, cancel := context.WithTimeout(ctx, 5*time.Minute)
 	defer cancel()
 
-	stdout, stderr, waitFn, killFn, startErr := runner.Start(execCtx, binPath, args, conversation)
+	extraEnv := cliConfigEnv(cred.Provider, cred.Binary, cred.ConfigDir)
+	var stdout, stderr io.ReadCloser
+	var waitFn func() error
+	var killFn func()
+	var startErr error
+	if er, ok := runner.(envCLIRunner); ok && len(extraEnv) > 0 {
+		stdout, stderr, waitFn, killFn, startErr = er.StartWithEnv(execCtx, binPath, args, conversation, extraEnv)
+	} else {
+		stdout, stderr, waitFn, killFn, startErr = runner.Start(execCtx, binPath, args, conversation)
+	}
 	if startErr != nil {
 		return providerTurnResult{}, errors.New("failed to launch " + cred.Binary + " CLI")
 	}
@@ -397,6 +433,399 @@ func streamProviderCLIV2(ctx context.Context, s *Store, target resolvedAgentProv
 	turnResult.Text = strings.TrimSpace(fullText.String())
 	if turnResult.Text == "" {
 		return providerTurnResult{}, errors.New(cred.Binary + " returned an empty reply")
+	}
+	turnResult.FinishReason = "stop"
+	return turnResult, nil
+}
+
+func decodeCLIReviewOutput(raw, requestID string) (string, []AIActionCard, bool) {
+	trimmed := strings.TrimSpace(raw)
+	var out struct {
+		Answer string `json:"answer"`
+		Cards  []struct {
+			Kind  string `json:"kind"`
+			Title string `json:"title"`
+			Text  string `json:"text"`
+		} `json:"cards"`
+	}
+	if uniqueAIJSON([]byte(trimmed)) {
+		dec := json.NewDecoder(strings.NewReader(trimmed))
+		dec.DisallowUnknownFields()
+		if dec.Decode(&out) == nil && dec.Decode(new(any)) == io.EOF && validAgentText(out.Answer, 2000, true) && out.Cards != nil && len(out.Cards) <= 3 {
+			cards := make([]AIActionCard, 0, len(out.Cards))
+			validCards := true
+			for _, c := range out.Cards {
+				if (c.Kind != "reminder-draft" && c.Kind != "paper-strategy-draft") || !validAgentText(c.Title, 80, true) || !validAgentText(c.Text, 1000, true) {
+					validCards = false
+					break
+				}
+				cards = append(cards, AIActionCard{
+					ID:     requestID + ":" + string(rune('1'+len(cards))),
+					Kind:   c.Kind,
+					Title:  c.Title,
+					Text:   c.Text,
+					Review: "unreviewed",
+				})
+			}
+			if validCards {
+				return out.Answer, cards, true
+			}
+		}
+	}
+	runes := []rune(trimmed)
+	if len(runes) > 2000 {
+		trimmed = strings.TrimSpace(string(runes[:2000]))
+	}
+	if validAgentText(trimmed, 2000, true) {
+		return trimmed, []AIActionCard{}, true
+	}
+	return "", nil, false
+}
+
+func dispatchCLIAgentAI(ctx context.Context, s *Store, q AgentAIRequest, onDelta func(string)) (AgentAIRequest, bool, error) {
+	if s == nil || q.ConnectionRef == "" {
+		return q, false, nil
+	}
+	s.provider.mu.Lock()
+	v, err := s.aiConnectionLocked(q.ConnectionRef)
+	if err != nil || v.Ref != q.ConnectionRef || v.AuthMethod != "cli" {
+		s.provider.mu.Unlock()
+		return q, false, nil
+	}
+	state := s.credentialLocked(q.ConnectionRef)
+	cred, ok := parseCLIProviderCredential(state.key)
+	allowed := ok && !v.Disabled && !v.PlanPaused && cred.Provider == v.Provider && policyProvider(q.Policy) == v.Provider && validateAIModelPolicy(q, s.now().Unix()) == nil
+	if allowed {
+		if q.TaskID != "" {
+			allowed = s.taskAccessMatches(q, state.taskAccess, true, state)
+		} else {
+			allowed = !v.Locked
+		}
+	}
+	runner := s.cliRunner()
+	s.provider.mu.Unlock()
+	if !allowed {
+		return q, true, errors.New("CLI subscription account is locked, disabled, or unavailable for this task")
+	}
+
+	nowUnix := s.now().Unix()
+	target := resolvedAgentProvider{
+		Ref:        v.Ref,
+		Provider:   v.Provider,
+		Name:       v.Name,
+		AuthMethod: "cli",
+		Model:      q.Model,
+	}
+	prompt := providerV2Prompt{
+		Instructions: aiInstructions,
+		Messages:     []AgentV2Message{{Role: "user", Content: q.Context}},
+	}
+	var streamed strings.Builder
+	turn, callErr := streamCLIWithCred(ctx, runner, target, cred, prompt, providerStreamCallbacks{
+		onTextDelta: func(delta string) {
+			streamed.WriteString(delta)
+			if onDelta != nil {
+				onDelta(streamed.String())
+			}
+		},
+	})
+	q.Admission = &OpenAIAdmission{
+		State:               "admitted",
+		ModelRecordSHA256:   q.Policy.ID,
+		AccessAt:            nowUnix,
+		CountedAt:           nowUnix,
+		InputTokens:         turn.InputTokens,
+		GenerationAttempted: true,
+	}
+	if callErr != nil {
+		return q, true, callErr
+	}
+	answer, cards, ok := decodeCLIReviewOutput(turn.Text, q.ID)
+	q.InputTokens = turn.InputTokens
+	q.OutputTokens = turn.OutputTokens
+	q.CachedInputTokens = turn.CachedTokens
+	q.CostBasis = cliUsageCostBasis
+	q.HeldMicrousd = 0
+	q.SpentMicrousd = 0
+	if !ok {
+		q.State = "failed"
+		q.Failure = "CLI response failed review validation. No action was executed."
+		return q, true, nil
+	}
+	q.State = "completed"
+	q.Answer = answer
+	q.Cards = cards
+	q.Failure = ""
+	return q, true, nil
+}
+
+func streamAntigravityACPV2(ctx context.Context, runner providerCLIRunner, target resolvedAgentProvider, cred cliProviderCredential, prompt providerV2Prompt, cb providerStreamCallbacks) (providerTurnResult, error) {
+	interactive, ok := runner.(interactiveCLIRunner)
+	if !ok {
+		return providerTurnResult{}, errors.New("Antigravity ACP requires interactive stdio support")
+	}
+	binPath, err := discoverAntigravityACP(runner, cred.BinaryPath)
+	if err != nil {
+		return providerTurnResult{}, err
+	}
+
+	cwd, err := os.MkdirTemp("", "fased-acp-turn-*")
+	if err != nil {
+		return providerTurnResult{}, err
+	}
+	defer os.RemoveAll(cwd)
+
+	execCtx, cancel := context.WithTimeout(ctx, 5*time.Minute)
+	defer cancel()
+
+	stdin, stdout, stderr, waitFn, killFn, err := interactive.StartInteractive(
+		execCtx,
+		binPath,
+		[]string{"acp", "--stdio", "--disable-telemetry"},
+		antigravityACPEnv(cred.ConfigDir),
+	)
+	if err != nil {
+		return providerTurnResult{}, errors.New("failed to launch Antigravity ACP")
+	}
+
+	errCh := make(chan string, 1)
+	go func() {
+		if stderr == nil {
+			errCh <- ""
+			return
+		}
+		defer stderr.Close()
+		raw, _ := io.ReadAll(io.LimitReader(stderr, 8192))
+		errCh <- sanitizeDiagValue(stripANSI(string(raw)), 240)
+	}()
+
+	conn := newACPConn(stdin, stdout)
+	doneWatch := make(chan struct{})
+	watchDone := make(chan struct{})
+	var cancelOnce sync.Once
+	var sessionIDMu sync.Mutex
+	var activeSessionID string
+	sendCancelAndKill := func() {
+		cancelOnce.Do(func() {
+			sessionIDMu.Lock()
+			sid := activeSessionID
+			sessionIDMu.Unlock()
+			if sid != "" {
+				sent := make(chan struct{})
+				go func() {
+					_ = conn.sendJSON(map[string]any{
+						"jsonrpc": "2.0",
+						"method":  "session/cancel",
+						"params":  map[string]any{"sessionId": sid},
+					})
+					close(sent)
+				}()
+				select {
+				case <-sent:
+				case <-time.After(150 * time.Millisecond):
+				}
+			}
+			if killFn != nil {
+				killFn()
+			}
+		})
+	}
+	go func() {
+		defer close(watchDone)
+		select {
+		case <-execCtx.Done():
+			sendCancelAndKill()
+		case <-doneWatch:
+			if execCtx.Err() != nil {
+				sendCancelAndKill()
+			}
+		}
+	}()
+	defer func() {
+		close(doneWatch)
+		<-watchDone
+		if stdin != nil {
+			_ = stdin.Close()
+		}
+		if killFn != nil {
+			killFn()
+		}
+		if waitFn != nil {
+			_ = waitFn()
+		}
+	}()
+
+	initResp, err := conn.call(execCtx, "initialize", map[string]any{
+		"protocolVersion": 1,
+		"clientCapabilities": map[string]any{
+			"fs":       map[string]any{"readTextFile": false, "writeTextFile": false},
+			"terminal": false,
+		},
+		"clientInfo": map[string]any{"name": "fased", "version": "0.1.35"},
+	})
+	if err != nil {
+		if ctx.Err() != nil {
+			return providerTurnResult{}, ctx.Err()
+		}
+		return providerTurnResult{}, errors.New("Antigravity ACP initialize failed")
+	}
+	if initResp.Error != nil {
+		if isAntigravityAuthError(initResp.Error, "") {
+			return providerTurnResult{}, errors.New("Antigravity ACP requires Google sign-in; run 'antigravity acp --login' and reconnect")
+		}
+		return providerTurnResult{}, errors.New("Antigravity ACP initialize error: " + sanitizeDiagValue(initResp.Error.Message, 160))
+	}
+
+	sessResp, err := conn.call(execCtx, "session/new", map[string]any{
+		"cwd":        cwd,
+		"mcpServers": []any{},
+	})
+	if err != nil {
+		if ctx.Err() != nil {
+			return providerTurnResult{}, ctx.Err()
+		}
+		return providerTurnResult{}, errors.New("Antigravity ACP session creation failed")
+	}
+	if sessResp.Error != nil {
+		if isAntigravityAuthError(sessResp.Error, "") {
+			return providerTurnResult{}, errors.New("Antigravity ACP requires Google sign-in; run 'antigravity acp --login' and reconnect")
+		}
+		return providerTurnResult{}, errors.New("Antigravity ACP session error: " + sanitizeDiagValue(sessResp.Error.Message, 160))
+	}
+	var sessRes acpSessionNewResult
+	if json.Unmarshal(sessResp.Result, &sessRes) != nil || sessRes.SessionID == "" {
+		return providerTurnResult{}, errors.New("Antigravity ACP returned an invalid session")
+	}
+
+	sessionIDMu.Lock()
+	activeSessionID = sessRes.SessionID
+	sessionIDMu.Unlock()
+
+	_, configModelSet := antigravityModelsFromSession(sessRes)
+	if modelOpt := resolveAntigravityModelOption(target.Model, configModelSet); modelOpt != "" {
+		if len(configModelSet) == 0 || configModelSet[modelOpt] {
+			_, _ = conn.call(execCtx, "session/set_config_option", map[string]any{
+				"sessionId": sessRes.SessionID,
+				"configId":  "model",
+				"value":     modelOpt,
+			})
+		} else {
+			_, _ = conn.call(execCtx, "session/set_model", map[string]any{
+				"sessionId": sessRes.SessionID,
+				"modelId":   target.Model,
+			})
+		}
+	}
+
+	sysPrompt, conversation := formatCLIPrompt(prompt)
+	combinedPrompt := conversation
+	if sysPrompt != "" {
+		combinedPrompt = "System instructions:\n" + sysPrompt + "\n\n" + conversation
+	}
+
+	conn.nextID++
+	promptID := conn.nextID
+	wantPromptID := fmt.Sprintf("%d", promptID)
+	if err := conn.sendJSON(map[string]any{
+		"jsonrpc": "2.0",
+		"id":      promptID,
+		"method":  "session/prompt",
+		"params": map[string]any{
+			"sessionId": sessRes.SessionID,
+			"prompt": []map[string]any{
+				{"type": "text", "text": combinedPrompt},
+			},
+		},
+	}); err != nil {
+		return providerTurnResult{}, errors.New("failed to send prompt to Antigravity ACP")
+	}
+
+	var fullText strings.Builder
+	var turnResult providerTurnResult
+	for {
+		if execCtx.Err() != nil {
+			if ctx.Err() != nil {
+				return providerTurnResult{}, ctx.Err()
+			}
+			return providerTurnResult{}, execCtx.Err()
+		}
+		env, readErr := conn.readEnvelope()
+		if readErr != nil {
+			if ctx.Err() != nil {
+				return providerTurnResult{}, ctx.Err()
+			}
+			break
+		}
+		if env.Method != "" && len(env.ID) > 0 {
+			_ = conn.handleServerRequest(env)
+			continue
+		}
+		if env.Method == "session/update" {
+			var notif struct {
+				SessionID string `json:"sessionId"`
+				Update    struct {
+					SessionUpdate string `json:"sessionUpdate"`
+					Used          int64  `json:"used"`
+					Content       *struct {
+						Type string `json:"type"`
+						Text string `json:"text"`
+					} `json:"content,omitempty"`
+				} `json:"update"`
+			}
+			if json.Unmarshal(env.Params, &notif) == nil && (notif.SessionID == "" || notif.SessionID == sessRes.SessionID) {
+				if notif.Update.SessionUpdate == "agent_message_chunk" && notif.Update.Content != nil && notif.Update.Content.Type == "text" && notif.Update.Content.Text != "" {
+					if fullText.Len() < 1024*1024 {
+						fullText.WriteString(notif.Update.Content.Text)
+					}
+					if cb.onTextDelta != nil {
+						cb.onTextDelta(notif.Update.Content.Text)
+					}
+				}
+				if notif.Update.SessionUpdate == "usage_update" && notif.Update.Used > turnResult.InputTokens {
+					turnResult.InputTokens = notif.Update.Used
+				}
+			}
+			continue
+		}
+		if len(env.ID) > 0 && strings.TrimSpace(string(env.ID)) == wantPromptID {
+			if env.Error != nil {
+				stderrMsg := ""
+				select {
+				case stderrMsg = <-errCh:
+				default:
+				}
+				if isAntigravityAuthError(env.Error, stderrMsg) {
+					return providerTurnResult{}, errors.New("Antigravity ACP requires Google sign-in; run 'antigravity acp --login' and reconnect")
+				}
+				return providerTurnResult{}, errors.New("Antigravity ACP error: " + sanitizeDiagValue(env.Error.Message, 160))
+			}
+			var res acpPromptResult
+			if json.Unmarshal(env.Result, &res) == nil && res.Usage != nil {
+				if res.Usage.InputTokens > 0 {
+					turnResult.InputTokens = res.Usage.InputTokens
+				}
+				if res.Usage.OutputTokens > 0 {
+					turnResult.OutputTokens = res.Usage.OutputTokens
+				}
+				if res.Usage.CachedReadTokens > 0 {
+					turnResult.CachedTokens = res.Usage.CachedReadTokens
+				}
+			}
+			break
+		}
+	}
+
+	turnResult.Text = strings.TrimSpace(fullText.String())
+	if turnResult.Text == "" {
+		stderrMsg := ""
+		select {
+		case stderrMsg = <-errCh:
+		case <-time.After(100 * time.Millisecond):
+		}
+		if stderrMsg != "" {
+			return providerTurnResult{}, errors.New("Antigravity ACP failed: " + stderrMsg)
+		}
+		return providerTurnResult{}, errors.New("Antigravity ACP returned an empty reply")
 	}
 	turnResult.FinishReason = "stop"
 	return turnResult, nil

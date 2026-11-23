@@ -26,6 +26,8 @@ type runtimeChangeSignal struct {
 
 var storeChangeSignals sync.Map
 
+var cliAgentAIDispatch func(context.Context, *Store, AgentAIRequest, func(string)) (AgentAIRequest, bool, error)
+
 func getStoreSignal(s *Store) *runtimeChangeSignal {
 	if s == nil {
 		return nil
@@ -970,14 +972,23 @@ func (s *Store) advanceAgentAI(ctx context.Context, rt http.RoundTripper, fixtur
 		rt = aiMemoryReviewTransport{store: s, request: *dispatch, next: rt, observed: observed}
 	}
 	defer func() { s.progressMu.Lock(); delete(s.aiProgress, dispatch.ID); s.progressMu.Unlock() }()
-	result, callErr := callReviewedAgentAIStreamAt(callCtx, *dispatch, rt, s.now, func(text string) {
+	progressCb := func(text string) {
 		s.progressMu.Lock()
 		defer s.progressMu.Unlock()
 		if s.aiProgress == nil {
 			s.aiProgress = map[string]string{}
 		}
 		s.aiProgress[dispatch.ID] = text
-	})
+	}
+	var result AgentAIRequest
+	var callErr error
+	handled := false
+	if dispatch.ConnectionRef != "" && cliAgentAIDispatch != nil {
+		result, handled, callErr = cliAgentAIDispatch(callCtx, s, *dispatch, progressCb)
+	}
+	if !handled {
+		result, callErr = callReviewedAgentAIStreamAt(callCtx, *dispatch, rt, s.now, progressCb)
+	}
 	cancel()
 	<-monitorDone
 	// Shutdown/timeout must not erase the dispatched reservation. Persist with a

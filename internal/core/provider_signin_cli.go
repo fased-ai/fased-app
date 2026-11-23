@@ -25,6 +25,9 @@ type HostCLIStatus struct {
 	Provider       string   `json:"provider"`
 	Binary         string   `json:"binary"`
 	Label          string   `json:"label"`
+	Transport      string   `json:"transport,omitempty"`
+	Version        string   `json:"version,omitempty"`
+	BinaryPath     string   `json:"binaryPath,omitempty"`
 	Installed      bool     `json:"installed"`
 	Authenticated  bool     `json:"authenticated"`
 	Account        string   `json:"account,omitempty"`
@@ -51,6 +54,7 @@ type cliProviderSpec struct {
 	Provider       string
 	Binary         string
 	Label          string
+	Transport      string
 	SupportsDevice bool
 	LoginCommand   string
 	InstallHint    string
@@ -62,6 +66,7 @@ var supportedCLIProviders = []cliProviderSpec{
 		Provider:       "openai",
 		Binary:         "codex",
 		Label:          "Codex CLI",
+		Transport:      "cli",
 		SupportsDevice: true,
 		LoginCommand:   "codex login --device-auth",
 		InstallHint:    "npm install -g @openai/codex",
@@ -71,6 +76,7 @@ var supportedCLIProviders = []cliProviderSpec{
 		Provider:       "anthropic",
 		Binary:         "claude",
 		Label:          "Claude Code",
+		Transport:      "cli",
 		SupportsDevice: false,
 		LoginCommand:   "claude auth login",
 		InstallHint:    "npm install -g @anthropic-ai/claude-code",
@@ -78,8 +84,19 @@ var supportedCLIProviders = []cliProviderSpec{
 	},
 	{
 		Provider:       "google",
+		Binary:         "antigravity",
+		Label:          "Antigravity ACP",
+		Transport:      "acp",
+		SupportsDevice: false,
+		LoginCommand:   antigravityLoginCommand,
+		InstallHint:    antigravityInstallHint,
+		Models:         []string{"gemini-4-neon", "gemini-4-carbon", "gemini-3.8-flash", "gemini-pro-orchestrator-neon"},
+	},
+	{
+		Provider:       "google",
 		Binary:         "gemini",
 		Label:          "Gemini CLI",
+		Transport:      "cli",
 		SupportsDevice: false,
 		LoginCommand:   "gemini",
 		InstallHint:    "npm install -g @google/gemini-cli",
@@ -89,11 +106,34 @@ var supportedCLIProviders = []cliProviderSpec{
 		Provider:       "xai",
 		Binary:         "grok",
 		Label:          "Grok CLI",
+		Transport:      "cli",
 		SupportsDevice: true,
 		LoginCommand:   "grok login --device-auth",
 		InstallHint:    "npm install -g @xai-org/grok-cli",
 		Models:         []string{"grok-4.7", "grok-4-fast"},
 	},
+}
+
+func cliSpecsForProvider(provider string) []cliProviderSpec {
+	var out []cliProviderSpec
+	for _, spec := range supportedCLIProviders {
+		if spec.Provider == provider {
+			out = append(out, spec)
+		}
+	}
+	return out
+}
+
+func cliSpecForTarget(provider, binary string) (cliProviderSpec, bool) {
+	if binary == "" {
+		return cliSpecForProvider(provider)
+	}
+	for _, spec := range supportedCLIProviders {
+		if spec.Provider == provider && spec.Binary == binary {
+			return spec, true
+		}
+	}
+	return cliProviderSpec{}, false
 }
 
 func cliSpecForProvider(provider string) (cliProviderSpec, bool) {
@@ -111,18 +151,26 @@ func validCLIProvider(provider string) bool {
 }
 
 type cliProviderCredential struct {
-	Version  int    `json:"version"`
-	Provider string `json:"provider"`
-	Binary   string `json:"binary"`
+	Version    int    `json:"version"`
+	Provider   string `json:"provider"`
+	Binary     string `json:"binary"`
+	BinaryPath string `json:"binaryPath,omitempty"`
+	ConfigDir  string `json:"configDir,omitempty"`
 }
 
 func parseCLIProviderCredential(raw []byte) (cliProviderCredential, bool) {
 	var c cliProviderCredential
-	if len(raw) == 0 || len(raw) > 512 || !uniqueAIJSON(raw, 512) || json.Unmarshal(raw, &c) != nil {
+	if len(raw) == 0 || len(raw) > 1024 || !uniqueAIJSON(raw, 1024) || json.Unmarshal(raw, &c) != nil {
 		return cliProviderCredential{}, false
 	}
-	spec, ok := cliSpecForProvider(c.Provider)
+	spec, ok := cliSpecForTarget(c.Provider, c.Binary)
 	if !ok || c.Version != 1 || c.Binary != spec.Binary {
+		return cliProviderCredential{}, false
+	}
+	if c.BinaryPath != "" && !validCustomCLIBinaryPath(c.BinaryPath) {
+		return cliProviderCredential{}, false
+	}
+	if c.ConfigDir != "" && !validCLIConfigDir(c.ConfigDir) {
 		return cliProviderCredential{}, false
 	}
 	return c, true
@@ -133,10 +181,28 @@ func encodeCLIProviderCredential(provider string) ([]byte, error) {
 	if !ok {
 		return nil, errors.New("unsupported CLI subscription provider")
 	}
+	return encodeCLIProviderCredentialWithConfig(spec.Provider, spec.Binary, "", "")
+}
+
+func encodeCLIProviderCredentialWithConfig(provider, binary, binaryPath, configDir string) ([]byte, error) {
+	spec, ok := cliSpecForTarget(provider, binary)
+	if !ok {
+		return nil, errors.New("unsupported CLI subscription provider")
+	}
+	binaryPath = strings.TrimSpace(binaryPath)
+	configDir = strings.TrimSpace(configDir)
+	if binaryPath != "" && !validCustomCLIBinaryPath(binaryPath) {
+		return nil, errors.New("invalid CLI binary path")
+	}
+	if configDir != "" && !validCLIConfigDir(configDir) {
+		return nil, errors.New("invalid CLI config directory")
+	}
 	return json.Marshal(cliProviderCredential{
-		Version:  1,
-		Provider: spec.Provider,
-		Binary:   spec.Binary,
+		Version:    1,
+		Provider:   spec.Provider,
+		Binary:     spec.Binary,
+		BinaryPath: binaryPath,
+		ConfigDir:  configDir,
 	})
 }
 
@@ -145,6 +211,10 @@ type providerCLIRunner interface {
 	Run(ctx context.Context, binary string, args []string, stdin string) (stdout []byte, stderr []byte, exitCode int, err error)
 	Start(ctx context.Context, binary string, args []string, stdin string) (stdout io.ReadCloser, stderr io.ReadCloser, wait func() error, kill func(), err error)
 	FileExistsNonEmpty(path string) bool
+}
+
+type envCLIRunner interface {
+	StartWithEnv(ctx context.Context, binary string, args []string, stdin string, extraEnv []string) (stdout io.ReadCloser, stderr io.ReadCloser, wait func() error, kill func(), err error)
 }
 
 type osCLIRunner struct{}
@@ -188,8 +258,31 @@ func (osCLIRunner) Run(ctx context.Context, binary string, args []string, stdin 
 }
 
 func (osCLIRunner) Start(ctx context.Context, binary string, args []string, stdin string) (io.ReadCloser, io.ReadCloser, func() error, func(), error) {
+	return osCLIRunner{}.StartWithEnv(ctx, binary, args, stdin, nil)
+}
+
+func (osCLIRunner) StartWithEnv(ctx context.Context, binary string, args []string, stdin string, extraEnv []string) (io.ReadCloser, io.ReadCloser, func() error, func(), error) {
 	cmd := exec.CommandContext(ctx, binary, args...)
-	cmd.Env = sanitizedCLIEnv()
+	base := sanitizedCLIEnv()
+	if len(extraEnv) > 0 {
+		overridden := map[string]bool{}
+		var validExtra []string
+		for _, entry := range extraEnv {
+			if k, _, ok := strings.Cut(entry, "="); ok && k != "" {
+				overridden[k] = true
+				validExtra = append(validExtra, entry)
+			}
+		}
+		dedup := make([]string, 0, len(base)+len(validExtra))
+		for _, entry := range base {
+			if k, _, ok := strings.Cut(entry, "="); ok && overridden[k] {
+				continue
+			}
+			dedup = append(dedup, entry)
+		}
+		base = append(dedup, validExtra...)
+	}
+	cmd.Env = base
 	if stdin != "" {
 		cmd.Stdin = strings.NewReader(stdin)
 	}
@@ -213,6 +306,42 @@ func (osCLIRunner) Start(ctx context.Context, binary string, args []string, stdi
 		}
 	}
 	return stdout, stderr, cmd.Wait, kill, nil
+}
+
+func (osCLIRunner) StartInteractive(ctx context.Context, binary string, args []string, env []string) (io.WriteCloser, io.ReadCloser, io.ReadCloser, func() error, func(), error) {
+	cmd := exec.CommandContext(ctx, binary, args...)
+	if len(env) > 0 {
+		cmd.Env = env
+	} else {
+		cmd.Env = safeCLIEnv()
+	}
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		return nil, nil, nil, nil, nil, err
+	}
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		_ = stdin.Close()
+		return nil, nil, nil, nil, nil, err
+	}
+	stderr, err := cmd.StderrPipe()
+	if err != nil {
+		_ = stdin.Close()
+		_ = stdout.Close()
+		return nil, nil, nil, nil, nil, err
+	}
+	if err := cmd.Start(); err != nil {
+		_ = stdin.Close()
+		_ = stdout.Close()
+		_ = stderr.Close()
+		return nil, nil, nil, nil, nil, err
+	}
+	kill := func() {
+		if cmd.Process != nil {
+			_ = cmd.Process.Kill()
+		}
+	}
+	return stdin, stdout, stderr, cmd.Wait, kill, nil
 }
 
 func (osCLIRunner) FileExistsNonEmpty(path string) bool {
@@ -268,26 +397,89 @@ func firstStatusLine(raw string) string {
 	return ""
 }
 
+func extractCLIVersion(raw string) string {
+	cleaned := stripANSI(raw)
+	for _, field := range strings.Fields(cleaned) {
+		token := strings.Trim(field, "(),:;[]\"'")
+		token = strings.TrimPrefix(token, "v")
+		if len(token) < 3 || token[0] < '0' || token[0] > '9' || !strings.Contains(token, ".") {
+			continue
+		}
+		return sanitizeDiagValue(token, 32)
+	}
+	return ""
+}
+
+func probeCLIVersion(ctx context.Context, runner providerCLIRunner, binPath string) string {
+	vctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	out, errOut, code, runErr := runner.Run(vctx, binPath, []string{"--version"}, "")
+	cancel()
+	if code != 0 || runErr != nil {
+		return ""
+	}
+	return extractCLIVersion(string(out) + "\n" + string(errOut))
+}
+
 func probeSingleCLI(ctx context.Context, runner providerCLIRunner, spec cliProviderSpec) HostCLIStatus {
+	return probeSingleCLIWithConfig(ctx, runner, spec, "", "")
+}
+
+type runEnvCLIRunner interface {
+	RunWithEnv(ctx context.Context, binary string, args []string, stdin string, extraEnv []string) (stdout []byte, stderr []byte, exitCode int, err error)
+}
+
+func runCLIWithOptionalEnv(ctx context.Context, runner providerCLIRunner, binary string, args []string, stdin string, extraEnv []string) ([]byte, []byte, int, error) {
+	if len(extraEnv) > 0 {
+		if er, ok := runner.(runEnvCLIRunner); ok {
+			return er.RunWithEnv(ctx, binary, args, stdin, extraEnv)
+		}
+	}
+	return runner.Run(ctx, binary, args, stdin)
+}
+
+func probeSingleCLIWithConfig(ctx context.Context, runner providerCLIRunner, spec cliProviderSpec, customBinaryPath, configDir string) HostCLIStatus {
+	if spec.Binary == "antigravity" {
+		return probeAntigravityACPWithConfig(ctx, runner, spec, customBinaryPath, configDir)
+	}
+	transport := spec.Transport
+	if transport == "" {
+		transport = "cli"
+	}
 	status := HostCLIStatus{
 		Provider:       spec.Provider,
 		Binary:         spec.Binary,
 		Label:          spec.Label,
+		Transport:      transport,
 		SupportsDevice: spec.SupportsDevice,
 		LoginCommand:   spec.LoginCommand,
 		InstallHint:    spec.InstallHint,
 		Models:         append([]string(nil), spec.Models...),
 	}
-	binPath, err := runner.LookPath(spec.Binary)
+	lookupTarget := spec.Binary
+	if customBinaryPath != "" {
+		if !validCustomCLIBinaryPath(customBinaryPath) {
+			return status
+		}
+		lookupTarget = expandCLIUserPath(customBinaryPath)
+	}
+	binPath, err := runner.LookPath(lookupTarget)
+	if (err != nil || binPath == "") && customBinaryPath != "" {
+		if _, isOS := runner.(osCLIRunner); isOS && regularExecutableFile(lookupTarget) {
+			binPath, err = lookupTarget, nil
+		}
+	}
 	if err != nil || binPath == "" {
 		return status
 	}
 	status.Installed = true
+	status.BinaryPath = binPath
+	status.Version = probeCLIVersion(ctx, runner, binPath)
+	extraEnv := cliConfigEnv(spec.Provider, spec.Binary, configDir)
 
 	switch spec.Provider {
 	case "anthropic":
 		pctx, cancel := context.WithTimeout(ctx, 6*time.Second)
-		out, _, _, runErr := runner.Run(pctx, binPath, []string{"auth", "status", "--json"}, "")
+		out, _, _, runErr := runCLIWithOptionalEnv(pctx, runner, binPath, []string{"auth", "status", "--json"}, "", extraEnv)
 		cancel()
 		if obj := extractJSONObject(out); len(obj) > 0 {
 			var parsed struct {
@@ -313,7 +505,7 @@ func probeSingleCLI(ctx context.Context, runner providerCLIRunner, spec cliProvi
 
 	case "openai":
 		pctx, cancel := context.WithTimeout(ctx, 4*time.Second)
-		out, errOut, code, runErr := runner.Run(pctx, binPath, []string{"login", "status"}, "")
+		out, errOut, code, runErr := runCLIWithOptionalEnv(pctx, runner, binPath, []string{"login", "status"}, "", extraEnv)
 		cancel()
 		combined := string(out) + "\n" + string(errOut)
 		lower := strings.ToLower(stripANSI(combined))
@@ -324,7 +516,10 @@ func probeSingleCLI(ctx context.Context, runner providerCLIRunner, spec cliProvi
 
 	case "google":
 		home, _ := os.UserHomeDir()
-		if home != "" && (runner.FileExistsNonEmpty(filepath.Join(home, ".gemini", "oauth_creds.json")) || runner.FileExistsNonEmpty(filepath.Join(home, ".gemini", "google_accounts.json"))) {
+		if configDir != "" && validCLIConfigDir(configDir) {
+			home = expandCLIUserPath(configDir)
+		}
+		if home != "" && (runner.FileExistsNonEmpty(filepath.Join(home, ".gemini", "oauth_creds.json")) || runner.FileExistsNonEmpty(filepath.Join(home, ".gemini", "google_accounts.json")) || runner.FileExistsNonEmpty(filepath.Join(home, "oauth_creds.json"))) {
 			status.Authenticated = true
 			status.Account = "Google CLI"
 		} else if os.Getenv("GEMINI_API_KEY") != "" {
@@ -334,11 +529,11 @@ func probeSingleCLI(ctx context.Context, runner providerCLIRunner, spec cliProvi
 
 	case "xai":
 		pctx, cancel := context.WithTimeout(ctx, 4*time.Second)
-		out, errOut, code, runErr := runner.Run(pctx, binPath, []string{"auth", "status"}, "")
+		out, errOut, code, runErr := runCLIWithOptionalEnv(pctx, runner, binPath, []string{"auth", "status"}, "", extraEnv)
 		cancel()
 		if code != 0 || runErr != nil {
 			pctx2, cancel2 := context.WithTimeout(ctx, 4*time.Second)
-			out, errOut, code, runErr = runner.Run(pctx2, binPath, []string{"login", "status"}, "")
+			out, errOut, code, runErr = runCLIWithOptionalEnv(pctx2, runner, binPath, []string{"login", "status"}, "", extraEnv)
 			cancel2()
 		}
 		combined := string(out) + "\n" + string(errOut)
@@ -368,17 +563,28 @@ func runParallelCLIProbe(ctx context.Context, runner providerCLIRunner) []HostCL
 func fastInitialCLIStatuses(runner providerCLIRunner) []HostCLIStatus {
 	out := make([]HostCLIStatus, len(supportedCLIProviders))
 	for i, spec := range supportedCLIProviders {
+		transport := spec.Transport
+		if transport == "" {
+			transport = "cli"
+		}
 		st := HostCLIStatus{
 			Provider:       spec.Provider,
 			Binary:         spec.Binary,
 			Label:          spec.Label,
+			Transport:      transport,
 			SupportsDevice: spec.SupportsDevice,
 			LoginCommand:   spec.LoginCommand,
 			InstallHint:    spec.InstallHint,
 			Models:         append([]string(nil), spec.Models...),
 		}
-		if p, err := runner.LookPath(spec.Binary); err == nil && p != "" {
+		if spec.Binary == "antigravity" {
+			if p, err := discoverAntigravityACP(runner, ""); err == nil && p != "" {
+				st.Installed = true
+				st.BinaryPath = p
+			}
+		} else if p, err := runner.LookPath(spec.Binary); err == nil && p != "" {
 			st.Installed = true
+			st.BinaryPath = p
 		}
 		out[i] = st
 	}
@@ -454,8 +660,129 @@ func (s *Store) probeHostCLIs(ctx context.Context, force bool) []HostCLIStatus {
 	return out
 }
 
+func validHexAccentColor(s string) bool {
+	if s == "" {
+		return true
+	}
+	if len(s) != 7 || s[0] != '#' {
+		return false
+	}
+	for i := 1; i < 7; i++ {
+		c := s[i]
+		if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')) {
+			return false
+		}
+	}
+	return true
+}
+
+func cliConfigEnv(provider, binary, configDir string) []string {
+	configDir = strings.TrimSpace(configDir)
+	if configDir == "" || !validCLIConfigDir(configDir) {
+		return nil
+	}
+	expanded := expandCLIUserPath(configDir)
+	switch {
+	case binary == "antigravity":
+		return []string{
+			"ANTIGRAVITY_HOME=" + expanded,
+			"ANTIGRAVITY_CONFIG_DIR=" + expanded,
+			"XDG_CONFIG_HOME=" + filepath.Join(expanded, "config"),
+			"XDG_DATA_HOME=" + filepath.Join(expanded, "data"),
+		}
+	case provider == "anthropic":
+		return []string{"CLAUDE_CONFIG_DIR=" + expanded}
+	case provider == "openai":
+		return []string{"CODEX_HOME=" + expanded}
+	case provider == "google":
+		return []string{"GEMINI_CLI_HOME=" + expanded, "HOME=" + expanded}
+	default:
+		return nil
+	}
+}
+
+func (osCLIRunner) RunWithEnv(ctx context.Context, binary string, args []string, stdin string, extraEnv []string) ([]byte, []byte, int, error) {
+	cmd := exec.CommandContext(ctx, binary, args...)
+	cmd.Env = mergeCLIEnv(sanitizedCLIEnv(), extraEnv)
+	if stdin != "" {
+		cmd.Stdin = strings.NewReader(stdin)
+	}
+	var outBuf, errBuf bytes.Buffer
+	cmd.Stdout = &limitedWriter{w: &outBuf, max: 128 * 1024}
+	cmd.Stderr = &limitedWriter{w: &errBuf, max: 32 * 1024}
+	err := cmd.Run()
+	code := 0
+	if err != nil {
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) {
+			code = exitErr.ExitCode()
+		} else {
+			code = -1
+		}
+	}
+	return outBuf.Bytes(), errBuf.Bytes(), code, err
+}
+
+func mergeCLIEnv(base, extra []string) []string {
+	if len(extra) == 0 {
+		return base
+	}
+	overridden := map[string]bool{}
+	var validExtra []string
+	for _, entry := range extra {
+		if k, _, ok := strings.Cut(entry, "="); ok && k != "" {
+			overridden[k] = true
+			validExtra = append(validExtra, entry)
+		}
+	}
+	dedup := make([]string, 0, len(base)+len(validExtra))
+	for _, entry := range base {
+		if k, _, ok := strings.Cut(entry, "="); ok && overridden[k] {
+			continue
+		}
+		dedup = append(dedup, entry)
+	}
+	return append(dedup, validExtra...)
+}
+
+func resolveCLIConnectTarget(ctx context.Context, runner providerCLIRunner, provider, binary, binaryPath, configDir string) (cliProviderSpec, HostCLIStatus, bool) {
+	if binary != "" {
+		spec, ok := cliSpecForTarget(provider, binary)
+		if !ok {
+			return cliProviderSpec{}, HostCLIStatus{}, false
+		}
+		return spec, probeSingleCLIWithConfig(ctx, runner, spec, binaryPath, configDir), true
+	}
+	specs := cliSpecsForProvider(provider)
+	if len(specs) == 0 {
+		return cliProviderSpec{}, HostCLIStatus{}, false
+	}
+	var installedSpec *cliProviderSpec
+	var installedStatus HostCLIStatus
+	firstSpec := specs[0]
+	var firstStatus HostCLIStatus
+	for i, sp := range specs {
+		st := probeSingleCLIWithConfig(ctx, runner, sp, binaryPath, configDir)
+		if i == 0 {
+			firstStatus = st
+		}
+		if st.Installed && st.Authenticated {
+			return sp, st, true
+		}
+		if st.Installed && installedSpec == nil {
+			copySpec := sp
+			installedSpec = &copySpec
+			installedStatus = st
+		}
+	}
+	if installedSpec != nil {
+		return *installedSpec, installedStatus, true
+	}
+	return firstSpec, firstStatus, true
+}
+
 func (s *Store) changeProviderCLI(ctx context.Context, c AIConnectionCommand) (AIConnectionView, error) {
-	if c.Key != "" || c.CredentialMode != "" || c.Pilot != nil || c.Allowance != nil || c.Revision != 0 || c.ProfileID != "" || len(c.TaskIDs) > 0 || c.AuthorizationSeconds != 0 || c.ConsentDigest != "" || c.GoogleProject != "" {
+	if c.Key != "" || c.CredentialMode != "" || c.Pilot != nil || c.Allowance != nil || c.Revision != 0 || c.ProfileID != "" || len(c.TaskIDs) > 0 || c.AuthorizationSeconds != 0 || c.ConsentDigest != "" || c.GoogleProject != "" || c.Disabled != nil {
 		return AIConnectionView{}, errors.New("CLI subscription operation accepts no key or task grant")
 	}
 	var phase string
@@ -487,14 +814,22 @@ func (s *Store) changeProviderCLI(ctx context.Context, c AIConnectionCommand) (A
 		if !s.cliSubscriptionsAvailable() {
 			return AIConnectionView{}, errors.New("CLI subscriptions are held in this build")
 		}
-		spec, ok := cliSpecForProvider(c.Provider)
-		if !ok || !validAgentText(c.Name, 80, false) || !s.validPassphraseOrOS(ctx, c.Passphrase) {
+		if !validAgentText(c.Name, 80, false) || !s.validPassphraseOrOS(ctx, c.Passphrase) || !validHexAccentColor(c.AccentColor) {
 			return AIConnectionView{}, errors.New("select a supported CLI subscription provider and vault passphrase")
+		}
+		if c.BinaryPath != "" && !validCustomCLIBinaryPath(c.BinaryPath) {
+			return AIConnectionView{}, errors.New("invalid CLI binary path")
+		}
+		if c.ConfigDir != "" && !validCLIConfigDir(c.ConfigDir) {
+			return AIConnectionView{}, errors.New("invalid CLI config directory")
 		}
 		if s.pilotBindingActive() {
 			return AIConnectionView{}, errors.New("pilot permits one initial OpenAI account; preserve the existing vault")
 		}
-		status := probeSingleCLI(ctx, s.cliRunner(), spec)
+		spec, status, ok := resolveCLIConnectTarget(ctx, s.cliRunner(), c.Provider, c.Binary, c.BinaryPath, c.ConfigDir)
+		if !ok {
+			return AIConnectionView{}, errors.New("select a supported CLI subscription provider and vault passphrase")
+		}
 		if !status.Installed {
 			return AIConnectionView{}, errors.New(spec.Label + " is not installed on this host")
 		}
@@ -505,7 +840,7 @@ func (s *Store) changeProviderCLI(ctx context.Context, c AIConnectionCommand) (A
 		if name == "" {
 			name = spec.Label
 		}
-		v, err := s.persistCLIConnection(ctx, spec.Provider, name, c.Ref, c.Passphrase)
+		v, err := s.persistCLIConnectionWithSpec(ctx, spec.Provider, spec.Binary, c.BinaryPath, c.ConfigDir, name, c.AccentColor, c.Ref, c.Passphrase)
 		if err != nil {
 			return AIConnectionView{}, err
 		}
@@ -534,10 +869,18 @@ func (s *Store) persistCLIConnection(ctx context.Context, provider, name, existi
 	if !ok {
 		return AIConnectionView{}, errors.New("unsupported CLI subscription provider")
 	}
-	if !validAgentText(name, 80, false) {
+	return s.persistCLIConnectionWithSpec(ctx, spec.Provider, spec.Binary, "", "", name, "", existingRef, passphrase)
+}
+
+func (s *Store) persistCLIConnectionWithSpec(ctx context.Context, provider, binary, binaryPath, configDir, name, accentColor, existingRef, passphrase string) (AIConnectionView, error) {
+	spec, ok := cliSpecForTarget(provider, binary)
+	if !ok {
+		return AIConnectionView{}, errors.New("unsupported CLI subscription provider")
+	}
+	if !validAgentText(name, 80, false) || !validHexAccentColor(accentColor) {
 		return AIConnectionView{}, errors.New("invalid connection name")
 	}
-	plain, err := encodeCLIProviderCredential(spec.Provider)
+	plain, err := encodeCLIProviderCredentialWithConfig(spec.Provider, spec.Binary, binaryPath, configDir)
 	if err != nil {
 		return AIConnectionView{}, err
 	}
@@ -573,13 +916,14 @@ func (s *Store) persistCLIConnection(ctx context.Context, provider, name, existi
 	}
 
 	env := aiVaultEnvelope{
-		Provider: spec.Provider,
-		Name:     strings.TrimSpace(name),
-		Mode:     "cli",
-		Version:  8,
-		TestOnly: s.providerFixture && !s.provider.apiCredentials,
-		Salt:     make([]byte, 16),
-		Nonce:    make([]byte, 12),
+		Provider:    spec.Provider,
+		Name:        strings.TrimSpace(name),
+		AccentColor: accentColor,
+		Mode:        "cli",
+		Version:     8,
+		TestOnly:    s.providerFixture && !s.provider.apiCredentials,
+		Salt:        make([]byte, 16),
+		Nonce:       make([]byte, 12),
 	}
 	if env.Ref, err = randomToken(); err != nil {
 		return AIConnectionView{}, err

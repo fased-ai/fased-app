@@ -132,7 +132,7 @@ func resolveAgentV2Provider(ctx context.Context, s *Store, explicitRef, threadRe
 			return resolvedAgentProvider{}, errors.New("invalid AI connection reference")
 		}
 		v, err := s.AIConnection(ref)
-		if err != nil || v.Ref != ref || v.Locked || v.PlanPaused {
+		if err != nil || v.Ref != ref || v.Locked || v.Disabled || v.PlanPaused {
 			return resolvedAgentProvider{}, errors.New("selected AI provider is locked or unavailable; unlock or reconnect it in Providers")
 		}
 		return buildResolved(v)
@@ -144,19 +144,19 @@ func resolveAgentV2Provider(ctx context.Context, s *Store, explicitRef, threadRe
 			continue
 		}
 		v, err := s.AIConnection(candidateRef)
-		if err == nil && v.Ref == candidateRef && !v.Locked && !v.PlanPaused {
+		if err == nil && v.Ref == candidateRef && !v.Locked && !v.Disabled && !v.PlanPaused {
 			return buildResolved(v)
 		}
 	}
 
 	// Priority 3: default or first unlocked connection.
 	v, err := s.AIConnection()
-	if err == nil && v.Ref != "" && !v.Locked && !v.PlanPaused {
+	if err == nil && v.Ref != "" && !v.Locked && !v.Disabled && !v.PlanPaused {
 		return buildResolved(v)
 	}
 	if err == nil {
 		for _, c := range v.Connections {
-			if c.Ref != "" && !c.Locked && !c.PlanPaused {
+			if c.Ref != "" && !c.Locked && !c.Disabled && !c.PlanPaused {
 				return buildResolved(c)
 			}
 		}
@@ -189,11 +189,14 @@ func streamProviderV2(ctx context.Context, s *Store, target resolvedAgentProvide
 	if target.Fixture && s.agentV2TransportOverride == nil {
 		return runFixtureProviderV2(ctx, prompt, cb)
 	}
+	if target.AuthMethod == "cli" {
+		if !s.cliSubscriptionsAvailable() {
+			return providerTurnResult{}, errors.New("provider calls are disabled on this instance")
+		}
+		return streamProviderCLIV2(ctx, s, target, prompt, cb)
+	}
 	if !s.aiExecutionAvailable(s.providerFixture) && s.agentV2TransportOverride == nil {
 		return providerTurnResult{}, errors.New("provider calls are disabled on this instance")
-	}
-	if target.AuthMethod == "cli" {
-		return streamProviderCLIV2(ctx, s, target, prompt, cb)
 	}
 	baseRT := s.agentV2TransportOverride
 	if baseRT == nil {

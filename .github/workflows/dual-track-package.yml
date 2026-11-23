@@ -93,7 +93,13 @@ jobs:
           node scripts/ci-ubuntu-mirror.mjs
           sudo install -m 0644 .evidence/ubuntu.sources /etc/apt/sources.list.d/ubuntu.sources
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends libgtk-3-dev libwebkit2gtk-4.1-dev desktop-file-utils dpkg-dev
+          sudo apt-get install -y --no-install-recommends libgtk-3-dev libwebkit2gtk-4.1-dev desktop-file-utils dpkg-dev curl
+          if [ "$(uname -m)" = "x86_64" ]; then
+            curl -fsSL -o /tmp/appimagetool "https://github.com/AppImage/appimagetool/releases/download/1.9.1/appimagetool-x86_64.AppImage"
+            echo "ed4ce84f0d9caff66f50bcca6ff6f35aae54ce8135408b3fa33abfc3cb384eb0  /tmp/appimagetool" | sha256sum --check -
+            sudo install -m 0755 /tmp/appimagetool /usr/local/bin/appimagetool
+            rm -f /tmp/appimagetool
+          fi
       - run: go -C desktop mod verify
       - run: npm run build:desktop
       - run: npm run build:core

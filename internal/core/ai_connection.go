@@ -34,6 +34,11 @@ type AIConnectionCommand struct {
 	Remote               bool                  `json:"remote,omitempty"`
 	Pilot                *OpenAIPilotAllowance `json:"pilot,omitempty"`
 	Provider             string                `json:"provider,omitempty"`
+	Binary               string                `json:"binary,omitempty"`
+	BinaryPath           string                `json:"binaryPath,omitempty"`
+	ConfigDir            string                `json:"configDir,omitempty"`
+	AccentColor          string                `json:"accentColor,omitempty"`
+	Disabled             *bool                 `json:"disabled,omitempty"`
 	Name                 string                `json:"name,omitempty"`
 	CredentialMode       string                `json:"credentialMode,omitempty"`
 	Revision             int64                 `json:"revision,omitempty"`
@@ -55,6 +60,12 @@ type AIConnectionView struct {
 	GoogleSignInAvailable         bool                  `json:"googleSignInAvailable"`
 	Endpoint                      string                `json:"endpoint,omitempty"`
 	AuthMethod                    string                `json:"authMethod"`
+	Disabled                      bool                  `json:"disabled,omitempty"`
+	Binary                        string                `json:"binary,omitempty"`
+	BinaryPath                    string                `json:"binaryPath,omitempty"`
+	ConfigDir                     string                `json:"configDir,omitempty"`
+	AccentColor                   string                `json:"accentColor,omitempty"`
+	CLIVersion                    string                `json:"cliVersion,omitempty"`
 	PlanUse                       bool                  `json:"planUse"`
 	PlanPaused                    bool                  `json:"planPaused"`
 	PlanFailure                   string                `json:"planFailure,omitempty"`
@@ -91,6 +102,8 @@ type AIConnectionView struct {
 type aiVaultEnvelope struct {
 	OSProtected bool   `json:"osProtected,omitempty"`
 	TestOnly    bool   `json:"testOnly,omitempty"`
+	Disabled    bool   `json:"disabled,omitempty"`
+	AccentColor string `json:"accentColor,omitempty"`
 	Provider    string `json:"provider,omitempty"`
 	Name        string `json:"name,omitempty"`
 	Mode        string `json:"mode,omitempty"`
@@ -346,6 +359,22 @@ func (s *Store) aiConnectionLocked(refs ...string) (v AIConnectionView, err erro
 		}
 		if v.CredentialMode == "cli" {
 			v.AuthMethod = "cli"
+			if state := s.provider.accounts[v.Ref]; state != nil {
+				if cred, ok := parseCLIProviderCredential(state.key); ok {
+					v.Binary = cred.Binary
+					v.BinaryPath = cred.BinaryPath
+					v.ConfigDir = cred.ConfigDir
+				}
+			}
+			for _, cli := range v.HostCLIs {
+				if cli.Provider == v.Provider && (v.Binary == "" || cli.Binary == v.Binary) {
+					if v.Binary == "" {
+						v.Binary = cli.Binary
+					}
+					v.CLIVersion = cli.Version
+					break
+				}
+			}
 		}
 		s.pilotViewLocked(&v)
 		if s.pilotBindingActiveLocked() {
@@ -407,6 +436,8 @@ func (s *Store) aiConnectionLocked(refs ...string) (v AIConnectionView, err erro
 	}
 	state := s.credentialLocked(env.Ref)
 	v.Name = env.Name
+	v.Disabled = env.Disabled
+	v.AccentColor = env.AccentColor
 	v.Provider = aiVaultProvider(env)
 	v.Ref = env.Ref
 	v.OSProtected = env.OSProtected
@@ -483,6 +514,9 @@ func (s *Store) AIConnection(refs ...string) (AIConnectionView, error) {
 		if err != nil {
 			return v, err
 		}
+		// Host-level CLI inventory and device-auth state belong on root v only.
+		a.HostCLIs = nil
+		a.CLIAuth = nil
 		v.Connections = append(v.Connections, a)
 	}
 	return v, nil
@@ -572,6 +606,12 @@ func (s *Store) ChangeAIConnection(ctx context.Context, c AIConnectionCommand) (
 	if strings.HasPrefix(c.Action, "cli-") {
 		return s.changeProviderCLI(ctx, c)
 	}
+	if c.Binary != "" || c.BinaryPath != "" || c.ConfigDir != "" || c.AccentColor != "" {
+		return AIConnectionView{}, errors.New("CLI fields require a CLI operation")
+	}
+	if c.Disabled != nil && c.Action != "set-enabled" {
+		return AIConnectionView{}, errors.New("disabled state requires set-enabled")
+	}
 	if c.SignInID != "" || c.Callback != "" || c.Remote {
 		return AIConnectionView{}, errors.New("sign-in fields require a sign-in operation")
 	}
@@ -611,7 +651,7 @@ func (s *Store) ChangeAIConnection(ctx context.Context, c AIConnectionCommand) (
 		signalStoreChange(s)
 		return v, nil
 	}
-	if c.Action == "lock" || c.Action == "save" || c.Action == "add" || c.Action == "unlock" {
+	if c.Action == "lock" || c.Action == "save" || c.Action == "add" || c.Action == "unlock" || c.Action == "set-enabled" {
 		signalStoreChange(s)
 	}
 	if c.Action == "unlock" && v.Ref != "" && len(cached) > 0 {
@@ -738,6 +778,39 @@ func (s *Store) changeAIConnection(ctx context.Context, c AIConnectionCommand) (
 			return v, ErrConflict
 		}
 		v = AIConnectionView{}
+	}
+	if c.Action == "set-enabled" {
+		if c.Ref == "" || c.Disabled == nil || c.Key != "" || c.Passphrase != "" || c.Provider != "" || c.Name != "" || c.CredentialMode != "" || c.Workspace != "" || c.Endpoint != "" || c.Server != "" {
+			return v, errors.New("enable toggle accepts an account and disabled flag only")
+		}
+		if v.Ref == "" || v.Ref != c.Ref {
+			return v, ErrConflict
+		}
+		col, err := s.readAIVaultCollection()
+		if err != nil {
+			return v, err
+		}
+		foundIdx := -1
+		for i, a := range col.Accounts {
+			if a.Ref == c.Ref {
+				foundIdx = i
+				break
+			}
+		}
+		if foundIdx < 0 {
+			return v, ErrConflict
+		}
+		oldEncoded, _ := json.Marshal(col.Accounts[foundIdx])
+		oldDigest := sha256.Sum256(oldEncoded)
+		col.Accounts[foundIdx].Disabled = *c.Disabled
+		if e = s.writeAIVaultCollection(col); e != nil {
+			return v, errors.New("credential storage failed; inspect vault before retry")
+		}
+		if state := s.provider.accounts[c.Ref]; state != nil && state.digest == oldDigest {
+			newEncoded, _ := json.Marshal(col.Accounts[foundIdx])
+			state.digest = sha256.Sum256(newEncoded)
+		}
+		return s.aiConnectionLocked(c.Ref)
 	}
 	if taskAccessAction(c.Action) {
 		if c.Action != "task-access-revoke" && !s.aiCredentialModeAllowed(v.CredentialMode) && !(s.pilotTargetLocked(v.Ref) && v.CredentialMode == "openai") {
@@ -972,13 +1045,13 @@ func (a authenticatedAITransport) RoundTrip(r *http.Request) (*http.Response, er
 	a.store.provider.mu.Lock()
 	v, e := a.store.aiConnectionLocked(a.ref)
 	state := a.store.credentialLocked(a.ref)
-	allowed := e == nil && !v.Locked && v.Ref == a.ref
+	allowed := e == nil && !v.Locked && !v.Disabled && v.Ref == a.ref
 	if a.modelsOnly && (r.URL.Path != providerModelsPath(v.Provider) || r.Method != "GET" || !providerRequestAllowed(v.Provider, r)) {
 		allowed = false
 	}
 
 	if a.request != nil && a.request.TaskID != "" {
-		allowed = e == nil && v.Ref == a.ref && a.store.taskAccessMatches(*a.request, state.taskAccess, true, state)
+		allowed = e == nil && v.Ref == a.ref && !v.Disabled && a.store.taskAccessMatches(*a.request, state.taskAccess, true, state)
 	}
 	if v.PlanPaused && !a.modelsOnly {
 		allowed = false

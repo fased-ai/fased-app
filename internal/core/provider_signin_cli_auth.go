@@ -58,7 +58,7 @@ func parseDeviceAuthLine(raw string) (string, string) {
 	return verificationURL, userCode
 }
 
-func cliAuthCommandArgs(provider string) ([]string, error) {
+func cliAuthCommandArgs(provider, binary string) ([]string, error) {
 	switch provider {
 	case "openai":
 		return []string{"login", "--device-auth"}, nil
@@ -67,6 +67,9 @@ func cliAuthCommandArgs(provider string) ([]string, error) {
 	case "anthropic":
 		return []string{"auth", "login"}, nil
 	case "google":
+		if binary == "antigravity" {
+			return nil, errors.New("Antigravity ACP requires Google sign-in; run 'antigravity acp --login' in a terminal, then click Check again")
+		}
 		return nil, errors.New("Gemini CLI requires interactive terminal sign-in; run 'gemini' in a terminal, then click Check again")
 	default:
 		return nil, errors.New("unsupported CLI subscription provider")
@@ -106,15 +109,15 @@ func (s *Store) cancelCLIAuthLocked() {
 }
 
 func (s *Store) startProviderCLIAuth(ctx context.Context, c AIConnectionCommand) (AIConnectionView, error) {
-	spec, ok := cliSpecForProvider(c.Provider)
+	runner := s.cliRunner()
+	spec, _, ok := resolveCLIConnectTarget(ctx, runner, c.Provider, c.Binary, "", "")
 	if !ok {
 		return AIConnectionView{}, errors.New("select a supported CLI subscription provider")
 	}
-	args, err := cliAuthCommandArgs(spec.Provider)
+	args, err := cliAuthCommandArgs(spec.Provider, spec.Binary)
 	if err != nil {
 		return AIConnectionView{}, err
 	}
-	runner := s.cliRunner()
 	binPath, err := runner.LookPath(spec.Binary)
 	if err != nil || binPath == "" {
 		return AIConnectionView{}, errors.New(spec.Label + " is not installed on this host")

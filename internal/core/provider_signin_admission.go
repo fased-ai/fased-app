@@ -22,7 +22,7 @@ func planSignInPolicy(policy *OpenAIModelPolicy) bool {
 }
 func planSignInRequest(q AgentAIRequest) bool { return planSignInPolicy(q.Policy) }
 func validPolicyLimits(l AILimits, p *OpenAIModelPolicy) bool {
-	if localPolicy(p) || kimiCodePolicy(p) || ollamaCloudPolicy(p) {
+	if localPolicy(p) || kimiCodePolicy(p) || ollamaCloudPolicy(p) || cliPolicy(p) {
 		return l.MaxInputTokens >= 1000 && l.MaxInputTokens <= 32000 && l.MaxOutputTokens >= 128 && l.MaxOutputTokens <= 1024 && l.DeadlineSeconds >= 1 && l.DeadlineSeconds <= 120 && l.BudgetMicrousd == 0
 	}
 	if !unmeteredPolicy(p) {
