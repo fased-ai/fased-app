@@ -60,6 +60,8 @@ type AIConnectionView struct {
 	PlanFailure                   string                `json:"planFailure,omitempty"`
 	SignInAvailable               bool                  `json:"signInAvailable"`
 	SignIn                        *ProviderSignInView   `json:"signIn,omitempty"`
+	HostCLIs                      []HostCLIStatus       `json:"hostClis,omitempty"`
+	CLIAuth                       *CLIAuthView          `json:"cliAuth,omitempty"`
 	PilotEnrollment               bool                  `json:"pilotEnrollment,omitempty"`
 	PilotAvailable                bool                  `json:"pilotAvailable,omitempty"`
 	Pilot                         *OpenAIPilotAllowance `json:"pilot,omitempty"`
@@ -102,6 +104,11 @@ type providerState struct {
 	signIn          *providerSignInAttempt
 	signInTransport http.RoundTripper // controlled tests only; ordinary constructors never inject it
 	signInRenewals  map[string]bool
+	cliAuth         *providerCLIAuthAttempt
+	cliRunner       providerCLIRunner
+	cliCache        []HostCLIStatus
+	cliCacheAt      time.Time
+	cliProbing      bool
 	// Closed in every runtime constructor. Only controlled tests set this field.
 	apiCredentials bool
 	nextEpoch      uint64
@@ -284,6 +291,7 @@ func (s *Store) lockAIConnection() {
 	s.chatEpoch.Add(1)
 	s.provider.mu.Lock()
 	s.cancelProviderSignInLocked()
+	s.cancelCLIAuthLocked()
 	s.clearAIConnectionLocked()
 	for ref := range s.provider.accounts {
 		s.clearAIConnectionLocked(ref)
@@ -298,6 +306,8 @@ func (s *Store) aiConnectionLocked(refs ...string) (v AIConnectionView, err erro
 		v.OSVaultAvailable = s.persistentTaskAccessAvailable && !s.isFixtureTaskSecrets()
 		v.SignInAvailable = s.providerSignInAvailableLocked()
 		v.SignIn = s.providerSignInViewLocked()
+		v.HostCLIs = s.hostCLIStatusesLocked()
+		v.CLIAuth = s.cliAuthViewLocked()
 		v.AuthMethod = "api-key"
 		if v.Provider == "anthropic" {
 			if state := s.provider.accounts[v.Ref]; state != nil {
@@ -333,6 +343,9 @@ func (s *Store) aiConnectionLocked(refs ...string) (v AIConnectionView, err erro
 					v.PlanUse = credential.planUse()
 				}
 			}
+		}
+		if v.CredentialMode == "cli" {
+			v.AuthMethod = "cli"
 		}
 		s.pilotViewLocked(&v)
 		if s.pilotBindingActiveLocked() {
@@ -556,6 +569,9 @@ func (s *Store) ChangeAIConnection(ctx context.Context, c AIConnectionCommand) (
 		}
 		return v, err
 	}
+	if strings.HasPrefix(c.Action, "cli-") {
+		return s.changeProviderCLI(ctx, c)
+	}
 	if c.SignInID != "" || c.Callback != "" || c.Remote {
 		return AIConnectionView{}, errors.New("sign-in fields require a sign-in operation")
 	}
@@ -575,6 +591,10 @@ func (s *Store) ChangeAIConnection(ctx context.Context, c AIConnectionCommand) (
 	if c.Action == "models-refresh" {
 		if c.Provider != "" || c.Ref == "" || c.Key != "" || c.Passphrase != "" || c.Name != "" || c.CredentialMode != "" || c.Allowance != nil || c.ProfileID != "" || c.Revision != 0 || len(c.TaskIDs) > 0 || c.AuthorizationSeconds != 0 || c.ConsentDigest != "" {
 			return AIConnectionView{}, errors.New("model refresh accepts an account only")
+		}
+		if v, err := s.AIConnection(c.Ref); err == nil && v.AuthMethod == "cli" {
+			s.probeHostCLIs(ctx, true)
+			return s.AIConnection(c.Ref)
 		}
 		return s.refreshProviderModels(ctx, c.Ref, s.providerModelTransport(c.Ref))
 	}
@@ -710,6 +730,9 @@ func (s *Store) changeAIConnection(ctx context.Context, c AIConnectionCommand) (
 	if (c.Action == "save" || c.Action == "remove") && (v.AuthMethod == "sign-in" || v.AuthMethod == "oauth") {
 		return v, errors.New("reconnect this sign-in account or add a separate API-key account")
 	}
+	if c.Action == "save" && v.AuthMethod == "cli" {
+		return v, errors.New("reconnect this CLI subscription account or add a separate API-key account")
+	}
 	if c.Action == "add" {
 		if c.Ref != "" {
 			return v, ErrConflict
@@ -766,6 +789,12 @@ func (s *Store) changeAIConnection(ctx context.Context, c AIConnectionCommand) (
 			return v, errors.New("vault unlock failed")
 		}
 		if c.Action == "unlock" {
+			if env.Version == 8 {
+				cred, ok := parseCLIProviderCredential(plain)
+				if !ok || cred.Provider != env.Provider {
+					return v, errors.New("vault unlock failed")
+				}
+			}
 			old := s.credentialLocked(env.Ref)
 			var taskAccess *TaskAccessAllowance
 			durable, last := old.durableAccess, int64(0)
@@ -1112,6 +1141,9 @@ func (a authenticatedAITransport) RoundTrip(r *http.Request) (*http.Response, er
 }
 
 func validAIVaultMode(v aiVaultEnvelope) bool {
+	if v.Version == 8 {
+		return v.Mode == "cli" && validCLIProvider(v.Provider)
+	}
 	if v.Version == 7 {
 		return v.Provider == "anthropic" && !v.TestOnly && (v.Mode == "test" || v.Mode == "anthropic")
 	}
@@ -1145,6 +1177,9 @@ func aiVaultMode(v aiVaultEnvelope) string {
 	return v.Mode
 }
 func (s *Store) aiCredentialModeAllowed(mode string) bool {
+	if mode == "cli" {
+		return s.provider.apiCredentials || s.providerFixture || s.provider.cliRunner != nil
+	}
 	if mode == "local" {
 		return s.providerFixture || s.provider.apiCredentials
 	}
@@ -1177,6 +1212,10 @@ func validAICredential(mode, key string) bool {
 	if mode == "local" {
 		_, e := localprovider.ParseCredential([]byte(key))
 		return e == nil
+	}
+	if mode == "cli" {
+		_, ok := parseCLIProviderCredential([]byte(key))
+		return ok
 	}
 	if mode == "openai-signin" {
 		_, ok := parseProviderSignInCredential([]byte(key))
@@ -1294,6 +1333,12 @@ func (s *Store) vaultSealKey(ctx context.Context, passphrase string, salt []byte
 func (s *Store) aiVaultAAD(v aiVaultEnvelope) []byte {
 	var aad string
 	switch v.Version {
+	case 8:
+		kind := "live"
+		if v.TestOnly {
+			kind = "fixture"
+		}
+		aad = "fased-cli-provider-v8:" + s.instanceID + ":" + v.Provider + ":" + v.Mode + ":" + v.Ref + ":" + kind
 	case 7:
 		aad = "fased-anthropic-workspace-v7:" + s.instanceID + ":" + v.Provider + ":" + v.Mode + ":" + v.Ref
 	case 6:
@@ -1356,6 +1401,10 @@ func (s *Store) openAIVaultWithPreKey(ctx context.Context, v aiVaultEnvelope, pa
 	gcm, _ := cipher.NewGCM(block)
 	plain, err := gcm.Open(nil, v.Nonce, v.Ciphertext, s.aiVaultAAD(v))
 	valid := validAICredential(aiVaultMode(v), string(plain))
+	if v.Version == 8 {
+		cred, ok := parseCLIProviderCredential(plain)
+		valid = ok && cred.Provider == v.Provider
+	}
 	if v.Version == 7 {
 		_, valid = parseAnthropicWorkspace(plain, aiVaultMode(v))
 	}
@@ -1406,6 +1455,10 @@ func (s *Store) restoreOSProtectedConnections(ctx context.Context) {
 		gcm, _ := cipher.NewGCM(block)
 		plain, err := gcm.Open(nil, env.Nonce, env.Ciphertext, s.aiVaultAAD(env))
 		valid := validAICredential(aiVaultMode(env), string(plain))
+		if env.Version == 8 {
+			cred, ok := parseCLIProviderCredential(plain)
+			valid = ok && cred.Provider == env.Provider
+		}
 		if env.Version == 7 {
 			_, valid = parseAnthropicWorkspace(plain, aiVaultMode(env))
 		}
