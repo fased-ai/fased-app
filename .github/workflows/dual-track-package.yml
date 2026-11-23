@@ -233,4 +233,5 @@ jobs:
         with:
           name: fased-host-smoke-${{ matrix.os }}
           path: .evidence/dual-track-host-smoke-*.json
+          include-hidden-files: true
           retention-days: 7
