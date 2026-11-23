@@ -21,6 +21,8 @@ export type ProvidersPreset = {
   provider?: string;
   method?: "api-key" | "sign-in" | "local";
 };
+export type SettingsTab =
+  "general" | "providers" | "instance" | "updates" | "diagnostics";
 export type PendingChatPrompt = {
   id: string;
   profileId: string;
@@ -278,6 +280,15 @@ function useWorkspaceState() {
     new Map<string, TaskComposerDraft>(),
   );
   const [setupOpen, setSetupOpen] = useState(false);
+  const [settingsModalTab, setSettingsModalTab] = useState<SettingsTab | null>(
+    null,
+  );
+  const openSettingsModal = useCallback((tab: SettingsTab = "general") => {
+    setSettingsModalTab(tab);
+  }, []);
+  const closeSettingsModal = useCallback(() => {
+    setSettingsModalTab(null);
+  }, []);
   const providersOpen = route === "providers";
   const [providersPreset, setProvidersPreset] =
     useState<ProvidersPreset | null>(null);
@@ -347,6 +358,9 @@ function useWorkspaceState() {
     window.addEventListener("hashchange", fn);
     return () => window.removeEventListener("hashchange", fn);
   }, []);
+  useEffect(() => {
+    setSettingsModalTab(null);
+  }, [route]);
   useEffect(() => {
     try {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(prototypeState));
@@ -478,6 +492,9 @@ function useWorkspaceState() {
       route,
       setupOpen,
       setSetupOpen,
+      settingsModalTab,
+      openSettingsModal,
+      closeSettingsModal,
       providersOpen,
       setProvidersOpen,
       providersPreset,
@@ -535,6 +552,9 @@ function useWorkspaceState() {
       dispatch,
       route,
       setupOpen,
+      settingsModalTab,
+      openSettingsModal,
+      closeSettingsModal,
       providersOpen,
       setProvidersOpen,
       providersPreset,

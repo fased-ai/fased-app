@@ -55,6 +55,7 @@ export {
   RotateCcw,
   Search,
   Server,
+  Settings,
   Settings2,
   Shield,
   ShieldCheck,

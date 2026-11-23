@@ -1,0 +1,466 @@
+/* Unified T3-Code-style Settings modal & 3-step Add Provider walkthrough using obsidian WEN tokens. */
+.wt dialog.settings-modal {
+  width: min(980px, calc(100vw - 24px));
+  max-width: min(980px, calc(100vw - 24px));
+  max-height: min(86vh, 760px);
+  display: flex;
+  flex-direction: column;
+  background: var(--wt-surface);
+  border: 1px solid var(--wt-border);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+.wt dialog.settings-modal[open] {
+  display: flex;
+}
+.wt .settings-modal-layout {
+  display: grid;
+  grid-template-columns: 220px minmax(0, 1fr);
+  min-height: 0;
+  flex: 1;
+}
+.wt .settings-modal-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  background: var(--shell-header);
+  border-right: 1px solid var(--wt-border);
+  min-width: 0;
+}
+.wt .settings-modal-search {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border: 1px solid var(--wt-border);
+  border-radius: 8px;
+  background: var(--shell-input);
+  color: var(--wt-muted);
+}
+.wt .settings-modal-search input {
+  width: 100%;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+.wt .settings-modal-tabs {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.wt .settings-modal-tabs button {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 9px;
+  width: 100%;
+  min-height: 36px;
+  padding: 7px 10px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--wt-muted);
+  text-align: left;
+  font-size: 13px;
+  font-weight: 500;
+}
+.wt .settings-modal-tabs button:hover:not(:disabled) {
+  background: var(--shell-hover);
+  border-color: transparent;
+  color: var(--wt-text);
+}
+.wt .settings-modal-tabs button[aria-current="page"] {
+  background: var(--wt-raised);
+  border-color: var(--wt-border);
+  color: var(--wt-text);
+}
+.wt .settings-modal-pane {
+  padding: 16px 20px 20px;
+  overflow-y: auto;
+  display: grid;
+  gap: 14px;
+  align-content: start;
+  min-width: 0;
+}
+.wt .settings-modal-card {
+  border: 1px solid var(--wt-border);
+  border-radius: 10px;
+  background: var(--wt-bg);
+  padding: 12px 14px;
+  display: grid;
+  gap: 10px;
+}
+.wt .settings-modal-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.wt .settings-modal-row strong {
+  font-size: 13px;
+  font-weight: 600;
+}
+.wt .settings-providers-grid {
+  display: grid;
+  grid-template-columns: 288px minmax(0, 1fr);
+  gap: 12px;
+  align-items: start;
+}
+.wt .settings-providers-list {
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid var(--wt-border);
+  border-radius: 10px;
+  background: var(--wt-bg);
+}
+.wt .settings-providers-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.wt .settings-providers-head .agent-actions {
+  display: inline-flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 6px;
+  flex: 0 0 auto;
+}
+.wt .settings-providers-head button {
+  min-height: 30px;
+  height: 30px;
+}
+.wt .settings-providers-head button.icon-button {
+  width: 30px;
+  padding: 0;
+}
+.wt .settings-providers-head button.primary {
+  padding: 0 10px;
+  font-size: 12px;
+}
+.wt .settings-providers-detail .agent-actions,
+.wt .wizard-body .agent-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.wt .wizard-body .appearance-segmented {
+  width: fit-content;
+  justify-self: start;
+}
+.wt .settings-provider-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: 8px;
+  border: 1px solid transparent;
+  background: transparent;
+}
+.wt .settings-provider-row[data-active="true"] {
+  background: var(--wt-raised);
+  border-color: var(--wt-border);
+}
+.wt .settings-provider-row[data-disabled="true"] .settings-provider-select {
+  opacity: 0.58;
+}
+.wt .settings-provider-select {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 2px 0;
+  min-height: 30px;
+  border: 0;
+  background: transparent;
+  text-align: left;
+  color: var(--wt-text);
+}
+.wt .settings-provider-select:hover:not(:disabled) {
+  background: transparent;
+  border-color: transparent;
+}
+.wt .settings-provider-meta {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+.wt .settings-provider-meta > strong {
+  font-size: 13px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.wt .settings-provider-meta > small {
+  font-size: 11px;
+  color: var(--wt-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.wt .provider-accent-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex: 0 0 8px;
+  background: var(--wt-coral);
+}
+.wt .settings-modal .cli-status-dot,
+.wt .provider-wizard .cli-status-dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  margin-right: 6px;
+  flex: 0 0 7px;
+  background: var(--wt-muted);
+}
+.wt .settings-modal .cli-status-dot[data-state="ready"],
+.wt .provider-wizard .cli-status-dot[data-state="ready"] {
+  background: var(--wt-cyan);
+}
+.wt .settings-runtimes-group {
+  border-top: 1px solid var(--wt-border);
+  padding-top: 8px;
+  margin-top: 2px;
+  display: grid;
+  gap: 6px;
+}
+.wt .settings-runtimes-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--wt-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.wt .settings-runtime-chip {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 8px;
+  border-radius: 8px;
+  border: 1px solid var(--wt-border);
+  background: var(--wt-surface);
+  color: var(--wt-text);
+  font-size: 12px;
+  text-align: left;
+}
+.wt .settings-runtime-chip > span:first-child {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.wt .settings-providers-detail {
+  border: 1px solid var(--wt-border);
+  border-radius: 10px;
+  background: var(--wt-bg);
+  padding: 14px;
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+}
+.wt .settings-detail-kv {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+}
+.wt .settings-detail-kv div {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 12px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--wt-border);
+}
+.wt .settings-detail-kv dt {
+  color: var(--wt-muted);
+}
+.wt .settings-detail-kv dd {
+  margin: 0;
+  color: var(--wt-text);
+  overflow-wrap: anywhere;
+  text-align: right;
+}
+
+/* 3-Step Add Provider Wizard */
+.wt dialog.provider-wizard {
+  width: min(620px, calc(100vw - 24px));
+  max-width: min(620px, calc(100vw - 24px));
+  background: var(--wt-surface);
+  border: 1px solid var(--wt-border);
+  border-radius: var(--radius);
+}
+.wt .wizard-steps {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  padding: 12px 16px 0;
+}
+.wt .wizard-step {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--wt-border);
+  background: var(--wt-bg);
+  color: var(--wt-muted);
+  font-size: 12px;
+  font-weight: 500;
+}
+.wt .wizard-step[data-state="active"] {
+  border-color: var(--wt-coral);
+  color: var(--wt-text);
+  background: var(--wt-raised);
+}
+.wt .wizard-step[data-state="done"] {
+  border-color: var(--wt-border);
+  color: var(--wt-text);
+}
+.wt .wizard-step-badge {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  font-size: 11px;
+  font-weight: 700;
+  background: var(--wt-raised);
+  border: 1px solid var(--wt-border);
+  color: var(--wt-muted);
+  flex: 0 0 20px;
+}
+.wt .wizard-step[data-state="active"] .wizard-step-badge,
+.wt .wizard-step[data-state="done"] .wizard-step-badge {
+  background: var(--wt-coral);
+  border-color: var(--wt-coral);
+  color: var(--shell-primary-text);
+}
+.wt .wizard-body {
+  padding: 16px;
+  display: grid;
+  gap: 14px;
+}
+.wt .wizard-provider-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+.wt .wizard-provider-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 44px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--wt-border);
+  background: var(--wt-bg);
+  color: var(--wt-text);
+  text-align: left;
+  font-size: 13px;
+  font-weight: 500;
+}
+.wt .wizard-provider-card:hover:not(:disabled) {
+  background: var(--wt-raised);
+  border-color: var(--wt-btn-hover-border);
+}
+.wt .wizard-provider-card[aria-pressed="true"] {
+  background: var(--wt-raised);
+  border-color: var(--wt-coral);
+  color: var(--wt-text);
+}
+.wt .wizard-provider-card-main {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.wt .wizard-swatches {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.wt .wizard-swatch-btn {
+  width: 28px;
+  height: 28px;
+  min-height: 28px;
+  padding: 0;
+  border-radius: 50%;
+  border: 2px solid var(--wt-border);
+  display: inline-grid;
+  place-items: center;
+  color: var(--shell-primary-text);
+}
+.wt .wizard-swatch-btn[aria-pressed="true"] {
+  border-color: var(--wt-text);
+}
+.wt .wizard-swatch-none {
+  padding: 4px 10px;
+  min-height: 28px;
+  border-radius: 999px;
+  border: 1px solid var(--wt-border);
+  background: var(--wt-bg);
+  color: var(--wt-muted);
+  font-size: 12px;
+}
+.wt .wizard-swatch-none[aria-pressed="true"] {
+  border-color: var(--wt-coral);
+  color: var(--wt-text);
+  background: var(--wt-raised);
+}
+.wt .wizard-footer {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 12px 16px;
+  border-top: 1px solid var(--wt-border);
+  background: var(--shell-header);
+}
+
+@media (max-width: 760px) {
+  .wt dialog.settings-modal {
+    width: calc(100vw - 12px);
+    max-width: calc(100vw - 12px);
+    max-height: 92dvh;
+  }
+  .wt .settings-modal-layout {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr);
+  }
+  .wt .settings-modal-nav {
+    border-right: 0;
+    border-bottom: 1px solid var(--wt-border);
+    padding: 8px 10px;
+  }
+  .wt .settings-modal-tabs {
+    flex-direction: row;
+    overflow-x: auto;
+    gap: 6px;
+  }
+  .wt .settings-modal-tabs button {
+    width: auto;
+    white-space: nowrap;
+    flex: 0 0 auto;
+  }
+  .wt .settings-modal-pane {
+    padding: 12px;
+  }
+  .wt .settings-providers-grid,
+  .wt .wizard-provider-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}

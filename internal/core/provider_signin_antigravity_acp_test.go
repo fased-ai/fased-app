@@ -742,4 +742,57 @@ func openLiveCLIStore(t *testing.T, runner providerCLIRunner) *Store {
 	return s
 }
 
+func TestProviderAccentColorNonCLISave(t *testing.T) {
+	t.Parallel()
+	s := fixtureStore(t)
+
+	if _, err := s.ChangeAIConnection(t.Context(), AIConnectionCommand{
+		Action:      "add",
+		Provider:    "openai",
+		Name:        "Bad Color",
+		Key:         testAPIKey,
+		Passphrase:  testVaultPassword,
+		AccentColor: "not-hex",
+	}); err == nil {
+		t.Fatal("expected invalid accent color error on add")
+	}
+	if _, err := s.ChangeAIConnection(t.Context(), AIConnectionCommand{
+		Action:      "lock",
+		AccentColor: "#27C5DA",
+	}); err == nil {
+		t.Fatal("expected accent color on lock to fail")
+	}
+
+	added, err := s.ChangeAIConnection(t.Context(), AIConnectionCommand{
+		Action:      "add",
+		Provider:    "openai",
+		Name:        "Primary API",
+		Key:         testAPIKey,
+		Passphrase:  testVaultPassword,
+		AccentColor: "#27C5DA",
+	})
+	if err != nil {
+		t.Fatalf("add with AccentColor failed: %v", err)
+	}
+	if added.AccentColor != "#27C5DA" {
+		t.Fatalf("expected AccentColor #27C5DA, got %q", added.AccentColor)
+	}
+
+	// Replacing via save without specifying AccentColor preserves the existing swatch.
+	saved, err := s.ChangeAIConnection(t.Context(), AIConnectionCommand{
+		Action:     "save",
+		Ref:        added.Ref,
+		Provider:   "openai",
+		Name:       "Primary API Renamed",
+		Key:        testAPIKey + "-2",
+		Passphrase: testVaultPassword,
+	})
+	if err != nil {
+		t.Fatalf("save preserving AccentColor failed: %v", err)
+	}
+	if saved.AccentColor != "#27C5DA" {
+		t.Fatalf("expected preserved AccentColor #27C5DA, got %q", saved.AccentColor)
+	}
+}
+
 func boolPtr(v bool) *bool { return &v }

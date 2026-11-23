@@ -606,8 +606,16 @@ func (s *Store) ChangeAIConnection(ctx context.Context, c AIConnectionCommand) (
 	if strings.HasPrefix(c.Action, "cli-") {
 		return s.changeProviderCLI(ctx, c)
 	}
-	if c.Binary != "" || c.BinaryPath != "" || c.ConfigDir != "" || c.AccentColor != "" {
+	if c.Binary != "" || c.BinaryPath != "" || c.ConfigDir != "" {
 		return AIConnectionView{}, errors.New("CLI fields require a CLI operation")
+	}
+	if c.AccentColor != "" {
+		if c.Action != "add" && c.Action != "save" {
+			return AIConnectionView{}, errors.New("accent color requires add or save")
+		}
+		if !validHexAccentColor(c.AccentColor) {
+			return AIConnectionView{}, errors.New("invalid accent color")
+		}
 	}
 	if c.Disabled != nil && c.Action != "set-enabled" {
 		return AIConnectionView{}, errors.New("disabled state requires set-enabled")
@@ -937,7 +945,16 @@ func (s *Store) changeAIConnection(ctx context.Context, c AIConnectionCommand) (
 func (s *Store) persistAIConnectionLocked(ctx context.Context, c AIConnectionCommand, col aiVaultCollection, provider, mode string, bootstrap bool, preSeal preDerivedKDF) (AIConnectionView, error) {
 	var v AIConnectionView
 	var e error
-	env := aiVaultEnvelope{Name: strings.TrimSpace(c.Name), Version: 1, Salt: make([]byte, 16), Nonce: make([]byte, 12)}
+	accentColor := c.AccentColor
+	if accentColor == "" && c.Action == "save" && c.Ref != "" {
+		for _, a := range col.Accounts {
+			if a.Ref == c.Ref {
+				accentColor = a.AccentColor
+				break
+			}
+		}
+	}
+	env := aiVaultEnvelope{Name: strings.TrimSpace(c.Name), AccentColor: accentColor, Version: 1, Salt: make([]byte, 16), Nonce: make([]byte, 12)}
 	if mode == "openai" {
 		env.Version, env.Mode = 2, mode
 	}
