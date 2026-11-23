@@ -29,7 +29,7 @@ const defaults: PlaybookVersion = {
 export function AgentPlaybooks({ view: v }: { view: AgentView }) {
   const { t: uiText } = useUI();
   const core = useCore();
-  const { agents, launchChatPrompt, navigate } = useWorkspace();
+  const { agents, launchChatPrompt } = useWorkspace();
   const [editing, setEditing] = useState<string>();
   const [form, setForm] = useState(defaults);
   const [versions, setVersions] = useState<Record<string, number>>({});
@@ -512,21 +512,6 @@ export function AgentPlaybooks({ view: v }: { view: AgentView }) {
               )}
               {run && (
                 <div className="row-actions">
-                  <button
-                    className="secondary"
-                    disabled={busy}
-                    onClick={async () => {
-                      if (
-                        await agents.change({
-                          action: "task-run-explain",
-                          id: run.id,
-                        })
-                      )
-                        navigate("agents/review");
-                    }}
-                  >
-                    {uiText("Discuss digest")}
-                  </button>
                   <button
                     type="button"
                     className="text-button"

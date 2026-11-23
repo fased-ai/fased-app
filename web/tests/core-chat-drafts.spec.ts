@@ -1699,18 +1699,42 @@ test("configured agent joins account Chat task result and memory without partial
     .click();
   await expect.poll(async () => (await read()).runs.length).toBe(1);
   expect((await read()).runs[0].outcome).toBe("reminded");
-  await page.getByRole("button", { name: "Discuss", exact: true }).click();
-  const source = (await read()).messages.at(-1);
-  expect(source.text).toContain((await read()).runs[0].id);
-  await page
+  await page.getByRole("button", { name: "Open thread", exact: true }).click();
+  await expect(page).toHaveURL(/#agents\/chat$/);
+  const v2Msg = page.locator(".v2-message-assistant").last();
+  await expect(v2Msg).toContainText((await read()).runs[0].id);
+  await v2Msg
     .getByRole("button", { name: "Remember this", exact: true })
-    .last()
     .click();
-  await page
+  const memoryDialog = page.getByRole("dialog", {
+    name: "Memory",
+    exact: true,
+  });
+  await memoryDialog
     .getByLabel("Note", { exact: true })
     .fill("Prefer daily SOL risk summaries");
-  await page.getByRole("button", { name: "Save memory", exact: true }).click();
-  await expect.poll(async () => (await read()).memories.length).toBe(1);
+  await memoryDialog
+    .getByRole("button", { name: "Save memory", exact: true })
+    .click();
+  await expect(memoryDialog).toHaveCount(0);
+  const readV2Memories = async (profile: string) => {
+    const sessionToken = await page.evaluate(() =>
+      sessionStorage.getItem("fased.core.session.v1"),
+    );
+    const res = await page.request.get(
+      `${url}/api/v1/agents/v2/memories?profileId=${encodeURIComponent(profile)}`,
+      {
+        headers: sessionToken
+          ? { Authorization: `Bearer ${sessionToken}` }
+          : undefined,
+      },
+    );
+    expect(res.ok()).toBe(true);
+    return (await res.json()).memories;
+  };
+  await expect
+    .poll(async () => (await readV2Memories(profile.id)).length)
+    .toBe(1);
   await page.getByRole("button", { name: "More", exact: true }).click();
   await page
     .getByRole("navigation", { name: "More pages", exact: true })
@@ -1720,10 +1744,7 @@ test("configured agent joins account Chat task result and memory without partial
     page.getByText("Prefer daily SOL risk summaries", { exact: true }),
   ).toBeVisible();
   const retained = await read();
-  expect(JSON.stringify(retained.memories[0])).toContain(source.id);
-  expect(
-    (await privateCLI(["agents", "--profile", "news-researcher"])).memories,
-  ).toHaveLength(0);
+  expect(await readV2Memories("news-researcher")).toHaveLength(0);
   await captureScreenshot(page, {
     path: test
       .info()

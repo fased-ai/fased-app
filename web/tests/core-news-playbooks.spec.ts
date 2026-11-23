@@ -282,36 +282,52 @@ test("reviewed playbooks keep versions and fresh consent through one fixture dig
     notices: v.notices,
     aiRequests: v.aiRequests,
   };
+  await expect(
+    result.getByRole("button", { name: "Discuss digest", exact: true }),
+  ).toHaveCount(0);
   await result
-    .getByRole("button", { name: "Discuss digest", exact: true })
+    .getByRole("button", { name: "Open in Chat", exact: true })
     .click();
-  await expect(page).toHaveURL(/#agents\/review$/);
-  v = await read();
-  const message = v.messages.at(-1);
-  expect(message.text).toContain(savedResult.runs[0].news.fetchId);
-  const article = page
-    .locator(".local-messages article")
-    .filter({ hasText: message.text });
-  await article
+  await expect(page).toHaveURL(/#agents\/chat$/);
+  await expect(page.locator(".v2-message-user").last()).toContainText(
+    savedResult.runs[0].news.fetchId,
+    { timeout: 12000 },
+  );
+  const assistantMsg = page.locator(".v2-message-assistant").last();
+  await expect(
+    assistantMsg.getByRole("button", { name: "Remember this", exact: true }),
+  ).toBeVisible({ timeout: 12000 });
+  await assistantMsg
     .getByRole("button", { name: "Remember this", exact: true })
     .click();
-  const memory = article.getByRole("region", {
-    name: "Chat memory review",
+  const memoryDialog = page.getByRole("dialog", {
+    name: "Memory",
     exact: true,
   });
-  await revealControl(
-    page,
-    memory.getByRole("textbox", { name: "Note", exact: true }),
-    "",
-  );
-  await memory
+  await memoryDialog
     .getByRole("textbox", { name: "Note", exact: true })
     .fill("Fixture digest sources must be checked before reuse.");
-  expect((await read()).memories).toHaveLength(1);
-  await memory
+  await memoryDialog
     .getByRole("button", { name: "Save memory", exact: true })
     .click();
-  await expect.poll(async () => (await read()).memories.length).toBe(2);
+  await expect(memoryDialog).toHaveCount(0);
+  await expect
+    .poll(async () => {
+      const sessionToken = await page.evaluate(() =>
+        sessionStorage.getItem("fased.core.session.v1"),
+      );
+      const res = await page.request.get(
+        `${url}/api/v1/agents/v2/memories?profileId=${encodeURIComponent(profileId)}&scope=chat`,
+        {
+          headers: sessionToken
+            ? { Authorization: `Bearer ${sessionToken}` }
+            : undefined,
+        },
+      );
+      expect(res.ok()).toBe(true);
+      return (await res.json()).memories.length;
+    })
+    .toBe(1);
   v = await read();
   expect({
     tasks: v.tasks,
@@ -473,11 +489,17 @@ test("joined agent workspace preserves news chat reminder run memory and reviewe
   const fetched = await read();
   const fetch = fetched.newsFetches[0],
     item = fetch.items[0];
-  await news
+  const headlineRow = news
     .locator(".news-headline")
-    .filter({ hasText: item.title })
-    .getByRole("button", { name: "Discuss", exact: true })
-    .click();
+    .filter({ hasText: item.title });
+  await expect(
+    headlineRow.getByRole("button", { name: "Discuss", exact: true }),
+  ).toHaveCount(0);
+  await expect(
+    headlineRow.getByRole("button", { name: "Ask in Chat", exact: true }),
+  ).toBeVisible();
+  await command({ action: "news-item-explain", id: fetch.id, source: item.id });
+  await page.goto(url + "/#agents/review");
   await expect(page.locator(".local-messages")).toContainText(
     "Historical news headline",
   );
@@ -603,84 +625,86 @@ test("joined agent workspace preserves news chat reminder run memory and reviewe
     aiRequests: v.aiRequests,
   };
   await page.getByRole("button", { name: "Results", exact: true }).click();
-  await page
+  const runCard = page
     .locator(".memory-card")
-    .filter({ hasText: `Run ${run.id}` })
-    .getByRole("button", { name: "Discuss", exact: true })
+    .filter({ hasText: `Run ${run.id}` });
+  await expect(
+    runCard.getByRole("button", { name: "Discuss", exact: true }),
+  ).toHaveCount(0);
+  await runCard
+    .getByRole("button", { name: "Open thread", exact: true })
     .click();
-  await expect(page.locator(".local-messages")).toContainText(
-    "Historical reminder run",
-  );
+  await expect(page).toHaveURL(/#agents\/chat$/);
+  const runReply = page.locator(".v2-message-assistant").last();
+  await expect(runReply).toContainText(run.id);
+  await expect(runReply).toContainText(item.title);
   v = await read();
-  const runMessage = v.messages.at(-1);
-  expect(runMessage.text).toContain(run.id);
-  expect(runMessage.text).toContain(item.title);
   expect({
     tasks: v.tasks,
     runs: v.runs,
     notices: v.notices,
     aiRequests: v.aiRequests,
   }).toEqual(outcomes);
-  const runArticle = page
-    .locator(".local-messages article")
-    .filter({ hasText: runMessage.text });
-  await runArticle
+  await runReply
     .getByRole("button", { name: "Remember this", exact: true })
     .click();
-  const memoryReview = runArticle.getByRole("region", {
-    name: "Chat memory review",
+  const memoryDialog = page.getByRole("dialog", {
+    name: "Memory",
     exact: true,
   });
   const noteText =
     "Review retained headline provenance before planning the next reminder";
-  await revealControl(
-    page,
-    memoryReview.getByLabel("Note", { exact: true }),
-    "",
-  );
-  await memoryReview.getByLabel("Note", { exact: true }).fill(noteText);
-  expect((await read()).memories).toHaveLength(0);
-  await memoryReview
+  await memoryDialog.getByLabel("Note", { exact: true }).fill(noteText);
+  await memoryDialog
     .getByRole("button", { name: "Save memory", exact: true })
     .click();
-  await expect.poll(async () => (await read()).memories.length).toBe(1);
-  await expect(runArticle.getByRole("status")).toHaveText("Memory saved.");
-  v = await read();
-  const note = v.memories[0];
-  expect(note.text).toBe(noteText);
-  expect(note.source).toContain(`id=${runMessage.id}`);
-  expect(note.source).toContain(
-    `sha256=${createHash("sha256").update(runMessage.text).digest("hex")}`,
+  await expect(memoryDialog).toHaveCount(0);
+  await expect
+    .poll(async () => {
+      const sessionToken = await page.evaluate(() =>
+        sessionStorage.getItem("fased.core.session.v1"),
+      );
+      const res = await page.request.get(
+        `${url}/api/v1/agents/v2/memories?profileId=${encodeURIComponent(profileId)}`,
+        {
+          headers: sessionToken
+            ? { Authorization: `Bearer ${sessionToken}` }
+            : undefined,
+        },
+      );
+      expect(res.ok()).toBe(true);
+      return (await res.json()).memories.length;
+    })
+    .toBe(1);
+  const sessionToken = await page.evaluate(() =>
+    sessionStorage.getItem("fased.core.session.v1"),
   );
-  const recall = await privateCLI([
-    "agents",
-    "--profile",
-    profileId,
-    "--memory-search",
-    "HEADLINE PROVENANCE",
-    "--memory-source",
-    note.id,
-  ]);
-  expect(recall.memories.map((m: any) => m.id)).toEqual([note.id]);
-  await runArticle
-    .getByRole("button", { name: "Open Memory", exact: true })
+  const noteRes = await page.request.get(
+    `${url}/api/v1/agents/v2/memories?profileId=${encodeURIComponent(profileId)}`,
+    {
+      headers: sessionToken
+        ? { Authorization: `Bearer ${sessionToken}` }
+        : undefined,
+    },
+  );
+  expect(noteRes.ok()).toBe(true);
+  const note = (await noteRes.json()).memories[0];
+  expect(note.content).toBe(noteText);
+  await page.getByRole("button", { name: "More", exact: true }).click();
+  await page
+    .getByRole("navigation", { name: "More pages", exact: true })
+    .getByRole("link", { name: "Memory", exact: true })
     .click();
   await expect(page).toHaveURL(/#agents\/memory$/);
-  expect((await read()).memories).toHaveLength(1);
-  const memorySearch = page.locator(".memory-search");
-  await revealControl(
-    page,
-    memorySearch.getByRole("searchbox", { name: "Search", exact: true }),
-  );
-  await memorySearch
-    .getByRole("searchbox", { name: "Search", exact: true })
+  await expect(page.locator(".memory-library").first()).toContainText(noteText);
+  const v2Search = page
+    .getByRole("region", { name: "Workspace index", exact: true })
+    .locator("form");
+  await v2Search
+    .getByRole("searchbox", { name: "Search saved drafts", exact: true })
     .fill("HEADLINE PROVENANCE");
-  await memorySearch
-    .getByRole("button", { name: "Search", exact: true })
-    .click();
-  await expect(
-    page.getByRole("article", { name: `Memory ${note.id}`, exact: true }),
-  ).toContainText(noteText);
+  await v2Search.getByRole("button", { name: "Search", exact: true }).click();
+  await expect(page.locator(".memory-library").first()).toContainText(noteText);
 
   const retained = await read();
   const other = await privateCLI(["agents", "--profile", "news-researcher"]);
@@ -692,7 +716,7 @@ test("joined agent workspace preserves news chat reminder run memory and reviewe
     { action: "news-item-explain", id: fetch.id, source: item.id },
     {
       action: "memory-chat-save",
-      id: runMessage.id,
+      id: run.id,
       source: "message",
       text: "Foreign source refused",
     },
@@ -705,7 +729,7 @@ test("joined agent workspace preserves news chat reminder run memory and reviewe
   expect(await read()).toEqual(retained);
   await chooseProfile(/^News Researcher /);
   await expect(
-    page.getByRole("article", { name: `Memory ${note.id}`, exact: true }),
+    page.locator(".memory-library").filter({ hasText: noteText }),
   ).toHaveCount(0);
   await chooseProfile(/^Trading Analyst /);
   await command({
@@ -909,7 +933,7 @@ test("joined agent workspace preserves news chat reminder run memory and reviewe
         requestId: prepared.id,
         taskId: task.id,
         runId: run.id,
-        runMessageId: runMessage.id,
+        runMessageId: run.id,
         memoryId: note.id,
         headlineSnapshotSHA256: hash,
         sourceBackedMemory: true,
@@ -1369,7 +1393,20 @@ test("WEN paper context hands off UI and CLI to frozen same-profile chat with op
       exact: true,
     })
     .click();
-  await expect(page).toHaveURL(/#agents\/review$/);
+  await expect(page).toHaveURL(/#agents\/chat$/);
+  const draftedPrompt = await page
+    .getByLabel("Message", { exact: true })
+    .inputValue();
+  expect(draftedPrompt).toContain("Frozen WEN paper context v1");
+  expect(draftedPrompt).toContain(receiptHash);
+  expect(draftedPrompt).toContain(task.wen.digest);
+  expect(draftedPrompt).toContain("not current state");
+  v = await privateCLI(["agents"]);
+  expect(v.aiRequests).toHaveLength(0);
+  expect(v.tasks[0].state).toBe("completed");
+  expect(v.runs).toHaveLength(1);
+  await command({ action: "wen-paper-explain", id: task.id });
+  await page.goto(url + "/#agents/review");
   const snapshot = page
     .locator(".local-messages article")
     .filter({ hasText: "Frozen WEN paper context v1" });
@@ -1378,9 +1415,6 @@ test("WEN paper context hands off UI and CLI to frozen same-profile chat with op
   v = await privateCLI(["agents"]);
   const originalText = v.messages[0].text;
   expect(await snapshot.locator("p").textContent()).toBe(originalText);
-  expect(v.aiRequests).toHaveLength(0);
-  expect(v.tasks[0].state).toBe("completed");
-  expect(v.runs).toHaveLength(1);
   const review = page.getByRole("region", {
     name: "Optional AI request review",
   });
@@ -1638,10 +1672,30 @@ test("news chat shares saved headline UI and CLI capture, reviewed memory, expli
     notices: v.notices,
     ai: v.aiRequests,
   };
-  await panel
+  const newsRow = panel
     .locator(".news-headline")
-    .filter({ hasText: item.title })
-    .getByRole("button", { name: "Discuss", exact: true })
+    .filter({ hasText: item.title });
+  await expect(
+    newsRow.getByRole("button", { name: "Discuss", exact: true }),
+  ).toHaveCount(0);
+  await expect(
+    newsRow.getByRole("button", { name: "Ask in Chat", exact: true }),
+  ).toBeVisible();
+  await command({ action: "news-item-explain", id: fetch.id, source: item.id });
+  await page.goto(url + "/#agents/review");
+  await page.reload();
+  await revealControl(page, page.getByLabel("Agent", { exact: true }), "");
+  await page
+    .getByLabel("Agent", { exact: true })
+    .selectOption({ label: "Trading Analyst" });
+  const explainedView = await read();
+  const explainedSession = explainedView.sessions.find(
+    (s: { id: string }) => s.id === explainedView.messages.at(-1).sessionId,
+  );
+  await openConversationList(page);
+  await page
+    .locator("aside.conversation-rail")
+    .getByRole("button", { name: explainedSession.name, exact: true })
     .click();
   await expect(page.locator(".local-messages")).toContainText(
     "Historical news headline",
@@ -1971,19 +2025,23 @@ test("provider-free News watch reviews rules deduplicates across restart and joi
   });
   await expect(result).toContainText("New matches: 0");
   await page.getByRole("button", { name: "Results", exact: true }).click();
-  await page
-    .getByRole("article", { name: `Run ${v.runs[0].id}`, exact: true })
-    .getByRole("button", { name: "Discuss", exact: true })
+  const watchRun = page.getByRole("article", {
+    name: `Run ${v.runs[0].id}`,
+    exact: true,
+  });
+  await expect(
+    watchRun.getByRole("button", { name: "Discuss", exact: true }),
+  ).toHaveCount(0);
+  await watchRun
+    .getByRole("button", { name: "Open thread", exact: true })
     .click();
-  await expect(page).toHaveURL(/#agents\/review/);
+  await expect(page).toHaveURL(/#agents\/chat$/);
   const message = page
-    .locator(".chat-message")
-    .filter({ hasText: "Paper headlines" })
+    .locator(".v2-message-assistant")
+    .filter({ hasText: v.runs[0].id })
     .last();
   await expect(message).toContainText("New matches: 1");
-  await expect(message.locator(".watch-headlines")).toContainText(
-    "Controlled paper-news headline",
-  );
+  await expect(message).toContainText("Controlled paper-news headline");
   await message
     .getByRole("button", { name: "Remember this", exact: true })
     .click();
@@ -1994,7 +2052,24 @@ test("provider-free News watch reviews rules deduplicates across restart and joi
   await memory
     .getByRole("button", { name: "Save memory", exact: true })
     .click();
-  await expect.poll(async () => (await read()).memories.length).toBe(1);
+  await expect(memory).toHaveCount(0);
+  await expect
+    .poll(async () => {
+      const sessionToken = await page.evaluate(() =>
+        sessionStorage.getItem("fased.core.session.v1"),
+      );
+      const res = await page.request.get(
+        `${url}/api/v1/agents/v2/memories?profileId=${encodeURIComponent(profileId)}`,
+        {
+          headers: sessionToken
+            ? { Authorization: `Bearer ${sessionToken}` }
+            : undefined,
+        },
+      );
+      expect(res.ok()).toBe(true);
+      return (await res.json()).memories.length;
+    })
+    .toBe(1);
   const final = await read();
   expect(final.tasks).toEqual(v.tasks);
   expect(final.runs).toEqual(v.runs);

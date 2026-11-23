@@ -1552,30 +1552,25 @@ test("task run chat shares historical UI and CLI capture, explicit fixture expla
     .getByLabel("Agent", { exact: true })
     .selectOption({ label: "Trading Analyst" });
   await page.getByRole("button", { name: "Results", exact: true }).click();
-  await page
+  const historicalRunCard = page
     .locator(".memory-card")
-    .filter({ hasText: `Run ${plain.id}` })
-    .getByRole("button", { name: "Discuss", exact: true })
+    .filter({ hasText: `Run ${plain.id}` });
+  await expect(
+    historicalRunCard.getByRole("button", { name: "Discuss", exact: true }),
+  ).toHaveCount(0);
+  await historicalRunCard
+    .getByRole("button", { name: "Open thread", exact: true })
     .click();
-  await expect(page.locator(".local-messages")).toContainText(
-    "Historical reminder run",
+  await expect(page).toHaveURL(/#agents\/chat$/);
+  await expect(page.locator(".v2-message-assistant").last()).toContainText(
+    "Journal review",
   );
-  const runArticle = page
-    .locator(".chat-message")
-    .filter({ hasText: "Journal review" });
-  await expect(
-    runArticle.getByText("Compare retained sources", { exact: true }),
-  ).toBeVisible();
-  await expect(
-    runArticle.getByText("Saved reminder", { exact: false }),
-  ).toBeVisible();
-  await expect(runArticle.locator("details")).not.toHaveAttribute("open");
-  await expect(runArticle.locator("details p")).not.toBeVisible();
-  await runArticle.getByText("Source", { exact: true }).click();
-  await expect(runArticle.locator("details p")).toContainText(
-    "Snapshot SHA-256:",
+  await expect(page.locator(".v2-message-assistant").last()).toContainText(
+    "Compare retained sources",
   );
-  await runArticle.getByText("Source", { exact: true }).click();
+  await expect(page.locator(".v2-message-assistant").last()).toContainText(
+    plain.id,
+  );
   v = await read();
   expect({
     tasks: v.tasks,
@@ -1583,6 +1578,7 @@ test("task run chat shares historical UI and CLI capture, explicit fixture expla
     notices: v.notices,
     aiRequests: v.aiRequests,
   }).toEqual(source);
+  v = await command({ action: "task-run-explain", id: plain.id });
   const snapshot = v.messages.at(-1);
   const [body, hash] = snapshot.text.split("\nSnapshot SHA-256: ");
   expect(hash).toBe(createHash("sha256").update(body).digest("hex"));
@@ -1606,23 +1602,40 @@ test("task run chat shares historical UI and CLI capture, explicit fixture expla
     }),
   ).rejects.toThrow();
   expect((await read()).messages).toHaveLength(1);
-  // The new ordinary message reuses reviewed memory; opening alone saves nothing.
+  // Saving a V2 memory from the chat message persists without altering core tasks/runs.
   await page
+    .locator(".v2-message-assistant")
+    .last()
     .getByRole("button", { name: "Remember this", exact: true })
     .click();
-  const review = page.getByRole("region", { name: "Chat memory review" });
-  expect((await read()).memories).toHaveLength(0);
-  await expect(review.getByLabel("Note", { exact: true })).toHaveValue(
-    "Journal review\nCompare retained sources",
-  );
-  await revealControl(page, review.getByLabel("Note", { exact: true }), "");
-  await review
+  const memoryDialog = page.getByRole("dialog", {
+    name: "Memory",
+    exact: true,
+  });
+  await memoryDialog
     .getByLabel("Note", { exact: true })
     .fill("Review saved reminder outcomes before planning");
-  await review
+  await memoryDialog
     .getByRole("button", { name: "Save memory", exact: true })
     .click();
-  await expect.poll(async () => (await read()).memories.length).toBe(1);
+  await expect(memoryDialog).toHaveCount(0);
+  await expect
+    .poll(async () => {
+      const sessionToken = await page.evaluate(() =>
+        sessionStorage.getItem("fased.core.session.v1"),
+      );
+      const res = await page.request.get(
+        `${url}/api/v1/agents/v2/memories?profileId=${encodeURIComponent(profileId)}`,
+        {
+          headers: sessionToken
+            ? { Authorization: `Bearer ${sessionToken}` }
+            : undefined,
+        },
+      );
+      expect(res.ok()).toBe(true);
+      return (await res.json()).memories.length;
+    })
+    .toBe(1);
   // Prepare disclosure is inert; consent is a separate command.
   v = await command({
     action: "ai-prepare",
@@ -2056,10 +2069,12 @@ test("normal Tasks joins optional News analysis and granted analysis-only result
     path: `.evidence/b04-task-analysis/optional-${isMobile ? "mobile" : "desktop"}.png`,
     fullPage: false,
   });
-  await result.getByRole("button", { name: "Discuss", exact: true }).click();
-  await expect(page).toHaveURL(/#agents\/review/);
+  await result
+    .getByRole("button", { name: "Open thread", exact: true })
+    .click();
+  await expect(page).toHaveURL(/#agents\/chat$/);
   let message = page
-    .locator(".chat-message")
+    .locator(".v2-message-assistant")
     .filter({ hasText: "Optional paper analysis" })
     .last();
   await expect(message).toContainText("Analysis skipped");
@@ -2075,7 +2090,23 @@ test("normal Tasks joins optional News analysis and granted analysis-only result
   await memory
     .getByRole("button", { name: "Save memory", exact: true })
     .click();
-  await expect.poll(async () => (await read()).memories.length).toBe(1);
+  await expect(memory).toHaveCount(0);
+  const readV2Memories = async () => {
+    const sessionToken = await page.evaluate(() =>
+      sessionStorage.getItem("fased.core.session.v1"),
+    );
+    const res = await page.request.get(
+      `${url}/api/v1/agents/v2/memories?profileId=trading-analyst`,
+      {
+        headers: sessionToken
+          ? { Authorization: `Bearer ${sessionToken}` }
+          : undefined,
+      },
+    );
+    expect(res.ok()).toBe(true);
+    return (await res.json()).memories;
+  };
+  await expect.poll(async () => (await readV2Memories()).length).toBe(1);
   await page.goto(url + "/#agents/tasks");
   await page.getByRole("button", { name: "New task", exact: true }).click();
   editor = page.getByRole("complementary", {
@@ -2144,9 +2175,12 @@ test("normal Tasks joins optional News analysis and granted analysis-only result
     exact: true,
   });
   await expect(result).toContainText(v.aiRequests[0].answer);
-  await result.getByRole("button", { name: "Discuss", exact: true }).click();
+  await result
+    .getByRole("button", { name: "Open thread", exact: true })
+    .click();
+  await expect(page).toHaveURL(/#agents\/chat$/);
   message = page
-    .locator(".chat-message")
+    .locator(".v2-message-assistant")
     .filter({ hasText: "Routine analysis" })
     .last();
   await expect(message).toContainText(v.aiRequests[0].answer);
@@ -2162,7 +2196,8 @@ test("normal Tasks joins optional News analysis and granted analysis-only result
   await memory
     .getByRole("button", { name: "Save memory", exact: true })
     .click();
-  await expect.poll(async () => (await read()).memories.length).toBe(2);
+  await expect(memory).toHaveCount(0);
+  await expect.poll(async () => (await readV2Memories()).length).toBe(2);
   const saved = await read();
   expect(saved.tasks).toEqual(v.tasks);
   expect(saved.runs).toEqual(v.runs);

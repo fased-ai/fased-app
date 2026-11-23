@@ -1,5 +1,6 @@
 import { useUI } from "../ui-preferences";
 import { useState } from "react";
+import { buildWENPaperExplainPrompt } from "../agents-v2";
 import { Badge } from "../components/shared";
 import { useWorkspace } from "../workspace";
 
@@ -12,7 +13,7 @@ const ranges = [
 ];
 export function WENPaperJourney() {
   const { t: uiText } = useUI();
-  const { core, agents, navigate } = useWorkspace();
+  const { core, agents, launchChatPrompt } = useWorkspace();
   const [name, setName] = useState("Range rehearsal");
   const [budget, setBudget] = useState("0.01");
   const [selection, setSelection] = useState("2");
@@ -160,13 +161,21 @@ export function WENPaperJourney() {
                       <button
                         className="secondary"
                         disabled={agents.busy}
-                        onClick={() =>
-                          void agents
-                            .change({ action: "wen-paper-explain", id: t.id })
-                            .then((ok) => {
-                              if (ok) navigate("agents/review");
-                            })
-                        }
+                        onClick={() => {
+                          const latestRun = [...v.runs]
+                            .reverse()
+                            .find(
+                              (r) =>
+                                r.taskId === t.id &&
+                                r.profileId === v.profileId,
+                            );
+                          launchChatPrompt({
+                            profileId: v.profileId,
+                            title: t.name,
+                            prompt: buildWENPaperExplainPrompt(t, latestRun),
+                            draftOnly: true,
+                          });
+                        }}
                       >
                         Explain this paper entry: {t.name}
                       </button>

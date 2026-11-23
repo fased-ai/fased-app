@@ -40,7 +40,7 @@ test("existing pages localize controls and keep owner drafts records and Meteora
     if (!ownedFixtureOrigins.has(new URL(r.url()).origin))
       external.push(r.url());
   });
-  await page.goto(url + "/#agents/review");
+  await page.goto(url + "/#agents/chat");
   const claim = JSON.parse(
     await readFile(join(dir, "claim-code.json"), "utf8"),
   );
@@ -55,16 +55,6 @@ test("existing pages localize controls and keep owner drafts records and Meteora
   const login = spawn(binary, ["login", "--data-dir", dir, "--password-stdin"]);
   login.stdin!.end(fixturePassword + "\n");
   expect((await once(login, "exit"))[0]).toBe(0);
-  await openConversationList(page);
-  await page
-    .getByRole("button", { name: "New conversation", exact: true })
-    .click();
-  await page
-    .getByLabel("Conversation name", { exact: true })
-    .fill("Owner conversation — 250 SOL");
-  await page
-    .getByRole("button", { name: "Create conversation", exact: true })
-    .click();
   await page
     .getByLabel("Message", { exact: true })
     .fill("Owner draft — 250 SOL");
@@ -133,7 +123,7 @@ test("existing pages localize controls and keep owner drafts records and Meteora
       ["wallets/overview", accounts],
       ["overview", null],
       ["agents/tasks", null],
-      ["agents/review", null],
+      ["agents/chat", null],
     ] as const) {
       await page.evaluate((hash) => {
         location.hash = hash;
@@ -143,7 +133,7 @@ test("existing pages localize controls and keep owner drafts records and Meteora
         await expect(page.locator(".settings-primary > section")).toHaveCount(
           2,
         );
-      if (route === "agents/review")
+      if (route === "agents/chat")
         await expect(page.locator(".chat-input textarea")).toHaveValue(
           "Owner draft — 250 SOL",
         );
@@ -155,7 +145,7 @@ test("existing pages localize controls and keep owner drafts records and Meteora
       ).toBe(true);
       if (
         route === "settings" ||
-        route === "agents/review" ||
+        route === "agents/chat" ||
         route === "agents/tasks"
       )
         await captureScreenshot(page, {
@@ -163,9 +153,6 @@ test("existing pages localize controls and keep owner drafts records and Meteora
           fullPage: false,
         });
     }
-    await expect(page.locator(".conversation-rail")).toContainText(
-      "Owner conversation — 250 SOL",
-    );
   }
   expect(await privateCLI(["agents"])).toEqual(before);
   expect(external).toEqual([]);
@@ -191,7 +178,7 @@ test("Meteora shell preserves drafts and records through navigation theme langua
       external.push(r.url());
   });
   await page.emulateMedia({ colorScheme: "dark" });
-  await page.goto(url + "/#agents/review");
+  await page.goto(url + "/#agents/chat");
   const claim = JSON.parse(
     await readFile(join(dir, "claim-code.json"), "utf8"),
   );
@@ -209,16 +196,6 @@ test("Meteora shell preserves drafts and records through navigation theme langua
   await expect(
     page.getByRole("button", { name: "Preferences", exact: true }),
   ).toBeVisible();
-  await openConversationList(page);
-  await page
-    .getByRole("button", { name: "New conversation", exact: true })
-    .click();
-  await page
-    .getByLabel("Conversation name", { exact: true })
-    .fill("Untranslated owner conversation");
-  await page
-    .getByRole("button", { name: "Create conversation", exact: true })
-    .click();
   const message = page.getByLabel("Message", { exact: true });
   await message.fill("Do not translate or discard this unsent draft.");
   const before = await privateCLI(["agents"]);
@@ -283,9 +260,6 @@ test("Meteora shell preserves drafts and records through navigation theme langua
     .getByRole("navigation", { name: "Main navigation", exact: true })
     .getByRole("link", { name: "Chat", exact: true })
     .click();
-  await page.evaluate(() => {
-    window.location.hash = "agents/review";
-  });
   await expect(message).toHaveValue(
     "Do not translate or discard this unsent draft.",
   );
@@ -697,17 +671,7 @@ test("shared WEN Overview Wallets and Settings preserve fixture authority and re
   await expect(page.locator('[data-widget="mining"]')).toHaveCount(0);
   await checkLayout("dashboard", ".dashboard-grid");
   await page.locator('.shell-top-nav>a[href="#agents/chat"]').click();
-  await page.evaluate(() => {
-    window.location.hash = "agents/review";
-  });
-  await revealControl(
-    page,
-    page.getByLabel("Conversation name", { exact: true }),
-    "Conversation name",
-  );
-  await expect(
-    page.getByLabel("Conversation name", { exact: true }),
-  ).toBeVisible();
+  await expect(page.getByLabel("Message", { exact: true })).toBeVisible();
   await page.goto(url + "/#wallets/accounts");
   await revealFixtureAccountEntry(page);
   const walletCapabilities = await (
@@ -1194,9 +1158,6 @@ test("Dashboard drag and resize autosave without a duplicate home rail shortcut"
     .getByRole("navigation", { name: "Main navigation", exact: true })
     .getByRole("link", { name: "Chat", exact: true })
     .click();
-  await page.evaluate(() => {
-    window.location.hash = "agents/review";
-  });
   await page.getByRole("link", { name: "Fased", exact: true }).click();
   await expect(
     page.getByRole("heading", { name: "Dashboard", exact: true }),
@@ -1647,88 +1608,70 @@ test("Dashboard joins provider agent Chat reviewed task result and memory withou
   await expect.poll(async () => (await read()).runs.length).toBe(1);
   expect((await read()).runs[0].outcome).toBe("reminded");
   const reminderRunId = (await read()).runs[0].id;
-  await page.getByRole("button", { name: "Discuss", exact: true }).click();
-  await expect(page.locator(".local-messages")).toContainText(
-    "Inspect the saved SOL risk limits",
-  );
-  const resultMessage = (await read()).messages.at(-1);
-  expect(resultMessage.text).toContain((await read()).runs[0].id);
-  await page
+  await page.getByRole("button", { name: "Open thread", exact: true }).click();
+  await expect(page).toHaveURL(/#agents\/chat$/);
+  const v2Msg = page.locator(".v2-message-assistant").last();
+  await expect(v2Msg).toContainText("Inspect the saved SOL risk limits");
+  await expect(v2Msg).toContainText(reminderRunId);
+  await v2Msg
     .getByRole("button", { name: "Remember this", exact: true })
-    .last()
     .click();
-  await page
+  const memoryDialog = page.getByRole("dialog", {
+    name: "Memory",
+    exact: true,
+  });
+  await memoryDialog
     .getByLabel("Note", { exact: true })
     .fill("Prefer daily SOL risk summaries");
-  await page.getByRole("button", { name: "Save memory", exact: true }).click();
-  await expect.poll(async () => (await read()).memories.length).toBe(1);
-  expect(JSON.stringify((await read()).memories[0])).toContain(
-    resultMessage.id,
-  );
+  await memoryDialog
+    .getByRole("button", { name: "Save memory", exact: true })
+    .click();
+  await expect(memoryDialog).toHaveCount(0);
+  const readV2Memories = async (profile = "trading-analyst") => {
+    const sessionToken = await page.evaluate(() =>
+      sessionStorage.getItem("fased.core.session.v1"),
+    );
+    const res = await page.request.get(
+      `${url}/api/v1/agents/v2/memories?profileId=${encodeURIComponent(profile)}`,
+      {
+        headers: sessionToken
+          ? { Authorization: `Bearer ${sessionToken}` }
+          : undefined,
+      },
+    );
+    expect(res.ok()).toBe(true);
+    return (await res.json()).memories;
+  };
+  await expect.poll(async () => (await readV2Memories()).length).toBe(1);
   await page.getByRole("button", { name: "More", exact: true }).click();
   await page
     .getByRole("navigation", { name: "More pages", exact: true })
     .getByRole("link", { name: "Memory", exact: true })
     .click();
-  await expect(
-    page.getByText("Prefer daily SOL risk summaries", { exact: true }),
-  ).toBeVisible();
-  const note = page
-    .locator(".memory-card")
-    .filter({ hasText: "Prefer daily SOL risk summaries" });
-  await note.getByRole("button", { name: "Source", exact: true }).click();
-  const memorySource = note.getByRole("region", {
-    name: "Memory source",
+  const workspaceIndex = page.getByRole("region", {
+    name: "Workspace index",
     exact: true,
   });
   await expect(
-    memorySource.getByRole("button", { name: "Open Chat", exact: true }),
-  ).toBeVisible();
-  await expect(
-    memorySource.getByText("Inspect the saved SOL risk limits", {
+    workspaceIndex.getByText("Prefer daily SOL risk summaries", {
       exact: true,
     }),
   ).toBeVisible();
-  await expect(memorySource.locator(".task-inspection > p")).not.toBeVisible();
-  await expect(memorySource.locator("details small")).not.toBeVisible();
-  await memorySource.getByText("Details", { exact: true }).click();
-  await expect(memorySource.locator("details small")).toContainText("SHA-256");
-  await memorySource.getByText("Details", { exact: true }).click();
+  const note = workspaceIndex
+    .locator(".memory-card")
+    .filter({ hasText: "Prefer daily SOL risk summaries" });
+  await expect(note).toContainText("Daily SOL review");
+  await workspaceIndex
+    .getByRole("searchbox", { name: "Search saved drafts", exact: true })
+    .fill("RISK SUMMARIES");
+  await workspaceIndex
+    .getByRole("button", { name: "Search", exact: true })
+    .click();
+  await expect(note).toBeVisible();
   await captureScreenshot(page, {
     path: `.evidence/connected-memory-${isMobile ? "mobile" : "desktop"}.png`,
     fullPage: true,
   });
-  await memorySource
-    .getByRole("button", { name: "Open Chat", exact: true })
-    .click();
-  await openEvidence(page);
-  const inspection = page.getByRole("region", {
-    name: "Local agent evidence inspection",
-    exact: true,
-  });
-  await inspection
-    .getByRole("combobox", { name: "Evidence type", exact: true })
-    .selectOption("memory");
-  const savedNote = (await read()).memories[0];
-  await inspection
-    .getByRole("combobox", { name: "Saved record", exact: true })
-    .selectOption(JSON.stringify([savedNote.id, ""]));
-  await inspection
-    .getByRole("button", { name: "Inspect evidence", exact: true })
-    .click();
-  await inspection
-    .getByRole("button", { name: "Use in AI review", exact: true })
-    .click();
-  const attached = page
-    .locator(".composer-context")
-    .filter({ has: page.getByText("Selected evidence", { exact: true }) });
-  await expect(attached).toBeVisible();
-  await expect(attached).not.toHaveAttribute("open");
-  await assertCompactComposer();
-  await attached.locator(":scope > summary").click();
-  await expect(attached.locator("fieldset")).toBeVisible();
-  await assertCompactComposer();
-  await attached.locator(":scope > summary").click();
   await page.locator(".shell-brand").click();
   await expect(page.locator('[data-widget="tasks"]')).toContainText(
     "Daily SOL review",

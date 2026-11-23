@@ -62,12 +62,10 @@ export function AgentTasks({
   view: v,
   panel,
   setPanel,
-  onDiscuss,
 }: {
   view: AgentView;
   panel: string;
   setPanel: (value: string) => void;
-  onDiscuss: () => void;
 }) {
   const { t: uiText } = useUI();
   const core = useCore();
@@ -428,10 +426,6 @@ export function AgentTasks({
         )
       : uiText(taskStateTitles[task.state] ?? "Unavailable");
   }
-  async function discuss(run: AgentRun) {
-    if (await agents.change({ action: "task-run-explain", id: run.id }))
-      onDiscuss();
-  }
   function runTaskInChat(t: AgentTask, run?: AgentRun) {
     const answer = run?.aiRequestId
       ? v.aiRequests.find((q) => q.id === run.aiRequestId)?.answer
@@ -456,7 +450,6 @@ export function AgentTasks({
           if (node) runCards.current.set(id, node);
           else runCards.current.delete(id);
         }}
-        onDiscuss={(r) => void discuss(r)}
         onOpenThread={(tid) =>
           openChatThread({ profileId: v.profileId, threadId: tid })
         }

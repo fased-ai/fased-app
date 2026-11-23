@@ -22,7 +22,6 @@ export function TaskRunCard({
   inline = false,
   threadId,
   onRegisterCard,
-  onDiscuss,
   onOpenThread,
   onRunInChat,
 }: {
@@ -31,7 +30,6 @@ export function TaskRunCard({
   inline?: boolean;
   threadId?: string;
   onRegisterCard?: (id: string, node: HTMLElement | null) => void;
-  onDiscuss: (run: AgentRun) => void;
   onOpenThread?: (threadId: string) => void;
   onRunInChat?: (task: AgentTask, run?: AgentRun) => void;
 }) {
@@ -51,18 +49,6 @@ export function TaskRunCard({
     run.strategy === "paper-limit-buy-v1";
   const acceptedAnswer =
     typedAnalysis && run.analysis?.state !== "completed" ? undefined : answer;
-
-  const canDiscuss =
-    !run.wen &&
-    !run.botId &&
-    (paper ||
-      [
-        "reminder-v1",
-        "ai-step-v1/reminder-v1",
-        "ai-step-v1",
-        "news-watch-v1",
-        "analysis-v1",
-      ].includes(run.strategy));
 
   const canRunInChat =
     !run.wen &&
@@ -199,7 +185,7 @@ export function TaskRunCard({
           })}
         </ul>
       )}
-      {(canDiscuss || canRunInChat || (threadId && onOpenThread)) && (
+      {(canRunInChat || (threadId && onOpenThread)) && (
         <div className="row-actions">
           {threadId && onOpenThread && (
             <button
@@ -208,15 +194,6 @@ export function TaskRunCard({
               onClick={() => onOpenThread(threadId)}
             >
               {uiText("Open thread")}
-            </button>
-          )}
-          {canDiscuss && (
-            <button
-              className="secondary"
-              disabled={agents.busy || !!run.swap}
-              onClick={() => onDiscuss(run)}
-            >
-              {uiText("Discuss")}
             </button>
           )}
           {canRunInChat && task && (
