@@ -28,6 +28,7 @@ export type PendingChatPrompt = {
   profileId: string;
   title?: string;
   prompt: string;
+  draftOnly?: boolean;
 };
 export type PendingChatThread = {
   id: string;
@@ -379,12 +380,18 @@ function useWorkspaceState() {
     setMessage("");
   }, [state.selectedProfile]);
   const launchChatPrompt = useCallback(
-    (input: { profileId: string; title?: string; prompt: string }) => {
+    (input: {
+      profileId: string;
+      title?: string;
+      prompt: string;
+      draftOnly?: boolean;
+    }) => {
       setPendingChatPrompt({
         id: crypto.randomUUID(),
         profileId: input.profileId,
         title: input.title,
         prompt: input.prompt,
+        draftOnly: input.draftOnly,
       });
       navigate("agents/chat");
     },

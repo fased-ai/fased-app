@@ -71,13 +71,7 @@ export function NewsSourcePicker({
     </div>
   );
 }
-export function NewsInputs({
-  view: v,
-  onDiscuss,
-}: {
-  view: AgentView;
-  onDiscuss: () => void;
-}) {
+export function NewsInputs({ view: v }: { view: AgentView }) {
   const { t } = useUI();
   const { agents, launchChatPrompt } = useWorkspace();
   const [settings, setSettings] = useState(false);
@@ -234,22 +228,6 @@ export function NewsInputs({
                   }
                 >
                   {t("Ask in Chat")}
-                </button>
-                <button
-                  className="text-button"
-                  disabled={agents.busy}
-                  onClick={async () => {
-                    if (
-                      await agents.change({
-                        action: "news-item-explain",
-                        id: f.id,
-                        source: item.id,
-                      })
-                    )
-                      onDiscuss();
-                  }}
-                >
-                  {t("Discuss")}
                 </button>
                 <details className="news-details">
                   <summary>{t("Details")}</summary>

@@ -956,6 +956,7 @@ export function buildTaskRunChatPrompt(
     outcome: string;
     analysis?: { state: string; reason?: string };
     watch?: { newIds: string[] };
+    news?: { fetchId: string };
   },
   answer?: string,
 ): string {
@@ -963,6 +964,7 @@ export function buildTaskRunChatPrompt(
   if (task.text) lines.push(`Task brief: ${task.text}`);
   if (run) {
     lines.push(`Run ${run.id} outcome: ${run.outcome}`);
+    if (run.news?.fetchId) lines.push(`Fetch ID: ${run.news.fetchId}`);
     if (run.watch) lines.push(`New matches: ${run.watch.newIds.length}`);
     if (run.analysis) {
       lines.push(
@@ -972,6 +974,39 @@ export function buildTaskRunChatPrompt(
   }
   if (answer) lines.push("", "Recorded analysis:", answer);
   lines.push("", "Summarize next steps and open risks.");
+  return lines.join("\n");
+}
+
+export function buildWENPaperExplainPrompt(
+  task: {
+    name: string;
+    wen?: {
+      version: string;
+      budgetSOL: string;
+      selection: string;
+      fixtureSource: string;
+      digest: string;
+    };
+  },
+  latestRun?: { id: string; wen?: { receiptSha256?: string } },
+): string {
+  const p = task.wen;
+  const lines = ["Frozen WEN paper context v1", `Entry: ${task.name}`];
+  if (p) {
+    lines.push(
+      `Template: ${p.version}`,
+      `Budget: ${p.budgetSOL} SOL · Range index: ${p.selection}`,
+      `Canonical source: ${p.fixtureSource}`,
+      `Review digest: ${p.digest}`,
+    );
+  }
+  if (latestRun?.wen?.receiptSha256) {
+    lines.push(`Receipt SHA-256: ${latestRun.wen.receiptSha256}`);
+  }
+  lines.push(
+    "Historical snapshot — not current state.",
+    "Explain the captured range, digest, and limitations without predicting rewards.",
+  );
   return lines.join("\n");
 }
 

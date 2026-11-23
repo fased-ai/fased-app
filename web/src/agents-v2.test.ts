@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   buildNewsChatPrompt,
   buildTaskRunChatPrompt,
+  buildWENPaperExplainPrompt,
   clearModelManifestV2,
   compactThreadV2,
   extractMessageCitations,
@@ -667,5 +668,37 @@ describe("Phase 8B-3 secret cards, model manifest, and MCP helpers", () => {
 
     await getMCPDiscovery({ request: req });
     expect(req).toHaveBeenCalledWith("mcp");
+  });
+
+  it("includes news fetchId in buildTaskRunChatPrompt and builds frozen WEN paper context prompts", () => {
+    const runPrompt = buildTaskRunChatPrompt(
+      { name: "Morning digest", text: "Summarize SOL news" },
+      {
+        id: "run-42",
+        outcome: "completed",
+        news: { fetchId: "fetch-abc" },
+      },
+      "Digest summary",
+    );
+    expect(runPrompt).toContain("Fetch ID: fetch-abc");
+    expect(runPrompt).toContain("Digest summary");
+
+    const paperPrompt = buildWENPaperExplainPrompt(
+      {
+        name: "Range rehearsal",
+        wen: {
+          version: "wen-paper/v1",
+          budgetSOL: "0.25",
+          selection: "2",
+          fixtureSource: "wen-paper.fixture.json",
+          digest: "deadbeef",
+        },
+      },
+      { id: "run-99", wen: { receiptSha256: "cafebabe" } },
+    );
+    expect(paperPrompt).toContain("Frozen WEN paper context v1");
+    expect(paperPrompt).toContain("deadbeef");
+    expect(paperPrompt).toContain("cafebabe");
+    expect(paperPrompt).toContain("not current state");
   });
 });

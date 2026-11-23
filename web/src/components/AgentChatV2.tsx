@@ -12,6 +12,7 @@ import {
 import type { AgentView } from "../agents";
 import { parseFasedVisualSpec, parseSafeVisualHTML } from "../agent-visuals";
 import {
+  createMemoryV2,
   deleteThreadV2,
   extractMessageCitations,
   formatApprovalFields,
@@ -49,6 +50,7 @@ import {
   Zap,
 } from "../icons";
 import { AgentVisualBlock } from "./AgentVisualBlock";
+import { Dialog } from "./shared";
 import "./agent-chat-v2.css";
 
 function renderInline(segments: InlineSegment[]) {
@@ -440,13 +442,7 @@ function ApprovalCard({
   );
 }
 
-export function AgentChatV2({
-  view,
-  onOpenLegacySession,
-}: {
-  view: AgentView;
-  onOpenLegacySession: (sessionId: string) => void;
-}) {
+export function AgentChatV2({ view }: { view: AgentView }) {
   const { t, language } = useUI();
   const core = useCore();
   const {
@@ -494,6 +490,11 @@ export function AgentChatV2({
   const compactNoticeTimerRef = useRef<number | null>(null);
   const [editingTitle, setEditingTitle] = useState(false);
   const [titleDraft, setTitleDraft] = useState("");
+  const [memoryNoteDraft, setMemoryNoteDraft] = useState<{
+    text: string;
+    error: string;
+    busy: boolean;
+  } | null>(null);
   const [undoToast, setUndoToast] = useState<{
     kind: "archive" | "delete";
     thread: AgentThread;
@@ -753,6 +754,15 @@ export function AgentChatV2({
     consumedPromptIds.current.add(pendingChatPrompt.id);
     const next = pendingChatPrompt;
     clearChatPrompt(next.id);
+    if (next.draftOnly) {
+      v2.startNewThread();
+      setChatDrafts((cur) => {
+        const copy = new Map(cur);
+        copy.set(`${core.instanceId}:${view.profileId}:v2:new`, next.prompt);
+        return copy;
+      });
+      return;
+    }
     void v2.sendMessage({
       content: next.prompt,
       title: next.title,
@@ -764,8 +774,11 @@ export function AgentChatV2({
   }, [
     pendingChatPrompt,
     view.profileId,
+    core.instanceId,
     v2.streaming,
+    v2.startNewThread,
     v2.sendMessage,
+    setChatDrafts,
     clearChatPrompt,
     activeConnectionRef,
     activeModel,
@@ -808,11 +821,6 @@ export function AgentChatV2({
     (item) =>
       !pendingDeleteIds.has(item.id) &&
       (!q || item.title.toLowerCase().includes(q)),
-  );
-  const legacySessions = view.sessions.filter(
-    (s) =>
-      s.profileId === view.profileId &&
-      (!q || s.name.toLowerCase().includes(q)),
   );
 
   const visibleMessages: AgentV2Message[] = (v2.detail?.messages ?? []).filter(
@@ -1016,29 +1024,6 @@ export function AgentChatV2({
             </p>
           )}
         </div>
-
-        {legacySessions.length > 0 && (
-          <details className="v2-legacy-rail">
-            <summary>
-              {t("Legacy reviews")} ({legacySessions.length})
-            </summary>
-            <div className="agent-session-list">
-              {legacySessions.map((s) => (
-                <button
-                  key={s.id}
-                  type="button"
-                  className="text-button"
-                  onClick={() => {
-                    onOpenLegacySession(s.id);
-                    setRailOpen(false);
-                  }}
-                >
-                  {s.name}
-                </button>
-              ))}
-            </div>
-          </details>
-        )}
       </aside>
 
       <div className="agent-record-body chat-workspace">
@@ -1307,14 +1292,19 @@ export function AgentChatV2({
                             v2.lastHandoff.fromModel ||
                             v2.lastHandoff.fromProvider
                           );
+                        const canRemember =
+                          m.role === "assistant" &&
+                          m.status !== "streaming" &&
+                          m.content.trim() !== "";
                         const showMeta =
-                          (m.content ||
+                          canRemember ||
+                          ((m.content ||
                             m.errorText ||
                             (m.approvals?.length ?? 0) > 0) &&
-                          (m.model ||
-                            (m.outputTokens ?? 0) > 0 ||
-                            !!showRecalled ||
-                            !!showHandoff);
+                            (m.model ||
+                              (m.outputTokens ?? 0) > 0 ||
+                              !!showRecalled ||
+                              !!showHandoff));
                         if (!showMeta) return null;
                         return (
                           <footer className="v2-msg-meta">
@@ -1344,6 +1334,21 @@ export function AgentChatV2({
                                   ),
                                 )}
                               </span>
+                            )}
+                            {canRemember && (
+                              <button
+                                type="button"
+                                className="text-button v2-msg-remember"
+                                onClick={() =>
+                                  setMemoryNoteDraft({
+                                    text: m.content.trim().slice(0, 280),
+                                    error: "",
+                                    busy: false,
+                                  })
+                                }
+                              >
+                                {t("Remember this")}
+                              </button>
                             )}
                           </footer>
                         );
@@ -1619,6 +1624,75 @@ export function AgentChatV2({
           </form>
         </div>
       </div>
+
+      {memoryNoteDraft && (
+        <Dialog
+          title={t("Memory")}
+          onClose={() => {
+            if (!memoryNoteDraft.busy) setMemoryNoteDraft(null);
+          }}
+        >
+          <form
+            className="dialog-body v2-memory-form"
+            onSubmit={async (e) => {
+              e.preventDefault();
+              const content = memoryNoteDraft.text.trim();
+              if (!content || memoryNoteDraft.busy) return;
+              setMemoryNoteDraft({ ...memoryNoteDraft, busy: true, error: "" });
+              try {
+                await createMemoryV2(core, {
+                  profileId: view.profileId,
+                  scope: "chat",
+                  title: v2.detail?.thread.title || "Chat note",
+                  content,
+                });
+                setMemoryNoteDraft(null);
+              } catch (err) {
+                setMemoryNoteDraft({
+                  ...memoryNoteDraft,
+                  busy: false,
+                  error:
+                    err instanceof Error
+                      ? err.message
+                      : "Could not save memory",
+                });
+              }
+            }}
+          >
+            {memoryNoteDraft.error && (
+              <p role="alert">{memoryNoteDraft.error}</p>
+            )}
+            <label>
+              {t("Note")}
+              <textarea
+                aria-label={t("Note")}
+                rows={4}
+                maxLength={2000}
+                required
+                autoFocus
+                value={memoryNoteDraft.text}
+                disabled={memoryNoteDraft.busy}
+                onChange={(e) =>
+                  setMemoryNoteDraft({
+                    ...memoryNoteDraft,
+                    text: e.target.value,
+                    error: "",
+                  })
+                }
+              />
+            </label>
+            <div className="agent-actions">
+              <button
+                type="submit"
+                className="primary"
+                disabled={memoryNoteDraft.busy || !memoryNoteDraft.text.trim()}
+              >
+                {t("Save memory")}
+              </button>
+            </div>
+          </form>
+        </Dialog>
+      )}
     </section>
   );
 }

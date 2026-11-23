@@ -784,3 +784,45 @@ test("Phase 8B-3 in-thread secret request cards, sandboxed visual replies, and S
   await page.keyboard.press("Escape");
   await expect(dialog).toHaveCount(0);
 });
+
+test("Agent V2 chat hides legacy review rail and saves memory notes via Remember this", async ({
+  page,
+}) => {
+  test.setTimeout(60000);
+  await stop();
+  await start(true, "127.0.0.1:0", "local", false);
+  await page.goto(url + "/#agents/chat");
+  await expect(
+    page.getByRole("heading", { name: "Chat", exact: true }),
+  ).toBeVisible();
+  await expect(page.locator(".v2-legacy-rail")).toHaveCount(0);
+
+  const composer = page.getByLabel("Message", { exact: true });
+  await composer.fill("Summarize SOL support levels");
+  await page.getByRole("button", { name: "Send", exact: true }).click();
+  const assistantMsg = page.locator(".v2-message-assistant").last();
+  await expect(
+    assistantMsg.getByRole("button", { name: "Remember this", exact: true }),
+  ).toBeVisible({ timeout: 12000 });
+  await assistantMsg
+    .getByRole("button", { name: "Remember this", exact: true })
+    .click();
+
+  const memoryDialog = page.getByRole("dialog", {
+    name: "Memory",
+    exact: true,
+  });
+  await expect(memoryDialog).toBeVisible();
+  await memoryDialog
+    .getByLabel("Note", { exact: true })
+    .fill("Track SOL weekly support levels");
+  await memoryDialog
+    .getByRole("button", { name: "Save memory", exact: true })
+    .click();
+  await expect(memoryDialog).toHaveCount(0);
+
+  await page.goto(url + "/#agents/memory");
+  await expect(
+    page.getByText("Track SOL weekly support levels", { exact: true }),
+  ).toBeVisible({ timeout: 12000 });
+});

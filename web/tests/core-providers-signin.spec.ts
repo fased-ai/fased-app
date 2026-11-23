@@ -1402,26 +1402,52 @@ for (const location of ["local", "remote"]) {
         .getByRole("navigation", { name: "Task views", exact: true })
         .getByRole("button", { name: "Results", exact: true })
         .click();
-      await page
-        .getByRole("region", { name: "Run results", exact: true })
-        .getByRole("button", { name: "Discuss", exact: true })
+      const runCard = page.getByRole("region", {
+        name: "Run results",
+        exact: true,
+      });
+      await expect(
+        runCard.getByRole("button", { name: "Discuss", exact: true }),
+      ).toHaveCount(0);
+      await runCard
+        .getByRole("button", { name: "Open thread", exact: true })
         .click();
-      const source = (await read()).messages.at(-1);
-      await page
+      await expect(page).toHaveURL(/#agents\/chat$/);
+      const reply = page.locator(".v2-message-assistant").last();
+      await expect(reply).toBeVisible();
+      await reply
         .getByRole("button", { name: "Remember this", exact: true })
-        .last()
         .click();
-      await page
+      const memDialog = page.getByRole("dialog", {
+        name: "Memory",
+        exact: true,
+      });
+      await memDialog
         .getByLabel(/^(?:Fact|Note)$/, { exact: true })
         .fill("Keep fictional event summaries brief");
-      await page
+      await memDialog
         .getByRole("button", { name: "Save memory", exact: true })
         .click();
-      await expect.poll(async () => (await read()).memories.length).toBe(1);
-      expect(JSON.stringify((await read()).memories[0])).toContain(source.id);
-      expect(
-        (await privateCLI(["agents", "--profile", "news-researcher"])).memories,
-      ).toHaveLength(0);
+      await expect(memDialog).toHaveCount(0);
+      const readV2Memories = async (profile: string) => {
+        const sessionToken = await page.evaluate(() =>
+          sessionStorage.getItem("fased.core.session.v1"),
+        );
+        const res = await page.request.get(
+          `${url}/api/v1/agents/v2/memories?profileId=${encodeURIComponent(profile)}`,
+          {
+            headers: sessionToken
+              ? { Authorization: `Bearer ${sessionToken}` }
+              : undefined,
+          },
+        );
+        expect(res.ok()).toBe(true);
+        return (await res.json()).memories;
+      };
+      await expect
+        .poll(async () => (await readV2Memories(profile.id)).length)
+        .toBe(1);
+      expect(await readV2Memories("news-researcher")).toHaveLength(0);
     }
     expect(external).toEqual([]);
   });

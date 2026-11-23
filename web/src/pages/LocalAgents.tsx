@@ -116,41 +116,11 @@ function LocalAgentEditor({
   const { tab, navigate } = useWorkspace();
   const [legacySessionId, setLegacySessionId] = useState("");
   const [legacySearch, setLegacySearch] = useState("");
-  const [useLegacyChat, setUseLegacyChat] = useState(false);
 
   return (
     <div className="local-agents">
-      {tab === "news" && (
-        <NewsInputs
-          view={v}
-          onDiscuss={() => {
-            setLegacySessionId("");
-            setLegacySearch("");
-            navigate("agents/review");
-          }}
-        />
-      )}
-      {tab === "chat" &&
-        (useLegacyChat ? (
-          <Suspense fallback={<p role="status">{uiText("Loading")}</p>}>
-            <LegacyAgentChat
-              view={v}
-              session={legacySessionId}
-              setSession={setLegacySessionId}
-              search={legacySearch}
-              setSearch={setLegacySearch}
-              onBackToThreads={() => setUseLegacyChat(false)}
-            />
-          </Suspense>
-        ) : (
-          <AgentChatV2
-            view={v}
-            onOpenLegacySession={(sessionId) => {
-              setLegacySessionId(sessionId);
-              setUseLegacyChat(true);
-            }}
-          />
-        ))}
+      {tab === "news" && <NewsInputs view={v} />}
+      {tab === "chat" && <AgentChatV2 view={v} />}
       {tab === "review" && (
         <Suspense fallback={<p role="status">{uiText("Loading")}</p>}>
           <LegacyAgentChat
@@ -159,10 +129,7 @@ function LocalAgentEditor({
             setSession={setLegacySessionId}
             search={legacySearch}
             setSearch={setLegacySearch}
-            onBackToThreads={() => {
-              setUseLegacyChat(false);
-              navigate("agents/chat");
-            }}
+            onBackToThreads={() => navigate("agents/chat")}
           />
         </Suspense>
       )}
@@ -178,16 +145,7 @@ function LocalAgentEditor({
         />
       )}
       {tab === "tasks" && (
-        <AgentTasks
-          view={v}
-          panel={taskPanel}
-          setPanel={setTaskPanel}
-          onDiscuss={() => {
-            setLegacySessionId("");
-            setLegacySearch("");
-            navigate("agents/review");
-          }}
-        />
+        <AgentTasks view={v} panel={taskPanel} setPanel={setTaskPanel} />
       )}
     </div>
   );
