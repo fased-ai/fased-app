@@ -71,6 +71,12 @@ test("rendered install.ps1 pins desktop release URLs and SHA-256s for amd64 and 
   );
   assert.ok(rendered.includes(sha256(amd64Archive)));
   assert.ok(rendered.includes(sha256(arm64Archive)));
+  assert.match(rendered, /function Invoke-DetachedUninstall/);
+  assert.match(
+    rendered,
+    /Invoke-DetachedUninstall -BinaryPath \$AppBin -Arguments @\('uninstall'\)/,
+  );
+  assert.match(rendered, /Remove-Item -LiteralPath \$stageDir -Recurse -Force/);
 });
 
 test("rendered install-cli.sh passes syntax checks, pins 4 Unix targets, and rejects tampering/bad options", () => {

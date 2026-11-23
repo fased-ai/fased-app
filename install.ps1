@@ -193,6 +193,27 @@ function Install-FasedCmdShim {
   }
 }
 
+function Invoke-DetachedUninstall {
+  param(
+    [Parameter(Mandatory = $true)][string]$BinaryPath,
+    [Parameter(Mandatory = $true)][string[]]$Arguments
+  )
+  # Copy the executable to a temporary staging directory before uninstalling so Windows does not lock the target .exe during removal.
+  $tmpRoot = if (-not [string]::IsNullOrWhiteSpace($env:TEMP)) { $env:TEMP } else { [System.IO.Path]::GetTempPath() }
+  $stageDir = Join-Path $tmpRoot ('fased-uninstall-' + [Guid]::NewGuid().ToString('N'))
+  New-Item -ItemType Directory -Path $stageDir -Force | Out-Null
+  try {
+    $tmpExe = Join-Path $stageDir ([System.IO.Path]::GetFileName($BinaryPath))
+    Copy-Item -LiteralPath $BinaryPath -Destination $tmpExe -Force
+    & $tmpExe @Arguments
+    return $LASTEXITCODE
+  } finally {
+    if (Test-Path -LiteralPath $stageDir) {
+      Remove-Item -LiteralPath $stageDir -Recurse -Force -ErrorAction SilentlyContinue
+    }
+  }
+}
+
 if ($Action -ne 'install') {
   if ($Profile -eq 'server') {
     if (-not (Test-Path -LiteralPath $ServerBin)) {
@@ -201,8 +222,7 @@ if ($Action -ne 'install') {
     if ($Action -eq 'uninstall') {
       $uArgs = @('server', 'uninstall')
       if ($Purge) { $uArgs += '--purge' }
-      & $ServerBin @uArgs
-      exit $LASTEXITCODE
+      exit (Invoke-DetachedUninstall -BinaryPath $ServerBin -Arguments $uArgs)
     }
     if ($Action -eq 'status') {
       & $ServerBin 'server' 'status'
@@ -218,7 +238,7 @@ if ($Action -ne 'install') {
       Fail 'No installed Fased Local binary was found.'
     }
     switch ($Action) {
-      'uninstall' { & $AppBin 'uninstall'; exit $LASTEXITCODE }
+      'uninstall' { exit (Invoke-DetachedUninstall -BinaryPath $AppBin -Arguments @('uninstall')) }
       'open'      { & $AppBin 'open'; exit $LASTEXITCODE }
       'start'     { & $AppBin 'service' 'start'; exit $LASTEXITCODE }
       'stop'      { & $AppBin 'service' 'stop'; exit $LASTEXITCODE }
