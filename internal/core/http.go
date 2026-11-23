@@ -3,33 +3,24 @@ package core
 import (
 	"bufio"
 	"crypto/rand"
-	"crypto/subtle"
 	"encoding/binary"
-	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/fased-ai/fased-app/internal/auth"
+	"github.com/fased-ai/fased-app/internal/httpapi"
 	"github.com/fased-ai/fased-app/internal/tailnet"
-	"io"
 	"io/fs"
 	"mime"
 	"net"
 	"net/http"
 	"net/url"
 	"os"
-	"path"
 	"runtime"
 	"strconv"
 	"strings"
-	"sync"
-	"time"
 )
 
 const sessionCookie = "fased_session"
-
-type rateWindow struct {
-	start    time.Time
-	attempts int
-}
 
 type HTTPHandler struct {
 	wenResearchOrigin string
@@ -50,8 +41,7 @@ type HTTPHandler struct {
 	authSlots         chan struct{}
 	aiSlots           chan struct{}
 	privateProof      privateAccessProofCache
-	limiterMu         sync.Mutex
-	limiter           map[string]*rateWindow
+	limiter           auth.RateLimiter
 	loopbackPeerUID   func(client, server *net.TCPAddr) (int, bool, error)
 }
 
@@ -64,7 +54,6 @@ func NewHTTPHandler(store *Store, baseURL, publicOrigin string, assets fs.FS) (*
 		authSlots:        make(chan struct{}, 2),
 		aiSlots:          make(chan struct{}, 2),
 		instanceLocation: "local",
-		limiter:          map[string]*rateWindow{},
 	}
 	if _, err := rand.Read(h.wenResearchKey[:]); err != nil {
 		return nil, err
@@ -81,26 +70,22 @@ func NewHTTPHandler(store *Store, baseURL, publicOrigin string, assets fs.FS) (*
 		h.hosts[net.JoinHostPort("localhost", base.Port())] = true
 	}
 	if publicOrigin != "" {
-		parsed, err := url.Parse(publicOrigin)
-		if err != nil || parsed.Scheme != "https" || parsed.Host == "" || parsed.User != nil || (parsed.Path != "" && parsed.Path != "/") || parsed.RawQuery != "" || parsed.Fragment != "" {
-			return nil, errors.New("public origin must be an exact HTTPS origin without credentials or a path")
+		canonOrigin, host, err := httpapi.ValidatePublicOrigin(publicOrigin)
+		if err != nil {
+			return nil, err
 		}
-		publicOrigin = strings.TrimSuffix(publicOrigin, "/")
-		h.origins[publicOrigin] = true
-		h.hosts[parsed.Host] = true
-		h.publicHost = parsed.Host
+		h.origins[canonOrigin] = true
+		h.hosts[host] = true
+		h.publicHost = host
 	}
 	return h, nil
 }
 func (h *HTTPHandler) SetRequirePassword(v bool) {
 	h.requirePassword = v
 }
-func isLoopbackHost(host string) bool { ip := net.ParseIP(host); return ip != nil && ip.IsLoopback() }
+func isLoopbackHost(host string) bool { return httpapi.IsLoopbackHost(host) }
 func (h *HTTPHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("X-Content-Type-Options", "nosniff")
-	w.Header().Set("Referrer-Policy", "no-referrer")
-	w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; object-src 'none'; base-uri 'none'; form-action 'self'")
-	w.Header().Set("X-Frame-Options", "DENY")
+	httpapi.SetSecurityHeaders(w)
 	if h.remoteIngress && !h.legacyRemoteAccess(r.Context()) && r.Context().Value(remoteIdentityKey{}) == nil {
 		if r.Host == h.publicHost || (r.Context().Value(privateIPCKey{}) != true && (!h.hosts[r.Host] || r.Method != http.MethodGet || r.URL.Path != "/api/v1/health" || !h.checkLoopbackPeerUID(r, true))) {
 			writeError(w, 403, "Private Tailscale access required")
@@ -703,40 +688,7 @@ func (h *HTTPHandler) ratePeerKey(r *http.Request) string {
 }
 
 func (h *HTTPHandler) allowRate(r *http.Request, bucket string, limit int) bool {
-	h.limiterMu.Lock()
-	defer h.limiterMu.Unlock()
-	if h.limiter == nil {
-		h.limiter = map[string]*rateWindow{}
-	}
-	now := h.store.now()
-	key := bucket + "|" + h.ratePeerKey(r)
-	w := h.limiter[key]
-	if w == nil {
-		if len(h.limiter) >= 1024 {
-			for k, existing := range h.limiter {
-				if now.Sub(existing.start) >= time.Minute {
-					delete(h.limiter, k)
-				}
-			}
-		}
-		if len(h.limiter) >= 1024 {
-			for k := range h.limiter {
-				delete(h.limiter, k)
-				break
-			}
-		}
-		w = &rateWindow{start: now}
-		h.limiter[key] = w
-	}
-	if now.Sub(w.start) >= time.Minute {
-		w.start = now
-		w.attempts = 0
-	}
-	if w.attempts >= limit {
-		return false
-	}
-	w.attempts++
-	return true
+	return h.limiter.Allow(h.store.now(), bucket+"|"+h.ratePeerKey(r), limit)
 }
 
 func (h *HTTPHandler) writeSessionResponse(w http.ResponseWriter, r *http.Request, token string) {
@@ -875,8 +827,7 @@ func (h *HTTPHandler) csrf(w http.ResponseWriter, r *http.Request, token string)
 	if h.custodyAccountsRequest(r) || h.custodyOnchainRequest(r) {
 		return true
 	}
-	expected := csrfToken(token)
-	if subtle.ConstantTimeCompare([]byte(r.Header.Get("X-CSRF-Token")), []byte(expected)) != 1 {
+	if !auth.VerifyCSRF(r.Header.Get("X-CSRF-Token"), token) {
 		writeError(w, 403, "CSRF token required")
 		return false
 	}
@@ -908,61 +859,14 @@ func (h *HTTPHandler) sessionMode(r *http.Request) string {
 	return "bearer"
 }
 func decodeJSON(w http.ResponseWriter, r *http.Request, value any) bool {
-	r.Body = http.MaxBytesReader(w, r.Body, 16*1024)
-	defer r.Body.Close()
-	decoder := json.NewDecoder(r.Body)
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(value); err != nil {
-		writeError(w, 400, "invalid JSON request")
-		return false
-	}
-	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
-		writeError(w, 400, "one JSON object required")
-		return false
-	}
-	return true
+	return httpapi.DecodeStrictJSON(w, r, 16*1024, value)
 }
 func writeJSON(w http.ResponseWriter, status int, value any) {
-	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(value)
+	httpapi.WriteJSON(w, status, value)
 }
 func writeError(w http.ResponseWriter, status int, message string) {
-	writeJSON(w, status, map[string]string{"error": message})
+	httpapi.WriteError(w, status, message)
 }
 func (h *HTTPHandler) static(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet && r.Method != http.MethodHead {
-		writeError(w, 405, "method not allowed")
-		return
-	}
-	if h.assets == nil {
-		writeError(w, 503, "UI assets unavailable")
-		return
-	}
-	clean := strings.TrimPrefix(path.Clean("/"+r.URL.Path), "/")
-	if clean == "" || !strings.Contains(path.Base(clean), ".") {
-		clean = "index.html"
-	}
-	if !fs.ValidPath(clean) {
-		writeError(w, 404, "not found")
-		return
-	}
-	data, err := fs.ReadFile(h.assets, clean)
-	if err != nil {
-		writeError(w, 404, "not found")
-		return
-	}
-	kind := mime.TypeByExtension(path.Ext(clean))
-	if kind != "" {
-		w.Header().Set("Content-Type", kind)
-	}
-	if clean == "index.html" {
-		w.Header().Set("Cache-Control", "no-store")
-	} else {
-		w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
-	}
-	w.Header().Set("Content-Length", strconv.Itoa(len(data)))
-	if r.Method == http.MethodGet {
-		_, _ = w.Write(data)
-	}
+	httpapi.ServeStaticAsset(w, r, h.assets)
 }

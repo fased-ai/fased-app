@@ -5,25 +5,19 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
+
+	"github.com/fased-ai/fased-app/internal/agents"
 )
 
 const webSearchMaxBodyBytes = 256 * 1024
 
-type agentWebSearchResult struct {
-	Index   int    `json:"index"`
-	Title   string `json:"title"`
-	URL     string `json:"url"`
-	Domain  string `json:"domain"`
-	Snippet string `json:"snippet"`
-	Source  string `json:"source"`
-}
+type agentWebSearchResult = agents.WebSearchResult
 
 func toolWebSearch(ctx context.Context, s *Store, _ string, rawArgs json.RawMessage) (any, error) {
 	var args struct {
@@ -171,45 +165,10 @@ func toolWebSearch(ctx context.Context, s *Store, _ string, rawArgs json.RawMess
 		ddgURL := "https://api.duckduckgo.com/?q=" + url.QueryEscape(query) + "&format=json&no_html=1&skip_disambig=1"
 		if body, err := fetchWebSearchJSON(ctx, client, ddgURL); err != nil {
 			remoteErrs = append(remoteErrs, err)
+		} else if pErr := agents.ParseDuckDuckGo(body, limit, addCandidate); pErr != nil {
+			remoteErrs = append(remoteErrs, pErr)
 		} else {
-			type ddgTopic struct {
-				FirstURL string     `json:"FirstURL"`
-				Text     string     `json:"Text"`
-				Topics   []ddgTopic `json:"Topics"`
-			}
-			var ddg struct {
-				Heading       string     `json:"Heading"`
-				AbstractText  string     `json:"AbstractText"`
-				AbstractURL   string     `json:"AbstractURL"`
-				RelatedTopics []ddgTopic `json:"RelatedTopics"`
-			}
-			if err := json.Unmarshal(body, &ddg); err != nil {
-				remoteErrs = append(remoteErrs, err)
-			} else {
-				remoteOK = true
-				if ddg.AbstractURL != "" {
-					addCandidate(ddg.Heading, ddg.AbstractURL, ddg.AbstractText, "duckduckgo")
-				}
-				var walkTopics func(items []ddgTopic)
-				walkTopics = func(items []ddgTopic) {
-					for _, item := range items {
-						if len(results) >= limit {
-							return
-						}
-						if item.FirstURL != "" {
-							title := item.Text
-							if cut := strings.Index(title, " - "); cut > 0 {
-								title = title[:cut]
-							}
-							addCandidate(title, item.FirstURL, item.Text, "duckduckgo")
-						}
-						if len(item.Topics) > 0 {
-							walkTopics(item.Topics)
-						}
-					}
-				}
-				walkTopics(ddg.RelatedTopics)
-			}
+			remoteOK = true
 		}
 	}
 
@@ -217,28 +176,13 @@ func toolWebSearch(ctx context.Context, s *Store, _ string, rawArgs json.RawMess
 		wikiURL := "https://en.wikipedia.org/w/api.php?action=query&list=search&srsearch=" + url.QueryEscape(query) + "&format=json&utf8=1&srlimit=" + strconv.Itoa(limit)
 		if body, err := fetchWebSearchJSON(ctx, client, wikiURL); err != nil {
 			remoteErrs = append(remoteErrs, err)
+		} else if pErr := agents.ParseWikipedia(body, limit, func(raw string) string {
+			_, clean := extractWebTitleAndText("text/html", raw)
+			return clean
+		}, addCandidate); pErr != nil {
+			remoteErrs = append(remoteErrs, pErr)
 		} else {
-			var wiki struct {
-				Query struct {
-					Search []struct {
-						Title   string `json:"title"`
-						Snippet string `json:"snippet"`
-					} `json:"search"`
-				} `json:"query"`
-			}
-			if err := json.Unmarshal(body, &wiki); err != nil {
-				remoteErrs = append(remoteErrs, err)
-			} else {
-				remoteOK = true
-				for _, hit := range wiki.Query.Search {
-					if len(results) >= limit {
-						break
-					}
-					pageURL := "https://en.wikipedia.org/wiki/" + url.PathEscape(strings.ReplaceAll(strings.TrimSpace(hit.Title), " ", "_"))
-					_, cleanSnippet := extractWebTitleAndText("text/html", hit.Snippet)
-					addCandidate(hit.Title, pageURL, cleanSnippet, "wikipedia")
-				}
-			}
+			remoteOK = true
 		}
 	}
 
@@ -257,27 +201,5 @@ func toolWebSearch(ctx context.Context, s *Store, _ string, rawArgs json.RawMess
 }
 
 func fetchWebSearchJSON(ctx context.Context, client *http.Client, targetURL string) ([]byte, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, targetURL, nil)
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("Accept", "application/json")
-	req.Header.Set("User-Agent", "fased-agent/1")
-
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("search provider returned HTTP %d", resp.StatusCode)
-	}
-	body, err := io.ReadAll(io.LimitReader(resp.Body, webSearchMaxBodyBytes+1))
-	if err != nil {
-		return nil, err
-	}
-	if len(body) > webSearchMaxBodyBytes {
-		return nil, errors.New("search provider response exceeds size limit")
-	}
-	return body, nil
+	return agents.FetchJSON(ctx, client, targetURL, webSearchMaxBodyBytes)
 }

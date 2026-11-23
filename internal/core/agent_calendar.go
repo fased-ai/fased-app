@@ -9,17 +9,13 @@ import (
 	"strings"
 	"time"
 	_ "time/tzdata"
+
+	"github.com/fased-ai/fased-app/internal/scheduler"
 )
 
 // TaskCalendar is a versioned reviewed schedule. Once-at keeps its absolute
 // instant; cron evaluates named-zone wall time within a fixed bounded horizon.
-type TaskCalendar struct {
-	Expression string `json:"expression,omitempty"`
-	Until      int64  `json:"until,omitempty"`
-	Version    string `json:"version"`
-	At         int64  `json:"at"`
-	TimeZone   string `json:"timeZone"`
-}
+type TaskCalendar = scheduler.TaskCalendar
 
 func validCalendar(c *TaskCalendar) bool {
 	if c == nil || c.TimeZone == "Local" || !validAgentText(c.TimeZone, 120, true) {

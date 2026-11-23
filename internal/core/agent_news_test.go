@@ -16,6 +16,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/fased-ai/fased-app/internal/news"
 )
 
 func newsChatFixture(t *testing.T) (*Store, AgentView, *atomic.Int32) {
@@ -585,11 +587,11 @@ func TestNewsURLsPublicDialTLSAndCapacity(t *testing.T) {
 			t.Fatal("private/reserved address accepted", raw)
 		}
 	}
-	p := newPublicNewsTransport().(*publicNewsTransport)
-	if p.transport.Proxy != nil || !p.transport.DisableKeepAlives || p.transport.TLSClientConfig.InsecureSkipVerify {
+	p := newPublicNewsTransport().(*news.PublicTransport)
+	if p.Transport.Proxy != nil || !p.Transport.DisableKeepAlives || p.Transport.TLSClientConfig.InsecureSkipVerify {
 		t.Fatal("unsafe news HTTP policy")
 	}
-	if conn, e := p.transport.DialContext(t.Context(), "tcp", "127.0.0.1:443"); e == nil {
+	if conn, e := p.Transport.DialContext(t.Context(), "tcp", "127.0.0.1:443"); e == nil {
 		conn.Close()
 		t.Fatal("private DNS/dial permitted")
 	}

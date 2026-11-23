@@ -1,8 +1,6 @@
 package core
 
 import (
-	"crypto/aes"
-	"crypto/cipher"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
@@ -11,6 +9,8 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+
+	"github.com/fased-ai/fased-app/internal/vault"
 )
 
 // Backups contain ciphertext only. v1/v2 remain bound to the original instance,
@@ -87,10 +87,11 @@ func sealPortableRPCBackupWithPreKey(keyVersion int, network, endpoint, passphra
 			Nonce:       nonce,
 		},
 	}
-	block, _ := aes.NewCipher(key)
+	b.Vault.Ciphertext, err = vault.SealAESGCM(key, b.Vault.Nonce, plain, portableRPCAAD(b))
 	clear(key)
-	gcm, _ := cipher.NewGCM(block)
-	b.Vault.Ciphertext = gcm.Seal(nil, b.Vault.Nonce, plain, portableRPCAAD(b))
+	if err != nil {
+		return RPCCredentialBackup{}, err
+	}
 	return b, nil
 }
 
@@ -116,10 +117,8 @@ func (s *Store) openRPCBackupWithPreKey(b *RPCCredentialBackup, a Account, passw
 		aad = s.rpcAAD(a.ID, b.Vault)
 	}
 	key := pre.keyFor(password, b.Vault.Salt)
-	block, _ := aes.NewCipher(key)
+	plain, e := vault.OpenAESGCM(key, b.Vault.Nonce, b.Vault.Ciphertext, aad)
 	clear(key)
-	gcm, _ := cipher.NewGCM(block)
-	plain, e := gcm.Open(nil, b.Vault.Nonce, b.Vault.Ciphertext, aad)
 	if e != nil || !validRPCSecret(b.Vault.Version, string(plain)) {
 		clear(plain)
 		return nil, fail
