@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -365,5 +366,63 @@ func TestLocalBrowserAutoEnterSecurity(t *testing.T) {
 	}
 	if w = callBrowser(ph, "http://127.0.0.1:7331", "1", "same-origin"); w.Code != http.StatusForbidden {
 		t.Fatalf("password-claimed instance admitted passwordless browser action: %d", w.Code)
+	}
+}
+
+func TestRemoteProxyTrustAndLocalNonceHardening(t *testing.T) {
+	s, err := OpenStore(filepath.Join(t.TempDir(), "state"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+
+	h, err := NewHTTPHandler(s, "http://127.0.0.1:7331", "https://proxy.example.com", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.instanceLocation = "remote"
+	h.remoteProxyTrust = true
+	h.remoteTransport = "cloudflare"
+
+	// Ambiguous multi-header X-Forwarded-Proto over plain loopback proxy HTTP must be refused.
+	ambig := httptest.NewRequest(http.MethodGet, "http://proxy.example.com/api/v1/health", nil)
+	ambig.Host = "proxy.example.com"
+	ambig.Header.Add("X-Forwarded-Proto", "http")
+	ambig.Header.Add("X-Forwarded-Proto", "https")
+	wa := httptest.NewRecorder()
+	h.ServeHTTP(wa, ambig)
+	if wa.Code != http.StatusForbidden {
+		t.Fatalf("expected 403 on multi-value X-Forwarded-Proto, got %d", wa.Code)
+	}
+
+	// Non-loopback TCP peer must be refused when LocalAddrContextKey is set (real socket).
+	nonLoop := httptest.NewRequest(http.MethodGet, "http://proxy.example.com/api/v1/health", nil)
+	nonLoop.Host = "proxy.example.com"
+	nonLoop.RemoteAddr = "203.0.113.55:4444"
+	nonLoop.Header.Set("X-Forwarded-Proto", "https")
+	nonLoop = nonLoop.WithContext(context.WithValue(nonLoop.Context(), http.LocalAddrContextKey, &net.TCPAddr{IP: net.ParseIP("127.0.0.1"), Port: 7331}))
+	wn := httptest.NewRecorder()
+	h.ServeHTTP(wn, nonLoop)
+	if wn.Code != http.StatusForbidden {
+		t.Fatalf("expected 403 on non-loopback proxy peer, got %d", wn.Code)
+	}
+
+	// Nonce initialization writes a 0600 file and validates matching headers only.
+	nonceDir := filepath.Join(t.TempDir(), "nonce-state")
+	if err := h.initLocalBootstrapNonce(nonceDir); err != nil {
+		t.Fatalf("initLocalBootstrapNonce failed: %v", err)
+	}
+	if h.localNonce == "" {
+		t.Fatal("expected non-empty local bootstrap nonce")
+	}
+	goodReq := httptest.NewRequest(http.MethodPost, "http://127.0.0.1:7331/api/v1/auth/local", nil)
+	goodReq.Header.Set("X-Fased-Local-Nonce", h.localNonce)
+	if !h.validLocalNonce(goodReq) {
+		t.Fatal("valid local bootstrap nonce was rejected")
+	}
+	badReq := httptest.NewRequest(http.MethodPost, "http://127.0.0.1:7331/api/v1/auth/local", nil)
+	badReq.Header.Set("X-Fased-Local-Nonce", "wrong-nonce")
+	if h.validLocalNonce(badReq) {
+		t.Fatal("wrong local bootstrap nonce was accepted")
 	}
 }

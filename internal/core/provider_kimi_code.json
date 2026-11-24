@@ -2,8 +2,8 @@
   "version": 1,
   "policy": "latest-only",
   "provider": "kimi-code",
-  "reviewedAt": 1795219200,
-  "expiresAt": 1797811200,
+  "reviewedAt": 1795478400,
+  "expiresAt": 1798070400,
   "sources": {
     "models": "https://www.kimi.com/code/docs/en/kimi-code/models.html",
     "contract": "https://www.kimi.com/code/docs/en/third-party-tools/hermes.html",

@@ -120,6 +120,11 @@ func openStoreWithTaskSecrets(dir string, secrets providersecrets.Source) (_ *St
 	if schema > RemoteOwnerStateSchema {
 		return nil, errors.New("core state schema is newer than this binary; refusing downgrade")
 	}
+	if schema > 0 {
+		if err = sqliteQuickCheck(ctx, db, "core.sqlite"); err != nil {
+			return nil, err
+		}
+	}
 	if schema == 0 {
 		if _, err = db.ExecContext(ctx, "PRAGMA synchronous=OFF;"); err != nil {
 			return nil, err
@@ -382,6 +387,7 @@ func (s *Store) Close() error {
 	s.closeApplicationChecks()
 	s.closeVenueCredentials()
 	s.lockAIConnection()
+	evictCodexAppServerSessions()
 	s.agentV2Mu.Lock()
 	v2 := s.agentV2
 	s.agentV2 = nil

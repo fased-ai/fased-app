@@ -44,6 +44,7 @@ type HTTPHandler struct {
 	desktopRelease    desktopReleaseCache
 	limiter           auth.RateLimiter
 	loopbackPeerUID   func(client, server *net.TCPAddr) (int, bool, error)
+	localNonce        string
 }
 
 func NewHTTPHandler(store *Store, baseURL, publicOrigin string, assets fs.FS) (*HTTPHandler, error) {
@@ -94,7 +95,14 @@ func (h *HTTPHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if h.remoteProxyTrust && r.Host == h.publicHost && r.Context().Value(privateIPCKey{}) != true {
-		if r.TLS == nil && !strings.EqualFold(r.Header.Get("X-Forwarded-Proto"), "https") {
+		if _, hasLocal := r.Context().Value(http.LocalAddrContextKey).(*net.TCPAddr); hasLocal {
+			if !isLoopbackRemoteAddr(r.RemoteAddr) {
+				writeError(w, 403, "loopback reverse proxy peer required")
+				return
+			}
+		}
+		protos := r.Header.Values("X-Forwarded-Proto")
+		if r.TLS == nil && (len(protos) != 1 || !strings.EqualFold(strings.TrimSpace(protos[0]), "https")) {
 			writeError(w, 403, "HTTPS proxy required")
 			return
 		}
@@ -219,7 +227,7 @@ func (h *HTTPHandler) api(w http.ResponseWriter, r *http.Request) {
 			}
 			passwordAvailable := claimed && !passwordDisabled(salt)
 			result["passwordAvailable"] = passwordAvailable
-			result["localAutoEnter"] = !h.requirePassword && !passwordAvailable
+			result["localAutoEnter"] = !h.requirePassword && !passwordAvailable && (h.localPeerVerifiable() || r.Context().Value(privateIPCKey{}) == true)
 		}
 		if h.instanceLocation == "remote" || h.publicHost != "" || h.remoteIngress {
 			hasPW, pwErr := h.store.hasPassword(r.Context())
@@ -665,24 +673,26 @@ func (h *HTTPHandler) ratePeerKey(r *http.Request) string {
 		return "ipc"
 	}
 	if h.remoteProxyTrust && r.Host == h.publicHost {
-		if h.remoteTransport == "cloudflare" {
-			if cfIP := strings.TrimSpace(r.Header.Get("CF-Connecting-IP")); cfIP != "" {
-				if parsed := net.ParseIP(cfIP); parsed != nil {
-					return "proxy:" + parsed.String()
-				}
-			}
-		}
-		if xff := r.Header.Values("X-Forwarded-For"); len(xff) > 0 {
-			for i := len(xff) - 1; i >= 0; i-- {
-				parts := strings.Split(xff[i], ",")
-				for j := len(parts) - 1; j >= 0; j-- {
-					if parsed := net.ParseIP(strings.TrimSpace(parts[j])); parsed != nil {
+		if _, hasLocal := r.Context().Value(http.LocalAddrContextKey).(*net.TCPAddr); !hasLocal || isLoopbackRemoteAddr(r.RemoteAddr) {
+			if h.remoteTransport == "cloudflare" {
+				if cfIP := strings.TrimSpace(r.Header.Get("CF-Connecting-IP")); cfIP != "" {
+					if parsed := net.ParseIP(cfIP); parsed != nil {
 						return "proxy:" + parsed.String()
 					}
 				}
 			}
+			if xff := r.Header.Values("X-Forwarded-For"); len(xff) > 0 {
+				for i := len(xff) - 1; i >= 0; i-- {
+					parts := strings.Split(xff[i], ",")
+					for j := len(parts) - 1; j >= 0; j-- {
+						if parsed := net.ParseIP(strings.TrimSpace(parts[j])); parsed != nil {
+							return "proxy:" + parsed.String()
+						}
+					}
+				}
+			}
+			return "proxy:loopback"
 		}
-		return "proxy:loopback"
 	}
 	host := r.RemoteAddr
 	if parsed, _, err := net.SplitHostPort(r.RemoteAddr); err == nil && parsed != "" {
@@ -839,11 +849,15 @@ func (h *HTTPHandler) csrf(w http.ResponseWriter, r *http.Request, token string)
 }
 func (h *HTTPHandler) session(r *http.Request) string {
 	if h.sessionMode(r) == "cookie" {
-		cookie, err := r.Cookie(sessionCookie)
-		if err != nil {
-			return ""
+		if cookie, err := r.Cookie(sessionCookie); err == nil && cookie.Value != "" {
+			return cookie.Value
 		}
-		return cookie.Value
+		if r.URL.Path == "/api/v1/mcp" && r.Header.Get("Origin") == "" && r.Header.Get("Sec-Fetch-Site") == "" {
+			if auth := r.Header.Get("Authorization"); strings.HasPrefix(auth, "Bearer ") {
+				return strings.TrimPrefix(auth, "Bearer ")
+			}
+		}
+		return ""
 	}
 	if auth := r.Header.Get("Authorization"); strings.HasPrefix(auth, "Bearer ") {
 		return strings.TrimPrefix(auth, "Bearer ")

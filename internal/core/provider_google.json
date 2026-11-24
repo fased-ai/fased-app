@@ -2,8 +2,8 @@
   "version": 1,
   "policy": "latest-only",
   "provider": "google",
-  "reviewedAt": 1795219200,
-  "expiresAt": 1797811200,
+  "reviewedAt": 1795478400,
+  "expiresAt": 1798070400,
   "sources": {
     "models": "https://aistudio.google.com/docs/models/gemini-3.8-flash",
     "pricing": "https://aistudio.google.com/docs/pricing",

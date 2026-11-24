@@ -4,7 +4,11 @@ import (
 	"bytes"
 	"context"
 	"crypto/subtle"
+	"net"
 	"net/http"
+	"path/filepath"
+	"runtime"
+	"strings"
 	"time"
 )
 
@@ -12,8 +16,45 @@ import (
 // from a loopback address or a caller-supplied header. Launch proofs live in
 // memory, expire quickly, are single-use and cannot survive a core restart.
 const localLaunchLifetime = 2 * time.Minute
+const localBootstrapNonceFile = "local-nonce"
 
 var localOwnerSalt = []byte("fased-local-os-owner-v1")
+
+func isLoopbackRemoteAddr(remoteAddr string) bool {
+	host, _, err := net.SplitHostPort(strings.TrimSpace(remoteAddr))
+	if err != nil {
+		host = strings.TrimSpace(remoteAddr)
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
+}
+
+func (h *HTTPHandler) initLocalBootstrapNonce(dir string) error {
+	if dir == "" {
+		return nil
+	}
+	nonce, err := randomToken()
+	if err != nil {
+		return err
+	}
+	if err := WritePrivateJSON(filepath.Join(dir, localBootstrapNonceFile), map[string]string{"nonce": nonce}); err != nil {
+		return err
+	}
+	h.localNonce = nonce
+	return nil
+}
+
+func (h *HTTPHandler) localPeerVerifiable() bool {
+	return runtime.GOOS == "linux" || h.loopbackPeerUID != nil
+}
+
+func (h *HTTPHandler) validLocalNonce(r *http.Request) bool {
+	if h.localNonce == "" {
+		return false
+	}
+	got := strings.TrimSpace(r.Header.Get("X-Fased-Local-Nonce"))
+	return len(got) == len(h.localNonce) && subtle.ConstantTimeCompare([]byte(got), []byte(h.localNonce)) == 1
+}
 
 func (s *Store) issueLocalLaunch(_ context.Context) (string, error) {
 	s.authMu.Lock()
@@ -157,6 +198,10 @@ func (h *HTTPHandler) localOwnerAPI(w http.ResponseWriter, r *http.Request) {
 		}
 		if r.Header.Get("X-Fased-Local") != "1" {
 			writeError(w, 403, "Local browser confirmation required")
+			return
+		}
+		if r.Context().Value(privateIPCKey{}) != true && !h.localPeerVerifiable() && !h.validLocalNonce(r) {
+			writeError(w, 403, "Local OS owner launch proof required")
 			return
 		}
 		if sfs := r.Header.Get("Sec-Fetch-Site"); sfs != "" && sfs != "same-origin" {

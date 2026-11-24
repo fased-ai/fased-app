@@ -284,7 +284,25 @@ func (h *HTTPHandler) agentsV2API(w http.ResponseWriter, r *http.Request, token 
 		}
 		switch r.Method {
 		case http.MethodGet:
-			detail, err := h.store.GetThread(r.Context(), sub)
+			limit := 0
+			beforeSeq := 0
+			if raw := strings.TrimSpace(r.URL.Query().Get("limit")); raw != "" {
+				n, err := strconv.Atoi(raw)
+				if err != nil || n < 1 || n > 500 {
+					writeError(w, 400, "invalid limit")
+					return
+				}
+				limit = n
+			}
+			if raw := strings.TrimSpace(r.URL.Query().Get("beforeSeq")); raw != "" {
+				n, err := strconv.Atoi(raw)
+				if err != nil || n < 1 {
+					writeError(w, 400, "invalid beforeSeq")
+					return
+				}
+				beforeSeq = n
+			}
+			detail, err := h.store.GetThreadPage(r.Context(), sub, limit, beforeSeq)
 			if errors.Is(err, ErrThreadNotFound) {
 				writeError(w, 404, err.Error())
 				return
