@@ -234,3 +234,110 @@ test("composed readonly Onchain adapter refuses ordinary config without backport
     /exact ordinary fixture declaration/,
   );
 });
+
+test("predecessor package and lockfile superset helpers allow additive deps but reject drift", async () => {
+  const { assertPredecessorPackageCompatible, isVerifiedLockSuperset } =
+    await import("./fixture-core-storage.mjs");
+
+  const priorLock = {
+    lockfileVersion: 3,
+    packages: {
+      "": { dependencies: { react: "19.3.1" } },
+      "node_modules/react": { version: "19.3.1", integrity: "sha512-react" },
+      "node_modules/lucide-react": {
+        version: "1.59.0",
+        integrity: "sha512-lucide",
+      },
+    },
+  };
+  const additiveLock = {
+    lockfileVersion: 3,
+    packages: {
+      "": {
+        dependencies: { react: "19.3.1", "lightweight-charts": "5.3.0" },
+      },
+      "node_modules/react": { version: "19.3.1", integrity: "sha512-react" },
+      "node_modules/lucide-react": {
+        version: "1.59.0",
+        integrity: "sha512-lucide",
+      },
+      "node_modules/lightweight-charts": {
+        version: "5.3.0",
+        integrity: "sha512-lwc",
+      },
+    },
+  };
+  assert.equal(isVerifiedLockSuperset(priorLock, additiveLock), true);
+  assert.equal(
+    isVerifiedLockSuperset(priorLock, {
+      ...additiveLock,
+      packages: {
+        ...additiveLock.packages,
+        "node_modules/react": { version: "19.3.2", integrity: "sha512-react" },
+      },
+    }),
+    false,
+  );
+  assert.equal(
+    isVerifiedLockSuperset(priorLock, {
+      ...additiveLock,
+      packages: {
+        ...additiveLock.packages,
+        "node_modules/lucide-react": {
+          version: "1.59.0",
+          integrity: "sha512-tampered",
+        },
+      },
+    }),
+    false,
+  );
+  assert.equal(
+    isVerifiedLockSuperset(priorLock, {
+      lockfileVersion: 3,
+      packages: {
+        "node_modules/react": priorLock.packages["node_modules/react"],
+      },
+    }),
+    false,
+  );
+
+  const priorPkg = {
+    name: "fased-app",
+    version: "0.0.0-core.1",
+    scripts: { build: "tsc --noEmit && vite build", "test:core": "old" },
+    dependencies: { react: "19.3.1" },
+    devDependencies: { vite: "8.3.4" },
+  };
+  assert.doesNotThrow(() =>
+    assertPredecessorPackageCompatible(
+      {
+        ...priorPkg,
+        scripts: { ...priorPkg.scripts, "test:core": "new" },
+        dependencies: {
+          ...priorPkg.dependencies,
+          "lightweight-charts": "5.3.0",
+        },
+      },
+      priorPkg,
+    ),
+  );
+  assert.throws(
+    () =>
+      assertPredecessorPackageCompatible(
+        { ...priorPkg, dependencies: { react: "19.4.0" } },
+        priorPkg,
+      ),
+    /drifted from pinned version/,
+  );
+  assert.throws(
+    () =>
+      assertPredecessorPackageCompatible(
+        {
+          ...priorPkg,
+          scripts: { ...priorPkg.scripts, build: "vite build" },
+        },
+        priorPkg,
+      ),
+    /predecessor package inputs changed/,
+  );
+});

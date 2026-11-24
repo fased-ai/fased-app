@@ -6,7 +6,9 @@ import { mkdir, cp, readFile, writeFile, rm } from "node:fs/promises";
 import path from "node:path";
 import { sha } from "./handoff-transport-evidence.mjs";
 import {
+  assertPredecessorPackageCompatible,
   currentStorageFixture,
+  isVerifiedLockSuperset,
   projectPasswordOnlyContract,
   runReaderStage,
 } from "./fixture-core-storage.mjs";
@@ -198,40 +200,44 @@ try {
       ),
   );
   execFileSync("gofmt", ["-w", httpPath]);
+  // Installer-build, core-test and owner release commands do not produce this inert UI.
+  // Keep every baseline package pin, build script, and legacy ui/ui.go untouched while
+  // permitting purely additive frontend dependencies verified as a lockfile superset.
+  const currentPkgText = await readFile("package.json", "utf8");
+  const refPkgText = execFileSync("git", ["show", ref + ":package.json"], {
+    encoding: "utf8",
+  });
+  assertPredecessorPackageCompatible(
+    JSON.parse(currentPkgText),
+    JSON.parse(refPkgText),
+  );
+  const currentLockText = await readFile("package-lock.json", "utf8");
+  const refLockText = execFileSync(
+    "git",
+    ["show", ref + ":package-lock.json"],
+    { encoding: "utf8" },
+  );
+  assert.ok(
+    isVerifiedLockSuperset(
+      JSON.parse(refLockText),
+      JSON.parse(currentLockText),
+    ),
+    "current package-lock.json must remain a verified superset of predecessor lockfile",
+  );
+  // Hash the reused current bundle separately; it is not historical UI proof.
+  assert.equal(
+    execFileSync("git", ["diff", ref, "--", "ui", "ui.go"], {
+      encoding: "utf8",
+    }),
+    "",
+  );
   const runtimeMetadata = {
     fixtureOnly: true,
     source:
       "historical health plus current connection descriptor and authenticated read-only Updates projection; nil controller",
     httpSHA256: sha(await readFile(httpPath)),
+    currentPackageLockSha256: sha(currentLockText),
   };
-  // Installer-build, core-test and owner release commands do not produce this inert UI.
-  // Keep every other package field, UI input and lockfile bound to the baseline.
-  const packageInputs = (value) => {
-    const inputs = structuredClone(value);
-    delete inputs.scripts["build:installer"];
-    delete inputs.scripts["test:core"];
-    delete inputs.scripts.release;
-    return inputs;
-  };
-  assert.deepEqual(
-    packageInputs(JSON.parse(await readFile("package.json", "utf8"))),
-    packageInputs(
-      JSON.parse(
-        execFileSync("git", ["show", ref + ":package.json"], {
-          encoding: "utf8",
-        }),
-      ),
-    ),
-  );
-  // Hash the reused current bundle separately; it is not historical UI proof.
-  assert.equal(
-    execFileSync(
-      "git",
-      ["diff", ref, "--", "ui", "package-lock.json", "ui.go"],
-      { encoding: "utf8" },
-    ),
-    "",
-  );
   await cp("dist", path.join(scratch, "dist"), { recursive: true });
   const outputs = {};
   for (const role of ["app", "signer"]) {

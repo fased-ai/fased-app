@@ -1,7 +1,9 @@
 // Ordinary-user compiler for reconstructible predecessor and bad-health fixtures.
 import assert from "node:assert/strict";
 import {
+  assertPredecessorPackageCompatible,
   currentStorageFixture,
+  isVerifiedLockSuperset,
   projectPasswordOnlyContract,
 } from "./fixture-core-storage.mjs";
 import { execFileSync } from "node:child_process";
@@ -46,41 +48,43 @@ try {
     execFileSync("tar", ["-xf", "-", "-C", dir], { input: bytes });
     return dir;
   };
-  // These maintenance commands do not build the predecessor UI or change its runtime
-  // dependencies. Every other package field and the lockfile must still match.
-  const packageInputs = (value) => {
-    const inputs = structuredClone(value);
-    delete inputs.scripts["build:installer"];
-    delete inputs.scripts["test:core"];
-    delete inputs.scripts.release;
-    return inputs;
-  };
-  assert.deepEqual(
-    packageInputs(JSON.parse(await readFile("package.json", "utf8"))),
-    packageInputs(
-      JSON.parse(
-        execFileSync("git", ["show", prior + ":package.json"], {
-          encoding: "utf8",
-        }),
-      ),
-    ),
-    "predecessor package inputs changed outside installer-build/core-test/owner-release commands",
+  // Maintenance commands keep historical scripts and pinned baseline packages intact.
+  // Purely additive frontend dependencies still preserve an identical verified lock superset;
+  // if any baseline package ever changes, fall back to an isolated npm ci install in old.
+  const currentPkgText = await readFile("package.json", "utf8");
+  const priorPkgText = execFileSync("git", ["show", prior + ":package.json"], {
+    encoding: "utf8",
+  });
+  assertPredecessorPackageCompatible(
+    JSON.parse(currentPkgText),
+    JSON.parse(priorPkgText),
   );
-  assert.equal(
-    execFileSync("git", ["diff", prior, "--", "package-lock.json"], {
-      encoding: "utf8",
-    }),
-    "",
-    "predecessor dependencies changed; install a separately pinned dependency tree before building its UI",
+  const currentLockText = await readFile("package-lock.json", "utf8");
+  const priorLockText = execFileSync(
+    "git",
+    ["show", prior + ":package-lock.json"],
+    { encoding: "utf8" },
+  );
+  const lockSuperset = isVerifiedLockSuperset(
+    JSON.parse(priorLockText),
+    JSON.parse(currentLockText),
   );
   const old = await archive(prior, "predecessor");
-  // UI changes must not silently put today's frontend in an older executable.
-  // Reuse only identical pinned dependencies, then compile the genuine old UI.
-  await symlink(
-    path.resolve("node_modules"),
-    path.join(old, "node_modules"),
-    "dir",
-  );
+  let dependencyReuseMode;
+  if (lockSuperset) {
+    await symlink(
+      path.resolve("node_modules"),
+      path.join(old, "node_modules"),
+      "dir",
+    );
+    dependencyReuseMode = "symlink-verified-superset";
+  } else {
+    execFileSync("npm", ["ci", "--ignore-scripts", "--no-audit", "--no-fund"], {
+      cwd: old,
+      stdio: "pipe",
+    });
+    dependencyReuseMode = "isolated-npm-ci";
+  }
   execFileSync("npm", ["run", "build"], { cwd: old, stdio: "pipe" });
   const oldUI = {};
   const hashUI = async (dir) => {
@@ -96,8 +100,12 @@ try {
   await hashUI(path.join(old, "dist"));
   report.predecessorUI = {
     mode: "built-from-pinned-source",
+    dependencyReuseMode,
     dependencyLockSha256: createHash("sha256")
       .update(await readFile(path.join(old, "package-lock.json")))
+      .digest("hex"),
+    currentLockSha256: createHash("sha256")
+      .update(currentLockText)
       .digest("hex"),
     outputs: oldUI,
   };
