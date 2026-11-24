@@ -544,6 +544,20 @@ func geckoTimeframeParams(iv string) (tf string, agg int) {
 	}
 }
 
+func (c *upstreamClient) getBinance(ctx context.Context, pathAndQuery string) ([]byte, error) {
+	// Prefer Binance's official unauthenticated public market-data mirror first so
+	// US-hosted deployments avoid api.binance.com HTTP 451 geo-blocks.
+	raw, err := c.get(ctx, "https://data-api.binance.vision"+pathAndQuery)
+	if err == nil || ctx.Err() != nil {
+		return raw, err
+	}
+	fallbackRaw, fallbackErr := c.get(ctx, "https://api.binance.com"+pathAndQuery)
+	if fallbackErr == nil {
+		return fallbackRaw, nil
+	}
+	return nil, err
+}
+
 func (c *upstreamClient) fetchCandles(ctx context.Context, venue, symbol, interval string, startSec, endSec int64, limit int) ([]Candle, error) {
 	if limit <= 0 || limit > maxCandlesLimit {
 		limit = 200
@@ -570,9 +584,9 @@ func (c *upstreamClient) fetchCandles(ctx context.Context, venue, symbol, interv
 		return ParseHyperliquidCandles(raw)
 
 	case VenueBinance:
-		u := fmt.Sprintf("https://api.binance.com/api/v3/klines?symbol=%s&interval=%s&limit=%d",
+		u := fmt.Sprintf("/api/v3/klines?symbol=%s&interval=%s&limit=%d",
 			url.QueryEscape(qSym), url.QueryEscape(interval), minInt(limit, 1000))
-		raw, err := c.get(ctx, u)
+		raw, err := c.getBinance(ctx, u)
 		if err != nil {
 			return nil, err
 		}
@@ -677,8 +691,8 @@ func (c *upstreamClient) fetchOrderBook(ctx context.Context, venue, symbol strin
 		}
 		return ParseHyperliquidBook(raw, venue, symbol)
 	case VenueBinance:
-		u := fmt.Sprintf("https://api.binance.com/api/v3/depth?symbol=%s&limit=%d", url.QueryEscape(qSym), minInt(limit, 100))
-		raw, err := c.get(ctx, u)
+		u := fmt.Sprintf("/api/v3/depth?symbol=%s&limit=%d", url.QueryEscape(qSym), minInt(limit, 100))
+		raw, err := c.getBinance(ctx, u)
 		if err != nil {
 			return OrderBookSnapshot{}, err
 		}
@@ -741,8 +755,8 @@ func (c *upstreamClient) fetchTrades(ctx context.Context, venue, symbol string, 
 		}
 		return out, nil
 	case VenueBinance:
-		u := fmt.Sprintf("https://api.binance.com/api/v3/trades?symbol=%s&limit=%d", url.QueryEscape(qSym), minInt(limit, 100))
-		raw, err := c.get(ctx, u)
+		u := fmt.Sprintf("/api/v3/trades?symbol=%s&limit=%d", url.QueryEscape(qSym), minInt(limit, 100))
+		raw, err := c.getBinance(ctx, u)
 		if err != nil {
 			return nil, err
 		}

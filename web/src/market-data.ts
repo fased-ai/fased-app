@@ -277,7 +277,7 @@ const DEFAULT_SEEDS: {
     style: "heikin_ashi",
   },
   { venue: "binance", symbol: "BTCUSDT", interval: "15m", style: "standard" },
-  { venue: "bybit", symbol: "BTCUSDT", interval: "1h", style: "standard" },
+  { venue: "kraken", symbol: "ETHUSD", interval: "1h", style: "standard" },
   { venue: "kraken", symbol: "XBTUSD", interval: "1h", style: "standard" },
   { venue: "hyperliquid", symbol: "HYPE", interval: "15m", style: "renko" },
   { venue: "binance", symbol: "ETHUSDT", interval: "5m", style: "standard" },

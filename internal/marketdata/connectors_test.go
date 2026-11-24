@@ -93,7 +93,7 @@ func TestConnectorsAndMockedLiveFetch(t *testing.T) {
 			return jsonResponse(200, `[{"t":1760000000000,"o":"94000","h":"94100","l":"93900","c":"94050","v":"12.5","n":40}]`), nil
 		case "stats-data.hyperliquid.xyz":
 			return jsonResponse(200, `{"leaderboardRows":[{"ethAddress":"0xabc","displayName":"top1","accountValue":"500000","windowPerformances":[["day",{"roi":"-0.035"}],["week",{"roi":"0.12"}]]}]}`), nil
-		case "api.binance.com":
+		case "data-api.binance.vision", "api.binance.com":
 			return jsonResponse(200, `[[1760000000000,"94000","94200","93950","94150","25.4",1760003599999,"0",100,"14.0"]]`), nil
 		case "api.bybit.com":
 			return jsonResponse(200, `{"retCode":0,"result":{"list":[["1760000000000","94010","94150","93980","94100","18.2"]]}}`), nil
@@ -198,5 +198,91 @@ func TestFixtureModeZeroNetworkRequests(t *testing.T) {
 	}
 	if n := networkCalls.Load(); n != 0 {
 		t.Fatalf("FixtureMode issued %d HTTP requests, expected 0", n)
+	}
+}
+
+func TestBinanceUsesPublicVisionMirrorAndFallsBack(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	// 1. Verify GetCandles, GetOrderBook, and GetTrades hit data-api.binance.vision first.
+	var hosts []string
+	var comCalls atomic.Int32
+	primaryTransport := roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		hosts = append(hosts, r.URL.Hostname())
+		if r.URL.Hostname() == "api.binance.com" {
+			comCalls.Add(1)
+			return jsonResponse(451, "restricted location"), nil
+		}
+		if r.URL.Hostname() != "data-api.binance.vision" {
+			return nil, errors.New("unexpected host: " + r.URL.Hostname())
+		}
+		switch r.URL.Path {
+		case "/api/v3/klines":
+			return jsonResponse(200, `[[1760000000000,"94000","94200","93950","94150","25.4",1760003599999,"0",100,"14.0"]]`), nil
+		case "/api/v3/depth":
+			return jsonResponse(200, `{"bids":[["94000","1.5"]],"asks":[["94010","1.0"]]}`), nil
+		case "/api/v3/trades":
+			return jsonResponse(200, `[{"id":7,"price":"94005","qty":"0.25","time":1760000000100,"isBuyerMaker":false}]`), nil
+		default:
+			return jsonResponse(404, "not found"), nil
+		}
+	})
+
+	svc, err := NewService(Config{
+		DataDir:       t.TempDir(),
+		FixtureMode:   false,
+		Now:           func() time.Time { return time.Unix(1760003600, 0).UTC() },
+		HTTPTransport: primaryTransport,
+	})
+	if err != nil {
+		t.Fatalf("NewService failed: %v", err)
+	}
+	defer func() { _ = svc.Close() }()
+
+	if cs, err := svc.GetCandles(ctx, VenueBinance, "BTCUSDT", "1h", TransformOptions{Style: StyleStandard}, 10); err != nil || len(cs.Candles) == 0 {
+		t.Fatalf("GetCandles failed: len=%d err=%v", len(cs.Candles), err)
+	}
+	if book, err := svc.GetOrderBook(ctx, VenueBinance, "BTCUSDT", 10); err != nil || book.Spread != 10 {
+		t.Fatalf("GetOrderBook failed: %+v err=%v", book, err)
+	}
+	if trades, err := svc.GetTrades(ctx, VenueBinance, "BTCUSDT", 10); err != nil || len(trades) != 1 || trades[0].Price != 94005 {
+		t.Fatalf("GetTrades failed: %+v err=%v", trades, err)
+	}
+	if comCalls.Load() != 0 {
+		t.Fatalf("expected 0 api.binance.com calls when data-api.binance.vision succeeds, got %d", comCalls.Load())
+	}
+	if len(hosts) < 3 {
+		t.Fatalf("expected >=3 vision requests, got %v", hosts)
+	}
+
+	// 2. Verify graceful fallback to api.binance.com when data-api.binance.vision returns HTTP 503.
+	var fallbackHosts []string
+	fallbackTransport := roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		fallbackHosts = append(fallbackHosts, r.URL.Hostname())
+		if r.URL.Hostname() == "data-api.binance.vision" {
+			return jsonResponse(503, "temporary unavailable"), nil
+		}
+		if r.URL.Hostname() == "api.binance.com" && r.URL.Path == "/api/v3/klines" {
+			return jsonResponse(200, `[[1760000000000,"94000","94200","93950","94150","25.4",1760003599999,"0",100,"14.0"]]`), nil
+		}
+		return jsonResponse(404, "not found"), nil
+	})
+	fallbackSvc, err := NewService(Config{
+		DataDir:       t.TempDir(),
+		FixtureMode:   false,
+		Now:           func() time.Time { return time.Unix(1760003600, 0).UTC() },
+		HTTPTransport: fallbackTransport,
+	})
+	if err != nil {
+		t.Fatalf("NewService(fallback) failed: %v", err)
+	}
+	defer func() { _ = fallbackSvc.Close() }()
+
+	if cs, err := fallbackSvc.GetCandles(ctx, VenueBinance, "BTCUSDT", "1h", TransformOptions{Style: StyleStandard}, 10); err != nil || len(cs.Candles) == 0 {
+		t.Fatalf("fallback GetCandles failed: len=%d err=%v", len(cs.Candles), err)
+	}
+	if len(fallbackHosts) != 2 || fallbackHosts[0] != "data-api.binance.vision" || fallbackHosts[1] != "api.binance.com" {
+		t.Fatalf("expected [data-api.binance.vision api.binance.com], got %v", fallbackHosts)
 	}
 }
