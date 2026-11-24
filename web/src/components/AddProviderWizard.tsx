@@ -180,10 +180,12 @@ export function AddProviderWizard({
     const res = await submitAction({
       action: "sign-in-start",
       provider,
+      remote: core.connection?.location === "remote",
       ...(provider === "google" && googleProject
         ? { googleProject: googleProject.trim() }
         : {}),
       ...(label.trim() ? { name: label.trim() } : {}),
+      ...(accentColor ? { accentColor } : {}),
     });
     if (res) {
       onClose();

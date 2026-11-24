@@ -68,6 +68,117 @@
     });
     if (conversation.status !== 200)
       throw new Error(`Conversation write: ${conversation.status}`);
+    phase = "Agent V2 threads, memories and MCP";
+    const jsonHeaders = {
+      ...headers,
+      "Content-Type": "application/json",
+      "X-CSRF-Token": auth.csrfToken,
+    };
+    const toolsResp = await fetch("/api/v1/agents/v2/tools", { headers });
+    if (toolsResp.status !== 200)
+      throw new Error(`Agent V2 tools read: ${toolsResp.status}`);
+    const usageResp = await fetch("/api/v1/agents/v2/usage?days=7", {
+      headers,
+    });
+    if (usageResp.status !== 200)
+      throw new Error(`Agent V2 usage read: ${usageResp.status}`);
+    const manifestResp = await fetch("/api/v1/agents/v2/model-manifest", {
+      headers,
+    });
+    if (manifestResp.status !== 200)
+      throw new Error(`Agent V2 manifest read: ${manifestResp.status}`);
+    const createdThreadResp = await fetch("/api/v1/agents/v2/threads", {
+      method: "POST",
+      headers: jsonHeaders,
+      body: JSON.stringify({
+        profileId: view.profileId,
+        title: "Native V2 smoke",
+      }),
+    });
+    const createdThread = await createdThreadResp.json();
+    if (createdThreadResp.status !== 201 || !createdThread?.thread?.id)
+      throw new Error(`Agent V2 thread create: ${createdThreadResp.status}`);
+    const threadId = createdThread.thread.id;
+    const renamedThreadResp = await fetch(
+      `/api/v1/agents/v2/threads/${encodeURIComponent(threadId)}`,
+      {
+        method: "PATCH",
+        headers: jsonHeaders,
+        body: JSON.stringify({ title: "Native V2 renamed" }),
+      },
+    );
+    const renamedThread = await renamedThreadResp.json();
+    if (
+      renamedThreadResp.status !== 200 ||
+      renamedThread?.thread?.title !== "Native V2 renamed"
+    )
+      throw new Error(`Agent V2 thread rename: ${renamedThreadResp.status}`);
+    const threadDetailResp = await fetch(
+      `/api/v1/agents/v2/threads/${encodeURIComponent(threadId)}`,
+      { headers },
+    );
+    if (threadDetailResp.status !== 200)
+      throw new Error(`Agent V2 thread detail: ${threadDetailResp.status}`);
+    const createdMemoryResp = await fetch("/api/v1/agents/v2/memories", {
+      method: "POST",
+      headers: jsonHeaders,
+      body: JSON.stringify({
+        profileId: view.profileId,
+        scope: "chat",
+        title: "Native rule",
+        content: "Keep responses concise.",
+        pinned: true,
+      }),
+    });
+    const createdMemory = await createdMemoryResp.json();
+    if (createdMemoryResp.status !== 201 || !createdMemory?.memory?.id)
+      throw new Error(`Agent V2 memory create: ${createdMemoryResp.status}`);
+    const memId = createdMemory.memory.id;
+    const listMemResp = await fetch(
+      `/api/v1/agents/v2/memories?profileId=${encodeURIComponent(view.profileId)}&excludeDrafts=1&limit=10`,
+      { headers },
+    );
+    if (listMemResp.status !== 200)
+      throw new Error(`Agent V2 memory list: ${listMemResp.status}`);
+    const patchMemResp = await fetch(
+      `/api/v1/agents/v2/memories/${encodeURIComponent(memId)}`,
+      {
+        method: "PATCH",
+        headers: jsonHeaders,
+        body: JSON.stringify({ content: "Keep responses very concise." }),
+      },
+    );
+    if (patchMemResp.status !== 200)
+      throw new Error(`Agent V2 memory patch: ${patchMemResp.status}`);
+    const delMemResp = await fetch(
+      `/api/v1/agents/v2/memories/${encodeURIComponent(memId)}`,
+      {
+        method: "DELETE",
+        headers: jsonHeaders,
+      },
+    );
+    if (delMemResp.status !== 200)
+      throw new Error(`Agent V2 memory delete: ${delMemResp.status}`);
+    const delThreadResp = await fetch(
+      `/api/v1/agents/v2/threads/${encodeURIComponent(threadId)}`,
+      {
+        method: "DELETE",
+        headers: jsonHeaders,
+      },
+    );
+    if (delThreadResp.status !== 200)
+      throw new Error(`Agent V2 thread delete: ${delThreadResp.status}`);
+    const mcpInfoResp = await fetch("/api/v1/mcp", { headers });
+    if (mcpInfoResp.status !== 200)
+      throw new Error(`MCP info read: ${mcpInfoResp.status}`);
+    const mcpPingResp = await fetch("/api/v1/mcp", {
+      method: "POST",
+      headers: jsonHeaders,
+      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "ping" }),
+    });
+    const mcpPing = await mcpPingResp.json();
+    if (mcpPingResp.status !== 200 || mcpPing?.jsonrpc !== "2.0")
+      throw new Error(`MCP ping: ${mcpPingResp.status}`);
     window.runtime.EventsEmit(
       "fased-native-smoke",
       JSON.stringify({
@@ -80,6 +191,7 @@
           "private IPC setup",
           "provider read",
           "profile query and conversation write",
+          "Agent V2 threads, memories and MCP",
         ],
       }),
     );

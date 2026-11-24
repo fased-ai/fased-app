@@ -135,7 +135,7 @@ func (s *Store) startGoogleSignIn(c AIConnectionCommand) (AIConnectionView, erro
 		return AIConnectionView{}, errors.New("Google API sign-in requires Fased's registered OAuth client; use an API key")
 	}
 	client.Project = c.GoogleProject
-	a := &providerSignInAttempt{ref: c.Ref, name: strings.TrimSpace(c.Name), client: client.ClientID, fixture: s.providerFixture}
+	a := &providerSignInAttempt{ref: c.Ref, name: strings.TrimSpace(c.Name), accentColor: c.AccentColor, client: client.ClientID, fixture: s.providerFixture}
 	if c.Ref != "" {
 		env, err := s.readAIVault(c.Ref)
 		state := s.credentialLocked(c.Ref)
@@ -304,13 +304,13 @@ func exchangeGoogle(ctx context.Context, wire http.RoundTripper, previous google
 	}
 	return c, nil
 }
-func (s *Store) saveGoogleCredentialLocked(ctx context.Context, c googleOAuthCredential, passphrase, ref, name string, fixture bool, expected [32]byte) (AIConnectionView, error) {
+func (s *Store) saveGoogleCredentialLocked(ctx context.Context, c googleOAuthCredential, passphrase, ref, name, accentColor string, fixture bool, expected [32]byte) (AIConnectionView, error) {
 	raw, _ := json.Marshal(c)
 	defer clear(raw)
 	if _, ok := parseGoogleCredential(raw); !ok {
 		return AIConnectionView{}, errors.New("Google credential refused")
 	}
-	return s.persistSignInCredentialLocked(ctx, raw, passphrase, ref, name, "google", "google-oauth", fixture, expected)
+	return s.persistSignInCredentialLocked(ctx, raw, passphrase, ref, name, accentColor, "google", "google-oauth", fixture, expected)
 }
 func (s *Store) completeGoogleSignIn(ctx context.Context, c AIConnectionCommand) (AIConnectionView, error) {
 	s.provider.mu.Lock()
@@ -369,7 +369,7 @@ func (s *Store) completeGoogleSignIn(ctx context.Context, c AIConnectionCommand)
 		s.provider.mu.Unlock()
 		return AIConnectionView{}, ErrConflict
 	}
-	v, err := s.saveGoogleCredentialLocked(ctx, credential, c.Passphrase, a.ref, a.name, a.fixture, a.digest)
+	v, err := s.saveGoogleCredentialLocked(ctx, credential, c.Passphrase, a.ref, a.name, a.accentColor, a.fixture, a.digest)
 	if err != nil {
 		logProviderDiag("google-sign-in-complete", map[string]any{"reason": "vault_save_failed", "err": err.Error()})
 	}
@@ -438,7 +438,7 @@ func (s *Store) renewGoogleSignIn(ctx context.Context, c AIConnectionCommand) (A
 		s.provider.mu.Unlock()
 		return AIConnectionView{}, ErrConflict
 	}
-	v, err := s.saveGoogleCredentialLocked(ctx, credential, c.Passphrase, c.Ref, env.Name, env.TestOnly, expected)
+	v, err := s.saveGoogleCredentialLocked(ctx, credential, c.Passphrase, c.Ref, env.Name, env.AccentColor, env.TestOnly, expected)
 	if c.Action == "sign-in-disconnect" {
 		s.clearAIConnectionLocked(c.Ref)
 		v, _ = s.aiConnectionLocked(c.Ref)

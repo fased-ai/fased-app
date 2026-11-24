@@ -255,3 +255,235 @@ func TestNativeTransportDoesNotSupplyAuthority(t *testing.T) {
 		t.Fatal("revoked native session accepted")
 	}
 }
+
+func TestNativeAgentV2MCPAndAuthRoutesAllowlist(t *testing.T) {
+	t.Parallel()
+	allowedCases := [][2]string{
+		{http.MethodGet, "/api/v1/agents/v2/tools"},
+		{http.MethodGet, "/api/v1/agents/v2/usage?profileId=news-researcher&days=7"},
+		{http.MethodGet, "/api/v1/agents/v2/task-threads?profileId=news-researcher"},
+		{http.MethodGet, "/api/v1/agents/v2/model-manifest"},
+		{http.MethodPut, "/api/v1/agents/v2/model-manifest"},
+		{http.MethodDelete, "/api/v1/agents/v2/model-manifest"},
+		{http.MethodGet, "/api/v1/agents/v2/threads?profileId=news-researcher&archived=1"},
+		{http.MethodPost, "/api/v1/agents/v2/threads"},
+		{http.MethodGet, "/api/v1/agents/v2/threads/thr_123-abc"},
+		{http.MethodPatch, "/api/v1/agents/v2/threads/thr_123-abc"},
+		{http.MethodPut, "/api/v1/agents/v2/threads/thr_123-abc"},
+		{http.MethodDelete, "/api/v1/agents/v2/threads/thr_123-abc"},
+		{http.MethodPost, "/api/v1/agents/v2/threads/thr_123-abc/messages"},
+		{http.MethodPost, "/api/v1/agents/v2/threads/thr_123-abc/messages?stream=1"},
+		{http.MethodPost, "/api/v1/agents/v2/threads/thr_123-abc/compact"},
+		{http.MethodPost, "/api/v1/agents/v2/threads/thr_123-abc/side?stream=0"},
+		{http.MethodPost, "/api/v1/agents/v2/approvals/apr_123-abc"},
+		{http.MethodGet, "/api/v1/agents/v2/memories?profileId=news-researcher&q=test&scope=chat&limit=20&excludeDrafts=1"},
+		{http.MethodPost, "/api/v1/agents/v2/memories"},
+		{http.MethodPatch, "/api/v1/agents/v2/memories/mem_123-abc"},
+		{http.MethodDelete, "/api/v1/agents/v2/memories/mem_123-abc"},
+		{http.MethodGet, "/api/v1/mcp"},
+		{http.MethodPost, "/api/v1/mcp"},
+		{http.MethodGet, "/api/v1/auth/devices"},
+		{http.MethodPost, "/api/v1/auth/devices"},
+		{http.MethodPost, "/api/v1/auth/pair"},
+		{http.MethodGet, "/api/v1/auth/pair/devices"},
+		{http.MethodPost, "/api/v1/auth/pair/devices"},
+	}
+	for _, tc := range allowedCases {
+		req := httptest.NewRequest(tc[0], "http://wails.localhost"+tc[1], nil)
+		if !PublicRequestAllowed(req) {
+			t.Errorf("expected allowed: %s %s", tc[0], tc[1])
+		}
+	}
+
+	deniedCases := [][2]string{
+		{http.MethodPost, "/api/v1/auth/pair/issue"},
+		{http.MethodGet, "/api/v1/auth/pair/manage"},
+		{http.MethodPost, "/api/v1/auth/pair/manage"},
+		{http.MethodGet, "/api/v1/auth/pair"},
+		{http.MethodDelete, "/api/v1/mcp"},
+		{http.MethodGet, "/api/v1/mcp?foo=1"},
+		{http.MethodGet, "/api/v1/agents/v2/tools?foo=1"},
+		{http.MethodPost, "/api/v1/agents/v2/threads/../mcp"},
+		{http.MethodGet, "/api/v1/agents/v2/threads/.."},
+		{http.MethodPost, "/api/v1/agents/v2/threads/thr_1/messages?stream=2"},
+		{http.MethodPost, "/api/v1/agents/v2/threads/thr_1/messages?extra=1"},
+		{http.MethodGet, "/api/v1/agents/v2/threads/thr_1/messages"},
+		{http.MethodGet, "/api/v1/agents/v2/memories/mem_1"},
+		{http.MethodPost, "/api/v1/agents/v2/memories/mem_1"},
+		{http.MethodGet, "/api/v1/agents/v2/unknown"},
+		{http.MethodGet, "/api/v1/agents/v2/usage?bad=1"},
+	}
+	for _, tc := range deniedCases {
+		req := httptest.NewRequest(tc[0], "http://wails.localhost"+tc[1], nil)
+		if PublicRequestAllowed(req) {
+			t.Errorf("expected denied: %s %s", tc[0], tc[1])
+		}
+	}
+}
+
+func TestNativeDesktopAgentV2SSEMemoryAndMCP(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	if err := os.Chmod(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	server, err := core.Start(t.Context(), dir, "127.0.0.1:0", "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	go func() { _ = server.Serve() }()
+	defer func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		if err := server.Close(ctx); err != nil {
+			t.Error(err)
+		}
+	}()
+	h := NewHandler(dir, fstest.MapFS{"index.html": {Data: []byte("fixture UI")}})
+	claim, err := server.Store.IssueClaimCode(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := func(method, path, body, token, csrf, accept string) *httptest.ResponseRecorder {
+		r := httptest.NewRequest(method, "http://wails.localhost"+path, strings.NewReader(body))
+		r.Header.Set("Origin", "http://wails.localhost")
+		if body != "" {
+			r.Header.Set("Content-Type", "application/json")
+		}
+		if accept != "" {
+			r.Header.Set("Accept", accept)
+		}
+		if token != "" {
+			r.Header.Set("Authorization", "Bearer "+token)
+		}
+		if csrf != "" {
+			r.Header.Set("X-CSRF-Token", csrf)
+		}
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, r)
+		return w
+	}
+	claimed := req("POST", "/api/v1/auth/claim", `{"code":"`+claim.Code+`","password":"fixture-native-password"}`, "", "", "")
+	if claimed.Code != 200 {
+		t.Fatalf("claim failed: %d %s", claimed.Code, claimed.Body)
+	}
+	var sess struct {
+		Token string `json:"sessionToken"`
+		CSRF  string `json:"csrfToken"`
+	}
+	if err := json.Unmarshal(claimed.Body.Bytes(), &sess); err != nil {
+		t.Fatal(err)
+	}
+
+	// Agent V2 thread create -> list -> patch -> delete
+	created := req("POST", "/api/v1/agents/v2/threads", `{"profileId":"news-researcher","title":"Desktop thread"}`, sess.Token, sess.CSRF, "")
+	if created.Code != 201 {
+		t.Fatalf("create thread: %d %s", created.Code, created.Body)
+	}
+	var threadResp struct {
+		Thread struct {
+			ID    string `json:"id"`
+			Title string `json:"title"`
+		} `json:"thread"`
+	}
+	if err := json.Unmarshal(created.Body.Bytes(), &threadResp); err != nil || threadResp.Thread.ID == "" {
+		t.Fatalf("bad thread payload: %s", created.Body)
+	}
+	tid := threadResp.Thread.ID
+
+	if got := req("PATCH", "/api/v1/agents/v2/threads/"+tid, `{"title":"Renamed desktop thread"}`, sess.Token, sess.CSRF, ""); got.Code != 200 || !strings.Contains(got.Body.String(), "Renamed desktop thread") {
+		t.Fatalf("patch thread: %d %s", got.Code, got.Body)
+	}
+	if got := req("GET", "/api/v1/agents/v2/threads?profileId=news-researcher", "", sess.Token, "", ""); got.Code != 200 || !strings.Contains(got.Body.String(), tid) {
+		t.Fatalf("list threads: %d %s", got.Code, got.Body)
+	}
+
+	// Large (>16 KiB) Agent V2 body succeeds through the route-scoped 256 KiB cap.
+	bigContent := strings.Repeat("a", 18*1024)
+	if got := req("POST", "/api/v1/agents/v2/memories", `{"profileId":"news-researcher","scope":"chat","title":"Big","content":"`+bigContent+`"}`, sess.Token, sess.CSRF, ""); got.Code == 413 {
+		t.Fatalf("expected >16 KiB Agent V2 body not to hit desktop 16 KiB limit: %d %s", got.Code, got.Body)
+	}
+
+	// Agent V2 memory CRUD
+	memCreated := req("POST", "/api/v1/agents/v2/memories", `{"profileId":"news-researcher","scope":"chat","title":"Rule","content":"Always verify","pinned":true}`, sess.Token, sess.CSRF, "")
+	if memCreated.Code != 201 {
+		t.Fatalf("create memory: %d %s", memCreated.Code, memCreated.Body)
+	}
+	var memResp struct {
+		Memory struct {
+			ID string `json:"id"`
+		} `json:"memory"`
+	}
+	if err := json.Unmarshal(memCreated.Body.Bytes(), &memResp); err != nil || memResp.Memory.ID == "" {
+		t.Fatalf("bad memory payload: %s", memCreated.Body)
+	}
+	if got := req("PATCH", "/api/v1/agents/v2/memories/"+memResp.Memory.ID, `{"content":"Always verify twice"}`, sess.Token, sess.CSRF, ""); got.Code != 200 {
+		t.Fatalf("patch memory: %d %s", got.Code, got.Body)
+	}
+	if got := req("DELETE", "/api/v1/agents/v2/memories/"+memResp.Memory.ID, "", sess.Token, sess.CSRF, ""); got.Code != 200 {
+		t.Fatalf("delete memory: %d %s", got.Code, got.Body)
+	}
+
+	// MCP GET, JSON-RPC ping, and 202 notifications/initialized
+	if got := req("GET", "/api/v1/mcp", "", sess.Token, "", ""); got.Code != 200 || !strings.Contains(got.Body.String(), "fased-mcp") {
+		t.Fatalf("GET /api/v1/mcp: %d %s", got.Code, got.Body)
+	}
+	if got := req("POST", "/api/v1/mcp", `{"jsonrpc":"2.0","id":1,"method":"ping"}`, sess.Token, sess.CSRF, ""); got.Code != 200 || !strings.Contains(got.Body.String(), `"result":{}`) {
+		t.Fatalf("POST /api/v1/mcp ping: %d %s", got.Code, got.Body)
+	}
+	if got := req("POST", "/api/v1/mcp", `{"jsonrpc":"2.0","method":"notifications/initialized"}`, sess.Token, sess.CSRF, ""); got.Code != http.StatusAccepted {
+		t.Fatalf("POST /api/v1/mcp notifications/initialized: got %d want 202 (%s)", got.Code, got.Body)
+	}
+
+	// Real SSE streaming passthrough via a stubbed core endpoint to verify incremental flushing and non-SSE rejection.
+	sseServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v1/agents/v2/threads/thr_sse/messages":
+			if !strings.Contains(r.Header.Get("Accept"), "text/event-stream") {
+				t.Errorf("Accept header not forwarded: %q", r.Header.Get("Accept"))
+			}
+			w.Header().Set("Content-Type", "text/event-stream; charset=utf-8")
+			w.WriteHeader(http.StatusOK)
+			flusher := w.(http.Flusher)
+			_, _ = w.Write([]byte("event: delta\ndata: {\"delta\":\"hello \"}\n\n"))
+			flusher.Flush()
+			_, _ = w.Write([]byte("event: done\ndata: {\"delta\":\"world\"}\n\n"))
+			flusher.Flush()
+		case "/api/v1/agents/v2/tools":
+			// Non-streaming route returning text/event-stream must be refused with 502.
+			w.Header().Set("Content-Type", "text/event-stream")
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte("event: spoof\ndata: {}\n\n"))
+		default:
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"ok":true}`))
+		}
+	}))
+	defer sseServer.Close()
+	sseHandler := NewHandler("fixture-sse", nil)
+	sseHandler.newClient = func(context.Context, string) (*core.Client, bool, json.RawMessage, error) {
+		// Deliberately attach a short client Timeout to prove streaming bypasses it.
+		c := sseServer.Client()
+		c.Timeout = 50 * time.Millisecond
+		return &core.Client{Endpoint: core.Endpoint{URL: sseServer.URL, InstanceID: "fixture-sse-id"}, HTTP: c}, false, nil, nil
+	}
+	sseReq := httptest.NewRequest(http.MethodPost, "http://wails.localhost/api/v1/agents/v2/threads/thr_sse/messages", strings.NewReader(`{"content":"hi"}`))
+	sseReq.Header.Set("Origin", "http://wails.localhost")
+	sseReq.Header.Set("Content-Type", "application/json")
+	sseReq.Header.Set("Accept", "text/event-stream")
+	sseRec := httptest.NewRecorder()
+	sseHandler.ServeHTTP(sseRec, sseReq)
+	if sseRec.Code != http.StatusOK || !strings.HasPrefix(sseRec.Header().Get("Content-Type"), "text/event-stream") || !strings.Contains(sseRec.Body.String(), `"delta":"hello "`) || !strings.Contains(sseRec.Body.String(), `"delta":"world"`) || !sseRec.Flushed {
+		t.Fatalf("SSE passthrough failed: code=%d ct=%q flushed=%v body=%q", sseRec.Code, sseRec.Header().Get("Content-Type"), sseRec.Flushed, sseRec.Body.String())
+	}
+	badSSEReq := httptest.NewRequest(http.MethodGet, "http://wails.localhost/api/v1/agents/v2/tools", nil)
+	badSSERec := httptest.NewRecorder()
+	sseHandler.ServeHTTP(badSSERec, badSSEReq)
+	if badSSERec.Code != http.StatusBadGateway {
+		t.Fatalf("non-streaming route accepted text/event-stream: code=%d", badSSERec.Code)
+	}
+
+	if got := req("DELETE", "/api/v1/agents/v2/threads/"+tid, "", sess.Token, sess.CSRF, ""); got.Code != 200 {
+		t.Fatalf("delete thread: %d %s", got.Code, got.Body)
+	}
+}

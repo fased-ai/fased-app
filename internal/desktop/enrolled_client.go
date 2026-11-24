@@ -135,8 +135,10 @@ func newPublicClient(ctx context.Context, dir string) (*core.Client, bool, json.
 		}
 		return (&custodyinstall.System{}).NativeChannel(ctx, current)
 	}}
-	c := &core.Client{Endpoint: core.Endpoint{URL: "http://" + m.Listen, InstanceID: commit.InstanceID}, HTTP: &http.Client{Transport: transport, Timeout: 10 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return errors.New("redirects refused") }}}
-	health, err := verifiedNativeHealth(ctx, c, commit.InstanceID, m.Owner)
+	c := &core.Client{Endpoint: core.Endpoint{URL: "http://" + m.Listen, InstanceID: commit.InstanceID}, HTTP: &http.Client{Transport: transport, Timeout: 30 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return errors.New("redirects refused") }}}
+	healthCtx, cancelHealth := context.WithTimeout(ctx, 10*time.Second)
+	health, err := verifiedNativeHealth(healthCtx, c, commit.InstanceID, m.Owner)
+	cancelHealth()
 	if err != nil {
 		c.Close()
 		return nil, false, nil, err

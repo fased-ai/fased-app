@@ -1026,3 +1026,22 @@ func TestRemoteProviderSignInOpensNoVPSLoopbackSocket(t *testing.T) {
 		t.Fatalf("unexpected listening callback socket on VPS in Remote mode: %d", res.StatusCode)
 	}
 }
+
+func TestRemoteProviderSignInPersistsAccentColor(t *testing.T) {
+	t.Parallel()
+	s := fixtureStore(t)
+	if _, err := s.ChangeAIConnection(t.Context(), AIConnectionCommand{Action: "sign-in-start", Provider: "openai", Remote: true, AccentColor: "not-a-color"}); err == nil {
+		t.Fatal("invalid sign-in accentColor should be refused")
+	}
+	start, err := s.ChangeAIConnection(t.Context(), AIConnectionCommand{Action: "sign-in-start", Provider: "openai", Remote: true, Name: "Remote Accent", AccentColor: "#27C5DA"})
+	if err != nil || start.SignIn == nil || !start.SignIn.Remote {
+		t.Fatalf("remote sign-in-start failed: err=%v signIn=%+v", err, start.SignIn)
+	}
+	done, err := s.ChangeAIConnection(t.Context(), AIConnectionCommand{Action: "sign-in-complete", SignInID: start.SignIn.ID, Callback: start.SignIn.URL, Passphrase: testVaultPassword})
+	if err != nil {
+		t.Fatalf("sign-in-complete failed: %v", err)
+	}
+	if done.AccentColor != "#27C5DA" {
+		t.Fatalf("expected persisted AccentColor #27C5DA, got %q", done.AccentColor)
+	}
+}

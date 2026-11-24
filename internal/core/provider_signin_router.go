@@ -26,7 +26,7 @@ func (s *Store) startRouterSignIn(c AIConnectionCommand) (AIConnectionView, erro
 	if !s.providerSignInAvailableLocked() || s.provider.signIn != nil || c.Ref != "" {
 		return AIConnectionView{}, ErrConflict
 	}
-	a := &providerSignInAttempt{name: strings.TrimSpace(c.Name), fixture: s.providerFixture}
+	a := &providerSignInAttempt{name: strings.TrimSpace(c.Name), accentColor: c.AccentColor, fixture: s.providerFixture}
 	var err error
 	if a.state, err = randomToken(); err != nil {
 		return AIConnectionView{}, err
@@ -185,7 +185,7 @@ func (s *Store) completeRouterSignIn(ctx context.Context, c AIConnectionCommand)
 		err = errors.New("connection limit reached")
 	}
 	if err == nil {
-		view, err = s.persistAIConnectionLocked(ctx, AIConnectionCommand{Action: "add", Provider: "openrouter", Name: a.name, Key: key, Passphrase: c.Passphrase}, col, "openrouter", mode, false, preDerivedKDF{})
+		view, err = s.persistAIConnectionLocked(ctx, AIConnectionCommand{Action: "add", Provider: "openrouter", Name: a.name, AccentColor: a.accentColor, Key: key, Passphrase: c.Passphrase}, col, "openrouter", mode, false, preDerivedKDF{})
 	}
 	s.cancelProviderSignInLocked()
 	s.provider.mu.Unlock()

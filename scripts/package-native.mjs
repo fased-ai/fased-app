@@ -21,9 +21,24 @@ const output = resolve(".evidence/packages");
 await mkdir(output, { recursive: true });
 const windows = process.platform === "win32";
 const desktop = resolve(`.evidence/bin/fased-desktop${windows ? ".exe" : ""}`);
+const engine = resolve(`.evidence/bin/fased-app${windows ? ".exe" : ""}`);
 const source = execFileSync("git", ["rev-parse", "HEAD"], {
   encoding: "utf8",
 }).trim();
+async function resolvePackageVersion() {
+  const builtVersion = execFileSync(engine, ["version"], {
+    encoding: "utf8",
+  }).trim();
+  if (builtVersion) {
+    return builtVersion;
+  }
+  if (process.env.FASED_RELEASE_VERSION?.trim()) {
+    return process.env.FASED_RELEASE_VERSION.trim();
+  }
+  const manifest = JSON.parse(await readFile("package.json", "utf8"));
+  return manifest.version || "0.0.0";
+}
+const appVersion = await resolvePackageVersion();
 // The owner client carries a matching Linux core/signer pair. The server app
 // package and old native inventories remain supported without this optional file.
 const signer = resolve(".evidence/bin/fased-signer");
@@ -38,9 +53,11 @@ execFileSync(
   "go",
   [
     "run",
+    "-ldflags",
+    `-X github.com/fased-ai/fased-app/internal/core.Version=${appVersion}`,
     "./cmd/fased-package",
     "--engine",
-    resolve(`.evidence/bin/fased-app${windows ? ".exe" : ""}`),
+    engine,
     "--desktop",
     desktop,
     ...(process.platform === "linux" ? ["--signer", signer] : []),
@@ -108,6 +125,8 @@ if (windows) {
           ...process.env,
           FASED_PACKAGE_PAYLOAD: payload,
           FASED_PACKAGE_OUTPUT: output,
+          FASED_APP_VERSION: appVersion,
+          FASED_PACKAGE_ICON: resolve("packaging/fased-app.ico"),
         },
       },
     );
@@ -212,11 +231,10 @@ if (process.platform === "linux") {
     execFileSync("tar", ["-xzf", archive, "-C", fixture], {
       stdio: "inherit",
     });
-    const manifest = JSON.parse(await readFile("package.json", "utf8"));
     linuxPackages = await buildLinuxDesktopPackages({
       payloadDir: join(fixture, bundleName),
       outputDir: output,
-      version: process.env.FASED_RELEASE_VERSION || manifest.version || "0.0.0",
+      version: appVersion,
       arch,
     });
   } finally {

@@ -9,8 +9,10 @@ import (
 	"encoding/json"
 	"errors"
 	"flag"
+	"fmt"
 	"io"
 	"net/http"
+	"net/http/httputil"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -56,12 +58,13 @@ func nativeAppClient(args []string, in io.Reader, out io.Writer) error {
 	if err != nil || (m.Location != "local" && m.Location != "remote") || !m.Enrollment || m.App.UID != os.Getuid() || m.App.UID != os.Geteuid() || signer.CheckApplication(*config, m.Root, *data) != nil {
 		return errors.New("protected package owner helper required")
 	}
-	r, err := http.ReadRequest(bufio.NewReader(io.LimitReader(in, 64*1024)))
+	r, err := http.ReadRequest(bufio.NewReader(io.LimitReader(in, desktop.MaxNativeRequestBytes)))
 	if err != nil {
 		return errors.New("invalid native request")
 	}
 	defer r.Body.Close()
-	if r.ContentLength > 16*1024 || !nativeClientRequestAllowed(r) {
+	reqLimit := desktop.RequestBodyLimit(r.URL.Path)
+	if r.ContentLength > reqLimit || !nativeClientRequestAllowed(r) {
 		return errors.New("native route unavailable")
 	}
 	// Remote bootstrap may observe health only. It must never obtain a Local
@@ -76,7 +79,11 @@ func nativeAppClient(args []string, in io.Reader, out io.Writer) error {
 			return err
 		}
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	timeout := 2 * time.Minute
+	if desktop.StreamingRoute(r.URL.Path) {
+		timeout = 10 * time.Minute
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 	client, err := core.NewClient(ctx, *data)
 	if err != nil {
@@ -88,8 +95,8 @@ func nativeAppClient(args []string, in io.Reader, out io.Writer) error {
 	}
 	// Every request goes through the existing protected IPC, never a loopback
 	// TCP destination which another local process could impersonate.
-	body, err := io.ReadAll(io.LimitReader(r.Body, 16*1024+1))
-	if err != nil || len(body) > 16*1024 {
+	body, err := io.ReadAll(io.LimitReader(r.Body, reqLimit+1))
+	if err != nil || int64(len(body)) > reqLimit {
 		return errors.New("native request too large")
 	}
 	defer clear(body)
@@ -104,7 +111,15 @@ func nativeAppClient(args []string, in io.Reader, out io.Writer) error {
 	if r.Method != "GET" {
 		r.Header.Set("Origin", client.Endpoint.URL)
 	}
-	response, err := client.HTTP.Do(r.WithContext(ctx))
+	httpClient := *client.HTTP
+	if desktop.StreamingRoute(r.URL.Path) {
+		httpClient.Timeout = 0
+	} else if strings.HasPrefix(r.URL.Path, "/api/v1/agents/v2/") || r.URL.Path == "/api/v1/mcp" || r.URL.Path == "/api/v1/ai/connection" {
+		if httpClient.Timeout > 0 && httpClient.Timeout < 2*time.Minute {
+			httpClient.Timeout = 2 * time.Minute
+		}
+	}
+	response, err := httpClient.Do(r.WithContext(ctx))
 	if err != nil {
 		return err
 	}
@@ -114,8 +129,44 @@ func nativeAppClient(args []string, in io.Reader, out io.Writer) error {
 			return err
 		}
 	}
+	if desktop.StreamingRoute(r.URL.Path) && response.StatusCode == http.StatusOK && strings.HasPrefix(response.Header.Get("Content-Type"), "text/event-stream") {
+		return writeChunkedSSEResponse(out, response)
+	}
 	response.Close = true
 	return response.Write(out)
+}
+
+func writeChunkedSSEResponse(out io.Writer, response *http.Response) error {
+	var head bytes.Buffer
+	fmt.Fprintf(&head, "HTTP/1.1 %03d %s\r\n", response.StatusCode, http.StatusText(response.StatusCode))
+	head.WriteString("Content-Type: text/event-stream; charset=utf-8\r\n")
+	head.WriteString("Cache-Control: no-cache, no-transform\r\n")
+	head.WriteString("Transfer-Encoding: chunked\r\n")
+	head.WriteString("Connection: close\r\n\r\n")
+	if _, err := out.Write(head.Bytes()); err != nil {
+		return err
+	}
+	cw := httputil.NewChunkedWriter(out)
+	buf := make([]byte, 4096)
+	for {
+		n, err := response.Body.Read(buf)
+		if n > 0 {
+			if _, wErr := cw.Write(buf[:n]); wErr != nil {
+				return wErr
+			}
+		}
+		if err != nil {
+			if errors.Is(err, io.EOF) {
+				break
+			}
+			return err
+		}
+	}
+	if err := cw.Close(); err != nil {
+		return err
+	}
+	_, err := io.WriteString(out, "\r\n")
+	return err
 }
 
 // VerifyPackageOwnerTarget authenticates the installed image. Confirm the

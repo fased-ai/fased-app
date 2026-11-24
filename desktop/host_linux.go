@@ -1,12 +1,12 @@
+//go:build linux
+
 package main
 
 import (
 	"context"
 	"errors"
-	"os"
 	"os/exec"
 	"path/filepath"
-	"syscall"
 
 	"github.com/fased-ai/fased-app/internal/localinstall"
 )
@@ -17,21 +17,19 @@ func hostPreparationNotice() string {
 	}
 	return ""
 }
+
 func prepareDesktopHost(ctx context.Context, bundle string, p localinstall.Paths) (bool, error) {
 	if hostPreparationNotice() == "" {
 		return false, nil
 	}
-	i, e := os.Stat("/usr/bin/x-terminal-emulator")
-	if e != nil {
+	term, err := resolveTrustedLinuxTerminal(nil)
+	if err != nil {
 		return false, errors.New("system terminal unavailable; run this package's fased-app install --bundle . --interactive in your terminal")
 	}
-	s, ok := i.Sys().(*syscall.Stat_t)
-	if !ok || s.Uid != 0 || !i.Mode().IsRegular() || i.Mode().Perm()&0022 != 0 {
-		return false, errors.New("system terminal must be a trusted root-owned OS executable")
-	}
-	c := exec.CommandContext(ctx, "/usr/bin/x-terminal-emulator", "-e", filepath.Join(bundle, localinstall.EngineName()), "install", "--bundle", bundle, "--prefix", p.Root, "--data-dir", p.Data, "--prepare-host")
-	if e = c.Start(); e != nil {
-		return false, e
+	cmdArgs := append(append([]string(nil), term.execArgs...), filepath.Join(bundle, localinstall.EngineName()), "install", "--bundle", bundle, "--prefix", p.Root, "--data-dir", p.Data, "--prepare-host")
+	c := exec.CommandContext(ctx, term.path, cmdArgs...)
+	if err = c.Start(); err != nil {
+		return false, err
 	}
 	go func() { _ = c.Wait() }()
 	return true, nil

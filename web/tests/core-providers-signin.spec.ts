@@ -4957,3 +4957,119 @@ test("Add provider wizard Step 3 renders Codex shadowHome and launchArgs and sho
   await expect(detail).toContainText("~/.codex-fased/work");
   await expect(detail).toContainText("--enable web_search_request");
 });
+
+test("AddProviderWizard sends remote:true and accentColor on Remote OAuth sign-in-start", async ({
+  page,
+  isMobile,
+}) => {
+  await page.route("**/api/v1/health", async (route) => {
+    const response = await route.fetch();
+    const body = await response.json();
+    body.connection = { location: "remote", transport: "loopback" };
+    await route.fulfill({ response, json: body });
+  });
+  await page.goto(url + "/#overview");
+  await openOwnerSetup(
+    page,
+    JSON.parse(await readFile(join(dir, "claim-code.json"), "utf8")).code,
+  );
+  await page.getByLabel("Create owner password").fill(fixturePassword);
+  await page
+    .getByRole("button", { name: "Claim workspace", exact: true })
+    .click();
+  await expect(
+    page.getByRole("button", { name: "Sign out", exact: true }),
+  ).toBeVisible();
+
+  const postedActions: Record<string, any>[] = [];
+  const baseConnection = await privateCLI(["ai-connection"]);
+  await page.route("**/api/v1/ai/connection", async (route) => {
+    if (route.request().method() === "GET") {
+      await route.fulfill({
+        json: {
+          ...baseConnection,
+          osVaultAvailable: true,
+          signInAvailable: true,
+          liveCallsEnabled: true,
+          hostClis: [],
+          connections: [],
+        },
+      });
+      return;
+    }
+    const body = route.request().postDataJSON() as Record<string, any>;
+    postedActions.push(body);
+    await route.fulfill({
+      json: {
+        ...baseConnection,
+        osVaultAvailable: true,
+        signInAvailable: true,
+        liveCallsEnabled: true,
+        hostClis: [],
+        connections: [],
+        signIn: {
+          id: "si-wizard-remote-1",
+          provider: body.provider || "openai",
+          state: "waiting",
+          url: "https://auth.openai.com/api/accounts/authorize?state=wiz-remote-1",
+          expiresAt: Math.floor(Date.now() / 1000) + 600,
+          remote: !!body.remote,
+        },
+      },
+    });
+  });
+
+  if (isMobile) {
+    await page
+      .getByRole("button", { name: "Preferences", exact: true })
+      .click();
+  } else {
+    await page
+      .locator("#shell-rail")
+      .getByRole("button", { name: "Settings", exact: true })
+      .click();
+  }
+
+  const settingsDialog = page.getByRole("dialog", { name: /Settings \// });
+  await settingsDialog
+    .locator(".settings-modal-tabs")
+    .getByRole("button", { name: "Providers", exact: true })
+    .click();
+  await settingsDialog
+    .getByRole("button", { name: "Add provider", exact: true })
+    .click();
+
+  const wizard = page.getByRole("dialog", {
+    name: "Add provider",
+    exact: true,
+  });
+  await expect(wizard).toBeVisible();
+  await wizard
+    .getByRole("group", { name: "Provider", exact: true })
+    .getByRole("button", { name: /OpenAI/ })
+    .click();
+  await wizard
+    .getByRole("button", { name: "Configure manually", exact: true })
+    .click();
+
+  await wizard.getByLabel("Label", { exact: true }).fill("Remote ChatGPT");
+  await wizard
+    .getByRole("group", { name: "Accent color", exact: true })
+    .getByRole("button", { name: "#27c5da", exact: true })
+    .click();
+  await wizard.getByRole("button", { name: "Next", exact: true }).click();
+
+  await wizard
+    .getByRole("button", { name: "Continue with ChatGPT", exact: true })
+    .click();
+
+  await expect
+    .poll(() => postedActions.find((a) => a.action === "sign-in-start"))
+    .toEqual({
+      action: "sign-in-start",
+      provider: "openai",
+      remote: true,
+      name: "Remote ChatGPT",
+      accentColor: "#27c5da",
+    });
+});

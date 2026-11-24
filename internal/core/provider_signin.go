@@ -174,17 +174,17 @@ func (s *Store) aiVaultModeAllowed(v aiVaultEnvelope) bool {
 }
 
 type providerSignInAttempt struct {
-	view                                                          ProviderSignInView
-	state, nonce, verifier, redirect, client, ref, name, callback string
-	google                                                        *googleOAuthCredential
-	expected                                                      *providerSignInCredential
-	digest                                                        [32]byte
-	epoch                                                         uint64
-	server                                                        *http.Server
-	timer                                                         *time.Timer
-	wire                                                          http.RoundTripper
-	busy                                                          bool
-	fixture                                                       bool
+	view                                                                       ProviderSignInView
+	state, nonce, verifier, redirect, client, ref, name, accentColor, callback string
+	google                                                                     *googleOAuthCredential
+	expected                                                                   *providerSignInCredential
+	digest                                                                     [32]byte
+	epoch                                                                      uint64
+	server                                                                     *http.Server
+	timer                                                                      *time.Timer
+	wire                                                                       http.RoundTripper
+	busy                                                                       bool
+	fixture                                                                    bool
 }
 
 func (s *Store) providerSignInAvailableLocked() bool {
@@ -258,12 +258,12 @@ func (s *Store) changeProviderSignIn(ctx context.Context, c AIConnectionCommand)
 	s.provider.mu.Unlock()
 	switch c.Action {
 	case "sign-in-start":
-		if c.SignInID != "" || c.Callback != "" || c.Passphrase != "" || (c.Provider != "openai" && c.Provider != "openrouter" && c.Provider != "google") || !validAgentText(c.Name, 80, false) {
+		if c.SignInID != "" || c.Callback != "" || c.Passphrase != "" || (c.Provider != "openai" && c.Provider != "openrouter" && c.Provider != "google") || !validAgentText(c.Name, 80, false) || !validHexAccentColor(c.AccentColor) {
 			return AIConnectionView{}, errors.New("select a supported sign-in provider")
 		}
 		return s.startProviderSignIn(c)
 	case "sign-in-cancel":
-		if c.Ref != "" || c.Provider != "" || c.Name != "" || c.Passphrase != "" || c.Callback != "" || c.Remote {
+		if c.Ref != "" || c.Provider != "" || c.Name != "" || c.AccentColor != "" || c.Passphrase != "" || c.Callback != "" || c.Remote {
 			return AIConnectionView{}, errors.New("cancel accepts the pending sign-in only")
 		}
 		s.provider.mu.Lock()
@@ -275,12 +275,12 @@ func (s *Store) changeProviderSignIn(ctx context.Context, c AIConnectionCommand)
 		s.provider.mu.Unlock()
 		return s.AIConnection()
 	case "sign-in-complete":
-		if c.Ref != "" || c.Provider != "" || c.Name != "" || c.Remote || !s.validPassphraseOrOS(ctx, c.Passphrase) {
+		if c.Ref != "" || c.Provider != "" || c.Name != "" || c.AccentColor != "" || c.Remote || !s.validPassphraseOrOS(ctx, c.Passphrase) {
 			return AIConnectionView{}, errors.New("finish with the pending sign-in and vault passphrase")
 		}
 		return s.completeProviderSignIn(ctx, c)
 	case "sign-in-refresh", "sign-in-disconnect":
-		if c.SignInID != "" || c.Callback != "" || c.Provider != "" || c.Name != "" || c.Remote || !validConnectionRef(c.Ref) || !s.validPassphraseOrOS(ctx, c.Passphrase) {
+		if c.SignInID != "" || c.Callback != "" || c.Provider != "" || c.Name != "" || c.AccentColor != "" || c.Remote || !validConnectionRef(c.Ref) || !s.validPassphraseOrOS(ctx, c.Passphrase) {
 			return AIConnectionView{}, errors.New("select the sign-in account and enter its vault passphrase")
 		}
 		return s.renewProviderSignIn(ctx, c)
@@ -304,7 +304,7 @@ func (s *Store) startProviderSignIn(c AIConnectionCommand) (AIConnectionView, er
 	if s.provider.signIn != nil {
 		return AIConnectionView{}, errors.New("finish or cancel the pending sign-in first")
 	}
-	a := &providerSignInAttempt{ref: c.Ref, name: strings.TrimSpace(c.Name), client: "dynamic_agent_client", fixture: s.providerFixture}
+	a := &providerSignInAttempt{ref: c.Ref, name: strings.TrimSpace(c.Name), accentColor: c.AccentColor, client: "dynamic_agent_client", fixture: s.providerFixture}
 	if c.Ref != "" {
 		env, err := s.readAIVault(c.Ref)
 		if err != nil || env.Version != 5 || !s.aiVaultModeAllowed(env) {
@@ -577,7 +577,7 @@ func (s *Store) completeProviderSignIn(ctx context.Context, c AIConnectionComman
 		s.provider.mu.Unlock()
 		return AIConnectionView{}, ErrConflict
 	}
-	v, err := s.saveProviderSignInLocked(ctx, credential, c.Passphrase, a.ref, a.name, a.fixture, a.digest)
+	v, err := s.saveProviderSignInLocked(ctx, credential, c.Passphrase, a.ref, a.name, a.accentColor, a.fixture, a.digest)
 	if err != nil {
 		logProviderDiag("sign-in-complete", map[string]any{"provider": "openai", "reason": "vault_save_failed", "err": err.Error()})
 	}
@@ -594,15 +594,15 @@ func (s *Store) completeProviderSignIn(ctx context.Context, c AIConnectionComman
 	return s.refreshProviderModels(ctx, v.Ref, s.providerModelTransport(v.Ref))
 }
 
-func (s *Store) saveProviderSignInLocked(ctx context.Context, c providerSignInCredential, passphrase, ref, name string, fixture bool, expected [32]byte) (AIConnectionView, error) {
+func (s *Store) saveProviderSignInLocked(ctx context.Context, c providerSignInCredential, passphrase, ref, name, accentColor string, fixture bool, expected [32]byte) (AIConnectionView, error) {
 	raw, _ := json.Marshal(c)
 	defer clear(raw)
 	if _, ok := parseProviderSignInCredential(raw); !ok {
 		return AIConnectionView{}, errors.New("invalid sign-in credential")
 	}
-	return s.persistSignInCredentialLocked(ctx, raw, passphrase, ref, name, "openai", "openai-signin", fixture, expected)
+	return s.persistSignInCredentialLocked(ctx, raw, passphrase, ref, name, accentColor, "openai", "openai-signin", fixture, expected)
 }
-func (s *Store) persistSignInCredentialLocked(ctx context.Context, raw []byte, passphrase, ref, name, provider, mode string, fixture bool, expected [32]byte) (AIConnectionView, error) {
+func (s *Store) persistSignInCredentialLocked(ctx context.Context, raw []byte, passphrase, ref, name, accentColor, provider, mode string, fixture bool, expected [32]byte) (AIConnectionView, error) {
 	col, err := s.readAIVaultCollection()
 	if errors.Is(err, os.ErrNotExist) {
 		col = aiVaultCollection{Version: 3}
@@ -626,8 +626,11 @@ func (s *Store) persistSignInCredentialLocked(ctx context.Context, raw []byte, p
 		if err != nil {
 			return AIConnectionView{}, err
 		}
+		if accentColor == "" {
+			accentColor = env.AccentColor
+		}
 	}
-	env := aiVaultEnvelope{Version: 5, Provider: provider, Mode: mode, TestOnly: fixture, Ref: ref, Name: name, Salt: make([]byte, 16), Nonce: make([]byte, 12)}
+	env := aiVaultEnvelope{Version: 5, Provider: provider, Mode: mode, TestOnly: fixture, Ref: ref, Name: name, AccentColor: accentColor, Salt: make([]byte, 16), Nonce: make([]byte, 12)}
 	if ref == "" {
 		env.Ref, err = randomToken()
 		if err != nil {
@@ -1088,7 +1091,7 @@ func (s *Store) renewProviderSignIn(ctx context.Context, c AIConnectionCommand) 
 		}
 		credential.AccessToken, credential.RefreshToken, credential.IDToken, credential.Scope = "", "", "", ""
 		credential.SignedOut, credential.ExpiresAt = true, 0
-		if _, err = s.saveProviderSignInLocked(ctx, credential, c.Passphrase, c.Ref, env.Name, env.TestOnly, expected); err != nil {
+		if _, err = s.saveProviderSignInLocked(ctx, credential, c.Passphrase, c.Ref, env.Name, env.AccentColor, env.TestOnly, expected); err != nil {
 			return AIConnectionView{}, err
 		}
 		s.clearAIConnectionLocked(c.Ref)
@@ -1117,7 +1120,7 @@ func (s *Store) renewProviderSignIn(ctx context.Context, c AIConnectionCommand) 
 		s.provider.mu.Unlock()
 		return AIConnectionView{}, ErrConflict
 	}
-	v, err := s.saveProviderSignInLocked(ctx, renewed, c.Passphrase, c.Ref, env.Name, env.TestOnly, expected)
+	v, err := s.saveProviderSignInLocked(ctx, renewed, c.Passphrase, c.Ref, env.Name, env.AccentColor, env.TestOnly, expected)
 	s.provider.mu.Unlock()
 	if err != nil {
 		return v, err

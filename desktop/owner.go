@@ -9,14 +9,20 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sync"
 	"time"
 
+	"github.com/fased-ai/fased-app/desktop/internal/window"
+	"github.com/fased-ai/fased-app/internal/appicon"
+	"github.com/fased-ai/fased-app/internal/core"
 	"github.com/fased-ai/fased-app/internal/ownerclient"
 	"github.com/fased-ai/fased-app/internal/signer"
 	"github.com/wailsapp/wails/v2"
 	"github.com/wailsapp/wails/v2/pkg/options"
 	"github.com/wailsapp/wails/v2/pkg/options/assetserver"
+	"github.com/wailsapp/wails/v2/pkg/options/linux"
+	"github.com/wailsapp/wails/v2/pkg/options/mac"
 )
 
 //go:embed ownerui/*
@@ -41,12 +47,26 @@ type WalletOwner struct {
 	terminal      func(context.Context, string, []string) error
 }
 
+func ownerBackupRoot() (string, error) {
+	if runtime.GOOS == "linux" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return "", err
+		}
+		return filepath.Join(home, ".local", "state", "fased", "owner-backups"), nil
+	}
+	cfg, err := os.UserConfigDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(cfg, "fased-app", "owner-backups"), nil
+}
+
 func ownerWindow(link string) error {
-	home, err := os.UserHomeDir()
+	root, err := ownerBackupRoot()
 	if err != nil {
 		return err
 	}
-	root := filepath.Join(home, ".local", "state", "fased", "owner-backups")
 	intent, origin, err := ownerclient.Resume(root, link)
 	if err != nil {
 		return err
@@ -68,7 +88,32 @@ func ownerWindow(link string) error {
 }
 
 func ownerOptions(owner *WalletOwner, assets fs.FS) *options.App {
-	return &options.App{Title: "Fased Wallet", Width: 520, Height: 700, MinWidth: 390, MinHeight: 640, BackgroundColour: options.NewRGBA(23, 22, 31, 255), AssetServer: &assetserver.Options{Assets: assets}, Bind: []interface{}{owner}, EnableDefaultContextMenu: false, DragAndDrop: &options.DragAndDrop{DisableWebViewDrop: true, EnableFileDrop: false}, OnBeforeClose: func(context.Context) bool { owner.Cancel(); return false }}
+	return &options.App{
+		Title:                    "Fased Wallet",
+		Width:                    520,
+		Height:                   700,
+		MinWidth:                 390,
+		MinHeight:                640,
+		BackgroundColour:         options.NewRGBA(13, 13, 18, 255),
+		AssetServer:              &assetserver.Options{Assets: assets},
+		Menu:                     window.MacApplicationMenu(),
+		Bind:                     []interface{}{owner},
+		EnableDefaultContextMenu: false,
+		DragAndDrop:              &options.DragAndDrop{DisableWebViewDrop: true, EnableFileDrop: false},
+		Linux: &linux.Options{
+			Icon:        appicon.PNG,
+			ProgramName: "fased-wallet",
+		},
+		Mac: &mac.Options{
+			DisableEscapeExitsFullscreen: true,
+			About: &mac.AboutInfo{
+				Title:   "Fased Wallet",
+				Message: "Version " + core.Version,
+				Icon:    appicon.PNG,
+			},
+		},
+		OnBeforeClose: func(context.Context) bool { owner.Cancel(); return false },
+	}
 }
 
 func (w *WalletOwner) Info() map[string]string {

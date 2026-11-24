@@ -9,8 +9,10 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"github.com/fased-ai/fased-app/internal/appicon"
 	"github.com/fased-ai/fased-app/internal/bundle"
 	"github.com/fased-ai/fased-app/internal/core"
+	"html"
 	"io"
 	"os"
 	"path/filepath"
@@ -84,11 +86,17 @@ func runArgs(args []string) error {
 	if runtime.GOOS == "darwin" && *desktop != "" {
 		prefix = "Fased App.app"
 		payload = filepath.Join(stage, "Contents", "MacOS")
+		resources := filepath.Join(stage, "Contents", "Resources")
 		if e := os.MkdirAll(payload, 0700); e != nil {
 			return e
 		}
-		plist := `<?xml version="1.0"?><plist version="1.0"><dict><key>CFBundleIdentifier</key><string>org.fased.app</string><key>CFBundleName</key><string>Fased App</string><key>CFBundleExecutable</key><string>fased-desktop</string><key>CFBundlePackageType</key><string>APPL</string><key>CFBundleShortVersionString</key><string>0.0.0</string><key>NSHighResolutionCapable</key><true/></dict></plist>`
-		if e := os.WriteFile(filepath.Join(stage, "Contents", "Info.plist"), []byte(plist), 0600); e != nil {
+		if e := os.MkdirAll(resources, 0700); e != nil {
+			return e
+		}
+		if e := os.WriteFile(filepath.Join(resources, "fased-app.icns"), appicon.ICNS(), 0600); e != nil {
+			return e
+		}
+		if e := os.WriteFile(filepath.Join(stage, "Contents", "Info.plist"), []byte(renderMacOSInfoPlist(core.Version)), 0600); e != nil {
 			return e
 		}
 	}
@@ -252,6 +260,28 @@ func runArgs(args []string) error {
 	fmt.Println(target)
 	return nil
 }
+func renderMacOSInfoPlist(version string) string {
+	v := html.EscapeString(version)
+	if v == "" {
+		v = "0.0.0"
+	}
+	return `<?xml version="1.0" encoding="UTF-8"?>` +
+		`<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">` +
+		`<plist version="1.0"><dict>` +
+		`<key>CFBundleIdentifier</key><string>org.fased.app</string>` +
+		`<key>CFBundleName</key><string>Fased App</string>` +
+		`<key>CFBundleDisplayName</key><string>Fased App</string>` +
+		`<key>CFBundleExecutable</key><string>fased-desktop</string>` +
+		`<key>CFBundleIconFile</key><string>fased-app.icns</string>` +
+		`<key>CFBundlePackageType</key><string>APPL</string>` +
+		`<key>CFBundleShortVersionString</key><string>` + v + `</string>` +
+		`<key>CFBundleVersion</key><string>` + v + `</string>` +
+		`<key>NSHighResolutionCapable</key><true/>` +
+		`<key>NSMicrophoneUsageDescription</key><string>Fased uses the microphone only when you start voice input in Chat.</string>` +
+		`<key>NSSpeechRecognitionUsageDescription</key><string>Fased uses speech recognition only when you start voice input in Chat.</string>` +
+		`</dict></plist>`
+}
+
 func copyTo(w io.Writer, path string) error {
 	f, e := os.Open(path)
 	if e != nil {

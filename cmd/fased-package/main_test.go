@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"encoding/xml"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -10,6 +11,29 @@ import (
 
 	"github.com/fased-ai/fased-app/internal/bundle"
 )
+
+func TestRenderMacOSInfoPlistMetadata(t *testing.T) {
+	t.Parallel()
+	raw := renderMacOSInfoPlist("0.1.38")
+	for _, want := range []string{
+		"<key>CFBundleShortVersionString</key><string>0.1.38</string>",
+		"<key>CFBundleVersion</key><string>0.1.38</string>",
+		"<key>CFBundleIconFile</key><string>fased-app.icns</string>",
+		"<key>NSMicrophoneUsageDescription</key>",
+		"<key>NSSpeechRecognitionUsageDescription</key>",
+	} {
+		if !strings.Contains(raw, want) {
+			t.Fatalf("Info.plist missing %q", want)
+		}
+	}
+	var doc any
+	if err := xml.Unmarshal([]byte(raw), &doc); err != nil {
+		t.Fatalf("Info.plist XML invalid: %v", err)
+	}
+	if !strings.Contains(renderMacOSInfoPlist(""), "<string>0.0.0</string>") {
+		t.Fatal("empty version should fall back to 0.0.0")
+	}
+}
 
 func TestUbuntuReleaseFormatProducer(t *testing.T) {
 	if runtime.GOOS != "linux" || runtime.GOARCH != "amd64" {
