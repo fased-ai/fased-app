@@ -146,7 +146,7 @@ func newUpstreamClient(override http.RoundTripper) *upstreamClient {
 			ExpectContinueTimeout: 1 * time.Second,
 			ResponseHeaderTimeout: 8 * time.Second,
 			TLSClientConfig: &tls.Config{
-				MinVersion: tls.VersionTLS13,
+				MinVersion: tls.VersionTLS12,
 			},
 		}
 	}
@@ -176,10 +176,10 @@ func validateUpstreamURL(rawURL string) (*url.URL, error) {
 	return u, nil
 }
 
-func (c *upstreamClient) doRequest(ctx context.Context, method, rawURL string, body []byte, contentType string) ([]byte, error) {
+func (c *upstreamClient) openRequest(ctx context.Context, method, rawURL string, body []byte, contentType string) (*http.Response, string, error) {
 	u, err := validateUpstreamURL(rawURL)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	var reader io.Reader
 	if len(body) > 0 {
@@ -187,13 +187,13 @@ func (c *upstreamClient) doRequest(ctx context.Context, method, rawURL string, b
 	}
 	req, err := http.NewRequestWithContext(ctx, method, u.String(), reader)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	if contentType != "" {
 		req.Header.Set("Content-Type", contentType)
 	}
 	host := strings.ToLower(u.Hostname())
-	if host == "data.sec.gov" || host == "www.sec.gov" {
+	if host == "data.sec.gov" || host == "www.sec.gov" || host == "fred.stlouisfed.org" {
 		req.Header.Set("User-Agent", secEDGARUserAgent)
 	} else {
 		req.Header.Set("User-Agent", defaultUserAgent)
@@ -202,13 +202,22 @@ func (c *upstreamClient) doRequest(ctx context.Context, method, rawURL string, b
 
 	resp, err := c.http.Do(req)
 	if err != nil {
+		return nil, "", err
+	}
+	if resp.StatusCode >= 300 && resp.StatusCode < 400 {
+		resp.Body.Close()
+		return nil, "", errors.New("upstream redirect blocked by security policy")
+	}
+	return resp, host, nil
+}
+
+func (c *upstreamClient) doRequest(ctx context.Context, method, rawURL string, body []byte, contentType string) ([]byte, error) {
+	resp, host, err := c.openRequest(ctx, method, rawURL, body, contentType)
+	if err != nil {
 		return nil, err
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode >= 300 && resp.StatusCode < 400 {
-		return nil, errors.New("upstream redirect blocked by security policy")
-	}
 	payload, readErr := io.ReadAll(io.LimitReader(resp.Body, maxUpstreamBodyBytes+1))
 	if readErr != nil {
 		return nil, readErr
@@ -220,6 +229,21 @@ func (c *upstreamClient) doRequest(ctx context.Context, method, rawURL string, b
 		return nil, fmt.Errorf("upstream %s returned HTTP %d", host, resp.StatusCode)
 	}
 	return payload, nil
+}
+
+// streamGet enforces SSRF, TLS 1.2+, redirect, status, and bounded read
+// controls while letting callers stop reading once top records are parsed.
+func (c *upstreamClient) streamGet(ctx context.Context, rawURL string, fn func(io.Reader) error) error {
+	resp, host, err := c.openRequest(ctx, http.MethodGet, rawURL, nil, "")
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return fmt.Errorf("upstream %s returned HTTP %d", host, resp.StatusCode)
+	}
+	return fn(io.LimitReader(resp.Body, maxUpstreamBodyBytes))
 }
 
 func (c *upstreamClient) get(ctx context.Context, rawURL string) ([]byte, error) {

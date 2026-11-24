@@ -3,7 +3,9 @@ package marketdata
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -284,5 +286,131 @@ func TestBinanceUsesPublicVisionMirrorAndFallsBack(t *testing.T) {
 	}
 	if len(fallbackHosts) != 2 || fallbackHosts[0] != "data-api.binance.vision" || fallbackHosts[1] != "api.binance.com" {
 		t.Fatalf("expected [data-api.binance.vision api.binance.com], got %v", fallbackHosts)
+	}
+}
+
+func TestTransportAllowsTLS12AndSendsContactUAForFRED(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	client := newUpstreamClient(nil)
+	tr, ok := client.http.Transport.(*http.Transport)
+	if !ok || tr.TLSClientConfig == nil {
+		t.Fatalf("expected *http.Transport with TLSClientConfig")
+	}
+	if tr.TLSClientConfig.MinVersion != tls.VersionTLS12 {
+		t.Fatalf("expected TLS MinVersion %#x (TLS 1.2), got %#x", tls.VersionTLS12, tr.TLSClientConfig.MinVersion)
+	}
+
+	var gotUA string
+	svc, err := NewService(Config{
+		DataDir:     t.TempDir(),
+		FixtureMode: false,
+		Now:         func() time.Time { return time.Unix(1760003600, 0).UTC() },
+		HTTPTransport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+			if r.URL.Hostname() == "fred.stlouisfed.org" {
+				gotUA = r.Header.Get("User-Agent")
+				return jsonResponse(200, "DATE,CPIAUCSL\n2026-10-01,314.25\n"), nil
+			}
+			return jsonResponse(404, "not found"), nil
+		}),
+	})
+	if err != nil {
+		t.Fatalf("NewService failed: %v", err)
+	}
+	defer func() { _ = svc.Close() }()
+
+	pts, err := svc.GetMacroSeries(ctx, "CPIAUCSL", 5)
+	if err != nil || len(pts) != 1 {
+		t.Fatalf("GetMacroSeries failed: len=%d err=%v", len(pts), err)
+	}
+	if gotUA != secEDGARUserAgent {
+		t.Fatalf("expected FRED User-Agent %q, got %q", secEDGARUserAgent, gotUA)
+	}
+}
+
+type trackingReadCloser struct {
+	r      io.Reader
+	bytes  *atomic.Int64
+	closed *atomic.Bool
+}
+
+func (t *trackingReadCloser) Read(p []byte) (int, error) {
+	n, err := t.r.Read(p)
+	if n > 0 {
+		t.bytes.Add(int64(n))
+	}
+	return n, err
+}
+
+func (t *trackingReadCloser) Close() error {
+	t.closed.Store(true)
+	return nil
+}
+
+func TestHyperliquidLeaderboardStreamsTop50WithoutFullRead(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	var buf bytes.Buffer
+	buf.WriteString(`{"leaderboardRows":[`)
+	// First 55 normal rows (~10 KB), followed by >3 MiB tail rows exceeding maxUpstreamBodyBytes.
+	for i := 0; i < 60; i++ {
+		if i > 0 {
+			buf.WriteByte(',')
+		}
+		fmt.Fprintf(&buf, `{"ethAddress":"0x%040x","displayName":"trader-%d","accountValue":"%d","windowPerformances":[["day",{"roi":"0.01"}],["week",{"roi":"0.25"}]]}`, i+1, i+1, 100000+i)
+	}
+	pad := strings.Repeat("x", 1024)
+	for buf.Len() < maxUpstreamBodyBytes+(1<<20) {
+		fmt.Fprintf(&buf, `,{"ethAddress":"0x%040x","displayName":"%s","accountValue":"100","windowPerformances":[]}`, 9999, pad)
+	}
+	buf.WriteString(`]}`)
+
+	if buf.Len() <= maxUpstreamBodyBytes {
+		t.Fatalf("expected >%d synthetic bytes, got %d", maxUpstreamBodyBytes, buf.Len())
+	}
+
+	var bytesRead atomic.Int64
+	var bodyClosed atomic.Bool
+	svc, err := NewService(Config{
+		DataDir:     t.TempDir(),
+		FixtureMode: false,
+		Now:         func() time.Time { return time.Unix(1760003600, 0).UTC() },
+		HTTPTransport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+			if r.URL.Hostname() == "stats-data.hyperliquid.xyz" {
+				return &http.Response{
+					StatusCode: 200,
+					Header:     make(http.Header),
+					Body: &trackingReadCloser{
+						r:      bytes.NewReader(buf.Bytes()),
+						bytes:  &bytesRead,
+						closed: &bodyClosed,
+					},
+				}, nil
+			}
+			return jsonResponse(404, "not found"), nil
+		}),
+	})
+	if err != nil {
+		t.Fatalf("NewService failed: %v", err)
+	}
+	defer func() { _ = svc.Close() }()
+
+	snap, err := svc.GetCohorts(ctx, "week")
+	if err != nil {
+		t.Fatalf("GetCohorts streaming failed: %v", err)
+	}
+	if len(snap.Entries) != 50 {
+		t.Fatalf("expected 50 streamed entries, got %d", len(snap.Entries))
+	}
+	if snap.Entries[0].Rank != 1 || snap.Entries[49].Rank != 50 || snap.Entries[0].WeekROI != 0.25 {
+		t.Fatalf("unexpected cohort entry bounds: first=%+v last=%+v", snap.Entries[0], snap.Entries[49])
+	}
+	if !bodyClosed.Load() {
+		t.Fatal("expected HTTP response body to be closed")
+	}
+	if read := bytesRead.Load(); read >= int64(maxUpstreamBodyBytes) {
+		t.Fatalf("expected early stream stop well under %d bytes, read %d", maxUpstreamBodyBytes, read)
 	}
 }
