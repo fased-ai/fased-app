@@ -30,6 +30,7 @@ type Options struct {
 	EngineSHA256, DesktopSHA256                     string
 	Signer, SignerSHA256                            string
 	Start, Autostart                                bool
+	Upgrade                                         bool
 	ProviderFixture                                 bool // Controlled installer harness only; never a wizard choice.
 }
 type Manifest struct {
@@ -264,6 +265,9 @@ func Install(ctx context.Context, paths Paths, options Options) (Manifest, error
 	if err = core.EnsurePrivateDirectory(p.Data); err != nil {
 		return Manifest{}, err
 	}
+	upgrading := false
+	var oldFiles map[string]string
+	var oldManifest Manifest
 	m, loadErr := Load(p)
 	if loadErr == nil {
 		if m.ProviderFixture != options.ProviderFixture {
@@ -275,13 +279,47 @@ func Install(ctx context.Context, paths Paths, options Options) (Manifest, error
 		if m.Phase == "removing" {
 			return m, errors.New("unfinished uninstall; resume uninstall before installing")
 		}
-		if len(files) != len(m.Files) {
-			return m, errors.New("installation differs; a verified update or explicit uninstall is required")
-		}
-		for name, hash := range files {
-			if m.Files[name] != hash {
+		filesMatch := sameFiles(m.Files, files)
+		if !filesMatch {
+			if !options.Upgrade {
+				if len(files) != len(m.Files) {
+					return m, errors.New("installation differs; a verified update or explicit uninstall is required")
+				}
 				return m, errors.New("installation differs; updates are not implemented yet")
 			}
+			if m.Phase != "ready" {
+				return m, errors.New("existing installation is not ready; resolve it before upgrading")
+			}
+			if m.Location != options.Location {
+				return m, errors.New("installation location differs; preserve the existing installation")
+			}
+			if err = verify(m); err != nil {
+				return m, err
+			}
+			if options.Start || options.Autostart || m.Autostart {
+				if m.Files[definitionName] != files[definitionName] {
+					if err = unregister(ctx, m); err != nil {
+						return m, err
+					}
+				} else if err = stop(ctx, m); err != nil {
+					return m, err
+				}
+			}
+			oldFiles = m.Files
+			oldManifest = m
+			preserveAutostart := !options.Autostart && oldManifest.Autostart && oldFiles[definitionName] == files[definitionName]
+			m.Phase = "preparing"
+			m.Version = core.Version
+			m.Files = files
+			m.Listen = options.Listen
+			m.PublicOrigin = options.PublicOrigin
+			m.Autostart = preserveAutostart
+			if err = core.WritePrivateJSON(filepath.Join(p.Root, "install.json"), m); err != nil {
+				return m, err
+			}
+			upgrading = true
+		} else if m.Phase == "preparing" && options.Upgrade {
+			upgrading = true
 		}
 	} else {
 		if !errors.Is(loadErr, os.ErrNotExist) {
@@ -305,10 +343,12 @@ func Install(ctx context.Context, paths Paths, options Options) (Manifest, error
 		for name, hash := range files {
 			target := filepath.Join(p.Root, name)
 			if got, err := digest(target); err == nil {
-				if got != hash {
+				if got == hash {
+					continue
+				}
+				if !upgrading {
 					return m, errors.New("partial installation differs; preserve it for inspection")
 				}
-				continue
 			} else if !errors.Is(err, os.ErrNotExist) {
 				return m, err
 			}
@@ -338,6 +378,18 @@ func Install(ctx context.Context, paths Paths, options Options) (Manifest, error
 			}
 			if got, err := digest(target); err != nil || got != hash {
 				return m, errors.New("copied application identity mismatch")
+			}
+		}
+		if len(oldFiles) > 0 {
+			if oldFiles[shortcutName] != "" && files[shortcutName] == "" {
+				_ = removeShortcut(oldManifest)
+			}
+			for name := range oldFiles {
+				if files[name] == "" {
+					if err = removeInstalledFile(filepath.Join(p.Root, name)); err != nil {
+						return m, err
+					}
+				}
 			}
 		}
 		m.Phase = "ready"
@@ -404,7 +456,47 @@ func writeNew(path string, in io.Reader, mode os.FileMode, expected string) (res
 	if hex.EncodeToString(h.Sum(nil)) != expected {
 		return errors.New("source changed while copying; no application file was published; retry the verified bundle")
 	}
-	return os.Rename(stage, path)
+	return replaceFile(stage, path)
+}
+
+func sameFiles(a, b map[string]string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for k, v := range a {
+		if b[k] != v {
+			return false
+		}
+	}
+	return true
+}
+
+func replaceFile(stage, target string) error {
+	attempts := 1
+	if runtime.GOOS == "windows" {
+		attempts = 30
+	}
+	var err error
+	for i := 0; i < attempts; i++ {
+		if err = os.Rename(stage, target); err == nil {
+			return nil
+		}
+		if runtime.GOOS == "windows" {
+			backup := target + ".old"
+			_ = os.Remove(backup)
+			if moveErr := os.Rename(target, backup); moveErr == nil {
+				if err = os.Rename(stage, target); err == nil {
+					_ = os.Remove(backup)
+					return nil
+				}
+				_ = os.Rename(backup, target)
+			}
+		}
+		if i+1 < attempts {
+			time.Sleep(100 * time.Millisecond)
+		}
+	}
+	return err
 }
 func Start(ctx context.Context, paths Paths) error {
 	m, lock, err := locked(paths)

@@ -14,6 +14,7 @@ param(
   [switch]$Status,
   [switch]$Uninstall,
   [switch]$Purge,
+  [switch]$Upgrade,
   [switch]$NoAutostart,
   [switch]$Help
 )
@@ -31,7 +32,7 @@ function Fail {
 }
 
 function Show-Usage {
-  Write-Output "Usage: install.ps1 [-Local|-Server|-Connect] [-Transport ssh|tailscale|cloudflare|domain] [-Domain HOST] [-Open|-Start|-Stop|-Status|-Uninstall] [-Purge] [-NoAutostart] [-Listen 127.0.0.1:PORT]"
+  Write-Output "Usage: install.ps1 [-Local|-Server|-Connect] [-Transport ssh|tailscale|cloudflare|domain] [-Domain HOST] [-Open|-Start|-Stop|-Status|-Uninstall] [-Purge] [-Upgrade] [-NoAutostart] [-Listen 127.0.0.1:PORT]"
 }
 
 if ($Help) {
@@ -60,6 +61,9 @@ if ($Profile -eq 'connect' -and $Action -ne 'install') {
 }
 if ($Purge -and $Action -ne 'uninstall') {
   Fail '-Purge requires -Uninstall.'
+}
+if ($Upgrade -and ($Action -ne 'install' -or $Profile -eq 'connect')) {
+  Fail '-Upgrade is only supported with -Local or -Server install.'
 }
 if ($Action -eq 'uninstall' -and ($Profile -notin @('local', 'server'))) {
   Fail '-Uninstall requires -Local or -Server.'
@@ -322,6 +326,10 @@ try {
     'local' {
       $installArgs = @('install', '--bundle', $BundleDir, '--listen', $Listen)
       if (-not $NoAutostart) { $installArgs += '--autostart' }
+      $existingManifest = Join-Path (Join-Path $BaseRoot 'app') 'install.json'
+      if ($Upgrade -or (Test-Path -LiteralPath $existingManifest)) {
+        $installArgs += '--upgrade'
+      }
       & $Engine @installArgs
       if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       Install-FasedCmdShim -TargetExe $AppBin

@@ -116,9 +116,11 @@ func TestServerInitAllTransportsAndValidation(t *testing.T) {
 func TestServerInstallStatusAndUninstallLifecycle(t *testing.T) {
 	prevCtl := serverSystemctl
 	prevTimeout := serverReadyTimeout
+	prevCred := serverCredentialProvision
 	t.Cleanup(func() {
 		serverSystemctl = prevCtl
 		serverReadyTimeout = prevTimeout
+		serverCredentialProvision = prevCred
 	})
 
 	var calls [][]string
@@ -126,6 +128,7 @@ func TestServerInstallStatusAndUninstallLifecycle(t *testing.T) {
 		calls = append(calls, append([]string(nil), args...))
 		return nil
 	}
+	serverCredentialProvision = nil
 	serverReadyTimeout = 10 * time.Millisecond
 
 	tmp := t.TempDir()
@@ -158,7 +161,7 @@ func TestServerInstallStatusAndUninstallLifecycle(t *testing.T) {
 	if !installed.Installed || !installed.Started || installed.Transport != "cloudflare" {
 		t.Fatalf("unexpected install result: %+v", installed)
 	}
-	if len(calls) != 2 || calls[0][0] != "daemon-reload" || strings.Join(calls[1], " ") != "enable --now fased-server.service" {
+	if len(calls) != 3 || calls[0][0] != "daemon-reload" || strings.Join(calls[1], " ") != "enable fased-server.service" || strings.Join(calls[2], " ") != "restart fased-server.service" {
 		t.Fatalf("unexpected systemctl calls: %+v", calls)
 	}
 	unitBytes, err := os.ReadFile(installed.UnitPath)
@@ -220,8 +223,13 @@ func TestServerInstallStatusAndUninstallLifecycle(t *testing.T) {
 
 func TestServerInstallLiveDaemonAutoPairs(t *testing.T) {
 	prevCtl := serverSystemctl
-	t.Cleanup(func() { serverSystemctl = prevCtl })
+	prevCred := serverCredentialProvision
+	t.Cleanup(func() {
+		serverSystemctl = prevCtl
+		serverCredentialProvision = prevCred
+	})
 	serverSystemctl = func(_ context.Context, _ ...string) error { return nil }
+	serverCredentialProvision = nil
 
 	dataDir := shortFixtureDir(t, "srv-pair-")
 	systemdDir := filepath.Join(t.TempDir(), "systemd-user")
@@ -522,7 +530,7 @@ func TestServerInstallAndUninstallWindowsLifecycle(t *testing.T) {
 	if !installed.Installed || !installed.Started || installed.ServiceManager != "windows" || !strings.HasSuffix(installed.UnitPath, "fased-server.task.xml") {
 		t.Fatalf("unexpected windows install result: %+v", installed)
 	}
-	if len(calls) != 2 || calls[0][0] != "/Create" || calls[1][0] != "/Run" {
+	if len(calls) != 3 || calls[0][0] != "/End" || calls[1][0] != "/Create" || calls[2][0] != "/Run" {
 		t.Fatalf("unexpected schtasks calls: %+v", calls)
 	}
 	taskBytes, err := os.ReadFile(installed.UnitPath)
@@ -558,7 +566,7 @@ func TestServerInstallAndUninstallWindowsLifecycle(t *testing.T) {
 
 func TestServerHardeningSystemdQuotingPurgeAndSetupLaunch(t *testing.T) {
 	// 1. quoteSystemdArgs & formatServerUnit hardening directives
-	unit := formatServerUnit("cloudflare", quoteSystemdArgs([]string{"/tmp/Fased App/fased-app", "serve", "--data-dir", "/tmp/data 100%$"}), "/tmp/data 100%$", true, "multi-user.target")
+	unit := formatServerUnit("cloudflare", quoteSystemdArgs([]string{"/tmp/Fased App/fased-app", "serve", "--data-dir", "/tmp/data 100%$"}), "/tmp/data 100%$", true, "multi-user.target", "")
 	for _, want := range []string{
 		`ExecStart="/tmp/Fased App/fased-app" serve --data-dir "/tmp/data 100%%$$"`,
 		"UMask=0077",
@@ -620,5 +628,95 @@ func TestServerHardeningSystemdQuotingPurgeAndSetupLaunch(t *testing.T) {
 	}
 	if needsPrivateLaunchFile("https://box.ts.net/#wallets/overview") {
 		t.Fatal("expected non-secret fragment false")
+	}
+}
+
+func TestServerInstallLinuxEncryptedCredentialAndWindowsRestart(t *testing.T) {
+	prevCtl := serverSystemctl
+	prevSch := serverSchtasks
+	prevCred := serverCredentialProvision
+	prevBin := serverBinaryInstaller
+	prevTimeout := serverReadyTimeout
+	t.Cleanup(func() {
+		serverSystemctl = prevCtl
+		serverSchtasks = prevSch
+		serverCredentialProvision = prevCred
+		serverBinaryInstaller = prevBin
+		serverReadyTimeout = prevTimeout
+	})
+	serverReadyTimeout = 10 * time.Millisecond
+
+	tmp := t.TempDir()
+	linuxData := filepath.Join(tmp, "linux-data")
+	systemdDir := filepath.Join(tmp, "systemd-user")
+	credPath := filepath.Join(linuxData, "server", "fased-provider-task-key.cred")
+
+	var ctlCalls [][]string
+	serverSystemctl = func(_ context.Context, args ...string) error {
+		ctlCalls = append(ctlCalls, append([]string(nil), args...))
+		return nil
+	}
+	serverCredentialProvision = func(_ context.Context, absData string) (string, error) {
+		if absData != linuxData {
+			t.Fatalf("unexpected absData %q", absData)
+		}
+		return credPath, nil
+	}
+
+	var out bytes.Buffer
+	if err := run([]string{
+		"server", "install",
+		"--service-manager", "systemd",
+		"--systemd-dir", systemdDir,
+		"--transport", "ssh",
+		"--listen", "127.0.0.1:7351",
+		"--data-dir", linuxData,
+		"--binary", "/usr/local/bin/fased-app",
+		"--json",
+	}, nil, &out, io.Discard); err != nil {
+		t.Fatalf("linux encrypted cred server install failed: %v", err)
+	}
+	unitBytes, err := os.ReadFile(filepath.Join(systemdDir, "fased-server.service"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantLine := "LoadCredentialEncrypted=fased-provider-task-key:" + credPath
+	if !strings.Contains(string(unitBytes), wantLine) {
+		t.Fatalf("user service unit missing %q:\n%s", wantLine, string(unitBytes))
+	}
+	if len(ctlCalls) != 3 || strings.Join(ctlCalls[2], " ") != "restart fased-server.service" {
+		t.Fatalf("expected restart on install/upgrade, got %+v", ctlCalls)
+	}
+
+	// Windows managed binary install must stop existing task before replacing binary, then /End -> /Create -> /Run.
+	var schCalls [][]string
+	serverSchtasks = func(_ context.Context, args ...string) error {
+		schCalls = append(schCalls, append([]string(nil), args...))
+		return nil
+	}
+	winPrefix := filepath.Join(tmp, "win-prefix")
+	winData := filepath.Join(tmp, "win-data")
+	winDir := filepath.Join(tmp, "win-svc")
+	serverBinaryInstaller = func(dst string) (string, error) {
+		if len(schCalls) == 0 || schCalls[0][0] != "/End" {
+			t.Fatalf("expected /End before installing Windows server binary, got %+v", schCalls)
+		}
+		return dst, nil
+	}
+	out.Reset()
+	if err := run([]string{
+		"server", "install",
+		"--service-manager", "windows",
+		"--prefix", winPrefix,
+		"--service-dir", winDir,
+		"--transport", "ssh",
+		"--listen", "127.0.0.1:7352",
+		"--data-dir", winData,
+		"--json",
+	}, nil, &out, io.Discard); err != nil {
+		t.Fatalf("windows managed binary server install failed: %v", err)
+	}
+	if len(schCalls) != 4 || schCalls[0][0] != "/End" || schCalls[1][0] != "/End" || schCalls[2][0] != "/Create" || schCalls[3][0] != "/Run" {
+		t.Fatalf("unexpected windows upgrade schtasks sequence: %+v", schCalls)
 	}
 }

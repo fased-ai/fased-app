@@ -77,6 +77,7 @@ func main() {
 		return
 	}
 	var firstPackage string
+	var firstPackageUnsigned bool
 	if paths, err := localinstall.DefaultPaths(); err == nil && paths.Data == *state {
 		allowSource, fenceErr := desktop.OriginalLocalStartAllowed(paths.Data, os.Getuid())
 		if fenceErr != nil {
@@ -90,6 +91,7 @@ func main() {
 					packageDir := filepath.Dir(self)
 					if m, e := bundle.Verify(packageDir); e == nil && m.Desktop {
 						firstPackage = packageDir
+						firstPackageUnsigned = m.UnsignedEngineering
 					}
 				}
 			} else {
@@ -104,7 +106,11 @@ func main() {
 		options.OnStartup = func(ctx context.Context) {
 			// Linux and Windows question dialogs return Yes/No and ignore
 			// custom button labels; use those supported responses on all OSes.
-			answer, e := wailsruntime.MessageDialog(ctx, wailsruntime.MessageDialogOptions{Type: wailsruntime.QuestionDialog, Title: "Set up Fased", Message: "Install Fased on this computer? Choose Yes for Local installation or No to connect to an existing Remote instance. Local installation starts Fased in the background. Login autostart is off. This is an unsigned engineering package." + hostPreparationNotice(), Buttons: []string{"Yes", "No"}, DefaultButton: "No", CancelButton: "No"})
+			unsignedNotice := ""
+			if firstPackageUnsigned {
+				unsignedNotice = " This is an unsigned engineering package."
+			}
+			answer, e := wailsruntime.MessageDialog(ctx, wailsruntime.MessageDialogOptions{Type: wailsruntime.QuestionDialog, Title: "Set up Fased", Message: "Install Fased on this computer? Choose Yes for Local installation or No to connect to an existing Remote instance. Local installation starts Fased in the background. Login autostart is off." + unsignedNotice + hostPreparationNotice(), Buttons: []string{"Yes", "No"}, DefaultButton: "No", CancelButton: "No"})
 			if e != nil {
 				wailsruntime.Quit(ctx)
 				return

@@ -20,6 +20,7 @@ import (
 
 	"github.com/fased-ai/fased-app/internal/connection"
 	"github.com/fased-ai/fased-app/internal/core"
+	"github.com/fased-ai/fased-app/internal/providersecrets"
 	"github.com/fased-ai/fased-app/internal/tailnet"
 )
 
@@ -52,9 +53,10 @@ type serverConfig struct {
 const serverConfigFile = "server-config.json"
 
 var (
-	serverSystemctl       = runSystemctlUser
-	serverBinaryInstaller = installServerBinary
-	serverReadyTimeout    = 6 * time.Second
+	serverSystemctl           = runSystemctlUser
+	serverBinaryInstaller     = installServerBinary
+	serverCredentialProvision = provisionServerUserCredential
+	serverReadyTimeout        = 6 * time.Second
 )
 
 func runSystemctlUser(ctx context.Context, args ...string) error {
@@ -350,7 +352,7 @@ func buildServerInitPlanForManager(transport, domain, listen, dataDir, binPath, 
 	case "windows":
 		serviceUnit = formatWindowsServerTaskXML(serverWindowsTaskUserID(), binPath, serveArgs)
 	default:
-		serviceUnit = formatServerUnit(transport, quoteSystemdArgs(execArgs), absData, true, "multi-user.target")
+		serviceUnit = formatServerUnit(transport, quoteSystemdArgs(execArgs), absData, true, "multi-user.target", "")
 	}
 
 	commands = append(commands, fmt.Sprintf("%s pair --data-dir %s", binPath, absData))
@@ -386,10 +388,13 @@ func isFasedWindowsShim(b []byte) bool {
 	return strings.HasPrefix(s, "@echo off\r\n\"") && strings.HasSuffix(s, "\" %*") && strings.Contains(strings.ToLower(s), "fased-app")
 }
 
-func formatServerUnit(transport, execLine, absData string, protectHome bool, wantedBy string) string {
+func formatServerUnit(transport, execLine, absData string, protectHome bool, wantedBy string, encryptedCredPath string) string {
 	extra := "UMask=0077\n"
 	if protectHome {
 		extra += "ProtectHome=read-only\n"
+	}
+	if encryptedCredPath != "" {
+		extra += fmt.Sprintf("LoadCredentialEncrypted=%s:%s\n", providersecrets.CredentialName, encryptedCredPath)
 	}
 	if wantedBy == "multi-user.target" {
 		extra += "PrivateDevices=yes\nProtectKernelTunables=yes\nProtectKernelModules=yes\nProtectKernelLogs=yes\nProtectControlGroups=yes\nProtectClock=yes\nProtectHostname=yes\nProtectProc=invisible\nLockPersonality=yes\nLimitCORE=0\nSystemCallArchitectures=native\nSystemCallFilter=@system-service\nRestrictSUIDSGID=yes\nCapabilityBoundingSet=\n"
@@ -414,7 +419,7 @@ WantedBy=%s
 `, transport, execLine, extra, absData, wantedBy)
 }
 
-func buildUserServiceUnit(plan serverInitPlan, binPath string) string {
+func buildUserServiceUnit(plan serverInitPlan, binPath, encryptedCredPath string) string {
 	execArgs := []string{
 		binPath,
 		"serve",
@@ -428,7 +433,7 @@ func buildUserServiceUnit(plan serverInitPlan, binPath string) string {
 	}
 	home, _ := os.UserHomeDir()
 	inHome := home != "" && (strings.HasPrefix(plan.DataDir, home+string(os.PathSeparator)) || strings.HasPrefix(binPath, home+string(os.PathSeparator)))
-	return formatServerUnit(plan.Transport, quoteSystemdArgs(execArgs), plan.DataDir, !inHome, "default.target")
+	return formatServerUnit(plan.Transport, quoteSystemdArgs(execArgs), plan.DataDir, !inHome, "default.target", encryptedCredPath)
 }
 
 func serverInitCommand(args []string, defaultDataDir string, out, errOut io.Writer) error {
@@ -589,10 +594,27 @@ func serverInstallCommand(args []string, defaultDataDir string, out, errOut io.W
 		if pErr != nil {
 			return pErr
 		}
+		if manager == "windows" {
+			stopCtx, stopCancel := context.WithTimeout(context.Background(), 10*time.Second)
+			_ = serverSchtasks(stopCtx, "/End", "/TN", serverWindowsTaskName())
+			stopCancel()
+		}
 		resolvedBin, err = serverBinaryInstaller(filepath.Join(absPrefix, serverBinaryName(runtime.GOOS)))
 		if err != nil {
 			return err
 		}
+	}
+
+	if err = core.EnsurePrivateDirectory(absData); err != nil {
+		return err
+	}
+	encryptedCredPath := ""
+	if manager == "systemd" && absServiceDir != "/etc/systemd/system" && serverCredentialProvision != nil {
+		credCtx, credCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		if p, cErr := serverCredentialProvision(credCtx, absData); cErr == nil {
+			encryptedCredPath = p
+		}
+		credCancel()
 	}
 
 	plan, err := buildServerInitPlanForManager(chosenTransport, *domain, *listen, absData, resolvedBin, manager)
@@ -600,12 +622,9 @@ func serverInstallCommand(args []string, defaultDataDir string, out, errOut io.W
 		return err
 	}
 	if manager == "systemd" && absServiceDir != "/etc/systemd/system" {
-		plan.ServiceUnit = buildUserServiceUnit(plan, resolvedBin)
+		plan.ServiceUnit = buildUserServiceUnit(plan, resolvedBin, encryptedCredPath)
 	}
 
-	if err = core.EnsurePrivateDirectory(absData); err != nil {
-		return err
-	}
 	if err = os.MkdirAll(absServiceDir, 0700); err != nil {
 		return err
 	}
