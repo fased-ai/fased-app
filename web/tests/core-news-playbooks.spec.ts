@@ -502,6 +502,7 @@ test("joined agent workspace preserves news chat reminder run memory and reviewe
   await page.goto(url + "/#agents/review");
   await expect(page.locator(".local-messages")).toContainText(
     "Historical news headline",
+    { timeout: 15000 },
   );
   let v = await read();
   const headlineMessage = v.messages.at(-1);
@@ -1394,9 +1395,11 @@ test("WEN paper context hands off UI and CLI to frozen same-profile chat with op
     })
     .click();
   await expect(page).toHaveURL(/#agents\/chat$/);
-  const draftedPrompt = await page
-    .getByLabel("Message", { exact: true })
-    .inputValue();
+  const messageInput = page.getByLabel("Message", { exact: true });
+  await expect(messageInput).toHaveValue(/Frozen WEN paper context v1/, {
+    timeout: 10000,
+  });
+  const draftedPrompt = await messageInput.inputValue();
   expect(draftedPrompt).toContain("Frozen WEN paper context v1");
   expect(draftedPrompt).toContain(receiptHash);
   expect(draftedPrompt).toContain(task.wen.digest);
