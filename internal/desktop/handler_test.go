@@ -742,3 +742,46 @@ func TestNativeQuantLabRoutes(t *testing.T) {
 		t.Fatal("expected 64 KiB request limit and 2 MiB response limit on /api/v1/lab routes")
 	}
 }
+
+func TestNativeDeskRoutes(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		method string
+		url    string
+		want   bool
+	}{
+		{http.MethodGet, "http://wails.localhost/api/v1/desk/state", true},
+		{http.MethodPut, "http://wails.localhost/api/v1/desk/limits", true},
+		{http.MethodPost, "http://wails.localhost/api/v1/desk/limits", false},
+		{http.MethodPost, "http://wails.localhost/api/v1/desk/control", true},
+		{http.MethodPost, "http://wails.localhost/api/v1/desk/cycle", true},
+		{http.MethodGet, "http://wails.localhost/api/v1/desk/cycles?limit=25", true},
+		{http.MethodGet, "http://wails.localhost/api/v1/desk/cycles?evil=1", false},
+		{http.MethodGet, "http://wails.localhost/api/v1/desk/tickets?status=PENDING_PM&limit=20", true},
+		{http.MethodPost, "http://wails.localhost/api/v1/desk/tickets/tkt-1/approve", true},
+		{http.MethodPost, "http://wails.localhost/api/v1/desk/tickets/tkt-1/reject", true},
+		{http.MethodPost, "http://wails.localhost/api/v1/desk/tickets/bad/path/approve", false},
+		{http.MethodGet, "http://wails.localhost/api/v1/desk/positions?status=OPEN", true},
+		{http.MethodPost, "http://wails.localhost/api/v1/desk/positions/mark", true},
+		{http.MethodPost, "http://wails.localhost/api/v1/desk/positions/pos-1/close", true},
+		{http.MethodGet, "http://wails.localhost/api/v1/desk/journal?symbol=BTC&outcome=SHADOW&limit=50", true},
+		{http.MethodGet, "http://wails.localhost/api/v1/desk/journal?bad=1", false},
+		{http.MethodGet, "http://wails.localhost/api/v1/desk/lessons?limit=20", true},
+		{http.MethodPut, "http://wails.localhost/api/v1/desk/lessons", true},
+		{http.MethodDelete, "http://wails.localhost/api/v1/desk/lessons/lesson-1", true},
+		{http.MethodGet, "http://wails.localhost/api/v1/desk/report", true},
+		{http.MethodGet, "http://wails.localhost/api/v1/desk/stream", true},
+	}
+	for _, tc := range cases {
+		req := httptest.NewRequest(tc.method, tc.url, nil)
+		if got := PublicRequestAllowed(req); got != tc.want {
+			t.Fatalf("PublicRequestAllowed(%s %s) = %v, want %v", tc.method, tc.url, got, tc.want)
+		}
+	}
+	if !StreamingRoute("/api/v1/desk/stream") {
+		t.Fatal("expected /api/v1/desk/stream to be a StreamingRoute")
+	}
+	if RequestBodyLimit("/api/v1/desk/cycle") != 64*1024 || responseLimit("/api/v1/desk/state") != 1*1024*1024 {
+		t.Fatal("expected 64 KiB request limit and 1 MiB response limit on /api/v1/desk routes")
+	}
+}

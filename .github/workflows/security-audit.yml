@@ -70,7 +70,8 @@ jobs:
             "./internal/automation:FuzzAutomationInputs" \
             "./internal/telegram:FuzzTelegramUpdateParser" \
             "./internal/fasedscript:FuzzFasedScriptCompileAndEval" \
-            "./internal/quantlab:FuzzQuantLabInputs"; do
+            "./internal/quantlab:FuzzQuantLabInputs" \
+            "./internal/desk:FuzzDeskInputs"; do
             pkg="${target%%:*}"
             fn="${target##*:}"
             echo "=== Fuzzing ${pkg} :: ${fn} (${FUZZ_TIME}) ==="

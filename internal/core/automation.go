@@ -230,7 +230,11 @@ func (h *coreTelegramHooks) ResolveApproval(ctx context.Context, id, decisionArg
 }
 
 func (h *coreTelegramHooks) SetAutomationState(ctx context.Context, action, reason, actor string) (automation.ControlState, error) {
-	return h.autoSvc.SetState(ctx, action, reason, actor)
+	st, err := h.autoSvc.SetState(ctx, action, reason, actor)
+	if err == nil && strings.EqualFold(strings.TrimSpace(action), "kill") {
+		h.store.syncDeskKill(ctx, reason, actor)
+	}
+	return st, err
 }
 
 func (h *HTTPHandler) automationAPI(w http.ResponseWriter, r *http.Request, token string) {
@@ -279,6 +283,9 @@ func (h *HTTPHandler) automationAPI(w http.ResponseWriter, r *http.Request, toke
 			if err != nil {
 				writeError(w, 400, err.Error())
 				return
+			}
+			if strings.EqualFold(strings.TrimSpace(in.Action), "kill") {
+				h.store.syncDeskKill(ctx, in.Reason, "owner")
 			}
 			writeJSON(w, 200, st)
 		default:
