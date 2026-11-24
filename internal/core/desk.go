@@ -57,6 +57,13 @@ func (s *Store) deskService() (*desk.Service, error) {
 			}
 			return ql.ListRuns(ctx, limit)
 		},
+		ScriptReader: func(ctx context.Context, scriptID string) (quantlab.ScriptRecord, bool, error) {
+			ql, qErr := s.quantLabService()
+			if qErr != nil {
+				return quantlab.ScriptRecord{}, false, qErr
+			}
+			return ql.GetScript(ctx, scriptID)
+		},
 		Scorer: func(ctx context.Context, req decision.EvaluateRequest) (decision.EvaluateResponse, error) {
 			decSvc, dErr := s.decisionService()
 			if dErr != nil {
@@ -519,7 +526,49 @@ func toolGetDeskState(ctx context.Context, s *Store, _ string, rawArgs json.RawM
 	if err != nil {
 		return nil, err
 	}
-	return svc.GetSnapshot(ctx)
+	snap, err := svc.GetSnapshot(ctx)
+	if err != nil {
+		return nil, err
+	}
+	openPositions := make([]desk.PaperPosition, 0, len(snap.Positions))
+	recentClosedPositions := make([]desk.PaperPosition, 0, 5)
+	for _, p := range snap.Positions {
+		if p.Status == "OPEN" {
+			if len(openPositions) < 25 {
+				openPositions = append(openPositions, p)
+			}
+		} else if len(recentClosedPositions) < 5 {
+			recentClosedPositions = append(recentClosedPositions, p)
+		}
+	}
+	pendingTickets := make([]desk.OrderTicket, 0, 25)
+	for _, tk := range snap.Tickets {
+		if tk.Status == "PENDING_PM" && len(pendingTickets) < 25 {
+			pendingTickets = append(pendingTickets, tk)
+		}
+	}
+	compactSeats := make([]map[string]any, 0, len(snap.Seats))
+	for _, seat := range snap.Seats {
+		compactSeats = append(compactSeats, map[string]any{
+			"id":              seat.ID,
+			"title":           seat.Title,
+			"canExecutePaper": seat.CanExecutePaper,
+		})
+	}
+	return map[string]any{
+		"control":               snap.Control,
+		"limits":                snap.Limits,
+		"account":               snap.Account,
+		"openPositions":         openPositions,
+		"recentClosedPositions": recentClosedPositions,
+		"pendingTickets":        pendingTickets,
+		"recentTicketsCount":    len(snap.Tickets),
+		"bench":                 snap.Bench,
+		"decay":                 snap.Decay,
+		"lessonsCount":          snap.LessonsCount,
+		"seats":                 compactSeats,
+		"updatedAt":             snap.UpdatedAt,
+	}, nil
 }
 
 func toolListDeskJournal(ctx context.Context, s *Store, _ string, rawArgs json.RawMessage) (any, error) {

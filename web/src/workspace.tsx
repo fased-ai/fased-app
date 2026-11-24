@@ -126,12 +126,12 @@ function getRoute() {
     predictions: "intel",
     strategies: "lab",
     quantlab: "lab",
-    desk: "lab",
+    desk: "lab/desk",
   };
   const route = aliases[raw] ?? raw;
   if (route === "terminals/asset" || route === "terminals/loss")
     return "terminals/satcoin";
-  return /^(overview|trade|intel|lab|activity|settings|providers|terminals(\/(satcoin|hyperliquid|jupiter))?|agents\/(chat|review|bots|tasks|news|memory|settings)|wallets\/(overview|accounts|permissions|security|activity))$/.test(
+  return /^(overview|trade|intel|lab(\/(scripts|desk|journal))?|activity|settings|providers|terminals(\/(satcoin|hyperliquid|jupiter))?|agents\/(chat|review|bots|tasks|news|memory|settings)|wallets\/(overview|accounts|permissions|security|activity))$/.test(
     route,
   )
     ? route
@@ -472,6 +472,8 @@ function useWorkspaceState() {
           ["Agents", "agents/settings"],
           ["Trade", "trade"],
           ["Intel", "intel"],
+          ["Lab", "lab"],
+          ["Trading Desk", "lab/desk"],
           ["News", "agents/news"],
           ["Wallets", "wallets/overview"],
           ["Settings", "settings"],

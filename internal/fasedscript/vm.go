@@ -231,6 +231,9 @@ func (m *vm) execStmt(st stmt, scope *envScope) error {
 		if err != nil {
 			return err
 		}
+		if cond.kind == valSeriesBool || cond.kind == valSeriesFloat {
+			return errors.New("if condition cannot be a bar series (causes look-ahead bias); use bar-wise ternary (cond ? a : b) or boolean operators (&& / ||)")
+		}
 		if asScalarBool(cond) {
 			return m.execStmt(s.then, scope)
 		}
@@ -546,6 +549,13 @@ func (m *vm) evalBinary(op tokenKind, lhs, rhs val) (val, error) {
 		return val{kind: valSeriesBool, sb: out}, nil
 
 	case tokLT, tokLE, tokGT, tokGE, tokEQ, tokNE:
+		if (op == tokEQ || op == tokNE) && (lhs.kind == valNull || rhs.kind == valNull) {
+			same := lhs.kind == valNull && rhs.kind == valNull
+			if op == tokNE {
+				same = !same
+			}
+			return val{kind: valBool, b: same}, nil
+		}
 		if lhs.kind == valStr && rhs.kind == valStr {
 			if op == tokEQ {
 				return val{kind: valBool, b: lhs.s == rhs.s}, nil

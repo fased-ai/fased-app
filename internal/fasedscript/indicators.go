@@ -217,12 +217,28 @@ func ATR(candles []marketdata.Candle, period int) []float64 {
 	return RMA(TrueRange(candles), period)
 }
 
-// VWAP computes cumulative typical-price volume-weighted average price over candles.
+// VWAP computes session-anchored typical-price volume-weighted average price over candles,
+// resetting cumulative sums on UTC day boundaries when timestamps are available.
 func VWAP(candles []marketdata.Candle) []float64 {
 	n := len(candles)
 	out := nanSlice(n)
 	var pvSum, volSum float64
+	normDay := func(ts int64) int64 {
+		if ts > 1_000_000_000_000 {
+			ts /= 1000
+		}
+		return ts / 86400
+	}
+	var prevDay int64
 	for i, c := range candles {
+		if c.Time > 0 {
+			day := normDay(c.Time)
+			if i > 0 && candles[i-1].Time > 0 && day != prevDay {
+				pvSum = 0
+				volSum = 0
+			}
+			prevDay = day
+		}
 		typ := (c.High + c.Low + c.Close) / 3.0
 		v := math.Max(0, c.Volume)
 		pvSum += typ * v

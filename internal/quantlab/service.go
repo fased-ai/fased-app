@@ -202,9 +202,8 @@ func (s *Service) RunBacktest(ctx context.Context, req BacktestRequest) (Backtes
 	}, nil
 }
 
-// RunValidation executes Gates 1-4 (plateau, bar permutations, walk-forward + holdout,
-// WF permutations) and persists the resulting ValidationRunRecord into lab.sqlite.
-func (s *Service) RunValidation(ctx context.Context, req ValidateRequest) (ValidationRunRecord, error) {
+// EvaluateValidation runs deterministic Gates 1-4 without persisting to lab.sqlite (read-only tool use).
+func (s *Service) EvaluateValidation(ctx context.Context, req ValidateRequest) (ValidationRunRecord, error) {
 	cfg, err := NormalizeBacktestConfig(req.Config)
 	if err != nil {
 		return ValidationRunRecord{}, err
@@ -224,12 +223,28 @@ func (s *Service) RunValidation(ctx context.Context, req ValidateRequest) (Valid
 		return ValidationRunRecord{}, err
 	}
 	durMs := time.Since(start).Milliseconds()
-
-	return s.store.insertRun(ctx, ValidationRunRecord{
+	return ValidationRunRecord{
 		ScriptID:   scriptID,
 		ScriptName: scriptName,
 		Config:     cfg,
 		Report:     report,
 		DurationMs: durMs,
+		CreatedAt:  s.now().UnixMilli(),
+	}, nil
+}
+
+// RunValidation executes Gates 1-4 (plateau, bar permutations, walk-forward + holdout,
+// WF permutations) and persists the resulting ValidationRunRecord into lab.sqlite.
+func (s *Service) RunValidation(ctx context.Context, req ValidateRequest) (ValidationRunRecord, error) {
+	rec, err := s.EvaluateValidation(ctx, req)
+	if err != nil {
+		return ValidationRunRecord{}, err
+	}
+	return s.store.insertRun(ctx, ValidationRunRecord{
+		ScriptID:   rec.ScriptID,
+		ScriptName: rec.ScriptName,
+		Config:     rec.Config,
+		Report:     rec.Report,
+		DurationMs: rec.DurationMs,
 	})
 }

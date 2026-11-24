@@ -2,6 +2,7 @@ package quantlab
 
 import (
 	"context"
+	"fmt"
 	"math"
 	"runtime"
 	"sort"
@@ -100,6 +101,105 @@ func PermuteCandles(candles []marketdata.Candle, seed uint64) []marketdata.Candl
 	return out
 }
 
+// PermuteCandlesWithPrefix keeps prefix untouched for causal indicator warm-up
+// while permuting tail returns and intrabar OHLC geometry anchored to the last prefix close.
+func PermuteCandlesWithPrefix(prefix, tail []marketdata.Candle, seed uint64) []marketdata.Candle {
+	out := make([]marketdata.Candle, 0, len(prefix)+len(tail))
+	out = append(out, prefix...)
+	if len(prefix) == 0 || len(tail) < 2 {
+		out = append(out, PermuteCandles(tail, seed)...)
+		return out
+	}
+
+	shapes := make([]barShape, len(tail))
+	prevC := math.Max(1e-9, prefix[len(prefix)-1].Close)
+	for i := 0; i < len(tail); i++ {
+		if i > 0 {
+			prevC = math.Max(1e-9, tail[i-1].Close)
+		}
+		openPx := math.Max(1e-9, tail[i].Open)
+		highPx := math.Max(openPx, tail[i].High)
+		lowPx := math.Max(1e-9, math.Min(openPx, tail[i].Low))
+		closePx := math.Max(1e-9, tail[i].Close)
+		shapes[i] = barShape{
+			openGap: math.Log(openPx / prevC),
+			highLog: math.Log(highPx / openPx),
+			lowLog:  math.Log(lowPx / openPx),
+			bodyLog: math.Log(closePx / openPx),
+			volume:  tail[i].Volume,
+		}
+	}
+
+	rng := permRNG(seed)
+	if rng == 0 {
+		rng = 1
+	}
+	for i := len(shapes) - 1; i > 0; i-- {
+		j := rng.intn(i + 1)
+		shapes[i], shapes[j] = shapes[j], shapes[i]
+	}
+
+	prevClose := math.Max(1e-9, prefix[len(prefix)-1].Close)
+	for i := 0; i < len(tail); i++ {
+		s := shapes[i]
+		o := prevClose * math.Exp(s.openGap)
+		h := o * math.Exp(s.highLog)
+		l := o * math.Exp(s.lowLog)
+		c := o * math.Exp(s.bodyLog)
+		if h < math.Max(o, c) {
+			h = math.Max(o, c)
+		}
+		if l > math.Min(o, c) {
+			l = math.Min(o, c)
+		}
+		out = append(out, marketdata.Candle{
+			Time:   tail[i].Time,
+			Open:   o,
+			High:   h,
+			Low:    l,
+			Close:  c,
+			Volume: s.volume,
+		})
+		prevClose = c
+	}
+	return out
+}
+
+func sliceBoolTail(arr []bool, start int) []bool {
+	if start <= 0 || len(arr) <= start {
+		if start <= 0 {
+			return arr
+		}
+		return nil
+	}
+	return arr[start:]
+}
+
+func sliceStrategy(spec fasedscript.StrategySpec, start int) fasedscript.StrategySpec {
+	out := spec
+	out.Long = sliceBoolTail(spec.Long, start)
+	out.ExitLong = sliceBoolTail(spec.ExitLong, start)
+	out.Short = sliceBoolTail(spec.Short, start)
+	out.ExitShort = sliceBoolTail(spec.ExitShort, start)
+	return out
+}
+
+func evalAndSimulateWindow(candles []marketdata.Candle, evalStart int, prog *fasedscript.Program, params map[string]float64, cfg BacktestConfig) (BacktestMetrics, error) {
+	if evalStart < 0 {
+		evalStart = 0
+	}
+	if evalStart >= len(candles) {
+		return BacktestMetrics{FinalEquity: cfg.InitialCapital}, nil
+	}
+	ev, err := prog.Eval(candles, params)
+	if err != nil {
+		return BacktestMetrics{}, err
+	}
+	sliced := sliceStrategy(ev.Strategy, evalStart)
+	m, _, _ := Simulate(candles[evalStart:], sliced, cfg)
+	return m, nil
+}
+
 func buildParamGrid(inputs []fasedscript.InputSpec, baseParams map[string]float64) []map[string]float64 {
 	cloneBase := func() map[string]float64 {
 		m := make(map[string]float64, len(baseParams))
@@ -122,6 +222,9 @@ func buildParamGrid(inputs []fasedscript.InputSpec, baseParams map[string]float6
 		var vals []float64
 		if inp.Max > inp.Min {
 			mid := inp.Default
+			if bp, ok := baseParams[inp.Name]; ok && !math.IsNaN(bp) && !math.IsInf(bp, 0) {
+				mid = math.Max(inp.Min, math.Min(inp.Max, bp))
+			}
 			step := inp.Step
 			if step <= 0 {
 				step = (inp.Max - inp.Min) / 4.0
@@ -140,7 +243,11 @@ func buildParamGrid(inputs []fasedscript.InputSpec, baseParams map[string]float6
 				}
 			}
 		} else {
-			vals = []float64{inp.Default}
+			v := inp.Default
+			if bp, ok := baseParams[inp.Name]; ok && !math.IsNaN(bp) && !math.IsInf(bp, 0) {
+				v = bp
+			}
+			vals = []float64{v}
 		}
 
 		next := make([]map[string]float64, 0, len(grid)*len(vals))
@@ -181,7 +288,8 @@ func RunFourGateValidation(ctx context.Context, candles []marketdata.Candle, pro
 	// Gate 1: Parameter Plateau Sweep across in-sample bars.
 	grid := buildParamGrid(prog.Inputs, cfg.Params)
 	cells := make([]PlateauCell, 0, len(grid))
-	bestCellIdx := 0
+	bestAnyIdx := 0
+	bestEligibleIdx := -1
 	passingCells := 0
 
 	for idx, params := range grid {
@@ -204,11 +312,18 @@ func RunFourGateValidation(ctx context.Context, candles []marketdata.Candle, pro
 			Trades:    m.TradeCount,
 			Passed:    cellPassed,
 		})
-		if m.AnnualizedSharpe > cells[bestCellIdx].Sharpe {
-			bestCellIdx = idx
+		if m.AnnualizedSharpe > cells[bestAnyIdx].Sharpe {
+			bestAnyIdx = idx
+		}
+		if m.TradeCount >= 3 && (bestEligibleIdx < 0 || m.AnnualizedSharpe > cells[bestEligibleIdx].Sharpe) {
+			bestEligibleIdx = idx
 		}
 	}
 
+	bestCellIdx := bestAnyIdx
+	if bestEligibleIdx >= 0 {
+		bestCellIdx = bestEligibleIdx
+	}
 	plateauRatio := 0.0
 	if len(cells) > 0 {
 		plateauRatio = round4(float64(passingCells) / float64(len(cells)))
@@ -225,6 +340,9 @@ func RunFourGateValidation(ctx context.Context, candles []marketdata.Candle, pro
 		Cells:        cells,
 	}
 
+	if ctx.Err() != nil {
+		return FourGateReport{}, ctx.Err()
+	}
 	// Evaluate real baseline across full non-holdout IS + full curve.
 	fullEval, err := prog.Eval(candles, bestParams)
 	if err != nil {
@@ -241,16 +359,31 @@ func RunFourGateValidation(ctx context.Context, candles []marketdata.Candle, pro
 		return FourGateReport{}, err
 	}
 	realISMetrics, _, _ := Simulate(inSample, isEval.Strategy, cfg)
-	permSharpes := runPermutationSweep(ctx, inSample, prog, bestParams, cfg, cfg.Permutations, cfg.Seed)
-	gate2 := summarizePermutations(realISMetrics.AnnualizedSharpe, permSharpes, 0.05)
-
-	// Gate 3: 3-Fold Chronological Walk-Forward + Locked Holdout Evaluation.
-	folds, frozenParams := runWalkForwardFolds(ctx, inSample, prog, grid, cfg)
-	holdEval, err := prog.Eval(holdoutSlice, frozenParams)
+	permSharpes, err := runPermutationSweep(ctx, inSample, prog, bestParams, cfg, cfg.Permutations, cfg.Seed)
 	if err != nil {
 		return FourGateReport{}, err
 	}
-	holdMetrics, _, _ := Simulate(holdoutSlice, holdEval.Strategy, cfg)
+	gate2 := summarizePermutations(realISMetrics.AnnualizedSharpe, permSharpes, 0.05)
+	if len(grid) > 1 && gate2.Iterations > 0 {
+		adjP := 1.0 - math.Pow(1.0-gate2.PValue, float64(len(grid)))
+		if adjP > 1.0 {
+			adjP = 1.0
+		}
+		gate2.PValue = round4(adjP)
+		gate2.Passed = gate2.PValue <= 0.05 && realISMetrics.AnnualizedSharpe > 0
+		warnings = append(warnings, fmt.Sprintf("Gate 2 p-value Šidák-adjusted across %d Gate 1 grid cells", len(grid)))
+	}
+
+	// Gate 3: 3-Fold Chronological Walk-Forward + Locked Holdout Evaluation (with causal warm-up prefix).
+	holdoutStart := n - holdoutBars
+	folds, frozenParams, err := runWalkForwardFolds(ctx, inSample, prog, grid, cfg)
+	if err != nil {
+		return FourGateReport{}, err
+	}
+	holdMetrics, err := evalAndSimulateWindow(candles, holdoutStart, prog, frozenParams, cfg)
+	if err != nil {
+		return FourGateReport{}, err
+	}
 
 	var sumOOSSharpe, sumOOSRet float64
 	for _, f := range folds {
@@ -264,7 +397,7 @@ func RunFourGateValidation(ctx context.Context, candles []marketdata.Candle, pro
 		avgOOSRet = round4(sumOOSRet / float64(len(folds)))
 	}
 	gate3 := Gate3WalkForward{
-		Passed:           avgOOSSharpe > 0 && holdMetrics.AnnualizedSharpe >= 0 && holdMetrics.TotalReturnPct > -5.0,
+		Passed:           avgOOSSharpe > 0 && holdMetrics.TradeCount >= 3 && holdMetrics.AnnualizedSharpe >= 0 && holdMetrics.TotalReturnPct > -5.0,
 		Folds:            folds,
 		OOSSharpe:        avgOOSSharpe,
 		OOSReturnPct:     avgOOSRet,
@@ -275,8 +408,11 @@ func RunFourGateValidation(ctx context.Context, candles []marketdata.Candle, pro
 		FrozenParams:     frozenParams,
 	}
 
-	// Gate 4: 200x Walk-Forward Out-Of-Sample / Holdout Permutation with frozen parameters.
-	wfPermSharpes := runPermutationSweep(ctx, holdoutSlice, prog, frozenParams, cfg, cfg.WFPermutations, cfg.Seed^0x5555555555555555)
+	// Gate 4: 200x Walk-Forward Out-Of-Sample / Holdout Permutation with frozen parameters & causal warm-up prefix.
+	wfPermSharpes, err := runHoldoutPermutationSweep(ctx, inSample, holdoutSlice, prog, frozenParams, cfg, cfg.WFPermutations, cfg.Seed^0x5555555555555555)
+	if err != nil {
+		return FourGateReport{}, err
+	}
 	gate4Raw := summarizePermutations(holdMetrics.AnnualizedSharpe, wfPermSharpes, 0.10)
 	gate4 := Gate4WFPermutation{
 		Passed:     gate4Raw.Passed,
@@ -319,7 +455,7 @@ func RunFourGateValidation(ctx context.Context, candles []marketdata.Candle, pro
 	}, nil
 }
 
-func runWalkForwardFolds(ctx context.Context, candles []marketdata.Candle, prog *fasedscript.Program, grid []map[string]float64, cfg BacktestConfig) ([]WalkForwardFold, map[string]float64) {
+func runWalkForwardFolds(ctx context.Context, candles []marketdata.Candle, prog *fasedscript.Program, grid []map[string]float64, cfg BacktestConfig) ([]WalkForwardFold, map[string]float64, error) {
 	const numFolds = 3
 	n := len(candles)
 	foldSpan := n / (numFolds + 1)
@@ -331,7 +467,7 @@ func runWalkForwardFolds(ctx context.Context, candles []marketdata.Candle, prog 
 
 	for fIdx := 0; fIdx < numFolds; fIdx++ {
 		if ctx.Err() != nil {
-			break
+			return nil, nil, ctx.Err()
 		}
 		trainEnd := foldSpan * (fIdx + 1)
 		testEnd := foldSpan * (fIdx + 2)
@@ -342,35 +478,51 @@ func runWalkForwardFolds(ctx context.Context, candles []marketdata.Candle, prog 
 			break
 		}
 		trainSlice := candles[:trainEnd]
-		testSlice := candles[trainEnd:testEnd]
 
-		chosen := grid[0]
-		bestTrainSharpe := math.Inf(-1)
+		chosenEligible := grid[0]
+		bestEligibleSharpe := math.Inf(-1)
+		chosenActive := grid[0]
+		bestActiveSharpe := math.Inf(-1)
+
 		for _, params := range grid {
+			if ctx.Err() != nil {
+				return nil, nil, ctx.Err()
+			}
 			ev, err := prog.Eval(trainSlice, params)
 			if err != nil {
 				continue
 			}
 			m, _, _ := Simulate(trainSlice, ev.Strategy, cfg)
-			if m.AnnualizedSharpe > bestTrainSharpe {
-				bestTrainSharpe = m.AnnualizedSharpe
-				chosen = ev.Params
+			if m.TradeCount >= 3 && m.AnnualizedSharpe > bestEligibleSharpe {
+				bestEligibleSharpe = m.AnnualizedSharpe
+				chosenEligible = ev.Params
+			}
+			if m.TradeCount > 0 && m.AnnualizedSharpe > bestActiveSharpe {
+				bestActiveSharpe = m.AnnualizedSharpe
+				chosenActive = ev.Params
 			}
 		}
-		if math.IsInf(bestTrainSharpe, -1) {
-			bestTrainSharpe = 0
+
+		chosen := grid[0]
+		bestTrainSharpe := 0.0
+		if !math.IsInf(bestEligibleSharpe, -1) {
+			chosen = chosenEligible
+			bestTrainSharpe = bestEligibleSharpe
+		} else if !math.IsInf(bestActiveSharpe, -1) {
+			chosen = chosenActive
+			bestTrainSharpe = bestActiveSharpe
 		}
 
-		oosEv, err := prog.Eval(testSlice, chosen)
-		var oosMetrics BacktestMetrics
-		if err == nil {
-			oosMetrics, _, _ = Simulate(testSlice, oosEv.Strategy, cfg)
+		// Evaluate OOS test slice with full train prefix warm-up (zero look-ahead).
+		oosMetrics, err := evalAndSimulateWindow(candles[:testEnd], trainEnd, prog, chosen, cfg)
+		if err != nil {
+			oosMetrics = BacktestMetrics{}
 		}
 		bestParams = chosen
 		folds = append(folds, WalkForwardFold{
 			Fold:         fIdx + 1,
 			TrainBars:    len(trainSlice),
-			TestBars:     len(testSlice),
+			TestBars:     testEnd - trainEnd,
 			ChosenParams: chosen,
 			TrainSharpe:  round4(bestTrainSharpe),
 			OOSSharpe:    oosMetrics.AnnualizedSharpe,
@@ -378,10 +530,13 @@ func runWalkForwardFolds(ctx context.Context, candles []marketdata.Candle, prog 
 			OOSTrades:    oosMetrics.TradeCount,
 		})
 	}
-	return folds, bestParams
+	return folds, bestParams, nil
 }
 
-func runPermutationSweep(ctx context.Context, candles []marketdata.Candle, prog *fasedscript.Program, params map[string]float64, cfg BacktestConfig, iters int, baseSeed uint64) []float64 {
+func runParallelPermutations(ctx context.Context, iters int, fn func(idx int) float64) ([]float64, error) {
+	if ctx.Err() != nil {
+		return nil, ctx.Err()
+	}
 	results := make([]float64, iters)
 	workers := runtime.NumCPU()
 	if workers > 4 {
@@ -410,20 +565,41 @@ func runPermutationSweep(ctx context.Context, candles []marketdata.Candle, prog 
 				if idx >= iters {
 					return
 				}
-				seed := baseSeed ^ uint64(idx+1)*0x9e3779b97f4a7c15
-				permed := PermuteCandles(candles, seed)
-				ev, err := prog.Eval(permed, params)
-				if err != nil {
-					results[idx] = 0
-					continue
-				}
-				m, _, _ := Simulate(permed, ev.Strategy, cfg)
-				results[idx] = m.AnnualizedSharpe
+				results[idx] = fn(idx)
 			}
 		}()
 	}
 	wg.Wait()
-	return results
+	if ctx.Err() != nil {
+		return nil, ctx.Err()
+	}
+	return results, nil
+}
+
+func runPermutationSweep(ctx context.Context, candles []marketdata.Candle, prog *fasedscript.Program, params map[string]float64, cfg BacktestConfig, iters int, baseSeed uint64) ([]float64, error) {
+	return runParallelPermutations(ctx, iters, func(idx int) float64 {
+		seed := baseSeed ^ uint64(idx+1)*0x9e3779b97f4a7c15
+		permed := PermuteCandles(candles, seed)
+		ev, err := prog.Eval(permed, params)
+		if err != nil {
+			return 0
+		}
+		m, _, _ := Simulate(permed, ev.Strategy, cfg)
+		return m.AnnualizedSharpe
+	})
+}
+
+func runHoldoutPermutationSweep(ctx context.Context, prefix, holdout []marketdata.Candle, prog *fasedscript.Program, params map[string]float64, cfg BacktestConfig, iters int, baseSeed uint64) ([]float64, error) {
+	evalStart := len(prefix)
+	return runParallelPermutations(ctx, iters, func(idx int) float64 {
+		seed := baseSeed ^ uint64(idx+1)*0x9e3779b97f4a7c15
+		permedFull := PermuteCandlesWithPrefix(prefix, holdout, seed)
+		m, err := evalAndSimulateWindow(permedFull, evalStart, prog, params, cfg)
+		if err != nil {
+			return 0
+		}
+		return m.AnnualizedSharpe
+	})
 }
 
 func summarizePermutations(realSharpe float64, perms []float64, alpha float64) Gate2Permutation {

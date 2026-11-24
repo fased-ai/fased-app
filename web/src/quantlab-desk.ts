@@ -445,6 +445,15 @@ export function formatSignedPct(val: number): string {
   return `${sign}${val.toFixed(2)}%`;
 }
 
+export function formatPrice(val: number): string {
+  if (!Number.isFinite(val) || val === 0) return "0.00";
+  const abs = Math.abs(val);
+  if (abs >= 100) return val.toFixed(2);
+  if (abs >= 1) return val.toFixed(4);
+  if (abs >= 0.01) return val.toFixed(6);
+  return val.toPrecision(4);
+}
+
 export function formatRMultiple(val: number): string {
   if (!Number.isFinite(val)) return "0.00R";
   const sign = val > 0 ? "+" : "";

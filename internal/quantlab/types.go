@@ -1,6 +1,8 @@
 package quantlab
 
 import (
+	"bytes"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
@@ -61,6 +63,39 @@ type BacktestConfig struct {
 	Permutations   int                `json:"permutations,omitempty"`
 	WFPermutations int                `json:"wfPermutations,omitempty"`
 	HoldoutPct     float64            `json:"holdoutPct,omitempty"`
+	feeBpsSet      bool
+	slippageBpsSet bool
+}
+
+// UnmarshalJSON tracks whether feeBps and slippageBps were explicitly provided (including 0)
+// while preserving strict unknown-field checking.
+func (c *BacktestConfig) UnmarshalJSON(data []byte) error {
+	trimmed := bytes.TrimSpace(data)
+	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
+		*c = BacktestConfig{}
+		return nil
+	}
+	type alias BacktestConfig
+	var aux alias
+	dec := json.NewDecoder(bytes.NewReader(trimmed))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&aux); err != nil {
+		return err
+	}
+	var rawKeys map[string]json.RawMessage
+	if err := json.Unmarshal(trimmed, &rawKeys); err != nil {
+		return err
+	}
+	for k := range rawKeys {
+		switch {
+		case strings.EqualFold(k, "feeBps"):
+			aux.feeBpsSet = true
+		case strings.EqualFold(k, "slippageBps"):
+			aux.slippageBpsSet = true
+		}
+	}
+	*c = BacktestConfig(aux)
+	return nil
 }
 
 // TradeFill records a single simulated causal entry/exit trade fill.
@@ -324,7 +359,7 @@ func NormalizeBacktestConfig(raw BacktestConfig) (BacktestConfig, error) {
 	}
 
 	feeBps := raw.FeeBps
-	if feeBps == 0 {
+	if feeBps == 0 && !raw.feeBpsSet {
 		feeBps = defaultFeeBps
 	}
 	if math.IsNaN(feeBps) || math.IsInf(feeBps, 0) || feeBps < 0 || feeBps > 200 {
@@ -332,7 +367,7 @@ func NormalizeBacktestConfig(raw BacktestConfig) (BacktestConfig, error) {
 	}
 
 	slipBps := raw.SlippageBps
-	if slipBps == 0 {
+	if slipBps == 0 && !raw.slippageBpsSet {
 		slipBps = defaultSlippageBps
 	}
 	if math.IsNaN(slipBps) || math.IsInf(slipBps, 0) || slipBps < 0 || slipBps > 200 {

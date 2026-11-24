@@ -415,19 +415,31 @@ func seedPriceForSymbol(venue, symbol string) (float64, uint64) {
 }
 
 func generateSyntheticCandles(venue, symbol string, stepSec, startSec int64, count int) []Candle {
+	if stepSec <= 0 {
+		stepSec = 3600
+	}
 	basePrice, seed := seedPriceForSymbol(venue, symbol)
+	barPrice := func(idx int64) float64 {
+		f := float64(idx)
+		s := float64(seed % 97)
+		phase := f*0.19 + s*0.03
+		drift := math.Sin(f*0.05+float64(seed%31)*0.1)*0.042 +
+			math.Sin(phase)*0.024 +
+			math.Cos(phase*0.5)*0.011 +
+			math.Sin(f*1.45+s)*0.0055
+		return math.Max(basePrice*(1.0+drift), basePrice*0.25)
+	}
 	out := make([]Candle, 0, count)
-	price := basePrice
 	for i := 0; i < count; i++ {
 		ts := startSec + int64(i)*stepSec
-		phase := float64(i)*0.21 + float64(seed%97)*0.03
-		deltaPct := math.Sin(phase)*0.0065 + math.Cos(phase*0.5)*0.0025
-		open := price
-		closePrice := math.Max(open*(1+deltaPct), basePrice*0.25)
-		wick := math.Abs(open) * (0.003 + float64((i+int(seed%7))%5)*0.001)
+		barIdx := ts / stepSec
+		open := barPrice(barIdx - 1)
+		closePrice := barPrice(barIdx)
+		absIdx := int(barIdx & 0x7fffffff)
+		wick := math.Abs(open) * (0.003 + float64((absIdx+int(seed%7))%5)*0.001)
 		high := math.Max(open, closePrice) + wick
 		low := math.Max(math.Min(open, closePrice)-wick, 1e-6)
-		vol := 120.0 + float64((i*17+int(seed%53))%300)*1.75
+		vol := 120.0 + float64((absIdx*17+int(seed%53))%300)*1.75
 		buyRatio := 0.45
 		if closePrice >= open {
 			buyRatio = 0.62
@@ -441,9 +453,8 @@ func generateSyntheticCandles(venue, symbol string, stepSec, startSec int64, cou
 			Volume:     round2(vol),
 			BuyVolume:  round2(vol * buyRatio),
 			SellVolume: round2(vol * (1 - buyRatio)),
-			Trades:     int64(45 + (i*11)%140),
+			Trades:     int64(45 + (absIdx*11)%140),
 		})
-		price = closePrice
 	}
 	return out
 }

@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"strings"
 	"testing"
@@ -159,7 +160,26 @@ func TestDeskHTTPMCPEndpointsAndKillSwitchSync(t *testing.T) {
 			resp.Body.Close()
 			t.Fatalf("MCP desk call failed: %s -> %d", call, resp.StatusCode)
 		}
-		resp.Body.Close()
+		if strings.Contains(call, `"get_desk_state"`) {
+			raw, _ := io.ReadAll(resp.Body)
+			resp.Body.Close()
+			var rpcOut struct {
+				Result struct {
+					Content []struct {
+						Text string `json:"text"`
+					} `json:"content"`
+				} `json:"result"`
+			}
+			if err := json.Unmarshal(raw, &rpcOut); err != nil || len(rpcOut.Result.Content) == 0 {
+				t.Fatalf("decode MCP get_desk_state: %s err=%v", raw, err)
+			}
+			text := rpcOut.Result.Content[0].Text
+			if len(text) >= 12*1024 || strings.Contains(text, `"truncated":true`) || !strings.Contains(text, `"decay"`) || !strings.Contains(text, `"bench"`) {
+				t.Fatalf("expected compact non-truncated get_desk_state DTO with decay/bench, got %d bytes: %s", len(text), text)
+			}
+		} else {
+			resp.Body.Close()
+		}
 	}
 	delLesson := doV2JSONRequest(t, http.MethodDelete, ts.URL+"/api/v1/desk/lessons/test-lesson", ts.URL, token, csrf, "", "")
 	delLesson.Body.Close()

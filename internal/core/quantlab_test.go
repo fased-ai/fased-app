@@ -131,19 +131,68 @@ func TestQuantLabHTTPAndMCPIntegration(t *testing.T) {
 	}
 	runDetail.Body.Close()
 
-	// MCP tools & fased://lab/scripts resource work cleanly.
-	for _, call := range []string{
-		`{"jsonrpc":"2.0","id":60,"method":"tools/call","params":{"name":"list_lab_scripts","arguments":{}}}`,
-		`{"jsonrpc":"2.0","id":61,"method":"tools/call","params":{"name":"run_fasedscript_backtest","arguments":{"scriptId":"ema-rsi-trend","venue":"hyperliquid","symbol":"BTC","interval":"1h","limit":120}}}`,
-		`{"jsonrpc":"2.0","id":62,"method":"tools/call","params":{"name":"run_four_gate_validation","arguments":{"scriptId":"ema-rsi-trend","venue":"hyperliquid","symbol":"BTC","interval":"1h","limit":180,"permutations":100,"wfPermutations":50}}}`,
-		`{"jsonrpc":"2.0","id":63,"method":"resources/read","params":{"uri":"fased://lab/scripts"}}`,
+	// MCP tools & fased://lab/scripts resource return compact (<12 KiB) non-truncated DTOs,
+	// and read-only run_four_gate_validation does not mutate /api/v1/lab/runs.
+	beforeRunsResp := doV2JSONRequest(t, http.MethodGet, ts.URL+"/api/v1/lab/runs?limit=25", "", token, "", "", "application/json")
+	var beforeRuns struct {
+		Count int `json:"count"`
+	}
+	_ = json.NewDecoder(beforeRunsResp.Body).Decode(&beforeRuns)
+	beforeRunsResp.Body.Close()
+
+	for _, call := range []struct {
+		body       string
+		mustFields []string
+	}{
+		{body: `{"jsonrpc":"2.0","id":60,"method":"tools/call","params":{"name":"list_lab_scripts","arguments":{}}}`},
+		{
+			body:       `{"jsonrpc":"2.0","id":61,"method":"tools/call","params":{"name":"run_fasedscript_backtest","arguments":{"scriptId":"ema-rsi-trend","venue":"hyperliquid","symbol":"BTC","interval":"1h","limit":400}}}`,
+			mustFields: []string{`"metrics"`, `"equityPointsCount"`, `"plotNames"`},
+		},
+		{
+			body:       `{"jsonrpc":"2.0","id":62,"method":"tools/call","params":{"name":"run_four_gate_validation","arguments":{"scriptId":"ema-rsi-trend","venue":"hyperliquid","symbol":"BTC","interval":"1h","limit":240,"permutations":100,"wfPermutations":50}}}`,
+			mustFields: []string{`"gate3"`, `"gate4"`, `"baselineMetrics"`},
+		},
+		{body: `{"jsonrpc":"2.0","id":63,"method":"resources/read","params":{"uri":"fased://lab/scripts"}}`},
 	} {
-		resp := doV2JSONRequest(t, http.MethodPost, ts.URL+"/api/v1/mcp", ts.URL, token, csrf, call, "application/json")
+		resp := doV2JSONRequest(t, http.MethodPost, ts.URL+"/api/v1/mcp", ts.URL, token, csrf, call.body, "application/json")
 		if resp.StatusCode != http.StatusOK {
 			resp.Body.Close()
-			t.Fatalf("MCP call expected 200: %s -> %d", call, resp.StatusCode)
+			t.Fatalf("MCP call expected 200: %s -> %d", call.body, resp.StatusCode)
 		}
+		raw, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
+		if len(call.mustFields) > 0 {
+			var rpcOut struct {
+				Result struct {
+					Content []struct {
+						Text string `json:"text"`
+					} `json:"content"`
+				} `json:"result"`
+			}
+			if err := json.Unmarshal(raw, &rpcOut); err != nil || len(rpcOut.Result.Content) == 0 {
+				t.Fatalf("decode MCP tool response: %s err=%v", raw, err)
+			}
+			text := rpcOut.Result.Content[0].Text
+			if len(text) >= 12*1024 || strings.Contains(text, `"truncated":true`) {
+				t.Fatalf("expected compact <12 KiB MCP DTO without truncation, got %d bytes: %s", len(text), text)
+			}
+			for _, field := range call.mustFields {
+				if !strings.Contains(text, field) {
+					t.Fatalf("expected MCP DTO field %s in %s", field, text)
+				}
+			}
+		}
+	}
+
+	afterRunsResp := doV2JSONRequest(t, http.MethodGet, ts.URL+"/api/v1/lab/runs?limit=25", "", token, "", "", "application/json")
+	var afterRuns struct {
+		Count int `json:"count"`
+	}
+	_ = json.NewDecoder(afterRunsResp.Body).Decode(&afterRuns)
+	afterRunsResp.Body.Close()
+	if afterRuns.Count != beforeRuns.Count {
+		t.Fatalf("expected read-only MCP run_four_gate_validation not to persist runs (%d -> %d)", beforeRuns.Count, afterRuns.Count)
 	}
 
 	// Delete custom script -> 200.

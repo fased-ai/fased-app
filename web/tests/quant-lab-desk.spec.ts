@@ -166,7 +166,10 @@ test("Quant Lab IDE, 4-Gate validation, Multi-Seat Paper/Shadow Desk, Overview w
     .click();
   await expect(lessonsList).not.toContainText("Stay flat during FOMC window");
 
-  // 5. Add Trading Desk widget on #overview cleanly.
+  // 5. Verify #desk deep-link opens Trading Desk tab directly, and add Trading Desk widget on #overview cleanly.
+  await page.goto(`${url}/#desk`);
+  await expect(page.getByTestId("desk-seat-roster")).toBeVisible();
+
   await page.goto(`${url}/#overview`);
   await page.getByRole("button", { name: "Add widgets", exact: true }).click();
   const dlg = page.getByRole("dialog", { name: "Widgets", exact: true });

@@ -85,8 +85,8 @@ func Simulate(candles []marketdata.Candle, strat fasedscript.StrategySpec, cfg B
 			Side:       pos.side,
 			EntryTime:  pos.entryTime,
 			ExitTime:   exitTime,
-			EntryPrice: round6(pos.entryPrice),
-			ExitPrice:  round6(adjExit),
+			EntryPrice: roundPrice(pos.entryPrice),
+			ExitPrice:  roundPrice(adjExit),
 			PnLPct:     round4(pnlPct),
 			PnLUSD:     round4(netPnL),
 			FeeUSD:     round4(pos.entryFee + exitFee),
@@ -384,4 +384,17 @@ func round6(v float64) float64 {
 		return 0
 	}
 	return math.Round(v*1000000) / 1000000
+}
+
+func roundPrice(v float64) float64 {
+	if math.IsNaN(v) || math.IsInf(v, 0) || v == 0 {
+		return 0
+	}
+	av := math.Abs(v)
+	if av >= 1 {
+		return round6(v)
+	}
+	exp := int(math.Floor(math.Log10(av)))
+	scale := math.Pow10(5 - exp)
+	return math.Round(v*scale) / scale
 }

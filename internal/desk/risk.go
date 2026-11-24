@@ -3,6 +3,7 @@ package desk
 import (
 	"fmt"
 	"math"
+	"strconv"
 	"strings"
 )
 
@@ -132,7 +133,11 @@ func EvaluateRisk(in RiskCheckInput) RiskEvaluation {
 		if entry > 0 && qty*entry > maxNotional {
 			qty = maxNotional / entry
 		}
-		qty = math.Floor(finiteFloat(qty)*1e4) / 1e4
+		qtyScale := 1e4
+		if qty > 0 && qty < 1 {
+			qtyScale = 1e6
+		}
+		qty = math.Floor(finiteFloat(qty)*qtyScale) / qtyScale
 		if qty <= 0 {
 			addViolation("SIZE_BELOW_MINIMUM")
 		} else {
@@ -145,7 +150,8 @@ func EvaluateRisk(in RiskCheckInput) RiskEvaluation {
 	out.ViolatedRules = violations
 	out.Approved = len(violations) == 0
 	if out.Approved {
-		out.Summary = fmt.Sprintf("APPROVED %s qty=%.4f notional=$%.2f risk=$%.2f R:R=%.2f", side, out.ComputedQty, out.NotionalUSD, out.RiskUSD, out.RiskReward)
+		qtyStr := strconv.FormatFloat(out.ComputedQty, 'f', -1, 64)
+		out.Summary = fmt.Sprintf("APPROVED %s qty=%s notional=$%.2f risk=$%.2f R:R=%.2f", side, qtyStr, out.NotionalUSD, out.RiskUSD, out.RiskReward)
 	} else {
 		out.Summary = fmt.Sprintf("REJECTED (%s)", strings.Join(violations, ", "))
 	}

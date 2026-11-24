@@ -490,6 +490,10 @@ func (p *parser) parseFactor() (expr, error) {
 
 func (p *parser) parseUnary() (expr, error) {
 	if p.at(tokBang) || p.at(tokMinus) || p.at(tokPlus) {
+		if err := p.enterDepth(); err != nil {
+			return nil, err
+		}
+		defer p.leaveDepth()
 		op := p.advance().kind
 		if err := p.enterNode(); err != nil {
 			return nil, err

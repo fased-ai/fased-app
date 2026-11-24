@@ -444,6 +444,39 @@ func (s *Server) startAgentTasks() {
 				}
 			}
 		}()
+
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			defer recoverBackgroundPanic("desk-mark-positions")
+			ticker := time.NewTicker(30 * time.Second)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-ticker.C:
+					deskDB := filepath.Join(s.Store.dir, "desk", "desk.sqlite")
+					s.Store.deskMu.Lock()
+					initialized := s.Store.deskSvc != nil
+					s.Store.deskMu.Unlock()
+					if !initialized {
+						if _, statErr := os.Stat(deskDB); statErr != nil {
+							continue
+						}
+					}
+					svc, err := s.Store.deskService()
+					if err != nil {
+						continue
+					}
+					markCtx, stop := context.WithTimeout(ctx, 10*time.Second)
+					if _, mErr := svc.MarkPositions(markCtx); mErr != nil && !errors.Is(mErr, context.Canceled) {
+						coreLogger.Warn("desk mark positions held", "err", sanitizeDiagValue(mErr.Error(), 200))
+					}
+					stop()
+				}
+			}
+		}()
 	}
 
 	wg.Add(1)
