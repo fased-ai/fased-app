@@ -666,6 +666,14 @@ func (h *HTTPHandler) api(w http.ResponseWriter, r *http.Request) {
 			h.marketDataAPI(w, r, token)
 			return
 		}
+		if strings.HasPrefix(r.URL.Path, "/api/v1/decision/") {
+			h.decisionAPI(w, r, token)
+			return
+		}
+		if r.URL.Path == "/api/v1/mcp/clients" || strings.HasPrefix(r.URL.Path, "/api/v1/mcp/clients/") {
+			h.mcpClientsAPI(w, r, token)
+			return
+		}
 		writeError(w, 404, "unknown API operation")
 	}
 }

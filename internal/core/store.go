@@ -17,7 +17,9 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/fased-ai/fased-app/internal/decision"
 	"github.com/fased-ai/fased-app/internal/marketdata"
+	"github.com/fased-ai/fased-app/internal/mcpclient"
 	"github.com/fased-ai/fased-app/internal/providersecrets"
 	"github.com/fased-ai/fased-app/internal/signer"
 	"github.com/fased-ai/fased-app/internal/update"
@@ -56,6 +58,11 @@ type Store struct {
 	marketDataMu                  sync.Mutex
 	marketData                    *marketdata.Service
 	marketDataTransport           http.RoundTripper // Tests only; never configuration, CLI or IPC.
+	integrationsMu                sync.Mutex
+	decisionSvc                   *decision.Service
+	mcpClientSvc                  *mcpclient.Service
+	decisionTransport             http.RoundTripper // Tests only; never configuration, CLI or IPC.
+	mcpClientTransport            http.RoundTripper // Tests only; never configuration, CLI or IPC.
 	dir                           string
 	instanceID                    string
 	pauseFault                    func(string) error // Test-only interruption injection, never configuration or IPC.
@@ -407,7 +414,20 @@ func (s *Store) Close() error {
 	if md != nil {
 		mdErr = md.Close()
 	}
-	return errors.Join(v2Err, mdErr, s.db.Close())
+	s.integrationsMu.Lock()
+	dec := s.decisionSvc
+	mcpC := s.mcpClientSvc
+	s.decisionSvc = nil
+	s.mcpClientSvc = nil
+	s.integrationsMu.Unlock()
+	var decErr, mcpCErr error
+	if dec != nil {
+		decErr = dec.Close()
+	}
+	if mcpC != nil {
+		mcpCErr = mcpC.Close()
+	}
+	return errors.Join(v2Err, mdErr, decErr, mcpCErr, s.db.Close())
 }
 func randomToken() (string, error) {
 	b := make([]byte, 32)

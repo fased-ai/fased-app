@@ -63,7 +63,9 @@ jobs:
             "./internal/update:FuzzStrictJSONBounded" \
             "./internal/update:FuzzParseDesktopManifest" \
             "./internal/wenpm1:FuzzDecodeFrames" \
-            "./internal/marketdata:FuzzMarketDataParsersAndTransforms"; do
+            "./internal/marketdata:FuzzMarketDataParsersAndTransforms" \
+            "./internal/decision:FuzzJevEvaluateParser" \
+            "./internal/mcpclient:FuzzMCPClientJSONRPC"; do
             pkg="${target%%:*}"
             fn="${target##*:}"
             echo "=== Fuzzing ${pkg} :: ${fn} (${FUZZ_TIME}) ==="

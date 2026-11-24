@@ -94,6 +94,7 @@ describe("UI translation catalog hygiene", () => {
       "components/CoreGate.tsx",
       "components/ErrorBoundary.tsx",
       "components/InstanceConnection.tsx",
+      "components/IntegrationsPanel.tsx",
       "components/RemoteDevices.tsx",
       "components/SettingsModal.tsx",
       "components/ShellNavigation.tsx",

@@ -17,22 +17,24 @@ const (
 )
 
 var mcpReadTools = map[string]bool{
-	"workspace_status":      true,
-	"list_wallets":          true,
-	"get_wallet_balances":   true,
-	"get_portfolio_summary": true,
-	"web_search":            true,
-	"fetch_web_page":        true,
-	"get_token_price":       true,
-	"get_swap_quote":        true,
-	"list_tasks":            true,
-	"search_memories":       true,
-	"search_news":           true,
-	"list_strategies":       true,
-	"get_market_candles":    true,
-	"get_orderbook":         true,
-	"get_footprint":         true,
-	"get_macro_or_sec":      true,
+	"workspace_status":       true,
+	"list_wallets":           true,
+	"get_wallet_balances":    true,
+	"get_portfolio_summary":  true,
+	"web_search":             true,
+	"fetch_web_page":         true,
+	"get_token_price":        true,
+	"get_swap_quote":         true,
+	"list_tasks":             true,
+	"search_memories":        true,
+	"search_news":            true,
+	"list_strategies":        true,
+	"get_market_candles":     true,
+	"get_orderbook":          true,
+	"get_footprint":          true,
+	"get_macro_or_sec":       true,
+	"jev_evaluate":           true,
+	"call_external_mcp_tool": true,
 }
 
 var mcpDraftTools = map[string]bool{
@@ -83,6 +85,12 @@ var mcpResources = []mcpResourceDescriptor{
 		URI:         "fased://market/watchlists",
 		Name:        "Market watchlists",
 		Description: "Saved market data watchlists and tracked instruments.",
+		MimeType:    "application/json",
+	},
+	{
+		URI:         "fased://mcp/clients",
+		Name:        "External MCP clients",
+		Description: "Configured external MCP client servers, read-only policy flags, and discovered tool schemas.",
 		MimeType:    "application/json",
 	},
 }
@@ -379,6 +387,16 @@ func readMCPResource(ctx context.Context, s *Store, uri string) (any, error) {
 			return nil, err
 		}
 		return map[string]any{"watchlists": lists, "count": len(lists)}, nil
+	case "fased://mcp/clients":
+		svc, err := s.mcpClientService()
+		if err != nil {
+			return nil, err
+		}
+		clients, err := svc.ListServers(ctx)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"clients": clients, "count": len(clients)}, nil
 	default:
 		return nil, errors.New("unknown MCP resource uri")
 	}
