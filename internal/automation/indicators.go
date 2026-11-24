@@ -124,17 +124,28 @@ func ComputeEMACross(candles []marketdata.Candle, fastPeriod, slowPeriod int) (c
 	return currSpread, prevSpread, true
 }
 
-// ComputeVWAPDelta computes close minus cumulative VWAP across the candle window
-// for the latest and prior bars so cross_above/below against 0 indicates VWAP crosses.
+// ComputeVWAPDelta computes close minus UTC session-reset VWAP across the candle
+// window for the latest and prior bars so cross_above/below against 0 indicates VWAP crosses.
 func ComputeVWAPDelta(candles []marketdata.Candle) (current, previous float64, ok bool) {
 	if len(candles) < 2 {
 		return 0, 0, false
 	}
 	var pvSum, volSum float64
 	var prevDelta, currDelta float64
+	curDay := int64(-1)
 	for i, c := range candles {
 		if !finiteCandle(c) || c.Volume < 0 {
 			return 0, 0, false
+		}
+		tSec := c.Time
+		if tSec > 1e12 {
+			tSec /= 1000
+		}
+		barDay := tSec / 86400
+		if barDay != curDay {
+			pvSum = 0
+			volSum = 0
+			curDay = barDay
 		}
 		typ := (c.High + c.Low + c.Close) / 3.0
 		pvSum += typ * c.Volume
@@ -188,17 +199,21 @@ func ComputeVolumeSpike(candles []marketdata.Candle, lookback int) (current, pre
 	return candles[n-1].Volume / currMean, candles[n-2].Volume / prevMean, true
 }
 
-// ComputeCVDDelta computes cumulative close-open signed volume over the trailing lookback window.
+// ComputeCVDDelta computes cumulative signed delta using actual buy/sell volume when
+// populated and falling back to close-vs-open volume otherwise.
 func ComputeCVDDelta(candles []marketdata.Candle, lookback int) (current, previous float64, ok bool) {
 	if lookback < 2 || len(candles) < lookback+1 {
 		return 0, 0, false
 	}
 	for _, c := range candles {
-		if !finiteCandle(c) || c.Volume < 0 {
+		if !finiteCandle(c) || c.Volume < 0 || math.IsNaN(c.BuyVolume) || math.IsInf(c.BuyVolume, 0) || math.IsNaN(c.SellVolume) || math.IsInf(c.SellVolume, 0) {
 			return 0, 0, false
 		}
 	}
 	barDelta := func(c marketdata.Candle) float64 {
+		if c.BuyVolume > 0 || c.SellVolume > 0 {
+			return c.BuyVolume - c.SellVolume
+		}
 		if c.Close > c.Open {
 			return c.Volume
 		}

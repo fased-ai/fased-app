@@ -93,6 +93,23 @@ test("Event triggers, Telegram controller, Alerts widget, zero secret leakage, a
     "0 unread",
   );
 
+  // Create a FasedScript trigger with safe dry-run Test (must not increment notifications or fire outbound).
+  await panel
+    .getByLabel("Trigger name", { exact: true })
+    .fill("EMA Script Desk Watch");
+  await panel
+    .getByLabel("Trigger kind", { exact: true })
+    .selectOption("fasedscript");
+  await panel.getByLabel("Action", { exact: true }).selectOption("desk_cycle");
+  await panel.getByLabel("Interval", { exact: true }).selectOption("1h");
+  await panel
+    .getByRole("button", { name: "Save trigger", exact: true })
+    .click();
+  const scriptRow = panel.getByTestId("trigger-row-ema-script-desk-watch");
+  await expect(scriptRow).toBeVisible();
+  await scriptRow.getByRole("button", { name: "Test", exact: true }).click();
+  await expect(scriptRow).toContainText("0x · fasedscript");
+
   // Test Pause / Resume and Kill switch / Clear kill switch controls.
   await panel.getByRole("button", { name: "Pause", exact: true }).click();
   await expect(panel.getByTestId("automation-state-badge")).toContainText(

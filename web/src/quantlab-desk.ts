@@ -28,6 +28,41 @@ export type LabScriptInput = {
   source: string;
 };
 
+export type ScriptPlotSeries = {
+  name: string;
+  tone: string;
+  pane: string;
+  values: (number | null)[];
+};
+
+export type ScriptSignalMarker = {
+  kind: string;
+  bars: boolean[];
+};
+
+export type EvalIndicatorRequest = {
+  scriptId?: string;
+  source?: string;
+  venue?: string;
+  symbol?: string;
+  interval?: string;
+  limit?: number;
+  params?: Record<string, number>;
+};
+
+export type EvalIndicatorResult = {
+  scriptId?: string;
+  venue: string;
+  symbol: string;
+  interval: string;
+  times: number[];
+  inputs: ScriptInputSpec[];
+  params: Record<string, number>;
+  plots: ScriptPlotSeries[];
+  signals?: ScriptSignalMarker[];
+  barCount: number;
+};
+
 export type BacktestConfig = {
   venue?: string;
   symbol?: string;
@@ -523,6 +558,13 @@ export function deleteLabScript(core: CoreRequestOnly, id: string) {
     `lab/scripts/${encodeURIComponent(id)}`,
     "DELETE",
   );
+}
+
+export function evaluateLabIndicator(
+  core: CoreRequestOnly,
+  payload: EvalIndicatorRequest,
+) {
+  return core.request<EvalIndicatorResult>("lab/evaluate", "POST", payload);
 }
 
 export function runLabBacktest(

@@ -16,6 +16,11 @@ import {
 } from "lightweight-charts";
 import type { ChartEventPin } from "../../world-intel";
 import type { CrosshairBus } from "../../stream-store";
+import type {
+  PaperPosition,
+  ScriptPlotSeries,
+  ScriptSignalMarker,
+} from "../../quantlab-desk";
 import {
   computeFibLevels,
   type Candle,
@@ -105,6 +110,21 @@ function resolveThemePalette(): ChartPalette {
   };
 }
 
+function toneToColor(tone: string, p: ChartPalette): string {
+  switch (tone) {
+    case "accent":
+    case "cyan":
+    case "bull":
+      return p.cyan;
+    case "danger":
+    case "coral":
+    case "bear":
+      return p.coral;
+    default:
+      return p.violet;
+  }
+}
+
 export function FasedChartAdapter({
   tileId,
   seriesKey = tileId,
@@ -112,6 +132,10 @@ export function FasedChartAdapter({
   tool,
   drawings,
   paperOrders,
+  scriptTimes,
+  scriptPlots,
+  scriptSignals,
+  deskPositions,
   eventPins = [],
   syncedCrosshair = null,
   crosshairBus,
@@ -127,6 +151,10 @@ export function FasedChartAdapter({
   tool: DrawingToolMode;
   drawings: ChartDrawing[];
   paperOrders: PaperOrderPreview[];
+  scriptTimes?: number[];
+  scriptPlots?: ScriptPlotSeries[];
+  scriptSignals?: ScriptSignalMarker[];
+  deskPositions?: PaperPosition[];
   eventPins?: ChartEventPin[];
   syncedCrosshair?: CrosshairSyncPoint | null;
   crosshairBus?: CrosshairBus;
@@ -148,6 +176,7 @@ export function FasedChartAdapter({
   syncEnabledRef.current = syncCrosshair;
   const priceLinesRef = useRef<IPriceLine[]>([]);
   const trendSeriesRef = useRef<ISeriesApi<"Line">[]>([]);
+  const scriptSeriesRef = useRef<ISeriesApi<"Line">[]>([]);
   const markersPluginRef = useRef<ISeriesMarkersPluginApi<Time> | null>(null);
   const paletteRef = useRef<ChartPalette>(resolveThemePalette());
   const pendingAnchorRef = useRef<{ time: number; price: number } | null>(null);
@@ -394,6 +423,7 @@ export function FasedChartAdapter({
       markersPluginRef.current = null;
       priceLinesRef.current = [];
       trendSeriesRef.current = [];
+      scriptSeriesRef.current = [];
       candleSeriesRef.current = null;
       volumeSeriesRef.current = null;
       chartRef.current = null;
@@ -459,7 +489,8 @@ export function FasedChartAdapter({
   useEffect(() => {
     const markersPlugin = markersPluginRef.current;
     if (!markersPlugin) return;
-    if (!candles.length || !eventPins.length) {
+    const hasSignals = (scriptSignals ?? []).length > 0;
+    if (!candles.length || (!eventPins.length && !hasSignals)) {
       markersPlugin.setMarkers([]);
       return;
     }
@@ -481,8 +512,91 @@ export function FasedChartAdapter({
             : p.violet,
       text: pin.label,
     }));
+
+    const times =
+      scriptTimes && scriptTimes.length > 0
+        ? scriptTimes
+        : candles.map((c) => c.time);
+    for (const sig of scriptSignals ?? []) {
+      const k = sig.kind.toLowerCase();
+      const isLong = k === "long" || k === "buy";
+      const isShort = k === "short" || k === "sell";
+      const n = Math.min(sig.bars?.length ?? 0, times.length);
+      for (let i = 0; i < n; i++) {
+        if (!sig.bars[i]) continue;
+        const ts = times[i];
+        if (!Number.isFinite(ts)) continue;
+        markers.push({
+          time: ts as UTCTimestamp,
+          position: isLong ? "belowBar" : "aboveBar",
+          shape: isLong ? "arrowUp" : isShort ? "arrowDown" : "circle",
+          color: isLong ? p.cyan : isShort ? p.coral : p.violet,
+          text: sig.kind.toUpperCase().slice(0, 10),
+        });
+      }
+    }
+    markers.sort((a, b) => Number(a.time) - Number(b.time));
     markersPlugin.setMarkers(markers);
-  }, [candles.length, eventPins]);
+  }, [candles, eventPins, scriptSignals, scriptTimes]);
+
+  useEffect(() => {
+    const chart = chartRef.current;
+    if (!chart) return;
+    for (const ls of scriptSeriesRef.current) {
+      try {
+        chart.removeSeries(ls);
+      } catch {}
+    }
+    scriptSeriesRef.current = [];
+    if (!candles.length || !scriptPlots?.length) return;
+
+    const p = paletteRef.current;
+    const times =
+      scriptTimes && scriptTimes.length > 0
+        ? scriptTimes
+        : candles.map((c) => c.time);
+
+    for (const plot of scriptPlots) {
+      if (plot.pane && plot.pane !== "overlay") continue;
+      const pts: { time: number; value: number }[] = [];
+      const n = Math.min(plot.values?.length ?? 0, times.length);
+      for (let i = 0; i < n; i++) {
+        const val = plot.values[i];
+        const ts = times[i];
+        if (
+          typeof val === "number" &&
+          Number.isFinite(val) &&
+          Number.isFinite(ts)
+        ) {
+          pts.push({ time: ts, value: val });
+        }
+      }
+      pts.sort((a, b) => a.time - b.time);
+      const deduped: { time: UTCTimestamp; value: number }[] = [];
+      for (const pt of pts) {
+        if (
+          deduped.length > 0 &&
+          (deduped[deduped.length - 1].time as number) === pt.time
+        ) {
+          deduped[deduped.length - 1] = {
+            time: pt.time as UTCTimestamp,
+            value: pt.value,
+          };
+        } else {
+          deduped.push({ time: pt.time as UTCTimestamp, value: pt.value });
+        }
+      }
+      if (deduped.length === 0) continue;
+      const line = chart.addSeries(LineSeries, {
+        color: toneToColor(plot.tone, p),
+        lineWidth: 2,
+        priceLineVisible: false,
+        lastValueVisible: false,
+      });
+      line.setData(deduped);
+      scriptSeriesRef.current.push(line);
+    }
+  }, [candles, scriptPlots, scriptTimes]);
 
   useEffect(() => {
     const cSeries = candleSeriesRef.current;
@@ -560,7 +674,46 @@ export function FasedChartAdapter({
         }),
       );
     }
-  }, [drawings, paperOrders]);
+
+    for (const pos of deskPositions ?? []) {
+      if (pos.status !== "OPEN") continue;
+      const isBuy = pos.side === "buy" || pos.side === "long";
+      priceLinesRef.current.push(
+        cSeries.createPriceLine({
+          price: pos.entryPrice,
+          color: isBuy ? p.cyan : p.coral,
+          lineWidth: 2,
+          lineStyle: LineStyle.Solid,
+          axisLabelVisible: true,
+          title: `DESK ${pos.side.toUpperCase()} (${pos.quantity})`,
+        }),
+      );
+      if (pos.stopPrice > 0) {
+        priceLinesRef.current.push(
+          cSeries.createPriceLine({
+            price: pos.stopPrice,
+            color: p.coral,
+            lineWidth: 1,
+            lineStyle: LineStyle.Dashed,
+            axisLabelVisible: true,
+            title: `SL ${pos.symbol}`,
+          }),
+        );
+      }
+      if (pos.targetPrice > 0) {
+        priceLinesRef.current.push(
+          cSeries.createPriceLine({
+            price: pos.targetPrice,
+            color: p.cyan,
+            lineWidth: 1,
+            lineStyle: LineStyle.Dashed,
+            axisLabelVisible: true,
+            title: `TP ${pos.symbol}`,
+          }),
+        );
+      }
+    }
+  }, [drawings, paperOrders, deskPositions]);
 
   useEffect(() => {
     const applySync = (pt: CrosshairSyncPoint | null) => {

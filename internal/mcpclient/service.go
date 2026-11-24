@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -26,6 +27,11 @@ type Service struct {
 	fixtureMode   bool
 	now           func() time.Time
 	httpTransport http.RoundTripper
+	publicClient  *http.Client
+	localClient   *http.Client
+	sessionMu     sync.Mutex
+	sessions      map[string]string
+	initialized   map[string]bool
 }
 
 // NewService opens isolated <dataDir>/integrations/mcpclient.sqlite storage.
@@ -43,12 +49,45 @@ func NewService(cfg Config) (*Service, error) {
 		fixtureMode:   cfg.FixtureMode,
 		now:           nowFn,
 		httpTransport: cfg.HTTPTransport,
+		publicClient:  newHTTPClient(cfg.HTTPTransport, false),
+		localClient:   newHTTPClient(cfg.HTTPTransport, true),
+		sessions:      make(map[string]string),
+		initialized:   make(map[string]bool),
 	}, nil
 }
 
 // Close closes SQLite handles and zeroes cached secret key bytes.
 func (s *Service) Close() error {
+	closeHTTPClient(s.publicClient)
+	closeHTTPClient(s.localClient)
 	return s.store.close()
+}
+
+func (s *Service) clientFor(allowLocalhost bool) *http.Client {
+	if allowLocalhost {
+		return s.localClient
+	}
+	return s.publicClient
+}
+
+func (s *Service) getSession(id string) (string, bool) {
+	s.sessionMu.Lock()
+	defer s.sessionMu.Unlock()
+	return s.sessions[id], s.initialized[id]
+}
+
+func (s *Service) setSession(id, sessID string, initDone bool) {
+	s.sessionMu.Lock()
+	defer s.sessionMu.Unlock()
+	if !initDone {
+		delete(s.sessions, id)
+		delete(s.initialized, id)
+		return
+	}
+	s.initialized[id] = true
+	if sessID != "" {
+		s.sessions[id] = sessID
+	}
 }
 
 // ListServers lists saved external MCP server configurations and discovered tools.
@@ -58,12 +97,20 @@ func (s *Service) ListServers(ctx context.Context) ([]ServerConfig, error) {
 
 // SaveServer creates or updates a validated external MCP configuration.
 func (s *Service) SaveServer(ctx context.Context, in ServerInput) (ServerConfig, error) {
-	return s.store.saveServer(ctx, in)
+	cfg, err := s.store.saveServer(ctx, in)
+	if err == nil {
+		s.setSession(cfg.ID, "", false)
+	}
+	return cfg, err
 }
 
 // DeleteServer removes a configured external MCP server by ID.
 func (s *Service) DeleteServer(ctx context.Context, id string) (bool, error) {
-	return s.store.deleteServer(ctx, id)
+	ok, err := s.store.deleteServer(ctx, id)
+	if err == nil {
+		s.setSession(id, "", false)
+	}
+	return ok, err
 }
 
 func isFixtureEndpoint(rawURL string) bool {
@@ -73,6 +120,29 @@ func isFixtureEndpoint(rawURL string) bool {
 	}
 	host := strings.ToLower(u.Hostname())
 	return strings.HasSuffix(host, ".invalid") || host == "fixture.local"
+}
+
+func (s *Service) initializeSession(ctx context.Context, client *http.Client, cfg ServerConfig, bearer string, strict bool) (string, error) {
+	_, sessID, status, err := callRPC(ctx, client, cfg, bearer, "", 1, "initialize", map[string]any{
+		"protocolVersion": protocolVersion,
+		"capabilities":    map[string]any{},
+		"clientInfo":      map[string]any{"name": "fased-mcp-client", "version": "1.0"},
+	}, false)
+	if err != nil {
+		if strict || status == 0 {
+			return "", err
+		}
+		// Legacy stateless endpoints may return non-2xx for initialize; still mark initialized for this server lifecycle.
+		s.setSession(cfg.ID, "", true)
+		return "", nil
+	}
+	s.setSession(cfg.ID, sessID, true)
+	_, nextSess, _, _ := callRPC(ctx, client, cfg, bearer, sessID, 0, "notifications/initialized", nil, true)
+	if nextSess != "" {
+		sessID = nextSess
+		s.setSession(cfg.ID, sessID, true)
+	}
+	return sessID, nil
 }
 
 // SyncServer executes initialize + notifications/initialized + tools/list + resources/list
@@ -102,20 +172,21 @@ func (s *Service) SyncServer(ctx context.Context, id string) (ServerConfig, erro
 		return s.store.updateCapabilities(ctx, id, tools, resources, nowSec, "")
 	}
 
-	if _, err := callRPC(ctx, s.httpTransport, cfg, bearer, 1, "initialize", map[string]any{
-		"protocolVersion": protocolVersion,
-		"capabilities":    map[string]any{},
-		"clientInfo":      map[string]any{"name": "fased-mcp-client", "version": "1.0"},
-	}, false); err != nil {
-		_, _ = s.store.updateCapabilities(ctx, id, cfg.Tools, cfg.Resources, nowSec, err.Error())
-		return ServerConfig{}, err
-	}
-	_, _ = callRPC(ctx, s.httpTransport, cfg, bearer, 0, "notifications/initialized", nil, true)
-
-	toolsRaw, err := callRPC(ctx, s.httpTransport, cfg, bearer, 2, "tools/list", nil, false)
+	client := s.clientFor(cfg.AllowLocalhost)
+	sessID, err := s.initializeSession(ctx, client, cfg, bearer, true)
 	if err != nil {
 		_, _ = s.store.updateCapabilities(ctx, id, cfg.Tools, cfg.Resources, nowSec, err.Error())
 		return ServerConfig{}, err
+	}
+
+	toolsRaw, nextSess, _, err := callRPC(ctx, client, cfg, bearer, sessID, 2, "tools/list", nil, false)
+	if err != nil {
+		_, _ = s.store.updateCapabilities(ctx, id, cfg.Tools, cfg.Resources, nowSec, err.Error())
+		return ServerConfig{}, err
+	}
+	if nextSess != "" {
+		sessID = nextSess
+		s.setSession(id, sessID, true)
 	}
 	var toolsResp struct {
 		Tools []RemoteTool `json:"tools"`
@@ -127,7 +198,10 @@ func (s *Service) SyncServer(ctx context.Context, id string) (ServerConfig, erro
 	var resourcesResp struct {
 		Resources []RemoteResource `json:"resources"`
 	}
-	if resRaw, rErr := callRPC(ctx, s.httpTransport, cfg, bearer, 3, "resources/list", nil, false); rErr == nil {
+	if resRaw, rSess, _, rErr := callRPC(ctx, client, cfg, bearer, sessID, 3, "resources/list", nil, false); rErr == nil {
+		if rSess != "" {
+			s.setSession(id, rSess, true)
+		}
 		_ = json.Unmarshal(resRaw, &resourcesResp)
 	}
 
@@ -183,12 +257,33 @@ func (s *Service) CallTool(ctx context.Context, serverID, toolName string, rawAr
 		}
 	}
 
-	resRaw, err := callRPC(ctx, s.httpTransport, cfg, bearer, 10, "tools/call", map[string]any{
+	client := s.clientFor(cfg.AllowLocalhost)
+	sessID, initDone := s.getSession(serverID)
+	if !initDone {
+		sessID, err = s.initializeSession(ctx, client, cfg, bearer, false)
+		if err != nil {
+			return CallResult{}, err
+		}
+	}
+
+	params := map[string]any{
 		"name":      name,
 		"arguments": parsedArgs,
-	}, false)
+	}
+	resRaw, nextSess, status, err := callRPC(ctx, client, cfg, bearer, sessID, 10, "tools/call", params, false)
+	if err != nil && status == http.StatusNotFound && sessID != "" {
+		s.setSession(serverID, "", false)
+		sessID, initErr := s.initializeSession(ctx, client, cfg, bearer, true)
+		if initErr != nil {
+			return CallResult{}, initErr
+		}
+		resRaw, nextSess, _, err = callRPC(ctx, client, cfg, bearer, sessID, 11, "tools/call", params, false)
+	}
 	if err != nil {
 		return CallResult{}, err
+	}
+	if nextSess != "" {
+		s.setSession(serverID, nextSess, true)
 	}
 	var rpcRes struct {
 		IsError bool             `json:"isError"`

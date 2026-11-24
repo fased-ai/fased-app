@@ -284,7 +284,7 @@ CREATE TABLE IF NOT EXISTS jev_config (
 				return dialPublicAddress(ctx, dialer, network, addr)
 			},
 			ForceAttemptHTTP2: true,
-			TLSClientConfig:   &tls.Config{MinVersion: tls.VersionTLS13},
+			TLSClientConfig:   &tls.Config{MinVersion: tls.VersionTLS12},
 		}
 	}
 

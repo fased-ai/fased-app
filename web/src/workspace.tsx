@@ -15,6 +15,7 @@ import { useUI } from "./ui-preferences";
 import { useCore } from "./core";
 import { AIConnectionProvider } from "./ai-connection";
 import { useAgents } from "./agents";
+import { FasedStreamClient } from "./stream-store";
 import type { Action, Provider } from "./state";
 import type { AccountsView } from "./accounts";
 export type ProvidersPreset = {
@@ -145,6 +146,23 @@ function useWorkspaceState() {
     loadInitialState,
   );
   const core = useCore();
+  const streamClientRef = useRef<FasedStreamClient | null>(null);
+  if (!streamClientRef.current) {
+    streamClientRef.current = new FasedStreamClient();
+  }
+  useEffect(() => {
+    return () => {
+      streamClientRef.current?.dispose();
+      streamClientRef.current = null;
+    };
+  }, []);
+  useEffect(() => {
+    streamClientRef.current?.setCore({
+      mode: core.mode,
+      request: core.request,
+      streamGet: core.streamGet,
+    });
+  }, [core.mode, core.request, core.streamGet]);
   const agents = useAgents(core);
   const activeAgents = core.mode === "ready" ? agents.view : null;
   const state = useMemo(
@@ -498,6 +516,7 @@ function useWorkspaceState() {
   return useMemo(
     () => ({
       core,
+      streamClient: streamClientRef.current ?? undefined,
       agents,
       wallets,
       focusedTask,

@@ -85,7 +85,7 @@ type CallResult struct {
 
 func isLoopbackHostname(host string) bool {
 	h := strings.ToLower(strings.TrimSpace(host))
-	if h == "localhost" || h == "127.0.0.1" || h == "::1" {
+	if h == "localhost" || strings.HasSuffix(h, ".localhost") || h == "127.0.0.1" || h == "::1" {
 		return true
 	}
 	if ip := net.ParseIP(h); ip != nil {
@@ -132,6 +132,9 @@ func ValidateEndpoint(rawURL string, allowLocalhost bool) (string, error) {
 	}
 
 	loopback := isLoopbackHostname(host)
+	if loopback && !allowLocalhost {
+		return "", errors.New("loopback MCP endpoint requires allowLocalhost=true")
+	}
 	if scheme == "http" {
 		if !allowLocalhost || !loopback {
 			return "", errors.New("plaintext http:// MCP endpoint requires allowLocalhost=true and loopback host")
@@ -142,13 +145,7 @@ func ValidateEndpoint(rawURL string, allowLocalhost bool) (string, error) {
 		return "", fmt.Errorf("unsupported MCP scheme %q", u.Scheme)
 	}
 	if ip := net.ParseIP(host); ip != nil {
-		if ip.IsLoopback() {
-			if !allowLocalhost {
-				return "", errors.New("loopback MCP endpoint requires allowLocalhost=true")
-			}
-			return u.String(), nil
-		}
-		if !isPublicUnicastIP(ip) {
+		if !loopback && !isPublicUnicastIP(ip) {
 			return "", fmt.Errorf("blocked non-public MCP IP %s", ip)
 		}
 	}
@@ -207,9 +204,32 @@ func isMutatingToolName(toolName string) bool {
 	low := strings.ToLower(strings.TrimSpace(toolName))
 	for _, prefix := range []string{
 		"delete_", "execute_", "sign_", "transfer_", "withdraw_",
-		"submit_order", "place_order", "send_tx", "broadcast_", "write_", "mutate_",
+		"submit_order", "place_order", "create_order", "cancel_order",
+		"close_position", "send_tx", "broadcast_", "write_", "mutate_",
+		"run_sql", "exec_sql",
 	} {
 		if strings.HasPrefix(low, prefix) || strings.Contains(low, prefix) {
+			return true
+		}
+	}
+	hasReadPrefix := false
+	for _, prefix := range []string{
+		"get_", "list_", "read_", "fetch_", "quote_", "search_", "inspect_", "describe_",
+		"get-", "list-", "read-", "fetch-", "quote-", "search-", "inspect-", "describe-",
+	} {
+		if strings.HasPrefix(low, prefix) {
+			hasReadPrefix = true
+			break
+		}
+	}
+	if hasReadPrefix {
+		return false
+	}
+	for _, tok := range strings.FieldsFunc(low, func(r rune) bool {
+		return r == '_' || r == '-' || r == '.' || r == ':'
+	}) {
+		switch tok {
+		case "swap", "buy", "sell", "order", "trade":
 			return true
 		}
 	}

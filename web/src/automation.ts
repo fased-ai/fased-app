@@ -1,7 +1,7 @@
 import type { AgentV2CoreClient } from "./agents-v2";
 
 export type TriggerKind =
-  "price" | "indicator" | "news" | "prediction" | "cron";
+  "price" | "indicator" | "fasedscript" | "news" | "prediction" | "cron";
 
 export type TriggerComparator =
   "above" | "below" | "cross_above" | "cross_below" | "pct_change_gte";
@@ -10,7 +10,7 @@ export type TriggerIndicator =
   "rsi_14" | "ema_cross" | "vwap_cross" | "volume_spike" | "cvd_delta";
 
 export type TriggerActionType =
-  "notify" | "jev_triage" | "agent_prompt" | "paper_alert";
+  "notify" | "jev_triage" | "agent_prompt" | "paper_alert" | "desk_cycle";
 
 export type NotificationSeverity = "info" | "warn" | "critical";
 
@@ -19,6 +19,7 @@ export type TriggerCondition = {
   symbol?: string;
   interval?: string;
   indicator?: TriggerIndicator | "";
+  scriptId?: string;
   comparator?: TriggerComparator | "";
   threshold?: number;
   category?: string;
@@ -34,9 +35,26 @@ export type TriggerCondition = {
 export type TriggerAction = {
   type: TriggerActionType;
   promptTemplate?: string;
+  deskMode?: "shadow" | "paper";
+  scriptId?: string;
   sendTelegram?: boolean;
   sendWebhook?: boolean;
   severity?: NotificationSeverity;
+};
+
+export const TRIGGER_DRAFT_KEY = "fased.trigger.draft.v1";
+
+export type TriggerDraftSeed = {
+  kind: TriggerKind;
+  name?: string;
+  venue?: string;
+  symbol?: string;
+  interval?: string;
+  scriptId?: string;
+  category?: string;
+  region?: string;
+  ticker?: string;
+  minUrgency?: number;
 };
 
 export type EventTrigger = {
@@ -205,6 +223,8 @@ export function summarizeTriggerCondition(tr: EventTrigger): string {
       return `${c.venue ?? "hyperliquid"} ${c.symbol ?? "BTC"} ${c.comparator ?? "above"} ${c.threshold ?? 0}`;
     case "indicator":
       return `${c.symbol ?? "BTC"} ${c.indicator ?? "rsi_14"} ${c.comparator ?? "above"} ${c.threshold ?? 0}`;
+    case "fasedscript":
+      return `${c.venue ?? "hyperliquid"} ${c.symbol ?? "BTC"} ${c.interval ?? "1h"} · ${c.scriptId ?? "script"}`;
     case "news":
       return `${c.category || "all"} · ${c.region || "global"} · urgency >= ${Math.round((c.minUrgency ?? 0) * 100)}%`;
     case "prediction":

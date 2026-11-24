@@ -720,8 +720,8 @@ func TestAgentV2SSEToolLoopAndApprovals(t *testing.T) {
 		t.Fatal(err)
 	}
 	toolsResp.Body.Close()
-	if len(toolsBody.Tools) != 34 {
-		t.Fatalf("expected 34 registered tools, got %d", len(toolsBody.Tools))
+	if len(toolsBody.Tools) != 39 {
+		t.Fatalf("expected 39 registered tools, got %d", len(toolsBody.Tools))
 	}
 
 	// Create thread -> 201.
@@ -2436,7 +2436,7 @@ func TestAgentV2DelegateToAgentAndRecursionGuard(t *testing.T) {
 	if !strings.Contains(seenInstructions, "Delegation mode:") {
 		t.Fatalf("expected delegation mode instruction, got %q", seenInstructions)
 	}
-	for _, forbidden := range []string{"delegate_to_agent", "save_memory", "draft_task", "draft_swap", "draft_strategy"} {
+	for _, forbidden := range []string{"delegate_to_agent", "save_memory", "draft_task", "draft_swap", "draft_strategy", "draft_lab_script", "draft_event_trigger", "run_desk_cycle", "save_desk_lesson", "sync_world_intel"} {
 		for _, got := range seenToolNames {
 			if got == forbidden {
 				t.Fatalf("delegated tool list must exclude %q, got %v", forbidden, seenToolNames)

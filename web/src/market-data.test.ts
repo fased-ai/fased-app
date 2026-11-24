@@ -50,6 +50,7 @@ describe("market-data workspace config and helpers", () => {
       JSON.stringify({
         version: 1,
         layout: "1x1",
+        orderflowTab: "desk",
         tiles: [
           {
             id: "tile-1",
@@ -57,6 +58,7 @@ describe("market-data workspace config and helpers", () => {
             symbol: "btc",
             interval: "1h",
             style: "standard",
+            scriptId: "ema-rsi-trend",
             drawings: [
               { id: "d1", kind: "hline", p1: { time: 1, price: 94000 } },
             ],
@@ -66,6 +68,8 @@ describe("market-data workspace config and helpers", () => {
       }),
     );
     const key = symbolOverlayKey("hyperliquid", "BTC");
+    expect(migrated.orderflowTab).toBe("desk");
+    expect(migrated.tiles[0].scriptId).toBe("ema-rsi-trend");
     expect(migrated.drawingsBySymbol?.[key]).toHaveLength(1);
     expect(migrated.tiles[0].drawings).toEqual([]);
   });

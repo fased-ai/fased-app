@@ -679,3 +679,77 @@ func TestStage3DeskMarkPositionsAndSubPenny(t *testing.T) {
 		t.Fatal("timed out waiting for position_closed SSE event from MarkPositions")
 	}
 }
+
+func TestSeatCrossEngineEvidence(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	now := time.Date(2026, 11, 24, 15, 0, 0, 0, time.UTC)
+	candles := sampleCandles(now.Unix(), 60, 50000, 180)
+
+	svc, err := NewService(Config{
+		DataDir:     dir,
+		FixtureMode: true,
+		Now:         func() time.Time { return now },
+		MarketReader: func(_ context.Context, _, _, _ string, limit int) ([]marketdata.Candle, error) {
+			if limit < len(candles) {
+				return candles[len(candles)-limit:], nil
+			}
+			return candles, nil
+		},
+		PredictionReader: func(_ context.Context, _ worldintel.PredictionFilter) (worldintel.PredictionList, error) {
+			return worldintel.PredictionList{
+				Markets: []worldintel.PredictionMarket{
+					{ID: "pm-btc", Question: "Will BTC close above 100k?", YesProb: 0.68},
+				},
+				Arbitrage: []worldintel.PredictionArbitrage{
+					{ID: "arb-btc", Topic: "BTC ETF inflows", SpreadPct: 9.5},
+				},
+			}, nil
+		},
+		OrderBookReader: func(_ context.Context, _, _ string) (marketdata.OrderBookSnapshot, error) {
+			return marketdata.OrderBookSnapshot{
+				Spread:   5.0,
+				MidPrice: 55000.0,
+				Bids:     []marketdata.OrderBookLevel{{Price: 54997.5, Size: 12.0}},
+				Asks:     []marketdata.OrderBookLevel{{Price: 55002.5, Size: 8.0}},
+			}, nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = svc.Close() })
+
+	if _, err := svc.SaveLesson(t.Context(), LessonInput{
+		Category: "risk",
+		Symbol:   "BTC",
+		Rule:     "Verify orderbook spread before paper fill",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	res, err := svc.RunCycle(t.Context(), CycleRequest{
+		Venue:    marketdata.VenueHyperliquid,
+		Symbol:   "BTC",
+		Interval: "1h",
+		Mode:     ModeShadow,
+		Limit:    60,
+	})
+	if err != nil {
+		t.Fatalf("RunCycle: %v", err)
+	}
+
+	bySeat := map[SeatID]SeatArtifact{}
+	for _, a := range res.Artifacts {
+		bySeat[a.Seat] = a
+	}
+	if len(bySeat[SeatChief].Evidence) == 0 || len(bySeat[SeatSkeptic].Evidence) == 0 {
+		t.Fatalf("expected Chief and Skeptic lesson evidence, got chief=%+v skeptic=%+v", bySeat[SeatChief], bySeat[SeatSkeptic])
+	}
+	if len(bySeat[SeatScout].Evidence) < 2 {
+		t.Fatalf("expected Scout prediction & arb evidence, got %+v", bySeat[SeatScout])
+	}
+	if len(bySeat[SeatChartist].Evidence) == 0 {
+		t.Fatalf("expected Chartist orderbook spread evidence, got %+v", bySeat[SeatChartist])
+	}
+}
