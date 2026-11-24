@@ -300,3 +300,35 @@ func TestInstalledSandboxRefusesOrdinaryWritableProcess(t *testing.T) {
 		t.Fatal("writable ordinary process passed installed enforcement")
 	}
 }
+
+func TestInstallHeadlessLinuxWithVerifiedSigner(t *testing.T) {
+	p, engine := installFixture(t)
+	signerPath := filepath.Join(filepath.Dir(engine), "fased-signer")
+	if err := os.WriteFile(signerPath, []byte("headless signer fixture"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	signerHash, err := digest(signerPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Install(t.Context(), p, Options{Engine: engine, Signer: signerPath, SignerSHA256: strings.Repeat("0", 64)}); err == nil {
+		t.Fatal("mismatched headless signer digest accepted")
+	}
+	m, err := Install(t.Context(), p, Options{Engine: engine, Signer: signerPath, SignerSHA256: signerHash})
+	if err != nil {
+		t.Fatalf("Install with headless verified signer failed: %v", err)
+	}
+	if m.Files["fased-signer"] != signerHash || m.Files[desktopName] != "" {
+		t.Fatalf("unexpected headless signer manifest: %+v", m.Files)
+	}
+	loaded, err := Load(p)
+	if err != nil || loaded.Files["fased-signer"] != signerHash {
+		t.Fatalf("Load after headless signer install failed: %v %+v", err, loaded.Files)
+	}
+	if err := Uninstall(t.Context(), p); err != nil {
+		t.Fatalf("Uninstall after headless signer install failed: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(p.Root, "fased-signer")); !os.IsNotExist(err) {
+		t.Fatalf("signer remained after uninstall: %v", err)
+	}
+}

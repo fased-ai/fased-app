@@ -76,7 +76,7 @@ func applicationUpdateID(s string) bool {
 	return e == nil && len(b) == 16 && hex.EncodeToString(b) == s
 }
 func (c ApplicationUpdate) validate() error {
-	if c.Sequence == 0 || !validExpectedDigest(c.ReleaseSHA256) || !applicationUpdateID(c.ID) || c.Version == "" || len(c.Version) > 128 || strings.ContainsAny(c.Version, "/\\\x00\r\n\t ") || !validExpectedDigest(c.ExpectedManifestSHA256) || !validExpectedDigest(c.EngineSHA256) || c.Engine == "" || (c.Desktop == "") != (c.DesktopSHA256 == "") || c.Desktop != "" && !validExpectedDigest(c.DesktopSHA256) || (c.Signer == "") != (c.SignerSHA256 == "") || c.Signer != "" && (c.Desktop == "" || !validExpectedDigest(c.SignerSHA256)) {
+	if c.Sequence == 0 || !validExpectedDigest(c.ReleaseSHA256) || !applicationUpdateID(c.ID) || c.Version == "" || len(c.Version) > 128 || strings.ContainsAny(c.Version, "/\\\x00\r\n\t ") || !validExpectedDigest(c.ExpectedManifestSHA256) || !validExpectedDigest(c.EngineSHA256) || c.Engine == "" || (c.Desktop == "") != (c.DesktopSHA256 == "") || c.Desktop != "" && !validExpectedDigest(c.DesktopSHA256) || (c.Signer == "") != (c.SignerSHA256 == "") || c.Signer != "" && !validExpectedDigest(c.SignerSHA256) {
 		return errors.New("complete authenticated application update identity required")
 	}
 	for _, p := range []string{c.Engine, c.Desktop, c.Signer} {
@@ -94,7 +94,7 @@ func validApplicationJournal(j applicationUpdateJournal, p Paths) bool {
 	if s.Sequence == 0 || !validExpectedDigest(s.ReleaseSHA256) || j.Target.ApplicationSequence != s.Sequence || j.Target.ApplicationReleaseSHA256 != s.ReleaseSHA256 || s.Version != 1 || !applicationUpdateID(s.ID) || s.PreviousManifestSHA256 != ManifestSHA256(j.Previous) || s.TargetManifestSHA256 != ManifestSHA256(j.Target) || s.EngineSHA256 != j.Target.Files[engineName] || s.DesktopSHA256 != j.Target.Files[desktopName] {
 		return false
 	}
-	if s.SignerSHA256 != "" && (!validExpectedDigest(s.SignerSHA256) || s.DesktopSHA256 == "" || j.Previous.Files["fased-signer"] == "" || j.Target.Files["fased-signer"] != s.SignerSHA256) {
+	if s.SignerSHA256 != "" && (!validExpectedDigest(s.SignerSHA256) || j.Previous.Files["fased-signer"] == "" || j.Target.Files["fased-signer"] != s.SignerSHA256) {
 		return false
 	}
 	if j.Previous.Root != p.Root || j.Previous.Data != p.Data || j.Target.Root != p.Root || j.Target.Data != p.Data || j.Previous.Phase != "ready" || j.Target.Phase != "ready" || j.Previous.Autostart != j.Target.Autostart || j.Previous.Listen != j.Target.Listen || j.Previous.PublicOrigin != j.Target.PublicOrigin || j.Previous.Location != j.Target.Location || j.Previous.ProviderFixture != j.Target.ProviderFixture || len(j.Previous.Files) != len(j.Target.Files) {

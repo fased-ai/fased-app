@@ -492,11 +492,12 @@ func LockOwnerSetup(dir string) (*InstanceLock, error) {
 	if err := privateDir(dir); err != nil {
 		return nil, err
 	}
-	// Linux enrollment also locks core.sqlite while it takes a snapshot. On
-	// macOS serializes owner setup on a separate private file so SQLite's own
-	// database locks do not interfere with the owner-setup lock.
+	// Linux enrollment also locks core.sqlite while it takes a snapshot. Non-Linux
+	// platforms serialize owner setup on a separate private file so OS/SQLite
+	// locks (macOS OFD/SQLite, Windows mandatory LockFileEx) do not interfere with
+	// core.sqlite reads during server startup.
 	name := "core.sqlite"
-	if runtime.GOOS == "darwin" {
+	if runtime.GOOS != "linux" {
 		name = "owner-setup.lock"
 	}
 	return LockInstance(filepath.Join(dir, name))

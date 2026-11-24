@@ -578,6 +578,51 @@ export async function runInstallerCommand(
   });
 }
 
+function collectWindowsInstallDiagnostic({ binaryPath, workDir }) {
+  const parts = [];
+  const taskXmlPath = path.join(path.dirname(binaryPath), "fased-app.task.xml");
+  try {
+    if (existsSync(taskXmlPath)) {
+      const raw = readFileSync(taskXmlPath);
+      const xmlText =
+        raw[0] === 0xff && raw[1] === 0xfe
+          ? raw.subarray(2).toString("utf16le")
+          : raw.toString("utf8");
+      const sid = xmlText.match(/<UserId>(S-[0-9-]+)<\/UserId>/)?.[1];
+      if (sid) {
+        const sch = spawnSync(
+          "schtasks.exe",
+          ["/Query", "/TN", `FasedApp-${sid}`, "/V", "/FO", "LIST"],
+          { encoding: "utf8", timeout: 10000, maxBuffer: 64 * 1024 },
+        );
+        parts.push(
+          `schtasks(/Query):\n${String(sch.stdout || "").slice(0, 4096)}\n${String(sch.stderr || "").slice(0, 1024)}`,
+        );
+      }
+      parts.push(`taskXml:\n${xmlText.slice(0, 2048)}`);
+    } else {
+      parts.push(`taskXml missing at ${taskXmlPath}`);
+    }
+  } catch (err) {
+    parts.push(
+      `schtasks error: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
+  const diagDataDir = path.join(workDir, "win-diag-state");
+  mkdirSync(diagDataDir, { recursive: true, mode: 0o700 });
+  if (existsSync(binaryPath)) {
+    const direct = spawnSync(
+      binaryPath,
+      ["serve", "--data-dir", diagDataDir, "--listen", "127.0.0.1:0"],
+      { encoding: "utf8", timeout: 5000, maxBuffer: 64 * 1024 },
+    );
+    parts.push(
+      `directCore(status=${direct.status}, signal=${direct.signal}, code=${direct.error?.code || ""}):\n${String(direct.stdout || "").slice(0, 2048)}\n${String(direct.stderr || "").slice(0, 2048)}`,
+    );
+  }
+  return parts.join("\n---\n");
+}
+
 export async function runHostSmoke({
   cliDir = path.resolve(
     process.env.FASED_SMOKE_CLI_DIR || ".evidence/dual-track-cli",
@@ -751,6 +796,20 @@ export async function runHostSmoke({
       preparedUbuntuPolicy = true;
     }
     const liveRun = await runInstallerCommand(liveScriptPath, liveArgs);
+    if (existsSync(installedPaths.binary)) {
+      installed = true;
+    }
+    if (liveRun.status !== 0 && process.platform === "win32") {
+      const winDiag = collectWindowsInstallDiagnostic({
+        binaryPath: installedPaths.binary,
+        workDir,
+      });
+      assert.equal(
+        liveRun.status,
+        0,
+        `Live install failed (exit ${liveRun.status}):\n${liveRun.stdout}\n${liveRun.stderr}\n${winDiag}`,
+      );
+    }
     assert.equal(
       liveRun.status,
       0,

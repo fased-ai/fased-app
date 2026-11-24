@@ -150,7 +150,7 @@ func Load(paths Paths) (Manifest, error) {
 		return m, errors.New("invalid installed application release identity")
 	}
 	for name := range m.Files {
-		if name != engineName && name != desktopName && name != definitionName && name != shortcutName && !(runtime.GOOS == "linux" && name == "fased-signer" && m.Files[desktopName] != "") {
+		if name != engineName && name != desktopName && name != definitionName && name != shortcutName && !(runtime.GOOS == "linux" && name == "fased-signer") {
 			return m, errors.New("unknown installation file in receipt")
 		}
 	}
@@ -226,7 +226,7 @@ func Install(ctx context.Context, paths Paths, options Options) (Manifest, error
 	if options.DesktopSHA256 != "" && (options.Desktop == "" || !validExpectedDigest(options.DesktopSHA256)) {
 		return Manifest{}, errors.New("verified desktop digest requires the selected desktop binary")
 	}
-	if options.Signer != "" && (runtime.GOOS != "linux" || options.Desktop == "" || !validExpectedDigest(options.SignerSHA256)) || options.Signer == "" && options.SignerSHA256 != "" {
+	if options.Signer != "" && (runtime.GOOS != "linux" || !validExpectedDigest(options.SignerSHA256)) || options.Signer == "" && options.SignerSHA256 != "" {
 		return Manifest{}, errors.New("signer requires a verified Linux native package")
 	}
 	files := map[string]string{engineName: engineHash, definitionName: bytesDigest(unit)}

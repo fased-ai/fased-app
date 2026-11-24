@@ -694,7 +694,11 @@ func installationCommand(args ...string) string {
 	return command
 }
 func waitForCore(ctx context.Context, dir string) (string, error) {
-	deadline, cancel := context.WithTimeout(ctx, 8*time.Second)
+	wait := 8 * time.Second
+	if runtime.GOOS == "windows" {
+		wait = 20 * time.Second
+	}
+	deadline, cancel := context.WithTimeout(ctx, wait)
 	defer cancel()
 	ticker := time.NewTicker(100 * time.Millisecond)
 	defer ticker.Stop()
