@@ -19,10 +19,24 @@ import (
 	wailsruntime "github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
+func reportDesktopStartupError(dataDir, message string, err error) {
+	full := message
+	if err != nil {
+		full = fmt.Sprintf("%s: %v", message, err)
+	}
+	fmt.Fprintln(os.Stderr, full)
+	if dataDir != "" {
+		if mkErr := os.MkdirAll(dataDir, 0700); mkErr == nil {
+			line := fmt.Sprintf("%s %s\n", time.Now().UTC().Format(time.RFC3339), full)
+			_ = os.WriteFile(filepath.Join(dataDir, "desktop-last-error.log"), []byte(line), 0600)
+		}
+	}
+}
+
 func main() {
 	dir, err := core.DefaultDataDir()
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "Cannot locate Fased instance data")
+		reportDesktopStartupError("", "Cannot locate Fased instance data", err)
 		os.Exit(1)
 	}
 	state := flag.String("data-dir", dir, "private instance state directory")
@@ -148,7 +162,7 @@ func main() {
 	}
 	err = wails.Run(options)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "Desktop window unavailable:", err)
+		reportDesktopStartupError(*state, "Desktop window unavailable", err)
 		os.Exit(1)
 	}
 }

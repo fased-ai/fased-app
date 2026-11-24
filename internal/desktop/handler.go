@@ -80,8 +80,9 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		fail(w, 403, "desktop origin required")
 		return
 	}
-	body, err := io.ReadAll(io.LimitReader(r.Body, 16*1024+1))
-	if err != nil || len(body) > 16*1024 {
+	reqLimit := RequestBodyLimit(r.URL.Path)
+	body, err := io.ReadAll(io.LimitReader(r.Body, reqLimit+1))
+	if err != nil || int64(len(body)) > reqLimit {
 		fail(w, 413, "request too large")
 		return
 	}
@@ -214,6 +215,19 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer response.Body.Close()
+	if r.URL.Path == "/api/v1/mcp" && response.StatusCode == http.StatusAccepted {
+		n, readErr := io.Copy(io.Discard, io.LimitReader(response.Body, 1025))
+		if readErr != nil || n > 1024 {
+			fail(w, 502, "invalid private core response")
+			return
+		}
+		w.WriteHeader(http.StatusAccepted)
+		return
+	}
+	if StreamingRoute(r.URL.Path) && response.StatusCode == http.StatusOK && strings.HasPrefix(response.Header.Get("Content-Type"), "text/event-stream") {
+		streamSSEResponse(w, response.Body)
+		return
+	}
 	limit := responseLimit(r.URL.Path)
 	data, err := io.ReadAll(io.LimitReader(response.Body, limit+1))
 	if err != nil || int64(len(data)) > limit || !strings.HasPrefix(response.Header.Get("Content-Type"), "application/json") {
@@ -233,13 +247,154 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(response.StatusCode)
 	_, _ = w.Write(data)
 }
+
+const (
+	// MaxNativeRequestBytes caps the raw HTTP wire request read by the protected
+	// app-identity stdio transport (headers + largest allowed desktop body).
+	MaxNativeRequestBytes  = 704 * 1024
+	sseStreamResponseLimit = 16 * 1024 * 1024
+)
+
+func streamSSEResponse(w http.ResponseWriter, body io.Reader) {
+	w.Header().Set("Content-Type", "text/event-stream; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-cache, no-transform")
+	w.Header().Set("X-Accel-Buffering", "no")
+	w.WriteHeader(http.StatusOK)
+	flusher, _ := w.(http.Flusher)
+	if flusher != nil {
+		flusher.Flush()
+	}
+	buf := make([]byte, 4096)
+	var written int64
+	for {
+		n, err := body.Read(buf)
+		if n > 0 {
+			remaining := sseStreamResponseLimit - written
+			if remaining <= 0 {
+				return
+			}
+			if int64(n) > remaining {
+				n = int(remaining)
+			}
+			if _, wErr := w.Write(buf[:n]); wErr != nil {
+				return
+			}
+			written += int64(n)
+			if flusher != nil {
+				flusher.Flush()
+			}
+		}
+		if err != nil {
+			return
+		}
+	}
+}
+
+func validPathSegment(seg string) bool {
+	if len(seg) == 0 || len(seg) > 128 || seg == "." || seg == ".." {
+		return false
+	}
+	for i := 0; i < len(seg); i++ {
+		c := seg[i]
+		ok := (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '-' || c == '_' || c == '.'
+		if !ok {
+			return false
+		}
+	}
+	return true
+}
+
+// StreamingRoute reports whether route may return a long-lived text/event-stream
+// response from the core.
+func StreamingRoute(route string) bool {
+	if !strings.HasPrefix(route, "/api/v1/agents/v2/") {
+		return false
+	}
+	rel := strings.TrimPrefix(route, "/api/v1/agents/v2/")
+	if strings.HasPrefix(rel, "threads/") {
+		sub := strings.TrimPrefix(rel, "threads/")
+		if strings.HasSuffix(sub, "/messages") {
+			return validPathSegment(strings.TrimSuffix(sub, "/messages"))
+		}
+		if strings.HasSuffix(sub, "/side") {
+			return validPathSegment(strings.TrimSuffix(sub, "/side"))
+		}
+		return false
+	}
+	if strings.HasPrefix(rel, "approvals/") {
+		return validPathSegment(strings.TrimPrefix(rel, "approvals/"))
+	}
+	return false
+}
+
+// RequestBodyLimit returns the maximum request body size admitted for route.
+// Legacy routes keep their original 16 KiB bound while Agent V2 and MCP match
+// the core's validated schema limits.
+func RequestBodyLimit(route string) int64 {
+	switch {
+	case route == "/api/v1/agents/v2/model-manifest":
+		return 640 * 1024
+	case strings.HasPrefix(route, "/api/v1/agents/v2/"):
+		return 256 * 1024
+	case route == "/api/v1/mcp":
+		return 64 * 1024
+	default:
+		return 16 * 1024
+	}
+}
+
+func allowedAgentsV2(method, route string) bool {
+	if !strings.HasPrefix(route, "/api/v1/agents/v2/") {
+		return false
+	}
+	rel := strings.TrimPrefix(route, "/api/v1/agents/v2/")
+	switch rel {
+	case "tools", "usage", "task-threads":
+		return method == http.MethodGet
+	case "model-manifest":
+		return method == http.MethodGet || method == http.MethodPut || method == http.MethodDelete
+	case "threads":
+		return method == http.MethodGet || method == http.MethodPost
+	case "memories":
+		return method == http.MethodGet || method == http.MethodPost
+	}
+	if strings.HasPrefix(rel, "threads/") {
+		sub := strings.TrimPrefix(rel, "threads/")
+		if strings.HasSuffix(sub, "/messages") {
+			return method == http.MethodPost && validPathSegment(strings.TrimSuffix(sub, "/messages"))
+		}
+		if strings.HasSuffix(sub, "/compact") {
+			return method == http.MethodPost && validPathSegment(strings.TrimSuffix(sub, "/compact"))
+		}
+		if strings.HasSuffix(sub, "/side") {
+			return method == http.MethodPost && validPathSegment(strings.TrimSuffix(sub, "/side"))
+		}
+		if !validPathSegment(sub) {
+			return false
+		}
+		return method == http.MethodGet || method == http.MethodPatch || method == http.MethodPut || method == http.MethodDelete
+	}
+	if strings.HasPrefix(rel, "approvals/") {
+		return method == http.MethodPost && validPathSegment(strings.TrimPrefix(rel, "approvals/"))
+	}
+	if strings.HasPrefix(rel, "memories/") {
+		return (method == http.MethodPatch || method == http.MethodDelete) && validPathSegment(strings.TrimPrefix(rel, "memories/"))
+	}
+	return false
+}
+
 func allowed(method, route string) bool {
+	if allowedAgentsV2(method, route) {
+		return true
+	}
 	switch route {
 	case "/api/v1/health", "/api/v1/auth/state", "/api/v1/signer/status", "/api/v1/installation/claim-code":
 		return method == "GET"
 	case "/api/v1/installation/connect", "/api/v1/installation/local-owner", "/api/v1/installation/wallet-owner":
 		return method == "POST"
 	case "/api/v1/agents":
+		return method == "GET" || method == "POST"
+	case "/api/v1/mcp":
 		return method == "GET" || method == "POST"
 	case "/api/v1/updates/application":
 		return method == "GET" || method == "POST"
@@ -255,8 +410,10 @@ func allowed(method, route string) bool {
 		return method == "GET"
 	case "/api/v1/setup":
 		return method == "GET" || method == "PUT"
-	case "/api/v1/auth/claim", "/api/v1/auth/login", "/api/v1/auth/logout":
+	case "/api/v1/auth/claim", "/api/v1/auth/login", "/api/v1/auth/logout", "/api/v1/auth/pair":
 		return method == "POST"
+	case "/api/v1/auth/devices", "/api/v1/auth/pair/devices":
+		return method == "GET" || method == "POST"
 	}
 	return false
 }
@@ -271,7 +428,7 @@ func forward(ctx context.Context, client *core.Client, original *http.Request, b
 	if err != nil {
 		return nil, err
 	}
-	for _, name := range []string{"Authorization", "Content-Type", "X-CSRF-Token"} {
+	for _, name := range []string{"Authorization", "Content-Type", "X-CSRF-Token", "Accept", "X-Fased-Pair"} {
 		if value := original.Header.Get(name); value != "" {
 			r.Header.Set(name, value)
 		}
@@ -279,7 +436,15 @@ func forward(ctx context.Context, client *core.Client, original *http.Request, b
 	if r.Method != "GET" {
 		r.Header.Set("Origin", client.Endpoint.URL)
 	}
-	return client.HTTP.Do(r)
+	httpClient := *client.HTTP
+	if StreamingRoute(original.URL.Path) {
+		httpClient.Timeout = 0
+	} else if strings.HasPrefix(original.URL.Path, "/api/v1/agents/v2/") || original.URL.Path == "/api/v1/mcp" || original.URL.Path == "/api/v1/ai/connection" {
+		if httpClient.Timeout > 0 && httpClient.Timeout < 2*time.Minute {
+			httpClient.Timeout = 2 * time.Minute
+		}
+	}
+	return httpClient.Do(r)
 }
 func fail(w http.ResponseWriter, status int, message string) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
@@ -290,12 +455,21 @@ func fail(w http.ResponseWriter, status int, message string) {
 func responseLimit(route string) int64 {
 	// The agent view includes the bounded 512 KiB document plus JSON escaping,
 	// progress and view fields. Other routes keep their original small bound.
-	if route == "/api/v1/agents" {
+	if route == "/api/v1/agents" || strings.HasPrefix(route, "/api/v1/agents/v2/") {
 		return 4 * 1024 * 1024
+	}
+	if route == "/api/v1/mcp" {
+		return 1 * 1024 * 1024
 	}
 	if route == "/api/v1/accounts/read" {
 		// Bounded wallet projection (up to 1024 token accounts per program, activity, and tx detail).
 		return core.WalletReadResponseLimit
+	}
+	if route == "/api/v1/accounts/portable" {
+		return 256 * 1024
+	}
+	if route == "/api/v1/updates/desktop-release" {
+		return 128 * 1024
 	}
 	return 32 * 1024
 }
@@ -303,22 +477,66 @@ func allowedQuery(r *http.Request) bool {
 	if r.URL.RawQuery == "" {
 		return true
 	}
-	if r.Method != "GET" || r.URL.Path != "/api/v1/agents" || len(r.URL.RawQuery) > 4096 {
+	if len(r.URL.RawQuery) > 4096 {
 		return false
 	}
 	q, err := url.ParseQuery(r.URL.RawQuery)
 	if err != nil {
 		return false
 	}
-	for key, values := range q {
+	for _, values := range q {
 		if len(values) != 1 || len(values[0]) > 800 {
 			return false
 		}
-		switch key {
-		case "profile", "q", "history", "before", "history-task", "history-q", "playbook-draft", "playbook-version", "memory-restore-draft", "memory-revision", "reminder-draft", "evidence", "evidence-id", "evidence-item", "ai-draft", "memory-search", "memory-source":
-		default:
-			return false
-		}
 	}
-	return true
+	switch {
+	case r.Method == http.MethodGet && r.URL.Path == "/api/v1/agents":
+		for key := range q {
+			switch key {
+			case "profile", "q", "history", "before", "history-task", "history-q", "playbook-draft", "playbook-version", "memory-restore-draft", "memory-revision", "reminder-draft", "evidence", "evidence-id", "evidence-item", "ai-draft", "memory-search", "memory-source":
+			default:
+				return false
+			}
+		}
+		return true
+	case r.Method == http.MethodGet && r.URL.Path == "/api/v1/agents/v2/usage":
+		for key := range q {
+			if key != "profileId" && key != "days" {
+				return false
+			}
+		}
+		return true
+	case r.Method == http.MethodGet && r.URL.Path == "/api/v1/agents/v2/task-threads":
+		for key := range q {
+			if key != "profileId" {
+				return false
+			}
+		}
+		return true
+	case r.Method == http.MethodGet && r.URL.Path == "/api/v1/agents/v2/threads":
+		for key := range q {
+			if key != "profileId" && key != "archived" {
+				return false
+			}
+		}
+		return true
+	case r.Method == http.MethodGet && r.URL.Path == "/api/v1/agents/v2/memories":
+		for key := range q {
+			switch key {
+			case "profileId", "q", "scope", "limit", "excludeDrafts":
+			default:
+				return false
+			}
+		}
+		return true
+	case r.Method == http.MethodPost && StreamingRoute(r.URL.Path):
+		for key, values := range q {
+			if key != "stream" || (values[0] != "0" && values[0] != "1") {
+				return false
+			}
+		}
+		return true
+	default:
+		return false
+	}
 }

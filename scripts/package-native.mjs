@@ -24,6 +24,24 @@ const desktop = resolve(`.evidence/bin/fased-desktop${windows ? ".exe" : ""}`);
 const source = execFileSync("git", ["rev-parse", "HEAD"], {
   encoding: "utf8",
 }).trim();
+async function resolvePackageVersion() {
+  if (process.env.FASED_RELEASE_VERSION?.trim()) {
+    return process.env.FASED_RELEASE_VERSION.trim();
+  }
+  try {
+    const releaseMeta = JSON.parse(
+      await readFile("release/ubuntu.json", "utf8"),
+    );
+    if (typeof releaseMeta.version === "string" && releaseMeta.version.trim()) {
+      return releaseMeta.version.trim();
+    }
+  } catch {
+    // Fallback to package.json below.
+  }
+  const manifest = JSON.parse(await readFile("package.json", "utf8"));
+  return manifest.version || "0.0.0";
+}
+const appVersion = await resolvePackageVersion();
 // The owner client carries a matching Linux core/signer pair. The server app
 // package and old native inventories remain supported without this optional file.
 const signer = resolve(".evidence/bin/fased-signer");
@@ -38,6 +56,8 @@ execFileSync(
   "go",
   [
     "run",
+    "-ldflags",
+    `-X github.com/fased-ai/fased-app/internal/core.Version=${appVersion}`,
     "./cmd/fased-package",
     "--engine",
     resolve(`.evidence/bin/fased-app${windows ? ".exe" : ""}`),
@@ -108,6 +128,8 @@ if (windows) {
           ...process.env,
           FASED_PACKAGE_PAYLOAD: payload,
           FASED_PACKAGE_OUTPUT: output,
+          FASED_APP_VERSION: appVersion,
+          FASED_PACKAGE_ICON: resolve("packaging/fased-app.ico"),
         },
       },
     );
@@ -212,11 +234,10 @@ if (process.platform === "linux") {
     execFileSync("tar", ["-xzf", archive, "-C", fixture], {
       stdio: "inherit",
     });
-    const manifest = JSON.parse(await readFile("package.json", "utf8"));
     linuxPackages = await buildLinuxDesktopPackages({
       payloadDir: join(fixture, bundleName),
       outputDir: output,
-      version: process.env.FASED_RELEASE_VERSION || manifest.version || "0.0.0",
+      version: appVersion,
       arch,
     });
   } finally {

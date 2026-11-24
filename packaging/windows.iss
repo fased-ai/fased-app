@@ -1,10 +1,18 @@
 ; Built only on the native Windows runner. Signing is a separate owner gate.
 #define Payload GetEnv("FASED_PACKAGE_PAYLOAD")
 #define Output GetEnv("FASED_PACKAGE_OUTPUT")
+#define AppVersion GetEnv("FASED_APP_VERSION")
+#if AppVersion == ""
+  #define AppVersion "0.0.0"
+#endif
+#define IconFile GetEnv("FASED_PACKAGE_ICON")
 [Setup]
 AppId=org.fased.app
 AppName=Fased App Engineering
-AppVersion=0.0.0
+AppVersion={#AppVersion}
+#if IconFile != ""
+SetupIconFile={#IconFile}
+#endif
 DefaultDirName={localappdata}\Programs\Fased App
 DefaultGroupName=Fased App
 PrivilegesRequired=lowest
