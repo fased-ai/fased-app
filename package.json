@@ -29,6 +29,7 @@
     "test:platform-install": "node scripts/check-platform-install.mjs"
   },
   "dependencies": {
+    "lightweight-charts": "5.3.0",
     "lucide-react": "1.59.0",
     "react": "19.3.1",
     "react-dom": "19.3.1"

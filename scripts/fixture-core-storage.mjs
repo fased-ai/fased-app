@@ -696,3 +696,55 @@ export function projectReadOnlyOnchainAdapter(source) {
   );
   return source.replace(declaration, "").replace(guard, "c.Version != 2");
 }
+
+// Verify that every package locked at a historical predecessor commit remains
+// present in currentLock with its exact version and integrity hash (allowing
+// purely additive frontend dependencies without altering predecessor builds).
+export function isVerifiedLockSuperset(priorLock, currentLock) {
+  const priorPkgs = priorLock?.packages ?? {};
+  const currentPkgs = currentLock?.packages ?? {};
+  const priorKeys = Object.keys(priorPkgs);
+  if (priorKeys.length === 0) return false;
+  for (const pkgPath of priorKeys) {
+    if (pkgPath === "") continue;
+    if (!Object.hasOwn(currentPkgs, pkgPath)) return false;
+    const priorEntry = priorPkgs[pkgPath];
+    const currentEntry = currentPkgs[pkgPath];
+    if (!priorEntry || !currentEntry) return false;
+    if (priorEntry.version !== currentEntry.version) return false;
+    if (priorEntry.integrity !== currentEntry.integrity) return false;
+  }
+  return true;
+}
+
+// Preserve baseline package metadata, build scripts, and all pinned baseline
+// dependency versions while permitting purely additive frontend dependencies.
+export function assertPredecessorPackageCompatible(currentPkg, priorPkg) {
+  const baseShape = (value) => {
+    const inputs = structuredClone(value ?? {});
+    if (inputs.scripts) {
+      delete inputs.scripts["build:installer"];
+      delete inputs.scripts["test:core"];
+      delete inputs.scripts.release;
+    }
+    delete inputs.dependencies;
+    delete inputs.devDependencies;
+    return inputs;
+  };
+  assert.deepEqual(
+    baseShape(currentPkg),
+    baseShape(priorPkg),
+    "predecessor package inputs changed outside installer-build/core-test/owner-release commands",
+  );
+  for (const section of ["dependencies", "devDependencies"]) {
+    const priorDeps = priorPkg?.[section] ?? {};
+    const currentDeps = currentPkg?.[section] ?? {};
+    for (const [pkgName, ver] of Object.entries(priorDeps)) {
+      assert.equal(
+        currentDeps[pkgName],
+        ver,
+        `predecessor ${section} entry ${pkgName} drifted from pinned version ${ver}`,
+      );
+    }
+  }
+}

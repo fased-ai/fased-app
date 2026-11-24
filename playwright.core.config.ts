@@ -15,6 +15,7 @@ export default defineConfig({
     "core-shell-dashboard-i18n.spec.ts",
     "core-a11y.spec.ts",
     "core-concurrency.spec.ts",
+    "trade-workspace.spec.ts",
     "research-ai.spec.ts",
     "research-fixture.spec.ts",
     "research-loop.spec.ts",

@@ -165,29 +165,33 @@ function useCoreState() {
     },
     [lock],
   );
-  const stream = useCallback(
+  const consumeSSEStream = useCallback(
     async (
       route: string,
-      body: unknown,
+      method: "GET" | "POST",
       options: {
+        body?: unknown;
         signal?: AbortSignal;
         onEvent: (frame: SSEFrame) => void;
       },
     ): Promise<void> => {
       const epoch = authGeneration.current;
       const headers: Record<string, string> = {
-        "Content-Type": "application/json",
         Accept: "text/event-stream",
       };
       if (token.current) headers.Authorization = `Bearer ${token.current}`;
-      if (csrf.current) headers["X-CSRF-Token"] = csrf.current;
+      if (method !== "GET") {
+        headers["Content-Type"] = "application/json";
+        if (csrf.current) headers["X-CSRF-Token"] = csrf.current;
+      }
       const response = await fetch(`/api/v1/${route}`, {
-        method: "POST",
+        method,
         signal: options.signal,
         headers,
         credentials: "same-origin",
         cache: "no-store",
-        body: JSON.stringify(body),
+        body:
+          options.body === undefined ? undefined : JSON.stringify(options.body),
       });
       if (response.status === 401) {
         const message = "Your session ended. Sign in again.";
@@ -233,6 +237,32 @@ function useCoreState() {
       }
     },
     [lock],
+  );
+  const stream = useCallback(
+    async (
+      route: string,
+      body: unknown,
+      options: {
+        signal?: AbortSignal;
+        onEvent: (frame: SSEFrame) => void;
+      },
+    ): Promise<void> =>
+      consumeSSEStream(route, "POST", {
+        body,
+        signal: options.signal,
+        onEvent: options.onEvent,
+      }),
+    [consumeSSEStream],
+  );
+  const streamGet = useCallback(
+    async (
+      route: string,
+      options: {
+        signal?: AbortSignal;
+        onEvent: (frame: SSEFrame) => void;
+      },
+    ): Promise<void> => consumeSSEStream(route, "GET", options),
+    [consumeSSEStream],
   );
   const inspect = useCallback(async () => {
     const health = await request<Health>("health");
@@ -585,6 +615,7 @@ function useCoreState() {
     mode,
     request,
     stream,
+    streamGet,
     setup,
     error,
     saving: pending.generation === authGeneration.current && pending.count > 0,
