@@ -510,6 +510,7 @@ func TestNativeMarketDataRoutesAndSSE(t *testing.T) {
 		{http.MethodDelete, "http://wails.localhost/api/v1/market/watchlists/core-desk", true},
 		{http.MethodDelete, "http://wails.localhost/api/v1/market/watchlists/../bad", false},
 		{http.MethodGet, "http://wails.localhost/api/v1/market/stream?venue=hyperliquid&symbol=BTC&interval=1h&style=standard", true},
+		{http.MethodGet, "http://wails.localhost/api/v1/market/stream?noSnapshot=1&subs=hyperliquid:BTC:1h:standard,kraken:ETHUSD:1h:standard", true},
 		{http.MethodPost, "http://wails.localhost/api/v1/market/stream", false},
 	} {
 		req := httptest.NewRequest(tc.method, tc.url, nil)
@@ -520,6 +521,9 @@ func TestNativeMarketDataRoutesAndSSE(t *testing.T) {
 
 	if !StreamingRoute("/api/v1/market/stream") {
 		t.Fatal("expected StreamingRoute(/api/v1/market/stream) to return true")
+	}
+	if RequestBodyLimit("/api/v1/market/watchlists") != 64*1024 {
+		t.Fatal("expected /api/v1/market/watchlists RequestBodyLimit = 64 KiB")
 	}
 	if responseLimit("/api/v1/market/candles") != 1*1024*1024 {
 		t.Fatal("expected /api/v1/market/candles responseLimit = 1 MiB")

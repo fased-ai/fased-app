@@ -65,7 +65,7 @@ type Service struct {
 	httpClient  *http.Client
 	fixtureMode bool
 	now         func() time.Time
-	mu          sync.Mutex
+	mu          sync.RWMutex
 	closed      bool
 }
 
@@ -323,11 +323,8 @@ func (s *Service) Close() error {
 	return nil
 }
 
-func (s *Service) loadConfig(ctx context.Context) (model string, cipherBlob []byte, err error) {
-	s.mu.Lock()
-	closed := s.closed
-	s.mu.Unlock()
-	if closed {
+func (s *Service) loadConfigLocked(ctx context.Context) (model string, cipherBlob []byte, err error) {
+	if s.closed || s.db == nil {
 		return "", nil, errors.New("decision service closed")
 	}
 	err = s.db.QueryRowContext(ctx, `SELECT model, key_ciphertext FROM jev_config WHERE id = 1`).Scan(&model, &cipherBlob)
@@ -341,6 +338,12 @@ func (s *Service) loadConfig(ctx context.Context) (model string, cipherBlob []by
 		model = DefaultModel
 	}
 	return model, cipherBlob, nil
+}
+
+func (s *Service) loadConfig(ctx context.Context) (model string, cipherBlob []byte, err error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.loadConfigLocked(ctx)
 }
 
 // Status reports whether a Jev API key is configured without returning secrets.
@@ -359,7 +362,9 @@ func (s *Service) Status(ctx context.Context) (Status, error) {
 
 // SaveConfig validates and stores an encrypted Jev key and/or model override.
 func (s *Service) SaveConfig(ctx context.Context, upd ConfigUpdate) (Status, error) {
-	curModel, curBlob, err := s.loadConfig(ctx)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	curModel, curBlob, err := s.loadConfigLocked(ctx)
 	if err != nil {
 		return Status{}, err
 	}
@@ -406,31 +411,41 @@ ON CONFLICT(id) DO UPDATE SET
 	}, nil
 }
 
+func (s *Service) loadEvaluationSecret(ctx context.Context, modelOverride string) (reqModel string, useFallback bool, apiKey string, err error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	storedModel, cipherBlob, err := s.loadConfigLocked(ctx)
+	if err != nil {
+		return "", false, "", err
+	}
+	reqModel = modelOverride
+	if strings.TrimSpace(reqModel) == "" && storedModel != "" {
+		reqModel = storedModel
+	}
+	if s.fixtureMode || len(cipherBlob) == 0 {
+		return reqModel, true, "", nil
+	}
+	apiKey, openErr := openSecret(s.key, cipherBlob)
+	if openErr != nil || strings.TrimSpace(apiKey) == "" {
+		return reqModel, true, "", nil
+	}
+	return reqModel, false, apiKey, nil
+}
+
 // Evaluate runs typed System-1 classification against configured TypeSafe Jev
 // or falls back deterministically when offline or unconfigured.
 func (s *Service) Evaluate(ctx context.Context, req EvaluateRequest) (EvaluateResponse, error) {
 	start := s.now()
-	if strings.TrimSpace(req.Model) == "" {
-		if storedModel, _, err := s.loadConfig(ctx); err == nil && storedModel != "" {
-			req.Model = storedModel
-		}
-	}
-	if err := ValidateRequest(&req); err != nil {
-		return EvaluateResponse{}, err
-	}
-
-	_, cipherBlob, err := s.loadConfig(ctx)
+	reqModel, useFallback, apiKey, err := s.loadEvaluationSecret(ctx, req.Model)
 	if err != nil {
 		return EvaluateResponse{}, err
 	}
-
-	if s.fixtureMode || len(cipherBlob) == 0 {
-		return EvaluateFallback(req, start)
+	req.Model = reqModel
+	if err := ValidateRequest(&req); err != nil {
+		return EvaluateResponse{}, err
 	}
-
-	apiKey, err := openSecret(s.key, cipherBlob)
-	if err != nil || strings.TrimSpace(apiKey) == "" {
-		return EvaluateFallback(req, start)
+	if useFallback {
+		return evaluateFallbackAt(req, start, s.now()), nil
 	}
 
 	res, err := s.callRemoteJev(ctx, apiKey, req, start)
@@ -537,6 +552,10 @@ func EvaluateFallback(req EvaluateRequest, start time.Time) (EvaluateResponse, e
 	if err := ValidateRequest(&req); err != nil {
 		return EvaluateResponse{}, err
 	}
+	return evaluateFallbackAt(req, start, time.Now()), nil
+}
+
+func evaluateFallbackAt(req EvaluateRequest, start, end time.Time) EvaluateResponse {
 	stateTokens := tokenize(req.State)
 	stateLower := strings.ToLower(req.State)
 
@@ -579,9 +598,9 @@ func EvaluateFallback(req EvaluateRequest, start time.Time) (EvaluateResponse, e
 			InputTokens:  maxInt(1, len(req.State)/4),
 			OutputTokens: len(req.Questions) * 8,
 		},
-		LatencyMs: maxInt64(0, time.Since(start).Milliseconds()),
+		LatencyMs: maxInt64(0, end.Sub(start).Milliseconds()),
 		Fallback:  true,
-	}, nil
+	}
 }
 
 var positiveSignals = map[string]float64{
@@ -593,6 +612,17 @@ var positiveSignals = map[string]float64{
 var negativeSignals = map[string]float64{
 	"stale": 0.2, "illiquid": 0.22, "bearish": 0.2, "exploit": 0.25, "drain": 0.22,
 	"rug": 0.25, "noise": 0.15, "unchanged": 0.15, "low": 0.1,
+}
+
+var bullishChoiceSignals = []string{
+	"bullish", "rally", "surge", "inflow", "inflows", "cut", "cuts", "approve", "approved",
+	"approval", "breakout", "adoption", "etf", "gain", "gains", "beat", "expansion", "stimulus", "easing",
+}
+
+var bearishChoiceSignals = []string{
+	"bearish", "crash", "attack", "strike", "missile", "war", "sanction", "sanctions",
+	"earthquake", "magnitude", "exploit", "hack", "drain", "rug", "bankrupt", "halt",
+	"default", "recession", "tariff", "tariffs", "escalation", "collapse", "plunge", "outflow",
 }
 
 func deterministicNoulScore(stateLower string, stateTokens map[string]int, instructions string) float64 {
@@ -624,6 +654,26 @@ func deterministicNoulScore(stateLower string, stateTokens map[string]int, instr
 }
 
 func deterministicChoiceScore(stateLower string, stateTokens map[string]int, spec QuestionSpec) (string, map[string]float64, float64) {
+	bullHits, bearHits := 0, 0
+	for _, kw := range bullishChoiceSignals {
+		if stateTokens[kw] > 0 {
+			bullHits++
+		}
+	}
+	for _, kw := range bearishChoiceSignals {
+		if stateTokens[kw] > 0 {
+			bearHits++
+		}
+	}
+	hasSentimentChoices := false
+	for _, ch := range spec.Choices {
+		l := strings.ToLower(ch)
+		if l == "bullish" || l == "bearish" || l == "positive" || l == "negative" || l == "neutral" {
+			hasSentimentChoices = true
+			break
+		}
+	}
+
 	scores := make([]float64, len(spec.Choices))
 	var sum float64
 	for i, ch := range spec.Choices {
@@ -638,9 +688,26 @@ func deterministicChoiceScore(stateLower string, stateTokens map[string]int, spe
 				s += 1.5
 			}
 		}
-		h := fnv.New32a()
-		_, _ = h.Write([]byte(stateLower + "|" + chLower))
-		s += float64(h.Sum32()%100) * 0.005
+		if hasSentimentChoices {
+			switch chLower {
+			case "bullish", "positive":
+				if bullHits > bearHits {
+					s += 1.25 + float64(bullHits-bearHits)*0.6
+				}
+			case "bearish", "negative":
+				if bearHits > bullHits {
+					s += 1.25 + float64(bearHits-bullHits)*0.6
+				}
+			case "neutral":
+				if bullHits == bearHits {
+					s += 1.5
+				}
+			}
+		} else {
+			h := fnv.New32a()
+			_, _ = h.Write([]byte(stateLower + "|" + chLower))
+			s += float64(h.Sum32()%100) * 0.005
+		}
 		scores[i] = s
 		sum += s
 	}

@@ -91,13 +91,17 @@ export function ShellNavigation() {
     setMore(false);
     if (more) moreButton.current?.focus();
   }
-  const showTradingTerminals =
+  const showCryptoTerminals =
     core.mode !== "ready" ||
     core.capabilities?.walletSigner === true ||
     core.capabilities?.financialExecution === true;
-  const visiblePages = shellPages.filter(
-    (p) => showTradingTerminals || !p.path.startsWith("terminals/"),
-  );
+  const showMiningTerminal =
+    core.mode !== "ready" || Boolean(agents.view?.wenMining);
+  const visiblePages = shellPages.filter((p) => {
+    if (p.path === "terminals/satcoin") return showMiningTerminal;
+    if (p.path.startsWith("terminals/")) return showCryptoTerminals;
+    return true;
+  });
   const railPages = visiblePages.filter(
     (p) => p.path !== "agents/news" && p.path !== "agents/memory",
   );

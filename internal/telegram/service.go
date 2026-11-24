@@ -24,6 +24,7 @@ type Service struct {
 	fixtureMode   bool
 	now           func() time.Time
 	mu            sync.Mutex
+	configMu      sync.Mutex
 	deliveries    []DeliveryReceipt
 	pollingActive atomic.Bool
 	lastOffset    int64
@@ -183,34 +184,61 @@ func (s *Service) SaveConfig(ctx context.Context, in ConfigInput) (ConfigView, e
 	if err != nil {
 		return ConfigView{}, err
 	}
+	if in.Enabled && len(chats) == 0 {
+		return ConfigView{}, errors.New("at least one allowedChatId is required before enabling Telegram bot")
+	}
+	trimmedToken := strings.TrimSpace(in.BotToken)
+	var validatedToken string
+	if !in.ClearToken && trimmedToken != "" {
+		var vErr error
+		validatedToken, vErr = ValidateBotToken(trimmedToken)
+		if vErr != nil {
+			return ConfigView{}, vErr
+		}
+	}
 
 	if in.ClearToken {
 		if err := s.secrets.DeleteSealedValue(ctx, telegramTokenKey); err != nil {
 			return ConfigView{}, err
 		}
-	} else if trimmed := strings.TrimSpace(in.BotToken); trimmed != "" {
-		validated, vErr := ValidateBotToken(trimmed)
-		if vErr != nil {
-			return ConfigView{}, vErr
-		}
-		if err := s.secrets.SetSealedValue(ctx, telegramTokenKey, validated); err != nil {
+	} else if validatedToken != "" {
+		if err := s.secrets.SetSealedValue(ctx, telegramTokenKey, validatedToken); err != nil {
 			return ConfigView{}, err
 		}
 	}
 
+	s.configMu.Lock()
 	rec := s.loadRecord(ctx)
 	rec.Enabled = in.Enabled
 	rec.AllowedChatIDs = chats
 	rec.MinUrgency = in.MinUrgency
 	rec.NotifyOnApproval = in.NotifyOnApproval
 	rec.NotifyOnKillSwitch = in.NotifyOnKillSwitch
-	if rec.Enabled && len(rec.AllowedChatIDs) == 0 {
-		return ConfigView{}, errors.New("at least one allowedChatId is required before enabling Telegram bot")
-	}
-	if err := s.saveRecord(ctx, rec); err != nil {
+	err = s.saveRecord(ctx, rec)
+	s.configMu.Unlock()
+	if err != nil {
 		return ConfigView{}, err
 	}
 	return s.GetConfig(ctx)
+}
+
+func (s *Service) recordPollOutcome(ctx context.Context, pollAt int64, lastErr string) {
+	s.configMu.Lock()
+	defer s.configMu.Unlock()
+	rec := s.loadRecord(ctx)
+	if pollAt > 0 {
+		rec.LastPollAt = pollAt
+	}
+	rec.LastError = lastErr
+	_ = s.saveRecord(ctx, rec)
+}
+
+func (s *Service) recordSendError(ctx context.Context, lastErr string) {
+	s.configMu.Lock()
+	defer s.configMu.Unlock()
+	rec := s.loadRecord(ctx)
+	rec.LastError = lastErr
+	_ = s.saveRecord(ctx, rec)
 }
 
 // SendNotification dispatches an exception or high-urgency automation alert to allowed chats.
@@ -266,8 +294,7 @@ func (s *Service) SendNotification(ctx context.Context, n automation.Notificatio
 		if sendErr != nil {
 			st = "error"
 			status = "error"
-			rec.LastError = redactToken(sendErr.Error(), tok)
-			_ = s.saveRecord(ctx, rec)
+			s.recordSendError(ctx, redactToken(sendErr.Error(), tok))
 		}
 		s.appendReceipt(DeliveryReceipt{
 			Kind:      n.Kind,
@@ -304,9 +331,9 @@ func (s *Service) SendTest(ctx context.Context) (ConfigView, error) {
 			continue
 		}
 		if sendErr := s.client.sendMessage(ctx, tok, chatID, "Fased Telegram controller connected (read-only/paper mode).", nil); sendErr != nil {
-			rec.LastError = redactToken(sendErr.Error(), tok)
-			_ = s.saveRecord(ctx, rec)
-			return ConfigView{}, errors.New(rec.LastError)
+			redacted := redactToken(sendErr.Error(), tok)
+			s.recordSendError(ctx, redacted)
+			return ConfigView{}, errors.New(redacted)
 		}
 		s.appendReceipt(DeliveryReceipt{
 			Kind:      "test",
@@ -355,6 +382,11 @@ func (s *Service) loadOffset(ctx context.Context) int64 {
 	if err != nil || parsed < 0 {
 		return 0
 	}
+	s.mu.Lock()
+	if parsed > s.lastOffset {
+		s.lastOffset = parsed
+	}
+	s.mu.Unlock()
 	return parsed
 }
 
@@ -371,7 +403,9 @@ func (s *Service) saveOffset(ctx context.Context, nextOffset int64) {
 
 // PollOnce polls pending Telegram Bot API updates and routes authorized commands/callbacks.
 func (s *Service) PollOnce(ctx context.Context) error {
+	s.configMu.Lock()
 	rec := s.loadRecord(ctx)
+	s.configMu.Unlock()
 	if !rec.Enabled || len(rec.AllowedChatIDs) == 0 {
 		return nil
 	}
@@ -388,15 +422,12 @@ func (s *Service) PollOnce(ctx context.Context) error {
 	updates, err := s.client.getUpdates(ctx, tok, offset, pollTimeout)
 	nowSec := s.now().UTC().Unix()
 	if err != nil {
-		rec.LastPollAt = nowSec
-		rec.LastError = redactToken(err.Error(), tok)
-		_ = s.saveRecord(ctx, rec)
-		return errors.New(rec.LastError)
+		redacted := redactToken(err.Error(), tok)
+		s.recordPollOutcome(ctx, nowSec, redacted)
+		return errors.New(redacted)
 	}
 
-	rec.LastPollAt = nowSec
-	rec.LastError = ""
-	_ = s.saveRecord(ctx, rec)
+	s.recordPollOutcome(ctx, nowSec, "")
 
 	hooks := s.getHooks()
 	maxNextOffset := offset

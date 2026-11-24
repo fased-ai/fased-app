@@ -30,7 +30,7 @@ var gazetteer = []geoHub{
 	{keyword: "fomc", region: RegionNA, country: "US", lat: 38.8921, lon: -77.0459},
 	{keyword: "treasury", region: RegionNA, country: "US", lat: 38.8979, lon: -77.0332},
 	{keyword: "new york", region: RegionNA, country: "US", lat: 40.7128, lon: -74.0060},
-	{keyword: "sec ", region: RegionNA, country: "US", lat: 38.8995, lon: -77.0074},
+	{keyword: "sec", region: RegionNA, country: "US", lat: 38.8995, lon: -77.0074},
 	{keyword: "chicago", region: RegionNA, country: "US", lat: 41.8781, lon: -87.6298},
 	{keyword: "san francisco", region: RegionNA, country: "US", lat: 37.7749, lon: -122.4194},
 	{keyword: "texas", region: RegionNA, country: "US", lat: 29.7604, lon: -95.3698},
@@ -148,6 +148,27 @@ func clamp01(v float64) float64 {
 	return math.Round(v*1000) / 1000
 }
 
+func containsASCIIPhraseWord(text, phrase string) bool {
+	if phrase == "" {
+		return false
+	}
+	searchFrom := 0
+	for {
+		idx := strings.Index(text[searchFrom:], phrase)
+		if idx < 0 {
+			return false
+		}
+		start := searchFrom + idx
+		end := start + len(phrase)
+		leftOK := start == 0 || !isASCIIWordChar(text[start-1])
+		rightOK := end == len(text) || !isASCIIWordChar(text[end])
+		if leftOK && rightOK {
+			return true
+		}
+		searchFrom = start + 1
+	}
+}
+
 // InferLocation maps event text onto a canonical region, country code, and coordinates.
 func InferLocation(text, defaultRegion string) (region, countryCode string, lat, lon float64) {
 	normDefault := NormalizeRegion(defaultRegion)
@@ -156,7 +177,13 @@ func InferLocation(text, defaultRegion string) (region, countryCode string, lat,
 	}
 	lower := strings.ToLower(text)
 	for _, hub := range gazetteer {
-		if strings.Contains(lower, hub.keyword) {
+		if hub.keyword == "sec" {
+			if containsASCIIPhraseWord(text, "SEC") {
+				return hub.region, hub.country, hub.lat, hub.lon
+			}
+			continue
+		}
+		if containsASCIIPhraseWord(lower, hub.keyword) {
 			return hub.region, hub.country, hub.lat, hub.lon
 		}
 	}

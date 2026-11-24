@@ -901,22 +901,29 @@ export function Overview() {
       {adding && (
         <Dialog title={t("Widgets")} onClose={() => setAdding(false)}>
           <div className="widget-catalog">
-            {(Object.keys(widgetNames) as WidgetID[]).map((id) => (
-              <button
-                className="secondary"
-                key={id}
-                disabled={layout.widgets.some((w) => w.id === id)}
-                onClick={() =>
-                  save({
-                    ...layout,
-                    widgets: [...layout.widgets, { id, size: "small" }],
-                  })
-                }
-              >
-                {t(widgetNames[id])}
-                <Plus size={14} />
-              </button>
-            ))}
+            {(Object.keys(widgetNames) as WidgetID[])
+              .filter(
+                (id) =>
+                  id !== "mining" ||
+                  core.mode !== "ready" ||
+                  Boolean(agents.view?.wenMining),
+              )
+              .map((id) => (
+                <button
+                  className="secondary"
+                  key={id}
+                  disabled={layout.widgets.some((w) => w.id === id)}
+                  onClick={() =>
+                    save({
+                      ...layout,
+                      widgets: [...layout.widgets, { id, size: "small" }],
+                    })
+                  }
+                >
+                  {t(widgetNames[id])}
+                  <Plus size={14} />
+                </button>
+              ))}
           </div>
           <div className="dialog-footer">
             <button

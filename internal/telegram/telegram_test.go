@@ -316,3 +316,82 @@ func TestAuthorizationCommandsOffsetAndRedaction(t *testing.T) {
 		t.Fatalf("expected bot token redacted from error, got %v", sendErr)
 	}
 }
+
+func TestTelegramSaveConfigValidationPreservesTokenAndPollDoesNotRevertConfig(t *testing.T) {
+	dir := t.TempDir()
+	now := time.Date(2026, 11, 24, 14, 0, 0, 0, time.UTC)
+	botToken := "987654321:XYZ_valid_secret_token_987654321"
+
+	autoSvc, err := automation.NewService(automation.Config{
+		DataDir: dir,
+		Now:     func() time.Time { return now },
+	})
+	if err != nil {
+		t.Fatalf("automation NewService: %v", err)
+	}
+	defer func() { _ = autoSvc.Close() }()
+
+	pollStarted := make(chan struct{})
+	releasePoll := make(chan struct{})
+	svc, err := NewService(Config{
+		Secrets: autoSvc,
+		Hooks:   &mockHooks{},
+		Now:     func() time.Time { return now },
+		HTTPTransport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+			if strings.HasSuffix(r.URL.Path, "/getUpdates") {
+				close(pollStarted)
+				<-releasePoll
+				return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(`{"ok":true,"result":[]}`)), Header: make(http.Header)}, nil
+			}
+			return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(`{"ok":true}`)), Header: make(http.Header)}, nil
+		}),
+	})
+	if err != nil {
+		t.Fatalf("NewService: %v", err)
+	}
+
+	if _, err := svc.SaveConfig(t.Context(), ConfigInput{
+		Enabled:        true,
+		BotToken:       botToken,
+		AllowedChatIDs: []int64{777001},
+		MinUrgency:     0.7,
+	}); err != nil {
+		t.Fatalf("SaveConfig initial: %v", err)
+	}
+
+	// Failing SaveConfig (Enabled=true without chat IDs + ClearToken=true) must NOT wipe existing token.
+	if _, err := svc.SaveConfig(t.Context(), ConfigInput{
+		Enabled:        true,
+		ClearToken:     true,
+		AllowedChatIDs: nil,
+		MinUrgency:     0.7,
+	}); err == nil {
+		t.Fatal("expected SaveConfig error when enabling with empty AllowedChatIDs")
+	}
+	cfgAfterErr, err := svc.GetConfig(t.Context())
+	if err != nil || !cfgAfterErr.HasBotToken {
+		t.Fatalf("expected existing bot token to remain intact after validation error, got %+v err=%v", cfgAfterErr, err)
+	}
+
+	// Concurrent SaveConfig disabling bot during PollOnce must NOT be reverted when PollOnce finishes.
+	pollDone := make(chan error, 1)
+	go func() {
+		pollDone <- svc.PollOnce(t.Context())
+	}()
+	<-pollStarted
+	if _, err := svc.SaveConfig(t.Context(), ConfigInput{
+		Enabled:        false,
+		AllowedChatIDs: []int64{555002},
+		MinUrgency:     0.8,
+	}); err != nil {
+		t.Fatalf("concurrent SaveConfig disable: %v", err)
+	}
+	close(releasePoll)
+	if err := <-pollDone; err != nil {
+		t.Fatalf("PollOnce returned unexpected error: %v", err)
+	}
+	finalCfg, err := svc.GetConfig(t.Context())
+	if err != nil || finalCfg.Enabled || len(finalCfg.AllowedChatIDs) != 1 || finalCfg.AllowedChatIDs[0] != 555002 {
+		t.Fatalf("PollOnce overwrote concurrent SaveConfig: %+v err=%v", finalCfg, err)
+	}
+}

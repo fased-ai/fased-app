@@ -146,4 +146,22 @@ func TestJevFixtureModeZeroNetworkAndValidation(t *testing.T) {
 	if _, err := svc.Evaluate(ctx, EvaluateRequest{State: "ok", Questions: map[string]QuestionSpec{"q": {Type: TypeChoice, Choices: []string{"onlyone"}}}}); err == nil {
 		t.Fatal("expected single-choice error")
 	}
+
+	// Verify deterministic lexicon sentiment scoring (no hash coin-flip on neutral/earthquake headlines).
+	now := time.Unix(1760000000, 0).UTC()
+	sentQ := map[string]QuestionSpec{
+		"sentiment": {Type: TypeChoice, Choices: []string{"bullish", "bearish", "neutral"}},
+	}
+	quakeResp, err := EvaluateFallback(EvaluateRequest{State: "M 5.4 Earthquake near Tokyo Japan", Questions: sentQ}, now)
+	if err != nil || quakeResp.Answers["sentiment"].Choice != "bearish" {
+		t.Fatalf("expected earthquake headline to score bearish, got %+v err=%v", quakeResp.Answers, err)
+	}
+	inflowResp, err := EvaluateFallback(EvaluateRequest{State: "Spot Bitcoin ETF inflow surge drives breakout", Questions: sentQ}, now)
+	if err != nil || inflowResp.Answers["sentiment"].Choice != "bullish" {
+		t.Fatalf("expected inflow surge headline to score bullish, got %+v err=%v", inflowResp.Answers, err)
+	}
+	neutralResp, err := EvaluateFallback(EvaluateRequest{State: "Quarterly statistical schedule released on Tuesday", Questions: sentQ}, now)
+	if err != nil || neutralResp.Answers["sentiment"].Choice != "neutral" {
+		t.Fatalf("expected non-directional headline to score neutral, got %+v err=%v", neutralResp.Answers, err)
+	}
 }

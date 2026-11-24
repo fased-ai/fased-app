@@ -5,6 +5,7 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useMemo,
   useRef,
   useState,
   type ReactNode,
@@ -400,143 +401,150 @@ function useCoreState() {
       active = false;
     };
   }, [refresh]);
-  async function authenticate(
-    password: string,
-    code?: string,
-    local = false,
-    remote = false,
-    confirm = false,
-  ) {
-    const epoch = ++authGeneration.current;
-    setError("");
-    changePending(epoch, 1);
-    try {
-      const nativeLocal =
-        local &&
-        code === undefined &&
-        ["wails", "wails.localhost"].includes(location.hostname);
-      // The protected native handler independently checks the current instance
-      // on this empty owner request. Reuse only a previously verified Local
-      // connection here; every other sign-in still performs its own inspection.
-      if (
-        !nativeLocal ||
-        !connection ||
-        connection.instanceId !== connectedID.current ||
-        connection.location !== "local" ||
-        connection.transport !== "loopback"
-      )
-        await inspect();
-      const browserLocal = local && code === undefined && !nativeLocal;
-      const session = await request<{
-        csrfToken: string;
-        sessionToken?: string;
-        sessionMode?: "bearer" | "cookie";
-      }>(
-        remote
-          ? "auth/remote"
-          : nativeLocal
-            ? "installation/local-owner"
-            : local
-              ? "auth/local"
-              : code === undefined
-                ? "auth/login"
-                : "auth/claim",
-        "POST",
-        remote
-          ? confirm
-            ? { code, confirm: true }
-            : { code }
-          : nativeLocal
-            ? {}
-            : browserLocal
-              ? { action: "browser" }
+  const authenticate = useCallback(
+    async (
+      password: string,
+      code?: string,
+      local = false,
+      remote = false,
+      confirm = false,
+    ) => {
+      const epoch = ++authGeneration.current;
+      setError("");
+      changePending(epoch, 1);
+      try {
+        const nativeLocal =
+          local &&
+          code === undefined &&
+          ["wails", "wails.localhost"].includes(location.hostname);
+        // The protected native handler independently checks the current instance
+        // on this empty owner request. Reuse only a previously verified Local
+        // connection here; every other sign-in still performs its own inspection.
+        if (
+          !nativeLocal ||
+          !connection ||
+          connection.instanceId !== connectedID.current ||
+          connection.location !== "local" ||
+          connection.transport !== "loopback"
+        )
+          await inspect();
+        const browserLocal = local && code === undefined && !nativeLocal;
+        const session = await request<{
+          csrfToken: string;
+          sessionToken?: string;
+          sessionMode?: "bearer" | "cookie";
+        }>(
+          remote
+            ? "auth/remote"
+            : nativeLocal
+              ? "installation/local-owner"
               : local
-                ? { action: "exchange", code }
+                ? "auth/local"
                 : code === undefined
-                  ? { password }
-                  : { password, code },
-        undefined,
-        browserLocal ? { "X-Fased-Local": "1" } : undefined,
-      );
-      if (epoch !== authGeneration.current) return;
-      if (remote) {
+                  ? "auth/login"
+                  : "auth/claim",
+          "POST",
+          remote
+            ? confirm
+              ? { code, confirm: true }
+              : { code }
+            : nativeLocal
+              ? {}
+              : browserLocal
+                ? { action: "browser" }
+                : local
+                  ? { action: "exchange", code }
+                  : code === undefined
+                    ? { password }
+                    : { password, code },
+          undefined,
+          browserLocal ? { "X-Fased-Local": "1" } : undefined,
+        );
+        if (epoch !== authGeneration.current) return;
+        if (remote) {
+          try {
+            sessionStorage.removeItem("fased.remote.signed-out");
+          } catch {}
+        }
+        if (local) {
+          try {
+            sessionStorage.removeItem("fased.local.signed-out");
+          } catch {}
+        }
+        csrf.current = session.csrfToken;
+        // HTTP loopback cookies would be shared across ports. Use origin-scoped session
+        // storage for loopback/native bearer sessions; private HTTPS uses its cookie.
+        const cookieMode = session.sessionMode
+          ? session.sessionMode === "cookie"
+          : location.protocol === "https:";
+        token.current = cookieMode ? "" : (session.sessionToken ?? "");
+        try {
+          if (token.current) sessionStorage.setItem(sessionKey, token.current);
+          else sessionStorage.removeItem(sessionKey);
+        } catch {
+          /* current-tab memory still works */
+        }
+        await refresh();
+        if (epoch === authGeneration.current && remote)
+          setRemoteSignedOut(false);
+        if (epoch === authGeneration.current && local) setLocalSignedOut(false);
+      } catch (e) {
+        if (epoch === authGeneration.current) {
+          setError(e instanceof Error ? e.message : "Authentication failed");
+          throw e;
+        }
+      } finally {
+        changePending(epoch, -1);
+      }
+    },
+    [request, inspect, refresh, connection, changePending],
+  );
+  const pair = useCallback(
+    async (pairCode: string, label?: string) => {
+      const epoch = ++authGeneration.current;
+      setError("");
+      changePending(epoch, 1);
+      try {
+        await inspect();
+        const session = await request<{
+          csrfToken: string;
+          sessionToken?: string;
+          sessionMode?: "bearer" | "cookie";
+        }>(
+          "auth/pair",
+          "POST",
+          label ? { code: pairCode.trim(), label } : { code: pairCode.trim() },
+          undefined,
+          { "X-Fased-Pair": "1" },
+        );
+        if (epoch !== authGeneration.current) return;
         try {
           sessionStorage.removeItem("fased.remote.signed-out");
         } catch {}
-      }
-      if (local) {
+        csrf.current = session.csrfToken;
+        const cookieMode = session.sessionMode
+          ? session.sessionMode === "cookie"
+          : location.protocol === "https:";
+        token.current = cookieMode ? "" : (session.sessionToken ?? "");
         try {
-          sessionStorage.removeItem("fased.local.signed-out");
-        } catch {}
+          if (token.current) sessionStorage.setItem(sessionKey, token.current);
+          else sessionStorage.removeItem(sessionKey);
+        } catch {
+          /* current-tab memory still works */
+        }
+        await refresh();
+        if (epoch === authGeneration.current) setRemoteSignedOut(false);
+      } catch (e) {
+        if (epoch === authGeneration.current) {
+          setError(e instanceof Error ? e.message : "Pairing failed");
+          throw e;
+        }
+      } finally {
+        changePending(epoch, -1);
       }
-      csrf.current = session.csrfToken;
-      // HTTP loopback cookies would be shared across ports. Use origin-scoped session
-      // storage for loopback/native bearer sessions; private HTTPS uses its cookie.
-      const cookieMode = session.sessionMode
-        ? session.sessionMode === "cookie"
-        : location.protocol === "https:";
-      token.current = cookieMode ? "" : (session.sessionToken ?? "");
-      try {
-        if (token.current) sessionStorage.setItem(sessionKey, token.current);
-        else sessionStorage.removeItem(sessionKey);
-      } catch {
-        /* current-tab memory still works */
-      }
-      await refresh();
-      if (epoch === authGeneration.current && remote) setRemoteSignedOut(false);
-      if (epoch === authGeneration.current && local) setLocalSignedOut(false);
-    } catch (e) {
-      if (epoch === authGeneration.current) {
-        setError(e instanceof Error ? e.message : "Authentication failed");
-        throw e;
-      }
-    } finally {
-      changePending(epoch, -1);
-    }
-  }
-  async function pair(pairCode: string, label?: string) {
-    const epoch = ++authGeneration.current;
-    setError("");
-    changePending(epoch, 1);
-    try {
-      await inspect();
-      const session = await request<{
-        csrfToken: string;
-        sessionToken?: string;
-        sessionMode?: "bearer" | "cookie";
-      }>(
-        "auth/pair",
-        "POST",
-        label ? { code: pairCode.trim(), label } : { code: pairCode.trim() },
-        undefined,
-        { "X-Fased-Pair": "1" },
-      );
-      if (epoch !== authGeneration.current) return;
-      try {
-        sessionStorage.removeItem("fased.remote.signed-out");
-      } catch {}
-      csrf.current = session.csrfToken;
-      const cookieMode = session.sessionMode
-        ? session.sessionMode === "cookie"
-        : location.protocol === "https:";
-      token.current = cookieMode ? "" : (session.sessionToken ?? "");
-      try {
-        if (token.current) sessionStorage.setItem(sessionKey, token.current);
-        else sessionStorage.removeItem(sessionKey);
-      } catch {
-        /* current-tab memory still works */
-      }
-      await refresh();
-      if (epoch === authGeneration.current) setRemoteSignedOut(false);
-    } catch (e) {
-      if (epoch === authGeneration.current) {
-        setError(e instanceof Error ? e.message : "Pairing failed");
-        throw e;
-      }
-    } finally {
-      changePending(epoch, -1);
-    }
-  }
+    },
+    [request, inspect, refresh, changePending],
+  );
   const updateSetup = useCallback(
     (patch: Partial<PrototypeState["setup"]>) => {
       const epoch = generation.current;
@@ -575,7 +583,7 @@ function useCoreState() {
     },
     [refresh, request, changePending],
   );
-  async function logout() {
+  const logout = useCallback(async () => {
     const epoch = authGeneration.current;
     changePending(epoch, 1);
     try {
@@ -601,43 +609,82 @@ function useCoreState() {
     } finally {
       changePending(epoch, -1);
     }
-  }
-  return {
-    remoteAccess,
-    remoteEnrolled,
-    remoteSignedOut,
-    pairingAvailable,
-    remoteTransport,
-    localAccess,
-    localAutoEnter,
-    localSignedOut,
-    passwordAvailable,
-    mode,
+  }, [
     request,
-    stream,
-    streamGet,
-    setup,
-    error,
-    saving: pending.generation === authGeneration.current && pending.count > 0,
-    instanceId,
-    version,
-    capabilities,
-    connection,
-    authenticate,
-    pair,
-    updateSetup,
-    logout,
-    retry: async () => {
-      setError("");
-      try {
-        await refresh();
-      } catch {
-        setLocalAutoEnter(false);
-        setMode("error");
-        setError("The Fased instance is unavailable. Retry the connection.");
-      }
-    },
-  };
+    lock,
+    remoteAccess,
+    pairingAvailable,
+    localAccess,
+    changePending,
+  ]);
+  const retry = useCallback(async () => {
+    setError("");
+    try {
+      await refresh();
+    } catch {
+      setLocalAutoEnter(false);
+      setMode("error");
+      setError("The Fased instance is unavailable. Retry the connection.");
+    }
+  }, [refresh]);
+  const saving =
+    pending.generation === authGeneration.current && pending.count > 0;
+  return useMemo(
+    () => ({
+      remoteAccess,
+      remoteEnrolled,
+      remoteSignedOut,
+      pairingAvailable,
+      remoteTransport,
+      localAccess,
+      localAutoEnter,
+      localSignedOut,
+      passwordAvailable,
+      mode,
+      request,
+      stream,
+      streamGet,
+      setup,
+      error,
+      saving,
+      instanceId,
+      version,
+      capabilities,
+      connection,
+      authenticate,
+      pair,
+      updateSetup,
+      logout,
+      retry,
+    }),
+    [
+      remoteAccess,
+      remoteEnrolled,
+      remoteSignedOut,
+      pairingAvailable,
+      remoteTransport,
+      localAccess,
+      localAutoEnter,
+      localSignedOut,
+      passwordAvailable,
+      mode,
+      request,
+      stream,
+      streamGet,
+      setup,
+      error,
+      saving,
+      instanceId,
+      version,
+      capabilities,
+      connection,
+      authenticate,
+      pair,
+      updateSetup,
+      logout,
+      retry,
+    ],
+  );
 }
 const CoreContext = createContext<ReturnType<typeof useCoreState> | null>(null);
 export function CoreProvider({ children }: { children: ReactNode }) {

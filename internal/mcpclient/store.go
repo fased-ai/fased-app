@@ -29,7 +29,7 @@ const (
 type store struct {
 	key    []byte
 	db     *sql.DB
-	mu     sync.Mutex
+	mu     sync.RWMutex
 	closed bool
 }
 
@@ -205,10 +205,9 @@ func (s *store) open(blob []byte) (string, error) {
 }
 
 func (s *store) listServers(ctx context.Context) ([]ServerConfig, error) {
-	s.mu.Lock()
-	closed := s.closed
-	s.mu.Unlock()
-	if closed {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.closed || s.db == nil {
 		return nil, errors.New("mcpclient store closed")
 	}
 	rows, err := s.db.QueryContext(ctx, `
@@ -246,7 +245,7 @@ ORDER BY id ASC
 	return out, rows.Err()
 }
 
-func (s *store) getServer(ctx context.Context, id string) (ServerConfig, string, error) {
+func (s *store) getServerLocked(ctx context.Context, id string) (ServerConfig, string, error) {
 	var cfg ServerConfig
 	var allowLocal, enabledInt, readOnlyInt int
 	var tokenBlob []byte
@@ -281,10 +280,24 @@ FROM mcp_servers WHERE id = ?
 	return cfg, tok, nil
 }
 
+func (s *store) getServer(ctx context.Context, id string) (ServerConfig, string, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.closed || s.db == nil {
+		return ServerConfig{}, "", errors.New("mcpclient store closed")
+	}
+	return s.getServerLocked(ctx, id)
+}
+
 func (s *store) saveServer(ctx context.Context, in ServerInput) (ServerConfig, error) {
 	norm, err := NormalizeServerInput(in)
 	if err != nil {
 		return ServerConfig{}, err
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.closed || s.db == nil {
+		return ServerConfig{}, errors.New("mcpclient store closed")
 	}
 
 	var existingCount int
@@ -336,11 +349,16 @@ ON CONFLICT(id) DO UPDATE SET
 	if err != nil {
 		return ServerConfig{}, err
 	}
-	cfg, _, err := s.getServer(ctx, norm.ID)
+	cfg, _, err := s.getServerLocked(ctx, norm.ID)
 	return cfg, err
 }
 
 func (s *store) updateCapabilities(ctx context.Context, id string, tools []RemoteTool, resources []RemoteResource, syncAt int64, syncErr string) (ServerConfig, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.closed || s.db == nil {
+		return ServerConfig{}, errors.New("mcpclient store closed")
+	}
 	toolsBytes, _ := json.Marshal(tools)
 	resBytes, _ := json.Marshal(resources)
 	_, err := s.db.ExecContext(ctx, `
@@ -351,11 +369,16 @@ WHERE id = ?
 	if err != nil {
 		return ServerConfig{}, err
 	}
-	cfg, _, err := s.getServer(ctx, id)
+	cfg, _, err := s.getServerLocked(ctx, id)
 	return cfg, err
 }
 
 func (s *store) deleteServer(ctx context.Context, id string) (bool, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.closed || s.db == nil {
+		return false, errors.New("mcpclient store closed")
+	}
 	res, err := s.db.ExecContext(ctx, `DELETE FROM mcp_servers WHERE id = ?`, strings.TrimSpace(id))
 	if err != nil {
 		return false, err

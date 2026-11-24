@@ -27,6 +27,8 @@ type Service struct {
 	fixtureMode   bool
 	now           func() time.Time
 	httpTransport http.RoundTripper
+	publicClient  *http.Client
+	localClient   *http.Client
 	scorer        Scorer
 	seedMu        sync.Mutex
 	seeded        bool
@@ -48,6 +50,8 @@ func NewService(cfg Config) (*Service, error) {
 		fixtureMode:   cfg.FixtureMode,
 		now:           nowFn,
 		httpTransport: cfg.HTTPTransport,
+		publicClient:  newHTTPClient(cfg.HTTPTransport, KindRSS, false),
+		localClient:   newHTTPClient(cfg.HTTPTransport, KindSidecar, true),
 		scorer:        cfg.Scorer,
 	}, nil
 }
@@ -343,53 +347,74 @@ func (s *Service) Sync(ctx context.Context, sourceID string) (SyncResult, error)
 	res := SyncResult{
 		SyncedAt: nowSec,
 	}
+	var resMu sync.Mutex
 	var errs map[string]string
-
-	for _, src := range targets {
-		if s.fixtureMode && (s.httpTransport == nil || isFixtureEndpoint(src.Endpoint)) {
-			evCount, predCount, fErr := s.syncFixtureSource(ctx, src, nowSec)
-			if fErr != nil {
-				if errs == nil {
-					errs = map[string]string{}
-				}
-				errs[src.ID] = fErr.Error()
-				_ = s.store.markSourceSync(ctx, src.ID, nowSec, fErr.Error())
-				continue
-			}
-			res.SyncedSources++
-			res.EventCount += evCount
-			res.PredictionCount += predCount
-			_ = s.store.markSourceSync(ctx, src.ID, nowSec, "")
-			continue
+	recordErr := func(id string, err error) {
+		resMu.Lock()
+		if errs == nil {
+			errs = map[string]string{}
 		}
-
-		raw, fErr := fetchSourceBytes(ctx, s.httpTransport, src)
-		if fErr != nil {
-			if errs == nil {
-				errs = map[string]string{}
-			}
-			errs[src.ID] = fErr.Error()
-			_ = s.store.markSourceSync(ctx, src.ID, nowSec, fErr.Error())
-			continue
-		}
-
-		evCount, predCount, pErr := s.ingestPayload(ctx, src, raw, nowSec)
-		if pErr != nil {
-			if errs == nil {
-				errs = map[string]string{}
-			}
-			errs[src.ID] = pErr.Error()
-			_ = s.store.markSourceSync(ctx, src.ID, nowSec, pErr.Error())
-			continue
-		}
-		res.SyncedSources++
-		res.EventCount += evCount
-		res.PredictionCount += predCount
-		_ = s.store.markSourceSync(ctx, src.ID, nowSec, "")
+		errs[id] = err.Error()
+		resMu.Unlock()
+		_ = s.store.markSourceSync(ctx, id, nowSec, err.Error())
 	}
+
+	workers := 4
+	if len(targets) < workers {
+		workers = len(targets)
+	}
+	if workers < 1 {
+		workers = 1
+	}
+	jobs := make(chan SourceConfig, len(targets))
+	for _, src := range targets {
+		jobs <- src
+	}
+	close(jobs)
+
+	var wg sync.WaitGroup
+	for w := 0; w < workers; w++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for src := range jobs {
+				srcCtx, cancel := context.WithTimeout(ctx, 8*time.Second)
+				var evCount, predCount int
+				var err error
+				if s.fixtureMode && (s.httpTransport == nil || isFixtureEndpoint(src.Endpoint)) {
+					evCount, predCount, err = s.syncFixtureSource(srcCtx, src, nowSec)
+				} else {
+					client := s.publicClient
+					if src.Kind == KindSidecar && src.AllowLocalhost {
+						client = s.localClient
+					}
+					var raw []byte
+					raw, err = fetchSourceBytes(srcCtx, client, s.httpTransport, src)
+					if err == nil {
+						evCount, predCount, err = s.ingestPayload(srcCtx, src, raw, nowSec)
+					}
+				}
+				cancel()
+				if err != nil {
+					recordErr(src.ID, err)
+					continue
+				}
+				resMu.Lock()
+				res.SyncedSources++
+				res.EventCount += evCount
+				res.PredictionCount += predCount
+				resMu.Unlock()
+				_ = s.store.markSourceSync(ctx, src.ID, nowSec, "")
+			}
+		}()
+	}
+	wg.Wait()
 
 	if len(errs) > 0 {
 		res.Errors = errs
+	}
+	if res.SyncedSources > 0 {
+		s.bus.Publish(StreamEvent{Type: "sync_complete", Timestamp: nowSec})
 	}
 	return res, nil
 }

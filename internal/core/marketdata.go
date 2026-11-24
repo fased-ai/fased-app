@@ -13,6 +13,15 @@ import (
 	"github.com/fased-ai/fased-app/internal/marketdata"
 )
 
+func (s *Store) loadedMarketDataService() *marketdata.Service {
+	if s == nil {
+		return nil
+	}
+	s.marketDataMu.Lock()
+	defer s.marketDataMu.Unlock()
+	return s.marketData
+}
+
 func (s *Store) marketDataService() (*marketdata.Service, error) {
 	if s == nil {
 		return nil, errors.New("workspace store unavailable")
@@ -316,27 +325,110 @@ func (h *HTTPHandler) marketDataAPI(w http.ResponseWriter, r *http.Request, toke
 	}
 }
 
+func parseStreamSubsParam(raw string) ([]marketdata.Filter, error) {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return nil, nil
+	}
+	parts := strings.Split(trimmed, ",")
+	if len(parts) > 16 {
+		return nil, errors.New("subs cannot exceed 16 streams")
+	}
+	filters := make([]marketdata.Filter, 0, len(parts))
+	for _, entry := range parts {
+		fields := strings.Split(strings.TrimSpace(entry), ":")
+		if len(fields) < 2 || len(fields) > 4 {
+			return nil, fmt.Errorf("invalid subscription tuple %q", entry)
+		}
+		v, err := marketdata.NormalizeVenue(fields[0])
+		if err != nil {
+			return nil, err
+		}
+		sym, err := marketdata.NormalizeSymbol(fields[1])
+		if err != nil {
+			return nil, err
+		}
+		iv := ""
+		if len(fields) >= 3 && strings.TrimSpace(fields[2]) != "" {
+			iv, err = marketdata.NormalizeInterval(fields[2])
+			if err != nil {
+				return nil, err
+			}
+		}
+		st := ""
+		if len(fields) == 4 && strings.TrimSpace(fields[3]) != "" {
+			st, err = marketdata.NormalizeStyle(fields[3])
+			if err != nil {
+				return nil, err
+			}
+		}
+		filters = append(filters, marketdata.Filter{
+			Venue:    v,
+			Symbol:   sym,
+			Interval: iv,
+			Style:    st,
+		})
+	}
+	return filters, nil
+}
+
 func (h *HTTPHandler) marketDataStreamSSE(w http.ResponseWriter, r *http.Request, svc *marketdata.Service) {
 	q := r.URL.Query()
 	venue := strings.ToLower(strings.TrimSpace(q.Get("venue")))
 	symbol := strings.TrimSpace(q.Get("symbol"))
 	interval := strings.ToLower(strings.TrimSpace(q.Get("interval")))
 	style := strings.ToLower(strings.TrimSpace(q.Get("style")))
-	if venue != "" {
-		if _, err := marketdata.NormalizeVenue(venue); err != nil {
-			writeError(w, 400, err.Error())
-			return
-		}
+	noSnapshot := q.Get("noSnapshot") == "1" || strings.EqualFold(q.Get("noSnapshot"), "true")
+	subsParam := strings.TrimSpace(q.Get("subs"))
+
+	filters, err := parseStreamSubsParam(subsParam)
+	if err != nil {
+		writeError(w, 400, err.Error())
+		return
 	}
-	if symbol != "" {
-		if _, err := marketdata.NormalizeSymbol(symbol); err != nil {
-			writeError(w, 400, err.Error())
-			return
+	if len(filters) == 0 {
+		if venue != "" {
+			var err error
+			venue, err = marketdata.NormalizeVenue(venue)
+			if err != nil {
+				writeError(w, 400, err.Error())
+				return
+			}
 		}
+		if symbol != "" {
+			var err error
+			symbol, err = marketdata.NormalizeSymbol(symbol)
+			if err != nil {
+				writeError(w, 400, err.Error())
+				return
+			}
+		}
+		if interval != "" {
+			var err error
+			interval, err = marketdata.NormalizeInterval(interval)
+			if err != nil {
+				writeError(w, 400, err.Error())
+				return
+			}
+		}
+		if style != "" {
+			var err error
+			style, err = marketdata.NormalizeStyle(style)
+			if err != nil {
+				writeError(w, 400, err.Error())
+				return
+			}
+		}
+		filters = []marketdata.Filter{{
+			Venue:    venue,
+			Symbol:   symbol,
+			Interval: interval,
+			Style:    style,
+		}}
 	}
 
 	var initial *marketdata.CandleSeries
-	if venue != "" && symbol != "" {
+	if len(filters) == 1 && subsParam == "" && !noSnapshot && venue != "" && symbol != "" {
 		snapCtx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 		series, err := svc.GetCandles(snapCtx, venue, symbol, interval, marketdata.TransformOptions{Style: style}, 100)
 		cancel()
@@ -347,15 +439,13 @@ func (h *HTTPHandler) marketDataStreamSSE(w http.ResponseWriter, r *http.Request
 		initial = &series
 	}
 
-	subCh, unsubscribe := svc.Subscribe(marketdata.Filter{
-		Venue:  venue,
-		Symbol: symbol,
-	})
+	subCh, unsubscribe := svc.SubscribeMulti(filters)
 	defer unsubscribe()
 
 	w.Header().Set("Content-Type", "text/event-stream; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-cache, no-transform")
 	w.Header().Set("X-Accel-Buffering", "no")
+	_ = http.NewResponseController(w).SetWriteDeadline(time.Time{})
 	w.WriteHeader(http.StatusOK)
 
 	flusher, _ := w.(http.Flusher)

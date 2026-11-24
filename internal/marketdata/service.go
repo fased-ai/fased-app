@@ -85,6 +85,11 @@ func (s *Service) Subscribe(filter Filter) (<-chan Event, func()) {
 	return s.bus.Subscribe(filter)
 }
 
+// SubscribeMulti attaches a single subscriber channel matching any of filters.
+func (s *Service) SubscribeMulti(filters []Filter) (<-chan Event, func()) {
+	return s.bus.SubscribeMulti(filters)
+}
+
 // Publish emits an event onto the in-process marketdata bus.
 func (s *Service) Publish(evt Event) {
 	if evt.Timestamp == 0 {
@@ -154,19 +159,22 @@ func (s *Service) GetCandles(ctx context.Context, venue, symbol, interval string
 		_ = s.store.UpsertCandles(ctx, v, sym, iv, base)
 		source = "fixture"
 	} else {
-		fetched, fetchErr := s.client.fetchCandles(ctx, v, sym, iv, startSec, endSec, limit)
+		fetched, fetchErr := s.client.fetchCandles(ctx, v, sym, iv, startSec, nowSec, limit)
 		if fetchErr == nil && len(fetched) > 0 {
 			base = fetched
 			_ = s.store.UpsertCandles(ctx, v, sym, iv, base)
 			source = v
 		} else {
-			cached, cacheErr := s.store.QueryCandles(ctx, v, sym, iv, startSec, endSec, limit)
+			cached, cacheErr := s.store.QueryCandles(ctx, v, sym, iv, startSec, nowSec, limit)
 			if cacheErr == nil && len(cached) > 0 {
 				base = cached
 			} else if fetchErr != nil {
 				return CandleSeries{}, fetchErr
 			}
 		}
+	}
+	if limit > 0 && len(base) > limit {
+		base = base[len(base)-limit:]
 	}
 
 	if (style == StyleTick || style == StyleVolume) && s.fixtureMode {
@@ -185,7 +193,7 @@ func (s *Service) GetCandles(ctx context.Context, venue, symbol, interval string
 			Fixture:   s.fixtureMode,
 			UpdatedAt: nowSec,
 		}
-		s.Publish(Event{Type: "candle", Venue: v, Symbol: sym, Interval: iv, Payload: series})
+		s.Publish(Event{Type: "candle", Venue: v, Symbol: sym, Interval: iv, Style: style, Payload: series})
 		return series, nil
 	}
 
@@ -204,7 +212,7 @@ func (s *Service) GetCandles(ctx context.Context, venue, symbol, interval string
 		UpdatedAt: nowSec,
 	}
 	if len(transformed) > 0 {
-		s.Publish(Event{Type: "candle", Venue: v, Symbol: sym, Interval: iv, Payload: transformed[len(transformed)-1]})
+		s.Publish(Event{Type: "candle", Venue: v, Symbol: sym, Interval: iv, Style: style, Payload: transformed[len(transformed)-1]})
 	}
 	return series, nil
 }

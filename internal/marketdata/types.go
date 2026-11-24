@@ -257,15 +257,18 @@ type Event struct {
 	Venue     string `json:"venue,omitempty"`
 	Symbol    string `json:"symbol,omitempty"`
 	Interval  string `json:"interval,omitempty"`
+	Style     string `json:"style,omitempty"`
 	Timestamp int64  `json:"timestamp"`
 	Payload   any    `json:"payload,omitempty"`
 }
 
 // Filter restricts Bus subscriptions when fields are non-empty.
 type Filter struct {
-	Venue  string
-	Symbol string
-	Type   string
+	Venue    string
+	Symbol   string
+	Interval string
+	Style    string
+	Type     string
 }
 
 // NormalizeVenue validates and canonicalizes a supported market data venue name.

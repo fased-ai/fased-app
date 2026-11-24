@@ -295,7 +295,13 @@ export function OnchainSwap() {
       <div className="section-head">
         <h1>{t("Onchain")}</h1>
         <div className="row-actions">
-          <Badge>{t("Live execution disabled")}</Badge>
+          <Badge>
+            {t(
+              active?.liveExecution
+                ? "Execution active"
+                : "Live execution disabled",
+            )}
+          </Badge>
           <button
             type="button"
             className="icon-btn"

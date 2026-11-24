@@ -477,7 +477,9 @@ function useWorkspaceState() {
           ["Settings", "settings"],
           ["Activity", "activity"],
         ].map(([title, path]) => ({ title, path })),
-        { title: "Mining", path: "terminals/satcoin" },
+        ...(core.mode !== "ready" || Boolean(agents.view?.wenMining)
+          ? [{ title: "Mining", path: "terminals/satcoin" }]
+          : []),
         { title: "Onchain", path: "terminals/jupiter" },
         { title: "Hyperliquid", path: "terminals/hyperliquid" },
         { title: "Memory", path: "agents/memory" },
@@ -488,7 +490,7 @@ function useWorkspaceState() {
           item.title &&
           t(item.title).toLowerCase().includes(query.toLowerCase()),
       ),
-    [query, t],
+    [query, t, core.mode, agents.view?.wenMining],
   );
 
   return useMemo(

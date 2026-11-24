@@ -550,6 +550,7 @@ func (h *HTTPHandler) automationStreamSSE(w http.ResponseWriter, r *http.Request
 	w.Header().Set("Content-Type", "text/event-stream; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-cache, no-transform")
 	w.Header().Set("X-Accel-Buffering", "no")
+	_ = http.NewResponseController(w).SetWriteDeadline(time.Time{})
 	w.WriteHeader(http.StatusOK)
 
 	flusher, _ := w.(http.Flusher)

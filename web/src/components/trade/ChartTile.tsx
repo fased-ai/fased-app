@@ -25,10 +25,20 @@ import {
 } from "../../world-intel";
 import { FasedChartAdapter } from "./FasedChartAdapter";
 
+export type LiveMarketUpdate = {
+  venue: string;
+  symbol: string;
+  interval?: string;
+  style?: string;
+  payload: Candle | { candles?: Candle[] };
+  seq: number;
+};
+
 export function ChartTile({
   tile,
   active,
   syncedCrosshair,
+  liveUpdate = null,
   intelEvents = [],
   showEvents = true,
   onSelect,
@@ -38,6 +48,7 @@ export function ChartTile({
   tile: ChartTileConfig;
   active: boolean;
   syncedCrosshair: CrosshairSyncPoint | null;
+  liveUpdate?: LiveMarketUpdate | null;
   intelEvents?: IntelEvent[];
   showEvents?: boolean;
   onSelect: () => void;
@@ -59,6 +70,8 @@ export function ChartTile({
   useEffect(() => {
     const controller = new AbortController();
     let mounted = true;
+    setCandles([]);
+    setSourceLabel("loading");
     setError("");
 
     fetchCandles(
@@ -80,65 +93,47 @@ export function ChartTile({
         setError(err instanceof Error ? err.message : "Failed to load candles");
       });
 
-    if (core.mode === "ready") {
-      const q = new URLSearchParams({
-        venue: tile.venue,
-        symbol: tile.symbol,
-        interval: tile.interval,
-        style: tile.style,
-      });
-      void core
-        .streamGet(`market/stream?${q.toString()}`, {
-          signal: controller.signal,
-          onEvent: (frame) => {
-            if (!mounted) return;
-            if (frame.event === "snapshot") {
-              try {
-                const parsed = JSON.parse(frame.data) as {
-                  candles?: Candle[];
-                  fixture?: boolean;
-                  source?: string;
-                };
-                if (Array.isArray(parsed.candles)) {
-                  setCandles(parsed.candles);
-                  if (parsed.source) setSourceLabel(parsed.source);
-                }
-              } catch {}
-            } else if (frame.event === "candle") {
-              try {
-                const ev = JSON.parse(frame.data) as {
-                  payload?: Candle | { candles?: Candle[] };
-                };
-                const p = ev.payload;
-                if (p && "candles" in p && Array.isArray(p.candles)) {
-                  setCandles(p.candles);
-                } else if (p && "close" in p) {
-                  setCandles((prev) => {
-                    if (prev.length === 0) return [p];
-                    const last = prev[prev.length - 1];
-                    if (last.time === p.time) {
-                      return [...prev.slice(0, -1), p];
-                    }
-                    if (p.time > last.time) {
-                      return [...prev.slice(-199), p];
-                    }
-                    return prev;
-                  });
-                }
-              } catch {}
-            }
-          },
-        })
-        .catch(() => {
-          /* ignore aborted or unavailable live stream when snapshot loaded */
-        });
-    }
-
     return () => {
       mounted = false;
       controller.abort();
     };
-  }, [core, core.mode, tile.venue, tile.symbol, tile.interval, tile.style]);
+  }, [
+    core.mode,
+    core.request,
+    tile.venue,
+    tile.symbol,
+    tile.interval,
+    tile.style,
+  ]);
+
+  useEffect(() => {
+    if (!liveUpdate) return;
+    if (
+      liveUpdate.venue !== tile.venue ||
+      liveUpdate.symbol.toUpperCase() !== tile.symbol.toUpperCase()
+    ) {
+      return;
+    }
+    if (liveUpdate.interval && liveUpdate.interval !== tile.interval) return;
+    if (liveUpdate.style && liveUpdate.style !== tile.style) return;
+
+    const p = liveUpdate.payload;
+    if (p && "candles" in p && Array.isArray(p.candles)) {
+      setCandles(p.candles);
+    } else if (p && "close" in p) {
+      setCandles((prev) => {
+        if (prev.length === 0) return [p];
+        const last = prev[prev.length - 1];
+        if (last.time === p.time) {
+          return [...prev.slice(0, -1), p];
+        }
+        if (p.time > last.time) {
+          return [...prev.slice(-199), p];
+        }
+        return prev;
+      });
+    }
+  }, [liveUpdate, tile.venue, tile.symbol, tile.interval, tile.style]);
 
   const latest = useMemo(() => candles[candles.length - 1] ?? null, [candles]);
   const matchedPins = useMemo(
