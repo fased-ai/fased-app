@@ -197,3 +197,122 @@ strategy({ long: crossover(ef, es), exitLong: crossunder(ef, es), stopLossPct: 3
 		t.Fatalf("DeleteScript failed: deleted=%v err=%v", deleted, err)
 	}
 }
+
+func TestValidationAndConfigStatisticalFixes(t *testing.T) {
+	// 1. Explicit JSON zero feeBps / slippageBps must be preserved instead of defaulting to 5.0 / 3.0.
+	var zeroCfg BacktestConfig
+	if err := json.Unmarshal([]byte(`{"feeBps":0,"slippageBps":0}`), &zeroCfg); err != nil {
+		t.Fatalf("Unmarshal zero fee config: %v", err)
+	}
+	normZero, err := NormalizeBacktestConfig(zeroCfg)
+	if err != nil || normZero.FeeBps != 0 || normZero.SlippageBps != 0 {
+		t.Fatalf("expected explicit 0 fee/slippage preserved, got fee=%v slip=%v err=%v", normZero.FeeBps, normZero.SlippageBps, err)
+	}
+
+	var omittedCfg BacktestConfig
+	if err := json.Unmarshal([]byte(`{}`), &omittedCfg); err != nil {
+		t.Fatalf("Unmarshal omitted config: %v", err)
+	}
+	normDefault, err := NormalizeBacktestConfig(omittedCfg)
+	if err != nil || normDefault.FeeBps != defaultFeeBps || normDefault.SlippageBps != defaultSlippageBps {
+		t.Fatalf("expected omitted fee/slippage to default (%.1f/%.1f), got %.1f/%.1f err=%v", defaultFeeBps, defaultSlippageBps, normDefault.FeeBps, normDefault.SlippageBps, err)
+	}
+
+	// 2. buildParamGrid centers sweep on user-supplied cfg.Params.
+	inputs := []fasedscript.InputSpec{{Name: "fast", Default: 9, Min: 5, Max: 30, Step: 2}}
+	grid := buildParamGrid(inputs, map[string]float64{"fast": 20})
+	if len(grid) != 3 || grid[0]["fast"] != 18 || grid[1]["fast"] != 20 || grid[2]["fast"] != 22 {
+		t.Fatalf("expected grid centered at user param 20 -> [18,20,22], got %+v", grid)
+	}
+
+	// 3. Sub-penny pricing retains significant digits cleanly.
+	subCandles := []marketdata.Candle{
+		{Time: 1000, Open: 0.00001234, High: 0.00001240, Low: 0.00001220, Close: 0.00001235, Volume: 100},
+		{Time: 2000, Open: 0.00001236, High: 0.00001250, Low: 0.00001230, Close: 0.00001248, Volume: 100},
+		{Time: 3000, Open: 0.00001249, High: 0.00001260, Low: 0.00001240, Close: 0.00001255, Volume: 100},
+	}
+	_, subTrades, _ := Simulate(subCandles, fasedscript.StrategySpec{Long: []bool{true, false, false}}, normZero)
+	if len(subTrades) != 1 || subTrades[0].EntryPrice <= 0 || subTrades[0].ExitPrice <= 0 {
+		t.Fatalf("expected non-zero rounded sub-penny trade prices, got %+v", subTrades)
+	}
+
+	// 4. Gate 3 must fail when holdout executes 0 trades.
+	candles := syntheticCandles(240)
+	flatProg, err := fasedscript.Compile(`plot("c", close); strategy({ long: false, short: false });`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	flatCfg, _ := NormalizeBacktestConfig(BacktestConfig{Limit: 240, Permutations: 50, WFPermutations: 25})
+	flatRep, err := RunFourGateValidation(t.Context(), candles, flatProg, flatCfg)
+	if err != nil {
+		t.Fatalf("RunFourGateValidation zero-trade: %v", err)
+	}
+	if flatRep.Gate3.Passed || flatRep.Gate3.HoldoutTrades != 0 {
+		t.Fatalf("expected Gate 3 failure with 0 holdout trades, got %+v", flatRep.Gate3)
+	}
+
+	// 5. Canceled context propagates context.Canceled rather than bogus p-values.
+	emaProg, err := fasedscript.Compile(`const p = input("p", 30, 26, 34, 4); const m = ema(close, p); const f = ema(close, 5); plot("m", m); strategy({ long: crossover(f, m), exitLong: crossunder(f, m) });`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cCtx, cancel := context.WithCancel(t.Context())
+	cancel()
+	if _, err := RunFourGateValidation(cCtx, candles, emaProg, flatCfg); err == nil {
+		t.Fatal("expected canceled context error from RunFourGateValidation")
+	}
+
+	// 6. Causal warm-up prefix enables ema(close, 30) to generate signals cleanly in a 40-bar holdout tail.
+	mWarm, err := evalAndSimulateWindow(candles, len(candles)-40, emaProg, map[string]float64{"p": 30}, flatCfg)
+	if err != nil {
+		t.Fatalf("evalAndSimulateWindow warm-up check failed: %v", err)
+	}
+	if mWarm.TradeCount == 0 {
+		t.Fatalf("expected warm-up prefix to enable trades in 40-bar holdout for ema(30), got 0 trades")
+	}
+
+	// 7. Gate 1 ignores a 1-trade outlier cell when selecting BestParams if eligible (>=3 trades) cells exist.
+	outlierSrc := `const mode = input("mode", 1, 0, 2, 1);
+const bars = cumCount;
+plot("m", close);`
+	_ = outlierSrc
+	// Build a clean deterministic script with 3 parameter modes: mode=0 (<3 trades high Sharpe) vs mode=1 & mode=2 (>=3 trades).
+	upDown := make([]marketdata.Candle, 120)
+	baseTs := int64(1795400000)
+	for i := range upDown {
+		// Sawtooth wave cleanly ascending overall so fast/slow MA crosses >= 6 times on mode=0,1 while mode=2 only trades once via steep threshold.
+		px := 100.0 + float64(i)*0.4 + math.Sin(float64(i)*0.5)*3.5
+		upDown[i] = marketdata.Candle{Time: baseTs + int64(i)*3600, Open: px - 0.5, High: px + 1.5, Low: px - 1.5, Close: px + 0.5, Volume: 100}
+	}
+	outlierProg, err := fasedscript.Compile(`const th = input("th", 0, 0, 2, 1);
+const f = ema(close, 3);
+const s = ema(close, 8);
+const trigger = th >= 2 ? (highest(close, 12) == close && shift(close, 1) < close && close > 140) : crossover(f, s);
+const exit = th >= 2 ? false : crossunder(f, s);
+plot("f", f);
+strategy({ long: trigger, exitLong: exit });`)
+	if err != nil {
+		t.Fatalf("Compile Gate 1 outlier script: %v", err)
+	}
+	repOutlier, err := RunFourGateValidation(t.Context(), upDown, outlierProg, flatCfg)
+	if err != nil {
+		t.Fatalf("RunFourGateValidation outlier test: %v", err)
+	}
+	// If th=2 produced < 3 trades on inSample, Gate 1 must not pick th=2 as BestParams when th=0/1 have >=3 trades.
+	if len(repOutlier.Gate1.Cells) < 2 {
+		t.Fatalf("expected >=2 plateau cells, got %+v", repOutlier.Gate1.Cells)
+	}
+	hasEligible := false
+	outlierSingleTrade := false
+	for _, c := range repOutlier.Gate1.Cells {
+		if c.Trades >= 3 {
+			hasEligible = true
+		}
+		if c.Params["th"] == 2 && c.Trades < 3 {
+			outlierSingleTrade = true
+		}
+	}
+	if hasEligible && outlierSingleTrade && repOutlier.Gate1.BestParams["th"] == 2 {
+		t.Fatalf("expected Gate 1 to ignore <3-trade outlier cell th=2, got BestParams=%+v cells=%+v", repOutlier.Gate1.BestParams, repOutlier.Gate1.Cells)
+	}
+}

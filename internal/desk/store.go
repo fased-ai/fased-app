@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -86,6 +87,7 @@ CREATE TABLE IF NOT EXISTS paper_account(
 	daily_day TEXT NOT NULL,
 	total_fees REAL NOT NULL DEFAULT 0,
 	consecutive_losses INTEGER NOT NULL DEFAULT 0,
+	reset_at INTEGER NOT NULL DEFAULT 0,
 	updated_at INTEGER NOT NULL
 );
 
@@ -206,6 +208,12 @@ CREATE TABLE IF NOT EXISTS desk_bench(
 	if _, err := db.ExecContext(ctx, schemaSQL); err != nil {
 		_ = db.Close()
 		return nil, err
+	}
+	if _, colErr := db.ExecContext(ctx, `SELECT reset_at FROM paper_account LIMIT 1`); colErr != nil {
+		if _, altErr := db.ExecContext(ctx, `ALTER TABLE paper_account ADD COLUMN reset_at INTEGER NOT NULL DEFAULT 0`); altErr != nil {
+			_ = db.Close()
+			return nil, altErr
+		}
 	}
 
 	s := &store{dir: dir, db: db, now: nowFn}
@@ -393,6 +401,7 @@ type accountRow struct {
 	DailyDay          string
 	TotalFees         float64
 	ConsecutiveLosses int
+	ResetAt           int64
 	UpdatedAt         int64
 }
 
@@ -405,8 +414,8 @@ func (s *store) getAccountRow(ctx context.Context) (accountRow, error) {
 func (s *store) getAccountRowLocked(ctx context.Context) (accountRow, error) {
 	var row accountRow
 	err := s.db.QueryRowContext(ctx,
-		`SELECT initial_capital, cash_usd, realized_pnl, daily_pnl, daily_day, total_fees, consecutive_losses, updated_at FROM paper_account WHERE id=1`,
-	).Scan(&row.InitialCapital, &row.CashUSD, &row.RealizedPnL, &row.DailyPnL, &row.DailyDay, &row.TotalFees, &row.ConsecutiveLosses, &row.UpdatedAt)
+		`SELECT initial_capital, cash_usd, realized_pnl, daily_pnl, daily_day, total_fees, consecutive_losses, reset_at, updated_at FROM paper_account WHERE id=1`,
+	).Scan(&row.InitialCapital, &row.CashUSD, &row.RealizedPnL, &row.DailyPnL, &row.DailyDay, &row.TotalFees, &row.ConsecutiveLosses, &row.ResetAt, &row.UpdatedAt)
 	if err != nil {
 		return accountRow{}, err
 	}
@@ -423,9 +432,16 @@ func (s *store) updateAccountRow(ctx context.Context, row accountRow) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	_, err := s.db.ExecContext(ctx,
-		`UPDATE paper_account SET initial_capital=?, cash_usd=?, realized_pnl=?, daily_pnl=?, daily_day=?, total_fees=?, consecutive_losses=?, updated_at=? WHERE id=1`,
-		row.InitialCapital, row.CashUSD, row.RealizedPnL, row.DailyPnL, row.DailyDay, row.TotalFees, row.ConsecutiveLosses, row.UpdatedAt,
+		`UPDATE paper_account SET initial_capital=?, cash_usd=?, realized_pnl=?, daily_pnl=?, daily_day=?, total_fees=?, consecutive_losses=?, reset_at=?, updated_at=? WHERE id=1`,
+		row.InitialCapital, row.CashUSD, row.RealizedPnL, row.DailyPnL, row.DailyDay, row.TotalFees, row.ConsecutiveLosses, row.ResetAt, row.UpdatedAt,
 	)
+	return err
+}
+
+func (s *store) resetConsecutiveLosses(ctx context.Context, now int64) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_, err := s.db.ExecContext(ctx, `UPDATE paper_account SET consecutive_losses=0, updated_at=? WHERE id=1`, now)
 	return err
 }
 
@@ -812,4 +828,113 @@ func (s *store) isBenched(ctx context.Context, symbol, scriptID string, now int6
 		}
 	}
 	return false, BenchEntry{}, nil
+}
+
+func (s *store) rejectTicketIfPending(ctx context.Context, ticket OrderTicket) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	res, err := s.db.ExecContext(ctx,
+		`UPDATE desk_tickets SET status='REJECTED_BY_PM', reason=?, updated_at=? WHERE id=? AND status='PENDING_PM'`,
+		ticket.Reason, ticket.UpdatedAt, ticket.ID,
+	)
+	if err != nil {
+		return false, err
+	}
+	n, _ := res.RowsAffected()
+	return n == 1, nil
+}
+
+func (s *store) approveTicketAndOpenPositionTx(ctx context.Context, ticket OrderTicket, pos PaperPosition, entryFee float64, now int64) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return false, err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	res, err := tx.ExecContext(ctx,
+		`UPDATE desk_tickets SET entry_price=?, stop_price=?, target_price=?, quantity=?, notional_usd=?, risk_usd=?, risk_reward=?, status='FILLED', reason=?, updated_at=? WHERE id=? AND status='PENDING_PM'`,
+		ticket.EntryPrice, ticket.StopPrice, ticket.TargetPrice, ticket.Quantity, ticket.NotionalUSD, ticket.RiskUSD, ticket.RiskReward, ticket.Reason, now, ticket.ID,
+	)
+	if err != nil {
+		return false, err
+	}
+	affected, _ := res.RowsAffected()
+	if affected != 1 {
+		return false, nil
+	}
+	if _, err := tx.ExecContext(ctx,
+		`INSERT INTO paper_positions(id, ticket_id, venue, symbol, script_id, side, quantity, entry_price, mark_price, stop_price, target_price, initial_risk_usd, entry_fee_usd, exit_price, exit_fee_usd, unrealized_pnl, realized_pnl, pnl_r, status, exit_reason, opened_at, closed_at) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		pos.ID, pos.TicketID, pos.Venue, pos.Symbol, pos.ScriptID, pos.Side, pos.Quantity, pos.EntryPrice, pos.MarkPrice, pos.StopPrice, pos.TargetPrice, pos.InitialRiskUSD, pos.EntryFeeUSD, pos.ExitPrice, pos.ExitFeeUSD, pos.UnrealizedPnL, pos.RealizedPnL, pos.PnLR, pos.Status, pos.ExitReason, pos.OpenedAt, pos.ClosedAt,
+	); err != nil {
+		return false, err
+	}
+	var cashUSD, totalFees float64
+	if err := tx.QueryRowContext(ctx, `SELECT cash_usd, total_fees FROM paper_account WHERE id=1`).Scan(&cashUSD, &totalFees); err != nil {
+		return false, err
+	}
+	newCash := math.Round((cashUSD-entryFee)*100) / 100
+	newFees := math.Round((totalFees+entryFee)*100) / 100
+	if _, err := tx.ExecContext(ctx, `UPDATE paper_account SET cash_usd=?, total_fees=?, updated_at=? WHERE id=1`, newCash, newFees, now); err != nil {
+		return false, err
+	}
+	if err := tx.Commit(); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func (s *store) closePositionAndUpdateAccountTx(ctx context.Context, p PaperPosition, grossPnL, netPnL, exitFee float64, now int64) (bool, accountRow, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return false, accountRow{}, err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	res, err := tx.ExecContext(ctx,
+		`UPDATE paper_positions SET exit_price=?, mark_price=?, exit_fee_usd=?, unrealized_pnl=0, realized_pnl=?, pnl_r=?, status='CLOSED', exit_reason=?, closed_at=? WHERE id=? AND status='OPEN'`,
+		p.ExitPrice, p.MarkPrice, p.ExitFeeUSD, p.RealizedPnL, p.PnLR, p.ExitReason, p.ClosedAt, p.ID,
+	)
+	if err != nil {
+		return false, accountRow{}, err
+	}
+	affected, _ := res.RowsAffected()
+	if affected != 1 {
+		return false, accountRow{}, nil
+	}
+
+	var acct accountRow
+	if err := tx.QueryRowContext(ctx,
+		`SELECT initial_capital, cash_usd, realized_pnl, daily_pnl, daily_day, total_fees, consecutive_losses, reset_at, updated_at FROM paper_account WHERE id=1`,
+	).Scan(&acct.InitialCapital, &acct.CashUSD, &acct.RealizedPnL, &acct.DailyPnL, &acct.DailyDay, &acct.TotalFees, &acct.ConsecutiveLosses, &acct.ResetAt, &acct.UpdatedAt); err != nil {
+		return false, accountRow{}, err
+	}
+	today := s.dayString(s.now().UnixMilli())
+	if acct.DailyDay != today {
+		acct.DailyDay = today
+		acct.DailyPnL = 0
+	}
+	acct.CashUSD = math.Round((acct.CashUSD+grossPnL-exitFee)*100) / 100
+	acct.RealizedPnL = math.Round((acct.RealizedPnL+netPnL)*100) / 100
+	acct.DailyPnL = math.Round((acct.DailyPnL+netPnL)*100) / 100
+	acct.TotalFees = math.Round((acct.TotalFees+exitFee)*100) / 100
+	if netPnL < 0 {
+		acct.ConsecutiveLosses++
+	} else {
+		acct.ConsecutiveLosses = 0
+	}
+	acct.UpdatedAt = now
+	if _, err := tx.ExecContext(ctx,
+		`UPDATE paper_account SET cash_usd=?, realized_pnl=?, daily_pnl=?, daily_day=?, total_fees=?, consecutive_losses=?, updated_at=? WHERE id=1`,
+		acct.CashUSD, acct.RealizedPnL, acct.DailyPnL, acct.DailyDay, acct.TotalFees, acct.ConsecutiveLosses, acct.UpdatedAt,
+	); err != nil {
+		return false, accountRow{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return false, accountRow{}, err
+	}
+	return true, acct, nil
 }

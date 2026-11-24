@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Badge } from "../components/shared";
 import {
   Check,
@@ -22,6 +22,7 @@ import {
   deleteLabScript,
   deskStatusLabel,
   formatCurrencyUSD,
+  formatPrice,
   formatRMultiple,
   formatSignedPct,
   getDeskState,
@@ -57,6 +58,12 @@ import "./QuantLabWorkspace.css";
 
 type LabTab = "scripts" | "desk" | "journal";
 
+function tabFromRoute(route: string): LabTab {
+  if (route === "lab/desk") return "desk";
+  if (route === "lab/journal") return "journal";
+  return "scripts";
+}
+
 const OUTCOME_FILTERS = [
   "",
   "SHADOW",
@@ -71,11 +78,12 @@ const OUTCOME_FILTERS = [
 
 export function QuantLabWorkspace() {
   const { t } = useUI();
-  const { core } = useWorkspace();
+  const { core, route } = useWorkspace();
 
-  const [tab, setTab] = useState<LabTab>("scripts");
+  const [tab, setTab] = useState<LabTab>(() => tabFromRoute(route));
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const limitsDirtyRef = useRef(false);
 
   // Lab scripts & runner state
   const [scripts, setScripts] = useState<LabScript[]>([]);
@@ -147,7 +155,7 @@ export function QuantLabWorkspace() {
       if (items.length > 0) {
         setSelectedScriptId((prev) => {
           if (prev && items.some((s) => s.id === prev)) return prev;
-          const first = items[0];
+          const first = items.find((s) => s.id === "ema-rsi-trend") ?? items[0];
           setScriptIdInput(first.id);
           setScriptNameInput(first.name);
           setScriptCatInput(first.category || "trend");
@@ -170,8 +178,10 @@ export function QuantLabWorkspace() {
         listDeskLessons(core, 50),
       ]);
       setDesk(snap);
-      setLimitsDraft(snap.limits);
-      setCycleMode(snap.limits.mode === "paper" ? "paper" : "shadow");
+      if (!limitsDirtyRef.current) {
+        setLimitsDraft(snap.limits);
+        setCycleMode(snap.limits.mode === "paper" ? "paper" : "shadow");
+      }
       if ((cyclesRes.cycles ?? []).length > 0) {
         setLatestCycle(cyclesRes.cycles[0]);
       }
@@ -184,6 +194,15 @@ export function QuantLabWorkspace() {
     }
   }, [core, outcomeFilter]);
 
+  const loadDeskRef = useRef(loadDesk);
+  loadDeskRef.current = loadDesk;
+
+  useEffect(() => {
+    if (route.startsWith("lab/")) {
+      setTab(tabFromRoute(route));
+    }
+  }, [route]);
+
   useEffect(() => {
     void loadLab();
   }, [loadLab]);
@@ -195,22 +214,49 @@ export function QuantLabWorkspace() {
   useEffect(() => {
     if (core.mode !== "ready") return;
     const ctrl = new AbortController();
-    void core
-      .streamGet("desk/stream", {
-        signal: ctrl.signal,
-        onEvent: (frame) => {
+    let reloadTimer: number | undefined;
+    let backoffMs = 1000;
+
+    async function connect() {
+      while (!ctrl.signal.aborted) {
+        try {
+          await core.streamGet("desk/stream", {
+            signal: ctrl.signal,
+            onEvent: (frame) => {
+              backoffMs = 1000;
+              if (
+                frame.event &&
+                frame.event !== "ready" &&
+                frame.event !== "heartbeat"
+              ) {
+                if (reloadTimer !== undefined) window.clearTimeout(reloadTimer);
+                reloadTimer = window.setTimeout(() => {
+                  reloadTimer = undefined;
+                  void loadDeskRef.current();
+                }, 150);
+              }
+            },
+          });
+        } catch (err) {
           if (
-            frame.event &&
-            frame.event !== "ready" &&
-            frame.event !== "heartbeat"
+            ctrl.signal.aborted ||
+            (err instanceof DOMException && err.name === "AbortError")
           ) {
-            void loadDesk();
+            return;
           }
-        },
-      })
-      .catch(() => {});
-    return () => ctrl.abort();
-  }, [core, loadDesk]);
+        }
+        if (ctrl.signal.aborted) return;
+        await new Promise((resolve) => window.setTimeout(resolve, backoffMs));
+        backoffMs = Math.min(30000, backoffMs * 2);
+      }
+    }
+
+    void connect();
+    return () => {
+      ctrl.abort();
+      if (reloadTimer !== undefined) window.clearTimeout(reloadTimer);
+    };
+  }, [core]);
 
   async function onSaveScript() {
     if (core.mode !== "ready") return;
@@ -270,9 +316,12 @@ export function QuantLabWorkspace() {
     setBusy(true);
     setError("");
     try {
+      const selectedScript = scripts.find((s) => s.id === selectedScriptId);
+      const sourceEdited =
+        !selectedScript || scriptSourceInput !== selectedScript.source;
       const rec = await runLabValidation(core, {
         scriptId: selectedScriptId || undefined,
-        source: selectedScriptId ? undefined : scriptSourceInput,
+        source: sourceEdited ? scriptSourceInput : undefined,
         config: {
           venue,
           symbol,
@@ -319,6 +368,7 @@ export function QuantLabWorkspace() {
         reason: `UI ${action}`,
       });
       if (action === "unkill") setConfirmUnkill("");
+      if (action === "reset_paper") limitsDirtyRef.current = false;
       await loadDesk();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Desk control failed");
@@ -333,6 +383,7 @@ export function QuantLabWorkspace() {
     setError("");
     try {
       const saved = await updateDeskLimits(core, limitsDraft);
+      limitsDirtyRef.current = false;
       setLimitsDraft(saved);
       setCycleMode(saved.mode === "paper" ? "paper" : "shadow");
       await loadDesk();
@@ -614,8 +665,9 @@ export function QuantLabWorkspace() {
                     onChange={(e) => setScriptCatInput(e.target.value)}
                   >
                     <option value="trend">trend</option>
-                    <option value="mean-reversion">mean-reversion</option>
+                    <option value="mean_reversion">mean_reversion</option>
                     <option value="breakout">breakout</option>
+                    <option value="volatility">volatility</option>
                     <option value="indicator">indicator</option>
                   </select>
                 </div>
@@ -1013,12 +1065,13 @@ export function QuantLabWorkspace() {
                     <select
                       id="desk-mode"
                       value={limitsDraft.mode}
-                      onChange={(e) =>
+                      onChange={(e) => {
+                        limitsDirtyRef.current = true;
                         setLimitsDraft((cur) => ({
                           ...cur,
                           mode: e.target.value as DeskMode,
-                        }))
-                      }
+                        }));
+                      }}
                     >
                       <option value="shadow">{t("Shadow")}</option>
                       <option value="paper">{t("Paper")}</option>
@@ -1033,12 +1086,13 @@ export function QuantLabWorkspace() {
                       type="number"
                       step="0.1"
                       value={limitsDraft.riskPerTradePct}
-                      onChange={(e) =>
+                      onChange={(e) => {
+                        limitsDirtyRef.current = true;
                         setLimitsDraft((cur) => ({
                           ...cur,
                           riskPerTradePct: Number(e.target.value) || 0,
-                        }))
-                      }
+                        }));
+                      }}
                     />
                   </div>
                   <div className="lab-field">
@@ -1050,12 +1104,13 @@ export function QuantLabWorkspace() {
                       type="number"
                       step="0.5"
                       value={limitsDraft.maxDailyLossPct}
-                      onChange={(e) =>
+                      onChange={(e) => {
+                        limitsDirtyRef.current = true;
                         setLimitsDraft((cur) => ({
                           ...cur,
                           maxDailyLossPct: Number(e.target.value) || 0,
-                        }))
-                      }
+                        }));
+                      }}
                     />
                   </div>
                 </div>
@@ -1065,12 +1120,13 @@ export function QuantLabWorkspace() {
                     <input
                       type="checkbox"
                       checked={limitsDraft.requirePmTap}
-                      onChange={(e) =>
+                      onChange={(e) => {
+                        limitsDirtyRef.current = true;
                         setLimitsDraft((cur) => ({
                           ...cur,
                           requirePmTap: e.target.checked,
-                        }))
-                      }
+                        }));
+                      }}
                     />
                     <span>{t("Require PM tap")}</span>
                   </label>
@@ -1078,12 +1134,13 @@ export function QuantLabWorkspace() {
                     <input
                       type="checkbox"
                       checked={limitsDraft.requireFourGatePass}
-                      onChange={(e) =>
+                      onChange={(e) => {
+                        limitsDirtyRef.current = true;
                         setLimitsDraft((cur) => ({
                           ...cur,
                           requireFourGatePass: e.target.checked,
-                        }))
-                      }
+                        }));
+                      }}
                     />
                     <span>{t("Require 4-Gate")}</span>
                   </label>
@@ -1104,13 +1161,13 @@ export function QuantLabWorkspace() {
                     {pendingTickets.map((tk) => (
                       <div className="lab-row-card" key={tk.id}>
                         <div className="lab-row-top">
-                          <strong>{`${tk.symbol} ${tk.side.toUpperCase()} · ${tk.quantity} @ ${tk.entryPrice.toFixed(2)}`}</strong>
+                          <strong>{`${tk.symbol} ${tk.side.toUpperCase()} · ${tk.quantity} @ ${formatPrice(tk.entryPrice)}`}</strong>
                           <span className="lab-status-pill">
                             {`R:R ${tk.riskReward.toFixed(2)}`}
                           </span>
                         </div>
                         <div className="lab-muted">
-                          {`Stop ${tk.stopPrice.toFixed(2)} · Target ${tk.targetPrice.toFixed(2)} · Risk ${formatCurrencyUSD(tk.riskUsd)}`}
+                          {`Stop ${formatPrice(tk.stopPrice)} · Target ${formatPrice(tk.targetPrice)} · Risk ${formatCurrencyUSD(tk.riskUsd)}`}
                         </div>
                         <div className="lab-actions-row">
                           <button
@@ -1158,7 +1215,7 @@ export function QuantLabWorkspace() {
                     {openPositions.map((p) => (
                       <div className="lab-row-card" key={p.id}>
                         <div className="lab-row-top">
-                          <strong>{`${p.symbol} ${p.side.toUpperCase()} · ${p.quantity} @ ${p.entryPrice.toFixed(2)}`}</strong>
+                          <strong>{`${p.symbol} ${p.side.toUpperCase()} · ${p.quantity} @ ${formatPrice(p.entryPrice)}`}</strong>
                           <span className="lab-status-pill">
                             {formatCurrencyUSD(p.unrealizedPnlUsd)}
                           </span>
@@ -1204,6 +1261,28 @@ export function QuantLabWorkspace() {
                     >
                       <option value="shadow">{t("Shadow")}</option>
                       <option value="paper">{t("Paper")}</option>
+                    </select>
+                  </div>
+                  <div className="lab-field">
+                    <label htmlFor="desk-cycle-script">
+                      {t("FasedScript")}
+                    </label>
+                    <select
+                      id="desk-cycle-script"
+                      value={selectedScriptId || "ema-rsi-trend"}
+                      onChange={(e) => {
+                        const found = scripts.find(
+                          (s) => s.id === e.target.value,
+                        );
+                        if (found) selectScriptRecord(found);
+                        else setSelectedScriptId(e.target.value);
+                      }}
+                    >
+                      {scripts.map((s) => (
+                        <option key={s.id} value={s.id}>
+                          {s.name}
+                        </option>
+                      ))}
                     </select>
                   </div>
                   <div className="lab-field">

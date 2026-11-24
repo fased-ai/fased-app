@@ -251,7 +251,7 @@ func toolRunFasedScriptBacktest(ctx context.Context, s *Store, _ string, rawArgs
 	if err != nil {
 		return nil, err
 	}
-	return svc.RunBacktest(ctx, quantlab.BacktestRequest{
+	res, err := svc.RunBacktest(ctx, quantlab.BacktestRequest{
 		ScriptID: args.ScriptID,
 		Source:   args.Source,
 		Config: quantlab.BacktestConfig{
@@ -262,6 +262,31 @@ func toolRunFasedScriptBacktest(ctx context.Context, s *Store, _ string, rawArgs
 			Params:   args.Params,
 		},
 	})
+	if err != nil {
+		return nil, err
+	}
+	plotNames := make([]map[string]string, 0, len(res.Plots))
+	for _, p := range res.Plots {
+		plotNames = append(plotNames, map[string]string{
+			"name": p.Name,
+			"tone": p.Tone,
+			"pane": p.Pane,
+		})
+	}
+	recentTrades := res.Trades
+	if len(recentTrades) > 10 {
+		recentTrades = recentTrades[len(recentTrades)-10:]
+	}
+	return map[string]any{
+		"scriptId":          res.ScriptID,
+		"config":            res.Config,
+		"metrics":           res.Metrics,
+		"params":            res.Params,
+		"barCount":          res.BarCount,
+		"plotNames":         plotNames,
+		"equityPointsCount": len(res.Equity),
+		"recentTrades":      recentTrades,
+	}, nil
 }
 
 func toolRunFourGateValidation(ctx context.Context, s *Store, _ string, rawArgs json.RawMessage) (any, error) {
@@ -284,7 +309,7 @@ func toolRunFourGateValidation(ctx context.Context, s *Store, _ string, rawArgs 
 	if err != nil {
 		return nil, err
 	}
-	return svc.RunValidation(ctx, quantlab.ValidateRequest{
+	rec, err := svc.EvaluateValidation(ctx, quantlab.ValidateRequest{
 		ScriptID: args.ScriptID,
 		Source:   args.Source,
 		Config: quantlab.BacktestConfig{
@@ -298,4 +323,51 @@ func toolRunFourGateValidation(ctx context.Context, s *Store, _ string, rawArgs 
 			Params:         args.Params,
 		},
 	})
+	if err != nil {
+		return nil, err
+	}
+	recentTrades := rec.Report.Trades
+	if len(recentTrades) > 10 {
+		recentTrades = recentTrades[len(recentTrades)-10:]
+	}
+	return map[string]any{
+		"scriptId":        rec.ScriptID,
+		"scriptName":      rec.ScriptName,
+		"config":          rec.Config,
+		"durationMs":      rec.DurationMs,
+		"grade":           rec.Report.Grade,
+		"gatesPassed":     rec.Report.GatesPassed,
+		"promotionReady":  rec.Report.PromotionReady,
+		"executionPolicy": rec.Report.ExecutionPolicy,
+		"warnings":        rec.Report.Warnings,
+		"baselineMetrics": rec.Report.BaselineMetrics,
+		"gate1": map[string]any{
+			"passed":       rec.Report.Gate1.Passed,
+			"testedCells":  rec.Report.Gate1.TestedCells,
+			"passingCells": rec.Report.Gate1.PassingCells,
+			"plateauRatio": rec.Report.Gate1.PlateauRatio,
+			"bestSharpe":   rec.Report.Gate1.BestSharpe,
+			"bestParams":   rec.Report.Gate1.BestParams,
+		},
+		"gate2": map[string]any{
+			"passed":     rec.Report.Gate2.Passed,
+			"iterations": rec.Report.Gate2.Iterations,
+			"realSharpe": rec.Report.Gate2.RealSharpe,
+			"meanPerm":   rec.Report.Gate2.MeanPerm,
+			"p95Perm":    rec.Report.Gate2.P95Perm,
+			"pValue":     rec.Report.Gate2.PValue,
+			"beatCount":  rec.Report.Gate2.BeatCount,
+		},
+		"gate3": rec.Report.Gate3,
+		"gate4": map[string]any{
+			"passed":     rec.Report.Gate4.Passed,
+			"iterations": rec.Report.Gate4.Iterations,
+			"realSharpe": rec.Report.Gate4.RealSharpe,
+			"meanPerm":   rec.Report.Gate4.MeanPerm,
+			"p90Perm":    rec.Report.Gate4.P90Perm,
+			"pValue":     rec.Report.Gate4.PValue,
+			"beatCount":  rec.Report.Gate4.BeatCount,
+		},
+		"recentTrades": recentTrades,
+	}, nil
 }

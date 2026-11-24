@@ -5,10 +5,13 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/fased-ai/fased-app/internal/decision"
+	"github.com/fased-ai/fased-app/internal/fasedscript"
 	"github.com/fased-ai/fased-app/internal/marketdata"
 	"github.com/fased-ai/fased-app/internal/quantlab"
 	"github.com/fased-ai/fased-app/internal/worldintel"
@@ -22,6 +25,7 @@ type Config struct {
 	MarketReader       func(ctx context.Context, venue, symbol, interval string, limit int) ([]marketdata.Candle, error)
 	IntelEvents        func(ctx context.Context, filter worldintel.EventFilter) ([]worldintel.IntelEvent, error)
 	LabRunsReader      func(ctx context.Context, limit int) ([]quantlab.ValidationRunSummary, error)
+	ScriptReader       func(ctx context.Context, scriptID string) (quantlab.ScriptRecord, bool, error)
 	Scorer             func(ctx context.Context, req decision.EvaluateRequest) (decision.EvaluateResponse, error)
 	ExternalKillActive func(ctx context.Context) bool
 	OnAlert            func(ctx context.Context, severity, title, body string)
@@ -34,6 +38,7 @@ type Service struct {
 	store *store
 	bus   *Bus
 	now   func() time.Time
+	opMu  sync.Mutex
 }
 
 // NewService opens the isolated desk SQLite store and initializes the event bus.
@@ -175,6 +180,8 @@ func (s *Service) UpdateLimits(ctx context.Context, limits RiskLimits) (RiskLimi
 	if err := limits.Validate(); err != nil {
 		return RiskLimits{}, err
 	}
+	s.opMu.Lock()
+	defer s.opMu.Unlock()
 	openPos, err := s.store.listPositions(ctx, "OPEN", 10)
 	if err != nil {
 		return RiskLimits{}, err
@@ -194,6 +201,8 @@ func (s *Service) UpdateLimits(ctx context.Context, limits RiskLimits) (RiskLimi
 
 // SetControl handles pause, resume, kill, unkill (requiring "CONFIRM"), and reset_paper.
 func (s *Service) SetControl(ctx context.Context, action, confirm, reason, actor string) (ControlState, error) {
+	s.opMu.Lock()
+	defer s.opMu.Unlock()
 	act := strings.ToLower(strings.TrimSpace(action))
 	if actor = strings.TrimSpace(actor); actor == "" {
 		actor = "owner"
@@ -274,6 +283,8 @@ func (s *Service) SetControl(ctx context.Context, action, confirm, reason, actor
 // SyncExternalKill cancels pending paper tickets and flattens open paper positions when an
 // external kill switch (Telegram /kill or Automation) activates.
 func (s *Service) SyncExternalKill(ctx context.Context, reason, actor string) error {
+	s.opMu.Lock()
+	defer s.opMu.Unlock()
 	now := s.now().UnixMilli()
 	msg := firstNonEmpty(reason, "External kill switch activated by "+firstNonEmpty(actor, "system"))
 	if err := s.haltPendingAndFlatten(ctx, msg, "EXIT_EXTERNAL_KILL", now); err != nil {
@@ -329,6 +340,7 @@ func (s *Service) resetPaperAccount(ctx context.Context, now int64) error {
 		DailyDay:          s.store.dayString(now),
 		TotalFees:         0,
 		ConsecutiveLosses: 0,
+		ResetAt:           now,
 		UpdatedAt:         now,
 	})
 }
@@ -465,8 +477,8 @@ func (s *Service) RunCycle(ctx context.Context, req CycleRequest) (CycleResult, 
 		if ev.URL != "" && len(scoutEvidence) < 3 {
 			scoutEvidence = append(scoutEvidence, fmt.Sprintf("[untrusted] %s (%s, %.2f)", ev.Title, ev.URL, ev.Urgency))
 		}
-		if ev.Urgency >= 0.85 && ev.Sentiment == "negative" {
-			toxicCatalyst = fmt.Sprintf("High-urgency negative catalyst (%s): %s", ev.SourceName, ev.Title)
+		if ev.Urgency >= 0.85 && (strings.EqualFold(ev.Sentiment, "bearish") || strings.EqualFold(ev.Sentiment, "negative")) {
+			toxicCatalyst = fmt.Sprintf("High-urgency bearish catalyst (%s): %s", ev.SourceName, ev.Title)
 		}
 		if ev.Urgency >= 0.80 && (strings.TrimSpace(ev.URL) == "" || ev.PublishedAt <= 0) {
 			unsourcedHighUrgency = true
@@ -512,21 +524,60 @@ func (s *Service) RunCycle(ctx context.Context, req CycleRequest) (CycleResult, 
 	if staleData || setup.Score < limits.MinChartScore {
 		chartVerdict = "KILL"
 	}
+
+	// Seat 4: Quant (FasedScript signal evaluation + QuantLab 4-Gate linkage)
+	if err := AssertSeatToolAllowed(SeatQuant, "list_lab_scripts"); err != nil {
+		return CycleResult{}, err
+	}
+	scriptNoSignal := false
+	effectiveLimits := limits
+	quantSignalNote := ""
+	if s.cfg.ScriptReader != nil && scriptID != "" {
+		rec, found, sErr := s.cfg.ScriptReader(ctx, scriptID)
+		if sErr != nil {
+			return CycleResult{}, fmt.Errorf("script lookup failed: %w", sErr)
+		}
+		if !found {
+			if strings.TrimSpace(req.ScriptID) != "" {
+				return CycleResult{}, fmt.Errorf("%w: script %q", ErrNotFound, scriptID)
+			}
+		} else {
+			prog, cErr := fasedscript.Compile(rec.Source)
+			if cErr != nil {
+				return CycleResult{}, fmt.Errorf("compile script %q: %w", scriptID, cErr)
+			}
+			ev, eErr := prog.Eval(candles, nil)
+			if eErr != nil {
+				return CycleResult{}, fmt.Errorf("evaluate script %q: %w", scriptID, eErr)
+			}
+			sigSide, _, hasRules := evaluateStrategySignal(ev.Strategy, len(candles))
+			if !hasRules || sigSide == "" {
+				scriptNoSignal = true
+				quantSignalNote = fmt.Sprintf("Script %s emitted no active signal at latest bar.", scriptID)
+			} else {
+				setup = deriveScriptSetup(setup, sigSide, ev.Strategy, limits.MinRiskReward)
+				quantSignalNote = fmt.Sprintf("Script %s active %s signal.", scriptID, strings.ToUpper(sigSide))
+				if ev.Strategy.SizePct > 0 && ev.Strategy.SizePct < effectiveLimits.MaxPositionPct {
+					effectiveLimits.MaxPositionPct = ev.Strategy.SizePct
+				}
+			}
+		}
+	}
+
 	result.Artifacts = append(result.Artifacts, SeatArtifact{
 		Seat:      SeatChartist,
 		Verdict:   chartVerdict,
 		Score:     setup.Score,
-		Summary:   fmt.Sprintf("%s setup score=%.1f entry=%.4f stop=%.4f target=%.4f R:R=%.2f (ATR=%.4f, RSI=%.1f, EMA20/50=%+.2f%%)", strings.ToUpper(setup.Side), setup.Score, setup.EntryPrice, setup.StopPrice, setup.TargetPrice, setup.RiskReward, setup.ATR14, setup.RSI14, setup.EMASpreadPct),
+		Summary:   fmt.Sprintf("%s setup score=%.1f entry=%s stop=%s target=%s R:R=%.2f (ATR=%s, RSI=%.1f, EMA20/50=%+.2f%%)", strings.ToUpper(setup.Side), setup.Score, formatPriceStr(setup.EntryPrice), formatPriceStr(setup.StopPrice), formatPriceStr(setup.TargetPrice), setup.RiskReward, formatPriceStr(setup.ATR14), setup.RSI14, setup.EMASpreadPct),
 		Timestamp: now,
 	})
 
-	// Seat 4: Quant (QuantLab 4-Gate linkage over MCP/service callback)
-	if err := AssertSeatToolAllowed(SeatQuant, "list_lab_scripts"); err != nil {
-		return CycleResult{}, err
-	}
 	fourGatePassed := false
 	expectedAvgR := 0.50
 	quantSummary := fmt.Sprintf("Script %s evaluated; no prior 4-Gate PASS run recorded for %s.", scriptID, symbol)
+	if quantSignalNote != "" {
+		quantSummary = quantSignalNote + " " + quantSummary
+	}
 	if s.cfg.LabRunsReader != nil {
 		runs, rErr := s.cfg.LabRunsReader(ctx, 50)
 		if rErr == nil {
@@ -536,6 +587,9 @@ func (s *Service) RunCycle(ctx context.Context, req CycleRequest) (CycleResult, 
 						fourGatePassed = true
 						expectedAvgR = math.Max(0.25, math.Min(1.50, math.Round(finiteFloat(run.Sharpe)*0.25*100)/100))
 						quantSummary = fmt.Sprintf("Script %s passed 4-Gate validation (%d/4, grade=%s, Sharpe=%.2f, expAvgR=%.2fR).", scriptID, run.GatesPassed, run.Grade, run.Sharpe, expectedAvgR)
+						if quantSignalNote != "" {
+							quantSummary = quantSignalNote + " " + quantSummary
+						}
 						break
 					}
 				}
@@ -543,7 +597,9 @@ func (s *Service) RunCycle(ctx context.Context, req CycleRequest) (CycleResult, 
 		}
 	}
 	quantVerdict := "PASS"
-	if limits.RequireFourGatePass && !fourGatePassed {
+	if scriptNoSignal {
+		quantVerdict = "NO_SIGNAL"
+	} else if limits.RequireFourGatePass && !fourGatePassed {
 		quantVerdict = "REJECTED"
 	}
 	result.Artifacts = append(result.Artifacts, SeatArtifact{
@@ -553,6 +609,37 @@ func (s *Service) RunCycle(ctx context.Context, req CycleRequest) (CycleResult, 
 		Summary:   quantSummary,
 		Timestamp: now,
 	})
+
+	if scriptNoSignal {
+		reason := fmt.Sprintf("No active FasedScript strategy signal for %s on %s %s.", scriptID, venue, symbol)
+		result.FinalStatus = "NO_SIGNAL"
+		result.RiskCheck = RiskEvaluation{Approved: false, Summary: reason}
+		result.Artifacts = append(result.Artifacts,
+			SeatArtifact{Seat: SeatSkeptic, Verdict: "SKIPPED", Summary: reason, Timestamp: now},
+			SeatArtifact{Seat: SeatRisk, Verdict: "NO_SIGNAL", Summary: reason, Timestamp: now},
+			SeatArtifact{Seat: SeatExecutor, Verdict: "NO_SIGNAL", Summary: reason, Timestamp: now},
+			SeatArtifact{Seat: SeatJournal, Verdict: "NO_SIGNAL", Summary: reason, Timestamp: now},
+		)
+		if err := s.store.saveCycle(ctx, result); err != nil {
+			return CycleResult{}, err
+		}
+		_ = s.store.appendJournal(ctx, JournalEntry{
+			ID:        newID("jrn"),
+			CycleID:   cycleID,
+			Seat:      SeatQuant,
+			Venue:     venue,
+			Symbol:    symbol,
+			ScriptID:  scriptID,
+			Mode:      mode,
+			Outcome:   "NO_SIGNAL",
+			Score:     setup.Score,
+			Reason:    reason,
+			CreatedAt: now,
+			UpdatedAt: now,
+		})
+		s.publish("cycle_completed", fmt.Sprintf("%s %s %s -> NO_SIGNAL", venue, symbol, mode), result)
+		return result, nil
+	}
 
 	// Seat 5: Skeptic (Adversarial attack; CanProposeTrades is strictly false in Go)
 	if err := AssertSeatToolAllowed(SeatSkeptic, "list_desk_journal"); err != nil {
@@ -584,20 +671,33 @@ func (s *Service) RunCycle(ctx context.Context, req CycleRequest) (CycleResult, 
 		Timestamp: now,
 	})
 
-	// Seat 6: Risk Officer (Immutable Go evaluation, no negotiation)
+	// Seat 6: Risk Officer (Immutable Go evaluation, no negotiation) & Seat 7: Executor (atomic under opMu)
 	if err := AssertSeatToolAllowed(SeatRisk, "get_desk_state"); err != nil {
 		return CycleResult{}, err
 	}
+	s.opMu.Lock()
+	ctrlNow, cErr := s.controlWithExternal(ctx)
+	if cErr != nil {
+		s.opMu.Unlock()
+		return CycleResult{}, cErr
+	}
 	snap, err := s.GetSnapshot(ctx)
 	if err != nil {
+		s.opMu.Unlock()
 		return CycleResult{}, err
 	}
+	benchedNow, benchRecNow, bErr := s.store.isBenched(ctx, symbol, scriptID, now)
+	if bErr == nil && benchedNow && !benched {
+		benched = true
+		skepticVerdict = "KILL"
+		skepticReason = firstNonEmpty(benchRecNow.Reason, "Cooldown bench is active on "+symbol+"/"+scriptID)
+	}
 	riskEval := EvaluateRisk(RiskCheckInput{
-		Limits:             limits,
+		Limits:             effectiveLimits,
 		Mode:               mode,
-		KillSwitchActive:   ctrl.KillSwitchActive,
-		ExternalKillActive: ctrl.ExternalKillActive,
-		Paused:             ctrl.Paused,
+		KillSwitchActive:   ctrlNow.KillSwitchActive,
+		ExternalKillActive: ctrlNow.ExternalKillActive,
+		Paused:             ctrlNow.Paused,
 		SkepticVerdict:     skepticVerdict,
 		Benched:            benched,
 		StaleData:          staleData,
@@ -671,9 +771,11 @@ func (s *Service) RunCycle(ctx context.Context, req CycleRequest) (CycleResult, 
 	// Seat 7: Executor (Sole seat permitted to open paper/shadow positions)
 	if skepticVerdict == "PASS" && riskEval.Approved {
 		if err := AssertSeatToolAllowed(SeatExecutor, "place_paper_order"); err != nil {
+			s.opMu.Unlock()
 			return CycleResult{}, err
 		}
 		if err := s.store.saveTicket(ctx, ticket); err != nil {
+			s.opMu.Unlock()
 			return CycleResult{}, err
 		}
 		result.Ticket = &ticket
@@ -693,8 +795,9 @@ func (s *Service) RunCycle(ctx context.Context, req CycleRequest) (CycleResult, 
 				Timestamp: now,
 			})
 		case "FILLED":
-			pos, pErr := s.openPaperPositionLocked(ctx, ticket, limits, now)
+			pos, pErr := s.openPaperPositionLocked(ctx, ticket, effectiveLimits, now)
 			if pErr != nil {
+				s.opMu.Unlock()
 				return CycleResult{}, pErr
 			}
 			result.Position = &pos
@@ -707,6 +810,7 @@ func (s *Service) RunCycle(ctx context.Context, req CycleRequest) (CycleResult, 
 		}
 	} else {
 		if err := s.store.saveTicket(ctx, ticket); err != nil {
+			s.opMu.Unlock()
 			return CycleResult{}, err
 		}
 		result.Ticket = &ticket
@@ -717,6 +821,7 @@ func (s *Service) RunCycle(ctx context.Context, req CycleRequest) (CycleResult, 
 			Timestamp: now,
 		})
 	}
+	s.opMu.Unlock()
 
 	// Seat 8: Journal (Log every outcome, including kills & shadows)
 	if err := AssertSeatToolAllowed(SeatJournal, "record_journal_entry"); err != nil {
@@ -764,11 +869,39 @@ func (s *Service) RunCycle(ctx context.Context, req CycleRequest) (CycleResult, 
 	return result, nil
 }
 
-// ApproveTicket converts a PENDING_PM paper ticket into an open PaperPosition after re-checking kill switches & risk.
+// ApproveTicket converts a PENDING_PM paper ticket into an open PaperPosition after re-checking kill switches, slippage & risk.
 func (s *Service) ApproveTicket(ctx context.Context, ticketID, actor string) (PaperPosition, error) {
 	if err := AssertSeatToolAllowed(SeatExecutor, "place_paper_order"); err != nil {
 		return PaperPosition{}, err
 	}
+	cleanID := strings.TrimSpace(ticketID)
+	ticketPre, foundPre, err := s.store.getTicket(ctx, cleanID)
+	if err != nil {
+		return PaperPosition{}, err
+	}
+	if !foundPre {
+		return PaperPosition{}, ErrNotFound
+	}
+	if ticketPre.Status != "PENDING_PM" {
+		return PaperPosition{}, fmt.Errorf("ticket %s has status %s, expected PENDING_PM", ticketPre.ID, ticketPre.Status)
+	}
+
+	var latestCandles []marketdata.Candle
+	if s.cfg.MarketReader != nil {
+		if c, cErr := s.cfg.MarketReader(ctx, ticketPre.Venue, ticketPre.Symbol, firstNonEmpty(ticketPre.Interval, "1h"), 5); cErr == nil && len(c) > 0 {
+			latestCandles = c
+		}
+	}
+	var labRuns []quantlab.ValidationRunSummary
+	if s.cfg.LabRunsReader != nil {
+		if r, rErr := s.cfg.LabRunsReader(ctx, 50); rErr == nil {
+			labRuns = r
+		}
+	}
+
+	s.opMu.Lock()
+	defer s.opMu.Unlock()
+
 	ctrl, err := s.controlWithExternal(ctx)
 	if err != nil {
 		return PaperPosition{}, err
@@ -780,7 +913,7 @@ func (s *Service) ApproveTicket(ctx context.Context, ticketID, actor string) (Pa
 		return PaperPosition{}, ErrDeskPaused
 	}
 
-	ticket, found, err := s.store.getTicket(ctx, strings.TrimSpace(ticketID))
+	ticket, found, err := s.store.getTicket(ctx, cleanID)
 	if err != nil {
 		return PaperPosition{}, err
 	}
@@ -806,10 +939,49 @@ func (s *Service) ApproveTicket(ctx context.Context, ticketID, actor string) (Pa
 	if err != nil {
 		return PaperPosition{}, err
 	}
-	benched, _, err := s.store.isBenched(ctx, ticket.Symbol, ticket.ScriptID, s.now().UnixMilli())
+	nowTime := s.now()
+	now := nowTime.UnixMilli()
+	benched, _, err := s.store.isBenched(ctx, ticket.Symbol, ticket.ScriptID, now)
 	if err != nil {
 		return PaperPosition{}, err
 	}
+
+	fourGatePassed := false
+	for _, run := range labRuns {
+		if run.ScriptID == ticket.ScriptID && run.PromotionReady {
+			if run.Symbol == "" || strings.EqualFold(run.Symbol, ticket.Symbol) {
+				fourGatePassed = true
+				break
+			}
+		}
+	}
+
+	fillPrice := ticket.EntryPrice
+	staleData := false
+	if len(latestCandles) > 0 {
+		last := latestCandles[len(latestCandles)-1]
+		lastSec := normalizeCandleSeconds(last.Time)
+		staleData = !s.cfg.FixtureMode && (nowTime.Unix()-lastSec) > limits.StaleDataMaxAgeSec
+		if ticket.EntryPrice > 0 && last.Close > 0 {
+			driftBps := math.Abs(last.Close-ticket.EntryPrice) / ticket.EntryPrice * 10000.0
+			if limits.MaxSlippageBps > 0 && driftBps > limits.MaxSlippageBps {
+				slipSummary := fmt.Sprintf("REJECTED (MAX_SLIPPAGE_EXCEEDED: %.1f > %.1f bps)", driftBps, limits.MaxSlippageBps)
+				ticket.Status = "FAILED_RISK_CHECK"
+				ticket.Reason = slipSummary
+				ticket.UpdatedAt = now
+				_ = s.store.saveTicket(ctx, ticket)
+				_ = s.store.updateJournalOutcomeByTicket(ctx, ticket.ID, "FAILED_RISK_CHECK", 0, 0, 0, slipSummary, "", now)
+				return PaperPosition{}, fmt.Errorf("%w: %s", ErrRiskRejected, slipSummary)
+			}
+			slipRate := math.Min(limits.MaxSlippageBps, 5.0) / 10000.0
+			if strings.EqualFold(ticket.Side, "short") {
+				fillPrice = roundPrice(last.Close * (1.0 - slipRate))
+			} else {
+				fillPrice = roundPrice(last.Close * (1.0 + slipRate))
+			}
+		}
+	}
+
 	riskEval := EvaluateRisk(RiskCheckInput{
 		Limits:             limits,
 		Mode:               ModePaper,
@@ -818,19 +990,19 @@ func (s *Service) ApproveTicket(ctx context.Context, ticketID, actor string) (Pa
 		Paused:             ctrl.Paused,
 		SkepticVerdict:     "PASS",
 		Benched:            benched,
-		FourGatePassed:     true,
+		StaleData:          staleData,
+		FourGatePassed:     fourGatePassed,
 		EquityUSD:          snap.Account.EquityUSD,
 		OpenPositions:      snap.Account.OpenPositions,
 		DailyLossPct:       snap.Account.DailyLossPct,
 		ConsecutiveLosses:  snap.Account.ConsecutiveLosses,
 		ChartScore:         ticket.ChartScore,
 		Side:               ticket.Side,
-		EntryPrice:         ticket.EntryPrice,
+		EntryPrice:         fillPrice,
 		StopPrice:          ticket.StopPrice,
 		TargetPrice:        ticket.TargetPrice,
 	})
 	if !riskEval.Approved {
-		now := s.now().UnixMilli()
 		ticket.Status = "FAILED_RISK_CHECK"
 		ticket.Reason = riskEval.Summary
 		ticket.UpdatedAt = now
@@ -839,24 +1011,54 @@ func (s *Service) ApproveTicket(ctx context.Context, ticketID, actor string) (Pa
 		return PaperPosition{}, fmt.Errorf("%w: %s", ErrRiskRejected, riskEval.Summary)
 	}
 
-	now := s.now().UnixMilli()
+	ticket.EntryPrice = fillPrice
+	ticket.Quantity = riskEval.ComputedQty
+	ticket.NotionalUSD = riskEval.NotionalUSD
+	ticket.RiskUSD = riskEval.RiskUSD
+	ticket.RiskReward = riskEval.RiskReward
 	ticket.Status = "FILLED"
 	ticket.Reason = "Approved by PM (" + firstNonEmpty(actor, "owner") + ")"
 	ticket.UpdatedAt = now
-	if err := s.store.saveTicket(ctx, ticket); err != nil {
-		return PaperPosition{}, err
+
+	notional := ticket.Quantity * ticket.EntryPrice
+	entryFee := math.Round(notional*(limits.FeeBps/10000.0)*100) / 100
+	riskUSD := math.Abs(ticket.EntryPrice-ticket.StopPrice) * ticket.Quantity
+	if riskUSD <= 0 {
+		riskUSD = ticket.RiskUSD
 	}
-	pos, err := s.openPaperPositionLocked(ctx, ticket, limits, now)
+	pos := PaperPosition{
+		ID:             newID("pos"),
+		TicketID:       ticket.ID,
+		Venue:          ticket.Venue,
+		Symbol:         ticket.Symbol,
+		ScriptID:       ticket.ScriptID,
+		Side:           ticket.Side,
+		Quantity:       ticket.Quantity,
+		EntryPrice:     ticket.EntryPrice,
+		MarkPrice:      ticket.EntryPrice,
+		StopPrice:      ticket.StopPrice,
+		TargetPrice:    ticket.TargetPrice,
+		InitialRiskUSD: math.Round(riskUSD*100) / 100,
+		EntryFeeUSD:    entryFee,
+		Status:         "OPEN",
+		OpenedAt:       now,
+	}
+	transitioned, err := s.store.approveTicketAndOpenPositionTx(ctx, ticket, pos, entryFee, now)
 	if err != nil {
 		return PaperPosition{}, err
 	}
+	if !transitioned {
+		return PaperPosition{}, fmt.Errorf("ticket %s already processed", ticket.ID)
+	}
 	_ = s.store.updateJournalOutcomeByTicket(ctx, ticket.ID, "FILLED", 0, 0, 0, ticket.Reason, "", now)
-	s.publish("ticket_approved", fmt.Sprintf("Opened paper position %s (%s %.4f @ %.4f)", pos.Symbol, pos.Side, pos.Quantity, pos.EntryPrice), pos)
+	s.publish("ticket_approved", fmt.Sprintf("Opened paper position %s (%s %s @ %s)", pos.Symbol, pos.Side, strconv.FormatFloat(pos.Quantity, 'f', -1, 64), formatPriceStr(pos.EntryPrice)), pos)
 	return pos, nil
 }
 
 // RejectTicket declines a PENDING_PM ticket and logs REJECTED_BY_PM in Trade Journal.
 func (s *Service) RejectTicket(ctx context.Context, ticketID, reason, actor string) (OrderTicket, error) {
+	s.opMu.Lock()
+	defer s.opMu.Unlock()
 	ticket, found, err := s.store.getTicket(ctx, strings.TrimSpace(ticketID))
 	if err != nil {
 		return OrderTicket{}, err
@@ -872,8 +1074,12 @@ func (s *Service) RejectTicket(ctx context.Context, ticketID, reason, actor stri
 	ticket.Status = "REJECTED_BY_PM"
 	ticket.Reason = msg
 	ticket.UpdatedAt = now
-	if err := s.store.saveTicket(ctx, ticket); err != nil {
+	ok, err := s.store.rejectTicketIfPending(ctx, ticket)
+	if err != nil {
 		return OrderTicket{}, err
+	}
+	if !ok {
+		return OrderTicket{}, fmt.Errorf("ticket %s already processed", ticket.ID)
 	}
 	_ = s.store.updateJournalOutcomeByTicket(ctx, ticket.ID, "REJECTED_BY_PM", 0, 0, 0, msg, "", now)
 	s.publish("ticket_rejected", fmt.Sprintf("PM rejected ticket %s (%s)", ticket.ID, ticket.Symbol), ticket)
@@ -890,55 +1096,118 @@ func (s *Service) MarkPositions(ctx context.Context) ([]PaperPosition, error) {
 	if len(openPos) == 0 || s.cfg.MarketReader == nil {
 		return openPos, nil
 	}
-	now := s.now().UnixMilli()
-	updated := make([]PaperPosition, 0, len(openPos))
+
+	type candleFetch struct {
+		candles []marketdata.Candle
+	}
+	fetched := make(map[string]candleFetch, len(openPos))
 	for _, p := range openPos {
-		candles, cErr := s.cfg.MarketReader(ctx, p.Venue, p.Symbol, "1m", 5)
+		candles, cErr := s.cfg.MarketReader(ctx, p.Venue, p.Symbol, "1m", 60)
 		if cErr != nil || len(candles) == 0 {
-			candles, cErr = s.cfg.MarketReader(ctx, p.Venue, p.Symbol, "1h", 5)
+			candles, cErr = s.cfg.MarketReader(ctx, p.Venue, p.Symbol, "1h", 24)
 		}
-		if cErr != nil || len(candles) == 0 {
-			updated = append(updated, p)
+		if cErr == nil && len(candles) > 0 {
+			fetched[p.ID] = candleFetch{candles: candles}
+		}
+	}
+
+	updated := make([]PaperPosition, 0, len(openPos))
+	type closeNotice struct {
+		pos PaperPosition
+	}
+	var closedNotices []closeNotice
+
+	s.opMu.Lock()
+	now := s.now().UnixMilli()
+	for _, item := range openPos {
+		cur, found, gErr := s.store.getPosition(ctx, item.ID)
+		if gErr != nil || !found || cur.Status != "OPEN" {
 			continue
 		}
-		last := candles[len(candles)-1]
-		// Conservative SL-before-TP check matching internal/quantlab.
-		if p.Side == "long" {
-			if last.Low <= p.StopPrice {
-				closed, err := s.closePositionInternal(ctx, p, p.StopPrice, "STOP_LOSS", false, now)
-				if err == nil {
-					updated = append(updated, closed)
-					continue
-				}
-			}
-			if last.High >= p.TargetPrice {
-				closed, err := s.closePositionInternal(ctx, p, p.TargetPrice, "TAKE_PROFIT", false, now)
-				if err == nil {
-					updated = append(updated, closed)
-					continue
-				}
-			}
-			p.UnrealizedPnL = math.Round((last.Close-p.EntryPrice)*p.Quantity*100) / 100
-		} else {
-			if last.High >= p.StopPrice {
-				closed, err := s.closePositionInternal(ctx, p, p.StopPrice, "STOP_LOSS", false, now)
-				if err == nil {
-					updated = append(updated, closed)
-					continue
-				}
-			}
-			if last.Low <= p.TargetPrice {
-				closed, err := s.closePositionInternal(ctx, p, p.TargetPrice, "TAKE_PROFIT", false, now)
-				if err == nil {
-					updated = append(updated, closed)
-					continue
-				}
-			}
-			p.UnrealizedPnL = math.Round((p.EntryPrice-last.Close)*p.Quantity*100) / 100
+		fc, ok := fetched[cur.ID]
+		if !ok || len(fc.candles) == 0 {
+			updated = append(updated, cur)
+			continue
 		}
-		p.MarkPrice = last.Close
-		_ = s.store.savePosition(ctx, p)
-		updated = append(updated, p)
+		candles := fc.candles
+		last := candles[len(candles)-1]
+		openedSec := cur.OpenedAt / 1000
+
+		triggerReason := ""
+		triggerPx := 0.0
+		sawPostEntryBar := false
+		for _, c := range candles {
+			if normalizeCandleSeconds(c.Time) <= openedSec {
+				continue
+			}
+			sawPostEntryBar = true
+			if cur.Side == "long" {
+				if cur.StopPrice > 0 && c.Low <= cur.StopPrice {
+					triggerReason = "STOP_LOSS"
+					triggerPx = cur.StopPrice
+					break
+				}
+				if cur.TargetPrice > 0 && c.High >= cur.TargetPrice {
+					triggerReason = "TAKE_PROFIT"
+					triggerPx = cur.TargetPrice
+					break
+				}
+			} else {
+				if cur.StopPrice > 0 && c.High >= cur.StopPrice {
+					triggerReason = "STOP_LOSS"
+					triggerPx = cur.StopPrice
+					break
+				}
+				if cur.TargetPrice > 0 && c.Low <= cur.TargetPrice {
+					triggerReason = "TAKE_PROFIT"
+					triggerPx = cur.TargetPrice
+					break
+				}
+			}
+		}
+		if triggerReason == "" && !sawPostEntryBar {
+			// Avoid triggering on a pre-entry bar wick; only check live close breach conservatively.
+			if cur.Side == "long" {
+				if cur.StopPrice > 0 && last.Close <= cur.StopPrice {
+					triggerReason = "STOP_LOSS"
+					triggerPx = cur.StopPrice
+				} else if cur.TargetPrice > 0 && last.Close >= cur.TargetPrice {
+					triggerReason = "TAKE_PROFIT"
+					triggerPx = cur.TargetPrice
+				}
+			} else {
+				if cur.StopPrice > 0 && last.Close >= cur.StopPrice {
+					triggerReason = "STOP_LOSS"
+					triggerPx = cur.StopPrice
+				} else if cur.TargetPrice > 0 && last.Close <= cur.TargetPrice {
+					triggerReason = "TAKE_PROFIT"
+					triggerPx = cur.TargetPrice
+				}
+			}
+		}
+
+		if triggerReason != "" {
+			closed, cErr := s.closePositionInternal(ctx, cur, triggerPx, triggerReason, false, now)
+			if cErr == nil {
+				updated = append(updated, closed)
+				closedNotices = append(closedNotices, closeNotice{pos: closed})
+				continue
+			}
+		}
+
+		if cur.Side == "long" {
+			cur.UnrealizedPnL = math.Round((last.Close-cur.EntryPrice)*cur.Quantity*100) / 100
+		} else {
+			cur.UnrealizedPnL = math.Round((cur.EntryPrice-last.Close)*cur.Quantity*100) / 100
+		}
+		cur.MarkPrice = roundPrice(last.Close)
+		_ = s.store.savePosition(ctx, cur)
+		updated = append(updated, cur)
+	}
+	s.opMu.Unlock()
+
+	for _, cn := range closedNotices {
+		s.publish("position_closed", fmt.Sprintf("Auto-closed paper %s (%s) PnL=$%.2f (%.2fR)", cn.pos.Symbol, cn.pos.ExitReason, cn.pos.RealizedPnL, cn.pos.PnLR), cn.pos)
 	}
 	return updated, nil
 }
@@ -948,28 +1217,51 @@ func (s *Service) ClosePosition(ctx context.Context, posID string, overridePrice
 	if err := AssertSeatToolAllowed(SeatExecutor, "close_paper_position"); err != nil {
 		return PaperPosition{}, err
 	}
-	p, found, err := s.store.getPosition(ctx, strings.TrimSpace(posID))
+	cleanID := strings.TrimSpace(posID)
+	prePos, foundPre, err := s.store.getPosition(ctx, cleanID)
 	if err != nil {
 		return PaperPosition{}, err
 	}
+	if !foundPre {
+		return PaperPosition{}, ErrNotFound
+	}
+	if prePos.Status != "OPEN" {
+		return PaperPosition{}, fmt.Errorf("position %s already closed (%s)", prePos.ID, prePos.Status)
+	}
+
+	fetchedClose := 0.0
+	hasOverride := overridePrice > 0 && !math.IsNaN(overridePrice) && !math.IsInf(overridePrice, 0)
+	if !hasOverride && s.cfg.MarketReader != nil {
+		if candles, cErr := s.cfg.MarketReader(ctx, prePos.Venue, prePos.Symbol, "1h", 3); cErr == nil && len(candles) > 0 {
+			fetchedClose = candles[len(candles)-1].Close
+		}
+	}
+
+	s.opMu.Lock()
+	p, found, err := s.store.getPosition(ctx, cleanID)
+	if err != nil {
+		s.opMu.Unlock()
+		return PaperPosition{}, err
+	}
 	if !found {
+		s.opMu.Unlock()
 		return PaperPosition{}, ErrNotFound
 	}
 	if p.Status != "OPEN" {
+		s.opMu.Unlock()
 		return PaperPosition{}, fmt.Errorf("position %s already closed (%s)", p.ID, p.Status)
 	}
 	exitPx := p.MarkPrice
-	if overridePrice > 0 && !math.IsNaN(overridePrice) && !math.IsInf(overridePrice, 0) {
+	if hasOverride {
 		exitPx = overridePrice
-	} else if s.cfg.MarketReader != nil {
-		if candles, cErr := s.cfg.MarketReader(ctx, p.Venue, p.Symbol, "1h", 3); cErr == nil && len(candles) > 0 {
-			exitPx = candles[len(candles)-1].Close
-		}
+	} else if fetchedClose > 0 {
+		exitPx = fetchedClose
 	}
 	if exitPx <= 0 {
 		exitPx = p.EntryPrice
 	}
 	closed, err := s.closePositionInternal(ctx, p, exitPx, firstNonEmpty(reason, "PM_MANUAL_CLOSE"), false, s.now().UnixMilli())
+	s.opMu.Unlock()
 	if err != nil {
 		return PaperPosition{}, err
 	}
@@ -1047,27 +1339,12 @@ func (s *Service) closePositionInternal(ctx context.Context, p PaperPosition, ex
 	p.Status = "CLOSED"
 	p.ExitReason = exitReason
 	p.ClosedAt = now
-	if err := s.store.savePosition(ctx, p); err != nil {
-		return PaperPosition{}, err
-	}
-
-	acct, err := s.store.getAccountRow(ctx)
+	closedOK, acct, err := s.store.closePositionAndUpdateAccountTx(ctx, p, grossPnL, netPnL, exitFee, now)
 	if err != nil {
 		return PaperPosition{}, err
 	}
-	// Entry fee was already subtracted from CashUSD on open; add gross - exitFee so Cash == Initial + RealizedPnL.
-	acct.CashUSD = math.Round((acct.CashUSD+grossPnL-exitFee)*100) / 100
-	acct.RealizedPnL = math.Round((acct.RealizedPnL+netPnL)*100) / 100
-	acct.DailyPnL = math.Round((acct.DailyPnL+netPnL)*100) / 100
-	acct.TotalFees = math.Round((acct.TotalFees+exitFee)*100) / 100
-	if netPnL < 0 {
-		acct.ConsecutiveLosses++
-	} else {
-		acct.ConsecutiveLosses = 0
-	}
-	acct.UpdatedAt = now
-	if err := s.store.updateAccountRow(ctx, acct); err != nil {
-		return PaperPosition{}, err
+	if !closedOK {
+		return PaperPosition{}, fmt.Errorf("position %s already closed", p.ID)
 	}
 
 	outcome := "CLOSED_LOSS"
@@ -1076,7 +1353,7 @@ func (s *Service) closePositionInternal(ctx context.Context, p PaperPosition, ex
 	}
 	_ = s.store.updateJournalOutcomeByTicket(ctx, p.TicketID, outcome, exitPrice, p.RealizedPnL, p.PnLR, exitReason, "", now)
 
-	// Cooldown bench after MaxConsecutiveLosses
+	// Cooldown bench after MaxConsecutiveLosses; reset streak once bench takes over so desk does not deadlock after cooldown expires.
 	if acct.ConsecutiveLosses >= limits.MaxConsecutiveLosses && exitReason != "RESET_PAPER" {
 		benchedUntil := now + int64(limits.CooldownHours)*int64(time.Hour/time.Millisecond)
 		reason := fmt.Sprintf("Cooldown %dh triggered after %d consecutive paper losses", limits.CooldownHours, acct.ConsecutiveLosses)
@@ -1084,16 +1361,17 @@ func (s *Service) closePositionInternal(ctx context.Context, p PaperPosition, ex
 		if p.ScriptID != "" {
 			_, _ = s.store.setBench(ctx, "script:"+p.ScriptID, reason, acct.ConsecutiveLosses, benchedUntil, now)
 		}
+		_ = s.store.resetConsecutiveLosses(ctx, now)
 		s.emitAlert(ctx, "warn", "Desk Cooldown Bench Triggered", reason)
 	}
 
-	// Auto-trip Kill Switch if DailyLossPct >= MaxDailyLossPct
+	// Auto-trip Kill Switch if DailyLossPct >= MaxDailyLossPct and flatten remaining open positions.
 	if !duringKill && acct.DailyPnL < 0 && acct.InitialCapital > 0 {
 		lossPct := (-acct.DailyPnL / acct.InitialCapital) * 100.0
 		if lossPct >= limits.MaxDailyLossPct {
 			reason := fmt.Sprintf("Daily loss limit breached (%.2f%% >= %.2f%%)", lossPct, limits.MaxDailyLossPct)
-			_, _ = s.store.cancelPendingTickets(ctx, reason, now)
 			_, _ = s.store.saveControl(ctx, true, true, reason, "risk-engine", now)
+			_ = s.haltPendingAndFlatten(ctx, reason, "EXIT_DAILY_LOSS_KILL", now)
 			s.publish("kill_switch", reason, p)
 			s.emitAlert(ctx, "critical", "Desk Daily Loss Kill Switch Triggered", reason)
 		}
@@ -1103,6 +1381,10 @@ func (s *Service) closePositionInternal(ctx context.Context, p PaperPosition, ex
 
 // GetDecayReport computes paper vs backtest R-multiple health over closed paper trades.
 func (s *Service) GetDecayReport(ctx context.Context) (DecayReport, error) {
+	acct, err := s.store.getAccountRow(ctx)
+	if err != nil {
+		return DecayReport{}, err
+	}
 	positions, err := s.store.listPositions(ctx, "CLOSED", 200)
 	if err != nil {
 		return DecayReport{}, err
@@ -1116,6 +1398,9 @@ func (s *Service) GetDecayReport(ctx context.Context) (DecayReport, error) {
 	var sumExpectedR float64
 	var expectedCount int
 	for _, j := range journal {
+		if acct.ResetAt > 0 && j.CreatedAt <= acct.ResetAt {
+			continue
+		}
 		switch j.Outcome {
 		case "KILLED_BY_SKEPTIC":
 			kills++
@@ -1137,6 +1422,9 @@ func (s *Service) GetDecayReport(ctx context.Context) (DecayReport, error) {
 	var sumR float64
 	for _, p := range positions {
 		if p.ExitReason == "RESET_PAPER" {
+			continue
+		}
+		if acct.ResetAt > 0 && p.ClosedAt <= acct.ResetAt {
 			continue
 		}
 		validClosed++
@@ -1387,14 +1675,109 @@ func analyzeCandles(candles []marketdata.Candle) chartSetup {
 	return chartSetup{
 		Side:         side,
 		Score:        score,
-		EntryPrice:   lastClose,
-		StopPrice:    math.Round(stop*10000) / 10000,
-		TargetPrice:  math.Round(target*10000) / 10000,
+		EntryPrice:   roundPrice(lastClose),
+		StopPrice:    roundPrice(stop),
+		TargetPrice:  roundPrice(target),
 		RiskReward:   rr,
-		ATR14:        math.Round(lastATR*10000) / 10000,
+		ATR14:        roundPrice(lastATR),
 		RSI14:        math.Round(rsi14*10) / 10,
 		EMASpreadPct: math.Round(spreadPct*100) / 100,
 	}
+}
+
+func evaluateStrategySignal(strat fasedscript.StrategySpec, barCount int) (side string, signalBar int, hasRules bool) {
+	hasRules = len(strat.Long) > 0 || len(strat.Short) > 0
+	if !hasRules || barCount <= 0 {
+		return "", -1, hasRules
+	}
+	flagAt := func(arr []bool, i int) bool {
+		return i >= 0 && i < len(arr) && arr[i]
+	}
+	activeSide := ""
+	lastEntryBar := -1
+	for i := 0; i < barCount; i++ {
+		wantLong := flagAt(strat.Long, i)
+		wantExitLong := flagAt(strat.ExitLong, i)
+		wantShort := flagAt(strat.Short, i)
+		wantExitShort := flagAt(strat.ExitShort, i)
+
+		if activeSide == "long" && (wantExitLong || (wantShort && !wantLong)) {
+			activeSide = ""
+		} else if activeSide == "short" && (wantExitShort || (wantLong && !wantShort)) {
+			activeSide = ""
+		}
+		if activeSide == "" {
+			if wantLong && !wantShort {
+				activeSide = "long"
+				lastEntryBar = i
+			} else if wantShort && !wantLong {
+				activeSide = "short"
+				lastEntryBar = i
+			}
+		}
+	}
+	return activeSide, lastEntryBar, true
+}
+
+func deriveScriptSetup(base chartSetup, side string, strat fasedscript.StrategySpec, minRR float64) chartSetup {
+	entry := base.EntryPrice
+	if entry <= 0 {
+		return base
+	}
+	atr := base.ATR14
+	if atr <= 0 {
+		atr = entry * 0.01
+	}
+
+	var stopDist float64
+	switch {
+	case strat.StopLossPct > 0:
+		stopDist = entry * (strat.StopLossPct / 100.0)
+	case strat.TrailingAtrMult > 0:
+		stopDist = strat.TrailingAtrMult * atr
+	default:
+		stopDist = 1.5 * atr
+	}
+	if stopDist <= 0 {
+		stopDist = entry * 0.01
+	}
+
+	var rewardDist float64
+	if strat.TakeProfitPct > 0 {
+		rewardDist = entry * (strat.TakeProfitPct / 100.0)
+	} else {
+		rewardDist = math.Max(2.5*atr, stopDist*math.Max(minRR, 1.8))
+	}
+
+	var stop, target float64
+	if side == "short" {
+		stop = entry + stopDist
+		target = entry - rewardDist
+		if target <= 0 {
+			target = entry * 0.85
+		}
+	} else {
+		side = "long"
+		stop = entry - stopDist
+		if stop <= 0 {
+			stop = entry * 0.90
+		}
+		target = entry + rewardDist
+	}
+
+	effStopDist := math.Abs(entry - stop)
+	effRewardDist := math.Abs(target - entry)
+	rr := 0.0
+	if effStopDist > 0 {
+		rr = math.Round((effRewardDist/effStopDist)*100) / 100
+	}
+	out := base
+	out.Side = side
+	out.EntryPrice = roundPrice(entry)
+	out.StopPrice = roundPrice(stop)
+	out.TargetPrice = roundPrice(target)
+	out.RiskReward = rr
+	return out
 }
 
 func causalEMA(vals []float64, period int) float64 {
@@ -1446,7 +1829,7 @@ func causalRSI(closes []float64, period int) float64 {
 		if avgGain == 0 {
 			return 50
 		}
-		return 75
+		return 100
 	}
 	rs := avgGain / avgLoss
 	return finiteFloat(100.0 - (100.0 / (1.0 + rs)))

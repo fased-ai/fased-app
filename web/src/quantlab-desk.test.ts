@@ -3,6 +3,7 @@ import {
   buildEquityPolyline,
   deskStatusLabel,
   formatCurrencyUSD,
+  formatPrice,
   formatRMultiple,
   formatSignedPct,
   normalizeHistogramHeights,
@@ -24,6 +25,12 @@ describe("quantlab-desk helpers", () => {
 
     expect(formatRMultiple(1.25)).toBe("+1.25R");
     expect(formatRMultiple(-1)).toBe("-1.00R");
+
+    expect(formatPrice(94000.5)).toBe("94000.50");
+    expect(formatPrice(12.3456)).toBe("12.3456");
+    expect(formatPrice(0.0567891)).toBe("0.056789");
+    expect(formatPrice(0.00001234)).toBe("0.00001234");
+    expect(formatPrice(Number.NaN)).toBe("0.00");
   });
 
   it("prioritizes kill switch and external kill switch over pause", () => {

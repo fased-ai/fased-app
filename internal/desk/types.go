@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math"
 	"regexp"
+	"strconv"
 	"strings"
 )
 
@@ -525,4 +526,22 @@ func finiteFloat(v float64) float64 {
 		return 0
 	}
 	return v
+}
+
+func roundPrice(v float64) float64 {
+	v = finiteFloat(v)
+	if v == 0 {
+		return 0
+	}
+	av := math.Abs(v)
+	if av >= 1 {
+		return math.Round(v*10000) / 10000
+	}
+	exp := int(math.Floor(math.Log10(av)))
+	scale := math.Pow10(5 - exp)
+	return math.Round(v*scale) / scale
+}
+
+func formatPriceStr(v float64) string {
+	return strconv.FormatFloat(roundPrice(v), 'f', -1, 64)
 }
