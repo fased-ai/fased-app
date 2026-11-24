@@ -387,6 +387,43 @@ func agentV2ToolRegistry() []agentToolEntry {
 		},
 		{
 			spec: AgentToolSpec{
+				Name:        "get_world_intel",
+				Tier:        toolTierRead,
+				Description: "Query geo-tagged global macro/geopolitics/crypto/seismic intelligence events and multi-source correlated clusters (events are tagged untrusted=true).",
+				Parameters: map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"category":   map[string]any{"type": "string", "description": "Category filter: macro, crypto, geopolitics, conflict, energy, seismic, policy, prediction, or sidecar."},
+						"region":     map[string]any{"type": "string", "description": "Region filter: na, eu, apac, mena, latam, africa, or global."},
+						"ticker":     map[string]any{"type": "string", "description": "Optional market ticker symbol (e.g. BTC, SOL, OIL, NVDA)."},
+						"query":      map[string]any{"type": "string", "description": "Optional search keyword."},
+						"minUrgency": map[string]any{"type": "number", "description": "Minimum urgency threshold between 0 and 1."},
+						"hours":      map[string]any{"type": "integer", "description": "Lookback window in hours."},
+						"limit":      map[string]any{"type": "integer", "description": "Maximum events to return (1-500)."},
+					},
+				},
+			},
+			execute: toolGetWorldIntel,
+		},
+		{
+			spec: AgentToolSpec{
+				Name:        "get_prediction_markets",
+				Tier:        toolTierRead,
+				Description: "Fetch read-only Polymarket and Kalshi public prediction market odds, 24h volumes, and detected cross-venue arbitrage spreads.",
+				Parameters: map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"venue":    map[string]any{"type": "string", "description": "Optional venue filter: polymarket or kalshi."},
+						"category": map[string]any{"type": "string", "description": "Optional category filter."},
+						"query":    map[string]any{"type": "string", "description": "Optional search query."},
+						"limit":    map[string]any{"type": "integer", "description": "Maximum markets to return (1-500)."},
+					},
+				},
+			},
+			execute: toolGetPredictionMarkets,
+		},
+		{
+			spec: AgentToolSpec{
 				Name:        "delegate_to_agent",
 				Tier:        toolTierRead,
 				Description: "Delegate a read-only research or analysis subtask to another workspace agent profile and return its concise synthesis without mutating thread messages or running action tools.",

@@ -586,3 +586,62 @@ func TestNativeDecisionAndExternalMCPRoutes(t *testing.T) {
 		t.Fatal("expected 1 MiB response limit on decision and external MCP client routes")
 	}
 }
+
+func TestNativeWorldIntelRoutesAndSSE(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		method string
+		url    string
+		want   bool
+	}{
+		{http.MethodGet, "http://wails.localhost/api/v1/intel/events?category=macro&region=na&ticker=BTC&minUrgency=0.5&limit=20", true},
+		{http.MethodGet, "http://wails.localhost/api/v1/intel/events?evil=1", false},
+		{http.MethodGet, "http://wails.localhost/api/v1/intel/map?hours=48", true},
+		{http.MethodGet, "http://wails.localhost/api/v1/intel/predictions?venue=polymarket&limit=20", true},
+		{http.MethodGet, "http://wails.localhost/api/v1/intel/sources", true},
+		{http.MethodPut, "http://wails.localhost/api/v1/intel/sources", true},
+		{http.MethodDelete, "http://wails.localhost/api/v1/intel/sources/custom-1", true},
+		{http.MethodDelete, "http://wails.localhost/api/v1/intel/sources/bad/path", false},
+		{http.MethodPost, "http://wails.localhost/api/v1/intel/sync", true},
+		{http.MethodGet, "http://wails.localhost/api/v1/intel/stream?region=global", true},
+	}
+	for _, tc := range cases {
+		req := httptest.NewRequest(tc.method, tc.url, nil)
+		if got := PublicRequestAllowed(req); got != tc.want {
+			t.Fatalf("PublicRequestAllowed(%s %s) = %v, want %v", tc.method, tc.url, got, tc.want)
+		}
+	}
+	if !StreamingRoute("/api/v1/intel/stream") {
+		t.Fatal("expected StreamingRoute(/api/v1/intel/stream) to return true")
+	}
+	if RequestBodyLimit("/api/v1/intel/sources") != 64*1024 || responseLimit("/api/v1/intel/events") != 1*1024*1024 {
+		t.Fatal("expected 64 KiB request limit and 1 MiB response limit on intel routes")
+	}
+
+	sseServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/v1/intel/stream" {
+			w.Header().Set("Content-Type", "text/event-stream; charset=utf-8")
+			w.WriteHeader(http.StatusOK)
+			flusher := w.(http.Flusher)
+			_, _ = w.Write([]byte("event: snapshot\ndata: {\"events\":[]}\n\n"))
+			flusher.Flush()
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer sseServer.Close()
+
+	h := NewHandler("fixture-intel-sse", nil)
+	h.newClient = func(context.Context, string) (*core.Client, bool, json.RawMessage, error) {
+		c := sseServer.Client()
+		c.Timeout = 50 * time.Millisecond
+		return &core.Client{Endpoint: core.Endpoint{URL: sseServer.URL, InstanceID: "fixture-intel-sse"}, HTTP: c}, false, nil, nil
+	}
+	req := httptest.NewRequest(http.MethodGet, "http://wails.localhost/api/v1/intel/stream?region=global", nil)
+	req.Header.Set("Accept", "text/event-stream")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"events":[]`) || !rec.Flushed {
+		t.Fatalf("desktop intel SSE passthrough failed: code=%d flushed=%v body=%q", rec.Code, rec.Flushed, rec.Body.String())
+	}
+}
