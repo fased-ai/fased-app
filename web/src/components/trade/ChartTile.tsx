@@ -18,12 +18,19 @@ import {
   type Interval,
   type PaperOrderPreview,
 } from "../../market-data";
+import {
+  buildChartEventPins,
+  matchEventsForSymbol,
+  type IntelEvent,
+} from "../../world-intel";
 import { FasedChartAdapter } from "./FasedChartAdapter";
 
 export function ChartTile({
   tile,
   active,
   syncedCrosshair,
+  intelEvents = [],
+  showEvents = true,
   onSelect,
   onChangeTile,
   onCrosshairMove,
@@ -31,6 +38,8 @@ export function ChartTile({
   tile: ChartTileConfig;
   active: boolean;
   syncedCrosshair: CrosshairSyncPoint | null;
+  intelEvents?: IntelEvent[];
+  showEvents?: boolean;
   onSelect: () => void;
   onChangeTile: (next: ChartTileConfig) => void;
   onCrosshairMove: (pt: CrosshairSyncPoint) => void;
@@ -132,6 +141,16 @@ export function ChartTile({
   }, [core, core.mode, tile.venue, tile.symbol, tile.interval, tile.style]);
 
   const latest = useMemo(() => candles[candles.length - 1] ?? null, [candles]);
+  const matchedPins = useMemo(
+    () =>
+      showEvents && intelEvents.length > 0
+        ? buildChartEventPins(
+            candles,
+            matchEventsForSymbol(intelEvents, tile.symbol),
+          )
+        : [],
+    [candles, intelEvents, showEvents, tile.symbol],
+  );
 
   function commitSymbol() {
     const clean = symbolDraft.trim();
@@ -245,6 +264,14 @@ export function ChartTile({
                 {tile.drawings.length + tile.paperOrders.length} {t("overlays")}
               </span>
             )}
+            {matchedPins.length > 0 && (
+              <span
+                className="trade-source-pill"
+                data-testid={`chart-pins-${tile.id}`}
+              >
+                {matchedPins.length} {t("pins")}
+              </span>
+            )}
           </>
         ) : (
           <span>{error || t("Loading")}</span>
@@ -258,6 +285,7 @@ export function ChartTile({
           tool={tool}
           drawings={tile.drawings}
           paperOrders={tile.paperOrders}
+          eventPins={matchedPins}
           syncedCrosshair={syncedCrosshair}
           onCrosshairMove={onCrosshairMove}
           onAddDrawing={(d: ChartDrawing) =>

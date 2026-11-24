@@ -17,6 +17,7 @@ export default defineConfig({
     "core-a11y.spec.ts",
     "core-concurrency.spec.ts",
     "trade-workspace.spec.ts",
+    "world-intel.spec.ts",
     "research-ai.spec.ts",
     "research-fixture.spec.ts",
     "research-loop.spec.ts",

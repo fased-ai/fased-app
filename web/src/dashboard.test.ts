@@ -22,6 +22,14 @@ describe("Dashboard layout", () => {
         '{"version":1,"widgets":[{"id":"tasks","size":"small"},{"id":"tasks","size":"wide"},{"id":"foreign","size":"wide"}]}',
       ).widgets,
     ).toEqual([{ id: "tasks", size: "small" }]);
+    expect(
+      parseDashboard(
+        '{"version":1,"widgets":[{"id":"intel","size":"wide"},{"id":"predictions","size":"small"}]}',
+      ).widgets,
+    ).toEqual([
+      { id: "intel", size: "wide" },
+      { id: "predictions", size: "small" },
+    ]);
   });
   it("recovers malformed or unsupported preferences without changing defaults", () => {
     const baseline = defaultDashboard();
@@ -29,5 +37,13 @@ describe("Dashboard layout", () => {
     expect(parseDashboard('{"version":99,"widgets":[]}')).toEqual(baseline);
     moveWidget(baseline, "tasks", "agents");
     expect(baseline).toEqual(defaultDashboard());
+    expect(
+      parseDashboard(
+        '{"version":1,"widgets":[{"id":"intel","size":"wide"},{"id":"predictions","size":"small"}]}',
+      ).widgets,
+    ).toEqual([
+      { id: "intel", size: "wide" },
+      { id: "predictions", size: "small" },
+    ]);
   });
 });

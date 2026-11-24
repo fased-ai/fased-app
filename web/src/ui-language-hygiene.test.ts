@@ -106,6 +106,8 @@ describe("UI translation catalog hygiene", () => {
       "pages/Overview.tsx",
       "pages/Settings.tsx",
       "pages/TradeWorkspace.tsx",
+      "pages/WorldIntelWorkspace.tsx",
+      "components/intel/WorldMapView.tsx",
       "components/trade/ChartTile.tsx",
       "components/trade/OrderflowPane.tsx",
       "components/trade/WatchlistPanel.tsx",
