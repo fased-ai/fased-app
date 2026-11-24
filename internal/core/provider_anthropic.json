@@ -2,7 +2,7 @@
   "version": 1,
   "policy": "latest-only",
   "reviewedAt": 1795478400,
-  "expiresAt": 1811030400,
+  "expiresAt": 1798070400,
   "provider": "anthropic",
   "sources": {
     "models": "https://platform.claude.com/docs/en/models/overview",

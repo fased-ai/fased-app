@@ -3,7 +3,7 @@
   "policy": "latest-only",
   "provider": "qwen",
   "reviewedAt": 1795478400,
-  "expiresAt": 1811030400,
+  "expiresAt": 1798070400,
   "sources": {
     "models": "https://www.alibabacloud.com/help/en/model-studio/qwen3-8-flash",
     "pricing": "https://www.alibabacloud.com/help/en/model-studio/qwen3-8-flash",
