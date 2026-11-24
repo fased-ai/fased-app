@@ -10,11 +10,9 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"net/url"
 	"os"
 	"path/filepath"
 	"runtime"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -75,31 +73,6 @@ type Store struct {
 	custodyPackageID              string                                                             // Public package identifier for owner SSH.
 	custodyNetwork                string                                                             // Public immutable v2 configuration; no key material.
 	researchRead                  func(context.Context, researchFactResult) (json.RawMessage, error) // Test-only local projection fault; never configuration/IPC.
-}
-
-func isWindowsDriveSlashPath(p string) bool {
-	return len(p) >= 2 && ((p[0] >= 'A' && p[0] <= 'Z') || (p[0] >= 'a' && p[0] <= 'z')) && p[1] == ':'
-}
-
-func sqliteFileURIFromSlash(slashPath, rawQuery string) string {
-	u := url.URL{
-		Scheme:   "file",
-		RawQuery: rawQuery,
-	}
-	switch {
-	case isWindowsDriveSlashPath(slashPath):
-		u.Path = "/" + slashPath
-	case strings.HasPrefix(slashPath, "/"):
-		u.Path = slashPath
-	default:
-		u.OmitHost = true
-		u.Path = slashPath
-	}
-	return u.String()
-}
-
-func sqliteFileURI(dbPath, rawQuery string) string {
-	return sqliteFileURIFromSlash(filepath.ToSlash(dbPath), rawQuery)
 }
 
 func sqliteDSN(dbPath string) string {
