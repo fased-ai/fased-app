@@ -39,6 +39,7 @@ import {
   KeyRound,
   Mic,
   MicOff,
+  Pencil,
   Plug,
   Plus,
   RotateCcw,
@@ -1049,12 +1050,19 @@ export function AgentChatV2({ view }: { view: AgentView }) {
                     autoFocus
                     onChange={(e) => setTitleDraft(e.target.value)}
                   />
-                  <button type="submit" className="icon-button">
+                  <button
+                    type="submit"
+                    className="icon-button"
+                    aria-label={t("Save")}
+                    title={t("Save")}
+                  >
                     <Check size={15} />
                   </button>
                   <button
                     type="button"
                     className="icon-button"
+                    aria-label={t("Cancel")}
+                    title={t("Cancel")}
                     onClick={() => setEditingTitle(false)}
                   >
                     <X size={15} />
@@ -1068,6 +1076,16 @@ export function AgentChatV2({ view }: { view: AgentView }) {
                   >
                     {v2.detail.thread.title}
                   </h3>
+                  <button
+                    type="button"
+                    className="icon-button"
+                    aria-label={t("Rename thread")}
+                    title={t("Rename thread")}
+                    disabled={v2.streaming}
+                    onClick={() => setEditingTitle(true)}
+                  >
+                    <Pencil size={14} />
+                  </button>
                   {v2.detail.thread.sourceKind === "task" && (
                     <span className="v2-pill v2-thread-source-pill">
                       {t("Task")}
