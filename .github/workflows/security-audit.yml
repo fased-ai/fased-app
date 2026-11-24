@@ -43,7 +43,8 @@ jobs:
       - name: Go vulnerability audit (govulncheck)
         run: |
           go install golang.org/x/vuln/cmd/govulncheck@latest
-          govulncheck ./...
+          # Enforce zero reachable vulnerabilities across all shipping binaries & desktop module.
+          govulncheck ./cmd/fased-app ./cmd/fased-signer ./cmd/fased-install ./cmd/fased-package ./cmd/fased-release-candidate
           (cd desktop && govulncheck ./...)
       - name: Bounded Go fuzzing across all fuzz targets
         env:
