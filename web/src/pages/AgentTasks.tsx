@@ -15,6 +15,7 @@ import { useCore } from "../core";
 import { useWorkspace, type TaskComposerDraft } from "../workspace";
 import { RefreshCw } from "../icons";
 import { Dialog } from "../components/shared";
+import { EventTriggersPanel } from "../components/automation/EventTriggersPanel";
 import { TaskHistory } from "./TaskHistory";
 import { AgentPlaybooks } from "./AgentPlaybooks";
 import { ScheduledAITasks } from "./ScheduledAITasks";
@@ -463,6 +464,7 @@ export function AgentTasks({
         <nav className="task-views tabs" aria-label={uiText("Task views")}>
           {[
             "automations",
+            "triggers",
             "strategies",
             "history",
             "inbox",
@@ -483,6 +485,7 @@ export function AgentTasks({
                   (
                     {
                       automations: "Tasks",
+                      triggers: "Event triggers",
                       strategies: "Strategies",
                       history: "Results",
                       inbox: "Inbox",
@@ -533,6 +536,7 @@ export function AgentTasks({
           </button>
         </div>
       </div>
+      {panel === "triggers" && <EventTriggersPanel />}
       <div hidden={panel !== "strategies"}>
         <AgentStrategies
           key={`${v.profileId}:${instanceId}`}

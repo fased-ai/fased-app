@@ -15,6 +15,7 @@ import {
 } from "../agents-v2";
 import {
   ArrowRight,
+  Bell,
   Check,
   Copy,
   ExternalLink,
@@ -35,6 +36,7 @@ import { AddProviderWizard } from "./AddProviderWizard";
 import { ApplicationUpdatesPanel } from "./ApplicationUpdatesPanel";
 import { InstanceSummary, RemoteConnection } from "./InstanceConnection";
 import { IntegrationsPanel } from "./IntegrationsPanel";
+import { NotificationsPanel } from "./NotificationsPanel";
 import { RemoteDevices } from "./RemoteDevices";
 import { UpdateStatusPanel } from "./UpdateStatusPanel";
 import { Dialog, ToggleSwitch } from "./shared";
@@ -48,6 +50,7 @@ const SETTINGS_TABS: {
   { id: "general", label: "General", icon: SlidersHorizontal },
   { id: "providers", label: "Providers", icon: Plug, readyOnly: true },
   { id: "instance", label: "Instance", icon: Server },
+  { id: "notifications", label: "Notifications", icon: Bell, readyOnly: true },
   { id: "updates", label: "Updates", icon: RefreshCw, readyOnly: true },
   {
     id: "diagnostics",
@@ -100,6 +103,7 @@ export function SettingsModal() {
       setActiveTab(
         core.mode !== "ready" &&
           (settingsModalTab === "providers" ||
+            settingsModalTab === "notifications" ||
             settingsModalTab === "updates" ||
             settingsModalTab === "diagnostics")
           ? "general"
@@ -551,6 +555,10 @@ export function SettingsModal() {
                   </div>
                 )}
               </>
+            )}
+
+            {activeTab === "notifications" && core.mode === "ready" && (
+              <NotificationsPanel />
             )}
 
             {activeTab === "updates" && core.mode === "ready" && (

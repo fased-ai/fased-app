@@ -37,6 +37,8 @@ var mcpReadTools = map[string]bool{
 	"call_external_mcp_tool": true,
 	"get_world_intel":        true,
 	"get_prediction_markets": true,
+	"list_event_triggers":    true,
+	"list_notifications":     true,
 }
 
 var mcpDraftTools = map[string]bool{
@@ -99,6 +101,12 @@ var mcpResources = []mcpResourceDescriptor{
 		URI:         "fased://intel/events",
 		Name:        "World intelligence events",
 		Description: "Recent geo-tagged global news, macro, seismic, and prediction-market intelligence (tagged untrusted=true).",
+		MimeType:    "application/json",
+	},
+	{
+		URI:         "fased://automation/triggers",
+		Name:        "Automation triggers",
+		Description: "Configured event-driven triggers and current pause/kill-switch state.",
 		MimeType:    "application/json",
 	},
 }
@@ -415,6 +423,8 @@ func readMCPResource(ctx context.Context, s *Store, uri string) (any, error) {
 			return nil, err
 		}
 		return map[string]any{"events": summary.Events, "clusters": summary.Clusters, "regionCounts": summary.RegionCounts, "count": len(summary.Events), "untrusted": true}, nil
+	case "fased://automation/triggers":
+		return toolListEventTriggers(ctx, s, "", []byte(`{}`))
 	default:
 		return nil, errors.New("unknown MCP resource uri")
 	}

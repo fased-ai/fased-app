@@ -14,6 +14,7 @@ export default defineConfig({
     "core-updates-custody.spec.ts",
     "core-shell-dashboard-i18n.spec.ts",
     "core-integrations.spec.ts",
+    "core-automation-telegram.spec.ts",
     "core-a11y.spec.ts",
     "core-concurrency.spec.ts",
     "trade-workspace.spec.ts",

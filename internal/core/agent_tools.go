@@ -424,6 +424,34 @@ func agentV2ToolRegistry() []agentToolEntry {
 		},
 		{
 			spec: AgentToolSpec{
+				Name:        "list_event_triggers",
+				Tier:        toolTierRead,
+				Description: "Inspect configured price, indicator, World Intel, prediction arbitrage, and cron automation triggers plus current pause and kill-switch status.",
+				Parameters: map[string]any{
+					"type":       "object",
+					"properties": map[string]any{},
+				},
+			},
+			execute: toolListEventTriggers,
+		},
+		{
+			spec: AgentToolSpec{
+				Name:        "list_notifications",
+				Tier:        toolTierRead,
+				Description: "List recent automation alerts and notifications with optional unread and severity filters.",
+				Parameters: map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"unreadOnly": map[string]any{"type": "boolean", "description": "Only return unread notifications."},
+						"severity":   map[string]any{"type": "string", "description": "Optional filter: info, warn, or critical."},
+						"limit":      map[string]any{"type": "integer", "description": "Maximum notifications to return (1-200)."},
+					},
+				},
+			},
+			execute: toolListNotifications,
+		},
+		{
+			spec: AgentToolSpec{
 				Name:        "delegate_to_agent",
 				Tier:        toolTierRead,
 				Description: "Delegate a read-only research or analysis subtask to another workspace agent profile and return its concise synthesis without mutating thread messages or running action tools.",

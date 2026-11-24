@@ -17,11 +17,13 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/fased-ai/fased-app/internal/automation"
 	"github.com/fased-ai/fased-app/internal/decision"
 	"github.com/fased-ai/fased-app/internal/marketdata"
 	"github.com/fased-ai/fased-app/internal/mcpclient"
 	"github.com/fased-ai/fased-app/internal/providersecrets"
 	"github.com/fased-ai/fased-app/internal/signer"
+	"github.com/fased-ai/fased-app/internal/telegram"
 	"github.com/fased-ai/fased-app/internal/update"
 	"github.com/fased-ai/fased-app/internal/worldintel"
 	_ "modernc.org/sqlite"
@@ -67,6 +69,11 @@ type Store struct {
 	worldIntelMu                  sync.Mutex
 	worldIntelSvc                 *worldintel.Service
 	worldIntelTransport           http.RoundTripper // Tests only; never configuration, CLI or IPC.
+	automationMu                  sync.Mutex
+	automationSvc                 *automation.Service
+	telegramSvc                   *telegram.Service
+	automationTransport           http.RoundTripper // Tests only; never configuration, CLI or IPC.
+	telegramTransport             http.RoundTripper // Tests only; never configuration, CLI or IPC.
 	dir                           string
 	instanceID                    string
 	pauseFault                    func(string) error // Test-only interruption injection, never configuration or IPC.
@@ -439,7 +446,16 @@ func (s *Store) Close() error {
 	if wi != nil {
 		wiErr = wi.Close()
 	}
-	return errors.Join(v2Err, mdErr, decErr, mcpCErr, wiErr, s.db.Close())
+	s.automationMu.Lock()
+	auto := s.automationSvc
+	s.automationSvc = nil
+	s.telegramSvc = nil
+	s.automationMu.Unlock()
+	var autoErr error
+	if auto != nil {
+		autoErr = auto.Close()
+	}
+	return errors.Join(v2Err, mdErr, decErr, mcpCErr, wiErr, autoErr, s.db.Close())
 }
 func randomToken() (string, error) {
 	b := make([]byte, 32)
