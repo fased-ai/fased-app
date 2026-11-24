@@ -1,9 +1,16 @@
 import fs from "node:fs";
 import path from "node:path";
 
-const DEFAULT_WINDOWS_TIMESTAMP_URL = "http://timestamp.digicert.com";
+const DEFAULT_WINDOWS_TIMESTAMP_URL = "https://timestamp.digicert.com";
 const DEFAULT_WINDOWS_KITS_BIN =
   "C:\\Program Files (x86)\\Windows Kits\\10\\bin";
+
+function isRequireSigned(env = process.env) {
+  const raw = String(env.FASED_REQUIRE_SIGNED || "")
+    .trim()
+    .toLowerCase();
+  return raw === "1" || raw === "true";
+}
 
 function compareDottedVersionsDesc(a, b) {
   const pa = a.split(".").map((n) => Number.parseInt(n, 10) || 0);
@@ -55,6 +62,11 @@ export function resolveMacOSSigningConfig(env = process.env) {
       "Apple notarization configuration requires APPLE_SIGNING_IDENTITY.",
     );
   }
+  if (isRequireSigned(env) && (!identity || !notarizationEnabled)) {
+    throw new Error(
+      "FASED_REQUIRE_SIGNED=1 requires macOS APPLE_SIGNING_IDENTITY and notarization credentials.",
+    );
+  }
 
   return {
     enabled: Boolean(identity),
@@ -88,6 +100,11 @@ export function resolveWindowsSigningConfig(env = process.env) {
   if (hasPfxSource !== Boolean(password)) {
     throw new Error(
       "Partial Windows Authenticode configuration: set both WINDOWS_SIGN_CERT_PFX_PATH (or WINDOWS_SIGN_CERT_PFX_BASE64) and WINDOWS_SIGN_CERT_PASSWORD.",
+    );
+  }
+  if (isRequireSigned(env) && !(hasPfxSource && password)) {
+    throw new Error(
+      "FASED_REQUIRE_SIGNED=1 requires Windows Authenticode certificate and password.",
     );
   }
 

@@ -1,25 +1,21 @@
-# Shared Fased and WEN design direction
+# Shared Fased design language
 
-Use one recognizable market workspace across Fased and WEN, while retaining each product's navigation and branding. This is a design direction, not a shipped cross-app integration.
+Fased uses the Obsidian-and-Coral palette (`web/src/shell.css`, `web/src/styles.css`) across desktop browser, mobile PWA, and Wails native wrappers, with full Dark and Light mode parity and WCAG 2.1 AA contrast checked in CI (`core-a11y.spec.ts`).
 
-The shipped Fased App WEN design system uses obsidian surfaces (`#0d0d12`), restrained ember-orange accents (`#FF5A36` / `#ff6b35`), compact cards, readable tables, full Light mode parity (`#f5f4f8`), and clear activity state. Keep Fcode Lab as the umbrella; give Satcoin Mining the same round terms and financial labels wherever it appears.
+| Element       | Dark Mode (`:root.wt`)                                                                                                      | Light Mode (`:root.wt[data-theme="light"]`)                                                                 |
+| ------------- | --------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| Surface       | Obsidian canvas `#0d0d12`, surface `#161621`, raised `#1f1f2d`, border `#252536`                                            | Canvas `#f3f3f8`, surface `#fff`, raised `#ececf4`, border `#d7d7e4`                                        |
+| Text          | Primary `#f5f5fa`, muted `#8f8fa6`, coral button ink `#160a10`                                                              | Primary `#242231`, muted `#626177`, coral button ink `#fff`                                                 |
+| Accent        | Coral `#ff4f7c` (`--wt-coral`), hover `#ff7a8e` (`--shell-primary-hover`), cyan `#27c5da`, violet `#8b6fff`                 | Coral `#b51e43` (`--wt-coral`), hover `#9d1637` (`--shell-primary-hover`), cyan `#087786`, violet `#6640bd` |
+| Status        | Ok `#5be0a5`, warn `#f3c677`, danger `#ff7e92`, info `#7cd8e6`                                                              | High-contrast semantic surface/border pairs meeting WCAG 2.1 AA across Dark and Light                       |
+| Layout        | Quiet top bar (`Overview` logo, search, `Wallets`, alerts, connection), collapsible left rail, bottom-left `Settings` modal | Full-width responsive canvas with mobile switcher below `<= 760px`                                          |
+| Numbers       | Tabular numeric alignment, explicit units/venues, honest estimation markers for backfill vs live ticks                      | Same numeric formatting and keyboard focus-visible rings                                                    |
+| Accessibility | Visible keyboard focus rings (`outline: 2px solid var(--lime)`), labeled controls, zero sole-color status cues              | Audited Dark & Light in `web/tests/core-a11y.spec.ts`                                                       |
 
-| Element       | Shared direction                                                                                             |
-| ------------- | ------------------------------------------------------------------------------------------------------------ |
-| Surface       | Obsidian background `#0d0d12`, panels `#161621`, borders `#242434` (Light mode `#f5f4f8` / `#ffffff`).       |
-| Text          | High-contrast primary text `#f0eef5` and secondary `#9490a8` meeting WCAG 2.1 AA across Dark and Light.      |
-| Accent        | Ember `#FF5A36` (configurable accent tokens) for primary actions and active states; color is never sole cue. |
-| Layout        | Stable left navigation, central workspace and optional right strategy/detail panel.                          |
-| Numbers       | Tabular quantities, visible asset units and consistent rounding; SOL principal, BTC and SAT remain separate. |
-| States        | Available, committed, settling, pending conversion, claimable, claimed and recovery required.                |
-| Accessibility | Visible keyboard focus, labeled controls, readable contrast and reduced-motion support.                      |
+## Navigation and UI discipline
 
-## Satcoin Mining workspace
+The primary left rail organizes **Overview (`#overview`), Trade (`#trade`), Intel (`#intel`), Lab (`#lab`), Chat (`#agents/chat`), Tasks (`#agents/tasks`), Agents (`#agents/settings`), and Wallets (`#wallets`)**, with bottom-left **Settings** opening `<SettingsModal>` (`General`, `Providers`, `Instance`, `Notifications`, `Updates`, `Diagnostics`). Legacy secondary taglines and inline helper walls are replaced by direct controls and on-demand info dialogs (`AGENTS.md`).
 
-Lead with the BTC chart and range strip. Keep the round timer and commitment state beside them. The allocation ticket shows selected ranges, SOL sizes, total exposure and conditional payouts before commitment. Results and the activity ledger follow below; a strategy/chat panel is optional. On narrow screens, keep the range selector, amount and final review usable without a fixed desktop grid.
+## Deferred WEN Mining surface
 
-Use **Mine → Trade SAT → Stake → Daily competition → Portfolio/social strategies** in WEN. Inside Fased, the same mining workspace sits in **Terminals → WEN**; account navigation remains Overview, Agents, Terminals, Wallets and Activity.
-
-Shared controls must use the same definitions, not merely matching colors. A conditional reward is not a received balance. An estimated crowd is not revealed live commitments. A connected profile is not a spending mandate. Keep prototype data and disabled financial actions labeled until their actual adapters are accepted.
-
-Avoid physical rigs, random-tile imagery and a casino jackpot as the core mining metaphor. BTC movement, range allocation, capital and accuracy explain the mechanism. Team identities, profiles and daily competition can add personality without obscuring the ledger.
+The 3-pane WEN allocation histogram terminal (`#terminals/satcoin`) shares these Obsidian/Light CSS tokens (`MiningHistogramCharts.tsx`) but remains **strictly hidden and disabled (`NOT READY / DO NOT IMPLEMENT NOW`, `miningActivationEnabled: false`)** behind an independent gate decoupled from `walletSigner` and `financialExecution`. When authorized later after WEN Lean V1 Mainnet launch, visual alignment must never conflate conditional estimates with claimable rewards or bypass isolated signer limits.

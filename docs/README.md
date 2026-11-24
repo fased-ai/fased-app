@@ -1,14 +1,15 @@
 # Fased App product guide
 
-Fased is the optional agent workspace in the Fcode Lab ecosystem. WEN is the Asset Mining platform; Satcoin Mining is its first product. A shared portfolio and visual language do not pool funds or grant spending authority.
+Fased is the self-hosted agent, research, charting, intelligence, and paper-strategy operating system in the Fcode Lab ecosystem. A shared design language never pools keys or grants spending authority.
 
-**Availability:** this main-branch guide describes the new application's product direction. The main branch starts from the licensing and contribution foundation. Separate engineering branches contain prototype and local acceptance work; they are not a published financial release. No WEN adapter, live wallet or AI capability is made available by these documentation changes. For the existing agent's supported setup, use the [Fased documentation](https://docs.fased.ai).
+**Availability:** Attested Ubuntu 24.04 x86-64 Local/Remote installers, cross-platform CLI & unsigned desktop pre-release builds, live AI providers (OAuth, API key, local server, Host CLI/ACP), watch-only Solana RPC, and Stages 1–3 research/charting/intelligence/automation/QuantLab/Paper-Desk capabilities are shipped (`v0.1.41+`). Live wallet signing, real-money trading execution, and auto-updates remain strictly disabled. **WEN `SAT` mining execution is marked `NOT READY / DO NOT IMPLEMENT NOW` (`miningActivationEnabled: false`).** See the [User guide](index.md) and [Availability](reference/status.md).
 
-The planned navigation is **Overview, Agents, Terminals, Wallets and Activity**, with Settings and Notifications secondary. The selected local or server instance stays visible. Agent profiles own context and preferences; explicit policies own permissions.
+The active shell navigation covers **Overview, Trade, Intel (News), Lab (FasedScript & Paper Desk), Chat, Tasks, Agents, and Wallets**, with a unified bottom-left **Settings** modal (`General`, `Providers`, `Instance`, `Notifications`, `Updates`, `Diagnostics`).
 
-- **Agents:** research, conversations, tasks and bounded strategies.
-- **Terminals:** focused market workspaces; Satcoin Mining is the WEN terminal.
-- **Wallets:** accounts, available balances, pending obligations and permissions.
-- **Activity:** reasons for actions, results, failures and recovery state.
+- **Trade:** Synchronized `1×1`–`4×4` multi-asset charts, 9 candle styles, Orderflow (`Footprint`, `DOM`, `Tape`, `VP`, `CVD`, `Intel`), FasedScript overlays, and the Paper/Shadow Desk dock.
+- **Intel (News):** Clean-room WorldMap, multi-source feeds, Polymarket↔Kalshi prediction odds/arbitrage, and chart event pins.
+- **Lab & Desk:** Sandboxed `FasedScript` DSL, deterministic 4-Gate validation, and the 8-seat Paper/Shadow Trading Desk.
+- **Agents & Tasks:** Conversational Agent V2 with `/api/v1/mcp`, External MCP Client, cron schedules, event-driven triggers, and fail-closed Telegram alerts/approvals.
+- **Wallets:** Watch-only Solana accounts, live read-only RPC, and portable backups; signing stays OFF until authorized.
 
-Read [Satcoin Mining](satcoin-mining.md) for the planned terminal and [shared design language](design-language.md) for consistency with the WEN app. Each terminal needs its own admitted execution adapter; a visual control is not evidence of working financial execution.
+Read [Satcoin Mining](satcoin-mining.md) for the deferred WEN `NOT READY` hold and [shared design language](design-language.md) for Fased's Obsidian/Light design tokens. Each live execution venue requires explicit pre-live hardening and owner authorization; a UI control never activates live trading or signing.

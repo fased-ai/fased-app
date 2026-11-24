@@ -3,11 +3,11 @@ title: "Fased"
 description: "Personal trading research and automation."
 ---
 
-Fased is a self-hosted workspace for agents, market research and authorized automation. Chat, Tasks, News and Memory keep your work connected, on your computer or a private server.
+Fased is a self-hosted workspace for agents, market data, charting, global intelligence, paper strategy validation, and reviewed automation — on your computer or a private server.
 
-**Install → choose Local or Remote → sign in → open Dashboard.** Connect an optional provider, create an agent and use Chat. Review a Task, inspect its result and remember useful context. Reminders and simple news watches need no AI provider.
+**Install → choose Local or Remote → sign in → open Overview, Trade, Intel, or Lab.** Connect an optional AI provider, explore charts/orderflow and global news/predictions, test FasedScript strategies in 4-Gate QuantLab and the 8-Seat Paper/Shadow Desk, or run deterministic event triggers and cron jobs without an AI provider.
 
-<Note>Ubuntu 24.04 x86-64 Local and Tailscale Remote install/updates, cross-platform CLI & unsigned desktop pre-releases (Linux, macOS, Windows), live AI providers (including Host CLI/ACP) with native OS-protected credentials, Agent V2 with MCP, and watch-only Solana wallets with live read-only RPC are available. Live wallet signing, trading and WEN mining activation remain strictly disabled. See [Availability](/reference/status).</Note>
+<Note>Ubuntu 24.04 x86-64 Local and Tailscale Remote install/updates, cross-platform CLI & unsigned desktop pre-releases (Linux, macOS, Windows), live AI providers (including Host CLI/ACP) with OS-protected credentials, TypeSafe Jev & external MCP client, Agent V2 with `/api/v1/mcp`, watch-only Solana wallets with live read-only RPC, and Stages 1–3 Trade/Intel/Lab/Automation/Telegram features are available. Live wallet signing, real-money trading execution, and in-app auto-updating remain strictly disabled; **WEN `SAT` mining execution is NOT READY / DO NOT IMPLEMENT NOW**. See [Availability](/reference/status).</Note>
 
 <CardGroup cols={2}>
 <Card title="Install" icon="download" href="/guide/install">Local and private Remote access.</Card>

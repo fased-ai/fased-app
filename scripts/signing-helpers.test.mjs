@@ -103,7 +103,7 @@ test("resolveMacOSSigningConfig fails closed on partial secrets", () => {
 test("resolveWindowsSigningConfig handles unsigned, signed, invalid URL, and partial secrets", () => {
   const off = resolveWindowsSigningConfig({});
   assert.equal(off.enabled, false);
-  assert.equal(off.timestampUrl, "http://timestamp.digicert.com");
+  assert.equal(off.timestampUrl, "https://timestamp.digicert.com");
 
   const on = resolveWindowsSigningConfig({
     WINDOWS_SIGN_CERT_PFX_PATH: "C:\\temp\\cert.pfx",
@@ -181,4 +181,43 @@ test("findWindowsSigntool picks highest Windows Kits SDK version or override", (
     ],
   });
   assert.equal(found, `${kitsDir}\\10.0.26100.0\\x64\\signtool.exe`);
+});
+
+test("FASED_REQUIRE_SIGNED enforces fail-closed macOS and Windows signing secrets", () => {
+  for (const val of ["1", "true"]) {
+    assert.throws(
+      () => resolveMacOSSigningConfig({ FASED_REQUIRE_SIGNED: val }),
+      /FASED_REQUIRE_SIGNED=1 requires macOS/,
+    );
+    assert.throws(
+      () =>
+        resolveMacOSSigningConfig({
+          FASED_REQUIRE_SIGNED: val,
+          APPLE_SIGNING_IDENTITY: "Developer ID Application: Test",
+        }),
+      /FASED_REQUIRE_SIGNED=1 requires macOS/,
+    );
+    assert.throws(
+      () => resolveWindowsSigningConfig({ FASED_REQUIRE_SIGNED: val }),
+      /FASED_REQUIRE_SIGNED=1 requires Windows/,
+    );
+  }
+
+  const macOk = resolveMacOSSigningConfig({
+    FASED_REQUIRE_SIGNED: "1",
+    APPLE_SIGNING_IDENTITY: "Developer ID Application: Test",
+    APPLE_CERT_P12_BASE64: "AAAA",
+    APPLE_CERT_PASSWORD: "pw",
+    APPLE_NOTARY_KEYCHAIN_PROFILE: "fased-notary",
+  });
+  assert.equal(macOk.enabled, true);
+  assert.equal(macOk.notarizationEnabled, true);
+
+  const winOk = resolveWindowsSigningConfig({
+    FASED_REQUIRE_SIGNED: "true",
+    WINDOWS_SIGN_CERT_PFX_PATH: "C:\\temp\\cert.pfx",
+    WINDOWS_SIGN_CERT_PASSWORD: "pw",
+  });
+  assert.equal(winOk.enabled, true);
+  assert.equal(winOk.timestampUrl, "https://timestamp.digicert.com");
 });

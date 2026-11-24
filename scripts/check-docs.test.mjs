@@ -218,3 +218,31 @@ test("Mintlify title support retains malformed title, private-link and traversal
     ).some((e) => e.includes("missing top-level heading")),
   );
 });
+
+test("anti-drift checks reject stale PM1 math, missing NOT READY hold, and wrong Ember hex", () => {
+  const staleSat = foundation({
+    "docs/satcoin-mining.md":
+      "# Satcoin\n\n8× boost is limited to 60,000 gross SAT and 74/1/10/10/5 split.\n",
+  });
+  const satErrors = validateDocumentation(staleSat);
+  assert.ok(satErrors.some((e) => e.includes("obsolete Oct-26 PM1 math")));
+  assert.ok(satErrors.some((e) => e.includes("NOT READY")));
+
+  const validSat = foundation({
+    "docs/satcoin-mining.md":
+      "# Satcoin\n\nNOT READY / DO NOT IMPLEMENT NOW. See Lean V1.\n",
+  });
+  assert.deepEqual(validateDocumentation(validSat), []);
+
+  const staleDesign = foundation({
+    "docs/design-language.md": "# Design\n\nEmber `#FF5A36` accent.\n",
+  });
+  assert.ok(
+    validateDocumentation(staleDesign).some((e) => e.includes("stale #FF5A36")),
+  );
+
+  const validDesign = foundation({
+    "docs/design-language.md": "# Design\n\nCoral `#ff4f7c` accent.\n",
+  });
+  assert.deepEqual(validateDocumentation(validDesign), []);
+});

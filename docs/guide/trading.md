@@ -3,10 +3,12 @@ title: "Strategies and trading"
 description: "Define rules and limits before authorizing an action."
 ---
 
-A strategy identifies its market, wallet, allocation, timing and risk limits. An agent can help research a strategy or propose a change. Trading still requires your separate permission.
+A strategy defines its market, entry/exit logic, timing, and deterministic risk limits in **Lab (`#lab`)** using the sandboxed **FasedScript** DSL, and can be overlaid directly on **`#trade` charts** or attached to **Event Triggers**.
 
-Paper evaluation is in development. The planned flow is to save a strategy version, review a bounded Task and inspect its simulated result. Editing retains the version history and requires review of affected Tasks.
+The **#trade** workspace provides synchronized `1×1`–`4×4` Lightweight Charts v5 across all 9 candle styles (`Standard`, `Heikin-Ashi`, `Renko`, `Range`, `Kagi`, `Point & Figure`, `Three Line Break`, `Tick`, `Volume`), Orderflow (`Footprint`, `DOM`, `Tape`, `Volume Profile`, `CVD`, and `Cohorts/FRED/SEC Intel`), symbol-scoped drawings, FasedScript overlays, and the **Paper / Shadow Desk** dock.
 
-**Onchain** and **Hyperliquid** trading are planned. Each trade needs clear quantities, costs and permissions, with visible order status and recovery options. Connecting a provider or wallet does not authorize a trade.
+In **#lab**, strategies run against deterministic **4-Gate Statistical Validation** (plateau sweep, 1,000× bar permutation, 3-fold walk-forward + holdout, and 200× walk-forward permutation) and can execute bounded cycles on the **8-Seat Trading Desk** (`Chief`, `Scout`, `Chartist`, `Quant`, `Skeptic`, `Risk`, `Executor`, `Journal`). Desk execution is locked to `shadow`/`paper` mode only and never places real-money trades.
 
-[Fased Network](/guide/network) is intended to supply research and signals for your own strategies. [Mining](/wen/automation) remains a future integration. See [Availability](/reference/status).
+**Live wallet signing, Onchain (Jupiter/Solana) swaps, and Hyperliquid live perps remain strictly disabled** in this build. Connecting a provider or watch-only wallet never authorizes a live order.
+
+[Fased Network](/guide/network) is planned to share attributed signals across instances. [WEN SAT Mining](/wen/automation) is **NOT READY / DO NOT IMPLEMENT NOW**. See [Availability](/reference/status).

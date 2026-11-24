@@ -584,7 +584,14 @@ if (
 ) {
   main()
     .then((r) => console.log(JSON.stringify(r)))
-    .catch(() => {
+    .catch((err) => {
+      const raw = err instanceof Error ? err.message : String(err || "");
+      const redacted = raw
+        .replace(/Bearer\s+[A-Za-z0-9._-]+/gi, "Bearer [REDACTED]")
+        .replace(/\bgh[pousr]_[A-Za-z0-9_]+\b/g, "[REDACTED]")
+        .replace(/\bgithub_pat_[A-Za-z0-9_]+\b/g, "[REDACTED]")
+        .trim();
+      if (redacted) console.error(`Release error: ${redacted}`);
       console.error(
         "Release held. Preserve the original artifacts and operation records; no password is needed.",
       );

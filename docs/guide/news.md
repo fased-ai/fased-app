@@ -3,10 +3,10 @@ title: "News"
 description: "Follow sources and bring relevant headlines into your work."
 ---
 
-Add a supported RSS source in **News** to keep headlines, publication times and source links together. Inspect a saved headline, choose **Discuss** to bring it into Chat, or create a news watch.
+Open **Intel (`#intel`)** or **News (`#agents/news`)** to follow live RSS/Atom feeds, GDELT global news/geopolitics, USGS seismic events, and Polymarket↔Kalshi prediction odds & arbitrage spreads over a clean-room WorldMap. Background sync enriches items with location/ticker tags and urgency/sentiment scores (TypeSafe Jev or fast deterministic offline fallback) and pins catalysts onto **`#trade` charts**.
 
-A simple watch checks titles against your chosen rule and timing. New matches appear in the Inbox and Task results. It does not need an AI provider. If required information is unavailable or stale, dependent work pauses.
+From any headline or feed item you can inspect details, send titles/catalysts to **Event Triggers** (`#agents/tasks`), or bring context into **Agent Chat** without requiring an AI provider for rule-based matching.
 
-AI analysis is optional and uses the account and limits you approve. A news report is source material; a [Network signal](/guide/network) is an attributed market view with a forecast horizon and conditions.
+AI analysis is optional and uses the account and limits you approve. A news item is source material; a [Network signal](/guide/network) is a planned attributed forecast with explicit conditions.
 
-The development app uses sample inputs. Supported sources and live availability are listed in the release information. See [Availability](/reference/status).
+Real-money automated execution remains disabled across all news and prediction workflows. See [Availability](/reference/status).
