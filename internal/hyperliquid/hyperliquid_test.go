@@ -82,6 +82,7 @@ func (m *mockHyperliquidTransport) RoundTrip(req *http.Request) (*http.Response,
 						"oid":     res.OrderID,
 						"sz":      res.FilledSize,
 						"limitPx": res.AvgPrice,
+						"cloid":   res.ClientOrderID,
 					},
 				},
 			})
@@ -94,7 +95,14 @@ func (m *mockHyperliquidTransport) RoundTrip(req *http.Request) (*http.Response,
 		act, _ := payload["action"].(map[string]any)
 		actType, _ := act["type"].(string)
 		m.lastAction = actType
-		if actType == "cancel" {
+		switch actType {
+		case "updateLeverage":
+			m.mu.Unlock()
+			respBody, _ = json.Marshal(map[string]any{
+				"status":   "ok",
+				"response": map[string]any{"type": "default"},
+			})
+		case "cancel":
 			m.reconcileRes.State = "canceled"
 			m.mu.Unlock()
 			respBody, _ = json.Marshal(map[string]any{
@@ -106,14 +114,21 @@ func (m *mockHyperliquidTransport) RoundTrip(req *http.Request) (*http.Response,
 					},
 				},
 			})
-		} else {
+		default:
 			m.nextOid++
 			oid := m.nextOid
+			cloid := ""
+			if orders, ok := act["orders"].([]any); ok && len(orders) > 0 {
+				if first, ok := orders[0].(map[string]any); ok {
+					cloid, _ = first["c"].(string)
+				}
+			}
 			m.reconcileRes = ExchangeSubmissionResult{
-				State:      "filled",
-				OrderID:    oid,
-				FilledSize: "0.5",
-				AvgPrice:   "3200.5",
+				State:         "filled",
+				OrderID:       oid,
+				ClientOrderID: cloid,
+				FilledSize:    "0.5",
+				AvgPrice:      "3200.5",
 			}
 			m.mu.Unlock()
 			respBody, _ = json.Marshal(map[string]any{
@@ -171,6 +186,9 @@ func TestValidateOriginAndSSRFGuards(t *testing.T) {
 	}
 	if _, err := liveClient.SubmitSignedOrder(t.Context(), signer.HyperliquidOrderIntent{Network: "testnet"}, &signer.HyperliquidSignedAction{}, ""); !errors.Is(err, ErrExecutionDisabled) {
 		t.Fatalf("ordinary client SubmitSignedOrder got %v, want ErrExecutionDisabled", err)
+	}
+	if _, err := liveClient.SubmitSignedUpdateLeverage(t.Context(), signer.HyperliquidUpdateLeverageIntent{Network: "testnet", Leverage: 5}, &signer.HyperliquidSignedAction{}, ""); !errors.Is(err, ErrExecutionDisabled) {
+		t.Fatalf("ordinary client SubmitSignedUpdateLeverage got %v, want ErrExecutionDisabled", err)
 	}
 	if _, err := liveClient.SubmitSignedCancel(t.Context(), signer.HyperliquidCancelIntent{Network: "testnet"}, &signer.HyperliquidSignedAction{}, ""); !errors.Is(err, ErrExecutionDisabled) {
 		t.Fatalf("ordinary client SubmitSignedCancel got %v, want ErrExecutionDisabled", err)
@@ -237,16 +255,38 @@ func TestControlledHyperliquidEndToEndFlow(t *testing.T) {
 		MaxOrderPriceBpsDeviation: 500,
 		ExpiresAt:                 now + 3600,
 	}
+	levIntent := signer.HyperliquidUpdateLeverageIntent{
+		Network:    "testnet",
+		Asset:      "ETH",
+		AssetIndex: 1,
+		Leverage:   5,
+		IsCross:    false,
+		Nonce:      1000,
+		ExpiresAt:  now + 300,
+	}
+	signedLev, err := v.SignHyperliquidUpdateLeverage(levIntent, policy)
+	if err != nil {
+		t.Fatalf("SignHyperliquidUpdateLeverage: %v", err)
+	}
+	levRes, err := client.SubmitSignedUpdateLeverage(ctx, levIntent, signedLev, policy.VaultAddress)
+	if err != nil || levRes.State != "ok" {
+		t.Fatalf("SubmitSignedUpdateLeverage got %+v, err=%v", levRes, err)
+	}
+
 	preview, intent, err := PreviewOrder(snap, policy, OrderDraft{
-		Asset:       "ETH",
-		IsBuy:       true,
-		LimitPrice:  "3200.50",
-		Size:        "0.500",
-		Leverage:    5,
-		TimeInForce: "Gtc",
-	}, 0, 1001, now)
+		Asset:         "ETH",
+		IsBuy:         true,
+		LimitPrice:    "3200.50",
+		Size:          "0.500",
+		Leverage:      5,
+		TimeInForce:   "Gtc",
+		ClientOrderID: "0x11111111111111111111111111111111",
+	}, 1000, 1001, now)
 	if err != nil {
 		t.Fatalf("PreviewOrder: %v", err)
+	}
+	if intent.IsCross {
+		t.Fatal("expected PreviewOrder to default IsCross to false")
 	}
 	if preview.NormalizedPrice != "3200.5" || preview.NormalizedSize != "0.5" {
 		t.Fatalf("unexpected normalized preview: %+v", preview)
@@ -274,6 +314,14 @@ func TestControlledHyperliquidEndToEndFlow(t *testing.T) {
 		t.Fatalf("ReconcileOrder got %+v, err=%v", reconcileRes, err)
 	}
 
+	cloidRes, err := client.ReconcileOrderByCloid(ctx, signerAddr, intent.ClientOrderID)
+	if err != nil || cloidRes.State != "filled" || cloidRes.OrderID != 5001 || cloidRes.ClientOrderID != intent.ClientOrderID {
+		t.Fatalf("ReconcileOrderByCloid got %+v, err=%v", cloidRes, err)
+	}
+	if _, err := client.ReconcileOrderByCloid(ctx, signerAddr, "not-a-cloid"); err == nil {
+		t.Fatal("accepted malformed cloid")
+	}
+
 	cancelIntent := signer.HyperliquidCancelIntent{
 		Network:    "testnet",
 		Asset:      "ETH",
@@ -289,5 +337,112 @@ func TestControlledHyperliquidEndToEndFlow(t *testing.T) {
 	cancelRes, err := client.SubmitSignedCancel(ctx, cancelIntent, signedCancel, policy.VaultAddress)
 	if err != nil || cancelRes.State != "cancelled" {
 		t.Fatalf("SubmitSignedCancel got %+v, err=%v", cancelRes, err)
+	}
+}
+
+func TestPreviewOrderMarginModeAndOnlyIsolated(t *testing.T) {
+	now := time.Now().Unix()
+	snap := MarketSnapshot{
+		Network: "testnet",
+		Markets: []MarketMeta{
+			{AssetIndex: 1, Symbol: "ETH", SzDecimals: 4, MaxLeverage: 20, OnlyIsolated: false, MarkPrice: "3200"},
+			{AssetIndex: 2, Symbol: "MEME", SzDecimals: 1, MaxLeverage: 10, OnlyIsolated: true, MarkPrice: "1.5"},
+		},
+	}
+	policy := signer.HyperliquidPolicy{
+		Version:                   1,
+		Network:                   "testnet",
+		AllowedAssets:             []string{"ETH", "MEME"},
+		MaxLeverage:               10,
+		MaxNotionalMicroUSD:       5_000_000_000,
+		MaxOrderPriceBpsDeviation: 500,
+		ExpiresAt:                 now + 3600,
+	}
+	trueVal := true
+	_, crossIntent, err := PreviewOrder(snap, policy, OrderDraft{
+		Asset:       "ETH",
+		IsBuy:       true,
+		IsCross:     &trueVal,
+		LimitPrice:  "3200",
+		Size:        "0.5",
+		Leverage:    5,
+		TimeInForce: "Gtc",
+	}, 0, 100, now)
+	if err != nil || !crossIntent.IsCross {
+		t.Fatalf("expected IsCross=true on non-onlyIsolated market, got isCross=%v err=%v", crossIntent.IsCross, err)
+	}
+
+	if _, _, err := PreviewOrder(snap, policy, OrderDraft{
+		Asset:       "MEME",
+		IsBuy:       true,
+		IsCross:     &trueVal,
+		LimitPrice:  "1.5",
+		Size:        "10",
+		Leverage:    5,
+		TimeInForce: "Gtc",
+	}, 0, 101, now); err == nil {
+		t.Fatal("accepted cross margin order on onlyIsolated market")
+	}
+}
+
+func TestOrderStorePersistenceAndMonotonicNonce(t *testing.T) {
+	dir := t.TempDir()
+	store, err := OpenOrderStore(dir)
+	if err != nil {
+		t.Fatalf("OpenOrderStore: %v", err)
+	}
+	ctx := t.Context()
+	rec := OrderRecord{
+		ID:              "hl-1001",
+		OrderID:         7001,
+		ClientOrderID:   "0xABCDEF0123456789ABCDEF0123456789",
+		Asset:           "ETH",
+		IsBuy:           true,
+		IsCross:         true,
+		LimitPrice:      "3200.5",
+		Size:            "0.5",
+		Leverage:        5,
+		ReduceOnly:      false,
+		TimeInForce:     "Gtc",
+		State:           "resting",
+		Nonce:           180,
+		SignerAddress:   "0x2c7536E3605D9C16a7a3D7b1898e529396a65c23",
+		ConnectionID:    "0x01",
+		TypedDataDigest: "0x02",
+		SignatureHex:    "0x03",
+		UpdatedAt:       1700000000,
+	}
+	if err := store.UpsertOrder(ctx, rec); err != nil {
+		t.Fatalf("UpsertOrder: %v", err)
+	}
+	if err := store.SaveLastNonce(ctx, 200); err != nil {
+		t.Fatalf("SaveLastNonce(200): %v", err)
+	}
+	// Regression nonce must be ignored monotonically.
+	if err := store.SaveLastNonce(ctx, 150); err != nil {
+		t.Fatalf("SaveLastNonce(150): %v", err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatalf("second Close: %v", err)
+	}
+
+	reopened, err := OpenOrderStore(dir)
+	if err != nil {
+		t.Fatalf("reopen OrderStore: %v", err)
+	}
+	defer func() { _ = reopened.Close() }()
+
+	orders, lastNonce, err := reopened.LoadState(ctx, 64)
+	if err != nil {
+		t.Fatalf("LoadState: %v", err)
+	}
+	if lastNonce != 200 {
+		t.Fatalf("expected monotonic lastNonce 200, got %d", lastNonce)
+	}
+	if len(orders) != 1 || orders[0].ID != rec.ID || orders[0].ClientOrderID != strings.ToLower(rec.ClientOrderID) || !orders[0].IsCross || orders[0].OrderID != 7001 {
+		t.Fatalf("unexpected persisted orders after reopen: %+v", orders)
 	}
 }

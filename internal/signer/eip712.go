@@ -251,6 +251,20 @@ func EncodeHyperliquidOrderAction(intent HyperliquidOrderIntent) ([]byte, error)
 	})
 }
 
+// EncodeHyperliquidUpdateLeverageAction serializes an updateLeverage L1 action
+// in canonical Hyperliquid msgpack key order (type, asset, isCross, leverage).
+func EncodeHyperliquidUpdateLeverageAction(intent HyperliquidUpdateLeverageIntent) ([]byte, error) {
+	if intent.AssetIndex > 10000 || intent.Leverage == 0 {
+		return nil, errors.New("updateLeverage requires valid asset index and non-zero leverage")
+	}
+	return encodeHyperliquidMsgpack([]msgpackKV{
+		{Key: "type", Val: "updateLeverage"},
+		{Key: "asset", Val: intent.AssetIndex},
+		{Key: "isCross", Val: intent.IsCross},
+		{Key: "leverage", Val: intent.Leverage},
+	})
+}
+
 // EncodeHyperliquidCancelAction serializes a single cancel-by-oid action in canonical
 // Hyperliquid L1 msgpack key order.
 func EncodeHyperliquidCancelAction(intent HyperliquidCancelIntent) ([]byte, error) {

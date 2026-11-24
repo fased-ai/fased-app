@@ -189,6 +189,106 @@ func TestEIP712AndHyperliquidMsgpackVectors(t *testing.T) {
 	}
 }
 
+func TestEncodeUpdateLeverageAction(t *testing.T) {
+	isoIntent := HyperliquidUpdateLeverageIntent{
+		Network:    "testnet",
+		Asset:      "ETH",
+		AssetIndex: 1,
+		Leverage:   5,
+		IsCross:    false,
+		Nonce:      1700000001001,
+		ExpiresAt:  1800000000,
+	}
+	packedIso, err := EncodeHyperliquidUpdateLeverageAction(isoIntent)
+	if err != nil {
+		t.Fatalf("encode isolated updateLeverage: %v", err)
+	}
+	// Verify canonical msgpack key ordering: type -> updateLeverage -> asset -> isCross -> leverage.
+	idxType := bytes.Index(packedIso, []byte("type"))
+	idxAction := bytes.Index(packedIso, []byte("updateLeverage"))
+	idxAsset := bytes.Index(packedIso, []byte("asset"))
+	idxCross := bytes.Index(packedIso, []byte("isCross"))
+	idxLev := bytes.Index(packedIso, []byte("leverage"))
+	if idxType < 0 || !(idxType < idxAction && idxAction < idxAsset && idxAsset < idxCross && idxCross < idxLev) {
+		t.Fatalf("unexpected key order in updateLeverage msgpack %x: type=%d act=%d asset=%d cross=%d lev=%d",
+			packedIso, idxType, idxAction, idxAsset, idxCross, idxLev)
+	}
+
+	crossIntent := isoIntent
+	crossIntent.IsCross = true
+	packedCross, err := EncodeHyperliquidUpdateLeverageAction(crossIntent)
+	if err != nil {
+		t.Fatalf("encode cross updateLeverage: %v", err)
+	}
+	if bytes.Equal(packedIso, packedCross) {
+		t.Fatal("isCross=true produced identical msgpack to isCross=false")
+	}
+
+	for _, bad := range []HyperliquidUpdateLeverageIntent{
+		{AssetIndex: 1, Leverage: 0},
+		{AssetIndex: 10001, Leverage: 5},
+	} {
+		if _, err := EncodeHyperliquidUpdateLeverageAction(bad); err == nil {
+			t.Fatalf("accepted invalid updateLeverage bounds %+v", bad)
+		}
+	}
+}
+
+func FuzzSecp256k1SignAndRecover(f *testing.F) {
+	key1, _ := hex.DecodeString("0000000000000000000000000000000000000000000000000000000000000001")
+	key2, _ := hex.DecodeString("4c0883a69102937d6231471b5dbb6204fe5129617082792ae468d01a3f362318")
+	zeros := make([]byte, 32)
+	maxBytes := bytes.Repeat([]byte{0xff}, 32)
+	d1 := Keccak256([]byte("fased-fuzz-digest-1"))
+	d2 := Keccak256([]byte("fased-fuzz-digest-2"))
+	f.Add(key1, d1[:])
+	f.Add(key2, d2[:])
+	f.Add(zeros, d1[:])
+	f.Add(maxBytes, d2[:])
+	f.Fuzz(func(t *testing.T, privBytes, digestBytes []byte) {
+		pubU, _, err := Secp256k1PublicKey(privBytes)
+		if err != nil {
+			return
+		}
+		addr, err := EthereumAddressFromPublicKey(pubU)
+		if err != nil {
+			t.Fatalf("valid pubkey failed address derivation: %v", err)
+		}
+		var digest [32]byte
+		if len(digestBytes) == 32 {
+			copy(digest[:], digestBytes)
+		} else {
+			digest = Keccak256(digestBytes)
+		}
+		sig, err := SignSecp256k1Digest(privBytes, digest)
+		if err != nil {
+			t.Fatalf("valid key failed signing: %v", err)
+		}
+		if err := VerifySecp256k1Signature(addr, digest, sig); err != nil {
+			t.Fatalf("VerifySecp256k1Signature failed: %v", err)
+		}
+		wrongDigest := digest
+		wrongDigest[0] ^= 0x01
+		if err := VerifySecp256k1Signature(addr, wrongDigest, sig); err == nil {
+			t.Fatal("accepted wrong digest")
+		}
+		otherAddr := "0x000000000000000000000000000000000000dEaD"
+		if addr == otherAddr {
+			otherAddr = "0x2c7536E3605D9C16a7a3D7b1898e529396a65c23"
+		}
+		if err := VerifySecp256k1Signature(otherAddr, digest, sig); err == nil {
+			t.Fatal("accepted wrong signer address")
+		}
+		sBig := new(big.Int).SetBytes(sig.S[:])
+		highS := new(big.Int).Sub(secp256k1N, sBig)
+		malleated := sig
+		highS.FillBytes(malleated.S[:])
+		if _, err := RecoverSecp256k1PublicKey(digest, malleated); err == nil {
+			t.Fatal("accepted high-S signature")
+		}
+	})
+}
+
 func FuzzHyperliquidDecimalAndAddress(f *testing.F) {
 	f.Add("3200.50", "0.2500", "3200", "0x2c7536E3605D9C16a7a3D7b1898e529396a65c23")
 	f.Add("96500", "0.01", "96000", "0x7E5F4552091A69125d5DfCb7b8C2659029395Bdf")

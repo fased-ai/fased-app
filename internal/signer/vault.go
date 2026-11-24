@@ -301,6 +301,7 @@ func (v *Vault) Close() error {
 	}
 	v.closed = true
 	v.lock()
+	v.clearHyperliquidState()
 	return v.store.close()
 }
 func (v *Vault) lock() {

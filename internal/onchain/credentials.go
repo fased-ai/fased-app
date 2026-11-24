@@ -228,7 +228,7 @@ func allowedCredentialRPC(method string, readOnly bool) bool {
 	switch method {
 	case "getSignatureStatuses", "getTransaction", "getBlockHeight":
 		return true
-	case "getGenesisHash", "getLatestBlockhash", "getAccountInfo", "getMinimumBalanceForRentExemption", "getFeeForMessage", "getBalance", "simulateTransaction", "sendTransaction":
+	case "getGenesisHash", "getLatestBlockhash", "getAccountInfo", "getMinimumBalanceForRentExemption", "getFeeForMessage", "getBalance", "getRecentPrioritizationFees", "simulateTransaction", "sendTransaction":
 		return !readOnly
 	}
 	return false

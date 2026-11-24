@@ -441,3 +441,78 @@ func TestOnchainProjectionOnlyAppearsForAvailableOrSavedSwaps(t *testing.T) {
 		t.Fatal("saved swap history missing while dispatch is disabled", e)
 	}
 }
+
+func TestOnchainRebroadcastRetriesTransientDropAndConfirmsIdenticalBytes(t *testing.T) {
+	h := newSwapHarness(t)
+	var signCalls int
+	baseSigner := h.store.onchain.signer
+	h.store.onchain.signer = func(ctx context.Context, r signer.Request) (signer.Response, error) {
+		if r.Action == "swap-sign" {
+			signCalls++
+		}
+		return baseSigner(ctx, r)
+	}
+	if err := h.store.ConfigureOnchainRebroadcast(onchain.RebroadcastConfig{MaxAttempts: 0}); err == nil {
+		t.Fatal("accepted invalid rebroadcast MaxAttempts=0")
+	}
+	if err := h.store.ConfigureOnchainRebroadcast(onchain.RebroadcastConfig{
+		MaxAttempts:  4,
+		InitialDelay: 5 * time.Millisecond,
+		MaxDelay:     10 * time.Millisecond,
+	}); err != nil {
+		t.Fatalf("ConfigureOnchainRebroadcast: %v", err)
+	}
+	review := h.quote(t)
+	h.submit(t, review)
+	h.chain.DropSubmission = true
+	h.chain.Unknown = true
+	h.chain.RevealAfterReads = 2
+	if err := h.store.advanceOnchain(t.Context()); err != nil {
+		t.Fatalf("advanceOnchain: %v", err)
+	}
+	got := h.command(t, "swap-view", SwapCommand{})
+	if len(got.Runs) != 1 || got.Runs[0].Swap.State != "confirmed" || got.Tasks[0].State != "completed" {
+		t.Fatalf("rebroadcast did not confirm swap: run=%+v task=%+v", got.Runs, got.Tasks)
+	}
+	if signCalls != 1 {
+		t.Fatalf("expected exactly 1 swap-sign call for identical-bytes rebroadcast, got %d", signCalls)
+	}
+	if h.chain.Submissions < 2 {
+		t.Fatalf("expected >= 2 rebroadcast submissions on transient drop, got %d", h.chain.Submissions)
+	}
+}
+
+func TestOnchainRebroadcastExpirySettlesWithoutResigning(t *testing.T) {
+	h := newSwapHarness(t)
+	var signCalls int
+	baseSigner := h.store.onchain.signer
+	h.store.onchain.signer = func(ctx context.Context, r signer.Request) (signer.Response, error) {
+		if r.Action == "swap-sign" {
+			signCalls++
+		}
+		return baseSigner(ctx, r)
+	}
+	if err := h.store.ConfigureOnchainRebroadcast(onchain.RebroadcastConfig{
+		MaxAttempts:  3,
+		InitialDelay: 5 * time.Millisecond,
+		MaxDelay:     10 * time.Millisecond,
+	}); err != nil {
+		t.Fatalf("ConfigureOnchainRebroadcast: %v", err)
+	}
+	review := h.quote(t)
+	h.submit(t, review)
+	h.chain.DropSubmission = true
+	h.chain.Unknown = true
+	h.chain.RevealAfterReads = 0
+	h.chain.BlockHeight = review.Proposal.Quote.LastValidHeight + 1
+	if err := h.store.advanceOnchain(t.Context()); err != nil {
+		t.Fatalf("advanceOnchain: %v", err)
+	}
+	got := h.command(t, "swap-view", SwapCommand{})
+	if len(got.Runs) != 1 || got.Runs[0].Swap.State != "failed" {
+		t.Fatalf("expected expired rebroadcast to settle as failed, got %+v", got.Runs)
+	}
+	if signCalls != 1 {
+		t.Fatalf("expected exactly 1 swap-sign call without re-signing, got %d", signCalls)
+	}
+}

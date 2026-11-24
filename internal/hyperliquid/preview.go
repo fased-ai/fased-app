@@ -38,6 +38,13 @@ func PreviewOrder(snapshot MarketSnapshot, policy signer.HyperliquidPolicy, req 
 	if market.MaxLeverage > 0 && req.Leverage > market.MaxLeverage {
 		return OrderPreview{}, signer.HyperliquidOrderIntent{}, errors.New("leverage exceeds market maximum")
 	}
+	isCross := false
+	if req.IsCross != nil {
+		isCross = *req.IsCross
+	}
+	if isCross && market.OnlyIsolated {
+		return OrderPreview{}, signer.HyperliquidOrderIntent{}, errors.New("cross margin rejected on onlyIsolated market")
+	}
 	normPrice, err := signer.NormalizeHyperliquidDecimal(req.LimitPrice)
 	if err != nil {
 		return OrderPreview{}, signer.HyperliquidOrderIntent{}, err
@@ -66,6 +73,7 @@ func PreviewOrder(snapshot MarketSnapshot, policy signer.HyperliquidPolicy, req 
 		Asset:              market.Symbol,
 		AssetIndex:         market.AssetIndex,
 		IsBuy:              req.IsBuy,
+		IsCross:            isCross,
 		LimitPrice:         normPrice,
 		Size:               normSize,
 		ReferenceMarkPrice: normMark,

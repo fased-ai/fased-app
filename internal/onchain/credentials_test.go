@@ -154,3 +154,25 @@ func TestAuthenticatedHTTPSRejectsRedirectAndSecretEcho(t *testing.T) {
 		})
 	}
 }
+
+func TestAuthenticatedDynamicPriorityFees(t *testing.T) {
+	_, _, q, _ := fixture(t)
+	chain := &onchaintest.Chain{RecentPriorityFees: []uint64{2_000, 15_000, 30_000}}
+	transport, access, cleared := authenticatedFixture(t, "https://mainnet.helius-rpc.com", chain)
+	client, err := onchain.NewControlledAuthenticatedClient(transport, access)
+	if err != nil {
+		t.Fatal(err)
+	}
+	q.MaxFeeLamports = 20_000
+	prepared, err := client.Prepare(t.Context(), q)
+	if err != nil {
+		t.Fatalf("Prepare with authenticated dynamic priority fees failed: %v", err)
+	}
+	if prepared.PriorityFeeMicroLamports == 0 {
+		t.Fatal("expected non-zero PriorityFeeMicroLamports from getRecentPrioritizationFees")
+	}
+	if prepared.FeeLamports < 5000 || prepared.FeeLamports > q.MaxFeeLamports {
+		t.Fatalf("fee lamports %d outside [5000, %d]", prepared.FeeLamports, q.MaxFeeLamports)
+	}
+	cleared()
+}
