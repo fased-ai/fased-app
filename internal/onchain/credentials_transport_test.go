@@ -43,7 +43,7 @@ func TestCredentialVerifierTransportFence(t *testing.T) {
 		t.Fatal(err)
 	}
 	transport := verifier.client.http.Transport
-	for _, method := range []string{"sendTransaction", "simulateTransaction", "getGenesisHash", "getLatestBlockhash", "getAccountInfo", "requestAirdrop", "sendRawTransaction", "getTransaction ", "getSignatureStatuses\",\"method\":\"sendTransaction"} {
+	for _, method := range []string{"sendTransaction", "simulateTransaction", "getGenesisHash", "getLatestBlockhash", "getAccountInfo", "getRecentPrioritizationFees", "requestAirdrop", "sendRawTransaction", "getTransaction ", "getSignatureStatuses\",\"method\":\"sendTransaction"} {
 		if response, err := transport.RoundTrip(scopedRequest(t, access.RPCOrigin, method)); err == nil {
 			response.Body.Close()
 			t.Fatalf("method admitted: %q", method)

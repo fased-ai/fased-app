@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/tls"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -434,6 +435,35 @@ func BuildOrderWirePayload(intent signer.HyperliquidOrderIntent, signed *signer.
 	return body, nil
 }
 
+// BuildUpdateLeverageWirePayload constructs the JSON body for POST /exchange updateLeverage.
+func BuildUpdateLeverageWirePayload(intent signer.HyperliquidUpdateLeverageIntent, signed *signer.HyperliquidSignedAction, vaultAddress string) (map[string]any, error) {
+	if signed == nil || intent.Leverage == 0 || intent.AssetIndex > 10000 {
+		return nil, errors.New("signed updateLeverage action, leverage, and valid assetIndex required")
+	}
+	body := map[string]any{
+		"action": map[string]any{
+			"type":     "updateLeverage",
+			"asset":    intent.AssetIndex,
+			"isCross":  intent.IsCross,
+			"leverage": intent.Leverage,
+		},
+		"nonce": signed.Nonce,
+		"signature": map[string]any{
+			"r": signed.SignatureR,
+			"s": signed.SignatureS,
+			"v": signed.SignatureV,
+		},
+	}
+	if vaultAddress != "" {
+		canonVault, err := signer.ValidateEthereumAddress(vaultAddress)
+		if err != nil {
+			return nil, err
+		}
+		body["vaultAddress"] = canonVault
+	}
+	return body, nil
+}
+
 // BuildCancelWirePayload constructs the JSON body for POST /exchange cancel-by-oid.
 func BuildCancelWirePayload(intent signer.HyperliquidCancelIntent, signed *signer.HyperliquidSignedAction, vaultAddress string) (map[string]any, error) {
 	if signed == nil || intent.OrderID == 0 {
@@ -559,7 +589,107 @@ func (c *Client) SubmitSignedCancel(ctx context.Context, intent signer.Hyperliqu
 	return res, err
 }
 
-// ReconcileOrder queries POST /info orderStatus to resolve uncertain submissions.
+func parseUpdateLeverageResponse(raw []byte) (ExchangeSubmissionResult, error) {
+	var resp struct {
+		Status   string          `json:"status"`
+		Response json.RawMessage `json:"response"`
+	}
+	if err := json.Unmarshal(raw, &resp); err != nil {
+		return ExchangeSubmissionResult{State: "unknown", Message: "malformed updateLeverage response"}, err
+	}
+	if resp.Status != "ok" {
+		msg := fmt.Sprintf("updateLeverage status %q", resp.Status)
+		var textResp string
+		if json.Unmarshal(resp.Response, &textResp) == nil && textResp != "" {
+			msg = textResp
+		}
+		return ExchangeSubmissionResult{State: "rejected", Message: msg}, errors.New(msg)
+	}
+	var errCheck struct {
+		Data *struct {
+			Statuses []struct {
+				Error string `json:"error"`
+			} `json:"statuses"`
+		} `json:"data"`
+	}
+	if json.Unmarshal(resp.Response, &errCheck) == nil && errCheck.Data != nil {
+		for _, st := range errCheck.Data.Statuses {
+			if st.Error != "" {
+				return ExchangeSubmissionResult{State: "rejected", Message: st.Error}, errors.New(st.Error)
+			}
+		}
+	}
+	return ExchangeSubmissionResult{State: "ok"}, nil
+}
+
+// SubmitSignedUpdateLeverage fails closed unless this Client holds a ControlledFixture transport.
+func (c *Client) SubmitSignedUpdateLeverage(ctx context.Context, intent signer.HyperliquidUpdateLeverageIntent, signed *signer.HyperliquidSignedAction, vaultAddress string) (ExchangeSubmissionResult, error) {
+	if c == nil || !c.controlled {
+		return ExchangeSubmissionResult{}, ErrExecutionDisabled
+	}
+	if intent.Network == "mainnet" && !signer.HyperliquidActivationEnabled {
+		return ExchangeSubmissionResult{}, ErrExecutionDisabled
+	}
+	body, err := BuildUpdateLeverageWirePayload(intent, signed, vaultAddress)
+	if err != nil {
+		return ExchangeSubmissionResult{}, err
+	}
+	raw, err := c.postJSON(ctx, "/exchange", body)
+	if err != nil {
+		return ExchangeSubmissionResult{State: "unknown", Message: err.Error()}, err
+	}
+	return parseUpdateLeverageResponse(raw)
+}
+
+func parseOrderStatusResponse(raw []byte, fallbackOID uint64, fallbackCloid string) (ExchangeSubmissionResult, error) {
+	var resp struct {
+		Status string `json:"status"`
+		Order  *struct {
+			Status string `json:"status"`
+			Order  struct {
+				Oid   uint64 `json:"oid"`
+				Sz    string `json:"sz"`
+				Limit string `json:"limitPx"`
+				Cloid string `json:"cloid"`
+			} `json:"order"`
+		} `json:"order"`
+	}
+	if err := json.Unmarshal(raw, &resp); err != nil {
+		return ExchangeSubmissionResult{State: "unknown", OrderID: fallbackOID, ClientOrderID: fallbackCloid, Message: "malformed orderStatus"}, err
+	}
+	if resp.Status != "order" || resp.Order == nil {
+		return ExchangeSubmissionResult{State: "unknown", OrderID: fallbackOID, ClientOrderID: fallbackCloid, Message: "order not indexed"}, nil
+	}
+	state := "unknown"
+	switch resp.Order.Status {
+	case "open":
+		state = "resting"
+	case "filled":
+		state = "filled"
+	case "canceled", "rejected", "marginCanceled":
+		state = "cancelled"
+		if resp.Order.Status == "rejected" {
+			state = "rejected"
+		}
+	}
+	oid := resp.Order.Order.Oid
+	if oid == 0 {
+		oid = fallbackOID
+	}
+	cloid := resp.Order.Order.Cloid
+	if cloid == "" {
+		cloid = fallbackCloid
+	}
+	return ExchangeSubmissionResult{
+		State:         state,
+		OrderID:       oid,
+		ClientOrderID: cloid,
+		FilledSize:    resp.Order.Order.Sz,
+		AvgPrice:      resp.Order.Order.Limit,
+	}, nil
+}
+
+// ReconcileOrder queries POST /info orderStatus by numeric orderId to resolve uncertain submissions.
 func (c *Client) ReconcileOrder(ctx context.Context, address string, orderID uint64) (ExchangeSubmissionResult, error) {
 	canon, err := signer.ValidateEthereumAddress(address)
 	if err != nil {
@@ -576,41 +706,29 @@ func (c *Client) ReconcileOrder(ctx context.Context, address string, orderID uin
 	if err != nil {
 		return ExchangeSubmissionResult{State: "unknown", OrderID: orderID, Message: err.Error()}, err
 	}
-	var resp struct {
-		Status string `json:"status"`
-		Order  *struct {
-			Status string `json:"status"`
-			Order  struct {
-				Oid   uint64 `json:"oid"`
-				Sz    string `json:"sz"`
-				Limit string `json:"limitPx"`
-				Cloid string `json:"cloid"`
-			} `json:"order"`
-		} `json:"order"`
+	return parseOrderStatusResponse(raw, orderID, "")
+}
+
+// ReconcileOrderByCloid queries POST /info orderStatus by 16-byte hex cloid when numeric orderId is unknown.
+func (c *Client) ReconcileOrderByCloid(ctx context.Context, address, cloid string) (ExchangeSubmissionResult, error) {
+	canon, err := signer.ValidateEthereumAddress(address)
+	if err != nil {
+		return ExchangeSubmissionResult{}, err
 	}
-	if err := json.Unmarshal(raw, &resp); err != nil {
-		return ExchangeSubmissionResult{State: "unknown", OrderID: orderID, Message: "malformed orderStatus"}, err
+	canonCloid := strings.ToLower(strings.TrimSpace(cloid))
+	if !strings.HasPrefix(canonCloid, "0x") || len(canonCloid) != 34 {
+		return ExchangeSubmissionResult{}, errors.New("reconcile requires 16-byte 0x cloid")
 	}
-	if resp.Status != "order" || resp.Order == nil {
-		return ExchangeSubmissionResult{State: "unknown", OrderID: orderID, Message: "order not indexed"}, nil
+	if rawHex, err := hex.DecodeString(canonCloid[2:]); err != nil || len(rawHex) != 16 {
+		return ExchangeSubmissionResult{}, errors.New("reconcile requires valid 16-byte hex cloid")
 	}
-	state := "unknown"
-	switch resp.Order.Status {
-	case "open":
-		state = "resting"
-	case "filled":
-		state = "filled"
-	case "canceled", "rejected", "marginCanceled":
-		state = "cancelled"
-		if resp.Order.Status == "rejected" {
-			state = "rejected"
-		}
+	raw, err := c.postJSON(ctx, "/info", map[string]any{
+		"type": "orderStatus",
+		"user": canon,
+		"oid":  canonCloid,
+	})
+	if err != nil {
+		return ExchangeSubmissionResult{State: "unknown", ClientOrderID: canonCloid, Message: err.Error()}, err
 	}
-	return ExchangeSubmissionResult{
-		State:         state,
-		OrderID:       resp.Order.Order.Oid,
-		ClientOrderID: resp.Order.Order.Cloid,
-		FilledSize:    resp.Order.Order.Sz,
-		AvgPrice:      resp.Order.Order.Limit,
-	}, nil
+	return parseOrderStatusResponse(raw, 0, canonCloid)
 }

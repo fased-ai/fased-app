@@ -477,7 +477,8 @@ func (s *Store) Close() error {
 	if dk != nil {
 		dkErr = dk.Close()
 	}
-	return errors.Join(v2Err, mdErr, decErr, mcpCErr, wiErr, autoErr, qlErr, dkErr, s.db.Close())
+	hlErr := s.clearHyperliquidRuntime()
+	return errors.Join(v2Err, mdErr, decErr, mcpCErr, wiErr, autoErr, qlErr, dkErr, hlErr, s.db.Close())
 }
 func randomToken() (string, error) {
 	b := make([]byte, 32)

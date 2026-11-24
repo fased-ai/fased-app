@@ -83,6 +83,9 @@ type ControlledSwapVenue interface {
 	Send(context.Context, onchain.Quote, []byte) (bool, error)
 	Reconcile(context.Context, onchain.Quote, []byte) (onchain.Observation, error)
 }
+type rebroadcastSwapVenue interface {
+	SendWithRebroadcast(context.Context, onchain.Quote, []byte, onchain.RebroadcastConfig) (onchain.RebroadcastResult, error)
+}
 type swapVenue = ControlledSwapVenue
 
 type swapEntry struct {
@@ -96,6 +99,23 @@ type onchainRuntime struct {
 	venue           func(Account) (swapVenue, error)
 	signer          func(context.Context, signer.Request) (signer.Response, error)
 	quotes          map[string]swapEntry
+	rebroadcast     *onchain.RebroadcastConfig
+}
+
+// ConfigureOnchainRebroadcast enables bounded SendWithRebroadcast retries for
+// already-signed immutable swap packets on the active onchain runtime.
+func (s *Store) ConfigureOnchainRebroadcast(cfg onchain.RebroadcastConfig) error {
+	if s == nil || s.onchain == nil {
+		return signer.ErrUnavailable
+	}
+	if cfg.MaxAttempts < 1 || cfg.MaxAttempts > onchain.MaxRebroadcastAttempts {
+		return errors.New("rebroadcast attempts outside supported bounds")
+	}
+	s.onchain.mu.Lock()
+	copyCfg := cfg
+	s.onchain.rebroadcast = &copyCfg
+	s.onchain.mu.Unlock()
+	return nil
 }
 
 func swapPolicyDigest(p SwapTaskPolicy) string { p.Digest = ""; return onchain.Hash(p) }
@@ -563,6 +583,28 @@ func (s *Store) advanceOnchain(ctx context.Context) error {
 			return nil
 		}); e != nil {
 			return e
+		}
+		if s.onchain.rebroadcast != nil {
+			if rb, ok := venue.(rebroadcastSwapVenue); ok {
+				res, sendErr := rb.SendWithRebroadcast(ctx, q, reply.Swap.Signed, *s.onchain.rebroadcast)
+				if sendErr != nil {
+					targetState := "not-submitted"
+					if res.Attempted {
+						targetState = "unknown"
+					}
+					if err := set(targetState); err != nil {
+						return err
+					}
+					if res.Expired {
+						_ = s.reconcileOnchain(ctx, r.ProfileID, r.TaskID)
+					}
+					return nil
+				}
+				if e = set("submitted"); e != nil {
+					return e
+				}
+				return s.reconcileOnchain(ctx, r.ProfileID, r.TaskID)
+			}
 		}
 		attempted, e := venue.Send(ctx, q, reply.Swap.Signed)
 		if e != nil {

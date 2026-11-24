@@ -54,12 +54,25 @@ type HyperliquidOrderIntent struct {
 	Size               string `json:"size"`
 	ReferenceMarkPrice string `json:"referenceMarkPrice"`
 	Leverage           uint32 `json:"leverage"`
+	IsCross            bool   `json:"isCross,omitempty"`
 	ReduceOnly         bool   `json:"reduceOnly"`
 	TimeInForce        string `json:"timeInForce"`
 	Grouping           string `json:"grouping"`
 	ClientOrderID      string `json:"clientOrderId,omitempty"`
 	Nonce              uint64 `json:"nonce"`
 	ExpiresAt          int64  `json:"expiresAt"`
+}
+
+// HyperliquidUpdateLeverageIntent represents an explicit leverage & margin-mode
+// configuration action signed before order submission.
+type HyperliquidUpdateLeverageIntent struct {
+	Network    string `json:"network"`
+	Asset      string `json:"asset"`
+	AssetIndex uint32 `json:"assetIndex"`
+	Leverage   uint32 `json:"leverage"`
+	IsCross    bool   `json:"isCross"`
+	Nonce      uint64 `json:"nonce"`
+	ExpiresAt  int64  `json:"expiresAt"`
 }
 
 // HyperliquidCancelIntent represents a single cancel-by-oid intent for EIP-712 signing.
@@ -308,6 +321,32 @@ func ValidateHyperliquidOrderIntent(intent HyperliquidOrderIntent, policy Hyperl
 	return notional, nil
 }
 
+// ValidateHyperliquidUpdateLeverageIntent validates leverage/margin-mode configuration against policy and nonce.
+func ValidateHyperliquidUpdateLeverageIntent(intent HyperliquidUpdateLeverageIntent, policy HyperliquidPolicy, lastNonce uint64, now int64) error {
+	if err := ValidateHyperliquidPolicy(policy, now); err != nil {
+		return err
+	}
+	if intent.Network != policy.Network {
+		return errors.New("Hyperliquid updateLeverage network mismatch")
+	}
+	if !slices.Contains(policy.AllowedAssets, intent.Asset) {
+		return errors.New("Hyperliquid updateLeverage asset not allowlisted")
+	}
+	if intent.AssetIndex > 10000 {
+		return errors.New("Hyperliquid asset index out of range")
+	}
+	if intent.Leverage == 0 || intent.Leverage > policy.MaxLeverage {
+		return errors.New("Hyperliquid leverage exceeds policy")
+	}
+	if intent.Nonce == 0 || intent.Nonce <= lastNonce {
+		return errors.New("Hyperliquid updateLeverage nonce must be strictly increasing")
+	}
+	if intent.ExpiresAt <= now || intent.ExpiresAt > policy.ExpiresAt {
+		return errors.New("Hyperliquid updateLeverage intent expired")
+	}
+	return nil
+}
+
 // ValidateHyperliquidCancelIntent validates a cancel-by-oid intent against policy and nonce.
 func ValidateHyperliquidCancelIntent(intent HyperliquidCancelIntent, policy HyperliquidPolicy, lastNonce uint64, now int64) error {
 	if err := ValidateHyperliquidPolicy(policy, now); err != nil {
@@ -329,6 +368,12 @@ func ValidateHyperliquidCancelIntent(intent HyperliquidCancelIntent, policy Hype
 		return errors.New("Hyperliquid cancel intent expired")
 	}
 	return nil
+}
+
+func (v *Vault) clearHyperliquidState() {
+	hyperliquidVaultMu.Lock()
+	delete(hyperliquidVaultStates, v)
+	hyperliquidVaultMu.Unlock()
 }
 
 func (v *Vault) hyperliquidState() (*hyperliquidVaultState, bool) {
@@ -473,6 +518,47 @@ func (v *Vault) SignHyperliquidOrder(intent HyperliquidOrderIntent, policy Hyper
 		return nil, err
 	}
 	signed, err := v.signHyperliquidActionLocked(intent.Network, policy.VaultAddress, actionMsgpack, intent.Nonce, notional)
+	if err != nil {
+		return nil, err
+	}
+	hyperliquidVaultMu.Lock()
+	if cur, exists := hyperliquidVaultStates[v]; exists && cur == st && intent.Nonce > cur.lastNonce {
+		cur.lastNonce = intent.Nonce
+	}
+	hyperliquidVaultMu.Unlock()
+	return signed, nil
+}
+
+// SignHyperliquidUpdateLeverage validates leverage bounds against policy, advances nonce,
+// and signs the Hyperliquid Exchange Agent EIP-712 digest for an updateLeverage action.
+func (v *Vault) SignHyperliquidUpdateLeverage(intent HyperliquidUpdateLeverageIntent, policy HyperliquidPolicy) (*HyperliquidSignedAction, error) {
+	if v == nil {
+		return nil, ErrUnavailable
+	}
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	if v.closed {
+		return nil, ErrUnavailable
+	}
+	st, ok := v.hyperliquidState()
+	if !ok || !st.enabled {
+		return nil, ErrUnavailable
+	}
+	if !v.unlocked() {
+		return nil, ErrLocked
+	}
+	hyperliquidVaultMu.Lock()
+	lastNonce := st.lastNonce
+	hyperliquidVaultMu.Unlock()
+
+	if err := ValidateHyperliquidUpdateLeverageIntent(intent, policy, lastNonce, v.now().Unix()); err != nil {
+		return nil, err
+	}
+	actionMsgpack, err := EncodeHyperliquidUpdateLeverageAction(intent)
+	if err != nil {
+		return nil, err
+	}
+	signed, err := v.signHyperliquidActionLocked(intent.Network, policy.VaultAddress, actionMsgpack, intent.Nonce, 0)
 	if err != nil {
 		return nil, err
 	}

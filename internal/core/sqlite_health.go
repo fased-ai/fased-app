@@ -126,6 +126,7 @@ func OptionalStateSQLitePaths() []string {
 		"automation/automation.sqlite",
 		"quantlab/lab.sqlite",
 		"desk/desk.sqlite",
+		"hyperliquid/orders.sqlite",
 	}
 }
 

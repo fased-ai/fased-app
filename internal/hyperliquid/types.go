@@ -78,12 +78,38 @@ type AccountState struct {
 type OrderDraft struct {
 	Asset         string `json:"asset"`
 	IsBuy         bool   `json:"isBuy"`
+	IsCross       *bool  `json:"isCross,omitempty"`
 	LimitPrice    string `json:"limitPrice"`
 	Size          string `json:"size"`
 	Leverage      uint32 `json:"leverage"`
 	ReduceOnly    bool   `json:"reduceOnly"`
 	TimeInForce   string `json:"timeInForce"`
 	ClientOrderID string `json:"clientOrderId,omitempty"`
+}
+
+// OrderRecord persists signed, submitted, and reconciled controlled Hyperliquid orders.
+type OrderRecord struct {
+	ID              string `json:"id"`
+	OrderID         uint64 `json:"orderId"`
+	ClientOrderID   string `json:"clientOrderId,omitempty"`
+	Asset           string `json:"asset"`
+	IsBuy           bool   `json:"isBuy"`
+	IsCross         bool   `json:"isCross,omitempty"`
+	LimitPrice      string `json:"limitPrice"`
+	Size            string `json:"size"`
+	Leverage        uint32 `json:"leverage"`
+	ReduceOnly      bool   `json:"reduceOnly"`
+	TimeInForce     string `json:"timeInForce"`
+	State           string `json:"state"`
+	Nonce           uint64 `json:"nonce"`
+	SignerAddress   string `json:"signerAddress"`
+	ConnectionID    string `json:"connectionId"`
+	TypedDataDigest string `json:"typedDataDigest"`
+	SignatureHex    string `json:"signatureHex"`
+	FilledSize      string `json:"filledSize,omitempty"`
+	AvgPrice        string `json:"avgPrice,omitempty"`
+	Message         string `json:"message,omitempty"`
+	UpdatedAt       int64  `json:"updatedAt"`
 }
 
 // OrderPreview is the deterministic, unsigned review projection computed before owner confirmation.

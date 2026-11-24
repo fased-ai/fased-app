@@ -2,12 +2,14 @@ package core
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -24,41 +26,24 @@ const (
 
 // HyperliquidCommand carries bounded UI/CLI command parameters for POST /api/v1/agents.
 type HyperliquidCommand struct {
-	Digest  string                  `json:"digest,omitempty"`
-	OrderID uint64                  `json:"orderId,omitempty"`
-	Request *hyperliquid.OrderDraft `json:"request,omitempty"`
+	ID            string                  `json:"id,omitempty"`
+	Digest        string                  `json:"digest,omitempty"`
+	OrderID       uint64                  `json:"orderId,omitempty"`
+	ClientOrderID string                  `json:"clientOrderId,omitempty"`
+	Request       *hyperliquid.OrderDraft `json:"request,omitempty"`
 }
 
 // HyperliquidReview represents a short-lived, single-use order review pending owner submission.
 type HyperliquidReview struct {
-	Revision  int64                    `json:"revision"`
-	ExpiresAt int64                    `json:"expiresAt"`
-	Digest    string                   `json:"digest"`
-	Preview   hyperliquid.OrderPreview `json:"preview"`
+	Revision       int64                                  `json:"revision"`
+	ExpiresAt      int64                                  `json:"expiresAt"`
+	Digest         string                                 `json:"digest"`
+	Preview        hyperliquid.OrderPreview               `json:"preview"`
+	LeverageIntent signer.HyperliquidUpdateLeverageIntent `json:"leverageIntent"`
 }
 
 // HyperliquidOrderRecord tracks signed/submitted/reconciled controlled Hyperliquid orders.
-type HyperliquidOrderRecord struct {
-	ID              string `json:"id"`
-	OrderID         uint64 `json:"orderId"`
-	Asset           string `json:"asset"`
-	IsBuy           bool   `json:"isBuy"`
-	LimitPrice      string `json:"limitPrice"`
-	Size            string `json:"size"`
-	Leverage        uint32 `json:"leverage"`
-	ReduceOnly      bool   `json:"reduceOnly"`
-	TimeInForce     string `json:"timeInForce"`
-	State           string `json:"state"`
-	Nonce           uint64 `json:"nonce"`
-	SignerAddress   string `json:"signerAddress"`
-	ConnectionID    string `json:"connectionId"`
-	TypedDataDigest string `json:"typedDataDigest"`
-	SignatureHex    string `json:"signatureHex"`
-	FilledSize      string `json:"filledSize,omitempty"`
-	AvgPrice        string `json:"avgPrice,omitempty"`
-	Message         string `json:"message,omitempty"`
-	UpdatedAt       int64  `json:"updatedAt"`
-}
+type HyperliquidOrderRecord = hyperliquid.OrderRecord
 
 // HyperliquidView is projected under AgentView.Hyperliquid only when configured.
 type HyperliquidView struct {
@@ -84,6 +69,7 @@ type hyperliquidRuntime struct {
 	mu        sync.Mutex
 	client    *hyperliquid.Client
 	vault     *signer.Vault
+	store     *hyperliquid.OrderStore
 	policy    signer.HyperliquidPolicy
 	address   string
 	markets   hyperliquid.MarketSnapshot
@@ -108,13 +94,18 @@ func (s *Store) hyperliquidRuntime() *hyperliquidRuntime {
 	return hyperliquidRuntimes[s]
 }
 
-func (s *Store) clearHyperliquidRuntime() {
+func (s *Store) clearHyperliquidRuntime() error {
 	if s == nil {
-		return
+		return nil
 	}
 	hyperliquidRuntimeMu.Lock()
+	old := hyperliquidRuntimes[s]
 	delete(hyperliquidRuntimes, s)
 	hyperliquidRuntimeMu.Unlock()
+	if old != nil && old.store != nil {
+		return old.store.Close()
+	}
+	return nil
 }
 
 // ConfigureHyperliquidControlled attaches a bounded controlled Hyperliquid venue adapter
@@ -153,20 +144,50 @@ func (s *Store) ConfigureHyperliquidControlled(client *hyperliquid.Client, vault
 			OpenOrders: []hyperliquid.OpenOrder{},
 		}
 	}
+	var (
+		orderStore     *hyperliquid.OrderStore
+		savedOrders    = []HyperliquidOrderRecord{}
+		savedLastNonce uint64
+	)
+	if s.dir != "" {
+		orderStore, err = hyperliquid.OpenOrderStore(s.dir)
+		if err != nil {
+			return err
+		}
+		loaded, loadedNonce, loadErr := orderStore.LoadState(initCtx, maxStoredHyperliquidOrders)
+		if loadErr != nil {
+			_ = orderStore.Close()
+			return loadErr
+		}
+		if loaded != nil {
+			savedOrders = loaded
+		}
+		savedLastNonce = loadedNonce
+	}
+	nextNonce := uint64(s.now().UnixMilli())
+	if savedLastNonce >= nextNonce {
+		nextNonce = savedLastNonce + 1
+	}
 	rt := &hyperliquidRuntime{
 		client:    client,
 		vault:     vault,
+		store:     orderStore,
 		policy:    policy,
 		address:   addr,
 		markets:   markets,
 		account:   acct,
 		reviews:   map[string]hyperliquidReviewEntry{},
-		orders:    []HyperliquidOrderRecord{},
-		nextNonce: uint64(s.now().UnixMilli()),
+		orders:    savedOrders,
+		lastNonce: savedLastNonce,
+		nextNonce: nextNonce,
 	}
 	hyperliquidRuntimeMu.Lock()
+	prev := hyperliquidRuntimes[s]
 	hyperliquidRuntimes[s] = rt
 	hyperliquidRuntimeMu.Unlock()
+	if prev != nil && prev.store != nil {
+		_ = prev.store.Close()
+	}
 	return nil
 }
 
@@ -285,30 +306,60 @@ func (s *Store) changeHyperliquid(ctx context.Context, c AgentCommand) (*Hyperli
 		if c.Hyperliquid == nil || c.Hyperliquid.Request == nil {
 			return nil, "", errors.New("hyperliquid order draft required")
 		}
+		draft := *c.Hyperliquid.Request
+		draft.ClientOrderID = strings.ToLower(strings.TrimSpace(draft.ClientOrderID))
+		if draft.ClientOrderID == "" {
+			var cloidBytes [16]byte
+			if _, err := rand.Read(cloidBytes[:]); err != nil {
+				return nil, "", err
+			}
+			draft.ClientOrderID = "0x" + hex.EncodeToString(cloidBytes[:])
+		}
+
 		rt.mu.Lock()
 		for k, entry := range rt.reviews {
 			if entry.review.ExpiresAt <= now {
 				delete(rt.reviews, k)
 			}
 		}
-		if rt.nextNonce < uint64(s.now().UnixMilli()) {
-			rt.nextNonce = uint64(s.now().UnixMilli())
+		floor := uint64(s.now().UnixMilli())
+		if rt.lastNonce >= floor {
+			floor = rt.lastNonce + 1
+		}
+		if rt.nextNonce < floor {
+			rt.nextNonce = floor
 		} else {
 			rt.nextNonce++
 		}
-		nextNonce := rt.nextNonce
+		levNonce := rt.nextNonce
+		orderNonce := levNonce + 1
+		rt.nextNonce = orderNonce
 		lastNonce := rt.lastNonce
 		markets := rt.markets
 		policy := rt.policy
-		preview, _, err := hyperliquid.PreviewOrder(markets, policy, *c.Hyperliquid.Request, lastNonce, nextNonce, now)
+		preview, _, err := hyperliquid.PreviewOrder(markets, policy, draft, levNonce, orderNonce, now)
 		if err != nil {
 			rt.mu.Unlock()
 			return nil, "", err
 		}
+		levIntent := signer.HyperliquidUpdateLeverageIntent{
+			Network:    policy.Network,
+			Asset:      preview.Intent.Asset,
+			AssetIndex: preview.Intent.AssetIndex,
+			Leverage:   preview.Intent.Leverage,
+			IsCross:    preview.Intent.IsCross,
+			Nonce:      levNonce,
+			ExpiresAt:  preview.Intent.ExpiresAt,
+		}
+		if err := signer.ValidateHyperliquidUpdateLeverageIntent(levIntent, policy, lastNonce, now); err != nil {
+			rt.mu.Unlock()
+			return nil, "", err
+		}
 		rev := HyperliquidReview{
-			Revision:  revision,
-			ExpiresAt: min(preview.Intent.ExpiresAt, now+hyperliquidReviewTTLSeconds),
-			Preview:   preview,
+			Revision:       revision,
+			ExpiresAt:      min(preview.Intent.ExpiresAt, now+hyperliquidReviewTTLSeconds),
+			Preview:        preview,
+			LeverageIntent: levIntent,
 		}
 		rev.Digest = hyperliquidDigest(struct {
 			Review HyperliquidReview
@@ -332,10 +383,62 @@ func (s *Store) changeHyperliquid(ctx context.Context, c AgentCommand) (*Hyperli
 			rt.mu.Unlock()
 			return nil, "", errors.New("hyperliquid order review missing, expired, or stale")
 		}
+		levIntent := entry.review.LeverageIntent
 		intent := entry.review.Preview.Intent
 		policy := rt.policy
 		vault := rt.vault
 		client := rt.client
+		addr := rt.address
+		orderStore := rt.store
+		signedLev, err := vault.SignHyperliquidUpdateLeverage(levIntent, policy)
+		if err != nil {
+			rt.mu.Unlock()
+			return nil, "", err
+		}
+		if levIntent.Nonce > rt.lastNonce {
+			rt.lastNonce = levIntent.Nonce
+		}
+		rt.mu.Unlock()
+
+		if orderStore != nil {
+			if err := orderStore.SaveLastNonce(ctx, levIntent.Nonce); err != nil {
+				return nil, "", err
+			}
+		}
+
+		// Apply explicit leverage & margin-mode configuration BEFORE signing/submitting the order.
+		levCtx, cancelLev := context.WithTimeout(ctx, 5*time.Second)
+		levRes, levErr := client.SubmitSignedUpdateLeverage(levCtx, levIntent, signedLev, policy.VaultAddress)
+		cancelLev()
+		if levErr != nil {
+			return nil, "", fmt.Errorf("hyperliquid updateLeverage failed: %w", levErr)
+		}
+		if levRes.State != "ok" {
+			return nil, "", fmt.Errorf("hyperliquid updateLeverage rejected: %s", levRes.Message)
+		}
+
+		verifyCtx, cancelVerify := context.WithTimeout(ctx, 5*time.Second)
+		acct, acctErr := client.FetchAccountState(verifyCtx, addr)
+		cancelVerify()
+		if acctErr != nil {
+			return nil, "", fmt.Errorf("hyperliquid leverage verification unavailable: %w", acctErr)
+		}
+		expectedMode := "isolated"
+		if levIntent.IsCross {
+			expectedMode = "cross"
+		}
+		for _, pos := range acct.Positions {
+			if pos.Symbol == intent.Asset {
+				if pos.Leverage != levIntent.Leverage || pos.MarginMode != expectedMode {
+					return nil, "", fmt.Errorf("hyperliquid leverage verification mismatch for %s: got %dx %s, want %dx %s",
+						intent.Asset, pos.Leverage, pos.MarginMode, levIntent.Leverage, expectedMode)
+				}
+				break
+			}
+		}
+
+		rt.mu.Lock()
+		rt.account = acct
 		signed, err := vault.SignHyperliquidOrder(intent, policy)
 		if err != nil {
 			rt.mu.Unlock()
@@ -345,6 +448,12 @@ func (s *Store) changeHyperliquid(ctx context.Context, c AgentCommand) (*Hyperli
 			rt.lastNonce = intent.Nonce
 		}
 		rt.mu.Unlock()
+
+		if orderStore != nil {
+			if err := orderStore.SaveLastNonce(ctx, intent.Nonce); err != nil {
+				return nil, "", err
+			}
+		}
 
 		submitCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 		res, subErr := client.SubmitSignedOrder(submitCtx, intent, signed, policy.VaultAddress)
@@ -361,8 +470,10 @@ func (s *Store) changeHyperliquid(ctx context.Context, c AgentCommand) (*Hyperli
 		rec := HyperliquidOrderRecord{
 			ID:              fmt.Sprintf("hl-%d", signed.Nonce),
 			OrderID:         res.OrderID,
+			ClientOrderID:   intent.ClientOrderID,
 			Asset:           intent.Asset,
 			IsBuy:           intent.IsBuy,
+			IsCross:         intent.IsCross,
 			LimitPrice:      intent.LimitPrice,
 			Size:            intent.Size,
 			Leverage:        intent.Leverage,
@@ -382,26 +493,77 @@ func (s *Store) changeHyperliquid(ctx context.Context, c AgentCommand) (*Hyperli
 		rt.mu.Lock()
 		rt.recordOrder(rec)
 		rt.mu.Unlock()
+		if orderStore != nil {
+			if err := orderStore.UpsertOrder(ctx, rec); err != nil {
+				return nil, "", err
+			}
+		}
 		_ = s.refreshHyperliquidState(ctx, rt)
 		return s.hyperliquidProjection(revision, nil), profile, nil
 
 	case "hyperliquid-reconcile":
-		if c.Hyperliquid == nil || c.Hyperliquid.OrderID == 0 {
-			return nil, "", errors.New("orderId required for reconciliation")
+		if c.Hyperliquid == nil || (c.Hyperliquid.OrderID == 0 && strings.TrimSpace(c.Hyperliquid.ClientOrderID) == "" && strings.TrimSpace(c.Hyperliquid.ID) == "") {
+			return nil, "", errors.New("orderId, clientOrderId, or id required for reconciliation")
 		}
+		wantOID := c.Hyperliquid.OrderID
+		wantCloid := strings.ToLower(strings.TrimSpace(c.Hyperliquid.ClientOrderID))
+		wantID := strings.TrimSpace(c.Hyperliquid.ID)
+
 		rt.mu.Lock()
-		client, addr := rt.client, rt.address
+		var targetOrd *HyperliquidOrderRecord
+		for i := range rt.orders {
+			o := &rt.orders[i]
+			switch {
+			case wantOID != 0 && o.OrderID == wantOID:
+				cp := *o
+				targetOrd = &cp
+			case wantCloid != "" && strings.EqualFold(o.ClientOrderID, wantCloid):
+				cp := *o
+				targetOrd = &cp
+			case wantID != "" && o.ID == wantID:
+				cp := *o
+				targetOrd = &cp
+			}
+			if targetOrd != nil {
+				break
+			}
+		}
+		client, addr, orderStore := rt.client, rt.address, rt.store
 		rt.mu.Unlock()
+		if targetOrd == nil {
+			return nil, "", errors.New("hyperliquid order not found")
+		}
 
 		recCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-		res, recErr := client.ReconcileOrder(recCtx, addr, c.Hyperliquid.OrderID)
+		var (
+			res    hyperliquid.ExchangeSubmissionResult
+			recErr error
+		)
+		if targetOrd.OrderID != 0 {
+			res, recErr = client.ReconcileOrder(recCtx, addr, targetOrd.OrderID)
+		}
+		if (targetOrd.OrderID == 0 || recErr != nil || res.State == "unknown" || res.State == "") && targetOrd.ClientOrderID != "" {
+			cloidRes, cloidErr := client.ReconcileOrderByCloid(recCtx, addr, targetOrd.ClientOrderID)
+			if cloidErr == nil && (cloidRes.State != "" && (cloidRes.State != "unknown" || res.State == "")) {
+				res = cloidRes
+				recErr = nil
+			} else if targetOrd.OrderID == 0 {
+				res = cloidRes
+				recErr = cloidErr
+			}
+		}
 		cancel()
 
+		var updatedRec *HyperliquidOrderRecord
 		rt.mu.Lock()
-		found := false
 		for i := range rt.orders {
-			if rt.orders[i].OrderID == c.Hyperliquid.OrderID {
-				found = true
+			if rt.orders[i].ID == targetOrd.ID {
+				if res.OrderID != 0 {
+					rt.orders[i].OrderID = res.OrderID
+				}
+				if res.ClientOrderID != "" && rt.orders[i].ClientOrderID == "" {
+					rt.orders[i].ClientOrderID = strings.ToLower(res.ClientOrderID)
+				}
 				if res.State != "" {
 					rt.orders[i].State = res.State
 				}
@@ -415,11 +577,19 @@ func (s *Store) changeHyperliquid(ctx context.Context, c AgentCommand) (*Hyperli
 					rt.orders[i].Message = res.Message
 				}
 				rt.orders[i].UpdatedAt = now
+				cp := rt.orders[i]
+				updatedRec = &cp
+				break
 			}
 		}
 		rt.mu.Unlock()
-		if !found {
+		if updatedRec == nil {
 			return nil, "", errors.New("hyperliquid order not found")
+		}
+		if orderStore != nil {
+			if err := orderStore.UpsertOrder(ctx, *updatedRec); err != nil {
+				return nil, "", err
+			}
 		}
 		if recErr != nil && res.State == "" {
 			return nil, "", recErr
@@ -443,6 +613,7 @@ func (s *Store) changeHyperliquid(ctx context.Context, c AgentCommand) (*Hyperli
 			rt.mu.Unlock()
 			return nil, "", errors.New("hyperliquid order not found")
 		}
+		targetID := rt.orders[idx].ID
 		assetSym := rt.orders[idx].Asset
 		var assetIdx uint32
 		foundAsset := false
@@ -457,8 +628,12 @@ func (s *Store) changeHyperliquid(ctx context.Context, c AgentCommand) (*Hyperli
 			rt.mu.Unlock()
 			return nil, "", errors.New("asset metadata unavailable for cancel")
 		}
-		if rt.nextNonce < uint64(s.now().UnixMilli()) {
-			rt.nextNonce = uint64(s.now().UnixMilli())
+		floor := uint64(s.now().UnixMilli())
+		if rt.lastNonce >= floor {
+			floor = rt.lastNonce + 1
+		}
+		if rt.nextNonce < floor {
+			rt.nextNonce = floor
 		} else {
 			rt.nextNonce++
 		}
@@ -466,6 +641,7 @@ func (s *Store) changeHyperliquid(ctx context.Context, c AgentCommand) (*Hyperli
 		policy := rt.policy
 		vault := rt.vault
 		client := rt.client
+		orderStore := rt.store
 		cancelIntent := signer.HyperliquidCancelIntent{
 			Network:    policy.Network,
 			Asset:      assetSym,
@@ -484,13 +660,20 @@ func (s *Store) changeHyperliquid(ctx context.Context, c AgentCommand) (*Hyperli
 		}
 		rt.mu.Unlock()
 
+		if orderStore != nil {
+			if err := orderStore.SaveLastNonce(ctx, cancelIntent.Nonce); err != nil {
+				return nil, "", err
+			}
+		}
+
 		cCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 		res, cancelErr := client.SubmitSignedCancel(cCtx, cancelIntent, signed, policy.VaultAddress)
 		cancel()
 
+		var updatedCancel *HyperliquidOrderRecord
 		rt.mu.Lock()
 		for i := range rt.orders {
-			if rt.orders[i].OrderID == c.Hyperliquid.OrderID {
+			if rt.orders[i].ID == targetID || rt.orders[i].OrderID == c.Hyperliquid.OrderID {
 				if res.State != "" {
 					rt.orders[i].State = res.State
 				} else if cancelErr != nil {
@@ -498,9 +681,17 @@ func (s *Store) changeHyperliquid(ctx context.Context, c AgentCommand) (*Hyperli
 					rt.orders[i].Message = cancelErr.Error()
 				}
 				rt.orders[i].UpdatedAt = now
+				cp := rt.orders[i]
+				updatedCancel = &cp
+				break
 			}
 		}
 		rt.mu.Unlock()
+		if orderStore != nil && updatedCancel != nil {
+			if err := orderStore.UpsertOrder(ctx, *updatedCancel); err != nil {
+				return nil, "", err
+			}
+		}
 		_ = s.refreshHyperliquidState(ctx, rt)
 		return s.hyperliquidProjection(revision, nil), profile, nil
 
