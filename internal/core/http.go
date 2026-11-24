@@ -18,6 +18,8 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 )
 
 const sessionCookie = "fased_session"
@@ -45,6 +47,9 @@ type HTTPHandler struct {
 	limiter           auth.RateLimiter
 	loopbackPeerUID   func(client, server *net.TCPAddr) (int, bool, error)
 	localNonce        string
+	streamTicketMu    sync.Mutex
+	streamTickets     map[string]streamTicketEntry
+	activeWSConns     atomic.Int32
 }
 
 func NewHTTPHandler(store *Store, baseURL, publicOrigin string, assets fs.FS) (*HTTPHandler, error) {
@@ -304,7 +309,11 @@ func (h *HTTPHandler) api(w http.ResponseWriter, r *http.Request) {
 		credentialGeneration = h.store.venueCredentials.generation
 		h.store.venueCredentials.mu.Unlock()
 	}
-	token := h.session(r)
+	if r.URL.Path == "/api/v1/stream" && r.Header.Get("Origin") == "" && !strings.HasPrefix(r.Header.Get("Authorization"), "Bearer ") {
+		writeError(w, 403, "origin or bearer auth required")
+		return
+	}
+	token := h.resolveStreamSession(r)
 	if !h.ownerSession(r, token) {
 		writeError(w, 401, "owner authentication required")
 		return
@@ -654,6 +663,14 @@ func (h *HTTPHandler) api(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 200, map[string]any{"available": false, "executionEnabled": false, "reason": "real wallets unavailable; public fixture references are managed through accounts"})
 		return
 	default:
+		if r.URL.Path == "/api/v1/stream/ticket" {
+			h.streamTicketAPI(w, r, token)
+			return
+		}
+		if r.URL.Path == "/api/v1/stream" {
+			h.streamWSAPI(w, r)
+			return
+		}
 		if r.URL.Path == "/api/v1/mcp" {
 			h.mcpAPI(w, r, token)
 			return

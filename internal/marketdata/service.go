@@ -12,18 +12,30 @@ import (
 
 // Config parameterizes a marketdata Service.
 type Config struct {
-	DataDir       string
-	FixtureMode   bool
-	Now           func() time.Time
-	HTTPTransport http.RoundTripper // Tests only.
+	DataDir          string
+	FixtureMode      bool
+	Now              func() time.Time
+	HTTPTransport    http.RoundTripper // Tests only.
+	WSEndpoints      map[string]string // Tests only.
+	FeedIdleGrace    time.Duration     // Tests only.
+	FeedEmitInterval time.Duration     // Tests only.
 }
 
 // Service unifies multi-venue market data connectors, deterministic chart transforms,
-// monthly SQLite candle persistence, watchlists, and in-process SSE pub/sub.
+// monthly SQLite candle persistence, watchlists, lazy upstream WebSockets, and in-process pub/sub.
 type Service struct {
 	store       *Store
 	bus         *Bus
 	client      *upstreamClient
+	cache       *FeedCache
+	hub         *FeedHub
+	flight      *callGroup
+	candleCache *ttlCache[[]Candle]
+	bookCache   *ttlCache[OrderBookSnapshot]
+	tradeCache  *ttlCache[[]TradeTick]
+	cohortCache *ttlCache[CohortSnapshot]
+	macroCache  *ttlCache[[]MacroPoint]
+	secCache    *ttlCache[[]SECFiling]
 	fixtureMode bool
 	now         func() time.Time
 }
@@ -39,14 +51,28 @@ func NewService(cfg Config) (*Service, error) {
 	if err != nil {
 		return nil, err
 	}
+	bus := NewBus()
+	cache := newFeedCache(nowFn)
+	client := newUpstreamClient(cfg.HTTPTransport)
+	client.poolCache = newTTLCache[string](256, nowFn)
 	svc := &Service{
 		store:       store,
-		bus:         NewBus(),
-		client:      newUpstreamClient(cfg.HTTPTransport),
+		bus:         bus,
+		client:      client,
+		cache:       cache,
+		hub:         newFeedHub(hubOptions{fixtureMode: cfg.FixtureMode, cache: cache, bus: bus, now: nowFn, wsEndpoints: cfg.WSEndpoints, idleGrace: cfg.FeedIdleGrace, emitInterval: cfg.FeedEmitInterval}),
+		flight:      newCallGroup(),
+		candleCache: newTTLCache[[]Candle](128, nowFn),
+		bookCache:   newTTLCache[OrderBookSnapshot](128, nowFn),
+		tradeCache:  newTTLCache[[]TradeTick](128, nowFn),
+		cohortCache: newTTLCache[CohortSnapshot](16, nowFn),
+		macroCache:  newTTLCache[[]MacroPoint](64, nowFn),
+		secCache:    newTTLCache[[]SECFiling](64, nowFn),
 		fixtureMode: cfg.FixtureMode,
 		now:         nowFn,
 	}
 	if err := svc.seedDefaultWatchlists(context.Background()); err != nil {
+		svc.hub.Close()
 		_ = store.Close()
 		return nil, err
 	}
@@ -74,10 +100,50 @@ func (s *Service) seedDefaultWatchlists(ctx context.Context) error {
 	return err
 }
 
-// Close releases the pub/sub bus and closes all SQLite partitions cleanly.
+// Close stops upstream feeds, releases the pub/sub bus, and closes all SQLite partitions cleanly.
 func (s *Service) Close() error {
+	if s.hub != nil {
+		s.hub.Close()
+	}
 	s.bus.Close()
 	return s.store.Close()
+}
+
+// AcquireFeed reference-counts a lazy upstream WebSocket feed for (venue, symbol).
+func (s *Service) AcquireFeed(venue, symbol string) func() {
+	if s == nil || s.hub == nil {
+		return func() {}
+	}
+	return s.hub.Acquire(venue, symbol)
+}
+
+// ActiveFeedConnections returns the number of active upstream WebSocket workers.
+func (s *Service) ActiveFeedConnections() int {
+	if s == nil || s.hub == nil {
+		return 0
+	}
+	return s.hub.ActiveConnections()
+}
+
+// CachedCandles returns in-memory buffered candles for (venue, symbol, interval) when present.
+func (s *Service) CachedCandles(venue, symbol, interval string, limit int) ([]Candle, bool) {
+	if s == nil || s.cache == nil {
+		return nil, false
+	}
+	v, err := NormalizeVenue(venue)
+	if err != nil {
+		return nil, false
+	}
+	sym, err := NormalizeSymbol(symbol)
+	if err != nil {
+		return nil, false
+	}
+	iv, err := NormalizeInterval(interval)
+	if err != nil {
+		return nil, false
+	}
+	bars, _, ok := s.cache.GetCandles(v, sym, iv, limit)
+	return bars, ok
 }
 
 // Subscribe attaches a subscriber channel to the pub/sub bus.
@@ -157,19 +223,64 @@ func (s *Service) GetCandles(ctx context.Context, venue, symbol, interval string
 	if s.fixtureMode {
 		base = generateSyntheticCandles(v, sym, stepSec, startSec, limit)
 		_ = s.store.UpsertCandles(ctx, v, sym, iv, base)
+		if s.cache != nil {
+			s.cache.UpsertCandles(v, sym, iv, base)
+		}
 		source = "fixture"
 	} else {
-		fetched, fetchErr := s.client.fetchCandles(ctx, v, sym, iv, startSec, nowSec, limit)
-		if fetchErr == nil && len(fetched) > 0 {
-			base = fetched
-			_ = s.store.UpsertCandles(ctx, v, sym, iv, base)
+		cacheKey := fmt.Sprintf("candles:%s:%s:%s:%d", v, venueQuerySymbol(v, sym), iv, limit)
+		if hit, ok := s.candleCache.get(cacheKey); ok && len(hit) > 0 {
+			base = hit
 			source = v
 		} else {
-			cached, cacheErr := s.store.QueryCandles(ctx, v, sym, iv, startSec, nowSec, limit)
-			if cacheErr == nil && len(cached) > 0 {
-				base = cached
-			} else if fetchErr != nil {
-				return CandleSeries{}, fetchErr
+			res, fetchErr := s.flight.Do(cacheKey, func() (any, error) {
+				if hit, ok := s.candleCache.get(cacheKey); ok && len(hit) > 0 {
+					return hit, nil
+				}
+				fetchCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 12*time.Second)
+				defer cancel()
+				fetched, err := s.client.fetchCandles(fetchCtx, v, sym, iv, startSec, nowSec, limit)
+				if err != nil || len(fetched) == 0 {
+					return nil, err
+				}
+				merged := fetched
+				if s.cache != nil {
+					merged = s.cache.UpsertCandles(v, sym, iv, fetched)
+				}
+				_ = s.store.UpsertCandles(fetchCtx, v, sym, iv, merged)
+				s.candleCache.set(cacheKey, merged, 2*time.Second)
+				return merged, nil
+			})
+			if fetchErr == nil {
+				if fetched, ok := res.([]Candle); ok && len(fetched) > 0 {
+					base = fetched
+					source = v
+				}
+			}
+			if len(base) == 0 {
+				cached, cacheErr := s.store.QueryCandles(ctx, v, sym, iv, startSec, nowSec, limit)
+				if cacheErr == nil && len(cached) > 0 {
+					base = cached
+				} else if fetchErr != nil {
+					return CandleSeries{}, fetchErr
+				}
+			}
+		}
+		if s.cache != nil && len(base) > 0 {
+			if wsBars, _, hasWS := s.cache.GetCandles(v, sym, iv, limit); hasWS && len(wsBars) > 0 {
+				wsTip := wsBars[len(wsBars)-1]
+				baseTip := base[len(base)-1]
+				if wsTip.Time == baseTip.Time && wsTip.Volume > baseTip.Volume {
+					merged := make([]Candle, len(base))
+					copy(merged, base)
+					merged[len(merged)-1] = wsTip
+					base = merged
+				} else if wsTip.Time > baseTip.Time {
+					merged := make([]Candle, len(base), len(base)+1)
+					copy(merged, base)
+					merged = append(merged, wsTip)
+					base = merged
+				}
 			}
 		}
 	}
@@ -177,24 +288,41 @@ func (s *Service) GetCandles(ctx context.Context, venue, symbol, interval string
 		base = base[len(base)-limit:]
 	}
 
-	if (style == StyleTick || style == StyleVolume) && s.fixtureMode {
-		ticks := generateSyntheticTicks(v, sym, endSec*1000, 180)
-		agg, aggErr := AggregateTicksToCandles(ticks, opts)
-		if aggErr != nil {
-			return CandleSeries{}, aggErr
+	if style == StyleTick || style == StyleVolume {
+		var ticks []TradeTick
+		if s.fixtureMode {
+			ticks = generateSyntheticTicks(v, sym, endSec*1000, 180)
+		} else {
+			if s.cache != nil {
+				ticks, _, _ = s.cache.RecentTrades(v, sym, 500)
+			}
+			if len(ticks) < 10 {
+				if restTicks, tErr := s.GetTrades(ctx, v, sym, 200); tErr == nil && len(restTicks) > 0 {
+					ticks = mergeUniqueTrades(ticks, restTicks)
+				}
+			}
 		}
-		series := CandleSeries{
-			Venue:     v,
-			Symbol:    sym,
-			Interval:  iv,
-			Style:     style,
-			Candles:   agg,
-			Source:    source,
-			Fixture:   s.fixtureMode,
-			UpdatedAt: nowSec,
+		if len(ticks) > 0 {
+			agg, aggErr := AggregateTicksToCandles(ticks, opts)
+			if aggErr != nil {
+				return CandleSeries{}, aggErr
+			}
+			if limit > 0 && len(agg) > limit {
+				agg = agg[len(agg)-limit:]
+			}
+			series := CandleSeries{
+				Venue:     v,
+				Symbol:    sym,
+				Interval:  iv,
+				Style:     style,
+				Candles:   agg,
+				Source:    source,
+				Fixture:   s.fixtureMode,
+				UpdatedAt: nowSec,
+			}
+			s.Publish(Event{Type: "candle", Venue: v, Symbol: sym, Interval: iv, Style: style, Payload: series})
+			return series, nil
 		}
-		s.Publish(Event{Type: "candle", Venue: v, Symbol: sym, Interval: iv, Style: style, Payload: series})
-		return series, nil
 	}
 
 	transformed, err := TransformCandles(base, opts)
@@ -236,11 +364,36 @@ func (s *Service) GetOrderBook(ctx context.Context, venue, symbol string, limit 
 		s.Publish(Event{Type: "orderbook", Venue: v, Symbol: sym, Payload: book})
 		return book, nil
 	}
-	book, err := s.client.fetchOrderBook(ctx, v, sym, limit, nowMs)
+	if s.cache != nil {
+		if snap, updatedMs, ok := s.cache.GetOrderBook(v, sym, limit); ok && (nowMs-updatedMs) < 3000 {
+			return snap, nil
+		}
+	}
+	cacheKey := fmt.Sprintf("book:%s:%s:%d", v, venueQuerySymbol(v, sym), limit)
+	if hit, ok := s.bookCache.get(cacheKey); ok {
+		return hit, nil
+	}
+	res, err := s.flight.Do(cacheKey, func() (any, error) {
+		if hit, ok := s.bookCache.get(cacheKey); ok {
+			return hit, nil
+		}
+		fetchCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+		defer cancel()
+		book, fetchErr := s.client.fetchOrderBook(fetchCtx, v, sym, limit, nowMs)
+		if fetchErr != nil {
+			return OrderBookSnapshot{}, fetchErr
+		}
+		if s.cache != nil {
+			s.cache.SetOrderBook(v, sym, book)
+		}
+		s.bookCache.set(cacheKey, book, time.Second)
+		s.Publish(Event{Type: "orderbook", Venue: v, Symbol: sym, Payload: book})
+		return book, nil
+	})
 	if err != nil {
 		return OrderBookSnapshot{}, err
 	}
-	s.Publish(Event{Type: "orderbook", Venue: v, Symbol: sym, Payload: book})
+	book, _ := res.(OrderBookSnapshot)
 	return book, nil
 }
 
@@ -261,7 +414,36 @@ func (s *Service) GetTrades(ctx context.Context, venue, symbol string, limit int
 	if s.fixtureMode {
 		return generateSyntheticTicks(v, sym, nowMs, limit), nil
 	}
-	return s.client.fetchTrades(ctx, v, sym, limit)
+	if s.cache != nil && s.ActiveFeedConnections() > 0 {
+		if liveTicks, updatedMs, ok := s.cache.RecentTrades(v, sym, limit); ok && len(liveTicks) > 0 && (nowMs-updatedMs) < 5000 {
+			return liveTicks, nil
+		}
+	}
+	cacheKey := fmt.Sprintf("trades:%s:%s:%d", v, venueQuerySymbol(v, sym), limit)
+	if hit, ok := s.tradeCache.get(cacheKey); ok {
+		return hit, nil
+	}
+	res, err := s.flight.Do(cacheKey, func() (any, error) {
+		if hit, ok := s.tradeCache.get(cacheKey); ok {
+			return hit, nil
+		}
+		fetchCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+		defer cancel()
+		trades, fetchErr := s.client.fetchTrades(fetchCtx, v, sym, limit)
+		if fetchErr != nil {
+			return nil, fetchErr
+		}
+		if s.cache != nil && len(trades) > 0 {
+			s.cache.AppendTrades(v, sym, trades)
+		}
+		s.tradeCache.set(cacheKey, trades, 1500*time.Millisecond)
+		return trades, nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	trades, _ := res.([]TradeTick)
+	return trades, nil
 }
 
 // GetFootprint computes orderflow footprint bars, delta, CVD, VPOC, VAH, and VAL.
@@ -273,7 +455,19 @@ func (s *Service) GetFootprint(ctx context.Context, venue, symbol, interval stri
 	if err != nil {
 		return FootprintSeries{}, err
 	}
-	ticks, _ := s.GetTrades(ctx, venue, symbol, 150)
+	var ticks []TradeTick
+	if s.fixtureMode {
+		ticks, _ = s.GetTrades(ctx, venue, symbol, 150)
+	} else {
+		restTicks, _ := s.GetTrades(ctx, venue, symbol, 200)
+		var ringTicks []TradeTick
+		if s.cache != nil && len(candles.Candles) > 0 {
+			startMs := candles.Candles[0].Time * 1000
+			endMs := s.now().UTC().UnixMilli() + 1000
+			ringTicks = s.cache.TradesInRange(candles.Venue, candles.Symbol, startMs, endMs)
+		}
+		ticks = mergeUniqueTrades(ringTicks, restTicks)
+	}
 	if stepSize <= 0 && len(candles.Candles) > 0 {
 		stepSize = autoPriceStep(candles.Candles, 4.0)
 	}
@@ -293,6 +487,30 @@ func (s *Service) GetFootprint(ctx context.Context, venue, symbol, interval stri
 	}, nil
 }
 
+func mergeUniqueTrades(a, b []TradeTick) []TradeTick {
+	if len(a) == 0 {
+		return b
+	}
+	if len(b) == 0 {
+		return a
+	}
+	seen := make(map[string]bool, len(a)+len(b))
+	out := make([]TradeTick, 0, len(a)+len(b))
+	add := func(list []TradeTick) {
+		for _, t := range list {
+			key := fmt.Sprintf("%s|%d|%.8f|%.8f|%s", t.ID, t.Time, t.Price, t.Size, t.Side)
+			if seen[key] {
+				continue
+			}
+			seen[key] = true
+			out = append(out, t)
+		}
+	}
+	add(a)
+	add(b)
+	return out
+}
+
 // GetMacroSeries returns FRED observations, cached in meta.sqlite.
 func (s *Service) GetMacroSeries(ctx context.Context, seriesID string, limit int) ([]MacroPoint, error) {
 	id, err := NormalizeSeriesID(seriesID)
@@ -308,16 +526,36 @@ func (s *Service) GetMacroSeries(ctx context.Context, seriesID string, limit int
 		pts = generateSyntheticMacro(id, nowSec)
 		_ = s.store.SaveMacroCache(ctx, id, pts)
 	} else {
-		fetched, fetchErr := s.client.fetchFREDSeries(ctx, id, nowSec)
-		if fetchErr == nil && len(fetched) > 0 {
-			pts = fetched
-			_ = s.store.SaveMacroCache(ctx, id, pts)
+		cacheKey := "macro:" + id
+		if hit, ok := s.macroCache.get(cacheKey); ok && len(hit) > 0 {
+			pts = hit
 		} else {
-			cached, _, ok, cacheErr := s.store.LoadMacroCache(ctx, id)
-			if cacheErr == nil && ok {
-				pts = cached
-			} else if fetchErr != nil {
-				return nil, fetchErr
+			res, fetchErr := s.flight.Do(cacheKey, func() (any, error) {
+				if hit, ok := s.macroCache.get(cacheKey); ok && len(hit) > 0 {
+					return hit, nil
+				}
+				fetchCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 12*time.Second)
+				defer cancel()
+				fetched, err := s.client.fetchFREDSeries(fetchCtx, id, nowSec)
+				if err != nil || len(fetched) == 0 {
+					return nil, err
+				}
+				_ = s.store.SaveMacroCache(fetchCtx, id, fetched)
+				s.macroCache.set(cacheKey, fetched, 5*time.Minute)
+				return fetched, nil
+			})
+			if fetchErr == nil {
+				if fetched, ok := res.([]MacroPoint); ok && len(fetched) > 0 {
+					pts = fetched
+				}
+			}
+			if len(pts) == 0 {
+				cached, _, ok, cacheErr := s.store.LoadMacroCache(ctx, id)
+				if cacheErr == nil && ok {
+					pts = cached
+				} else if fetchErr != nil {
+					return nil, fetchErr
+				}
 			}
 		}
 	}
@@ -339,20 +577,62 @@ func (s *Service) GetSECFilings(ctx context.Context, cik string, limit int) ([]S
 	if s.fixtureMode {
 		return generateSyntheticSECFilings(padded, limit), nil
 	}
-	return s.client.fetchSECFilings(ctx, padded, limit)
+	cacheKey := fmt.Sprintf("sec:%s:%d", padded, limit)
+	if hit, ok := s.secCache.get(cacheKey); ok {
+		return hit, nil
+	}
+	res, err := s.flight.Do(cacheKey, func() (any, error) {
+		if hit, ok := s.secCache.get(cacheKey); ok {
+			return hit, nil
+		}
+		fetchCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 12*time.Second)
+		defer cancel()
+		filings, fetchErr := s.client.fetchSECFilings(fetchCtx, padded, limit)
+		if fetchErr != nil {
+			return nil, fetchErr
+		}
+		s.secCache.set(cacheKey, filings, 5*time.Minute)
+		return filings, nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	filings, _ := res.([]SECFiling)
+	return filings, nil
 }
 
 // GetCohorts returns ranked trader cohorts for a venue and window.
 func (s *Service) GetCohorts(ctx context.Context, window string) (CohortSnapshot, error) {
-	w := strings.TrimSpace(window)
-	if w == "" {
-		w = "week"
+	w, err := NormalizeCohortWindow(window)
+	if err != nil {
+		return CohortSnapshot{}, err
 	}
 	nowSec := s.now().UTC().Unix()
 	if s.fixtureMode {
 		return generateSyntheticCohorts(w, nowSec), nil
 	}
-	return s.client.fetchCohorts(ctx, w, nowSec)
+	cacheKey := "cohorts:" + w
+	if hit, ok := s.cohortCache.get(cacheKey); ok {
+		return hit, nil
+	}
+	res, err := s.flight.Do(cacheKey, func() (any, error) {
+		if hit, ok := s.cohortCache.get(cacheKey); ok {
+			return hit, nil
+		}
+		fetchCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 12*time.Second)
+		defer cancel()
+		snap, fetchErr := s.client.fetchCohorts(fetchCtx, w, nowSec)
+		if fetchErr != nil {
+			return CohortSnapshot{}, fetchErr
+		}
+		s.cohortCache.set(cacheKey, snap, 60*time.Second)
+		return snap, nil
+	})
+	if err != nil {
+		return CohortSnapshot{}, err
+	}
+	snap, _ := res.(CohortSnapshot)
+	return snap, nil
 }
 
 // ListWatchlists lists saved watchlists.
@@ -543,18 +823,11 @@ func generateSyntheticSECFilings(cik string, limit int) []SECFiling {
 }
 
 func generateSyntheticCohorts(window string, nowSec int64) CohortSnapshot {
-	return CohortSnapshot{
-		Venue:     VenueHyperliquid,
-		Window:    window,
-		UpdatedAt: nowSec,
-		Source:    "fixture",
-		Fixture:   true,
-		Entries: []CohortEntry{
-			{Address: "0x1111111111111111111111111111111111111111", DisplayName: "desk-alpha", AccountValue: 2450000, DayROI: 0.042, WeekROI: 0.148, MonthROI: 0.312, AllTimeROI: 1.84, Rank: 1},
-			{Address: "0x2222222222222222222222222222222222222222", DisplayName: "delta-neutral-1", AccountValue: 1820000, DayROI: 0.019, WeekROI: 0.084, MonthROI: 0.205, AllTimeROI: 1.12, Rank: 2},
-			{Address: "0x3333333333333333333333333333333333333333", DisplayName: "sol-momentum", AccountValue: 940000, DayROI: 0.031, WeekROI: 0.112, MonthROI: 0.275, AllTimeROI: 0.96, Rank: 3},
-		},
-	}
+	return finalizeCohortSnapshot([]CohortEntry{
+		{Address: "0x1111111111111111111111111111111111111111", DisplayName: "desk-alpha", AccountValue: 2450000, DayROI: 0.042, WeekROI: 0.148, MonthROI: 0.312, AllTimeROI: 1.84, Rank: 1},
+		{Address: "0x2222222222222222222222222222222222222222", DisplayName: "delta-neutral-1", AccountValue: 1820000, DayROI: 0.019, WeekROI: 0.084, MonthROI: 0.205, AllTimeROI: 1.12, Rank: 2},
+		{Address: "0x3333333333333333333333333333333333333333", DisplayName: "sol-momentum", AccountValue: 940000, DayROI: 0.031, WeekROI: 0.112, MonthROI: 0.275, AllTimeROI: 0.96, Rank: 3},
+	}, window, nowSec, "fixture", true)
 }
 
 func round2(v float64) float64 {

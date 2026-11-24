@@ -164,18 +164,21 @@ type FootprintLevel struct {
 
 // FootprintBar holds orderflow footprint levels, CVD, VPOC, and 70% Value Area bounds.
 type FootprintBar struct {
-	Time   int64            `json:"time"`
-	Open   float64          `json:"open"`
-	High   float64          `json:"high"`
-	Low    float64          `json:"low"`
-	Close  float64          `json:"close"`
-	Volume float64          `json:"volume"`
-	Delta  float64          `json:"delta"`
-	CVD    float64          `json:"cvd"`
-	VPOC   float64          `json:"vpoc"`
-	VAH    float64          `json:"vah"`
-	VAL    float64          `json:"val"`
-	Levels []FootprintLevel `json:"levels"`
+	Time         int64            `json:"time"`
+	Open         float64          `json:"open"`
+	High         float64          `json:"high"`
+	Low          float64          `json:"low"`
+	Close        float64          `json:"close"`
+	Volume       float64          `json:"volume"`
+	CandleVolume float64          `json:"candleVolume,omitempty"`
+	Delta        float64          `json:"delta"`
+	CVD          float64          `json:"cvd"`
+	VPOC         float64          `json:"vpoc"`
+	VAH          float64          `json:"vah"`
+	VAL          float64          `json:"val"`
+	SourceKind   string           `json:"sourceKind,omitempty"`
+	TickCoverage float64          `json:"tickCoverage,omitempty"`
+	Levels       []FootprintLevel `json:"levels"`
 }
 
 // FootprintSeries wraps calculated footprint bars for a venue/symbol/interval.
@@ -320,6 +323,23 @@ func NormalizeStyle(raw string) (string, error) {
 		return "", fmt.Errorf("unsupported candle style %q", raw)
 	}
 	return st, nil
+}
+
+// NormalizeCohortWindow validates and canonicalizes a leaderboard window.
+func NormalizeCohortWindow(raw string) (string, error) {
+	w := strings.ToLower(strings.TrimSpace(raw))
+	switch w {
+	case "", "week":
+		return "week", nil
+	case "day":
+		return "day", nil
+	case "month":
+		return "month", nil
+	case "alltime":
+		return "allTime", nil
+	default:
+		return "", fmt.Errorf("unsupported cohort window %q", raw)
+	}
 }
 
 // NormalizeSeriesID validates a FRED macro series identifier.

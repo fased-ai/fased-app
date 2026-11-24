@@ -442,6 +442,25 @@ func (h *HTTPHandler) marketDataStreamSSE(w http.ResponseWriter, r *http.Request
 	subCh, unsubscribe := svc.SubscribeMulti(filters)
 	defer unsubscribe()
 
+	var releaseFeeds []func()
+	acquired := make(map[string]bool, len(filters))
+	for _, f := range filters {
+		if f.Venue == "" || f.Symbol == "" {
+			continue
+		}
+		key := f.Venue + ":" + strings.ToUpper(f.Symbol)
+		if acquired[key] {
+			continue
+		}
+		acquired[key] = true
+		releaseFeeds = append(releaseFeeds, svc.AcquireFeed(f.Venue, f.Symbol))
+	}
+	defer func() {
+		for _, release := range releaseFeeds {
+			release()
+		}
+	}()
+
 	w.Header().Set("Content-Type", "text/event-stream; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-cache, no-transform")
 	w.Header().Set("X-Accel-Buffering", "no")

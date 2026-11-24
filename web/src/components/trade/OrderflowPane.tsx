@@ -2,8 +2,10 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useCore } from "../../core";
 import { useUI } from "../../ui-preferences";
 import { RefreshCw } from "../../icons";
+import type { CrosshairBus, FasedStreamClient } from "../../stream-store";
 import {
   CHART_VENUES,
+  DOM_SUPPORTED_VENUES,
   fetchCohorts,
   fetchFootprint,
   fetchMacroSeries,
@@ -12,6 +14,7 @@ import {
   fetchTrades,
   formatCompactVolume,
   formatMarketPrice,
+  TAPE_SUPPORTED_VENUES,
   type CohortSnapshot,
   type FootprintBar,
   type FootprintSeries,
@@ -51,9 +54,11 @@ function getCanvasPalette(): CanvasPalette {
 
 function FootprintCanvas({
   bars,
+  stepSize = 0,
   focusedTime,
 }: {
   bars: FootprintBar[];
+  stepSize?: number;
   focusedTime: number | null;
 }) {
   const { t } = useUI();
@@ -92,7 +97,6 @@ function FootprintCanvas({
       let minP = Infinity;
       let maxP = -Infinity;
       let maxLvVol = 1;
-      const vpMap = new Map<number, number>();
       let maxDelta = 1;
 
       for (const b of visible) {
@@ -103,12 +107,20 @@ function FootprintCanvas({
           minP = Math.min(minP, lv.price);
           maxP = Math.max(maxP, lv.price);
           maxLvVol = Math.max(maxLvVol, lv.bidVol, lv.askVol);
-          const key = Math.round(lv.price * 100);
-          vpMap.set(key, (vpMap.get(key) ?? 0) + lv.totalVol);
         }
       }
       if (!Number.isFinite(minP) || !Number.isFinite(maxP) || maxP <= minP) {
-        maxP = minP + 1;
+        maxP = minP + Math.max(minP * 0.01, 1e-6);
+      }
+
+      const bucketStep =
+        stepSize > 0 ? stepSize : Math.max((maxP - minP) / 40, 1e-8);
+      const vpMap = new Map<number, number>();
+      for (const b of visible) {
+        for (const lv of b.levels) {
+          const key = Math.round(lv.price / bucketStep);
+          vpMap.set(key, (vpMap.get(key) ?? 0) + lv.totalVol);
+        }
       }
 
       const vpWidth = 42;
@@ -134,12 +146,11 @@ function FootprintCanvas({
       ctx.lineTo(w - 4, yPoc);
       ctx.stroke();
 
-      // Right-edge Volume Profile bars.
+      // Right-edge Volume Profile bars using sub-cent aware bucket step.
       let maxVP = 1;
       for (const v of vpMap.values()) maxVP = Math.max(maxVP, v);
-      const vpStart = w - vpWidth;
       for (const [key, vol] of vpMap.entries()) {
-        const y = priceToY(key / 100);
+        const y = priceToY(key * bucketStep);
         const bw = (vol / maxVP) * (vpWidth - 6);
         ctx.fillStyle = p.violet;
         ctx.globalAlpha = 0.55;
@@ -230,7 +241,6 @@ function FootprintCanvas({
         });
         ctx.stroke();
       }
-      void vpStart;
     };
 
     draw();
@@ -245,7 +255,7 @@ function FootprintCanvas({
       ro.disconnect();
       mo.disconnect();
     };
-  }, [bars, focusedTime, t]);
+  }, [bars, stepSize, focusedTime, t]);
 
   return (
     <div className="trade-canvas-box">
@@ -263,14 +273,20 @@ export function OrderflowPane({
   symbol,
   interval,
   tab,
-  syncedTime,
+  syncedTime = null,
+  streamClient,
+  crosshairBus,
+  syncCrosshair = true,
   onChangeTab,
 }: {
   venue: string;
   symbol: string;
   interval: Interval;
   tab: OrderflowTab;
-  syncedTime: number | null;
+  syncedTime?: number | null;
+  streamClient?: FasedStreamClient;
+  crosshairBus?: CrosshairBus;
+  syncCrosshair?: boolean;
   onChangeTab: (tab: OrderflowTab) => void;
 }) {
   const { t } = useUI();
@@ -282,20 +298,43 @@ export function OrderflowPane({
   const [macro, setMacro] = useState<MacroPoint[]>([]);
   const [secFilings, setSecFilings] = useState<SECFiling[]>([]);
   const [seriesId, setSeriesId] = useState("CPIAUCSL");
+  const [cikDraft, setCikDraft] = useState("0000320193");
   const [cik, setCik] = useState("0000320193");
+  const [paneError, setPaneError] = useState("");
   const [reloadNonce, setReloadNonce] = useState(0);
+  const [busFocusedTime, setBusFocusedTime] = useState<number | null>(null);
 
-  const bookVenue = useMemo(
-    () =>
-      ["hyperliquid", "binance", "bybit"].includes(venue)
-        ? venue
-        : "hyperliquid",
-    [venue],
-  );
+  const domSupported = DOM_SUPPORTED_VENUES.has(venue);
+  const tapeSupported = TAPE_SUPPORTED_VENUES.has(venue);
+  const effectiveFocusedTime =
+    crosshairBus && syncCrosshair ? busFocusedTime : syncedTime;
 
   useEffect(() => {
+    if (!crosshairBus || !syncCrosshair) {
+      setBusFocusedTime(null);
+      return;
+    }
+    return crosshairBus.subscribe((pt) => {
+      setBusFocusedTime(pt.time);
+    });
+  }, [crosshairBus, syncCrosshair]);
+
+  useEffect(() => {
+    const clean = cikDraft.trim();
+    if (!/^\d{1,10}$/.test(clean) || clean === cik) return;
+    const timer = window.setTimeout(() => {
+      setCik(clean);
+    }, 400);
+    return () => window.clearTimeout(timer);
+  }, [cikDraft, cik]);
+
+  // Initial HTTP loads for Footprint, DOM, and Tape tabs with honest venue gating.
+  useEffect(() => {
+    if (tab === "intel") return;
     const controller = new AbortController();
     let mounted = true;
+    setPaneError("");
+
     const candleVenue = CHART_VENUES.includes(
       venue as (typeof CHART_VENUES)[number],
     )
@@ -307,32 +346,36 @@ export function OrderflowPane({
         .then((res) => {
           if (mounted) setFootprint(res);
         })
-        .catch(() => {});
+        .catch((err) => {
+          if (!mounted || controller.signal.aborted) return;
+          setPaneError(err instanceof Error ? err.message : t("Error"));
+        });
     } else if (tab === "dom") {
-      fetchOrderBook(core, bookVenue, symbol, 12, controller.signal)
-        .then((res) => {
-          if (mounted) setBook(res);
-        })
-        .catch(() => {});
+      if (!domSupported) {
+        setBook(null);
+      } else {
+        fetchOrderBook(core, venue, symbol, 12, controller.signal)
+          .then((res) => {
+            if (mounted) setBook(res);
+          })
+          .catch((err) => {
+            if (!mounted || controller.signal.aborted) return;
+            setPaneError(err instanceof Error ? err.message : t("Error"));
+          });
+      }
     } else if (tab === "tape") {
-      fetchTrades(core, candleVenue, symbol, 35, controller.signal)
-        .then((res) => {
-          if (mounted) setTrades(res);
-        })
-        .catch(() => {});
-    } else if (tab === "intel") {
-      Promise.all([
-        fetchCohorts(core, "week", controller.signal),
-        fetchMacroSeries(core, seriesId, 12, controller.signal),
-        fetchSECFilings(core, cik, 6, controller.signal),
-      ])
-        .then(([coh, mac, sec]) => {
-          if (!mounted) return;
-          setCohorts(coh);
-          setMacro(mac);
-          setSecFilings(sec);
-        })
-        .catch(() => {});
+      if (!tapeSupported) {
+        setTrades([]);
+      } else {
+        fetchTrades(core, venue, symbol, 35, controller.signal)
+          .then((res) => {
+            if (mounted) setTrades(res);
+          })
+          .catch((err) => {
+            if (!mounted || controller.signal.aborted) return;
+            setPaneError(err instanceof Error ? err.message : t("Error"));
+          });
+      }
     }
 
     return () => {
@@ -340,26 +383,164 @@ export function OrderflowPane({
       controller.abort();
     };
   }, [
-    core,
+    core.mode,
+    core.request,
     tab,
     venue,
-    bookVenue,
     symbol,
     interval,
-    seriesId,
-    cik,
+    domSupported,
+    tapeSupported,
     reloadNonce,
+    t,
+  ]);
+
+  // Independent Intel tab fetches (Cohorts, FRED Macro, SEC EDGAR) so changing CIK or
+  // FRED series never refetches unaffected upstreams.
+  useEffect(() => {
+    if (tab !== "intel") return;
+    const controller = new AbortController();
+    let mounted = true;
+    setPaneError("");
+
+    fetchCohorts(core, "week", controller.signal)
+      .then((res) => {
+        if (mounted) setCohorts(res);
+      })
+      .catch((err) => {
+        if (!mounted || controller.signal.aborted) return;
+        setPaneError(err instanceof Error ? err.message : t("Error"));
+      });
+
+    return () => {
+      mounted = false;
+      controller.abort();
+    };
+  }, [core.mode, core.request, tab, reloadNonce, t]);
+
+  useEffect(() => {
+    if (tab !== "intel") return;
+    const controller = new AbortController();
+    let mounted = true;
+
+    fetchMacroSeries(core, seriesId, 12, controller.signal)
+      .then((res) => {
+        if (mounted) setMacro(res);
+      })
+      .catch((err) => {
+        if (!mounted || controller.signal.aborted) return;
+        setPaneError(err instanceof Error ? err.message : t("Error"));
+      });
+
+    return () => {
+      mounted = false;
+      controller.abort();
+    };
+  }, [core.mode, core.request, tab, seriesId, reloadNonce, t]);
+
+  useEffect(() => {
+    if (tab !== "intel" || !/^\d{1,10}$/.test(cik)) return;
+    const controller = new AbortController();
+    let mounted = true;
+
+    fetchSECFilings(core, cik, 6, controller.signal)
+      .then((res) => {
+        if (mounted) setSecFilings(res);
+      })
+      .catch((err) => {
+        if (!mounted || controller.signal.aborted) return;
+        setPaneError(err instanceof Error ? err.message : t("Error"));
+      });
+
+    return () => {
+      mounted = false;
+      controller.abort();
+    };
+  }, [core.mode, core.request, tab, cik, reloadNonce, t]);
+
+  // Live WS/SSE stream subscriptions for active Orderflow tab.
+  useEffect(() => {
+    if (!streamClient || core.mode !== "ready") return;
+    if (tab === "footprint") {
+      return streamClient.subscribe(
+        `footprint:${venue}:${symbol}:${interval}`,
+        (msg) => {
+          const bar = msg.payload as FootprintBar | undefined;
+          if (!bar || typeof bar.time !== "number") return;
+          setFootprint((prev) => {
+            if (!prev) return prev;
+            const bars = [...prev.bars];
+            const idx = bars.findIndex((b) => b.time === bar.time);
+            if (idx >= 0) {
+              bars[idx] = bar;
+            } else {
+              bars.push(bar);
+              if (bars.length > 48) bars.shift();
+            }
+            return { ...prev, bars };
+          });
+        },
+      );
+    }
+    if (tab === "dom" && domSupported) {
+      return streamClient.subscribe(`orderbook:${venue}:${symbol}`, (msg) => {
+        const snap = msg.payload as OrderBookSnapshot | undefined;
+        if (!snap || !Array.isArray(snap.bids) || !Array.isArray(snap.asks)) {
+          return;
+        }
+        setBook(snap);
+      });
+    }
+    if (tab === "tape" && tapeSupported) {
+      return streamClient.subscribe(`trade:${venue}:${symbol}`, (msg) => {
+        const tick = msg.payload as TradeTick | undefined;
+        if (!tick || typeof tick.price !== "number") return;
+        setTrades((prev) => {
+          if (
+            prev.some(
+              (existing) =>
+                tick.id &&
+                existing.id === tick.id &&
+                existing.time === tick.time,
+            )
+          ) {
+            return prev;
+          }
+          const next = [...prev, tick];
+          return next.length > 60 ? next.slice(-60) : next;
+        });
+      });
+    }
+  }, [
+    streamClient,
+    core.mode,
+    tab,
+    venue,
+    symbol,
+    interval,
+    domSupported,
+    tapeSupported,
   ]);
 
   const activeBar = useMemo(() => {
     const bars = footprint?.bars ?? [];
     if (bars.length === 0) return null;
-    if (syncedTime !== null) {
-      const exact = bars.find((b) => b.time === syncedTime);
+    if (effectiveFocusedTime !== null) {
+      const exact = bars.find((b) => b.time === effectiveFocusedTime);
       if (exact) return exact;
     }
     return bars[bars.length - 1];
-  }, [footprint, syncedTime]);
+  }, [footprint, effectiveFocusedTime]);
+
+  const provenanceLabel = useMemo(() => {
+    if (!activeBar) return "";
+    if (activeBar.sourceKind === "ticks") return t("Ticks");
+    if (activeBar.sourceKind === "partial_ticks") {
+      const pct = Math.round((activeBar.tickCoverage ?? 0) * 100);
+      return `${t("Partial")} ${pct}%`;
+    }
+    return t("Estimated");
+  }, [activeBar, t]);
 
   const maxDepthTotal = useMemo(() => {
     if (!book) return 1;
@@ -367,6 +548,15 @@ export function OrderflowPane({
     const askMax = book.asks[book.asks.length - 1]?.total ?? 0;
     return Math.max(bidMax, askMax, 1);
   }, [book]);
+
+  function commitCIK() {
+    const clean = cikDraft.trim();
+    if (/^\d{1,10}$/.test(clean)) {
+      setCik(clean);
+    } else {
+      setCikDraft(cik);
+    }
+  }
 
   const tabs: { id: OrderflowTab; label: string }[] = [
     { id: "footprint", label: "Footprint" },
@@ -413,103 +603,129 @@ export function OrderflowPane({
         ))}
       </div>
 
+      {paneError && (
+        <p className="trade-pane-error" role="status">
+          {paneError}
+        </p>
+      )}
+
       {tab === "footprint" && (
         <div className="trade-pane-body">
           <FootprintCanvas
             bars={footprint?.bars ?? []}
-            focusedTime={syncedTime}
+            stepSize={footprint?.stepSize ?? 0}
+            focusedTime={effectiveFocusedTime}
           />
           {activeBar && (
-            <dl className="trade-metric-grid">
-              <div>
-                <dt>{t("VPOC")}</dt>
-                <dd>{formatMarketPrice(activeBar.vpoc)}</dd>
+            <>
+              <div className="trade-provenance-row">
+                <span className="trade-source-pill">{provenanceLabel}</span>
               </div>
-              <div>
-                <dt>{t("VAH")}</dt>
-                <dd>{formatMarketPrice(activeBar.vah)}</dd>
-              </div>
-              <div>
-                <dt>{t("VAL")}</dt>
-                <dd>{formatMarketPrice(activeBar.val)}</dd>
-              </div>
-              <div>
-                <dt>{t("Delta")}</dt>
-                <dd>{formatCompactVolume(activeBar.delta)}</dd>
-              </div>
-              <div>
-                <dt>{t("CVD")}</dt>
-                <dd>{formatCompactVolume(activeBar.cvd)}</dd>
-              </div>
-            </dl>
+              <dl className="trade-metric-grid">
+                <div>
+                  <dt>{t("VPOC")}</dt>
+                  <dd>{formatMarketPrice(activeBar.vpoc)}</dd>
+                </div>
+                <div>
+                  <dt>{t("VAH")}</dt>
+                  <dd>{formatMarketPrice(activeBar.vah)}</dd>
+                </div>
+                <div>
+                  <dt>{t("VAL")}</dt>
+                  <dd>{formatMarketPrice(activeBar.val)}</dd>
+                </div>
+                <div>
+                  <dt>{t("Delta")}</dt>
+                  <dd>{formatCompactVolume(activeBar.delta)}</dd>
+                </div>
+                <div>
+                  <dt>{t("CVD")}</dt>
+                  <dd>{formatCompactVolume(activeBar.cvd)}</dd>
+                </div>
+              </dl>
+            </>
           )}
         </div>
       )}
 
       {tab === "dom" && (
         <div className="trade-pane-body">
-          {book && (
-            <div className="trade-dom-meta">
-              <span>
-                {t("Spread")}: {formatMarketPrice(book.spread)}
-              </span>
-              <span>
-                {t("Mid")}: {formatMarketPrice(book.midPrice)}
-              </span>
+          {!domSupported ? (
+            <div className="trade-pane-empty">
+              {t("DOM unavailable for this venue")}
             </div>
+          ) : (
+            <>
+              {book && (
+                <div className="trade-dom-meta">
+                  <span>
+                    {t("Spread")}: {formatMarketPrice(book.spread)}
+                  </span>
+                  <span>
+                    {t("Mid")}: {formatMarketPrice(book.midPrice)}
+                  </span>
+                </div>
+              )}
+              <div className="trade-dom-ladder">
+                <div className="trade-dom-col">
+                  <strong>{t("Asks")}</strong>
+                  {(book?.asks ?? []).slice(0, 10).map((lv) => (
+                    <div className="trade-dom-row is-ask" key={`a-${lv.price}`}>
+                      <span
+                        className="trade-dom-fill"
+                        style={{
+                          width: `${Math.min(100, (lv.total / maxDepthTotal) * 100)}%`,
+                        }}
+                      />
+                      <span>{formatMarketPrice(lv.price)}</span>
+                      <span>{lv.size.toFixed(2)}</span>
+                    </div>
+                  ))}
+                </div>
+                <div className="trade-dom-col">
+                  <strong>{t("Bids")}</strong>
+                  {(book?.bids ?? []).slice(0, 10).map((lv) => (
+                    <div className="trade-dom-row is-bid" key={`b-${lv.price}`}>
+                      <span
+                        className="trade-dom-fill"
+                        style={{
+                          width: `${Math.min(100, (lv.total / maxDepthTotal) * 100)}%`,
+                        }}
+                      />
+                      <span>{formatMarketPrice(lv.price)}</span>
+                      <span>{lv.size.toFixed(2)}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </>
           )}
-          <div className="trade-dom-ladder">
-            <div className="trade-dom-col">
-              <strong>{t("Asks")}</strong>
-              {(book?.asks ?? []).slice(0, 10).map((lv) => (
-                <div className="trade-dom-row is-ask" key={`a-${lv.price}`}>
-                  <span
-                    className="trade-dom-fill"
-                    style={{
-                      width: `${Math.min(100, (lv.total / maxDepthTotal) * 100)}%`,
-                    }}
-                  />
-                  <span>{formatMarketPrice(lv.price)}</span>
-                  <span>{lv.size.toFixed(2)}</span>
-                </div>
-              ))}
-            </div>
-            <div className="trade-dom-col">
-              <strong>{t("Bids")}</strong>
-              {(book?.bids ?? []).slice(0, 10).map((lv) => (
-                <div className="trade-dom-row is-bid" key={`b-${lv.price}`}>
-                  <span
-                    className="trade-dom-fill"
-                    style={{
-                      width: `${Math.min(100, (lv.total / maxDepthTotal) * 100)}%`,
-                    }}
-                  />
-                  <span>{formatMarketPrice(lv.price)}</span>
-                  <span>{lv.size.toFixed(2)}</span>
-                </div>
-              ))}
-            </div>
-          </div>
         </div>
       )}
 
       {tab === "tape" && (
         <div className="trade-pane-body">
-          <div className="trade-tape-list">
-            {trades
-              .slice(-24)
-              .reverse()
-              .map((tr, i) => (
-                <div
-                  key={`${tr.id}-${i}`}
-                  className={`trade-tape-row ${tr.side === "buy" ? "is-buy" : "is-sell"}`}
-                >
-                  <span>{tr.side === "buy" ? t("Bid") : t("Ask")}</span>
-                  <span>{formatMarketPrice(tr.price)}</span>
-                  <span>{tr.size.toFixed(3)}</span>
-                </div>
-              ))}
-          </div>
+          {!tapeSupported ? (
+            <div className="trade-pane-empty">
+              {t("Tape unavailable for this venue")}
+            </div>
+          ) : (
+            <div className="trade-tape-list">
+              {trades
+                .slice(-24)
+                .reverse()
+                .map((tr, i) => (
+                  <div
+                    key={`${tr.id}-${i}`}
+                    className={`trade-tape-row ${tr.side === "buy" ? "is-buy" : "is-sell"}`}
+                  >
+                    <span>{tr.side === "buy" ? t("Buy") : t("Sell")}</span>
+                    <span>{formatMarketPrice(tr.price)}</span>
+                    <span>{tr.size.toFixed(3)}</span>
+                  </div>
+                ))}
+            </div>
+          )}
         </div>
       )}
 
@@ -562,8 +778,16 @@ export function OrderflowPane({
               <input
                 aria-label={t("SEC CIK")}
                 className="trade-cik-input"
-                value={cik}
-                onChange={(e) => setCik(e.target.value)}
+                maxLength={10}
+                value={cikDraft}
+                onChange={(e) => setCikDraft(e.target.value)}
+                onBlur={commitCIK}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    e.preventDefault();
+                    commitCIK();
+                  }
+                }}
               />
             </div>
             <ul className="trade-intel-list">

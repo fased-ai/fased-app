@@ -4,6 +4,7 @@ go 1.26.0
 
 require (
 	github.com/Microsoft/go-winio v0.6.4
+	github.com/coder/websocket v1.8.15
 	github.com/cyberphone/json-canonicalization v0.0.0-20241213102144-19d51d7fe467
 	github.com/google/certificate-transparency-go v1.3.3
 	github.com/secure-systems-lab/go-securesystemslib v0.11.0

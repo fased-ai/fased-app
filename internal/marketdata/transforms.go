@@ -167,7 +167,8 @@ func transformRenko(in []Candle, brickSize float64) []Candle {
 	lastDir := 0
 	for _, c := range in {
 		price := c.Close
-		for len(out) < maxTransformedBars {
+		var batch []Candle
+		for len(out)+len(batch) < maxTransformedBars {
 			upThresh := anchor + brickSize
 			downThresh := anchor - brickSize
 			if lastDir == -1 {
@@ -181,14 +182,12 @@ func transformRenko(in []Candle, brickSize float64) []Candle {
 					openPrice = anchor + brickSize
 				}
 				closePrice := openPrice + brickSize
-				out = appendMonotonicBar(out, Candle{
-					Time:   c.Time,
-					Open:   openPrice,
-					High:   closePrice,
-					Low:    openPrice,
-					Close:  closePrice,
-					Volume: c.Volume,
-					Trades: c.Trades,
+				batch = append(batch, Candle{
+					Time:  c.Time,
+					Open:  openPrice,
+					High:  closePrice,
+					Low:   openPrice,
+					Close: closePrice,
 				})
 				anchor = closePrice
 				lastDir = 1
@@ -200,20 +199,33 @@ func transformRenko(in []Candle, brickSize float64) []Candle {
 					openPrice = anchor - brickSize
 				}
 				closePrice := math.Max(openPrice-brickSize, 1e-8)
-				out = appendMonotonicBar(out, Candle{
-					Time:   c.Time,
-					Open:   openPrice,
-					High:   openPrice,
-					Low:    closePrice,
-					Close:  closePrice,
-					Volume: c.Volume,
-					Trades: c.Trades,
+				batch = append(batch, Candle{
+					Time:  c.Time,
+					Open:  openPrice,
+					High:  openPrice,
+					Low:   closePrice,
+					Close: closePrice,
 				})
 				anchor = closePrice
 				lastDir = -1
 				continue
 			}
 			break
+		}
+		if k := len(batch); k > 0 {
+			kf := float64(k)
+			baseTrades := c.Trades / int64(k)
+			remTrades := c.Trades % int64(k)
+			for i := range batch {
+				batch[i].Volume = c.Volume / kf
+				batch[i].BuyVolume = c.BuyVolume / kf
+				batch[i].SellVolume = c.SellVolume / kf
+				batch[i].Trades = baseTrades
+				if int64(i) < remTrades {
+					batch[i].Trades++
+				}
+				out = appendMonotonicBar(out, batch[i])
+			}
 		}
 		if len(out) >= maxTransformedBars {
 			break
@@ -709,19 +721,38 @@ func ComputeFootprintAndProfile(candles []Candle, ticks []TradeTick, stepSize fl
 
 		cvd += barDelta
 		vpoc, vah, val := computeValueArea(levels, c.Close)
+		sourceKind := "ohlcv_estimated"
+		var tickCoverage float64
+		if barMatchedTicks {
+			if c.Volume > 0 {
+				cov := math.Min(1, barVol/c.Volume)
+				tickCoverage = math.Round(cov*10000) / 10000
+				if cov >= 0.85 {
+					sourceKind = "ticks"
+				} else {
+					sourceKind = "partial_ticks"
+				}
+			} else {
+				sourceKind = "ticks"
+				tickCoverage = 1
+			}
+		}
 		out = append(out, FootprintBar{
-			Time:   c.Time,
-			Open:   c.Open,
-			High:   c.High,
-			Low:    c.Low,
-			Close:  c.Close,
-			Volume: barVol,
-			Delta:  barDelta,
-			CVD:    cvd,
-			VPOC:   vpoc,
-			VAH:    vah,
-			VAL:    val,
-			Levels: levels,
+			Time:         c.Time,
+			Open:         c.Open,
+			High:         c.High,
+			Low:          c.Low,
+			Close:        c.Close,
+			Volume:       barVol,
+			CandleVolume: c.Volume,
+			Delta:        barDelta,
+			CVD:          cvd,
+			VPOC:         vpoc,
+			VAH:          vah,
+			VAL:          val,
+			SourceKind:   sourceKind,
+			TickCoverage: tickCoverage,
+			Levels:       levels,
 		})
 	}
 	return out, nil

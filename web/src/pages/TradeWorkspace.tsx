@@ -3,25 +3,24 @@ import { useCore } from "../core";
 import { useUI } from "../ui-preferences";
 import { Badge } from "../components/shared";
 import { Crosshair, Grid2x2, Layers, List, Pin } from "../icons";
+import { CrosshairBus, FasedStreamClient } from "../stream-store";
 import { fetchIntelEvents, type IntelEvent } from "../world-intel";
 import {
   defaultTradeWorkspaceConfig,
   ensureTilesForLayout,
   layoutTileCount,
   parseTradeWorkspaceConfig,
+  symbolOverlayKey,
   TRADE_STORAGE_KEY,
-  type Candle,
+  type ChartDrawing,
   type ChartTileConfig,
-  type CrosshairSyncPoint,
   type OrderflowTab,
+  type PaperOrderPreview,
   type TradeLayoutMode,
   type TradeWorkspaceConfig,
   type WatchlistItem,
 } from "../market-data";
-import {
-  ChartTile,
-  type LiveMarketUpdate,
-} from "../components/trade/ChartTile";
+import { ChartTile } from "../components/trade/ChartTile";
 import { OrderflowPane } from "../components/trade/OrderflowPane";
 import { WatchlistPanel } from "../components/trade/WatchlistPanel";
 import "./TradeWorkspace.css";
@@ -44,11 +43,32 @@ export function TradeWorkspace() {
       return defaultTradeWorkspaceConfig();
     }
   });
-  const [crosshair, setCrosshair] = useState<CrosshairSyncPoint | null>(null);
   const [showEvents, setShowEvents] = useState(true);
   const [intelEvents, setIntelEvents] = useState<IntelEvent[]>([]);
-  const [liveUpdate, setLiveUpdate] = useState<LiveMarketUpdate | null>(null);
-  const liveSeqRef = useRef(0);
+
+  const streamClientRef = useRef<FasedStreamClient | null>(null);
+  if (!streamClientRef.current) {
+    streamClientRef.current = new FasedStreamClient();
+  }
+  const crosshairBusRef = useRef<CrosshairBus | null>(null);
+  if (!crosshairBusRef.current) {
+    crosshairBusRef.current = new CrosshairBus();
+  }
+
+  useEffect(() => {
+    return () => {
+      streamClientRef.current?.dispose();
+      streamClientRef.current = null;
+    };
+  }, []);
+
+  useEffect(() => {
+    streamClientRef.current?.setCore({
+      mode: core.mode,
+      request: core.request,
+      streamGet: core.streamGet,
+    });
+  }, [core.mode, core.request, core.streamGet]);
 
   useEffect(() => {
     if (core.mode !== "ready" || !showEvents) return;
@@ -74,78 +94,6 @@ export function TradeWorkspace() {
     () => config.tiles.slice(0, visibleCount),
     [config.tiles, visibleCount],
   );
-  const subsParam = useMemo(() => {
-    const seen = new Set<string>();
-    const entries: string[] = [];
-    for (const tile of visibleTiles) {
-      const tuple = `${tile.venue}:${tile.symbol}:${tile.interval}:${tile.style}`;
-      if (!seen.has(tuple)) {
-        seen.add(tuple);
-        entries.push(tuple);
-      }
-    }
-    return entries.join(",");
-  }, [visibleTiles]);
-
-  useEffect(() => {
-    if (core.mode !== "ready" || !subsParam) return;
-    const controller = new AbortController();
-    const runStream = async () => {
-      const delays = [1000, 2000, 4000, 8000, 15000];
-      let attempt = 0;
-      const qs = new URLSearchParams({ noSnapshot: "1", subs: subsParam });
-      while (!controller.signal.aborted) {
-        try {
-          await core.streamGet(`market/stream?${qs.toString()}`, {
-            signal: controller.signal,
-            onEvent: (frame) => {
-              attempt = 0;
-              if (frame.event !== "candle") return;
-              try {
-                const ev = JSON.parse(frame.data) as {
-                  venue?: string;
-                  symbol?: string;
-                  interval?: string;
-                  style?: string;
-                  payload?: Candle | { candles?: Candle[] };
-                };
-                if (!ev.venue || !ev.symbol || !ev.payload) return;
-                liveSeqRef.current += 1;
-                setLiveUpdate({
-                  venue: ev.venue,
-                  symbol: ev.symbol,
-                  interval: ev.interval,
-                  style: ev.style,
-                  payload: ev.payload,
-                  seq: liveSeqRef.current,
-                });
-              } catch {}
-            },
-          });
-        } catch {
-          if (controller.signal.aborted) return;
-        }
-        if (controller.signal.aborted) return;
-        const waitMs = delays[Math.min(attempt, delays.length - 1)];
-        attempt++;
-        await new Promise<void>((resolve) => {
-          const t = window.setTimeout(resolve, waitMs);
-          controller.signal.addEventListener(
-            "abort",
-            () => {
-              window.clearTimeout(t);
-              resolve();
-            },
-            { once: true },
-          );
-        });
-      }
-    };
-    void runStream();
-    return () => {
-      controller.abort();
-    };
-  }, [core.mode, core.streamGet, subsParam]);
   const activeTile = useMemo(
     () =>
       visibleTiles.find((item) => item.id === config.activeTileId) ??
@@ -176,6 +124,50 @@ export function TradeWorkspace() {
         item.id === updated.id ? updated : item,
       ),
     }));
+  }
+
+  function addDrawing(tile: ChartTileConfig, d: ChartDrawing) {
+    const ovKey = symbolOverlayKey(tile.venue, tile.symbol);
+    setConfig((prev) => {
+      const curMap = prev.drawingsBySymbol ?? {};
+      const nextList = [...(curMap[ovKey] ?? []), d].slice(-32);
+      return {
+        ...prev,
+        drawingsBySymbol: { ...curMap, [ovKey]: nextList },
+      };
+    });
+  }
+
+  function addPaperOrder(tile: ChartTileConfig, ord: PaperOrderPreview) {
+    const ovKey = symbolOverlayKey(tile.venue, tile.symbol);
+    setConfig((prev) => {
+      const curMap = prev.paperOrdersBySymbol ?? {};
+      const nextList = [...(curMap[ovKey] ?? []), ord].slice(-16);
+      return {
+        ...prev,
+        paperOrdersBySymbol: { ...curMap, [ovKey]: nextList },
+      };
+    });
+  }
+
+  function clearOverlays(tile: ChartTileConfig) {
+    const ovKey = symbolOverlayKey(tile.venue, tile.symbol);
+    setConfig((prev) => {
+      const nextDrawings = { ...(prev.drawingsBySymbol ?? {}) };
+      delete nextDrawings[ovKey];
+      const nextOrders = { ...(prev.paperOrdersBySymbol ?? {}) };
+      delete nextOrders[ovKey];
+      return {
+        ...prev,
+        drawingsBySymbol: nextDrawings,
+        paperOrdersBySymbol: nextOrders,
+        tiles: prev.tiles.map((item) =>
+          item.id === tile.id
+            ? { ...item, drawings: [], paperOrders: [] }
+            : item,
+        ),
+      };
+    });
   }
 
   function loadWatchlistItem(item: WatchlistItem) {
@@ -291,28 +283,37 @@ export function TradeWorkspace() {
           className={`trade-grid layout-${config.layout}`}
           data-testid="trade-chart-grid"
         >
-          {visibleTiles.map((tile) => (
-            <ChartTile
-              key={tile.id}
-              tile={tile}
-              active={tile.id === activeTile?.id}
-              syncedCrosshair={config.syncCrosshair ? crosshair : null}
-              liveUpdate={liveUpdate}
-              intelEvents={intelEvents}
-              showEvents={showEvents}
-              onSelect={() =>
-                setConfig((prev) =>
-                  prev.activeTileId === tile.id
-                    ? prev
-                    : { ...prev, activeTileId: tile.id },
-                )
-              }
-              onChangeTile={updateTile}
-              onCrosshairMove={(pt) => {
-                if (config.syncCrosshair) setCrosshair(pt);
-              }}
-            />
-          ))}
+          {visibleTiles.map((tile) => {
+            const ovKey = symbolOverlayKey(tile.venue, tile.symbol);
+            const drawings = config.drawingsBySymbol?.[ovKey] ?? tile.drawings;
+            const paperOrders =
+              config.paperOrdersBySymbol?.[ovKey] ?? tile.paperOrders;
+            return (
+              <ChartTile
+                key={tile.id}
+                tile={tile}
+                active={tile.id === activeTile?.id}
+                drawings={drawings}
+                paperOrders={paperOrders}
+                streamClient={streamClientRef.current ?? undefined}
+                crosshairBus={crosshairBusRef.current ?? undefined}
+                syncCrosshair={config.syncCrosshair}
+                intelEvents={intelEvents}
+                showEvents={showEvents}
+                onSelect={() =>
+                  setConfig((prev) =>
+                    prev.activeTileId === tile.id
+                      ? prev
+                      : { ...prev, activeTileId: tile.id },
+                  )
+                }
+                onChangeTile={updateTile}
+                onAddDrawing={(d) => addDrawing(tile, d)}
+                onAddPaperOrder={(o) => addPaperOrder(tile, o)}
+                onClearOverlays={() => clearOverlays(tile)}
+              />
+            );
+          })}
         </div>
 
         {config.showOrderflow && activeTile && (
@@ -321,7 +322,9 @@ export function TradeWorkspace() {
             symbol={activeTile.symbol}
             interval={activeTile.interval}
             tab={config.orderflowTab}
-            syncedTime={crosshair?.time ?? null}
+            streamClient={streamClientRef.current ?? undefined}
+            crosshairBus={crosshairBusRef.current ?? undefined}
+            syncCrosshair={config.syncCrosshair}
             onChangeTab={(nextTab: OrderflowTab) =>
               setConfig((prev) => ({ ...prev, orderflowTab: nextTab }))
             }

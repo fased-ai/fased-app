@@ -138,3 +138,61 @@ func TestComputeFootprintAndProfile(t *testing.T) {
 		t.Fatalf("unexpected bar 1 CVD/Delta: %+v", bars[1])
 	}
 }
+
+func TestRenkoVolumeConservation(t *testing.T) {
+	in := []Candle{
+		{Time: 1000, Open: 100, High: 101, Low: 99, Close: 100, Volume: 20, BuyVolume: 12, SellVolume: 8, Trades: 5},
+		{Time: 2000, Open: 100, High: 109, Low: 100, Close: 109, Volume: 120, BuyVolume: 90, SellVolume: 30, Trades: 11},
+	}
+	out, err := TransformCandles(in, TransformOptions{Style: StyleRenko, BrickSize: 2.0})
+	if err != nil {
+		t.Fatalf("TransformCandles(Renko) failed: %v", err)
+	}
+	if len(out) < 3 {
+		t.Fatalf("expected >= 3 bricks on large price jump, got %d", len(out))
+	}
+	var sumVol, sumBuy, sumSell float64
+	var sumTrades int64
+	for _, b := range out {
+		sumVol += b.Volume
+		sumBuy += b.BuyVolume
+		sumSell += b.SellVolume
+		sumTrades += b.Trades
+	}
+	if math.Abs(sumVol-120.0) > 1e-6 || math.Abs(sumBuy-90.0) > 1e-6 || math.Abs(sumSell-30.0) > 1e-6 || sumTrades != 11 {
+		t.Fatalf("Renko volume/trades not conserved across %d bricks: vol=%.4f buy=%.4f sell=%.4f trades=%d", len(out), sumVol, sumBuy, sumSell, sumTrades)
+	}
+}
+
+func TestFootprintProvenanceAndCoverage(t *testing.T) {
+	candles := []Candle{
+		{Time: 1000, Open: 100, High: 104, Low: 99, Close: 103, Volume: 100},
+		{Time: 2000, Open: 103, High: 106, Low: 101, Close: 102, Volume: 100},
+		{Time: 3000, Open: 102, High: 105, Low: 101, Close: 104, Volume: 80},
+	}
+	ticks := []TradeTick{
+		// Bar 0: 95 / 100 => coverage 0.95 >= 0.85 -> "ticks"
+		{Time: 1000*1000 + 100, Price: 101, Size: 60, Side: "buy"},
+		{Time: 1000*1000 + 200, Price: 102, Size: 35, Side: "sell"},
+		// Bar 1: 20 / 100 => coverage 0.20 < 0.85 -> "partial_ticks"
+		{Time: 2000*1000 + 100, Price: 104, Size: 20, Side: "buy"},
+		// Bar 2: 0 ticks -> "ohlcv_estimated"
+	}
+
+	bars, err := ComputeFootprintAndProfile(candles, ticks, 1.0)
+	if err != nil {
+		t.Fatalf("ComputeFootprintAndProfile failed: %v", err)
+	}
+	if len(bars) != 3 {
+		t.Fatalf("expected 3 bars, got %d", len(bars))
+	}
+	if bars[0].SourceKind != "ticks" || math.Abs(bars[0].TickCoverage-0.95) > 1e-4 || bars[0].CandleVolume != 100 {
+		t.Fatalf("unexpected bar 0 provenance: %+v", bars[0])
+	}
+	if bars[1].SourceKind != "partial_ticks" || math.Abs(bars[1].TickCoverage-0.20) > 1e-4 || bars[1].CandleVolume != 100 {
+		t.Fatalf("unexpected bar 1 provenance: %+v", bars[1])
+	}
+	if bars[2].SourceKind != "ohlcv_estimated" || bars[2].TickCoverage != 0 || bars[2].CandleVolume != 80 {
+		t.Fatalf("unexpected bar 2 provenance: %+v", bars[2])
+	}
+}

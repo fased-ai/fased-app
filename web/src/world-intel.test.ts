@@ -117,6 +117,38 @@ describe("world-intel helpers and API wrappers", () => {
       { time: 1760000000, label: "USD" },
       { time: 1760003600, label: "BTC" },
     ]);
+
+    // 3-day-old events outside visible bar range must NOT snap onto bar 0 of a 1m chart.
+    const oneMinCandles = [
+      {
+        time: 1760000000,
+        open: 100,
+        high: 101,
+        low: 99,
+        close: 100,
+        volume: 5,
+      },
+      {
+        time: 1760000060,
+        open: 100,
+        high: 101,
+        low: 99,
+        close: 100,
+        volume: 5,
+      },
+    ];
+    const staleEvents: IntelEvent[] = [
+      {
+        ...sampleEvents[0],
+        id: "stale-old",
+        publishedAt: 1760000000 - 3 * 86400,
+      },
+      { ...sampleEvents[1], id: "in-range", publishedAt: 1760000030 },
+    ];
+    expect(
+      buildChartEventPins(oneMinCandles, staleEvents).map((p) => p.eventId),
+    ).toEqual(["in-range"]);
+
     expect(buildIntelChatPrompt(sampleEvents[0])).toContain("untrusted");
     expect(formatProbPct(0.624)).toBe("62%");
     expect(formatCompactUSD(1840000)).toBe("$1.84M");
