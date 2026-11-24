@@ -108,7 +108,7 @@ func newHTTPClient(override http.RoundTripper, allowLocalhost bool) *http.Client
 			IdleConnTimeout:       30 * time.Second,
 			TLSHandshakeTimeout:   5 * time.Second,
 			ResponseHeaderTimeout: 8 * time.Second,
-			TLSClientConfig:       &tls.Config{MinVersion: tls.VersionTLS13},
+			TLSClientConfig:       &tls.Config{MinVersion: tls.VersionTLS12},
 		}
 	}
 	return &http.Client{

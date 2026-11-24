@@ -1,10 +1,12 @@
 package marketdata
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"math"
 	"net/url"
 	"sort"
@@ -194,60 +196,129 @@ func buildOrderBookSnapshot(venue, symbol string, ts int64, bids, asks []OrderBo
 	}
 }
 
-// ParseHyperliquidLeaderboard extracts ranked cohorts for a given window ("day", "week", "month", "allTime").
-func ParseHyperliquidLeaderboard(raw []byte, window string, updatedAt int64) (CohortSnapshot, error) {
-	var payload struct {
-		LeaderboardRows []struct {
-			EthAddress         string          `json:"ethAddress"`
-			DisplayName        string          `json:"displayName"`
-			AccountValue       string          `json:"accountValue"`
-			WindowPerformances [][]interface{} `json:"windowPerformances"`
-		} `json:"leaderboardRows"`
+type leaderboardRowPayload struct {
+	EthAddress         string          `json:"ethAddress"`
+	DisplayName        string          `json:"displayName"`
+	AccountValue       string          `json:"accountValue"`
+	WindowPerformances [][]interface{} `json:"windowPerformances"`
+}
+
+func cohortEntryFromRow(row leaderboardRowPayload, rank int) (CohortEntry, bool) {
+	if strings.TrimSpace(row.EthAddress) == "" {
+		return CohortEntry{}, false
 	}
-	if err := json.Unmarshal(raw, &payload); err != nil {
-		return CohortSnapshot{}, fmt.Errorf("decode hyperliquid leaderboard: %w", err)
+	acctVal, _ := parseFloatStrict(row.AccountValue)
+	entry := CohortEntry{
+		Address:      row.EthAddress,
+		DisplayName:  strings.TrimSpace(row.DisplayName),
+		AccountValue: acctVal,
+		Rank:         rank,
 	}
+	for _, wp := range row.WindowPerformances {
+		if len(wp) < 2 {
+			continue
+		}
+		key, _ := wp[0].(string)
+		statsMap, _ := wp[1].(map[string]any)
+		if statsMap == nil {
+			continue
+		}
+		roi, _ := parseSignedFloatStrict(statsMap["roi"])
+		switch key {
+		case "day":
+			entry.DayROI = roi
+		case "week":
+			entry.WeekROI = roi
+		case "month":
+			entry.MonthROI = roi
+		case "allTime":
+			entry.AllTimeROI = roi
+		}
+	}
+	return entry, true
+}
+
+// ParseHyperliquidLeaderboardReader streams a Hyperliquid leaderboard JSON response
+// and stops once 50 valid ranked entries have been collected.
+func ParseHyperliquidLeaderboardReader(r io.Reader, window string, updatedAt int64) (CohortSnapshot, error) {
 	if window == "" {
 		window = "week"
 	}
-	entries := make([]CohortEntry, 0, len(payload.LeaderboardRows))
-	for i, row := range payload.LeaderboardRows {
-		if strings.TrimSpace(row.EthAddress) == "" {
+	dec := json.NewDecoder(r)
+	tok, err := dec.Token()
+	if err != nil {
+		return CohortSnapshot{}, fmt.Errorf("decode hyperliquid leaderboard: %w", err)
+	}
+	delim, ok := tok.(json.Delim)
+	if !ok || delim != '{' {
+		return CohortSnapshot{}, fmt.Errorf("decode hyperliquid leaderboard: expected object")
+	}
+
+	entries := make([]CohortEntry, 0, 50)
+	for dec.More() {
+		keyTok, err := dec.Token()
+		if err != nil {
+			return CohortSnapshot{}, fmt.Errorf("decode hyperliquid leaderboard: %w", err)
+		}
+		key, ok := keyTok.(string)
+		if !ok {
+			return CohortSnapshot{}, fmt.Errorf("decode hyperliquid leaderboard: expected field name")
+		}
+		if key != "leaderboardRows" {
+			var discard json.RawMessage
+			if err := dec.Decode(&discard); err != nil {
+				return CohortSnapshot{}, fmt.Errorf("decode hyperliquid leaderboard: %w", err)
+			}
 			continue
 		}
-		acctVal, _ := parseFloatStrict(row.AccountValue)
-		entry := CohortEntry{
-			Address:      row.EthAddress,
-			DisplayName:  strings.TrimSpace(row.DisplayName),
-			AccountValue: acctVal,
-			Rank:         i + 1,
+
+		arrTok, err := dec.Token()
+		if err != nil {
+			return CohortSnapshot{}, fmt.Errorf("decode hyperliquid leaderboard: %w", err)
 		}
-		for _, wp := range row.WindowPerformances {
-			if len(wp) < 2 {
-				continue
+		if arrTok == nil {
+			continue
+		}
+		arrDelim, ok := arrTok.(json.Delim)
+		if !ok || arrDelim != '[' {
+			return CohortSnapshot{}, fmt.Errorf("decode hyperliquid leaderboard: expected leaderboardRows array")
+		}
+		rowIndex := 0
+		for dec.More() {
+			var row leaderboardRowPayload
+			if err := dec.Decode(&row); err != nil {
+				return CohortSnapshot{}, fmt.Errorf("decode hyperliquid leaderboard: %w", err)
 			}
-			key, _ := wp[0].(string)
-			statsMap, _ := wp[1].(map[string]any)
-			if statsMap == nil {
-				continue
-			}
-			roi, _ := parseSignedFloatStrict(statsMap["roi"])
-			switch key {
-			case "day":
-				entry.DayROI = roi
-			case "week":
-				entry.WeekROI = roi
-			case "month":
-				entry.MonthROI = roi
-			case "allTime":
-				entry.AllTimeROI = roi
+			rowIndex++
+			if entry, keep := cohortEntryFromRow(row, rowIndex); keep {
+				entries = append(entries, entry)
+				if len(entries) >= 50 {
+					return CohortSnapshot{
+						Venue:     VenueHyperliquid,
+						Window:    window,
+						UpdatedAt: updatedAt,
+						Entries:   entries,
+						Source:    "hyperliquid-leaderboard",
+					}, nil
+				}
 			}
 		}
-		entries = append(entries, entry)
-		if len(entries) >= 50 {
-			break
+		endArr, err := dec.Token()
+		if err != nil {
+			return CohortSnapshot{}, fmt.Errorf("decode hyperliquid leaderboard: %w", err)
+		}
+		if d, ok := endArr.(json.Delim); !ok || d != ']' {
+			return CohortSnapshot{}, fmt.Errorf("decode hyperliquid leaderboard: expected end of leaderboardRows")
 		}
 	}
+	endObj, err := dec.Token()
+	if err != nil {
+		return CohortSnapshot{}, fmt.Errorf("decode hyperliquid leaderboard: %w", err)
+	}
+	if d, ok := endObj.(json.Delim); !ok || d != '}' {
+		return CohortSnapshot{}, fmt.Errorf("decode hyperliquid leaderboard: expected closing object")
+	}
+
 	return CohortSnapshot{
 		Venue:     VenueHyperliquid,
 		Window:    window,
@@ -255,6 +326,11 @@ func ParseHyperliquidLeaderboard(raw []byte, window string, updatedAt int64) (Co
 		Entries:   entries,
 		Source:    "hyperliquid-leaderboard",
 	}, nil
+}
+
+// ParseHyperliquidLeaderboard extracts ranked cohorts for a given window ("day", "week", "month", "allTime").
+func ParseHyperliquidLeaderboard(raw []byte, window string, updatedAt int64) (CohortSnapshot, error) {
+	return ParseHyperliquidLeaderboardReader(bytes.NewReader(raw), window, updatedAt)
 }
 
 // ParseBinanceKlines parses Binance REST /api/v3/klines nested arrays.
@@ -796,11 +872,15 @@ func (c *upstreamClient) fetchTrades(ctx context.Context, venue, symbol string, 
 }
 
 func (c *upstreamClient) fetchCohorts(ctx context.Context, window string, nowSec int64) (CohortSnapshot, error) {
-	raw, err := c.get(ctx, "https://stats-data.hyperliquid.xyz/Mainnet/leaderboard")
-	if err != nil {
+	var snap CohortSnapshot
+	if err := c.streamGet(ctx, "https://stats-data.hyperliquid.xyz/Mainnet/leaderboard", func(r io.Reader) error {
+		var parseErr error
+		snap, parseErr = ParseHyperliquidLeaderboardReader(r, window, nowSec)
+		return parseErr
+	}); err != nil {
 		return CohortSnapshot{}, err
 	}
-	return ParseHyperliquidLeaderboard(raw, window, nowSec)
+	return snap, nil
 }
 
 func minInt(a, b int) int {
