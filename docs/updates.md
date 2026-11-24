@@ -14,6 +14,8 @@ fased update
 
 A repeat reports **Already current**. The CLI reuses its owner session; if it expires, sign in with your existing Fased password inside the command.
 
+On standalone desktop and cross-platform CLI installations without a managed Linux update controller, **Settings → Updates** and `fased-app updates check` check the latest desktop release manifest read-only, and `install-cli.sh --upgrade` (Linux/macOS) or `install.ps1 -Upgrade` (Windows) upgrades binaries in place while preserving state.
+
 ## Automatic updates
 
 Choose **Automatic** in Settings → Updates. The installed service checks for eligible releases and applies them within your selected maintenance window. You can return to **Manual** at any time.

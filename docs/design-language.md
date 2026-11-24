@@ -2,13 +2,13 @@
 
 Use one recognizable market workspace across Fased and WEN, while retaining each product's navigation and branding. This is a design direction, not a shipped cross-app integration.
 
-The existing Fased App engineering prototype is the visual reference: dark graphite surfaces, restrained lime highlights, compact cards, readable tables and clear activity state. Keep Fcode Lab as the umbrella; give Satcoin Mining the same round terms and financial labels wherever it appears.
+The shipped Fased App WEN design system uses obsidian surfaces (`#0d0d12`), restrained ember-orange accents (`#FF5A36` / `#ff6b35`), compact cards, readable tables, full Light mode parity (`#f5f4f8`), and clear activity state. Keep Fcode Lab as the umbrella; give Satcoin Mining the same round terms and financial labels wherever it appears.
 
 | Element       | Shared direction                                                                                             |
 | ------------- | ------------------------------------------------------------------------------------------------------------ |
-| Surface       | Graphite background `#111416`, panels `#191d1f`, borders `#2b3032`.                                          |
-| Text          | Light primary text `#e8eae5`; muted `#929b9e` only where contrast remains readable.                          |
-| Accent        | Lime `#c3ed83` for the primary action and selected range; color is never the only status cue.                |
+| Surface       | Obsidian background `#0d0d12`, panels `#161621`, borders `#242434` (Light mode `#f5f4f8` / `#ffffff`).       |
+| Text          | High-contrast primary text `#f0eef5` and secondary `#9490a8` meeting WCAG 2.1 AA across Dark and Light.      |
+| Accent        | Ember `#FF5A36` (configurable accent tokens) for primary actions and active states; color is never sole cue. |
 | Layout        | Stable left navigation, central workspace and optional right strategy/detail panel.                          |
 | Numbers       | Tabular quantities, visible asset units and consistent rounding; SOL principal, BTC and SAT remain separate. |
 | States        | Available, committed, settling, pending conversion, claimable, claimed and recovery required.                |
