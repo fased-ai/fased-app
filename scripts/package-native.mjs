@@ -21,22 +21,19 @@ const output = resolve(".evidence/packages");
 await mkdir(output, { recursive: true });
 const windows = process.platform === "win32";
 const desktop = resolve(`.evidence/bin/fased-desktop${windows ? ".exe" : ""}`);
+const engine = resolve(`.evidence/bin/fased-app${windows ? ".exe" : ""}`);
 const source = execFileSync("git", ["rev-parse", "HEAD"], {
   encoding: "utf8",
 }).trim();
 async function resolvePackageVersion() {
+  const builtVersion = execFileSync(engine, ["--version"], {
+    encoding: "utf8",
+  }).trim();
+  if (builtVersion) {
+    return builtVersion;
+  }
   if (process.env.FASED_RELEASE_VERSION?.trim()) {
     return process.env.FASED_RELEASE_VERSION.trim();
-  }
-  try {
-    const releaseMeta = JSON.parse(
-      await readFile("release/ubuntu.json", "utf8"),
-    );
-    if (typeof releaseMeta.version === "string" && releaseMeta.version.trim()) {
-      return releaseMeta.version.trim();
-    }
-  } catch {
-    // Fallback to package.json below.
   }
   const manifest = JSON.parse(await readFile("package.json", "utf8"));
   return manifest.version || "0.0.0";
@@ -60,7 +57,7 @@ execFileSync(
     `-X github.com/fased-ai/fased-app/internal/core.Version=${appVersion}`,
     "./cmd/fased-package",
     "--engine",
-    resolve(`.evidence/bin/fased-app${windows ? ".exe" : ""}`),
+    engine,
     "--desktop",
     desktop,
     ...(process.platform === "linux" ? ["--signer", signer] : []),

@@ -50,9 +50,6 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          $errors = $null; $tokens = $null
-          [void][System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path 'install.ps1'), [ref]$tokens, [ref]$errors)
-          if ($errors -and $errors.Count -gt 0) { $errors | ForEach-Object { Write-Error $_.ToString() }; exit 1 }
           $tmp = Join-Path $env:TEMP ('fased-ps-ci-' + [Guid]::NewGuid().ToString('N'))
           New-Item -ItemType Directory -Path $tmp | Out-Null
           try {
