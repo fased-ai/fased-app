@@ -26,7 +26,7 @@ const source = execFileSync("git", ["rev-parse", "HEAD"], {
   encoding: "utf8",
 }).trim();
 async function resolvePackageVersion() {
-  const builtVersion = execFileSync(engine, ["--version"], {
+  const builtVersion = execFileSync(engine, ["version"], {
     encoding: "utf8",
   }).trim();
   if (builtVersion) {
