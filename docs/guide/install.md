@@ -3,7 +3,7 @@ title: "Install"
 description: "Local setup and private Remote access."
 ---
 
-Ubuntu 24.04 x86-64 Local and mandatory-Tailscale Remote installation and shared UI/CLI updates are supported; other distributions and architectures remain unverified. Format-4 installations update in place; older format-2 evaluation builds require a fresh install. See [Availability](/reference/status).
+Ubuntu 24.04 x86-64 Local and mandatory-Tailscale Remote installation with shared UI/CLI updates are certified and supported. Cross-platform CLI installers (`install-cli.sh` on Linux/macOS, `install.ps1` on Windows) and unsigned native desktop pre-release packages (`.dmg`, Windows `.exe`, Linux `.deb`/`.AppImage`) are also published on `-desktop` releases; desktop code signing and in-app auto-updating remain disabled until signing certificates are configured. Format-4 installations update in place; older format-2 evaluation builds require a fresh install. See [Availability](/reference/status).
 
 ## Choose Local or Remote
 
@@ -56,7 +56,11 @@ The updater preserves data and authentication, restarts Fased and reports the re
 
 **Manual** is the default. **Automatic** is an explicit choice using that same updater and your saved policy. It needs no open browser or SSH session. New system permissions require a clearly identified setup review rather than an ambiguous password prompt.
 
+Standalone desktop and cross-platform CLI installations check available releases read-only via **Settings → Updates** or `fased-app updates check`, and upgrade in place via `install-cli.sh --upgrade` (Linux/macOS) or `install.ps1 -Upgrade` (Windows) while preserving workspace databases and credentials.
+
 ## Recovery and availability
+
+Run `fased-app doctor` (or `fased-app doctor --json`) to inspect SQLite health, OS secret vault readiness, service status and network listeners. Use `fased-app backup --out <dir>` for consistent online SQLite backups (`VACUUM INTO`) and `fased-app restore --from <dir>` to verify and restore state safely.
 
 Keep a provider console or rescue route that works without Tailscale. Private SSH through Tailscale is useful for administration, but cannot replace that independent route. If your host offers no console/rescue, this Remote setup cannot safely finish its public-access lockdown. Use a host with recovery; do not remove your last working access path.
 
@@ -66,4 +70,4 @@ Wallet recovery must not depend on the VPS or Tailscale account. Before using re
 
 Existing records, credentials and recovery rights must survive upgrades and removal. Do not overwrite an installation to repair its updater. Wallet recovery is separate from app access and software updates.
 
-Ubuntu 24.04 x86-64 Local and mandatory-Tailscale Remote installation and updates are supported. Other OS releases, architectures and native installers remain unverified until their own acceptance is complete. See [Availability](/reference/status) and [Settings](/guide/settings).
+Ubuntu 24.04 x86-64 Local and mandatory-Tailscale Remote installation and updates are certified. Cross-platform CLI and desktop pre-release packages remain unsigned until platform signing certificates are configured. See [Availability](/reference/status) and [Settings](/guide/settings).

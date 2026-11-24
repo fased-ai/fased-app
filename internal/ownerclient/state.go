@@ -263,7 +263,13 @@ func SaveBackup(root string, result signer.OwnerResult) (string, []byte, error) 
 			return "", nil, errors.New("existing owner backup is preserved")
 		}
 	} else if errors.Is(err, os.ErrNotExist) {
-		existing = Backup{1, result.Intent.InstanceID, result.Intent.Network, result.Fingerprint, result.Backup}
+		existing = Backup{
+			Version:     1,
+			InstanceID:  result.Intent.InstanceID,
+			Network:     result.Intent.Network,
+			Fingerprint: result.Fingerprint,
+			Document:    result.Backup,
+		}
 		if err = writeState(path, existing); err != nil {
 			return "", nil, err
 		}

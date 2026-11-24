@@ -384,3 +384,34 @@ test("browser coverage runs once for every selected core path", async () => {
     assert.match(inspection, new RegExp(`if: matrix\\.leg == '${leg}'`));
   }
 });
+
+test("static vet, fuzz seed regression, and release assembler tests stay wired in CI", async () => {
+  const checks = await readFile(
+    new URL("../.github/workflows/checks.yml", import.meta.url),
+    "utf8",
+  );
+  const desktop = await readFile(
+    new URL("../.github/workflows/desktop-compatibility.yml", import.meta.url),
+    "utf8",
+  );
+  const audit = await readFile(
+    new URL("../.github/workflows/security-audit.yml", import.meta.url),
+    "utf8",
+  );
+  const dependabot = await readFile(
+    new URL("../.github/dependabot.yml", import.meta.url),
+    "utf8",
+  );
+  assert.match(checks, /scripts\/assemble-dual-track-release\.test\.mjs/);
+  assert.match(checks, /- run: go vet \.\/\.\.\./);
+  assert.match(
+    checks,
+    /go test -run='\^Fuzz' \.\/internal\/core \.\/internal\/signer \.\/internal\/update \.\/internal\/wenpm1/,
+  );
+  assert.match(desktop, /- run: go -C desktop vet \.\/\.\.\./);
+  assert.match(audit, /govulncheck/);
+  assert.match(audit, /FuzzDecodeFrames/);
+  assert.match(dependabot, /package-ecosystem: "gomod"/);
+  assert.match(dependabot, /directory: "\/desktop"/);
+  assert.match(dependabot, /package-ecosystem: "npm"/);
+});

@@ -64,7 +64,18 @@ func Quote(owner string, in, out, amount string, bps uint16) onchain.Quote {
 	binary.LittleEndian.PutUint16(data[24:], bps)
 	binary.LittleEndian.PutUint32(data[30:], 1)
 	copy(data[34:], []byte{0, 16, 39, 0, 1})
-	accounts := []onchain.Meta{{owner, true, false}, {source, false, true}, {dest, false, true}, {in, false, false}, {out, false, false}, {onchain.Token, false, false}, {onchain.Token, false, false}, {onchain.Jupiter, false, false}, {onchain.EventAuthority, false, false}, {onchain.Jupiter, false, false}}
+	accounts := []onchain.Meta{
+		{Pubkey: owner, IsSigner: true, IsWritable: false},
+		{Pubkey: source, IsSigner: false, IsWritable: true},
+		{Pubkey: dest, IsSigner: false, IsWritable: true},
+		{Pubkey: in, IsSigner: false, IsWritable: false},
+		{Pubkey: out, IsSigner: false, IsWritable: false},
+		{Pubkey: onchain.Token, IsSigner: false, IsWritable: false},
+		{Pubkey: onchain.Token, IsSigner: false, IsWritable: false},
+		{Pubkey: onchain.Jupiter, IsSigner: false, IsWritable: false},
+		{Pubkey: onchain.EventAuthority, IsSigner: false, IsWritable: false},
+		{Pubkey: onchain.Jupiter, IsSigner: false, IsWritable: false},
+	}
 	return onchain.Quote{Version: onchain.Version, Owner: owner, InputMint: in, OutputMint: out, Amount: amount, Output: strconv.FormatUint(output, 10), SlippageBPS: bps, Instructions: []onchain.Instruction{{ProgramID: onchain.Jupiter, Accounts: accounts, Data: base64.StdEncoding.EncodeToString(data)}}}
 }
 func (c *Chain) RoundTrip(r *http.Request) (*http.Response, error) {

@@ -8,24 +8,25 @@ Self-hosted agents for trading research and automation. Run Fased on your comput
 
 **[Install](#install) · [User guide](docs/index.md) · [Providers](docs/guide/providers.md) · [Network](docs/guide/network.md) · [Status](docs/reference/status.md)**
 
-> **Status:** Ubuntu 24.04 x86-64 Local/Remote installation and updates, live AI providers with OS-protected credentials, and watch-only Solana wallets with live read-only RPC are available. Live wallet signing, trading execution, and WEN mining activation remain disabled; Fased Network is planned. See [Availability](docs/reference/status.md).
+> **Status:** Attested Ubuntu 24.04 x86-64 Local/Remote installation and shared UI/CLI updates, cross-platform CLI & unsigned desktop pre-release packages (Linux, macOS, Windows), live AI providers (OAuth, API key, local server, and Host CLI/ACP) with native OS-protected credentials, Agent V2 with MCP, and watch-only Solana wallets with live read-only RPC are available. Live wallet signing, trading execution, and WEN mining activation remain strictly disabled; Fased Network is planned. See [Availability](docs/reference/status.md).
 
 ## What’s inside
 
-| Feature           | Use it for                                                                                                                                          |
-| ----------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Dashboard**     | Arrange your workspace and open the features you use.                                                                                               |
-| **Providers**     | Connect supported sign-in, API-key or local-server accounts with OS-protected credentials across agents, Chat and Tasks.                            |
-| **Agents & Chat** | Give each agent instructions and context, keep conversations and review proposed work.                                                              |
-| **Tasks**         | Schedule reminders, watch news, inspect results and pause automation. Deterministic tasks need no AI provider.                                      |
-| **News & Memory** | Follow sources and retain useful context you can inspect, correct or forget.                                                                        |
-| **Wallets & RPC** | Watch-only Solana accounts with live read-only RPC (keyless public Solana RPC or OS-protected RPC keys); signing and funds custody remain disabled. |
+| Feature           | Use it for                                                                                                                                               |
+| ----------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Dashboard**     | Arrange your workspace and open the features you use.                                                                                                    |
+| **Providers**     | Connect OAuth sign-in, API-key, local-server, or Host CLI/ACP accounts (`codex`, `claude`, `antigravity`, `gemini`, `grok`) with OS-protected secrets.   |
+| **Agents & Chat** | Give each agent instructions, rules, tools and persistent threads (`agents.sqlite`), use `/compact`, `/side`, voice input and local/Remote MCP access.   |
+| **Tasks**         | Schedule reminders, watch news, mirror completed runs into agent threads and pause automation. Deterministic tasks need no AI provider.                  |
+| **News & Memory** | Follow RSS/Atom feeds and retain scoped, pinned or searchable context you can inspect, edit or forget.                                                   |
+| **Wallets & RPC** | Watch-only Solana accounts with live read-only RPC (keyless public RPC or OS-protected RPC keys) and portable backups; signing remains disabled.         |
+| **Ops & Backup**  | Run `fased-app doctor` diagnostics, hot SQLite `fased-app backup` / `restore`, and unified **Settings** for appearance, devices, updates and MCP access. |
 
 Onchain, Hyperliquid, Mining and the trading-focused Fased Network have separate [roadmaps and availability](docs/reference/status.md). They are not live trading services in this build.
 
 ## Install
 
-Ubuntu 24.04 x86-64 is supported for Local and mandatory-Tailscale Remote installation; other platforms remain unverified. Format-4 installations update in place; older format-2 evaluation builds require a fresh install. See [Install](docs/guide/install.md) and [Availability](docs/reference/status.md).
+Attested Ubuntu 24.04 x86-64 is certified for Local and mandatory-Tailscale Remote installation with shared UI/CLI updates (`install.sh`). Cross-platform CLI installers (`install-cli.sh` on Linux/macOS, `install.ps1` on Windows) and unsigned native desktop packages (`.dmg`, Windows `.exe`, Linux `.deb`/`.AppImage`) are available via `-desktop` pre-releases; desktop code signing and in-app auto-updating remain disabled until signing certificates are enabled. Format-4 installations update in place; older format-2 evaluation builds require a fresh install. See [Install](docs/guide/install.md) and [Availability](docs/reference/status.md).
 
 | Choose      | Setup and access                                                                                                                                                              |
 | ----------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -37,7 +38,7 @@ The installer supplies compiled Fased and required OS components; no Go, Node, n
 
 ## Updates
 
-**Settings → Updates** and optional `fased update` use the same updater, authorization rules, progress, result and recovery. Routine updates reuse existing owner/device/OS authority without another password or account switch. A CLI client reaches Remote over Tailscale directly, without SSH. Manual is the default; Automatic is explicit opt-in and runs without an open browser or SSH session.
+**Settings → Updates** and `fased update` share one updater, authorization boundary, progress view and recovery transaction on managed Linux installations. Routine updates reuse existing owner/device/OS authority without another password or SSH session, and a CLI client reaches Remote over Tailscale directly. Manual is the default; Automatic is explicit opt-in. Standalone desktop and cross-platform CLI installations check available releases read-only via **Settings → Updates** or `fased-app updates check`, and upgrade in place via `install-cli.sh --upgrade` / `install.ps1 -Upgrade`.
 
 Updates preserve data and wallet permissions; they never unlock signing or grant spending authority. [Details](docs/guide/install.md).
 

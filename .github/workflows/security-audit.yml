@@ -1,0 +1,71 @@
+name: Security Audit & Fuzz
+
+on:
+  schedule:
+    - cron: "30 8 * * 1"
+  workflow_dispatch:
+    inputs:
+      fuzz_time:
+        description: "Duration per Go fuzz target (e.g. 5s, 15s)"
+        type: string
+        required: false
+        default: "5s"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: security-audit-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  go-security-and-fuzz:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.x"
+          cache-dependency-path: |
+            go.sum
+            desktop/go.sum
+      - name: Go static checks
+        run: |
+          go vet ./...
+          go -C desktop vet ./...
+      - name: Go vulnerability audit (govulncheck)
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@latest
+          govulncheck ./...
+          (cd desktop && govulncheck ./...)
+      - name: Bounded Go fuzzing across all fuzz targets
+        env:
+          FASED_FAST_TEST_KDF: "1"
+          FUZZ_TIME: ${{ inputs.fuzz_time || '5s' }}
+        run: |
+          set -euo pipefail
+          for target in \
+            "./internal/core:FuzzUniqueAIJSON" \
+            "./internal/core:FuzzPartialAIAnswerAndReadAIStream" \
+            "./internal/core:FuzzProviderSignInCallbacks" \
+            "./internal/core:FuzzValidateOIDCIDToken" \
+            "./internal/core:FuzzVaultCiphertextBoundAndFormats" \
+            "./internal/core:FuzzPublicRPCDestinationAndTargetOrdering" \
+            "./internal/signer:FuzzHyperliquidDecimalAndAddress" \
+            "./internal/update:FuzzStrictJSONBounded" \
+            "./internal/update:FuzzParseDesktopManifest" \
+            "./internal/wenpm1:FuzzDecodeFrames"; do
+            pkg="${target%%:*}"
+            fn="${target##*:}"
+            echo "=== Fuzzing ${pkg} :: ${fn} (${FUZZ_TIME}) ==="
+            go test -run='^$' -fuzz="^${fn}\$" -fuzztime="${FUZZ_TIME}" "${pkg}"
+          done
+      - name: Production npm dependency audit
+        run: npm audit --omit=dev --audit-level=high
