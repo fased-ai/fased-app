@@ -682,6 +682,10 @@ func (h *HTTPHandler) api(w http.ResponseWriter, r *http.Request) {
 			h.automationAPI(w, r, token)
 			return
 		}
+		if strings.HasPrefix(r.URL.Path, "/api/v1/lab/") {
+			h.quantLabAPI(w, r, token)
+			return
+		}
 		writeError(w, 404, "unknown API operation")
 	}
 }

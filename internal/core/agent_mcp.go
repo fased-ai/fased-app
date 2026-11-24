@@ -17,28 +17,31 @@ const (
 )
 
 var mcpReadTools = map[string]bool{
-	"workspace_status":       true,
-	"list_wallets":           true,
-	"get_wallet_balances":    true,
-	"get_portfolio_summary":  true,
-	"web_search":             true,
-	"fetch_web_page":         true,
-	"get_token_price":        true,
-	"get_swap_quote":         true,
-	"list_tasks":             true,
-	"search_memories":        true,
-	"search_news":            true,
-	"list_strategies":        true,
-	"get_market_candles":     true,
-	"get_orderbook":          true,
-	"get_footprint":          true,
-	"get_macro_or_sec":       true,
-	"jev_evaluate":           true,
-	"call_external_mcp_tool": true,
-	"get_world_intel":        true,
-	"get_prediction_markets": true,
-	"list_event_triggers":    true,
-	"list_notifications":     true,
+	"workspace_status":         true,
+	"list_wallets":             true,
+	"get_wallet_balances":      true,
+	"get_portfolio_summary":    true,
+	"web_search":               true,
+	"fetch_web_page":           true,
+	"get_token_price":          true,
+	"get_swap_quote":           true,
+	"list_tasks":               true,
+	"search_memories":          true,
+	"search_news":              true,
+	"list_strategies":          true,
+	"get_market_candles":       true,
+	"get_orderbook":            true,
+	"get_footprint":            true,
+	"get_macro_or_sec":         true,
+	"jev_evaluate":             true,
+	"call_external_mcp_tool":   true,
+	"get_world_intel":          true,
+	"get_prediction_markets":   true,
+	"list_event_triggers":      true,
+	"list_notifications":       true,
+	"list_lab_scripts":         true,
+	"run_fasedscript_backtest": true,
+	"run_four_gate_validation": true,
 }
 
 var mcpDraftTools = map[string]bool{
@@ -107,6 +110,12 @@ var mcpResources = []mcpResourceDescriptor{
 		URI:         "fased://automation/triggers",
 		Name:        "Automation triggers",
 		Description: "Configured event-driven triggers and current pause/kill-switch state.",
+		MimeType:    "application/json",
+	},
+	{
+		URI:         "fased://lab/scripts",
+		Name:        "FasedScript library",
+		Description: "Built-in and custom FasedScript indicator/strategy definitions and tunable input bounds.",
 		MimeType:    "application/json",
 	},
 }
@@ -425,6 +434,8 @@ func readMCPResource(ctx context.Context, s *Store, uri string) (any, error) {
 		return map[string]any{"events": summary.Events, "clusters": summary.Clusters, "regionCounts": summary.RegionCounts, "count": len(summary.Events), "untrusted": true}, nil
 	case "fased://automation/triggers":
 		return toolListEventTriggers(ctx, s, "", []byte(`{}`))
+	case "fased://lab/scripts":
+		return toolListLabScripts(ctx, s, "", []byte(`{}`))
 	default:
 		return nil, errors.New("unknown MCP resource uri")
 	}

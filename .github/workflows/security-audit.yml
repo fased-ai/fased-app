@@ -68,7 +68,9 @@ jobs:
             "./internal/mcpclient:FuzzMCPClientJSONRPC" \
             "./internal/worldintel:FuzzWorldIntelParsers" \
             "./internal/automation:FuzzAutomationInputs" \
-            "./internal/telegram:FuzzTelegramUpdateParser"; do
+            "./internal/telegram:FuzzTelegramUpdateParser" \
+            "./internal/fasedscript:FuzzFasedScriptCompileAndEval" \
+            "./internal/quantlab:FuzzQuantLabInputs"; do
             pkg="${target%%:*}"
             fn="${target##*:}"
             echo "=== Fuzzing ${pkg} :: ${fn} (${FUZZ_TIME}) ==="

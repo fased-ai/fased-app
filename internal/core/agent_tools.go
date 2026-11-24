@@ -452,6 +452,59 @@ func agentV2ToolRegistry() []agentToolEntry {
 		},
 		{
 			spec: AgentToolSpec{
+				Name:        "list_lab_scripts",
+				Tier:        toolTierRead,
+				Description: "List built-in and custom FasedScript indicator/strategy definitions and tunable input bounds in QuantLab.",
+				Parameters: map[string]any{
+					"type":       "object",
+					"properties": map[string]any{},
+				},
+			},
+			execute: toolListLabScripts,
+		},
+		{
+			spec: AgentToolSpec{
+				Name:        "run_fasedscript_backtest",
+				Tier:        toolTierRead,
+				Description: "Run a causal next-bar-open FasedScript backtest with fee and slippage simulation (read-only / paper metrics only).",
+				Parameters: map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"scriptId": map[string]any{"type": "string", "description": "Stored FasedScript ID (e.g. ema-rsi-trend)."},
+						"source":   map[string]any{"type": "string", "description": "Optional inline FasedScript source to evaluate."},
+						"venue":    map[string]any{"type": "string", "description": "Venue slug (default hyperliquid)."},
+						"symbol":   map[string]any{"type": "string", "description": "Symbol (default BTC)."},
+						"interval": map[string]any{"type": "string", "description": "Candle interval (1m, 5m, 15m, 1h, 4h, 1d)."},
+						"limit":    map[string]any{"type": "integer", "description": "Candle count (60-2000, default 400)."},
+					},
+				},
+			},
+			execute: toolRunFasedScriptBacktest,
+		},
+		{
+			spec: AgentToolSpec{
+				Name:        "run_four_gate_validation",
+				Tier:        toolTierRead,
+				Description: "Run deterministic 4-Gate validation (plateau sweep, 1000x bar permutation, 3-fold walk-forward + holdout, 200x WF permutation) for Paper/Shadow readiness.",
+				Parameters: map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"scriptId":       map[string]any{"type": "string", "description": "Stored FasedScript ID (e.g. ema-rsi-trend)."},
+						"source":         map[string]any{"type": "string", "description": "Optional inline FasedScript source to validate."},
+						"venue":          map[string]any{"type": "string", "description": "Venue slug (default hyperliquid)."},
+						"symbol":         map[string]any{"type": "string", "description": "Symbol (default BTC)."},
+						"interval":       map[string]any{"type": "string", "description": "Candle interval."},
+						"limit":          map[string]any{"type": "integer", "description": "Candle count (60-2000)."},
+						"seed":           map[string]any{"type": "integer", "description": "Deterministic PRNG seed."},
+						"permutations":   map[string]any{"type": "integer", "description": "Gate 2 permutation count (50-1000)."},
+						"wfPermutations": map[string]any{"type": "integer", "description": "Gate 4 permutation count (25-200)."},
+					},
+				},
+			},
+			execute: toolRunFourGateValidation,
+		},
+		{
+			spec: AgentToolSpec{
 				Name:        "delegate_to_agent",
 				Tier:        toolTierRead,
 				Description: "Delegate a read-only research or analysis subtask to another workspace agent profile and return its concise synthesis without mutating thread messages or running action tools.",

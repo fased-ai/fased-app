@@ -712,3 +712,33 @@ func TestNativeAutomationRoutesAndSSE(t *testing.T) {
 		t.Fatalf("desktop automation SSE passthrough failed: code=%d flushed=%v body=%q", rec.Code, rec.Flushed, rec.Body.String())
 	}
 }
+
+func TestNativeQuantLabRoutes(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		method string
+		url    string
+		want   bool
+	}{
+		{http.MethodGet, "http://wails.localhost/api/v1/lab/scripts", true},
+		{http.MethodPut, "http://wails.localhost/api/v1/lab/scripts", true},
+		{http.MethodDelete, "http://wails.localhost/api/v1/lab/scripts/custom-1", true},
+		{http.MethodDelete, "http://wails.localhost/api/v1/lab/scripts/bad/path", false},
+		{http.MethodPost, "http://wails.localhost/api/v1/lab/evaluate", true},
+		{http.MethodPost, "http://wails.localhost/api/v1/lab/backtest", true},
+		{http.MethodPost, "http://wails.localhost/api/v1/lab/validate", true},
+		{http.MethodGet, "http://wails.localhost/api/v1/lab/runs?limit=25", true},
+		{http.MethodGet, "http://wails.localhost/api/v1/lab/runs?evil=1", false},
+		{http.MethodGet, "http://wails.localhost/api/v1/lab/runs/run-123", true},
+		{http.MethodPost, "http://wails.localhost/api/v1/lab/runs/run-123", false},
+	}
+	for _, tc := range cases {
+		req := httptest.NewRequest(tc.method, tc.url, nil)
+		if got := PublicRequestAllowed(req); got != tc.want {
+			t.Fatalf("PublicRequestAllowed(%s %s) = %v, want %v", tc.method, tc.url, got, tc.want)
+		}
+	}
+	if RequestBodyLimit("/api/v1/lab/scripts") != 64*1024 || responseLimit("/api/v1/lab/validate") != 2*1024*1024 {
+		t.Fatal("expected 64 KiB request limit and 2 MiB response limit on /api/v1/lab routes")
+	}
+}
