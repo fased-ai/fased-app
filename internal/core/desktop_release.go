@@ -2,8 +2,10 @@ package core
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"runtime"
@@ -23,6 +25,7 @@ const (
 	desktopReleaseLatestPathPrefix    = "/fased-ai/fased-app/releases/tag/"
 	desktopReleaseCacheTTL            = 60 * time.Second
 	desktopReleaseRequestTimeout      = 12 * time.Second
+	desktopReleaseMaxURLBytes         = 4096
 )
 
 var errDesktopManifestNotPublished = errors.New("desktop release manifest not published")
@@ -132,7 +135,9 @@ func fetchPublicDesktopRelease(
 	checkedAt time.Time,
 ) (DesktopReleaseCheckView, error) {
 	if rt == nil {
-		rt = newPublicNewsTransport()
+		drt := newDesktopReleaseTransport()
+		defer drt.transport.CloseIdleConnections()
+		rt = drt
 	}
 	if latestURL == "" {
 		latestURL = defaultDesktopReleasesLatestURL
@@ -280,6 +285,114 @@ func canonicalSemverTriplet(raw string) bool {
 	return true
 }
 
+func allowedDesktopReleaseHost(rawHost string) bool {
+	if rawHost == "" || strings.HasSuffix(rawHost, ".") || len(rawHost) > 253 {
+		return false
+	}
+	host := strings.ToLower(rawHost)
+	if net.ParseIP(host) != nil {
+		return false
+	}
+	for _, label := range strings.Split(host, ".") {
+		if len(label) == 0 || len(label) > 63 || label[0] == '-' || label[len(label)-1] == '-' {
+			return false
+		}
+		for _, c := range label {
+			if !(c >= 'a' && c <= 'z' || c >= '0' && c <= '9' || c == '-') {
+				return false
+			}
+		}
+	}
+	return host == "github.com" || host == "githubusercontent.com" || strings.HasSuffix(host, ".githubusercontent.com")
+}
+
+func validateDesktopReleaseRequestURL(u *url.URL) error {
+	if u == nil || u.Scheme != "https" || u.Opaque != "" || u.User != nil || u.Fragment != "" || u.RawFragment != "" {
+		return errors.New("desktop release HTTPS URL required")
+	}
+	if p := u.Port(); p != "" && p != "443" {
+		return errors.New("desktop release port refused")
+	}
+	raw := u.String()
+	if raw == "" || len(raw) > desktopReleaseMaxURLBytes || strings.ContainsAny(raw, " \t\r\n") {
+		return errors.New("desktop release URL refused")
+	}
+	if !allowedDesktopReleaseHost(u.Hostname()) {
+		return errors.New("desktop release host refused")
+	}
+	return nil
+}
+
+func dialPublicDesktopRelease(ctx context.Context, network, address string, lookup rpcLookup, dial rpcDial) (net.Conn, error) {
+	host, port, err := net.SplitHostPort(address)
+	if err != nil || port != "443" || network != "tcp" || !allowedDesktopReleaseHost(host) {
+		return nil, errors.New("desktop release destination refused")
+	}
+	ips, err := lookup(ctx, "ip", host)
+	if err != nil || len(ips) == 0 || len(ips) > 32 {
+		return nil, errors.New("desktop release DNS unavailable")
+	}
+	for _, ip := range ips {
+		if !newsPublicIP(ip) {
+			return nil, errors.New("desktop release destination refused")
+		}
+	}
+	targets := orderPublicRPCTargets(ips)
+	for _, ip := range targets {
+		if ctx.Err() != nil {
+			break
+		}
+		attemptCtx := ctx
+		var cancel context.CancelFunc
+		if len(targets) > 1 {
+			attemptCtx, cancel = context.WithTimeout(ctx, 2*time.Second)
+		}
+		conn, dialErr := dial(attemptCtx, network, net.JoinHostPort(ip.String(), port))
+		if cancel != nil {
+			cancel()
+		}
+		if dialErr == nil {
+			return conn, nil
+		}
+		if ctx.Err() != nil {
+			break
+		}
+	}
+	return nil, errors.New("desktop release connection failed")
+}
+
+type desktopReleaseTransport struct {
+	transport *http.Transport
+}
+
+func newDesktopReleaseTransport() *desktopReleaseTransport {
+	d := &net.Dialer{Timeout: 5 * time.Second}
+	return &desktopReleaseTransport{
+		transport: &http.Transport{
+			Proxy:                  nil,
+			DisableKeepAlives:      true,
+			DisableCompression:     false,
+			MaxResponseHeaderBytes: 32 << 10,
+			TLSClientConfig: &tls.Config{
+				MinVersion:       tls.VersionTLS12,
+				CurvePreferences: []tls.CurveID{tls.X25519, tls.CurveP256, tls.CurveP384},
+			},
+			TLSHandshakeTimeout:   5 * time.Second,
+			ResponseHeaderTimeout: 8 * time.Second,
+			DialContext: func(ctx context.Context, network, address string) (net.Conn, error) {
+				return dialPublicDesktopRelease(ctx, network, address, net.DefaultResolver.LookupNetIP, d.DialContext)
+			},
+		},
+	}
+}
+
+func (t *desktopReleaseTransport) RoundTrip(r *http.Request) (*http.Response, error) {
+	if r == nil || r.Method != http.MethodGet || validateDesktopReleaseRequestURL(r.URL) != nil || (r.Host != "" && !strings.EqualFold(r.Host, r.URL.Host)) || len(r.Header.Values("Authorization")) != 0 || len(r.Header.Values("Cookie")) != 0 {
+		return nil, errors.New("desktop release request refused")
+	}
+	return t.transport.RoundTrip(r)
+}
+
 func allowedDesktopDownloadURL(u, base *url.URL) bool {
 	if u == nil || u.User != nil {
 		return false
@@ -293,8 +406,7 @@ func allowedDesktopDownloadURL(u, base *url.URL) bool {
 	if p := u.Port(); p != "" && p != "443" {
 		return false
 	}
-	host := strings.ToLower(strings.TrimSuffix(u.Hostname(), "."))
-	return host == "github.com" || host == "githubusercontent.com" || strings.HasSuffix(host, ".githubusercontent.com")
+	return allowedDesktopReleaseHost(u.Hostname())
 }
 
 func compareInstalledDesktopVersion(installedVersion string, manifest update.DesktopManifest) (bool, error) {

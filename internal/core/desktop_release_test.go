@@ -3,8 +3,11 @@ package core
 import (
 	"context"
 	"encoding/json"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
+	"net/url"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -82,8 +85,13 @@ func TestFetchPublicDesktopReleaseAndFiltering(t *testing.T) {
 		case "/fased-ai/fased-app/releases/latest":
 			http.Redirect(w, r, "/fased-ai/fased-app/releases/tag/v0.1.37", http.StatusFound)
 		case "/fased-ai/fased-app/releases/download/v0.1.37-desktop/desktop-release-manifest.json":
-			http.Redirect(w, r, "/cdn/v0.1.37-desktop/desktop-release-manifest.json", http.StatusFound)
+			presignedQuery := "?sp=r&sv=2018-11-09&sr=b&sig=" + strings.Repeat("a", 256) + "&jwt=" + strings.Repeat("b", 400)
+			http.Redirect(w, r, "/cdn/v0.1.37-desktop/desktop-release-manifest.json"+presignedQuery, http.StatusFound)
 		case "/cdn/v0.1.37-desktop/desktop-release-manifest.json":
+			if !strings.Contains(r.URL.RawQuery, "jwt=") || len(r.URL.RawQuery) < 650 {
+				http.Error(w, "missing presigned query", http.StatusBadRequest)
+				return
+			}
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write(sampleDesktopManifestJSON(t, "0.1.37", false))
 		default:
@@ -242,5 +250,112 @@ func TestDesktopReleaseHTTPEndpointAuthAndCache(t *testing.T) {
 	h2.ServeHTTP(w, req404)
 	if w.Code != 404 {
 		t.Fatalf("expected 404 when manifest unpublished, got %d", w.Code)
+	}
+}
+
+func TestDesktopReleaseTransportPresignedRedirectAndSSRF(t *testing.T) {
+	t.Parallel()
+
+	presignedRaw := "https://release-assets.githubusercontent.com/github-production-release-asset/1426211857/file?sp=r&sv=2018-11-09&sr=b&rscd=attachment&sig=" +
+		strings.Repeat("a", 256) + "&jwt=" + strings.Repeat("b", 400)
+	if len(presignedRaw) <= 750 {
+		t.Fatalf("expected presigned URL >750 bytes, got %d", len(presignedRaw))
+	}
+	presignedURL, err := url.Parse(presignedRaw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := validateDesktopReleaseRequestURL(presignedURL); err != nil {
+		t.Fatalf("expected valid presigned GitHub asset redirect URL, got error: %v", err)
+	}
+
+	rejectedURLs := []string{
+		"http://github.com/fased-ai/fased-app/releases/latest",
+		"https://github.com:8443/fased-ai/fased-app/releases/latest",
+		"https://user:pass@github.com/fased-ai/fased-app/releases/latest",
+		"https://github.com/fased-ai/fased-app/releases/latest#frag",
+		"https://github.com./fased-ai/fased-app/releases/latest",
+		"https://127.0.0.1/fased-ai/fased-app/releases/latest",
+		"https://[::1]/fased-ai/fased-app/releases/latest",
+		"https://evil.example/manifest.json",
+		"https://github.com.evil.example/manifest.json",
+		"https://github.com.invalid/manifest.json",
+		"https://release-assets.githubusercontent.com/" + strings.Repeat("a", desktopReleaseMaxURLBytes),
+	}
+	for _, raw := range rejectedURLs {
+		u, parseErr := url.Parse(raw)
+		if parseErr != nil {
+			continue
+		}
+		if err := validateDesktopReleaseRequestURL(u); err == nil {
+			t.Fatalf("expected %q to be rejected by validateDesktopReleaseRequestURL", raw)
+		}
+	}
+
+	drt := newDesktopReleaseTransport()
+	defer drt.transport.CloseIdleConnections()
+
+	postReq := httptest.NewRequest(http.MethodPost, presignedRaw, nil)
+	if _, err := drt.RoundTrip(postReq); err == nil {
+		t.Fatal("expected POST request to be refused")
+	}
+	authReq := httptest.NewRequest(http.MethodGet, presignedRaw, nil)
+	authReq.Header.Set("Authorization", "Bearer secret")
+	if _, err := drt.RoundTrip(authReq); err == nil {
+		t.Fatal("expected Authorization header to be refused")
+	}
+	cookieReq := httptest.NewRequest(http.MethodGet, presignedRaw, nil)
+	cookieReq.Header.Set("Cookie", "sid=secret")
+	if _, err := drt.RoundTrip(cookieReq); err == nil {
+		t.Fatal("expected Cookie header to be refused")
+	}
+
+	neverDial := func(context.Context, string, string) (net.Conn, error) {
+		t.Fatal("dial should not be called for refused destination")
+		return nil, nil
+	}
+	if _, err := dialPublicDesktopRelease(t.Context(), "tcp", "github.com:8443", nil, neverDial); err == nil {
+		t.Fatal("expected non-443 port to be refused")
+	}
+	if _, err := dialPublicDesktopRelease(t.Context(), "tcp", "evil.example:443", nil, neverDial); err == nil {
+		t.Fatal("expected untrusted host to be refused")
+	}
+
+	disallowedIPs := []string{
+		"127.0.0.1",
+		"10.0.0.1",
+		"100.64.0.1",
+		"169.254.169.254",
+		"::1",
+		"fd00::1",
+	}
+	pubIP := netip.MustParseAddr("140.82.112.4")
+	for _, rawIP := range disallowedIPs {
+		badIP := netip.MustParseAddr(rawIP)
+		lookupMixed := func(context.Context, string, string) ([]netip.Addr, error) {
+			return []netip.Addr{pubIP, badIP}, nil
+		}
+		if _, err := dialPublicDesktopRelease(t.Context(), "tcp", "release-assets.githubusercontent.com:443", lookupMixed, neverDial); err == nil {
+			t.Fatalf("expected DNS answer containing non-public IP %s to fail", rawIP)
+		}
+	}
+
+	var dialed []string
+	c1, c2 := net.Pipe()
+	defer c1.Close()
+	defer c2.Close()
+	lookupPublic := func(context.Context, string, string) ([]netip.Addr, error) {
+		return []netip.Addr{netip.MustParseAddr("185.199.108.133"), netip.MustParseAddr("2606:50c0:8000::154")}, nil
+	}
+	dialOK := func(_ context.Context, _ string, addr string) (net.Conn, error) {
+		dialed = append(dialed, addr)
+		return c1, nil
+	}
+	conn, err := dialPublicDesktopRelease(t.Context(), "tcp", "release-assets.githubusercontent.com:443", lookupPublic, dialOK)
+	if err != nil {
+		t.Fatalf("expected public IPv4/IPv6 dial to succeed, got %v", err)
+	}
+	if conn != c1 || len(dialed) != 1 || dialed[0] != "185.199.108.133:443" {
+		t.Fatalf("unexpected dial result: conn=%v dialed=%v", conn != nil, dialed)
 	}
 }
