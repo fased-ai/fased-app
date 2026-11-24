@@ -472,7 +472,7 @@ func (s *codexAppServerSession) initialize(ctx context.Context) error {
 	initResp, err := s.call(ctx, "initialize", map[string]any{
 		"clientInfo": map[string]any{
 			"name":    "fased",
-			"version": "0.1.36",
+			"version": Version,
 		},
 	}, nil)
 	if err != nil {

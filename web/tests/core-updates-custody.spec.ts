@@ -98,6 +98,79 @@ test("Updates keeps manual and automatic preferences without activating releases
   ).toBe("02:00");
 });
 
+test("Updates checks read-only desktop release manifest when controller is unavailable", async ({
+  page,
+}) => {
+  await page.goto(url);
+  const claim = JSON.parse(
+    await readFile(join(dir, "claim-code.json"), "utf8"),
+  );
+  await openOwnerSetup(page, claim.code);
+  await revealControl(page, page.getByLabel("Create owner password"), "");
+  await page.getByLabel("Create owner password").fill(fixturePassword);
+  await page.getByRole("button", { name: "Claim workspace" }).click();
+  await expect(
+    page.getByRole("button", { name: "Sign out", exact: true }),
+  ).toBeVisible();
+
+  await page.route("**/api/v1/updates/desktop-release", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        installedVersion: "0.1.36",
+        latestVersion: "0.1.37",
+        releaseTag: "v0.1.37-desktop",
+        releaseUrl:
+          "https://github.com/fased-ai/fased-app/releases/tag/v0.1.37-desktop",
+        updateAvailable: true,
+        signed: false,
+        platform: "linux",
+        arch: "amd64",
+        assets: [
+          {
+            name: "fased-app-0.1.37-linux-amd64.AppImage",
+            kind: "desktop",
+            os: "linux",
+            arch: "amd64",
+            url: "https://github.com/fased-ai/fased-app/releases/download/v0.1.37-desktop/fased-app-0.1.37-linux-amd64.AppImage",
+            sha256: "b".repeat(64),
+            bytes: 55_900_000,
+          },
+        ],
+        checkedAt: 1795400000,
+      }),
+    });
+  });
+
+  await page.goto(url + "/#settings");
+  const panel = page.getByRole("region", { name: "Updates", exact: true });
+  await expect(panel).toContainText("Release channel unavailable");
+  await panel
+    .getByRole("button", { name: "Check desktop release", exact: true })
+    .click();
+
+  await expect(panel).toContainText("v0.1.37");
+  await expect(panel).toContainText("Update available");
+  await expect(panel).toContainText("Unsigned");
+  await expect(
+    panel.getByRole("link", {
+      name: "fased-app-0.1.37-linux-amd64.AppImage",
+      exact: true,
+    }),
+  ).toHaveAttribute(
+    "href",
+    "https://github.com/fased-ai/fased-app/releases/download/v0.1.37-desktop/fased-app-0.1.37-linux-amd64.AppImage",
+  );
+  await expect(panel).toContainText("bbbbbbbbbbbb");
+  await expect(
+    panel.getByRole("link", { name: "Release notes", exact: true }),
+  ).toHaveAttribute(
+    "href",
+    "https://github.com/fased-ai/fased-app/releases/tag/v0.1.37-desktop",
+  );
+});
+
 test("update status shares UI and private CLI observations across pause, release and restart", async ({
   page,
 }) => {

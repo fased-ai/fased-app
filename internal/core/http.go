@@ -41,6 +41,7 @@ type HTTPHandler struct {
 	authSlots         chan struct{}
 	aiSlots           chan struct{}
 	privateProof      privateAccessProofCache
+	desktopRelease    desktopReleaseCache
 	limiter           auth.RateLimiter
 	loopbackPeerUID   func(client, server *net.TCPAddr) (int, bool, error)
 }
@@ -368,6 +369,9 @@ func (h *HTTPHandler) api(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		writeJSON(w, 200, h.store.ReadUpdateStatus(r.Context()))
+		return
+	case "/api/v1/updates/desktop-release":
+		h.desktopReleaseAPI(w, r)
 		return
 	case "/api/v1/updates/backup", "/api/v1/updates/recovery":
 		h.backupAPI(w, r, token)

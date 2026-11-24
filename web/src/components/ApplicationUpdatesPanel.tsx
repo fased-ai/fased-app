@@ -2,12 +2,17 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useCore } from "../core";
 import { useUI } from "../ui-preferences";
 import { Clock3 } from "../icons";
-import { Disclosure, ToggleSwitch } from "./shared";
+import { Badge, Disclosure, ToggleSwitch } from "./shared";
 import {
   applicationUpdateLabels,
   readApplicationUpdates,
   type ApplicationUpdateView,
 } from "../application-updates";
+import {
+  formatByteSize,
+  readDesktopReleaseCheck,
+  type DesktopReleaseCheckView,
+} from "../desktop-release";
 import type { UpdatePolicy } from "../update-preferences";
 import "../updates.css";
 export function ApplicationUpdatesPanel() {
@@ -19,6 +24,10 @@ export function ApplicationUpdatesPanel() {
   const [busy, setBusy] = useState(false);
   const [review, setReview] = useState<ApplicationUpdateView | null>(null);
   const [scheduleOpen, setScheduleOpen] = useState(false);
+  const [desktopRelease, setDesktopRelease] =
+    useState<DesktopReleaseCheckView | null>(null);
+  const [desktopReleaseError, setDesktopReleaseError] = useState("");
+  const [desktopReleaseBusy, setDesktopReleaseBusy] = useState(false);
   const epoch = useRef(0);
   const refresh = useCallback(async () => {
     const n = ++epoch.current;
@@ -40,11 +49,34 @@ export function ApplicationUpdatesPanel() {
   }, [request, core.instanceId]);
   useEffect(() => {
     if (core.mode === "ready") void refresh();
-    else setView(null);
+    else {
+      setView(null);
+      setDesktopRelease(null);
+      setDesktopReleaseError("");
+    }
     return () => {
       epoch.current++;
     };
   }, [core.mode, refresh]);
+  async function checkDesktopRelease() {
+    setDesktopReleaseBusy(true);
+    setDesktopReleaseError("");
+    try {
+      const checked = readDesktopReleaseCheck(
+        await request("updates/desktop-release"),
+      );
+      setDesktopRelease(checked);
+    } catch (e) {
+      setDesktopRelease(null);
+      setDesktopReleaseError(
+        e instanceof Error
+          ? e.message
+          : "Could not check desktop release feed.",
+      );
+    } finally {
+      setDesktopReleaseBusy(false);
+    }
+  }
   const phase = view?.operation.phase;
   const running = ["check-queued", "checking", "queued", "applying"].includes(
     phase ?? "",
@@ -159,11 +191,95 @@ export function ApplicationUpdatesPanel() {
                   )}
                 </p>
                 {!view.controllerAvailable && (
-                  <p className="subtle">
-                    {t(
-                      "Updates stay off until the trusted release channel is ready.",
-                    )}
-                  </p>
+                  <>
+                    <p className="subtle">
+                      {t(
+                        "Updates stay off until the trusted release channel is ready.",
+                      )}
+                    </p>
+                    <div className="desktop-release">
+                      <div className="desktop-release-head">
+                        <span>{t("Desktop release")}</span>
+                        <button
+                          type="button"
+                          className="secondary"
+                          disabled={desktopReleaseBusy || busy}
+                          onClick={() => void checkDesktopRelease()}
+                        >
+                          {desktopReleaseBusy
+                            ? t("Checking…")
+                            : t("Check desktop release")}
+                        </button>
+                      </div>
+                      {desktopReleaseError && (
+                        <p role="alert">{t(desktopReleaseError)}</p>
+                      )}
+                      {desktopRelease && (
+                        <>
+                          <div className="desktop-release-head">
+                            <span>
+                              {t("Latest release")}: v
+                              {desktopRelease.latestVersion}
+                            </span>
+                            <div className="desktop-release-badges">
+                              <Badge
+                                tone={
+                                  desktopRelease.updateAvailable
+                                    ? "lime"
+                                    : "muted"
+                                }
+                              >
+                                {t(
+                                  desktopRelease.updateAvailable
+                                    ? "Update available"
+                                    : "Up to date",
+                                )}
+                              </Badge>
+                              {!desktopRelease.signed && (
+                                <Badge>{t("Unsigned")}</Badge>
+                              )}
+                            </div>
+                          </div>
+                          {desktopRelease.assets.length > 0 && (
+                            <ul
+                              className="desktop-release-assets"
+                              aria-label={t("Verified downloads")}
+                            >
+                              {desktopRelease.assets.map((asset) => (
+                                <li
+                                  key={asset.name}
+                                  className="desktop-release-asset"
+                                >
+                                  <a
+                                    href={asset.url}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                  >
+                                    {asset.name}
+                                  </a>
+                                  <span className="desktop-release-meta">
+                                    <span>{formatByteSize(asset.bytes)}</span>
+                                    <code title={asset.sha256}>
+                                      {asset.sha256.slice(0, 12)}…
+                                    </code>
+                                  </span>
+                                </li>
+                              ))}
+                            </ul>
+                          )}
+                          <div className="desktop-release-meta">
+                            <a
+                              href={desktopRelease.releaseUrl}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                            >
+                              {t("Release notes")}
+                            </a>
+                          </div>
+                        </>
+                      )}
+                    </div>
+                  </>
                 )}
                 {view.operation.failure && (
                   <p role="alert">{t(view.operation.failure)}</p>
