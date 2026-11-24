@@ -85,6 +85,8 @@ test("rendered install.ps1 pins desktop release URLs and SHA-256s for amd64 and 
     /Invoke-DetachedUninstall -BinaryPath \$AppBin -Arguments @\('uninstall'\)/,
   );
   assert.match(rendered, /Remove-Item -LiteralPath \$stageDir -Recurse -Force/);
+  assert.match(rendered, /\[switch\]\$Upgrade/);
+  assert.match(rendered, /\$installArgs \+= '--upgrade'/);
 });
 
 test("rendered install-cli.sh passes syntax checks, pins 4 Unix targets, and rejects tampering/bad options", () => {
@@ -175,6 +177,27 @@ test("rendered install-cli.sh passes syntax checks, pins 4 Unix targets, and rej
     "--prepare-host",
   ]);
   assert.equal(statusPrep.status, 1);
+
+  const connectUpgrade = spawnSync("bash", [
+    "-c",
+    rendered,
+    "install-cli.sh",
+    "--connect",
+    "--upgrade",
+  ]);
+  assert.equal(connectUpgrade.status, 1);
+  assert.match(connectUpgrade.stderr.toString(), /--upgrade/);
+
+  const statusUpgrade = spawnSync("bash", [
+    "-c",
+    rendered,
+    "install-cli.sh",
+    "--local",
+    "--status",
+    "--upgrade",
+  ]);
+  assert.equal(statusUpgrade.status, 1);
+  assert.match(rendered, /local_args\+=\(--upgrade\)/);
 });
 
 test("buildDesktopReleaseManifest matches update.ParseDesktopManifest structure", () => {

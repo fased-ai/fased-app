@@ -567,3 +567,58 @@ func TestApplicationUpdateRefusesMutationResponseWithoutInstance(t *testing.T) {
 		t.Fatal("missing update response identity was accepted or retried", err, mutations)
 	}
 }
+
+func TestApplicationUpdatesCheckFallsBackToDesktopReleaseFeedWhenControllerDisabled(t *testing.T) {
+	var hitDesktopFeed bool
+	var postCount int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost {
+			postCount++
+			http.Error(w, "unexpected post", http.StatusBadRequest)
+			return
+		}
+		switch r.URL.Path {
+		case "/api/v1/updates/application":
+			_ = json.NewEncoder(w).Encode(core.ApplicationUpdateView{
+				InstanceID:          "original",
+				ControllerAvailable: false,
+			})
+		case "/api/v1/updates/desktop-release":
+			hitDesktopFeed = true
+			_ = json.NewEncoder(w).Encode(core.DesktopReleaseCheckView{
+				InstalledVersion: "0.1.37",
+				LatestVersion:    "0.1.38",
+				ReleaseTag:       "v0.1.38-desktop",
+				ReleaseURL:       "https://github.com/fased-ai/fased-app/releases/tag/v0.1.38-desktop",
+				UpdateAvailable:  true,
+				Signed:           false,
+				Platform:         "darwin",
+				Arch:             "arm64",
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	client := &core.Client{Endpoint: core.Endpoint{URL: server.URL, InstanceID: "original"}, HTTP: server.Client()}
+	var out bytes.Buffer
+	if err := applicationUpdatesWithClient(t.Context(), client, "check", nil, &out, io.Discard); err != nil {
+		t.Fatalf("updates check desktop fallback failed: %v", err)
+	}
+	if !hitDesktopFeed || postCount != 0 {
+		t.Fatalf("expected GET /api/v1/updates/desktop-release without POST, hit=%v posts=%d", hitDesktopFeed, postCount)
+	}
+	var got core.DesktopReleaseCheckView
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("invalid desktop check JSON: %v\n%s", err, out.String())
+	}
+	if !got.UpdateAvailable || got.LatestVersion != "0.1.38" || got.ReleaseTag != "v0.1.38-desktop" {
+		t.Fatalf("unexpected desktop check output: %+v", got)
+	}
+
+	// apply must remain strictly refused when ControllerAvailable is false.
+	if err := applicationUpdatesWithClient(t.Context(), client, "apply", nil, io.Discard, io.Discard); err == nil {
+		t.Fatal("updates apply unexpectedly succeeded when controller was unavailable")
+	}
+}

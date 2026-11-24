@@ -332,3 +332,103 @@ func TestInstallHeadlessLinuxWithVerifiedSigner(t *testing.T) {
 		t.Fatalf("signer remained after uninstall: %v", err)
 	}
 }
+
+func TestUpgradeReplacesVerifiedFilesAndPreservesState(t *testing.T) {
+	p, engine := installFixture(t)
+	signerPath := filepath.Join(filepath.Dir(engine), "fased-signer")
+	if err := os.WriteFile(signerPath, []byte("signer-v1"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	v1EngineHash, err := digest(engine)
+	if err != nil {
+		t.Fatal(err)
+	}
+	v1SignerHash, err := digest(signerPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m1, err := Install(t.Context(), p, Options{
+		Engine:       engine,
+		EngineSHA256: v1EngineHash,
+		Signer:       signerPath,
+		SignerSHA256: v1SignerHash,
+		Location:     "local",
+	})
+	if err != nil {
+		t.Fatalf("initial install failed: %v", err)
+	}
+	stateFile := filepath.Join(p.Data, "core.sqlite")
+	if err = os.WriteFile(stateFile, []byte("owner-wallet-state"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	// Prepare v2 engine and omit signer to verify obsolete optional file removal too.
+	if err = os.WriteFile(engine, []byte("engine-v2-binary"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	v2EngineHash, err := digest(engine)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Default Upgrade: false must still refuse differing bundle.
+	if _, err = Install(t.Context(), p, Options{Engine: engine, EngineSHA256: v2EngineHash, Location: "local"}); err == nil {
+		t.Fatal("default Upgrade=false unexpectedly allowed in-place replacement")
+	}
+
+	// Mismatched location must be refused even with Upgrade=true.
+	if _, err = Install(t.Context(), p, Options{Engine: engine, EngineSHA256: v2EngineHash, Location: "remote", Upgrade: true}); err == nil {
+		t.Fatal("Upgrade=true allowed location switch")
+	}
+
+	// Verified Upgrade=true replaces engine, removes obsolete signer, and preserves data.
+	m2, err := Install(t.Context(), p, Options{Engine: engine, EngineSHA256: v2EngineHash, Location: "local", Upgrade: true})
+	if err != nil {
+		t.Fatalf("verified Upgrade=true failed: %v", err)
+	}
+	if m2.Phase != "ready" || m2.Files[engineName] != v2EngineHash || m2.Files["fased-signer"] != "" {
+		t.Fatalf("unexpected upgraded manifest: %+v", m2)
+	}
+	if m1.Files[engineName] == m2.Files[engineName] {
+		t.Fatal("engine digest did not change after upgrade")
+	}
+	if got, err := digest(filepath.Join(p.Root, engineName)); err != nil || got != v2EngineHash {
+		t.Fatalf("upgraded binary mismatch: got=%s err=%v", got, err)
+	}
+	if _, err := os.Stat(filepath.Join(p.Root, "fased-signer")); !os.IsNotExist(err) {
+		t.Fatalf("obsolete fased-signer was not removed on upgrade: %v", err)
+	}
+	if state, err := os.ReadFile(stateFile); err != nil || string(state) != "owner-wallet-state" {
+		t.Fatalf("instance data was altered during upgrade: %q err=%v", string(state), err)
+	}
+
+	// Resuming an interrupted preparing upgrade succeeds with Upgrade=true.
+	m2.Phase = "preparing"
+	if err = core.WritePrivateJSON(filepath.Join(p.Root, "install.json"), m2); err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(filepath.Join(p.Root, engineName), []byte("old-before-crash"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = Install(t.Context(), p, Options{Engine: engine, EngineSHA256: v2EngineHash, Location: "local", Upgrade: true}); err != nil {
+		t.Fatalf("resuming interrupted upgrade failed: %v", err)
+	}
+	if got, err := digest(filepath.Join(p.Root, engineName)); err != nil || got != v2EngineHash {
+		t.Fatalf("resumed upgrade binary mismatch: got=%s err=%v", got, err)
+	}
+
+	// Tampered installed binary must refuse subsequent upgrade.
+	if err = os.WriteFile(filepath.Join(p.Root, engineName), []byte("tampered-on-disk"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(engine, []byte("engine-v3-binary"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	v3Hash, err := digest(engine)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = Install(t.Context(), p, Options{Engine: engine, EngineSHA256: v3Hash, Location: "local", Upgrade: true}); err == nil {
+		t.Fatal("Upgrade=true accepted tampered existing installation")
+	}
+}

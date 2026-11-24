@@ -68,6 +68,7 @@ func hostCommand(args []string, out, errOut io.Writer) error {
 	nativeBundleSHA256 := f.String("native-bundle-sha256", "", "exact native companion inventory digest")
 	installRuntime := f.Bool("install-runtime", false, "authorize Ubuntu 24.04's OS package manager to install missing desktop runtime libraries")
 	prepareHost := f.Bool("prepare-host", false, "authorize Ubuntu OS prerequisites and the verified restrictive sandbox policy")
+	upgrade := f.Bool("upgrade", false, "replace an existing verified Local installation in place while preserving instance state")
 	if err = f.Parse(remaining); err != nil {
 		return err
 	}
@@ -120,6 +121,9 @@ func hostCommand(args []string, out, errOut io.Writer) error {
 	}
 	if *managedRemote && !*interactive {
 		*vps = true
+	}
+	if *upgrade && (command != "install" || *managedRemote || *vps) {
+		return errors.New("--upgrade is only supported for Local installation")
 	}
 	budget := 30 * time.Second
 	if command == "install" {
@@ -414,7 +418,7 @@ func hostCommand(args []string, out, errOut io.Writer) error {
 		if inventory.Files["fased-signer"].SHA256 != "" {
 			signerPath = filepath.Join(filepath.Dir(engine), "fased-signer")
 		}
-		m, err := localinstall.Install(ctx, paths, localinstall.Options{ApplicationSequence: sequence, ApplicationReleaseSHA256: release, Engine: engine, EngineSHA256: inventory.Files[localinstall.EngineName()].SHA256, Desktop: *desktop, DesktopSHA256: inventory.Files[localinstall.DesktopName()].SHA256, Signer: signerPath, SignerSHA256: inventory.Files["fased-signer"].SHA256, Listen: *listen, PublicOrigin: *origin, Start: *start, Autostart: *autostart, Location: installLocation(*vps)})
+		m, err := localinstall.Install(ctx, paths, localinstall.Options{ApplicationSequence: sequence, ApplicationReleaseSHA256: release, Engine: engine, EngineSHA256: inventory.Files[localinstall.EngineName()].SHA256, Desktop: *desktop, DesktopSHA256: inventory.Files[localinstall.DesktopName()].SHA256, Signer: signerPath, SignerSHA256: inventory.Files["fased-signer"].SHA256, Listen: *listen, PublicOrigin: *origin, Start: *start, Autostart: *autostart, Upgrade: *upgrade, Location: installLocation(*vps)})
 		if err != nil {
 			return err
 		}

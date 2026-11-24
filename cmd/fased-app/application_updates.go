@@ -153,6 +153,13 @@ func applicationUpdatesWithClient(ctx context.Context, c *core.Client, action st
 		return json.NewEncoder(out).Encode(v)
 	}
 	if !v.ControllerAvailable {
+		if action == "check" {
+			var dv core.DesktopReleaseCheckView
+			if e = c.Do(ctx, http.MethodGet, "/api/v1/updates/desktop-release", nil, &dv); e != nil {
+				return e
+			}
+			return json.NewEncoder(out).Encode(dv)
+		}
 		return errors.New("trusted release channel and installation controller are not configured; activation remains disabled")
 	}
 	command := core.ApplicationUpdateCommand{Action: action, Revision: v.Revision, PolicyRevision: v.PolicyRevision}

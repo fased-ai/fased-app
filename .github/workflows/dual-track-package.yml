@@ -1,6 +1,17 @@
 name: Dual-track desktop & CLI packages
 on:
   workflow_dispatch:
+    inputs:
+      release_version:
+        description: Optional X.Y.Z version override (defaults to release/ubuntu.json)
+        required: false
+        default: ""
+        type: string
+      publish_prerelease:
+        description: Publish assembled vX.Y.Z-desktop prerelease on main (default false)
+        required: false
+        default: false
+        type: boolean
 permissions:
   contents: read
 concurrency:
@@ -28,8 +39,10 @@ jobs:
       - name: Validate install entry scripts
         run: |
           /bin/bash -n install.sh install-cli.sh
-          node --test scripts/install-entry.test.mjs scripts/linux-desktop-package.test.mjs scripts/build-dual-track-cli.test.mjs scripts/signing-helpers.test.mjs scripts/smoke-dual-track-installers.test.mjs
+          node --test scripts/install-entry.test.mjs scripts/linux-desktop-package.test.mjs scripts/build-dual-track-cli.test.mjs scripts/signing-helpers.test.mjs scripts/smoke-dual-track-installers.test.mjs scripts/assemble-dual-track-release.test.mjs
       - name: Cross-build headless CLI archives and installers
+        env:
+          FASED_RELEASE_VERSION: ${{ inputs.release_version }}
         run: node scripts/build-dual-track-cli.mjs
       - uses: actions/upload-artifact@v4
         with:
@@ -74,9 +87,20 @@ jobs:
             sudo install -m 0755 /tmp/appimagetool /usr/local/bin/appimagetool
             rm -f /tmp/appimagetool
           fi
+      - name: Resolve release version
+        env:
+          INPUT_RELEASE_VERSION: ${{ inputs.release_version }}
+        run: |
+          node -e '
+            const fs = require("node:fs");
+            const v = (process.env.INPUT_RELEASE_VERSION || JSON.parse(fs.readFileSync("release/ubuntu.json", "utf8")).version || "").trim();
+            if (!/^[0-9]+\.[0-9]+\.[0-9]+$/.test(v)) throw new Error("Invalid release version: " + v);
+            fs.appendFileSync(process.env.GITHUB_ENV, `FASED_RELEASE_VERSION=${v}\n`);
+          '
       - run: go -C desktop mod verify
       - run: npm run build:desktop
-      - run: npm run build:core
+      - name: Build core binary with release version
+        run: node scripts/build-core.mjs --version=${{ env.FASED_RELEASE_VERSION }}
       - name: Linux desktop packaging unit checks
         if: runner.os == 'Linux'
         run: node --test scripts/linux-desktop-package.test.mjs
@@ -235,3 +259,68 @@ jobs:
           path: .evidence/dual-track-host-smoke-*.json
           include-hidden-files: true
           retention-days: 7
+
+  assemble-release:
+    needs: [cli-archives, desktop-installers, installer-host-smoke]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - uses: actions/download-artifact@v4
+        with:
+          name: fased-cli-archives
+          path: .evidence/dual-track-cli
+      - uses: actions/download-artifact@v4
+        with:
+          name: fased-desktop-ubuntu-24.04
+          path: .evidence/desktop-artifacts/ubuntu-24.04
+      - uses: actions/download-artifact@v4
+        with:
+          name: fased-desktop-macos-15
+          path: .evidence/desktop-artifacts/macos-15
+      - uses: actions/download-artifact@v4
+        with:
+          name: fased-desktop-windows-2025
+          path: .evidence/desktop-artifacts/windows-2025
+      - name: Assemble unified dual-track release directory
+        run: |
+          node scripts/assemble-dual-track-release.mjs \
+            --cli-dir .evidence/dual-track-cli \
+            --desktop-root .evidence/desktop-artifacts \
+            --out-dir .evidence/dual-track-release
+          (cd .evidence/dual-track-release && sha256sum --check SHA256SUMS.txt)
+      - uses: actions/upload-artifact@v4
+        with:
+          name: fased-dual-track-release
+          path: .evidence/dual-track-release/
+          retention-days: 14
+
+  publish-prerelease:
+    if: inputs.publish_prerelease == true && github.ref == 'refs/heads/main'
+    needs: [assemble-release]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: fased-dual-track-release
+          path: .evidence/dual-track-release
+      - name: Publish opt-in desktop companion prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          cd .evidence/dual-track-release
+          sha256sum --check SHA256SUMS.txt
+          TAG=$(node -e 'const m = JSON.parse(require("node:fs").readFileSync("desktop-release-manifest.json","utf8")); console.log(m.releaseTag);')
+          VER=$(node -e 'const m = JSON.parse(require("node:fs").readFileSync("desktop-release-manifest.json","utf8")); console.log(m.version);')
+          gh release create "$TAG" ./* \
+            --repo "${{ github.repository }}" \
+            --title "Fased ${VER} (Desktop & Cross-Platform CLI)" \
+            --notes "Assembled cross-platform CLI archives, native desktop installers, rendered install-cli.sh / install.ps1, desktop-release-manifest.json, and SHA256SUMS.txt." \
+            --prerelease --draft

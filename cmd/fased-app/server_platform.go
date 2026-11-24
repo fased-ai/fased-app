@@ -1,7 +1,9 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"crypto/rand"
 	"encoding/binary"
 	"encoding/xml"
 	"errors"
@@ -14,6 +16,9 @@ import (
 	"strconv"
 	"strings"
 	"unicode/utf16"
+
+	"github.com/fased-ai/fased-app/internal/core"
+	"github.com/fased-ai/fased-app/internal/providersecrets"
 )
 
 const serverLaunchdLabel = "org.fased.server"
@@ -301,19 +306,71 @@ func launchdDomain() string {
 	return "gui/" + strconv.Itoa(os.Getuid())
 }
 
+func provisionServerUserCredential(ctx context.Context, absData string) (string, error) {
+	if runtime.GOOS != "linux" || os.Geteuid() == 0 {
+		return "", errors.New("systemd user credentials require a non-root Linux host")
+	}
+	credDir := filepath.Join(absData, "server")
+	if err := core.EnsurePrivateDirectory(credDir); err != nil {
+		return "", err
+	}
+	credPath := filepath.Join(credDir, providersecrets.CredentialName+".cred")
+	if info, err := os.Lstat(credPath); err == nil && info.Mode().IsRegular() && info.Size() > 0 && info.Mode().Perm()&0077 == 0 {
+		return credPath, nil
+	}
+	bin, err := exec.LookPath("systemd-creds")
+	if err != nil {
+		return "", err
+	}
+	key := make([]byte, 32)
+	if _, err = rand.Read(key); err != nil {
+		return "", err
+	}
+	defer clear(key)
+	tmp, err := os.CreateTemp(credDir, ".cred-*")
+	if err != nil {
+		return "", err
+	}
+	tmpPath := tmp.Name()
+	_ = tmp.Close()
+	_ = os.Chmod(tmpPath, 0600)
+	defer func() {
+		if tmpPath != "" {
+			_ = os.Remove(tmpPath)
+		}
+	}()
+	cmd := exec.CommandContext(ctx, bin, "encrypt", "--user", "--name="+providersecrets.CredentialName, "-", tmpPath)
+	cmd.Stdin = bytes.NewReader(key)
+	if out, runErr := cmd.CombinedOutput(); runErr != nil {
+		return "", fmt.Errorf("systemd-creds encrypt failed: %s: %w", strings.TrimSpace(string(out)), runErr)
+	}
+	if err = os.Chmod(tmpPath, 0600); err != nil {
+		return "", err
+	}
+	if err = os.Rename(tmpPath, credPath); err != nil {
+		return "", err
+	}
+	tmpPath = ""
+	return credPath, nil
+}
+
 func enableAndStartServerService(ctx context.Context, manager, unitPath string) error {
 	switch manager {
 	case "systemd":
 		if err := serverSystemctl(ctx, "daemon-reload"); err != nil {
 			return err
 		}
-		return serverSystemctl(ctx, "enable", "--now", "fased-server.service")
+		if err := serverSystemctl(ctx, "enable", "fased-server.service"); err != nil {
+			return err
+		}
+		return serverSystemctl(ctx, "restart", "fased-server.service")
 	case "launchd":
 		dom := launchdDomain()
 		_ = serverLaunchctl(ctx, "bootout", dom+"/"+serverLaunchdLabel)
 		return serverLaunchctl(ctx, "bootstrap", dom, unitPath)
 	case "windows":
 		task := serverWindowsTaskName()
+		_ = serverSchtasks(ctx, "/End", "/TN", task)
 		if err := serverSchtasks(ctx, "/Create", "/TN", task, "/XML", unitPath, "/F"); err != nil {
 			return err
 		}
