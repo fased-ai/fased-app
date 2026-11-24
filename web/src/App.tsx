@@ -30,6 +30,11 @@ const WorldIntelWorkspace = lazy(() =>
     default: m.WorldIntelWorkspace,
   })),
 );
+const QuantLabWorkspace = lazy(() =>
+  import("./pages/QuantLabWorkspace").then((m) => ({
+    default: m.QuantLabWorkspace,
+  })),
+);
 function WorkspaceShell() {
   const { t: uiText } = useUI();
   const { preferences, t } = useUI();
@@ -68,6 +73,7 @@ function WorkspaceShell() {
       overview: t("Dashboard"),
       trade: t("Trade"),
       intel: t("World Intel"),
+      lab: t("Quant Lab"),
       agents: t("Agents"),
       wallets: t("Wallets"),
       terminals: t("Terminals"),
@@ -127,6 +133,10 @@ function WorkspaceShell() {
             ) : section === "intel" ? (
               <Suspense fallback={<p role="status">{uiText("Loading")}</p>}>
                 <WorldIntelWorkspace />
+              </Suspense>
+            ) : section === "lab" ? (
+              <Suspense fallback={<p role="status">{uiText("Loading")}</p>}>
+                <QuantLabWorkspace />
               </Suspense>
             ) : section === "wallets" ? (
               <Wallets />

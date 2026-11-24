@@ -24,12 +24,13 @@ describe("Dashboard layout", () => {
     ).toEqual([{ id: "tasks", size: "small" }]);
     expect(
       parseDashboard(
-        '{"version":1,"widgets":[{"id":"intel","size":"wide"},{"id":"predictions","size":"small"},{"id":"alerts","size":"small"}]}',
+        '{"version":1,"widgets":[{"id":"intel","size":"wide"},{"id":"predictions","size":"small"},{"id":"alerts","size":"small"},{"id":"desk","size":"small"}]}',
       ).widgets,
     ).toEqual([
       { id: "intel", size: "wide" },
       { id: "predictions", size: "small" },
       { id: "alerts", size: "small" },
+      { id: "desk", size: "small" },
     ]);
   });
   it("recovers malformed or unsupported preferences without changing defaults", () => {
@@ -40,12 +41,13 @@ describe("Dashboard layout", () => {
     expect(baseline).toEqual(defaultDashboard());
     expect(
       parseDashboard(
-        '{"version":1,"widgets":[{"id":"intel","size":"wide"},{"id":"predictions","size":"small"},{"id":"alerts","size":"small"}]}',
+        '{"version":1,"widgets":[{"id":"intel","size":"wide"},{"id":"predictions","size":"small"},{"id":"alerts","size":"small"},{"id":"desk","size":"small"}]}',
       ).widgets,
     ).toEqual([
       { id: "intel", size: "wide" },
       { id: "predictions", size: "small" },
       { id: "alerts", size: "small" },
+      { id: "desk", size: "small" },
     ]);
   });
 });

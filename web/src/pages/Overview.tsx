@@ -13,6 +13,7 @@ import {
   Bell,
   Bot,
   Clock3,
+  FlaskConical,
   Globe2,
   History,
   LayoutDashboard,
@@ -54,6 +55,12 @@ import {
   type AutomationControlState,
   type NotificationItem,
 } from "../automation";
+import {
+  deskStatusLabel,
+  formatCurrencyUSD,
+  getDeskState,
+  type DeskSnapshot,
+} from "../quantlab-desk";
 
 const icons = {
   agents: Bot,
@@ -62,6 +69,7 @@ const icons = {
   intel: Globe2,
   predictions: TrendingUp,
   alerts: Bell,
+  desk: FlaskConical,
   wallets: Wallet,
   activity: History,
   mining: Pickaxe,
@@ -75,6 +83,7 @@ const paths = {
   intel: "intel",
   predictions: "intel",
   alerts: "agents/tasks",
+  desk: "lab",
   wallets: "wallets/overview",
   activity: "activity",
   mining: "terminals/satcoin",
@@ -115,9 +124,11 @@ export function Overview() {
   );
   const [alertItems, setAlertItems] = useState<NotificationItem[]>([]);
   const [alertUnread, setAlertUnread] = useState(0);
+  const [deskSnap, setDeskSnap] = useState<DeskSnapshot | null>(null);
   const hasIntelWidget = layout.widgets.some((w) => w.id === "intel");
   const hasPredWidget = layout.widgets.some((w) => w.id === "predictions");
   const hasAlertsWidget = layout.widgets.some((w) => w.id === "alerts");
+  const hasDeskWidget = layout.widgets.some((w) => w.id === "desk");
   useEffect(() => {
     if (core.mode !== "ready" || !hasAlertsWidget) return;
     let cancelled = false;
@@ -160,6 +171,18 @@ export function Overview() {
       cancelled = true;
     };
   }, [core, hasPredWidget]);
+  useEffect(() => {
+    if (core.mode !== "ready" || !hasDeskWidget) return;
+    let cancelled = false;
+    void getDeskState(core)
+      .then((res) => {
+        if (!cancelled) setDeskSnap(res);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [core, hasDeskWidget]);
   const board = useRef<HTMLDivElement>(null);
   const dragging = useRef<WidgetID | undefined>(undefined);
   function closeMenus() {
@@ -563,6 +586,28 @@ export function Overview() {
               </button>
             </div>
           )}
+        </div>
+      );
+    }
+    if (id === "desk") {
+      const status = deskStatusLabel(deskSnap?.control);
+      return (
+        <div className="dashboard-rows" data-testid="overview-desk-widget">
+          <div className="dashboard-row">
+            <span className="dashboard-copy">
+              <strong>{t(status)}</strong>
+              <small>
+                {`${deskSnap?.limits.mode ?? "shadow"} · ${formatCurrencyUSD(deskSnap?.account.equityUsd ?? 100000)}`}
+              </small>
+            </span>
+            <span className="mono">{`${deskSnap?.account.openPositions ?? 0}/${deskSnap?.account.pendingTickets ?? 0}`}</span>
+          </div>
+          <div className="dashboard-empty">
+            <button className="text-button" onClick={() => open(paths.desk)}>
+              {t("Quant Lab")}
+              <ArrowRight size={14} />
+            </button>
+          </div>
         </div>
       );
     }
