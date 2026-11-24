@@ -10,7 +10,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"net/url"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -77,12 +76,7 @@ type Store struct {
 }
 
 func sqliteDSN(dbPath string) string {
-	u := url.URL{
-		Scheme:   "file",
-		Path:     filepath.ToSlash(dbPath),
-		RawQuery: "_pragma=busy_timeout(5000)&_pragma=foreign_keys(1)&_pragma=synchronous(FULL)",
-	}
-	return u.String()
+	return sqliteFileURI(dbPath, "_pragma=busy_timeout(5000)&_pragma=foreign_keys(1)&_pragma=synchronous(FULL)")
 }
 
 func OpenStore(dir string) (_ *Store, resultErr error) {

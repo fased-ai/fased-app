@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"errors"
-	"net/url"
 	"os"
 	"path/filepath"
 	"time"
@@ -39,11 +38,7 @@ func IssueMaintenanceSession(ctx context.Context, dir, expected string) (string,
 	if err = protectPath(path, info); err != nil {
 		return "", err
 	}
-	uri := url.URL{Scheme: "file", Path: path}
-	query := uri.Query()
-	query.Set("mode", "rw")
-	uri.RawQuery = query.Encode()
-	db, err := sql.Open("sqlite", uri.String())
+	db, err := sql.Open("sqlite", sqliteFileURI(path, "mode=rw"))
 	if err != nil {
 		return "", err
 	}

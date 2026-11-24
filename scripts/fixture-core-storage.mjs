@@ -158,6 +158,7 @@ export async function currentStorageFixture(archivedRoot) {
     ),
     "update_preferences.go",
     "backup_linux.go",
+    "sqlite_uri.go",
     "inspection_fixture.go",
     ...(await readdir("internal/core")).filter(
       (name) =>

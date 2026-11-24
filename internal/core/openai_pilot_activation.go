@@ -10,7 +10,6 @@ import (
 	"fmt"
 	"go/format"
 	"net/http"
-	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -58,10 +57,9 @@ func preflightOpenAIPilotBinding(dir string, b pilotActivationBinding, enabled b
 		return errors.New("canonical pilot directory required")
 	}
 	// Refuse a swapped database before migrations, WAL setup or any state write.
-	u := url.URL{Scheme: "file", Path: filepath.Join(abs, "core.sqlite")}
 	// Read only the prepared identity/schema pages, without creating WAL/SHM.
 	// The ordinary connection later recovers all journal state authoritatively.
-	db, e := sql.Open("sqlite", u.String()+"?mode=ro&immutable=1")
+	db, e := sql.Open("sqlite", sqliteFileURI(filepath.Join(abs, "core.sqlite"), "mode=ro&immutable=1"))
 	if e != nil {
 		return errors.New("prepared pilot metadata unavailable")
 	}

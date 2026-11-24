@@ -88,7 +88,25 @@ func writePrivateLaunchFile(target string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return (&url.URL{Scheme: "file", Path: absPath}).String(), nil
+	return fileURLForPath(absPath), nil
+}
+
+func fileURLForPath(absPath string) string {
+	return fileURLFromSlash(filepath.ToSlash(absPath))
+}
+
+func fileURLFromSlash(slashPath string) string {
+	u := url.URL{Scheme: "file"}
+	switch {
+	case len(slashPath) >= 2 && ((slashPath[0] >= 'A' && slashPath[0] <= 'Z') || (slashPath[0] >= 'a' && slashPath[0] <= 'z')) && slashPath[1] == ':':
+		u.Path = "/" + slashPath
+	case strings.HasPrefix(slashPath, "/"):
+		u.Path = slashPath
+	default:
+		u.OmitHost = true
+		u.Path = slashPath
+	}
+	return u.String()
 }
 
 func openBrowserLaunch(target string) error {
