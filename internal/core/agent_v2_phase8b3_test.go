@@ -459,7 +459,7 @@ func TestMCPSecurityToolsAndResources(t *testing.T) {
 	if err := json.NewDecoder(discResp.Body).Decode(&disc); err != nil {
 		t.Fatal(err)
 	}
-	if disc.Name != "fased-mcp" || disc.ProtocolVersion != mcpProtocolVersion || disc.ToolCount != 25 || disc.ResourceCount != 9 {
+	if disc.Name != "fased-mcp" || disc.ProtocolVersion != mcpProtocolVersion || disc.ToolCount != 28 || disc.ResourceCount != 10 {
 		t.Fatalf("unexpected MCP discovery payload: %+v", disc)
 	}
 
@@ -502,7 +502,7 @@ func TestMCPSecurityToolsAndResources(t *testing.T) {
 			t.Fatalf("disallowed tool %s exposed by MCP tools/list", disallowed)
 		}
 	}
-	for _, allowed := range []string{"workspace_status", "list_wallets", "draft_task", "draft_swap", "draft_strategy", "get_market_candles", "get_orderbook", "get_footprint", "get_macro_or_sec", "jev_evaluate", "call_external_mcp_tool", "get_world_intel", "get_prediction_markets", "list_event_triggers", "list_notifications"} {
+	for _, allowed := range []string{"workspace_status", "list_wallets", "draft_task", "draft_swap", "draft_strategy", "get_market_candles", "get_orderbook", "get_footprint", "get_macro_or_sec", "jev_evaluate", "call_external_mcp_tool", "get_world_intel", "get_prediction_markets", "list_event_triggers", "list_notifications", "list_lab_scripts", "run_fasedscript_backtest", "run_four_gate_validation"} {
 		if !toolNames[allowed] {
 			t.Fatalf("expected tool %s missing from MCP tools/list", allowed)
 		}

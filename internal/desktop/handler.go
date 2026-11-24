@@ -339,7 +339,7 @@ func RequestBodyLimit(route string) int64 {
 		return 640 * 1024
 	case strings.HasPrefix(route, "/api/v1/agents/v2/"):
 		return 256 * 1024
-	case route == "/api/v1/mcp" || strings.HasPrefix(route, "/api/v1/mcp/clients") || strings.HasPrefix(route, "/api/v1/decision/") || strings.HasPrefix(route, "/api/v1/intel/") || strings.HasPrefix(route, "/api/v1/automation/"):
+	case route == "/api/v1/mcp" || strings.HasPrefix(route, "/api/v1/mcp/clients") || strings.HasPrefix(route, "/api/v1/decision/") || strings.HasPrefix(route, "/api/v1/intel/") || strings.HasPrefix(route, "/api/v1/automation/") || strings.HasPrefix(route, "/api/v1/lab/"):
 		return 64 * 1024
 	default:
 		return 16 * 1024
@@ -414,6 +414,12 @@ func allowed(method, route string) bool {
 		}
 		return method == http.MethodDelete && validPathSegment(rel)
 	}
+	if strings.HasPrefix(route, "/api/v1/lab/scripts/") {
+		return method == http.MethodDelete && validPathSegment(strings.TrimPrefix(route, "/api/v1/lab/scripts/"))
+	}
+	if strings.HasPrefix(route, "/api/v1/lab/runs/") {
+		return method == http.MethodGet && validPathSegment(strings.TrimPrefix(route, "/api/v1/lab/runs/"))
+	}
 	switch route {
 	case "/api/v1/health", "/api/v1/auth/state", "/api/v1/signer/status", "/api/v1/installation/claim-code":
 		return method == "GET"
@@ -465,6 +471,12 @@ func allowed(method, route string) bool {
 		return method == http.MethodPost
 	case "/api/v1/automation/notifications", "/api/v1/automation/stream":
 		return method == http.MethodGet
+	case "/api/v1/lab/scripts":
+		return method == http.MethodGet || method == http.MethodPut
+	case "/api/v1/lab/evaluate", "/api/v1/lab/backtest", "/api/v1/lab/validate":
+		return method == http.MethodPost
+	case "/api/v1/lab/runs":
+		return method == http.MethodGet
 	}
 	return false
 }
@@ -508,6 +520,9 @@ func responseLimit(route string) int64 {
 	// progress and view fields. Other routes keep their original small bound.
 	if route == "/api/v1/agents" || strings.HasPrefix(route, "/api/v1/agents/v2/") {
 		return 4 * 1024 * 1024
+	}
+	if strings.HasPrefix(route, "/api/v1/lab/") {
+		return 2 * 1024 * 1024
 	}
 	if route == "/api/v1/mcp" || strings.HasPrefix(route, "/api/v1/mcp/clients") || strings.HasPrefix(route, "/api/v1/decision/") || strings.HasPrefix(route, "/api/v1/market/") || strings.HasPrefix(route, "/api/v1/intel/") || strings.HasPrefix(route, "/api/v1/automation/") {
 		return 1 * 1024 * 1024
@@ -678,6 +693,13 @@ func allowedQuery(r *http.Request) bool {
 	case r.Method == http.MethodGet && r.URL.Path == "/api/v1/automation/notifications":
 		for key := range q {
 			if key != "limit" && key != "unreadOnly" && key != "severity" {
+				return false
+			}
+		}
+		return true
+	case r.Method == http.MethodGet && r.URL.Path == "/api/v1/lab/runs":
+		for key := range q {
+			if key != "limit" {
 				return false
 			}
 		}
