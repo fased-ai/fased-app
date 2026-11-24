@@ -339,7 +339,7 @@ func RequestBodyLimit(route string) int64 {
 		return 640 * 1024
 	case strings.HasPrefix(route, "/api/v1/agents/v2/"):
 		return 256 * 1024
-	case route == "/api/v1/mcp" || strings.HasPrefix(route, "/api/v1/mcp/clients") || strings.HasPrefix(route, "/api/v1/decision/") || strings.HasPrefix(route, "/api/v1/intel/") || strings.HasPrefix(route, "/api/v1/automation/") || strings.HasPrefix(route, "/api/v1/lab/") || strings.HasPrefix(route, "/api/v1/desk/"):
+	case route == "/api/v1/mcp" || strings.HasPrefix(route, "/api/v1/mcp/clients") || strings.HasPrefix(route, "/api/v1/decision/") || strings.HasPrefix(route, "/api/v1/market/") || strings.HasPrefix(route, "/api/v1/intel/") || strings.HasPrefix(route, "/api/v1/automation/") || strings.HasPrefix(route, "/api/v1/lab/") || strings.HasPrefix(route, "/api/v1/desk/"):
 		return 64 * 1024
 	default:
 		return 16 * 1024
@@ -533,7 +533,7 @@ func forward(ctx context.Context, client *core.Client, original *http.Request, b
 	httpClient := *client.HTTP
 	if StreamingRoute(original.URL.Path) {
 		httpClient.Timeout = 0
-	} else if strings.HasPrefix(original.URL.Path, "/api/v1/agents/v2/") || original.URL.Path == "/api/v1/mcp" || original.URL.Path == "/api/v1/ai/connection" {
+	} else if strings.HasPrefix(original.URL.Path, "/api/v1/agents/v2/") || original.URL.Path == "/api/v1/mcp" || original.URL.Path == "/api/v1/ai/connection" || strings.HasPrefix(original.URL.Path, "/api/v1/lab/") || strings.HasPrefix(original.URL.Path, "/api/v1/desk/") || strings.HasPrefix(original.URL.Path, "/api/v1/intel/") {
 		if httpClient.Timeout > 0 && httpClient.Timeout < 2*time.Minute {
 			httpClient.Timeout = 2 * time.Minute
 		}
@@ -686,7 +686,7 @@ func allowedQuery(r *http.Request) bool {
 		return true
 	case r.Method == http.MethodGet && r.URL.Path == "/api/v1/market/stream":
 		for key := range q {
-			if key != "venue" && key != "symbol" && key != "interval" && key != "style" {
+			if key != "venue" && key != "symbol" && key != "interval" && key != "style" && key != "subs" && key != "noSnapshot" {
 				return false
 			}
 		}

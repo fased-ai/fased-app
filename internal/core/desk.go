@@ -462,6 +462,7 @@ func (h *HTTPHandler) deskStreamSSE(w http.ResponseWriter, r *http.Request, svc 
 	w.Header().Set("Content-Type", "text/event-stream; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-cache, no-transform")
 	w.Header().Set("X-Accel-Buffering", "no")
+	_ = http.NewResponseController(w).SetWriteDeadline(time.Time{})
 	w.WriteHeader(http.StatusOK)
 
 	flusher, _ := w.(http.Flusher)

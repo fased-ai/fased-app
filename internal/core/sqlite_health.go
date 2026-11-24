@@ -115,8 +115,44 @@ func sqliteQuickCheck(ctx context.Context, db *sql.DB, name string) error {
 	return nil
 }
 
-// CheckpointWAL performs a non-blocking passive WAL checkpoint on core.sqlite
-// and, when initialized, agents.sqlite to keep WAL sidecars bounded over long runs.
+// OptionalStateSQLitePaths returns the clean relative paths of optional Stage 1-3
+// engine SQLite databases stored beneath the Core data directory (excluding secrets/keys).
+func OptionalStateSQLitePaths() []string {
+	return []string{
+		"marketdata/meta.sqlite",
+		"integrations/decision.sqlite",
+		"integrations/mcpclient.sqlite",
+		"worldintel/intel.sqlite",
+		"automation/automation.sqlite",
+		"quantlab/lab.sqlite",
+		"desk/desk.sqlite",
+	}
+}
+
+func checkpointSQLitePathPassive(ctx context.Context, dbPath string) error {
+	info, err := os.Lstat(dbPath)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		return err
+	}
+	if !info.Mode().IsRegular() {
+		return nil
+	}
+	db, err := sql.Open("sqlite", sqliteFileURI(dbPath, "_pragma=busy_timeout(3000)"))
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	db.SetMaxOpenConns(1)
+	var busy, logPages, checkpointed int
+	return db.QueryRowContext(ctx, "PRAGMA wal_checkpoint(PASSIVE)").Scan(&busy, &logPages, &checkpointed)
+}
+
+// CheckpointWAL performs a non-blocking passive WAL checkpoint on core.sqlite,
+// agents.sqlite (when initialized), and any initialized Stage 1-3 SQLite stores
+// to keep WAL sidecars bounded over long runs.
 func (s *Store) CheckpointWAL(ctx context.Context) error {
 	if s == nil {
 		return nil
@@ -135,6 +171,13 @@ func (s *Store) CheckpointWAL(ctx context.Context) error {
 		var busy, logPages, checkpointed int
 		if err := v2.db.QueryRowContext(ctx, "PRAGMA wal_checkpoint(PASSIVE)").Scan(&busy, &logPages, &checkpointed); err != nil && firstErr == nil {
 			firstErr = err
+		}
+	}
+	if s.dir != "" {
+		for _, rel := range OptionalStateSQLitePaths() {
+			if err := checkpointSQLitePathPassive(ctx, filepath.Join(s.dir, filepath.FromSlash(rel))); err != nil && firstErr == nil {
+				firstErr = err
+			}
 		}
 	}
 	return firstErr

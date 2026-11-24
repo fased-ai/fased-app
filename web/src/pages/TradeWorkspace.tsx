@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useCore } from "../core";
 import { useUI } from "../ui-preferences";
 import { Badge } from "../components/shared";
@@ -10,6 +10,7 @@ import {
   layoutTileCount,
   parseTradeWorkspaceConfig,
   TRADE_STORAGE_KEY,
+  type Candle,
   type ChartTileConfig,
   type CrosshairSyncPoint,
   type OrderflowTab,
@@ -17,7 +18,10 @@ import {
   type TradeWorkspaceConfig,
   type WatchlistItem,
 } from "../market-data";
-import { ChartTile } from "../components/trade/ChartTile";
+import {
+  ChartTile,
+  type LiveMarketUpdate,
+} from "../components/trade/ChartTile";
 import { OrderflowPane } from "../components/trade/OrderflowPane";
 import { WatchlistPanel } from "../components/trade/WatchlistPanel";
 import "./TradeWorkspace.css";
@@ -43,6 +47,8 @@ export function TradeWorkspace() {
   const [crosshair, setCrosshair] = useState<CrosshairSyncPoint | null>(null);
   const [showEvents, setShowEvents] = useState(true);
   const [intelEvents, setIntelEvents] = useState<IntelEvent[]>([]);
+  const [liveUpdate, setLiveUpdate] = useState<LiveMarketUpdate | null>(null);
+  const liveSeqRef = useRef(0);
 
   useEffect(() => {
     if (core.mode !== "ready" || !showEvents) return;
@@ -55,7 +61,7 @@ export function TradeWorkspace() {
     return () => {
       cancelled = true;
     };
-  }, [core, showEvents]);
+  }, [core.mode, core.request, showEvents]);
 
   useEffect(() => {
     try {
@@ -68,6 +74,78 @@ export function TradeWorkspace() {
     () => config.tiles.slice(0, visibleCount),
     [config.tiles, visibleCount],
   );
+  const subsParam = useMemo(() => {
+    const seen = new Set<string>();
+    const entries: string[] = [];
+    for (const tile of visibleTiles) {
+      const tuple = `${tile.venue}:${tile.symbol}:${tile.interval}:${tile.style}`;
+      if (!seen.has(tuple)) {
+        seen.add(tuple);
+        entries.push(tuple);
+      }
+    }
+    return entries.join(",");
+  }, [visibleTiles]);
+
+  useEffect(() => {
+    if (core.mode !== "ready" || !subsParam) return;
+    const controller = new AbortController();
+    const runStream = async () => {
+      const delays = [1000, 2000, 4000, 8000, 15000];
+      let attempt = 0;
+      const qs = new URLSearchParams({ noSnapshot: "1", subs: subsParam });
+      while (!controller.signal.aborted) {
+        try {
+          await core.streamGet(`market/stream?${qs.toString()}`, {
+            signal: controller.signal,
+            onEvent: (frame) => {
+              attempt = 0;
+              if (frame.event !== "candle") return;
+              try {
+                const ev = JSON.parse(frame.data) as {
+                  venue?: string;
+                  symbol?: string;
+                  interval?: string;
+                  style?: string;
+                  payload?: Candle | { candles?: Candle[] };
+                };
+                if (!ev.venue || !ev.symbol || !ev.payload) return;
+                liveSeqRef.current += 1;
+                setLiveUpdate({
+                  venue: ev.venue,
+                  symbol: ev.symbol,
+                  interval: ev.interval,
+                  style: ev.style,
+                  payload: ev.payload,
+                  seq: liveSeqRef.current,
+                });
+              } catch {}
+            },
+          });
+        } catch {
+          if (controller.signal.aborted) return;
+        }
+        if (controller.signal.aborted) return;
+        const waitMs = delays[Math.min(attempt, delays.length - 1)];
+        attempt++;
+        await new Promise<void>((resolve) => {
+          const t = window.setTimeout(resolve, waitMs);
+          controller.signal.addEventListener(
+            "abort",
+            () => {
+              window.clearTimeout(t);
+              resolve();
+            },
+            { once: true },
+          );
+        });
+      }
+    };
+    void runStream();
+    return () => {
+      controller.abort();
+    };
+  }, [core.mode, core.streamGet, subsParam]);
   const activeTile = useMemo(
     () =>
       visibleTiles.find((item) => item.id === config.activeTileId) ??
@@ -219,6 +297,7 @@ export function TradeWorkspace() {
               tile={tile}
               active={tile.id === activeTile?.id}
               syncedCrosshair={config.syncCrosshair ? crosshair : null}
+              liveUpdate={liveUpdate}
               intelEvents={intelEvents}
               showEvents={showEvents}
               onSelect={() =>

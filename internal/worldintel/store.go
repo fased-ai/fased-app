@@ -22,7 +22,7 @@ const (
 
 type store struct {
 	db     *sql.DB
-	mu     sync.Mutex
+	mu     sync.RWMutex
 	closed bool
 }
 
@@ -163,19 +163,11 @@ func (s *store) close() error {
 	return nil
 }
 
-func (s *store) checkOpen() error {
-	s.mu.Lock()
-	closed := s.closed
-	s.mu.Unlock()
-	if closed {
-		return errors.New("worldintel store closed")
-	}
-	return nil
-}
-
 func (s *store) listSources(ctx context.Context) ([]SourceConfig, error) {
-	if err := s.checkOpen(); err != nil {
-		return nil, err
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.closed || s.db == nil {
+		return nil, errors.New("worldintel store closed")
 	}
 	rows, err := s.db.QueryContext(ctx, `
 SELECT id, name, kind, endpoint, category, region, enabled, allow_localhost, built_in, last_sync_at, last_error
@@ -205,10 +197,7 @@ ORDER BY built_in DESC, id ASC
 	return out, rows.Err()
 }
 
-func (s *store) getSource(ctx context.Context, id string) (SourceConfig, error) {
-	if err := s.checkOpen(); err != nil {
-		return SourceConfig{}, err
-	}
+func (s *store) getSourceLocked(ctx context.Context, id string) (SourceConfig, error) {
 	var cfg SourceConfig
 	var en, allow, built int
 	err := s.db.QueryRowContext(ctx, `
@@ -230,13 +219,24 @@ FROM intel_sources WHERE id = ?
 	return cfg, nil
 }
 
-func (s *store) saveSource(ctx context.Context, in SourceInput) (SourceConfig, error) {
-	if err := s.checkOpen(); err != nil {
-		return SourceConfig{}, err
+func (s *store) getSource(ctx context.Context, id string) (SourceConfig, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.closed || s.db == nil {
+		return SourceConfig{}, errors.New("worldintel store closed")
 	}
+	return s.getSourceLocked(ctx, id)
+}
+
+func (s *store) saveSource(ctx context.Context, in SourceInput) (SourceConfig, error) {
 	norm, err := ValidateSourceInput(in)
 	if err != nil {
 		return SourceConfig{}, err
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.closed || s.db == nil {
+		return SourceConfig{}, errors.New("worldintel store closed")
 	}
 	var count int
 	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM intel_sources WHERE id != ?`, norm.ID).Scan(&count); err != nil {
@@ -271,14 +271,16 @@ ON CONFLICT(id) DO UPDATE SET
 `, norm.ID, norm.Name, norm.Kind, norm.Endpoint, norm.Category, norm.Region, enInt, allowInt, builtInInt); err != nil {
 		return SourceConfig{}, err
 	}
-	return s.getSource(ctx, norm.ID)
+	return s.getSourceLocked(ctx, norm.ID)
 }
 
 func (s *store) deleteSource(ctx context.Context, id string) (bool, error) {
-	if err := s.checkOpen(); err != nil {
-		return false, err
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.closed || s.db == nil {
+		return false, errors.New("worldintel store closed")
 	}
-	cfg, err := s.getSource(ctx, strings.TrimSpace(id))
+	cfg, err := s.getSourceLocked(ctx, strings.TrimSpace(id))
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return false, nil
@@ -297,8 +299,10 @@ func (s *store) deleteSource(ctx context.Context, id string) (bool, error) {
 }
 
 func (s *store) markSourceSync(ctx context.Context, id string, ts int64, syncErr string) error {
-	if err := s.checkOpen(); err != nil {
-		return err
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.closed || s.db == nil {
+		return errors.New("worldintel store closed")
 	}
 	_, err := s.db.ExecContext(ctx, `
 UPDATE intel_sources SET last_sync_at = ?, last_error = ? WHERE id = ?
@@ -310,8 +314,10 @@ func (s *store) upsertEvents(ctx context.Context, events []IntelEvent) error {
 	if len(events) == 0 {
 		return nil
 	}
-	if err := s.checkOpen(); err != nil {
-		return err
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.closed || s.db == nil {
+		return errors.New("worldintel store closed")
 	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -369,8 +375,10 @@ func (s *store) upsertPredictions(ctx context.Context, markets []PredictionMarke
 	if len(markets) == 0 {
 		return nil
 	}
-	if err := s.checkOpen(); err != nil {
-		return err
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.closed || s.db == nil {
+		return errors.New("worldintel store closed")
 	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -425,8 +433,10 @@ WHERE id NOT IN (
 }
 
 func (s *store) listEvents(ctx context.Context, filter EventFilter) ([]IntelEvent, error) {
-	if err := s.checkOpen(); err != nil {
-		return nil, err
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.closed || s.db == nil {
+		return nil, errors.New("worldintel store closed")
 	}
 	limit := filter.Limit
 	if limit <= 0 || limit > 500 {
@@ -498,8 +508,10 @@ LIMIT ?`
 }
 
 func (s *store) listPredictions(ctx context.Context, filter PredictionFilter) ([]PredictionMarket, error) {
-	if err := s.checkOpen(); err != nil {
-		return nil, err
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.closed || s.db == nil {
+		return nil, errors.New("worldintel store closed")
 	}
 	limit := filter.Limit
 	if limit <= 0 || limit > 500 {
@@ -555,12 +567,22 @@ LIMIT ?`
 }
 
 func (s *store) countEvents(ctx context.Context) int {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.closed || s.db == nil {
+		return 0
+	}
 	var n int
 	_ = s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM intel_events`).Scan(&n)
 	return n
 }
 
 func (s *store) countPredictions(ctx context.Context) int {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.closed || s.db == nil {
+		return 0
+	}
 	var n int
 	_ = s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM intel_predictions`).Scan(&n)
 	return n

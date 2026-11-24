@@ -426,13 +426,17 @@ func parseStringPairs(pairs [][]string, descending bool) []OrderBookLevel {
 // ParseBybitKlines parses Bybit v5 /v5/market/kline JSON payloads.
 func ParseBybitKlines(raw []byte) ([]Candle, error) {
 	var resp struct {
-		RetCode int `json:"retCode"`
+		RetCode int    `json:"retCode"`
+		RetMsg  string `json:"retMsg"`
 		Result  struct {
 			List [][]string `json:"list"`
 		} `json:"result"`
 	}
 	if err := json.Unmarshal(raw, &resp); err != nil {
 		return nil, fmt.Errorf("decode bybit kline: %w", err)
+	}
+	if resp.RetCode != 0 {
+		return nil, fmt.Errorf("bybit API error %d: %s", resp.RetCode, strings.TrimSpace(resp.RetMsg))
 	}
 	out := make([]Candle, 0, len(resp.Result.List))
 	for _, r := range resp.Result.List {
@@ -463,7 +467,9 @@ func ParseBybitKlines(raw []byte) ([]Candle, error) {
 // ParseBybitOrderBook parses Bybit v5 /v5/market/orderbook JSON payloads.
 func ParseBybitOrderBook(raw []byte, venue, symbol string) (OrderBookSnapshot, error) {
 	var resp struct {
-		Result struct {
+		RetCode int    `json:"retCode"`
+		RetMsg  string `json:"retMsg"`
+		Result  struct {
 			Bids [][]string `json:"b"`
 			Asks [][]string `json:"a"`
 			Ts   int64      `json:"ts"`
@@ -471,6 +477,9 @@ func ParseBybitOrderBook(raw []byte, venue, symbol string) (OrderBookSnapshot, e
 	}
 	if err := json.Unmarshal(raw, &resp); err != nil {
 		return OrderBookSnapshot{}, fmt.Errorf("decode bybit orderbook: %w", err)
+	}
+	if resp.RetCode != 0 {
+		return OrderBookSnapshot{}, fmt.Errorf("bybit API error %d: %s", resp.RetCode, strings.TrimSpace(resp.RetMsg))
 	}
 	bids := parseStringPairs(resp.Result.Bids, true)
 	asks := parseStringPairs(resp.Result.Asks, false)

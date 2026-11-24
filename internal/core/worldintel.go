@@ -57,7 +57,11 @@ func (h *HTTPHandler) worldIntelAPI(w http.ResponseWriter, r *http.Request, toke
 
 	rel := strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/v1/intel/"), "/")
 	q := r.URL.Query()
-	ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
+	timeout := 20 * time.Second
+	if rel == "sync" {
+		timeout = 30 * time.Second
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), timeout)
 	defer cancel()
 
 	switch {
@@ -261,6 +265,7 @@ func (h *HTTPHandler) worldIntelStreamSSE(w http.ResponseWriter, r *http.Request
 	w.Header().Set("Content-Type", "text/event-stream; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-cache, no-transform")
 	w.Header().Set("X-Accel-Buffering", "no")
+	_ = http.NewResponseController(w).SetWriteDeadline(time.Time{})
 	w.WriteHeader(http.StatusOK)
 
 	flusher, _ := w.(http.Flusher)

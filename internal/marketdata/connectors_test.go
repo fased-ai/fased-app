@@ -414,3 +414,43 @@ func TestHyperliquidLeaderboardStreamsTop50WithoutFullRead(t *testing.T) {
 		t.Fatalf("expected early stream stop well under %d bytes, read %d", maxUpstreamBodyBytes, read)
 	}
 }
+
+func TestBybitNonZeroRetCodeRejectedAndLimitTrim(t *testing.T) {
+	if _, err := ParseBybitKlines([]byte(`{"retCode":10001,"retMsg":"params error","result":{"list":[]}}`)); err == nil {
+		t.Fatal("expected ParseBybitKlines error for non-zero retCode")
+	}
+	if _, err := ParseBybitOrderBook([]byte(`{"retCode":10001,"retMsg":"params error","result":{"b":[],"a":[],"ts":0}}`), VenueBybit, "BTCUSDT"); err == nil {
+		t.Fatal("expected ParseBybitOrderBook error for non-zero retCode")
+	}
+
+	// Verify Kraken returning more bars than requested limit trims cleanly to tail limit.
+	var krakenRows strings.Builder
+	krakenRows.WriteString(`{"error":[],"result":{"XXBTZUSD":[`)
+	for i := 0; i < 12; i++ {
+		if i > 0 {
+			krakenRows.WriteByte(',')
+		}
+		fmt.Fprintf(&krakenRows, `[%d,"94000","94100","93900","94050","94025","2.5",10]`, 1760000000+i*3600)
+	}
+	krakenRows.WriteString(`]}}`)
+	svc, err := NewService(Config{
+		DataDir:     t.TempDir(),
+		FixtureMode: false,
+		Now:         func() time.Time { return time.Unix(1760050000, 0).UTC() },
+		HTTPTransport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+			return jsonResponse(200, krakenRows.String()), nil
+		}),
+	})
+	if err != nil {
+		t.Fatalf("NewService: %v", err)
+	}
+	defer func() { _ = svc.Close() }()
+
+	series, err := svc.GetCandles(context.Background(), VenueKraken, "XBTUSD", "1h", TransformOptions{Style: StyleStandard}, 5)
+	if err != nil {
+		t.Fatalf("GetCandles kraken limit: %v", err)
+	}
+	if len(series.Candles) != 5 {
+		t.Fatalf("expected 5 trimmed candles, got %d", len(series.Candles))
+	}
+}

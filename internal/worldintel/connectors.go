@@ -43,7 +43,7 @@ func DefaultSources() []SourceConfig {
 			ID:       "polymarket-top",
 			Name:     "Polymarket Active Markets",
 			Kind:     KindPolymarket,
-			Endpoint: "https://gamma-api.polymarket.com/markets?active=true&closed=false&limit=40",
+			Endpoint: "https://gamma-api.polymarket.com/markets?active=true&closed=false&order=volume24hr&ascending=false&limit=40",
 			Category: CategoryPrediction,
 			Region:   RegionGlobal,
 			Enabled:  true,
@@ -383,7 +383,7 @@ func ParseKalshiJSON(raw []byte, now int64) ([]PredictionMarket, error) {
 		if m.YesBid > 0 && m.YesAsk > 0 {
 			price = (m.YesBid + m.YesAsk) / 2.0
 		}
-		if price > 1 {
+		if price >= 1 {
 			price = price / 100.0
 		}
 		yesProb := clamp01(price)
@@ -690,6 +690,9 @@ func ParseWorldMonitorSidecarJSON(raw []byte, src SourceConfig, now int64) ([]In
 		}
 		pubAt := now
 		if num := parseFlexibleFloat(it.PublishedAt); num > 0 {
+			if num >= 1e12 {
+				num /= 1000.0
+			}
 			pubAt = int64(num)
 			if pubAt > now {
 				pubAt = now

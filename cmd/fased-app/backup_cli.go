@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -121,12 +122,16 @@ func runStateBackup(args []string, defaultData string, out, errOut io.Writer) er
 	}
 
 	// Consistent hot snapshots via SQLite VACUUM INTO.
-	for _, dbName := range []string{"core.sqlite", "agents.sqlite"} {
-		src := filepath.Join(absData, dbName)
+	dbPaths := append([]string{"core.sqlite", "agents.sqlite"}, core.OptionalStateSQLitePaths()...)
+	for _, relPath := range dbPaths {
+		src := filepath.Join(absData, filepath.FromSlash(relPath))
 		if _, statErr := os.Stat(src); errors.Is(statErr, os.ErrNotExist) {
 			continue
 		}
-		dst := filepath.Join(stageDir, dbName)
+		dst := filepath.Join(stageDir, filepath.FromSlash(relPath))
+		if mkErr := os.MkdirAll(filepath.Dir(dst), 0o700); mkErr != nil {
+			return mkErr
+		}
 		if err := core.SnapshotSQLite(ctx, src, dst); err != nil {
 			return err
 		}
@@ -134,7 +139,7 @@ func runStateBackup(args []string, defaultData string, out, errOut io.Writer) er
 		if err != nil {
 			return err
 		}
-		manifest.Files[dbName] = sum
+		manifest.Files[relPath] = sum
 	}
 
 	// Non-secret config/manifest files (never bundle private IPC sockets or locks).
@@ -291,6 +296,11 @@ func runStateRestore(args []string, defaultData string, out, errOut io.Writer) e
 		"model-manifest.json":  true,
 		"ai-credentials.json":  true,
 	}
+	optionalDBSet := map[string]bool{}
+	for _, relPath := range core.OptionalStateSQLitePaths() {
+		allowedFiles[relPath] = true
+		optionalDBSet[relPath] = true
+	}
 	extracted := map[string]string{}
 	for {
 		hdr, nextErr := tr.Next()
@@ -303,14 +313,20 @@ func runStateRestore(args []string, defaultData string, out, errOut io.Writer) e
 		if hdr.Typeflag != tar.TypeReg {
 			return fmt.Errorf("refusing non-regular archive entry: %s", hdr.Name)
 		}
-		name := filepath.Base(hdr.Name)
-		if name != hdr.Name || !allowedFiles[name] {
+		if strings.Contains(hdr.Name, "\\") {
+			return fmt.Errorf("unexpected archive entry: %s", hdr.Name)
+		}
+		name := path.Clean(hdr.Name)
+		if name != hdr.Name || strings.HasPrefix(name, "/") || strings.HasPrefix(name, "..") || !allowedFiles[name] {
 			return fmt.Errorf("unexpected archive entry: %s", hdr.Name)
 		}
 		if hdr.Size < 0 || hdr.Size > maxRestoreArchiveFileBytes {
 			return fmt.Errorf("archive entry exceeds size bound: %s", name)
 		}
-		dst := filepath.Join(stageDir, name)
+		dst := filepath.Join(stageDir, filepath.FromSlash(name))
+		if mkErr := os.MkdirAll(filepath.Dir(dst), 0o700); mkErr != nil {
+			return mkErr
+		}
 		w, err := os.OpenFile(dst, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
 		if err != nil {
 			return err
@@ -347,33 +363,40 @@ func runStateRestore(args []string, defaultData string, out, errOut io.Writer) e
 
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
-	for _, dbName := range []string{"core.sqlite", "agents.sqlite"} {
+	dbNames := append([]string{"core.sqlite", "agents.sqlite"}, core.OptionalStateSQLitePaths()...)
+	for _, dbName := range dbNames {
 		if manifest.Files[dbName] == "" {
 			continue
 		}
-		rep := core.InspectSQLiteHealth(ctx, filepath.Join(stageDir, dbName))
+		rep := core.InspectSQLiteHealth(ctx, filepath.Join(stageDir, filepath.FromSlash(dbName)))
 		if !rep.Healthy {
 			return fmt.Errorf("staged %s failed integrity check: %s", dbName, rep.QuickCheck)
 		}
 	}
 
 	// Clean stale WAL/SHM sidecars before swapping restored SQLite files into place.
-	for _, dbName := range []string{"core.sqlite", "agents.sqlite"} {
+	for _, dbName := range dbNames {
 		if manifest.Files[dbName] != "" {
-			_ = os.Remove(filepath.Join(absData, dbName+"-wal"))
-			_ = os.Remove(filepath.Join(absData, dbName+"-shm"))
+			target := filepath.Join(absData, filepath.FromSlash(dbName))
+			_ = os.Remove(target + "-wal")
+			_ = os.Remove(target + "-shm")
 		}
 	}
 
 	restored := make([]string, 0, len(manifest.Files))
 	for name := range manifest.Files {
-		src := filepath.Join(stageDir, name)
+		src := filepath.Join(stageDir, filepath.FromSlash(name))
 		raw, rErr := os.ReadFile(src)
 		if rErr != nil {
 			return rErr
 		}
-		dst := filepath.Join(absData, name)
-		tmpDst, tErr := os.CreateTemp(absData, ".restore-*")
+		dst := filepath.Join(absData, filepath.FromSlash(name))
+		if optionalDBSet[name] {
+			if mkErr := os.MkdirAll(filepath.Dir(dst), 0o700); mkErr != nil {
+				return mkErr
+			}
+		}
+		tmpDst, tErr := os.CreateTemp(filepath.Dir(dst), ".restore-*")
 		if tErr != nil {
 			return tErr
 		}

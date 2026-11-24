@@ -77,3 +77,33 @@ func TestBusFilteringBackpressureAndRaceSafety(t *testing.T) {
 	wg.Wait()
 	bus.Close()
 }
+
+func TestBusIntervalStyleAndSubscribeMulti(t *testing.T) {
+	bus := NewBus()
+	defer bus.Close()
+
+	multiCh, cancelMulti := bus.SubscribeMulti([]Filter{
+		{Venue: VenueHyperliquid, Symbol: "BTC", Interval: "1h", Style: StyleStandard},
+		{Venue: VenueKraken, Symbol: "ETHUSD", Interval: "15m", Style: StyleHeikinAshi},
+	})
+	defer cancelMulti()
+
+	// Wrong interval & wrong style must be dropped.
+	bus.Publish(Event{Type: "candle", Venue: VenueHyperliquid, Symbol: "BTC", Interval: "15m", Style: StyleRenko, Timestamp: 1})
+	select {
+	case leak := <-multiCh:
+		t.Fatalf("mismatched interval/style event leaked to multi filter: %+v", leak)
+	default:
+	}
+
+	// Matching second tuple arrives cleanly.
+	bus.Publish(Event{Type: "candle", Venue: VenueKraken, Symbol: "ETHUSD", Interval: "15m", Style: StyleHeikinAshi, Timestamp: 2})
+	select {
+	case got := <-multiCh:
+		if got.Venue != VenueKraken || got.Symbol != "ETHUSD" || got.Interval != "15m" || got.Style != StyleHeikinAshi {
+			t.Fatalf("unexpected multi event: %+v", got)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for SubscribeMulti event")
+	}
+}

@@ -201,4 +201,38 @@ func TestServiceFixtureModeAndMockSyncAndBus(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for filtered WorldIntel bus event")
 	}
+
+	// Verify Kalshi 1-cent probability parsing, sidecar ms scaling, InferLocation word boundaries, and sync_complete event.
+	kalshiOneCent, err := ParseKalshiJSON([]byte(`{"markets":[{"ticker":"KX-1C","title":"Tail risk","yes_bid":1,"yes_ask":1,"last_price":1}]}`), 1760000000)
+	if err != nil || len(kalshiOneCent) != 1 || kalshiOneCent[0].YesProb != 0.01 {
+		t.Fatalf("expected Kalshi 1c -> 0.01 prob, got %+v err=%v", kalshiOneCent, err)
+	}
+	sidecarMs, err := ParseWorldMonitorSidecarJSON([]byte(`{"events":[{"id":"ms1","title":"Indiana factory update and aspirant policy","publishedAt":1759990000000}]}`), DefaultSources()[6], 1760000000)
+	if err != nil || len(sidecarMs) != 1 || sidecarMs[0].PublishedAt != 1759990000 {
+		t.Fatalf("expected sidecar ms scaling to 1759990000, got %+v err=%v", sidecarMs, err)
+	}
+	if reg, _, _, _ := InferLocation("Indiana per sec", RegionNA); reg != RegionNA {
+		t.Fatalf("InferLocation false substring match on Indiana/sec -> %q, want %q", reg, RegionNA)
+	}
+	if reg, _, _, _ := InferLocation("SEC announces enforcement action", RegionGlobal); reg != RegionNA {
+		t.Fatalf("InferLocation missed SEC word match -> %q, want %q", reg, RegionNA)
+	}
+
+	syncCh, unsubAll := liveSvc.Subscribe(StreamFilter{})
+	defer unsubAll()
+	if _, err := liveSvc.Sync(context.Background(), "gdelt-global"); err != nil {
+		t.Fatalf("Sync #2: %v", err)
+	}
+	var seenComplete bool
+	timeout := time.After(time.Second)
+	for !seenComplete {
+		select {
+		case evt := <-syncCh:
+			if evt.Type == "sync_complete" {
+				seenComplete = true
+			}
+		case <-timeout:
+			t.Fatal("timed out waiting for sync_complete bus event")
+		}
+	}
 }

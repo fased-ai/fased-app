@@ -24,7 +24,7 @@ const marketDataDirName = "marketdata"
 type Store struct {
 	dir        string
 	now        func() time.Time
-	mu         sync.Mutex
+	mu         sync.RWMutex
 	metaDB     *sql.DB
 	partitions map[string]*sql.DB
 	closed     bool
@@ -319,6 +319,11 @@ func (s *Store) PruneOldPartitions(maxAgeDays int) (int, error) {
 		return 0, nil
 	}
 	cutoff := s.now().UTC().Add(-time.Duration(maxAgeDays) * 24 * time.Hour)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return 0, errors.New("marketdata store closed")
+	}
 	entries, err := os.ReadDir(s.dir)
 	if err != nil {
 		return 0, err
@@ -338,12 +343,10 @@ func (s *Store) PruneOldPartitions(maxAgeDays int) (int, error) {
 		if !monthEnd.Before(cutoff) {
 			continue
 		}
-		s.mu.Lock()
 		if db, ok := s.partitions[key]; ok {
 			_ = db.Close()
 			delete(s.partitions, key)
 		}
-		s.mu.Unlock()
 
 		base := filepath.Join(s.dir, name)
 		for _, suffix := range []string{"", "-wal", "-shm"} {
@@ -358,10 +361,9 @@ func (s *Store) PruneOldPartitions(maxAgeDays int) (int, error) {
 
 // ListWatchlists returns all persisted user watchlists sorted by updatedAt descending.
 func (s *Store) ListWatchlists(ctx context.Context) ([]Watchlist, error) {
-	s.mu.Lock()
-	closed := s.closed
-	s.mu.Unlock()
-	if closed {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.closed || s.metaDB == nil {
 		return nil, errors.New("marketdata store closed")
 	}
 	rows, err := s.metaDB.QueryContext(ctx, `
@@ -404,6 +406,11 @@ func (s *Store) SaveWatchlist(ctx context.Context, w Watchlist) (Watchlist, erro
 	if err != nil {
 		return Watchlist{}, err
 	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.closed || s.metaDB == nil {
+		return Watchlist{}, errors.New("marketdata store closed")
+	}
 	_, err = s.metaDB.ExecContext(ctx, `
 INSERT INTO watchlists (id, name, items_json, created_at, updated_at)
 VALUES (?, ?, ?, ?, ?)
@@ -420,6 +427,11 @@ ON CONFLICT(id) DO UPDATE SET
 
 // DeleteWatchlist deletes a watchlist by ID.
 func (s *Store) DeleteWatchlist(ctx context.Context, id string) (bool, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.closed || s.metaDB == nil {
+		return false, errors.New("marketdata store closed")
+	}
 	res, err := s.metaDB.ExecContext(ctx, `DELETE FROM watchlists WHERE id = ?`, strings.TrimSpace(id))
 	if err != nil {
 		return false, err
@@ -434,6 +446,11 @@ func (s *Store) SaveMacroCache(ctx context.Context, seriesID string, pts []Macro
 	if err != nil {
 		return err
 	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.closed || s.metaDB == nil {
+		return errors.New("marketdata store closed")
+	}
 	_, err = s.metaDB.ExecContext(ctx, `
 INSERT INTO macro_cache (series_id, payload_json, updated_at)
 VALUES (?, ?, ?)
@@ -444,6 +461,11 @@ ON CONFLICT(series_id) DO UPDATE SET payload_json=excluded.payload_json, updated
 
 // LoadMacroCache retrieves cached FRED points if stored.
 func (s *Store) LoadMacroCache(ctx context.Context, seriesID string) ([]MacroPoint, int64, bool, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.closed || s.metaDB == nil {
+		return nil, 0, false, errors.New("marketdata store closed")
+	}
 	var raw string
 	var updated int64
 	err := s.metaDB.QueryRowContext(ctx, `SELECT payload_json, updated_at FROM macro_cache WHERE series_id = ?`, seriesID).Scan(&raw, &updated)

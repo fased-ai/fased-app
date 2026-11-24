@@ -339,28 +339,109 @@ func (s *Server) startAgentTasks() {
 		go func() {
 			defer wg.Done()
 			defer recoverBackgroundPanic("telegram-poller")
-			waitReady := time.NewTicker(5 * time.Second)
 			for {
 				autoDB := filepath.Join(s.Store.dir, "automation", "automation.sqlite")
 				s.Store.automationMu.Lock()
 				initialized := s.Store.telegramSvc != nil
 				s.Store.automationMu.Unlock()
-				if initialized {
-					break
+				if !initialized {
+					if _, statErr := os.Stat(autoDB); statErr != nil {
+						timer := time.NewTimer(5 * time.Second)
+						select {
+						case <-ctx.Done():
+							timer.Stop()
+							return
+						case <-timer.C:
+						}
+						continue
+					}
 				}
-				if _, statErr := os.Stat(autoDB); statErr == nil {
-					break
+				tg, err := s.Store.telegramService()
+				if err != nil {
+					if ctx.Err() != nil {
+						return
+					}
+					coreLogger.Warn("telegram poller initialization held", "err", sanitizeDiagValue(err.Error(), 200))
+					timer := time.NewTimer(10 * time.Second)
+					select {
+					case <-ctx.Done():
+						timer.Stop()
+						return
+					case <-timer.C:
+					}
+					continue
 				}
-				select {
-				case <-ctx.Done():
-					waitReady.Stop()
-					return
-				case <-waitReady.C:
+				tg.RunPollingLoop(ctx)
+				return
+			}
+		}()
+
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			defer recoverBackgroundPanic("worldintel-sync")
+			intelDB := filepath.Join(s.Store.dir, "worldintel", "intel.sqlite")
+			s.Store.worldIntelMu.Lock()
+			ready := s.Store.worldIntelSvc != nil
+			s.Store.worldIntelMu.Unlock()
+			if !ready {
+				if _, statErr := os.Stat(intelDB); statErr == nil {
+					ready = true
 				}
 			}
-			waitReady.Stop()
-			if tg, err := s.Store.telegramService(); err == nil {
-				tg.RunPollingLoop(ctx)
+			if ready {
+				startupTimer := time.NewTimer(4 * time.Second)
+				select {
+				case <-ctx.Done():
+					startupTimer.Stop()
+					return
+				case <-startupTimer.C:
+				}
+			} else {
+				for {
+					s.Store.worldIntelMu.Lock()
+					initialized := s.Store.worldIntelSvc != nil
+					s.Store.worldIntelMu.Unlock()
+					if initialized {
+						break
+					}
+					if _, statErr := os.Stat(intelDB); statErr == nil {
+						break
+					}
+					waitTimer := time.NewTimer(5 * time.Second)
+					select {
+					case <-ctx.Done():
+						waitTimer.Stop()
+						return
+					case <-waitTimer.C:
+					}
+				}
+			}
+			runSync := func() {
+				svc, err := s.Store.worldIntelService()
+				if err != nil {
+					coreLogger.Warn("worldintel background service held", "err", sanitizeDiagValue(err.Error(), 200))
+					return
+				}
+				syncCtx, stop := context.WithTimeout(ctx, 25*time.Second)
+				res, syncErr := svc.Sync(syncCtx, "")
+				stop()
+				if syncErr != nil && !errors.Is(syncErr, context.Canceled) {
+					coreLogger.Warn("worldintel background sync held", "err", sanitizeDiagValue(syncErr.Error(), 200))
+				} else if len(res.Errors) > 0 {
+					coreLogger.Warn("worldintel background sync partial source errors", "count", len(res.Errors))
+				}
+			}
+			runSync()
+			ticker := time.NewTicker(10 * time.Minute)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-ticker.C:
+					runSync()
+				}
 			}
 		}()
 	}
@@ -381,6 +462,11 @@ func (s *Server) startAgentTasks() {
 					coreLogger.Warn("sqlite WAL checkpoint failed", "err", sanitizeDiagValue(err.Error(), 200))
 				}
 				stop()
+				if mdSvc := s.Store.loadedMarketDataService(); mdSvc != nil {
+					if _, pErr := mdSvc.PruneOldPartitions(365); pErr != nil {
+						coreLogger.Warn("marketdata partition prune held", "err", sanitizeDiagValue(pErr.Error(), 200))
+					}
+				}
 			}
 		}
 	}()
@@ -410,16 +496,10 @@ func (s *Server) Close(ctx context.Context) error {
 		s.taskCancel()
 		<-s.taskDone
 	}
-	// Cancel long-lived request contexts (e.g. SSE streams) if shutdown grace expires.
-	doneShutdown := make(chan struct{})
+	// Cancel long-lived request contexts (e.g. SSE streams) immediately so
+	// HTTP.Shutdown does not stall waiting for streaming responses to end.
 	if s.serverCancel != nil {
-		go func() {
-			select {
-			case <-ctx.Done():
-				s.serverCancel()
-			case <-doneShutdown:
-			}
-		}()
+		s.serverCancel()
 	}
 	err := errors.Join(s.HTTP.Shutdown(ctx), s.IPCServer.Shutdown(ctx))
 	if s.RemoteHTTP != nil {
@@ -428,10 +508,6 @@ func (s *Server) Close(ctx context.Context) error {
 		if s.RemoteLegacy != nil {
 			_ = s.RemoteLegacy.Close()
 		}
-	}
-	close(doneShutdown)
-	if s.serverCancel != nil {
-		s.serverCancel()
 	}
 	if err != nil {
 		_ = s.HTTP.Close()

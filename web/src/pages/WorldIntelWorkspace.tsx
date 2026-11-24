@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Badge } from "../components/shared";
 import { WorldMapView } from "../components/intel/WorldMapView";
 import {
@@ -39,6 +39,7 @@ export function WorldIntelWorkspace() {
   const [category, setCategory] = useState("");
   const [region, setRegion] = useState("");
   const [query, setQuery] = useState("");
+  const [debouncedQuery, setDebouncedQuery] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
 
@@ -54,13 +55,18 @@ export function WorldIntelWorkspace() {
   const [srcCategory, setSrcCategory] = useState<IntelCategory>("macro");
   const [srcAllowLocal, setSrcAllowLocal] = useState(false);
 
+  useEffect(() => {
+    const timer = window.setTimeout(() => setDebouncedQuery(query), 300);
+    return () => window.clearTimeout(timer);
+  }, [query]);
+
   const loadAll = useCallback(async () => {
     if (core.mode !== "ready") return;
     setError("");
     try {
       const [mapRes, predRes, srcRes] = await Promise.all([
         fetchIntelMap(core, { category, hours: 72 }),
-        fetchPredictions(core, { category, q: query, limit: 60 }),
+        fetchPredictions(core, { category, q: debouncedQuery, limit: 60 }),
         fetchIntelSources(core),
       ]);
       setMapSummary(mapRes);
@@ -69,7 +75,12 @@ export function WorldIntelWorkspace() {
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load intel");
     }
-  }, [core, category, query]);
+  }, [core.mode, core.request, category, debouncedQuery]);
+
+  const loadAllRef = useRef(loadAll);
+  useEffect(() => {
+    loadAllRef.current = loadAll;
+  }, [loadAll]);
 
   useEffect(() => {
     void loadAll();
@@ -81,18 +92,66 @@ export function WorldIntelWorkspace() {
     const qs = new URLSearchParams();
     if (category) qs.set("category", category);
     if (region) qs.set("region", region);
-    void core
-      .streamGet(`intel/stream?${qs.toString()}`, {
-        signal: ctrl.signal,
-        onEvent: (frame) => {
-          if (frame.event === "event") {
-            void loadAll();
-          }
-        },
-      })
-      .catch(() => {});
-    return () => ctrl.abort();
-  }, [core, category, region, loadAll]);
+    let reloadTimer: number | undefined;
+    const scheduleReload = (immediate = false) => {
+      if (reloadTimer !== undefined) {
+        window.clearTimeout(reloadTimer);
+        reloadTimer = undefined;
+      }
+      if (immediate) {
+        void loadAllRef.current();
+        return;
+      }
+      reloadTimer = window.setTimeout(() => {
+        reloadTimer = undefined;
+        void loadAllRef.current();
+      }, 500);
+    };
+
+    const runStream = async () => {
+      const delays = [1000, 2000, 4000, 8000, 15000];
+      let attempt = 0;
+      while (!ctrl.signal.aborted) {
+        try {
+          await core.streamGet(`intel/stream?${qs.toString()}`, {
+            signal: ctrl.signal,
+            onEvent: (frame) => {
+              attempt = 0;
+              if (frame.event === "sync_complete") {
+                scheduleReload(true);
+              } else if (
+                frame.event === "event" ||
+                frame.event === "prediction"
+              ) {
+                scheduleReload(false);
+              }
+            },
+          });
+        } catch {
+          if (ctrl.signal.aborted) return;
+        }
+        if (ctrl.signal.aborted) return;
+        const waitMs = delays[Math.min(attempt, delays.length - 1)];
+        attempt++;
+        await new Promise<void>((resolve) => {
+          const t = window.setTimeout(resolve, waitMs);
+          ctrl.signal.addEventListener(
+            "abort",
+            () => {
+              window.clearTimeout(t);
+              resolve();
+            },
+            { once: true },
+          );
+        });
+      }
+    };
+    void runStream();
+    return () => {
+      if (reloadTimer !== undefined) window.clearTimeout(reloadTimer);
+      ctrl.abort();
+    };
+  }, [core.mode, core.streamGet, category, region]);
 
   const rawEvents = mapSummary?.events ?? [];
   function sentimentLabel(sentiment: string): string {

@@ -5,9 +5,13 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/fased-ai/fased-app/internal/marketdata"
+	"github.com/fased-ai/fased-app/internal/quantlab"
 )
 
 func TestMarketDataHTTPAndAgentMCPIntegration(t *testing.T) {
@@ -137,5 +141,143 @@ func TestMarketDataHTTPAndAgentMCPIntegration(t *testing.T) {
 	contents, _ := resMap["contents"].([]any)
 	if len(contents) == 0 || !strings.Contains(contents[0].(map[string]any)["text"].(string), "Core Desk") {
 		t.Fatalf("expected Core Desk in fased://market/watchlists resource, got %+v", resOut)
+	}
+}
+
+func TestStage1To3SSEMultiplexAndShutdown(t *testing.T) {
+	t.Parallel()
+	dir := fixtureDir(t)
+	server, err := StartAgentFixture(t.Context(), dir, "127.0.0.1:0", "", nil)
+	if err != nil {
+		t.Fatalf("StartAgentFixture failed: %v", err)
+	}
+	serveDone := make(chan error, 1)
+	go func() { serveDone <- server.Serve() }()
+
+	closed := false
+	t.Cleanup(func() {
+		if !closed {
+			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			defer cancel()
+			_ = server.Close(ctx)
+			<-serveDone
+		}
+	})
+
+	token := claimFixture(t, server.Store)
+	mdSvc, err := server.Store.marketDataService()
+	if err != nil {
+		t.Fatalf("marketDataService failed: %v", err)
+	}
+
+	streamURL := server.URL + "/api/v1/market/stream?noSnapshot=1&subs=hyperliquid:BTC-PERP:1h:standard,bybit:BTCUSDT:5m:heikin_ashi"
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, streamURL, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Accept", "text/event-stream")
+
+	httpClient := &http.Client{}
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		t.Fatalf("GET multiplexed stream failed: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK || !strings.Contains(resp.Header.Get("Content-Type"), "text/event-stream") {
+		t.Fatalf("unexpected SSE status=%d content-type=%q", resp.StatusCode, resp.Header.Get("Content-Type"))
+	}
+
+	reader := bufio.NewReader(resp.Body)
+	readSSEData := func() (string, string) {
+		var eventName string
+		for {
+			line, err := reader.ReadString('\n')
+			if err != nil {
+				t.Fatalf("read SSE stream failed: %v", err)
+			}
+			trimmed := strings.TrimSpace(line)
+			if strings.HasPrefix(trimmed, "event:") {
+				eventName = strings.TrimSpace(strings.TrimPrefix(trimmed, "event:"))
+			} else if strings.HasPrefix(trimmed, "data:") {
+				return eventName, strings.TrimSpace(strings.TrimPrefix(trimmed, "data:"))
+			}
+		}
+	}
+
+	readyEvt, _ := readSSEData()
+	if readyEvt != "ready" {
+		t.Fatalf("expected noSnapshot=1 stream to emit event: ready first, got %q", readyEvt)
+	}
+
+	// Publish two matching events and two filtered events across interval/style boundaries.
+	now := time.Now().Unix()
+	mdSvc.Publish(marketdata.Event{
+		Type: "candle", Venue: "hyperliquid", Symbol: "BTC-PERP", Interval: "5m", Style: "standard",
+		Timestamp: now, Payload: map[string]any{"close": 90001.0},
+	})
+	mdSvc.Publish(marketdata.Event{
+		Type: "candle", Venue: "hyperliquid", Symbol: "BTC-PERP", Interval: "1h", Style: "standard",
+		Timestamp: now, Payload: map[string]any{"close": 91000.0},
+	})
+	mdSvc.Publish(marketdata.Event{
+		Type: "candle", Venue: "bybit", Symbol: "BTCUSDT", Interval: "5m", Style: "standard",
+		Timestamp: now, Payload: map[string]any{"close": 90002.0},
+	})
+	mdSvc.Publish(marketdata.Event{
+		Type: "candle", Venue: "bybit", Symbol: "BTCUSDT", Interval: "5m", Style: "heikin_ashi",
+		Timestamp: now, Payload: map[string]any{"close": 92000.0},
+	})
+
+	var received []marketdata.Event
+	for len(received) < 2 {
+		_, raw := readSSEData()
+		var evt marketdata.Event
+		if err := json.Unmarshal([]byte(raw), &evt); err != nil {
+			t.Fatalf("decode SSE event %q: %v", raw, err)
+		}
+		received = append(received, evt)
+	}
+	if received[0].Venue != "hyperliquid" || received[0].Interval != "1h" || received[0].Style != "standard" {
+		t.Fatalf("unexpected first filtered SSE event: %+v", received[0])
+	}
+	if received[1].Venue != "bybit" || received[1].Interval != "5m" || received[1].Style != "heikin_ashi" {
+		t.Fatalf("unexpected second filtered SSE event: %+v", received[1])
+	}
+
+	// Close server while the SSE connection is still actively open; shutdown must return promptly.
+	closeStart := time.Now()
+	closeCtx, closeCancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer closeCancel()
+	if err := server.Close(closeCtx); err != nil {
+		t.Fatalf("Server.Close with open SSE connection failed: %v", err)
+	}
+	closed = true
+	if elapsed := time.Since(closeStart); elapsed >= 3*time.Second {
+		t.Fatalf("Server.Close with open SSE took too long: %s", elapsed)
+	}
+	if err := <-serveDone; err != nil {
+		t.Fatalf("server.Serve returned error after Close: %v", err)
+	}
+
+	// Verify Stage 1-3 optional SQLite WAL checkpoint includes quantlab/lab.sqlite.
+	walStore := fixtureStore(t)
+	labSvc, err := walStore.quantLabService()
+	if err != nil {
+		t.Fatalf("quantLabService failed: %v", err)
+	}
+	if _, err := labSvc.SaveScript(t.Context(), quantlab.ScriptInput{
+		ID:     "wal-check",
+		Name:   "WAL Check",
+		Source: "close > open",
+	}); err != nil {
+		t.Fatalf("SaveScript failed: %v", err)
+	}
+	if err := walStore.CheckpointWAL(context.Background()); err != nil {
+		t.Fatalf("CheckpointWAL with quantlab/lab.sqlite failed: %v", err)
+	}
+	labHealth := InspectSQLiteHealth(context.Background(), filepath.Join(walStore.dir, "quantlab", "lab.sqlite"))
+	if !labHealth.Exists || !labHealth.Healthy {
+		t.Fatalf("expected healthy quantlab/lab.sqlite after CheckpointWAL, got %+v", labHealth)
 	}
 }

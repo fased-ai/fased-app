@@ -88,3 +88,54 @@ func TestDoctorAndBackupRestoreLifecycle(t *testing.T) {
 		t.Fatal("restore unexpectedly ran while instance.lock was held")
 	}
 }
+
+func TestBackupRestoreOptionalStage1To3SQLiteAndNoRawKey(t *testing.T) {
+	tmp := t.TempDir()
+	srcDir := filepath.Join(tmp, "src-stage1to3")
+	if err := os.MkdirAll(srcDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	store, err := core.OpenStore(srcDir)
+	if err != nil {
+		t.Fatalf("OpenStore: %v", err)
+	}
+	labFile := filepath.Join(srcDir, "quantlab", "lab.sqlite")
+	if err := os.MkdirAll(filepath.Dir(labFile), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(srcDir, "integrations"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(srcDir, "integrations", "integrations.key"), make([]byte, 32), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_ = core.SnapshotSQLite(t.Context(), filepath.Join(srcDir, "core.sqlite"), labFile)
+	_ = store.Close()
+
+	archivePath := filepath.Join(tmp, "stage1to3-backup.tar.gz")
+	var bkOut bytes.Buffer
+	if err := run([]string{"backup", "--data-dir", srcDir, "--out", archivePath, "--json"}, nil, &bkOut, io.Discard); err != nil {
+		t.Fatalf("backup failed: %v", err)
+	}
+	var bkManifest struct {
+		Files map[string]string `json:"files"`
+	}
+	if err := json.Unmarshal(bkOut.Bytes(), &bkManifest); err != nil {
+		t.Fatalf("invalid backup json: %v", err)
+	}
+	if bkManifest.Files["quantlab/lab.sqlite"] == "" {
+		t.Fatalf("expected quantlab/lab.sqlite in backup manifest, got %+v", bkManifest.Files)
+	}
+	if bkManifest.Files["integrations/integrations.key"] != "" {
+		t.Fatal("backup unexpectedly included raw integrations.key")
+	}
+
+	dstDir := filepath.Join(tmp, "dst-stage1to3")
+	if err := run([]string{"restore", "--from", archivePath, "--data-dir", dstDir, "--json"}, nil, io.Discard, io.Discard); err != nil {
+		t.Fatalf("restore failed: %v", err)
+	}
+	rep := core.InspectSQLiteHealth(t.Context(), filepath.Join(dstDir, "quantlab", "lab.sqlite"))
+	if !rep.Exists || !rep.Healthy {
+		t.Fatalf("expected healthy restored quantlab/lab.sqlite, got %+v", rep)
+	}
+}

@@ -94,7 +94,11 @@ func dialSafeIntel(ctx context.Context, dialer *net.Dialer, network, addr string
 	return nil, lastErr
 }
 
-func newHTTPClient(override http.RoundTripper, allowLocalhost bool) *http.Client {
+func isASCIIWordChar(b byte) bool {
+	return (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z') || (b >= '0' && b <= '9')
+}
+
+func newHTTPClient(override http.RoundTripper, srcKind string, allowLocalhost bool) *http.Client {
 	transport := override
 	if transport == nil {
 		dialer := &net.Dialer{Timeout: 5 * time.Second, KeepAlive: 30 * time.Second}
@@ -104,7 +108,7 @@ func newHTTPClient(override http.RoundTripper, allowLocalhost bool) *http.Client
 				return dialSafeIntel(ctx, dialer, network, addr, allowLocalhost)
 			},
 			ForceAttemptHTTP2:     true,
-			MaxIdleConns:          8,
+			MaxIdleConns:          16,
 			IdleConnTimeout:       30 * time.Second,
 			TLSHandshakeTimeout:   5 * time.Second,
 			ResponseHeaderTimeout: 8 * time.Second,
@@ -114,13 +118,21 @@ func newHTTPClient(override http.RoundTripper, allowLocalhost bool) *http.Client
 	return &http.Client{
 		Transport: transport,
 		Timeout:   defaultFetchTimeout,
-		CheckRedirect: func(*http.Request, []*http.Request) error {
-			return http.ErrUseLastResponse
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if len(via) >= 3 {
+				return errors.New("too many redirects")
+			}
+			if _, err := ValidateSourceEndpoint(req.URL.String(), srcKind, allowLocalhost); err != nil {
+				return err
+			}
+			req.Header.Del("Authorization")
+			req.Header.Del("Cookie")
+			return nil
 		},
 	}
 }
 
-func fetchSourceBytes(ctx context.Context, override http.RoundTripper, src SourceConfig) ([]byte, error) {
+func fetchSourceBytes(ctx context.Context, client *http.Client, override http.RoundTripper, src SourceConfig) ([]byte, error) {
 	if _, err := ValidateSourceEndpoint(src.Endpoint, src.Kind, src.AllowLocalhost); err != nil {
 		return nil, err
 	}
@@ -131,7 +143,9 @@ func fetchSourceBytes(ctx context.Context, override http.RoundTripper, src Sourc
 	req.Header.Set("User-Agent", "fased-worldintel/1.0")
 	req.Header.Set("Accept", "application/json, application/xml, application/rss+xml, application/atom+xml, text/xml;q=0.9")
 
-	client := newHTTPClient(override, src.Kind == KindSidecar && src.AllowLocalhost)
+	if client == nil {
+		client = newHTTPClient(override, src.Kind, src.Kind == KindSidecar && src.AllowLocalhost)
+	}
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, err
