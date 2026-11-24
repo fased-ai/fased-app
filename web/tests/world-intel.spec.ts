@@ -112,6 +112,7 @@ test("World Intel map, prediction arbitrage, chart event pins, Overview widgets,
         JSON.stringify({ theme: chosenTheme, language: "en", rail: true }),
       );
     }, theme);
+    await page.reload();
     for (const hash of ["#intel", "#overview"]) {
       await page.goto(`${url}/${hash}`);
       await expect(page.locator("html")).toHaveAttribute("data-theme", theme);
