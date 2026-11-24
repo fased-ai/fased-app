@@ -2,8 +2,10 @@ package core
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -547,5 +549,91 @@ func TestMCPSecurityToolsAndResources(t *testing.T) {
 	_, pausedDraft := callRPC(`{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"draft_task","arguments":{"name":"Blocked","description":"Should pause","intervalSeconds":300}}}`)
 	if pausedDraft["error"] == nil {
 		t.Fatalf("expected MCP draft tool error when paused, got %+v", pausedDraft)
+	}
+}
+
+func TestAgentV2GetThreadPaginationAndRemoteMCPBearer(t *testing.T) {
+	s, err := OpenStore(filepath.Join(t.TempDir(), "state"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+
+	// 1. Thread pagination returns oldest-to-newest pages with hasMore & nextBeforeSeq.
+	th, err := s.CreateThread(t.Context(), "wen-operator", "Long Thread", "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 1; i <= 5; i++ {
+		if _, err := s.AppendMessage(t.Context(), AgentV2Message{
+			ThreadID: th.ID,
+			Role:     "user",
+			Content:  fmt.Sprintf("msg-%d", i),
+			Status:   "completed",
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	page1, err := s.GetThreadPage(t.Context(), th.ID, 2, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !page1.HasMore || len(page1.Messages) != 2 || page1.Messages[0].Content != "msg-4" || page1.Messages[1].Content != "msg-5" || page1.NextBeforeSeq != page1.Messages[0].Seq || page1.Thread.MessageCount != 5 {
+		t.Fatalf("unexpected page1: %+v", page1)
+	}
+	page2, err := s.GetThreadPage(t.Context(), th.ID, 2, page1.NextBeforeSeq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !page2.HasMore || len(page2.Messages) != 2 || page2.Messages[0].Content != "msg-2" || page2.Messages[1].Content != "msg-3" {
+		t.Fatalf("unexpected page2: %+v", page2)
+	}
+	page3, err := s.GetThreadPage(t.Context(), th.ID, 2, page2.NextBeforeSeq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if page3.HasMore || len(page3.Messages) != 1 || page3.Messages[0].Content != "msg-1" {
+		t.Fatalf("unexpected page3: %+v", page3)
+	}
+
+	// 2. Owner-authenticated Remote HTTPS /api/v1/mcp admits non-browser Bearer token (refuses browser Origin without CSRF).
+	code, err := s.IssueClaimCode(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	token, err := s.Claim(t.Context(), code.Code, "owner-remote-mcp-pass")
+	if err != nil {
+		t.Fatal(err)
+	}
+	h, err := NewHTTPHandler(s, "http://127.0.0.1:7331", "https://remote.example.com", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.instanceLocation = "remote"
+	h.remoteProxyTrust = true
+	h.remoteTransport = "domain"
+
+	req := httptest.NewRequest(http.MethodPost, "https://remote.example.com/api/v1/mcp", strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"ping"}`))
+	req.Host = "remote.example.com"
+	req.Header.Set("X-Forwarded-Proto", "https")
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+token)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"result"`) {
+		t.Fatalf("expected 200 remote Bearer MCP ping, got %d %s", w.Code, w.Body.String())
+	}
+
+	// Browser-origin request using Bearer without CSRF must still be rejected.
+	browserReq := httptest.NewRequest(http.MethodPost, "https://remote.example.com/api/v1/mcp", strings.NewReader(`{"jsonrpc":"2.0","id":2,"method":"ping"}`))
+	browserReq.Host = "remote.example.com"
+	browserReq.Header.Set("X-Forwarded-Proto", "https")
+	browserReq.Header.Set("Origin", "https://remote.example.com")
+	browserReq.Header.Set("Content-Type", "application/json")
+	browserReq.Header.Set("Authorization", "Bearer "+token)
+	wb := httptest.NewRecorder()
+	h.ServeHTTP(wb, browserReq)
+	if wb.Code != http.StatusUnauthorized && wb.Code != http.StatusForbidden {
+		t.Fatalf("expected browser-origin Bearer MCP without cookie/CSRF refused, got %d", wb.Code)
 	}
 }

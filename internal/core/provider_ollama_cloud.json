@@ -2,8 +2,8 @@
   "version": 1,
   "policy": "latest-only",
   "provider": "ollama-cloud",
-  "reviewedAt": 1795219200,
-  "expiresAt": 1797811200,
+  "reviewedAt": 1795478400,
+  "expiresAt": 1811030400,
   "sources": {
     "models": "https://ollama.com/library/gemma4",
     "contract": "https://docs.ollama.com/api/openai-compatibility",

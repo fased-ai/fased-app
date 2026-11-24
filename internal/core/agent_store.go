@@ -111,6 +111,8 @@ type AgentThreadDetail struct {
 	Thread           AgentThread      `json:"thread"`
 	Messages         []AgentV2Message `json:"messages"`
 	PendingApprovals []AgentApproval  `json:"pendingApprovals"`
+	HasMore          bool             `json:"hasMore,omitempty"`
+	NextBeforeSeq    int              `json:"nextBeforeSeq,omitempty"`
 }
 
 type agentV2Store struct {
@@ -160,6 +162,11 @@ func (s *Store) ensureAgentV2(ctx context.Context) (*agentV2Store, error) {
 	}
 	if version > agentV2SchemaVersion {
 		return nil, errors.New("agents.sqlite schema is newer than this binary; refusing downgrade")
+	}
+	if version > 0 {
+		if err := sqliteQuickCheck(ctx, db, "agents.sqlite"); err != nil {
+			return nil, err
+		}
 	}
 	if version == 0 {
 		tx, err := db.BeginTx(ctx, nil)
@@ -571,6 +578,10 @@ var (
 )
 
 func (s *Store) GetThread(ctx context.Context, id string) (AgentThreadDetail, error) {
+	return s.GetThreadPage(ctx, id, 0, 0)
+}
+
+func (s *Store) GetThreadPage(ctx context.Context, id string, limit, beforeSeq int) (AgentThreadDetail, error) {
 	v2, err := s.ensureAgentV2(ctx)
 	if err != nil {
 		return AgentThreadDetail{}, err
@@ -579,23 +590,48 @@ func (s *Store) GetThread(ctx context.Context, id string) (AgentThreadDetail, er
 	if err != nil {
 		return AgentThreadDetail{}, err
 	}
-	msgRows, err := v2.db.QueryContext(ctx,
-		`SELECT id,thread_id,seq,role,content,reasoning,status,model,provider,call_id,tool_name,input_tokens,output_tokens,cached_tokens,error_text,created_at
-		 FROM messages WHERE thread_id=? ORDER BY seq ASC`,
-		id,
-	)
+	if limit < 0 {
+		limit = 0
+	}
+	if limit > 500 {
+		limit = 500
+	}
+	var totalMsgs int
+	if err := v2.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM messages WHERE thread_id=?`, id).Scan(&totalMsgs); err != nil {
+		return AgentThreadDetail{}, err
+	}
+	var msgRows *sql.Rows
+	if limit > 0 {
+		if beforeSeq > 0 {
+			msgRows, err = v2.db.QueryContext(ctx,
+				`SELECT id,thread_id,seq,role,content,reasoning,status,model,provider,call_id,tool_name,input_tokens,output_tokens,cached_tokens,error_text,created_at
+				 FROM messages WHERE thread_id=? AND seq<? ORDER BY seq DESC LIMIT ?`,
+				id, beforeSeq, limit+1,
+			)
+		} else {
+			msgRows, err = v2.db.QueryContext(ctx,
+				`SELECT id,thread_id,seq,role,content,reasoning,status,model,provider,call_id,tool_name,input_tokens,output_tokens,cached_tokens,error_text,created_at
+				 FROM messages WHERE thread_id=? ORDER BY seq DESC LIMIT ?`,
+				id, limit+1,
+			)
+		}
+	} else {
+		msgRows, err = v2.db.QueryContext(ctx,
+			`SELECT id,thread_id,seq,role,content,reasoning,status,model,provider,call_id,tool_name,input_tokens,output_tokens,cached_tokens,error_text,created_at
+			 FROM messages WHERE thread_id=? ORDER BY seq ASC`,
+			id,
+		)
+	}
 	if err != nil {
 		return AgentThreadDetail{}, err
 	}
 	msgs := []AgentV2Message{}
-	msgIdx := map[string]int{}
 	for msgRows.Next() {
 		var m AgentV2Message
 		if err := msgRows.Scan(&m.ID, &m.ThreadID, &m.Seq, &m.Role, &m.Content, &m.Reasoning, &m.Status, &m.Model, &m.Provider, &m.CallID, &m.ToolName, &m.InputTokens, &m.OutputTokens, &m.CachedTokens, &m.ErrorText, &m.CreatedAt); err != nil {
 			msgRows.Close()
 			return AgentThreadDetail{}, err
 		}
-		msgIdx[m.ID] = len(msgs)
 		msgs = append(msgs, m)
 	}
 	if err := msgRows.Err(); err != nil {
@@ -603,6 +639,26 @@ func (s *Store) GetThread(ctx context.Context, id string) (AgentThreadDetail, er
 		return AgentThreadDetail{}, err
 	}
 	msgRows.Close()
+
+	hasMore := false
+	nextBeforeSeq := 0
+	if limit > 0 {
+		if len(msgs) > limit {
+			hasMore = true
+			msgs = msgs[:limit]
+		}
+		// Reverse DESC page back into chronological ASC order.
+		for i, j := 0, len(msgs)-1; i < j; i, j = i+1, j-1 {
+			msgs[i], msgs[j] = msgs[j], msgs[i]
+		}
+		if hasMore && len(msgs) > 0 {
+			nextBeforeSeq = msgs[0].Seq
+		}
+	}
+	msgIdx := make(map[string]int, len(msgs))
+	for i, m := range msgs {
+		msgIdx[m.ID] = i
+	}
 
 	tcRows, err := v2.db.QueryContext(ctx,
 		`SELECT id,thread_id,message_id,call_id,tool_name,tier,args_json,status,result_json,error_text,created_at,completed_at
@@ -656,12 +712,14 @@ func (s *Store) GetThread(ctx context.Context, id string) (AgentThreadDetail, er
 	}
 	apRows.Close()
 
-	thread.MessageCount = len(msgs)
+	thread.MessageCount = totalMsgs
 	thread.PendingApprovals = len(pending)
 	return AgentThreadDetail{
 		Thread:           thread,
 		Messages:         msgs,
 		PendingApprovals: pending,
+		HasMore:          hasMore,
+		NextBeforeSeq:    nextBeforeSeq,
 	}, nil
 }
 

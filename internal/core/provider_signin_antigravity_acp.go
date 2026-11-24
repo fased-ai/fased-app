@@ -546,7 +546,7 @@ func probeAntigravityACPWithConfig(ctx context.Context, runner providerCLIRunner
 			"fs":       map[string]any{"readTextFile": false, "writeTextFile": false},
 			"terminal": false,
 		},
-		"clientInfo": map[string]any{"name": "fased", "version": "0.1.35"},
+		"clientInfo": map[string]any{"name": "fased", "version": Version},
 	})
 	if err != nil || initResp.Error != nil {
 		return status

@@ -158,7 +158,28 @@ func escapeXMLText(s string) string {
 	return b.String()
 }
 
+func launchdServerLogPath() string {
+	home, err := os.UserHomeDir()
+	if err != nil || strings.TrimSpace(home) == "" {
+		return "/dev/null"
+	}
+	return filepath.Join(home, "Library", "Logs", "Fased", "server.log")
+}
+
+func rotateLogIfOversized(path string, maxBytes int64) {
+	if path == "" || path == "/dev/null" {
+		return
+	}
+	_ = os.MkdirAll(filepath.Dir(path), 0700)
+	info, err := os.Lstat(path)
+	if err != nil || !info.Mode().IsRegular() || info.Size() < maxBytes {
+		return
+	}
+	_ = os.Rename(path, path+".1")
+}
+
 func formatLaunchdServerPlist(execArgs []string) string {
+	logPath := launchdServerLogPath()
 	var b strings.Builder
 	b.WriteString("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n")
 	b.WriteString("<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n")
@@ -174,8 +195,8 @@ func formatLaunchdServerPlist(execArgs []string) string {
 	b.WriteString("  <key>ThrottleInterval</key>\n  <integer>3</integer>\n")
 	b.WriteString("  <key>Umask</key>\n  <integer>63</integer>\n")
 	b.WriteString("  <key>ProcessType</key>\n  <string>Background</string>\n")
-	b.WriteString("  <key>StandardOutPath</key>\n  <string>/dev/null</string>\n")
-	b.WriteString("  <key>StandardErrorPath</key>\n  <string>/dev/null</string>\n")
+	b.WriteString("  <key>StandardOutPath</key>\n  <string>" + escapeXMLText(logPath) + "</string>\n")
+	b.WriteString("  <key>StandardErrorPath</key>\n  <string>" + escapeXMLText(logPath) + "</string>\n")
 	b.WriteString("</dict>\n</plist>\n")
 	return b.String()
 }
@@ -365,6 +386,7 @@ func enableAndStartServerService(ctx context.Context, manager, unitPath string) 
 		}
 		return serverSystemctl(ctx, "restart", "fased-server.service")
 	case "launchd":
+		rotateLogIfOversized(launchdServerLogPath(), 5*1024*1024)
 		dom := launchdDomain()
 		_ = serverLaunchctl(ctx, "bootout", dom+"/"+serverLaunchdLabel)
 		return serverLaunchctl(ctx, "bootstrap", dom, unitPath)

@@ -259,15 +259,7 @@ type envCLIRunner interface {
 type osCLIRunner struct{}
 
 func sanitizedCLIEnv() []string {
-	env := make([]string, 0, len(os.Environ())+1)
-	for _, item := range os.Environ() {
-		if strings.HasPrefix(item, "FASED_") || strings.HasPrefix(item, "NO_COLOR=") {
-			continue
-		}
-		env = append(env, item)
-	}
-	env = append(env, "NO_COLOR=1")
-	return env
+	return safeCLIEnv("NO_COLOR=1")
 }
 
 func (osCLIRunner) LookPath(binary string) (string, error) {
@@ -276,6 +268,7 @@ func (osCLIRunner) LookPath(binary string) (string, error) {
 
 func (osCLIRunner) Run(ctx context.Context, binary string, args []string, stdin string) ([]byte, []byte, int, error) {
 	cmd := exec.CommandContext(ctx, binary, args...)
+	configureSubprocessGroup(cmd)
 	cmd.Env = sanitizedCLIEnv()
 	if stdin != "" {
 		cmd.Stdin = strings.NewReader(stdin)
@@ -302,26 +295,8 @@ func (osCLIRunner) Start(ctx context.Context, binary string, args []string, stdi
 
 func (osCLIRunner) StartWithEnv(ctx context.Context, binary string, args []string, stdin string, extraEnv []string) (io.ReadCloser, io.ReadCloser, func() error, func(), error) {
 	cmd := exec.CommandContext(ctx, binary, args...)
-	base := sanitizedCLIEnv()
-	if len(extraEnv) > 0 {
-		overridden := map[string]bool{}
-		var validExtra []string
-		for _, entry := range extraEnv {
-			if k, _, ok := strings.Cut(entry, "="); ok && k != "" {
-				overridden[k] = true
-				validExtra = append(validExtra, entry)
-			}
-		}
-		dedup := make([]string, 0, len(base)+len(validExtra))
-		for _, entry := range base {
-			if k, _, ok := strings.Cut(entry, "="); ok && overridden[k] {
-				continue
-			}
-			dedup = append(dedup, entry)
-		}
-		base = append(dedup, validExtra...)
-	}
-	cmd.Env = base
+	configureSubprocessGroup(cmd)
+	cmd.Env = mergeCLIEnv(sanitizedCLIEnv(), extraEnv)
 	if stdin != "" {
 		cmd.Stdin = strings.NewReader(stdin)
 	}
@@ -340,15 +315,14 @@ func (osCLIRunner) StartWithEnv(ctx context.Context, binary string, args []strin
 		return nil, nil, nil, nil, err
 	}
 	kill := func() {
-		if cmd.Process != nil {
-			_ = cmd.Process.Kill()
-		}
+		killSubprocessGroup(cmd)
 	}
 	return stdout, stderr, cmd.Wait, kill, nil
 }
 
 func (osCLIRunner) StartInteractive(ctx context.Context, binary string, args []string, env []string) (io.WriteCloser, io.ReadCloser, io.ReadCloser, func() error, func(), error) {
 	cmd := exec.CommandContext(ctx, binary, args...)
+	configureSubprocessGroup(cmd)
 	if len(env) > 0 {
 		cmd.Env = env
 	} else {
@@ -376,9 +350,7 @@ func (osCLIRunner) StartInteractive(ctx context.Context, binary string, args []s
 		return nil, nil, nil, nil, nil, err
 	}
 	kill := func() {
-		if cmd.Process != nil {
-			_ = cmd.Process.Kill()
-		}
+		killSubprocessGroup(cmd)
 	}
 	return stdin, stdout, stderr, cmd.Wait, kill, nil
 }
@@ -761,6 +733,7 @@ func cliConfigEnvWithShadow(provider, binary, configDir, shadowHome string) []st
 
 func (osCLIRunner) RunWithEnv(ctx context.Context, binary string, args []string, stdin string, extraEnv []string) ([]byte, []byte, int, error) {
 	cmd := exec.CommandContext(ctx, binary, args...)
+	configureSubprocessGroup(cmd)
 	cmd.Env = mergeCLIEnv(sanitizedCLIEnv(), extraEnv)
 	if stdin != "" {
 		cmd.Stdin = strings.NewReader(stdin)

@@ -2,8 +2,8 @@
   "version": 1,
   "policy": "latest-only",
   "provider": "openrouter",
-  "reviewedAt": 1795219200,
-  "expiresAt": 1797811200,
+  "reviewedAt": 1795478400,
+  "expiresAt": 1811030400,
   "sources": {
     "models": "https://openrouter.ai/google/gemini-3.8-flash",
     "pricing": "https://openrouter.ai/api/v1/models",

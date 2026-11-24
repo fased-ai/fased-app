@@ -520,6 +520,13 @@ func allowedQuery(r *http.Request) bool {
 			}
 		}
 		return true
+	case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/api/v1/agents/v2/threads/") && validPathSegment(strings.TrimPrefix(r.URL.Path, "/api/v1/agents/v2/threads/")):
+		for key := range q {
+			if key != "limit" && key != "beforeSeq" {
+				return false
+			}
+		}
+		return true
 	case r.Method == http.MethodGet && r.URL.Path == "/api/v1/agents/v2/memories":
 		for key := range q {
 			switch key {

@@ -6,7 +6,6 @@ import (
 	"github.com/fased-ai/fased-app/internal/providersecrets"
 	"github.com/fased-ai/fased-app/internal/tailnet"
 	"io/fs"
-	"log"
 	"net"
 	"net/http"
 	"os"
@@ -30,6 +29,8 @@ type Server struct {
 	dir          string
 	ipcNetwork   string
 	ipcAddress   string
+	serverCtx    context.Context
+	serverCancel context.CancelFunc
 	taskCancel   context.CancelFunc
 	taskDone     chan struct{}
 }
@@ -146,17 +147,36 @@ func startModesWithTaskSecrets(ctx context.Context, dir, listen, publicOrigin st
 		listener.Close()
 		return nil, err
 	}
-	server := &Server{Store: store, Listener: listener, Lock: lock, URL: baseURL, dir: dir, HTTP: &http.Server{Handler: handler, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second, WriteTimeout: 30 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 16 * 1024}}
+	serverCtx, serverCancel := context.WithCancel(context.Background())
+	baseCtx := func(net.Listener) context.Context { return serverCtx }
+	server := &Server{
+		Store:        store,
+		Listener:     listener,
+		Lock:         lock,
+		URL:          baseURL,
+		dir:          dir,
+		serverCtx:    serverCtx,
+		serverCancel: serverCancel,
+		HTTP:         &http.Server{Handler: handler, BaseContext: baseCtx, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second, WriteTimeout: 30 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 16 * 1024},
+	}
 	ipc, network, address, err := listenIPC(dir, store.instanceID)
 	if err != nil {
+		serverCancel()
 		listener.Close()
 		return nil, err
 	}
 	server.IPC = ipc
 	server.ipcNetwork = network
 	server.ipcAddress = address
-	server.IPCServer = &http.Server{Handler: privateIPCHandler(handler), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second, WriteTimeout: 30 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 16 * 1024}
+	server.IPCServer = &http.Server{Handler: privateIPCHandler(handler), BaseContext: baseCtx, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second, WriteTimeout: 30 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 16 * 1024}
 	if err = server.writeEndpoint(); err != nil {
+		serverCancel()
+		listener.Close()
+		ipc.Close()
+		return nil, err
+	}
+	if err = handler.initLocalBootstrapNonce(dir); err != nil {
+		serverCancel()
 		listener.Close()
 		ipc.Close()
 		return nil, err
@@ -181,6 +201,7 @@ func (s *Server) startAgentTasks() {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
+		defer recoverBackgroundPanic("task-scheduler")
 		ticker := time.NewTicker(time.Second)
 		defer ticker.Stop()
 		lastError := ""
@@ -218,10 +239,10 @@ func (s *Server) startAgentTasks() {
 				}
 				message := ""
 				if e != nil && !errors.Is(e, ErrCorePaused) && !errors.Is(e, context.Canceled) {
-					message = "local task scheduler held; inspect workspace capacity and core state"
+					message = sanitizeDiagValue(e.Error(), 240)
 				}
 				if message != "" && message != lastError {
-					log.Print(message)
+					coreLogger.Warn("local task scheduler held", "loop", "tasks", "err", message)
 				}
 				lastError = message
 			}
@@ -231,6 +252,7 @@ func (s *Server) startAgentTasks() {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
+			defer recoverBackgroundPanic("agent-ai-scheduler")
 			ticker := time.NewTicker(time.Second)
 			defer ticker.Stop()
 			lastError := ""
@@ -244,10 +266,10 @@ func (s *Server) startAgentTasks() {
 					stop()
 					message := ""
 					if e != nil && !errors.Is(e, ErrCorePaused) && !errors.Is(e, context.Canceled) {
-						message = "local task scheduler held; inspect workspace capacity and core state"
+						message = sanitizeDiagValue(e.Error(), 240)
 					}
 					if message != "" && message != lastError {
-						log.Print(message)
+						coreLogger.Warn("local task scheduler held", "loop", "agent-ai", "err", message)
 					}
 					lastError = message
 				}
@@ -258,6 +280,7 @@ func (s *Server) startAgentTasks() {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
+			defer recoverBackgroundPanic("provider-model-refresh")
 			startupTimer := time.NewTimer(5 * time.Second)
 			defer startupTimer.Stop()
 			select {
@@ -278,6 +301,25 @@ func (s *Server) startAgentTasks() {
 			}
 		}()
 	}
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		defer recoverBackgroundPanic("sqlite-wal-checkpoint")
+		ticker := time.NewTicker(15 * time.Minute)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				c, stop := context.WithTimeout(ctx, 15*time.Second)
+				if err := s.Store.CheckpointWAL(c); err != nil && !errors.Is(err, context.Canceled) {
+					coreLogger.Warn("sqlite WAL checkpoint failed", "err", sanitizeDiagValue(err.Error(), 200))
+				}
+				stop()
+			}
+		}
+	}()
 	go func() {
 		wg.Wait()
 		close(s.taskDone)
@@ -304,6 +346,17 @@ func (s *Server) Close(ctx context.Context) error {
 		s.taskCancel()
 		<-s.taskDone
 	}
+	// Cancel long-lived request contexts (e.g. SSE streams) if shutdown grace expires.
+	doneShutdown := make(chan struct{})
+	if s.serverCancel != nil {
+		go func() {
+			select {
+			case <-ctx.Done():
+				s.serverCancel()
+			case <-doneShutdown:
+			}
+		}()
+	}
 	err := errors.Join(s.HTTP.Shutdown(ctx), s.IPCServer.Shutdown(ctx))
 	if s.RemoteHTTP != nil {
 		err = errors.Join(err, s.RemoteHTTP.Shutdown(ctx))
@@ -312,13 +365,19 @@ func (s *Server) Close(ctx context.Context) error {
 			_ = s.RemoteLegacy.Close()
 		}
 	}
+	close(doneShutdown)
+	if s.serverCancel != nil {
+		s.serverCancel()
+	}
 	if err != nil {
 		_ = s.HTTP.Close()
 		_ = s.IPCServer.Close()
 	}
 	// Keep a stale endpoint harmless: clients verify the instance ID before sending credentials.
 	_ = os.Remove(filepath.Join(s.dir, "endpoint.json"))
+	_ = os.Remove(filepath.Join(s.dir, localBootstrapNonceFile))
 	s.Store.clearHyperliquidRuntime()
+	evictCodexAppServerSessions()
 	return errors.Join(err, s.Store.Close(), s.Lock.Close())
 }
 
@@ -424,7 +483,7 @@ func (s *Server) ConfigureConnectionWithTransport(location, remoteTransport stri
 		h.remoteIngress = true
 		h.remoteProxyTrust = false
 		h.remoteTransport = "tailscale"
-		s.RemoteHTTP = &http.Server{Handler: h.remoteProxy(tailnet.WhoIs), ConnContext: tailnet.ConnContext, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second, WriteTimeout: 90 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 16 * 1024}
+		s.RemoteHTTP = &http.Server{Handler: h.remoteProxy(tailnet.WhoIs), BaseContext: func(net.Listener) context.Context { return s.serverCtx }, ConnContext: tailnet.ConnContext, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second, WriteTimeout: 90 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 16 * 1024}
 	} else if location == "remote" && (remoteTransport == "cloudflare" || remoteTransport == "domain" || remoteTransport == "proxy") {
 		h.remoteIngress = false
 		h.remoteProxyTrust = true

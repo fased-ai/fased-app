@@ -31,6 +31,25 @@ func escape(s string) string {
 	_ = xml.EscapeText(&b, []byte(s))
 	return b.String()
 }
+func darwinLogPath() string {
+	home, err := os.UserHomeDir()
+	if err != nil || strings.TrimSpace(home) == "" {
+		return "/dev/null"
+	}
+	return filepath.Join(home, "Library", "Logs", "Fased", "core.log")
+}
+
+func prepareDarwinLogDir() {
+	logPath := darwinLogPath()
+	if logPath == "/dev/null" {
+		return
+	}
+	_ = os.MkdirAll(filepath.Dir(logPath), 0700)
+	if info, err := os.Lstat(logPath); err == nil && info.Mode().IsRegular() && info.Size() >= 5*1024*1024 {
+		_ = os.Rename(logPath, logPath+".1")
+	}
+}
+
 func definition(p Paths, o Options) ([]byte, error) {
 	if _, err := validateDefinition(p, o); err != nil {
 		return nil, err
@@ -42,11 +61,12 @@ func definition(p Paths, o Options) ([]byte, error) {
 	if o.PublicOrigin != "" {
 		args = append(args, "--public-origin", o.PublicOrigin)
 	}
+	logPath := escape(darwinLogPath())
 	x := "<?xml version=\"1.0\" encoding=\"UTF-8\"?><!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\"><plist version=\"1.0\"><dict><key>Label</key><string>" + label + "</string><key>ProgramArguments</key><array>"
 	for _, a := range args {
 		x += "<string>" + escape(a) + "</string>"
 	}
-	x += "</array><key>RunAtLoad</key><true/><key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict><key>ThrottleInterval</key><integer>3</integer><key>Umask</key><integer>63</integer><key>ProcessType</key><string>Background</string><key>StandardOutPath</key><string>/dev/null</string><key>StandardErrorPath</key><string>/dev/null</string></dict></plist>"
+	x += "</array><key>RunAtLoad</key><true/><key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict><key>ThrottleInterval</key><integer>3</integer><key>Umask</key><integer>63</integer><key>ProcessType</key><string>Background</string><key>StandardOutPath</key><string>" + logPath + "</string><key>StandardErrorPath</key><string>" + logPath + "</string></dict></plist>"
 	return []byte(x), nil
 }
 func domain() string { return "gui/" + strconv.Itoa(os.Getuid()) }
@@ -101,6 +121,7 @@ func enable(ctx context.Context, m Manifest) error {
 	return os.Symlink(filepath.Join(m.Root, definitionName), p)
 }
 func start(ctx context.Context, m Manifest) error {
+	prepareDarwinLogDir()
 	ok, e := loaded(ctx, m)
 	if e != nil || ok {
 		return e

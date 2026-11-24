@@ -609,3 +609,20 @@ func TestProviderCLIStreamingAgentV2(t *testing.T) {
 		t.Fatalf("expected ANSI-sanitized error mentioning rate limited, got %q", err.Error())
 	}
 }
+
+func TestSanitizedCLIEnvUsesAllowlist(t *testing.T) {
+	t.Setenv("FASED_SECRET_TEST", "must-strip")
+	t.Setenv("AWS_SECRET_ACCESS_KEY", "must-strip-aws")
+	t.Setenv("OPENAI_API_KEY", "sk-must-strip-parent")
+
+	env := sanitizedCLIEnv()
+	joined := strings.Join(env, "\n")
+	for _, forbidden := range []string{"FASED_SECRET_TEST", "AWS_SECRET_ACCESS_KEY", "OPENAI_API_KEY", "must-strip"} {
+		if strings.Contains(joined, forbidden) {
+			t.Fatalf("sanitizedCLIEnv leaked %q", forbidden)
+		}
+	}
+	if !strings.Contains(joined, "NO_COLOR=1") {
+		t.Fatalf("expected NO_COLOR=1 in sanitizedCLIEnv")
+	}
+}

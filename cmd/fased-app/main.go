@@ -117,6 +117,12 @@ func run(args []string, in *os.File, out, errOut io.Writer) error {
 	if len(args) > 0 && args[0] == "server" {
 		return serverCommand(args[1:], out, errOut)
 	}
+	if len(args) > 0 && args[0] == "doctor" {
+		return doctorCommand(args[1:], out, errOut)
+	}
+	if len(args) > 0 && (args[0] == "backup" || args[0] == "restore") {
+		return stateBackupCommand(args[0], args[1:], out, errOut)
+	}
 	if len(args) > 1 && args[0] == "custody" && args[1] == "fixture-inspection" {
 		return inspectionFixtureCommand(args[2:], in, out, errOut)
 	}

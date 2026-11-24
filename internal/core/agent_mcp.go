@@ -156,7 +156,17 @@ func (h *HTTPHandler) mcpAPI(w http.ResponseWriter, r *http.Request, token strin
 				return
 			}
 		} else {
-			if h.instanceLocation != "local" || !h.checkLoopbackPeerUID(r, false) {
+			if h.instanceLocation == "local" {
+				if !h.checkLoopbackPeerUID(r, false) {
+					writeError(w, http.StatusForbidden, "local loopback peer identity required")
+					return
+				}
+			} else if h.instanceLocation == "remote" {
+				if !strings.HasPrefix(authHeader, "Bearer ") || r.Header.Get("Sec-Fetch-Site") != "" || !h.ownerSession(r, token) {
+					writeError(w, http.StatusForbidden, "owner Bearer authorization required for remote MCP")
+					return
+				}
+			} else {
 				writeError(w, http.StatusForbidden, "local loopback peer identity required")
 				return
 			}
