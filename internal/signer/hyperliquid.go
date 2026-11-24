@@ -28,8 +28,10 @@ type hyperliquidVaultState struct {
 }
 
 var (
-	hyperliquidVaultMu     sync.Mutex
-	hyperliquidVaultStates = map[*Vault]*hyperliquidVaultState{}
+	hyperliquidVaultMu           sync.Mutex
+	hyperliquidVaultStates       = map[*Vault]*hyperliquidVaultState{}
+	hyperliquidJournalFloor      func(*Vault) uint64
+	recordHyperliquidJournalSign func(*Vault, string, uint64, string) error
 )
 
 // HyperliquidPolicy bounds controlled Hyperliquid L1 order signing inside internal/signer.
@@ -495,6 +497,10 @@ func (v *Vault) SignHyperliquidOrder(intent HyperliquidOrderIntent, policy Hyper
 	}
 	v.mu.Lock()
 	defer v.mu.Unlock()
+	return v.signHyperliquidOrderLocked(intent, policy)
+}
+
+func (v *Vault) signHyperliquidOrderLocked(intent HyperliquidOrderIntent, policy HyperliquidPolicy) (*HyperliquidSignedAction, error) {
 	if v.closed {
 		return nil, ErrUnavailable
 	}
@@ -508,6 +514,11 @@ func (v *Vault) SignHyperliquidOrder(intent HyperliquidOrderIntent, policy Hyper
 	hyperliquidVaultMu.Lock()
 	lastNonce := st.lastNonce
 	hyperliquidVaultMu.Unlock()
+	if hyperliquidJournalFloor != nil {
+		if floor := hyperliquidJournalFloor(v); floor > lastNonce {
+			lastNonce = floor
+		}
+	}
 
 	notional, err := ValidateHyperliquidOrderIntent(intent, policy, lastNonce, v.now().Unix())
 	if err != nil {
@@ -520,6 +531,11 @@ func (v *Vault) SignHyperliquidOrder(intent HyperliquidOrderIntent, policy Hyper
 	signed, err := v.signHyperliquidActionLocked(intent.Network, policy.VaultAddress, actionMsgpack, intent.Nonce, notional)
 	if err != nil {
 		return nil, err
+	}
+	if recordHyperliquidJournalSign != nil {
+		if jErr := recordHyperliquidJournalSign(v, "order", intent.Nonce, signed.TypedDataDigest); jErr != nil {
+			return nil, jErr
+		}
 	}
 	hyperliquidVaultMu.Lock()
 	if cur, exists := hyperliquidVaultStates[v]; exists && cur == st && intent.Nonce > cur.lastNonce {
@@ -537,6 +553,10 @@ func (v *Vault) SignHyperliquidUpdateLeverage(intent HyperliquidUpdateLeverageIn
 	}
 	v.mu.Lock()
 	defer v.mu.Unlock()
+	return v.signHyperliquidUpdateLeverageLocked(intent, policy)
+}
+
+func (v *Vault) signHyperliquidUpdateLeverageLocked(intent HyperliquidUpdateLeverageIntent, policy HyperliquidPolicy) (*HyperliquidSignedAction, error) {
 	if v.closed {
 		return nil, ErrUnavailable
 	}
@@ -550,6 +570,11 @@ func (v *Vault) SignHyperliquidUpdateLeverage(intent HyperliquidUpdateLeverageIn
 	hyperliquidVaultMu.Lock()
 	lastNonce := st.lastNonce
 	hyperliquidVaultMu.Unlock()
+	if hyperliquidJournalFloor != nil {
+		if floor := hyperliquidJournalFloor(v); floor > lastNonce {
+			lastNonce = floor
+		}
+	}
 
 	if err := ValidateHyperliquidUpdateLeverageIntent(intent, policy, lastNonce, v.now().Unix()); err != nil {
 		return nil, err
@@ -561,6 +586,11 @@ func (v *Vault) SignHyperliquidUpdateLeverage(intent HyperliquidUpdateLeverageIn
 	signed, err := v.signHyperliquidActionLocked(intent.Network, policy.VaultAddress, actionMsgpack, intent.Nonce, 0)
 	if err != nil {
 		return nil, err
+	}
+	if recordHyperliquidJournalSign != nil {
+		if jErr := recordHyperliquidJournalSign(v, "updateLeverage", intent.Nonce, signed.TypedDataDigest); jErr != nil {
+			return nil, jErr
+		}
 	}
 	hyperliquidVaultMu.Lock()
 	if cur, exists := hyperliquidVaultStates[v]; exists && cur == st && intent.Nonce > cur.lastNonce {
@@ -578,6 +608,10 @@ func (v *Vault) SignHyperliquidCancel(intent HyperliquidCancelIntent, policy Hyp
 	}
 	v.mu.Lock()
 	defer v.mu.Unlock()
+	return v.signHyperliquidCancelLocked(intent, policy)
+}
+
+func (v *Vault) signHyperliquidCancelLocked(intent HyperliquidCancelIntent, policy HyperliquidPolicy) (*HyperliquidSignedAction, error) {
 	if v.closed {
 		return nil, ErrUnavailable
 	}
@@ -591,6 +625,11 @@ func (v *Vault) SignHyperliquidCancel(intent HyperliquidCancelIntent, policy Hyp
 	hyperliquidVaultMu.Lock()
 	lastNonce := st.lastNonce
 	hyperliquidVaultMu.Unlock()
+	if hyperliquidJournalFloor != nil {
+		if floor := hyperliquidJournalFloor(v); floor > lastNonce {
+			lastNonce = floor
+		}
+	}
 
 	if err := ValidateHyperliquidCancelIntent(intent, policy, lastNonce, v.now().Unix()); err != nil {
 		return nil, err
@@ -602,6 +641,11 @@ func (v *Vault) SignHyperliquidCancel(intent HyperliquidCancelIntent, policy Hyp
 	signed, err := v.signHyperliquidActionLocked(intent.Network, policy.VaultAddress, actionMsgpack, intent.Nonce, 0)
 	if err != nil {
 		return nil, err
+	}
+	if recordHyperliquidJournalSign != nil {
+		if jErr := recordHyperliquidJournalSign(v, "cancel", intent.Nonce, signed.TypedDataDigest); jErr != nil {
+			return nil, jErr
+		}
 	}
 	hyperliquidVaultMu.Lock()
 	if cur, exists := hyperliquidVaultStates[v]; exists && cur == st && intent.Nonce > cur.lastNonce {

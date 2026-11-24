@@ -301,7 +301,8 @@ func (v *Vault) compactOperationsJournalLocked(retainRecentSwaps int) (int, erro
 		return 0, errors.New("unsupported ledger version for compaction")
 	}
 
-	if replayed.ref != v.ledger.ref || replayed.installedSequence != v.ledger.installedSequence || replayed.updateFloor != v.ledger.updateFloor || replayed.activeUpdate != v.ledger.activeUpdate {
+	if replayed.ref != v.ledger.ref || replayed.installedSequence != v.ledger.installedSequence || replayed.updateFloor != v.ledger.updateFloor || replayed.activeUpdate != v.ledger.activeUpdate ||
+		replayed.hlLastNonce != v.ledger.hlLastNonce || (replayed.hlPolicy == nil) != (v.ledger.hlPolicy == nil) || len(replayed.agentVaults) != len(v.ledger.agentVaults) {
 		return 0, errors.New("compaction altered non-swap signer state")
 	}
 	for id, want := range v.ledger.swaps {

@@ -94,6 +94,12 @@ type ledger struct {
 	receiptRPC         *receiptRPCEnvelope
 	managedFresh       bool
 	swaps              map[string]SwapReceipt
+	hlPolicy           *HyperliquidPolicy
+	hlLastNonce        uint64
+	agentVaults        map[string]AgentVaultPolicy
+	agentDailySpend    map[string]map[string]uint64
+	agentDailyLoss     map[string]map[string]uint64
+	agentVaultOps      map[string]bool
 	main, mock         *journal
 	ref                AccountRef
 	missingHistory     bool
@@ -111,7 +117,19 @@ type ledger struct {
 }
 
 func newLedger() *ledger {
-	return &ledger{swaps: map[string]SwapReceipt{}, grants: map[string]FixtureGrant{}, ops: map[string]FixtureOperation{}, receipts: map[string]journalRecord{}, approvals: map[string]ApprovalReceipt{}, updates: map[string]update.Intent{}, installations: map[string]update.Installation{}}
+	return &ledger{
+		swaps:           map[string]SwapReceipt{},
+		agentVaults:     map[string]AgentVaultPolicy{},
+		agentDailySpend: map[string]map[string]uint64{},
+		agentDailyLoss:  map[string]map[string]uint64{},
+		agentVaultOps:   map[string]bool{},
+		grants:          map[string]FixtureGrant{},
+		ops:             map[string]FixtureOperation{},
+		receipts:        map[string]journalRecord{},
+		approvals:       map[string]ApprovalReceipt{},
+		updates:         map[string]update.Intent{},
+		installations:   map[string]update.Installation{},
+	}
 }
 
 func validRef(r AccountRef) bool {
@@ -480,6 +498,41 @@ func (l *ledger) apply(r journalRecord) error {
 		}
 		l.ref = *r.Account
 		l.policy = nil // New owner policy/grants, lifetime spent remains.
+	case "hyperliquid-policy":
+		if l.ref.Version != 1 {
+			return ErrUnavailable
+		}
+		if err := l.applyHyperliquidPolicy(r); err != nil {
+			return err
+		}
+	case "hyperliquid-sign":
+		if l.ref.Version != 1 {
+			return ErrUnavailable
+		}
+		if err := l.applyHyperliquidSign(r); err != nil {
+			return err
+		}
+	case "agent-vault-policy":
+		if l.ref.Version != 1 {
+			return ErrUnavailable
+		}
+		if err := l.applyAgentVaultPolicy(r); err != nil {
+			return err
+		}
+	case "agent-vault-revoke":
+		if l.ref.Version != 1 {
+			return ErrUnavailable
+		}
+		if err := l.applyAgentVaultRevoke(r); err != nil {
+			return err
+		}
+	case "agent-vault-spend":
+		if l.ref.Version != 1 {
+			return ErrUnavailable
+		}
+		if err := l.applyAgentVaultSpend(r); err != nil {
+			return err
+		}
 	case "journal-compact":
 		if !validCompactionAnchor(r) {
 			return errors.New("invalid journal compaction anchor")
@@ -512,6 +565,11 @@ func (l *ledger) append(v *Vault, r journalRecord) error {
 	}
 	next := *l
 	next.swaps = clone(l.swaps)
+	next.hlPolicy = clone(l.hlPolicy)
+	next.agentVaults = clone(l.agentVaults)
+	next.agentDailySpend = clone(l.agentDailySpend)
+	next.agentDailyLoss = clone(l.agentDailyLoss)
+	next.agentVaultOps = clone(l.agentVaultOps)
 	next.policy = clone(l.policy)
 	next.grants = clone(l.grants)
 	next.approvals = clone(l.approvals)

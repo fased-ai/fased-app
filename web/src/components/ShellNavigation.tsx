@@ -44,6 +44,24 @@ export const shellPages = [
   { name: "Onchain", path: "terminals/jupiter", icon: ArrowLeftRight },
   { name: "Hyperliquid", path: "terminals/hyperliquid", icon: TrendingUp },
 ] as const;
+export function visibleShellPaths(
+  coreMode: string,
+  capabilities:
+    { walletSigner?: boolean; financialExecution?: boolean } | null | undefined,
+  hasWENMining: boolean,
+) {
+  const showCryptoTerminals =
+    coreMode !== "ready" ||
+    capabilities?.walletSigner === true ||
+    capabilities?.financialExecution === true;
+  const showMiningTerminal = coreMode !== "ready" || hasWENMining;
+  return shellPages.filter((p) => {
+    if (p.path === "terminals/satcoin") return showMiningTerminal;
+    if (p.path.startsWith("terminals/")) return showCryptoTerminals;
+    return true;
+  });
+}
+
 export function ShellNavigation() {
   const {
     core,
@@ -91,17 +109,11 @@ export function ShellNavigation() {
     setMore(false);
     if (more) moreButton.current?.focus();
   }
-  const showCryptoTerminals =
-    core.mode !== "ready" ||
-    core.capabilities?.walletSigner === true ||
-    core.capabilities?.financialExecution === true;
-  const showMiningTerminal =
-    core.mode !== "ready" || Boolean(agents.view?.wenMining);
-  const visiblePages = shellPages.filter((p) => {
-    if (p.path === "terminals/satcoin") return showMiningTerminal;
-    if (p.path.startsWith("terminals/")) return showCryptoTerminals;
-    return true;
-  });
+  const visiblePages = visibleShellPaths(
+    core.mode,
+    core.capabilities,
+    Boolean(agents.view?.wenMining),
+  );
   const railPages = visiblePages.filter(
     (p) => p.path !== "agents/news" && p.path !== "agents/memory",
   );
