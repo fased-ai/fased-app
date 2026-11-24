@@ -6,8 +6,10 @@ import {
   ExternalLink,
   MessageSquare,
   RefreshCw,
+  Zap,
 } from "../icons";
 import { parseTradeWorkspaceConfig, TRADE_STORAGE_KEY } from "../market-data";
+import { TRIGGER_DRAFT_KEY, type TriggerDraftSeed } from "../automation";
 import { useUI } from "../ui-preferences";
 import { useWorkspace } from "../workspace";
 import {
@@ -33,7 +35,8 @@ type IntelTab = "events" | "predictions" | "sources";
 
 export function WorldIntelWorkspace() {
   const { t } = useUI();
-  const { core, agents, launchChatPrompt, navigate } = useWorkspace();
+  const { core, agents, streamClient, launchChatPrompt, navigate } =
+    useWorkspace();
 
   const [tab, setTab] = useState<IntelTab>("events");
   const [category, setCategory] = useState("");
@@ -87,11 +90,7 @@ export function WorldIntelWorkspace() {
   }, [loadAll]);
 
   useEffect(() => {
-    if (core.mode !== "ready") return;
-    const ctrl = new AbortController();
-    const qs = new URLSearchParams();
-    if (category) qs.set("category", category);
-    if (region) qs.set("region", region);
+    if (!streamClient || core.mode !== "ready") return;
     let reloadTimer: number | undefined;
     const scheduleReload = (immediate = false) => {
       if (reloadTimer !== undefined) {
@@ -107,51 +106,18 @@ export function WorldIntelWorkspace() {
         void loadAllRef.current();
       }, 500);
     };
-
-    const runStream = async () => {
-      const delays = [1000, 2000, 4000, 8000, 15000];
-      let attempt = 0;
-      while (!ctrl.signal.aborted) {
-        try {
-          await core.streamGet(`intel/stream?${qs.toString()}`, {
-            signal: ctrl.signal,
-            onEvent: (frame) => {
-              attempt = 0;
-              if (frame.event === "sync_complete") {
-                scheduleReload(true);
-              } else if (
-                frame.event === "event" ||
-                frame.event === "prediction"
-              ) {
-                scheduleReload(false);
-              }
-            },
-          });
-        } catch {
-          if (ctrl.signal.aborted) return;
-        }
-        if (ctrl.signal.aborted) return;
-        const waitMs = delays[Math.min(attempt, delays.length - 1)];
-        attempt++;
-        await new Promise<void>((resolve) => {
-          const t = window.setTimeout(resolve, waitMs);
-          ctrl.signal.addEventListener(
-            "abort",
-            () => {
-              window.clearTimeout(t);
-              resolve();
-            },
-            { once: true },
-          );
-        });
+    const unsub = streamClient.subscribe("intel", (frame) => {
+      if (frame.event === "sync_complete") {
+        scheduleReload(true);
+      } else if (frame.event === "event" || frame.event === "prediction") {
+        scheduleReload(false);
       }
-    };
-    void runStream();
+    });
     return () => {
       if (reloadTimer !== undefined) window.clearTimeout(reloadTimer);
-      ctrl.abort();
+      unsub();
     };
-  }, [core.mode, core.streamGet, category, region]);
+  }, [streamClient, core.mode]);
 
   const rawEvents = mapSummary?.events ?? [];
   function sentimentLabel(sentiment: string): string {
@@ -193,6 +159,21 @@ export function WorldIntelWorkspace() {
       title: ev.title,
       prompt: buildIntelChatPrompt(ev),
     });
+  }
+
+  function createTriggerFromEvent(ev: IntelEvent) {
+    const seed: TriggerDraftSeed = {
+      kind: "news",
+      name: ev.title.slice(0, 64),
+      category: ev.category || "macro",
+      region: ev.region || "",
+      ticker: ev.tickers?.[0] || "",
+      minUrgency: Number(Math.max(0.5, ev.urgency || 0.6).toFixed(2)),
+    };
+    try {
+      sessionStorage.setItem(TRIGGER_DRAFT_KEY, JSON.stringify(seed));
+    } catch {}
+    navigate("agents/tasks");
   }
 
   async function handleSync(sourceId?: string) {
@@ -386,6 +367,14 @@ export function WorldIntelWorkspace() {
                     <span>{`${t("Open chart")} (${selectedEvent.tickers[0]})`}</span>
                   </button>
                 )}
+                <button
+                  type="button"
+                  className="secondary"
+                  onClick={() => createTriggerFromEvent(selectedEvent)}
+                >
+                  <Zap size={13} aria-hidden="true" />
+                  <span>{t("Create trigger")}</span>
+                </button>
               </div>
             </article>
           )}
@@ -449,11 +438,12 @@ export function WorldIntelWorkspace() {
                         {sentimentLabel(ev.sentiment)}
                       </span>
                       <span className="pill">{ev.sourceName}</span>
-                      {ev.verified && (
+                      {ev.verified ? (
                         <span className="pill">{t("Verified")}</span>
-                      )}
-                      {ev.untrusted && (
-                        <span className="pill">{t("Untrusted")}</span>
+                      ) : (
+                        ev.untrusted && (
+                          <span className="pill">{t("Untrusted")}</span>
+                        )
                       )}
                       {ev.tickers?.map((tk) => (
                         <span key={tk} className="pill mono">
@@ -469,6 +459,14 @@ export function WorldIntelWorkspace() {
                       >
                         <MessageSquare size={13} aria-hidden="true" />
                         <span>{t("Ask in Chat")}</span>
+                      </button>
+                      <button
+                        type="button"
+                        className="secondary"
+                        onClick={() => createTriggerFromEvent(ev)}
+                      >
+                        <Zap size={13} aria-hidden="true" />
+                        <span>{t("Create trigger")}</span>
                       </button>
                       {ev.tickers?.[0] && (
                         <button
@@ -537,6 +535,11 @@ export function WorldIntelWorkspace() {
 
             {tab === "sources" && (
               <div className="intel-list" data-testid="intel-sources-list">
+                <div className="intel-card-actions">
+                  <a className="secondary" href="#agents/news">
+                    {t("Agent RSS inputs")}
+                  </a>
+                </div>
                 <form
                   className="intel-source-form"
                   aria-label={t("Custom source")}

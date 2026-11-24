@@ -10,6 +10,12 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+
+	"github.com/fased-ai/fased-app/internal/automation"
+	"github.com/fased-ai/fased-app/internal/desk"
+	"github.com/fased-ai/fased-app/internal/fasedscript"
+	"github.com/fased-ai/fased-app/internal/marketdata"
+	"github.com/fased-ai/fased-app/internal/quantlab"
 )
 
 const (
@@ -673,6 +679,101 @@ func agentV2ToolRegistry() []agentToolEntry {
 			},
 			preview: previewRequestSecret,
 			execute: executeRequestSecretMissingInput,
+		},
+		{
+			spec: AgentToolSpec{
+				Name:        "draft_lab_script",
+				Tier:        toolTierAction,
+				Description: "Validate and save a FasedScript indicator or strategy into Quant Lab (Paper/Shadow only). Requires owner approval.",
+				Parameters: map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"id":          map[string]any{"type": "string", "description": "Safe slug script ID (e.g. momentum-breakout)."},
+						"name":        map[string]any{"type": "string", "description": "Display name (1-80 characters)."},
+						"category":    map[string]any{"type": "string", "description": "Script category (trend, mean_reversion, breakout, volatility, indicator)."},
+						"description": map[string]any{"type": "string", "description": "Short strategy summary."},
+						"source":      map[string]any{"type": "string", "description": "Causal FasedScript source code."},
+					},
+					"required": []string{"id", "name", "source"},
+				},
+			},
+			preview: previewDraftLabScript,
+			execute: executeDraftLabScript,
+		},
+		{
+			spec: AgentToolSpec{
+				Name:        "draft_event_trigger",
+				Tier:        toolTierAction,
+				Description: "Create or update an event-driven automation trigger (price, indicator, fasedscript, news, prediction, cron). Requires owner approval.",
+				Parameters: map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"id":              map[string]any{"type": "string", "description": "Trigger identifier slug."},
+						"name":            map[string]any{"type": "string", "description": "Trigger display name."},
+						"kind":            map[string]any{"type": "string", "description": "price, indicator, fasedscript, news, prediction, or cron."},
+						"enabled":         map[string]any{"type": "boolean", "description": "Enable trigger immediately."},
+						"cooldownSeconds": map[string]any{"type": "integer", "description": "Minimum cooldown seconds (10-86400)."},
+						"condition":       map[string]any{"type": "object", "description": "Kind-specific trigger condition fields."},
+						"action":          map[string]any{"type": "object", "description": "Trigger action (notify, jev_triage, agent_prompt, paper_alert, desk_cycle)."},
+					},
+					"required": []string{"id", "name", "kind", "condition", "action"},
+				},
+			},
+			preview: previewDraftEventTrigger,
+			execute: executeDraftEventTrigger,
+		},
+		{
+			spec: AgentToolSpec{
+				Name:        "run_desk_cycle",
+				Tier:        toolTierAction,
+				Description: "Run one 8-Seat Trading Desk evaluation cycle strictly in Paper or Shadow mode. Requires owner approval.",
+				Parameters: map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"venue":    map[string]any{"type": "string", "description": "Venue slug (default hyperliquid)."},
+						"symbol":   map[string]any{"type": "string", "description": "Ticker symbol (default BTC)."},
+						"interval": map[string]any{"type": "string", "description": "Candle interval (default 1h)."},
+						"scriptId": map[string]any{"type": "string", "description": "FasedScript ID (default ema-rsi-trend)."},
+						"mode":     map[string]any{"type": "string", "description": "Desk mode: shadow or paper only."},
+						"limit":    map[string]any{"type": "integer", "description": "Candle lookback count (30-1000, default 120)."},
+					},
+				},
+			},
+			preview: previewRunDeskCycle,
+			execute: executeRunDeskCycle,
+		},
+		{
+			spec: AgentToolSpec{
+				Name:        "save_desk_lesson",
+				Tier:        toolTierAction,
+				Description: "Save a durable Trading Desk rule or lesson read by every seat before acting. Requires owner approval.",
+				Parameters: map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"category": map[string]any{"type": "string", "description": "Lesson category (risk, entry, exit, skeptic, quant, macro)."},
+						"symbol":   map[string]any{"type": "string", "description": "Optional symbol scope (e.g. BTC or blank for global)."},
+						"rule":     map[string]any{"type": "string", "description": "Concise actionable desk rule (1-400 characters)."},
+					},
+					"required": []string{"rule"},
+				},
+			},
+			preview: previewSaveDeskLesson,
+			execute: executeSaveDeskLesson,
+		},
+		{
+			spec: AgentToolSpec{
+				Name:        "sync_world_intel",
+				Tier:        toolTierAction,
+				Description: "Synchronize enabled World Intel public news, macro, and prediction sources (all results tagged untrusted=true). Requires owner approval.",
+				Parameters: map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"sourceId": map[string]any{"type": "string", "description": "Optional specific source ID (empty syncs all enabled sources)."},
+					},
+				},
+			},
+			preview: previewSyncWorldIntel,
+			execute: executeSyncWorldIntel,
 		},
 	}
 }
@@ -1343,4 +1444,365 @@ func executeDraftStrategy(ctx context.Context, s *Store, profileID string, rawAr
 	}
 	record["id"] = mem.ID
 	return record, nil
+}
+
+type draftLabScriptArgs struct {
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	Category    string `json:"category"`
+	Description string `json:"description"`
+	Source      string `json:"source"`
+}
+
+func parseDraftLabScriptArgs(raw json.RawMessage) (quantlab.ScriptInput, error) {
+	var a draftLabScriptArgs
+	if err := decodeToolArgs(raw, &a); err != nil {
+		return quantlab.ScriptInput{}, err
+	}
+	id, err := quantlab.ValidateSafeID(a.ID)
+	if err != nil {
+		return quantlab.ScriptInput{}, err
+	}
+	name := strings.TrimSpace(a.Name)
+	if name == "" || len(name) > 80 {
+		return quantlab.ScriptInput{}, errors.New("script name must be 1-80 characters")
+	}
+	if strings.TrimSpace(a.Source) == "" {
+		return quantlab.ScriptInput{}, errors.New("script source is required")
+	}
+	if _, err := fasedscript.Compile(a.Source); err != nil {
+		return quantlab.ScriptInput{}, fmt.Errorf("invalid FasedScript source: %w", err)
+	}
+	return quantlab.ScriptInput{
+		ID:          id,
+		Name:        name,
+		Category:    strings.TrimSpace(a.Category),
+		Description: strings.TrimSpace(a.Description),
+		Source:      a.Source,
+	}, nil
+}
+
+func previewDraftLabScript(_ context.Context, _ *Store, _ string, rawArgs json.RawMessage) (approvalDraft, error) {
+	in, err := parseDraftLabScriptArgs(rawArgs)
+	if err != nil {
+		return approvalDraft{}, err
+	}
+	payload, _ := json.Marshal(in)
+	return approvalDraft{
+		Title:       fmt.Sprintf("Save FasedScript: %s (%s)", sanitizeV2Title(in.Name, in.ID), in.ID),
+		Summary:     sanitizeV2Title(in.Description, "Compiled Paper/Shadow FasedScript"),
+		PayloadJSON: string(payload),
+	}, nil
+}
+
+func executeDraftLabScript(ctx context.Context, s *Store, _ string, rawArgs json.RawMessage) (any, error) {
+	in, err := parseDraftLabScriptArgs(rawArgs)
+	if err != nil {
+		return nil, err
+	}
+	ql, err := s.quantLabService()
+	if err != nil {
+		return nil, err
+	}
+	rec, err := ql.SaveScript(ctx, in)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{
+		"status":        "saved",
+		"id":            rec.ID,
+		"name":          rec.Name,
+		"category":      rec.Category,
+		"inputCount":    len(rec.Inputs),
+		"liveExecution": false,
+	}, nil
+}
+
+func parseDraftEventTriggerArgs(raw json.RawMessage) (automation.TriggerInput, automation.Trigger, error) {
+	var in automation.TriggerInput
+	if err := decodeToolArgs(raw, &in); err != nil {
+		return automation.TriggerInput{}, automation.Trigger{}, err
+	}
+	tr, err := automation.NormalizeTriggerInput(in)
+	if err != nil {
+		return automation.TriggerInput{}, automation.Trigger{}, err
+	}
+	return in, tr, nil
+}
+
+func previewDraftEventTrigger(_ context.Context, _ *Store, _ string, rawArgs json.RawMessage) (approvalDraft, error) {
+	in, tr, err := parseDraftEventTriggerArgs(rawArgs)
+	if err != nil {
+		return approvalDraft{}, err
+	}
+	payload, _ := json.Marshal(in)
+	return approvalDraft{
+		Title:       fmt.Sprintf("Save trigger: %s (%s)", sanitizeV2Title(tr.Name, tr.ID), tr.Kind),
+		Summary:     fmt.Sprintf("kind=%s action=%s cooldown=%ds (paper/alert only)", tr.Kind, tr.Action.Type, tr.CooldownSeconds),
+		PayloadJSON: string(payload),
+	}, nil
+}
+
+func executeDraftEventTrigger(ctx context.Context, s *Store, _ string, rawArgs json.RawMessage) (any, error) {
+	in, _, err := parseDraftEventTriggerArgs(rawArgs)
+	if err != nil {
+		return nil, err
+	}
+	svc, err := s.automationService()
+	if err != nil {
+		return nil, err
+	}
+	saved, err := svc.SaveTrigger(ctx, in)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{
+		"status":        "saved",
+		"id":            saved.ID,
+		"name":          saved.Name,
+		"kind":          saved.Kind,
+		"enabled":       saved.Enabled,
+		"action":        saved.Action.Type,
+		"liveExecution": false,
+	}, nil
+}
+
+type runDeskCycleArgs struct {
+	Venue    string `json:"venue"`
+	Symbol   string `json:"symbol"`
+	Interval string `json:"interval"`
+	ScriptID string `json:"scriptId"`
+	Mode     string `json:"mode"`
+	Limit    int    `json:"limit"`
+}
+
+func parseRunDeskCycleArgs(raw json.RawMessage) (desk.CycleRequest, error) {
+	var a runDeskCycleArgs
+	if err := decodeToolArgs(raw, &a); err != nil {
+		return desk.CycleRequest{}, err
+	}
+	venueRaw := strings.TrimSpace(a.Venue)
+	if venueRaw == "" {
+		venueRaw = marketdata.VenueHyperliquid
+	}
+	venue, err := marketdata.NormalizeVenue(venueRaw)
+	if err != nil {
+		return desk.CycleRequest{}, err
+	}
+	symRaw := strings.TrimSpace(a.Symbol)
+	if symRaw == "" {
+		symRaw = "BTC"
+	}
+	symbol, err := marketdata.NormalizeSymbol(symRaw)
+	if err != nil {
+		return desk.CycleRequest{}, err
+	}
+	ivRaw := strings.TrimSpace(a.Interval)
+	if ivRaw == "" {
+		ivRaw = "1h"
+	}
+	interval, err := marketdata.NormalizeInterval(ivRaw)
+	if err != nil {
+		return desk.CycleRequest{}, err
+	}
+	scriptID := strings.TrimSpace(a.ScriptID)
+	if scriptID == "" {
+		scriptID = "ema-rsi-trend"
+	} else {
+		scriptID, err = quantlab.ValidateSafeID(scriptID)
+		if err != nil {
+			return desk.CycleRequest{}, err
+		}
+	}
+	mode, err := desk.NormalizeMode(a.Mode)
+	if err != nil {
+		return desk.CycleRequest{}, err
+	}
+	limit := a.Limit
+	if limit <= 0 {
+		limit = 120
+	} else if limit < 30 {
+		limit = 30
+	} else if limit > 1000 {
+		limit = 1000
+	}
+	return desk.CycleRequest{
+		Venue:    venue,
+		Symbol:   symbol,
+		Interval: interval,
+		ScriptID: scriptID,
+		Mode:     mode,
+		Limit:    limit,
+	}, nil
+}
+
+func previewRunDeskCycle(_ context.Context, _ *Store, _ string, rawArgs json.RawMessage) (approvalDraft, error) {
+	req, err := parseRunDeskCycleArgs(rawArgs)
+	if err != nil {
+		return approvalDraft{}, err
+	}
+	payload, _ := json.Marshal(req)
+	return approvalDraft{
+		Title:       fmt.Sprintf("Run %s Desk cycle: %s %s (%s)", req.Mode, req.Venue, req.Symbol, req.Interval),
+		Summary:     fmt.Sprintf("script=%s limit=%d | paper/shadow only (no live execution)", req.ScriptID, req.Limit),
+		PayloadJSON: string(payload),
+	}, nil
+}
+
+func executeRunDeskCycle(ctx context.Context, s *Store, _ string, rawArgs json.RawMessage) (any, error) {
+	req, err := parseRunDeskCycleArgs(rawArgs)
+	if err != nil {
+		return nil, err
+	}
+	ds, err := s.deskService()
+	if err != nil {
+		return nil, err
+	}
+	res, err := ds.RunCycle(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+	artifacts := make([]map[string]any, 0, len(res.Artifacts))
+	for _, art := range res.Artifacts {
+		artifacts = append(artifacts, map[string]any{
+			"seat":    art.Seat,
+			"verdict": art.Verdict,
+			"summary": art.Summary,
+		})
+	}
+	out := map[string]any{
+		"id":            res.ID,
+		"mode":          res.Mode,
+		"venue":         res.Venue,
+		"symbol":        res.Symbol,
+		"interval":      res.Interval,
+		"scriptId":      res.ScriptID,
+		"finalStatus":   res.FinalStatus,
+		"riskCheck":     res.RiskCheck,
+		"artifacts":     artifacts,
+		"liveExecution": false,
+	}
+	if res.Ticket != nil {
+		out["ticketId"] = res.Ticket.ID
+	}
+	if res.Position != nil {
+		out["positionId"] = res.Position.ID
+	}
+	return out, nil
+}
+
+func parseSaveDeskLessonArgs(raw json.RawMessage) (desk.LessonInput, error) {
+	var in desk.LessonInput
+	if err := decodeToolArgs(raw, &in); err != nil {
+		return desk.LessonInput{}, err
+	}
+	if err := in.Validate(); err != nil {
+		return desk.LessonInput{}, err
+	}
+	if len(in.Rule) > 400 {
+		return desk.LessonInput{}, errors.New("lesson rule exceeds 400 characters")
+	}
+	return in, nil
+}
+
+func previewSaveDeskLesson(_ context.Context, _ *Store, _ string, rawArgs json.RawMessage) (approvalDraft, error) {
+	in, err := parseSaveDeskLessonArgs(rawArgs)
+	if err != nil {
+		return approvalDraft{}, err
+	}
+	sym := in.Symbol
+	if sym == "" {
+		sym = "ALL"
+	}
+	payload, _ := json.Marshal(in)
+	return approvalDraft{
+		Title:       fmt.Sprintf("Save Desk lesson (%s · %s)", in.Category, sym),
+		Summary:     sanitizeV2Title(in.Rule, "Desk lesson"),
+		PayloadJSON: string(payload),
+	}, nil
+}
+
+func executeSaveDeskLesson(ctx context.Context, s *Store, _ string, rawArgs json.RawMessage) (any, error) {
+	in, err := parseSaveDeskLessonArgs(rawArgs)
+	if err != nil {
+		return nil, err
+	}
+	ds, err := s.deskService()
+	if err != nil {
+		return nil, err
+	}
+	rec, err := ds.SaveLesson(ctx, in)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{
+		"status":        "saved",
+		"id":            rec.ID,
+		"category":      rec.Category,
+		"symbol":        rec.Symbol,
+		"rule":          rec.Rule,
+		"active":        rec.Active,
+		"liveExecution": false,
+	}, nil
+}
+
+type syncWorldIntelArgs struct {
+	SourceID string `json:"sourceId"`
+}
+
+func parseSyncWorldIntelArgs(raw json.RawMessage) (syncWorldIntelArgs, error) {
+	var a syncWorldIntelArgs
+	if err := decodeToolArgs(raw, &a); err != nil {
+		return syncWorldIntelArgs{}, err
+	}
+	a.SourceID = strings.TrimSpace(a.SourceID)
+	if a.SourceID != "" {
+		clean, err := automation.ValidateSafeID(a.SourceID)
+		if err != nil {
+			return syncWorldIntelArgs{}, err
+		}
+		a.SourceID = clean
+	}
+	return a, nil
+}
+
+func previewSyncWorldIntel(_ context.Context, _ *Store, _ string, rawArgs json.RawMessage) (approvalDraft, error) {
+	a, err := parseSyncWorldIntelArgs(rawArgs)
+	if err != nil {
+		return approvalDraft{}, err
+	}
+	scope := "all enabled sources"
+	if a.SourceID != "" {
+		scope = a.SourceID
+	}
+	payload, _ := json.Marshal(a)
+	return approvalDraft{
+		Title:       fmt.Sprintf("Sync World Intel (%s)", scope),
+		Summary:     "Refresh public news, macro & prediction feeds (tagged untrusted=true).",
+		PayloadJSON: string(payload),
+	}, nil
+}
+
+func executeSyncWorldIntel(ctx context.Context, s *Store, _ string, rawArgs json.RawMessage) (any, error) {
+	a, err := parseSyncWorldIntelArgs(rawArgs)
+	if err != nil {
+		return nil, err
+	}
+	wi, err := s.worldIntelService()
+	if err != nil {
+		return nil, err
+	}
+	res, err := wi.Sync(ctx, a.SourceID)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{
+		"status":          "synced",
+		"syncedSources":   res.SyncedSources,
+		"eventCount":      res.EventCount,
+		"predictionCount": res.PredictionCount,
+		"errorCount":      len(res.Errors),
+		"syncedAt":        res.SyncedAt,
+		"liveExecution":   false,
+	}, nil
 }

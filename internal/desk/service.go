@@ -23,12 +23,15 @@ type Config struct {
 	FixtureMode        bool
 	Now                func() time.Time
 	MarketReader       func(ctx context.Context, venue, symbol, interval string, limit int) ([]marketdata.Candle, error)
+	OrderBookReader    func(ctx context.Context, venue, symbol string) (marketdata.OrderBookSnapshot, error)
 	IntelEvents        func(ctx context.Context, filter worldintel.EventFilter) ([]worldintel.IntelEvent, error)
+	PredictionReader   func(ctx context.Context, filter worldintel.PredictionFilter) (worldintel.PredictionList, error)
 	LabRunsReader      func(ctx context.Context, limit int) ([]quantlab.ValidationRunSummary, error)
 	ScriptReader       func(ctx context.Context, scriptID string) (quantlab.ScriptRecord, bool, error)
 	Scorer             func(ctx context.Context, req decision.EvaluateRequest) (decision.EvaluateResponse, error)
 	ExternalKillActive func(ctx context.Context) bool
 	OnAlert            func(ctx context.Context, severity, title, body string)
+	OnApprovalTicket   func(ctx context.Context, ticket OrderTicket)
 }
 
 // Service coordinates the Multi-Seat Trading Desk, isolated Paper/Shadow engine,
@@ -444,19 +447,25 @@ func (s *Service) RunCycle(ctx context.Context, req CycleRequest) (CycleResult, 
 	}
 	lessons, _ := s.store.listLessons(ctx, maxLessonsRetained)
 	activeLessons := 0
+	var matchedLessons []string
 	for _, l := range lessons {
-		if l.Active {
-			activeLessons++
+		if !l.Active {
+			continue
+		}
+		activeLessons++
+		if len(matchedLessons) < 3 && (l.Symbol == "" || strings.EqualFold(l.Symbol, "ALL") || l.Symbol == "*" || strings.EqualFold(l.Symbol, symbol)) {
+			matchedLessons = append(matchedLessons, fmt.Sprintf("[%s] %s", l.Category, l.Rule))
 		}
 	}
 	result.Artifacts = append(result.Artifacts, SeatArtifact{
 		Seat:      SeatChief,
 		Verdict:   "PASS",
 		Summary:   fmt.Sprintf("Routed %s %s (%s) in %s mode with %d active desk lessons loaded.", venue, symbol, interval, mode, activeLessons),
+		Evidence:  matchedLessons,
 		Timestamp: now,
 	})
 
-	// Seat 2: Scout (WorldIntel catalyst & primary-source check)
+	// Seat 2: Scout (WorldIntel catalyst, predictions & primary-source check)
 	if err := AssertSeatToolAllowed(SeatScout, "get_world_intel"); err != nil {
 		return CycleResult{}, err
 	}
@@ -484,11 +493,30 @@ func (s *Service) RunCycle(ctx context.Context, req CycleRequest) (CycleResult, 
 			unsourcedHighUrgency = true
 		}
 	}
+	predMatches := 0
+	if s.cfg.PredictionReader != nil {
+		if preds, pErr := s.cfg.PredictionReader(ctx, worldintel.PredictionFilter{Query: symbol, Limit: 6}); pErr == nil {
+			for i, mkt := range preds.Markets {
+				if i >= 2 {
+					break
+				}
+				predMatches++
+				scoutEvidence = append(scoutEvidence, fmt.Sprintf("Prediction [untrusted]: %s (%.0f%% yes)", mkt.Question, mkt.YesProb*100))
+			}
+			for i, arb := range preds.Arbitrage {
+				if i >= 2 {
+					break
+				}
+				predMatches++
+				scoutEvidence = append(scoutEvidence, fmt.Sprintf("Pred Arb [untrusted]: %s (+%.1f%% spread)", arb.Topic, arb.SpreadPct))
+			}
+		}
+	}
 	scoutSummary := "NO_SIGNAL: no recent WorldIntel events matching " + symbol + "; technical rules apply."
 	scoutVerdict := "NO_SIGNAL"
-	if len(intelEvents) > 0 {
+	if len(intelEvents) > 0 || predMatches > 0 {
 		scoutVerdict = "PASS"
-		scoutSummary = fmt.Sprintf("Scanned %d untrusted catalysts for %s.", len(intelEvents), symbol)
+		scoutSummary = fmt.Sprintf("Scanned %d untrusted catalysts & %d predictions for %s.", len(intelEvents), predMatches, symbol)
 		if toxicCatalyst != "" {
 			scoutSummary += " WARNING: " + toxicCatalyst
 		}
@@ -523,6 +551,31 @@ func (s *Service) RunCycle(ctx context.Context, req CycleRequest) (CycleResult, 
 	chartVerdict := "PASS"
 	if staleData || setup.Score < limits.MinChartScore {
 		chartVerdict = "KILL"
+	}
+	var chartEvidence []string
+	var spreadBps float64
+	if s.cfg.OrderBookReader != nil {
+		if ob, obErr := s.cfg.OrderBookReader(ctx, venue, symbol); obErr == nil && ob.MidPrice > 0 {
+			spreadBps = (ob.Spread / ob.MidPrice) * 10000.0
+			var bidTop5, askTop5 float64
+			for i, lv := range ob.Bids {
+				if i >= 5 {
+					break
+				}
+				bidTop5 += lv.Size
+			}
+			for i, lv := range ob.Asks {
+				if i >= 5 {
+					break
+				}
+				askTop5 += lv.Size
+			}
+			ratio := 1.0
+			if askTop5 > 0 {
+				ratio = bidTop5 / askTop5
+			}
+			chartEvidence = append(chartEvidence, fmt.Sprintf("Orderbook: spread=%.2fbps, top5 bid/ask ratio=%.2f", spreadBps, ratio))
+		}
 	}
 
 	// Seat 4: Quant (FasedScript signal evaluation + QuantLab 4-Gate linkage)
@@ -569,6 +622,7 @@ func (s *Service) RunCycle(ctx context.Context, req CycleRequest) (CycleResult, 
 		Verdict:   chartVerdict,
 		Score:     setup.Score,
 		Summary:   fmt.Sprintf("%s setup score=%.1f entry=%s stop=%s target=%s R:R=%.2f (ATR=%s, RSI=%.1f, EMA20/50=%+.2f%%)", strings.ToUpper(setup.Side), setup.Score, formatPriceStr(setup.EntryPrice), formatPriceStr(setup.StopPrice), formatPriceStr(setup.TargetPrice), setup.RiskReward, formatPriceStr(setup.ATR14), setup.RSI14, setup.EMASpreadPct),
+		Evidence:  chartEvidence,
 		Timestamp: now,
 	})
 
@@ -664,10 +718,15 @@ func (s *Service) RunCycle(ctx context.Context, req CycleRequest) (CycleResult, 
 		RequireFourGate:      limits.RequireFourGatePass,
 		FourGatePassed:       fourGatePassed,
 	})
+	skepticEvidence := append([]string(nil), matchedLessons...)
+	if limits.MaxSlippageBps > 0 && spreadBps > limits.MaxSlippageBps*2 {
+		skepticEvidence = append(skepticEvidence, fmt.Sprintf("Wide spread warning: %.2fbps > 2x MaxSlippageBps (%.0fbps)", spreadBps, limits.MaxSlippageBps))
+	}
 	result.Artifacts = append(result.Artifacts, SeatArtifact{
 		Seat:      SeatSkeptic,
 		Verdict:   skepticVerdict,
 		Summary:   skepticReason,
+		Evidence:  skepticEvidence,
 		Timestamp: now,
 	})
 
@@ -822,6 +881,9 @@ func (s *Service) RunCycle(ctx context.Context, req CycleRequest) (CycleResult, 
 		})
 	}
 	s.opMu.Unlock()
+	if ticketStatus == "PENDING_PM" && s.cfg.OnApprovalTicket != nil {
+		s.cfg.OnApprovalTicket(ctx, ticket)
+	}
 
 	// Seat 8: Journal (Log every outcome, including kills & shadows)
 	if err := AssertSeatToolAllowed(SeatJournal, "record_journal_entry"); err != nil {

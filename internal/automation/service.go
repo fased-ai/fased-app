@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/fased-ai/fased-app/internal/decision"
+	"github.com/fased-ai/fased-app/internal/fasedscript"
 	"github.com/fased-ai/fased-app/internal/marketdata"
 	"github.com/fased-ai/fased-app/internal/scheduler"
 	"github.com/fased-ai/fased-app/internal/worldintel"
@@ -30,6 +31,8 @@ type Config struct {
 	IntelEvents      func(ctx context.Context, filter worldintel.EventFilter) ([]worldintel.IntelEvent, error)
 	IntelPredictions func(ctx context.Context, filter worldintel.PredictionFilter) (worldintel.PredictionList, error)
 	Scorer           func(ctx context.Context, req decision.EvaluateRequest) (decision.EvaluateResponse, error)
+	ScriptReader     func(ctx context.Context, scriptID string) (string, error)
+	OnDeskCycle      func(ctx context.Context, tr Trigger, venue, symbol, interval, scriptID, mode string) (string, error)
 	OnAgentPrompt    func(ctx context.Context, tr Trigger, prompt string, untrusted bool)
 	OnNotify         func(ctx context.Context, n Notification) string
 }
@@ -179,6 +182,27 @@ func (s *Service) RecordNotification(ctx context.Context, n Notification) (Notif
 		Notification: &saved,
 	})
 	return saved, nil
+}
+
+// NotifyApproval records a guarded approval notification and dispatches outbound Telegram alerts when enabled.
+func (s *Service) NotifyApproval(ctx context.Context, title, body, metadataJSON string) (Notification, error) {
+	ntf, err := s.RecordNotification(ctx, Notification{
+		Kind:         "approval",
+		Severity:     SeverityWarn,
+		Title:        title,
+		Body:         body,
+		Urgency:      0.90,
+		Untrusted:    false,
+		MetadataJSON: metadataJSON,
+	})
+	if err != nil {
+		return Notification{}, err
+	}
+	if status := s.dispatchOutbound(ctx, ntf, true, false); status != "" {
+		ntf.DeliveryStatus = status
+		_ = s.store.updateNotificationDelivery(ctx, ntf.ID, status)
+	}
+	return ntf, nil
 }
 
 // GetWebhookConfig returns the masked outbound webhook status and settings.
@@ -333,7 +357,7 @@ type conditionEval struct {
 }
 
 func (s *Service) evaluateTrigger(ctx context.Context, tr Trigger, dryRun, ignoreCooldown bool) (EvalResult, error) {
-	ev, err := s.evaluateCondition(ctx, tr)
+	ev, err := s.evaluateCondition(ctx, tr, dryRun, ignoreCooldown)
 	if err != nil {
 		return EvalResult{TriggerID: tr.ID, Summary: err.Error()}, err
 	}
@@ -367,10 +391,13 @@ func (s *Service) evaluateTrigger(ctx context.Context, tr Trigger, dryRun, ignor
 			_ = s.store.updateTriggerRuntime(ctx, tr)
 			return res, nil
 		}
-		if ev.fingerprint != "" && ev.fingerprint == tr.LastFingerprint && tr.LastFiredAt > 0 && nowSec-tr.LastFiredAt < int64(tr.CooldownSeconds)*2 {
-			res.Suppressed = "duplicate"
-			_ = s.store.updateTriggerRuntime(ctx, tr)
-			return res, nil
+		if ev.fingerprint != "" && ev.fingerprint == tr.LastFingerprint && tr.LastFiredAt > 0 {
+			permanentDedup := tr.Kind == KindNews || tr.Kind == KindCron || tr.Kind == KindFasedScript
+			if permanentDedup || nowSec-tr.LastFiredAt < int64(tr.CooldownSeconds)*2 {
+				res.Suppressed = "duplicate"
+				_ = s.store.updateTriggerRuntime(ctx, tr)
+				return res, nil
+			}
 		}
 	}
 
@@ -383,6 +410,42 @@ func (s *Service) evaluateTrigger(ctx context.Context, tr Trigger, dryRun, ignor
 			if scoredUrgency > urgency {
 				urgency = scoredUrgency
 			}
+		}
+	}
+	if tr.Action.Type == ActionDeskCycle && s.cfg.OnDeskCycle != nil {
+		venue := tr.Condition.Venue
+		if venue == "" {
+			venue = marketdata.VenueHyperliquid
+		}
+		symbol := tr.Condition.Symbol
+		if symbol == "" {
+			symbol = tr.Condition.Ticker
+		}
+		if symbol == "" {
+			symbol = ev.ticker
+		}
+		if symbol == "" {
+			symbol = "BTC"
+		}
+		interval := tr.Condition.Interval
+		if interval == "" {
+			interval = "1h"
+		}
+		scriptID := tr.Action.ScriptID
+		if scriptID == "" {
+			scriptID = tr.Condition.ScriptID
+		}
+		if scriptID == "" {
+			scriptID = "ema-rsi-trend"
+		}
+		mode := "shadow"
+		if strings.EqualFold(tr.Action.DeskMode, "paper") {
+			mode = "paper"
+		}
+		if summary, dErr := s.cfg.OnDeskCycle(ctx, tr, venue, symbol, interval, scriptID, mode); dErr != nil {
+			body = body + "\nDesk cycle error: " + dErr.Error()
+		} else if strings.TrimSpace(summary) != "" {
+			body = body + "\n" + strings.TrimSpace(summary)
 		}
 	}
 
@@ -501,7 +564,29 @@ func (s *Service) buildAgentPrompt(tr Trigger, ntf Notification) string {
 	return fmt.Sprintf("%s\nAlert: %s\nDetails: %s\nProvide a concise risk-first read-only assessment (paper/analysis only).", header, ntf.Title, ntf.Body)
 }
 
-func (s *Service) evaluateCondition(ctx context.Context, tr Trigger) (conditionEval, error) {
+func latestScriptSignal(ev fasedscript.EvalResult, idx int) string {
+	switch {
+	case idx < len(ev.Strategy.Long) && ev.Strategy.Long[idx]:
+		return "LONG"
+	case idx < len(ev.Strategy.Short) && ev.Strategy.Short[idx]:
+		return "SHORT"
+	case idx < len(ev.Strategy.ExitLong) && ev.Strategy.ExitLong[idx]:
+		return "EXIT_LONG"
+	case idx < len(ev.Strategy.ExitShort) && ev.Strategy.ExitShort[idx]:
+		return "EXIT_SHORT"
+	}
+	if len(ev.Strategy.Long) == 0 && len(ev.Strategy.Short) == 0 && len(ev.Strategy.ExitLong) == 0 && len(ev.Strategy.ExitShort) == 0 {
+		if len(ev.Plots) > 0 && idx < len(ev.Plots[0].Values) {
+			val := float64(ev.Plots[0].Values[idx])
+			if !math.IsNaN(val) && !math.IsInf(val, 0) && val > 0 {
+				return "SIGNAL"
+			}
+		}
+	}
+	return ""
+}
+
+func (s *Service) evaluateCondition(ctx context.Context, tr Trigger, dryRun, ignoreCooldown bool) (conditionEval, error) {
 	cond := tr.Condition
 	switch tr.Kind {
 	case KindPrice, KindIndicator:
@@ -591,6 +676,9 @@ func (s *Service) evaluateCondition(ctx context.Context, tr Trigger) (conditionE
 		var best *worldintel.IntelEvent
 		for i := range events {
 			ev := events[i]
+			if tr.LastFiredAt > 0 && !dryRun && !ignoreCooldown && ev.PublishedAt > 0 && ev.PublishedAt <= tr.LastFiredAt {
+				continue
+			}
 			if cond.Sentiment != "" && !strings.EqualFold(ev.Sentiment, cond.Sentiment) {
 				continue
 			}
@@ -695,6 +783,59 @@ func (s *Service) evaluateCondition(ctx context.Context, tr Trigger) (conditionE
 			meta: map[string]any{
 				"cronExpr": cond.CronExpr,
 				"utc":      nowUTC.Format(time.RFC3339),
+			},
+		}, nil
+
+	case KindFasedScript:
+		if s.cfg.MarketReader == nil {
+			return conditionEval{}, errors.New("market reader unavailable")
+		}
+		if s.cfg.ScriptReader == nil {
+			return conditionEval{}, errors.New("script reader unavailable")
+		}
+		candles, err := s.cfg.MarketReader(ctx, cond.Venue, cond.Symbol, cond.Interval, 160)
+		if err != nil {
+			return conditionEval{}, err
+		}
+		if len(candles) < 30 {
+			return conditionEval{}, errors.New("insufficient candle history for script")
+		}
+		src, err := s.cfg.ScriptReader(ctx, cond.ScriptID)
+		if err != nil {
+			return conditionEval{}, err
+		}
+		prog, err := fasedscript.Compile(src)
+		if err != nil {
+			return conditionEval{}, fmt.Errorf("compile script %q: %w", cond.ScriptID, err)
+		}
+		ev, err := prog.Eval(candles, nil)
+		if err != nil {
+			return conditionEval{}, fmt.Errorf("evaluate script %q: %w", cond.ScriptID, err)
+		}
+		idx := len(candles) - 1
+		latest := candles[idx]
+		signal := latestScriptSignal(ev, idx)
+		if signal == "" {
+			return conditionEval{matched: false, metric: latest.Close}, nil
+		}
+		fp := hashFingerprint(fmt.Sprintf("fasedscript:%s:%s:%s:%s:%s:%d", cond.ScriptID, cond.Venue, cond.Symbol, cond.Interval, signal, latest.Time))
+		return conditionEval{
+			matched:     true,
+			metric:      latest.Close,
+			fingerprint: fp,
+			title:       fmt.Sprintf("%s: %s %s %s (%s)", tr.Name, cond.ScriptID, cond.Symbol, cond.Interval, signal),
+			body:        fmt.Sprintf("FasedScript %s fired %s on %s %s (%s) @ %.4f", cond.ScriptID, signal, cond.Venue, cond.Symbol, cond.Interval, latest.Close),
+			ticker:      cond.Symbol,
+			venue:       cond.Venue,
+			urgency:     severityUrgency(tr.Action.Severity),
+			untrusted:   false,
+			meta: map[string]any{
+				"scriptId":   cond.ScriptID,
+				"signal":     signal,
+				"candleTime": latest.Time,
+				"venue":      cond.Venue,
+				"symbol":     cond.Symbol,
+				"interval":   cond.Interval,
 			},
 		}, nil
 

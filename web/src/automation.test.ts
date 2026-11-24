@@ -54,5 +54,25 @@ describe("automation helpers", () => {
     ).toBe("energy · mena · urgency >= 70%");
 
     expect(slugifyTriggerId("BTC Breakout > 90k!")).toBe("btc-breakout-90k");
+
+    expect(
+      summarizeTriggerCondition({
+        id: "script-1",
+        name: "EMA Script",
+        kind: "fasedscript",
+        enabled: true,
+        cooldownSeconds: 60,
+        condition: {
+          venue: "hyperliquid",
+          symbol: "BTC",
+          interval: "15m",
+          scriptId: "ema-rsi-trend",
+        },
+        action: { type: "desk_cycle", deskMode: "shadow" },
+        fireCount: 0,
+        createdAt: 1,
+        updatedAt: 1,
+      }),
+    ).toBe("hyperliquid BTC 15m · ema-rsi-trend");
   });
 });

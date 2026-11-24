@@ -285,7 +285,7 @@
 
 .trade-tabs {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(52px, 1fr));
   gap: 4px;
 }
 
@@ -480,6 +480,60 @@
   display: flex;
   justify-content: flex-end;
   gap: 6px;
+}
+
+.trade-desk-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  font-size: 0.75rem;
+}
+
+.trade-desk-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+}
+
+.trade-desk-controls select {
+  min-width: 0;
+  padding: 4px 6px;
+  font-size: 0.75rem;
+  color: var(--wt-text);
+  background: var(--wt-bg);
+  border: 1px solid var(--wt-border);
+  border-radius: 6px;
+}
+
+.trade-desk-run {
+  border-color: var(--wt-violet);
+  background: var(--wt-raised);
+}
+
+.trade-desk-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 6px 8px;
+  background: var(--wt-bg);
+  border: 1px solid var(--wt-border);
+  border-radius: 8px;
+  font-size: 0.76rem;
+}
+
+.trade-desk-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+
+.trade-desk-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
 }
 
 @media (max-width: 1100px) {

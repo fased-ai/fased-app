@@ -4,6 +4,13 @@ import { useUI } from "../../ui-preferences";
 import { RefreshCw } from "../../icons";
 import type { CrosshairBus, FasedStreamClient } from "../../stream-store";
 import {
+  deskStatusLabel,
+  formatCurrencyUSD,
+  formatPrice,
+  type DeskMode,
+  type DeskSnapshot,
+} from "../../quantlab-desk";
+import {
   CHART_VENUES,
   DOM_SUPPORTED_VENUES,
   fetchCohorts,
@@ -277,6 +284,15 @@ export function OrderflowPane({
   streamClient,
   crosshairBus,
   syncCrosshair = true,
+  desk = null,
+  activeScriptId = "",
+  deskBusy = false,
+  deskError = "",
+  onRunDeskCycle,
+  onApproveTicket,
+  onRejectTicket,
+  onClosePosition,
+  onOpenLab,
   onChangeTab,
 }: {
   venue: string;
@@ -287,6 +303,15 @@ export function OrderflowPane({
   streamClient?: FasedStreamClient;
   crosshairBus?: CrosshairBus;
   syncCrosshair?: boolean;
+  desk?: DeskSnapshot | null;
+  activeScriptId?: string;
+  deskBusy?: boolean;
+  deskError?: string;
+  onRunDeskCycle?: (mode: DeskMode) => void;
+  onApproveTicket?: (id: string) => void;
+  onRejectTicket?: (id: string) => void;
+  onClosePosition?: (id: string) => void;
+  onOpenLab?: () => void;
   onChangeTab: (tab: OrderflowTab) => void;
 }) {
   const { t } = useUI();
@@ -303,6 +328,15 @@ export function OrderflowPane({
   const [paneError, setPaneError] = useState("");
   const [reloadNonce, setReloadNonce] = useState(0);
   const [busFocusedTime, setBusFocusedTime] = useState<number | null>(null);
+  const [cycleMode, setCycleMode] = useState<DeskMode>("shadow");
+  const modeInitRef = useRef(false);
+
+  useEffect(() => {
+    if (desk && !modeInitRef.current) {
+      modeInitRef.current = true;
+      setCycleMode(desk.limits.mode === "paper" ? "paper" : "shadow");
+    }
+  }, [desk]);
 
   const domSupported = DOM_SUPPORTED_VENUES.has(venue);
   const tapeSupported = TAPE_SUPPORTED_VENUES.has(venue);
@@ -330,7 +364,7 @@ export function OrderflowPane({
 
   // Initial HTTP loads for Footprint, DOM, and Tape tabs with honest venue gating.
   useEffect(() => {
-    if (tab === "intel") return;
+    if (tab === "intel" || tab === "desk") return;
     const controller = new AbortController();
     let mounted = true;
     setPaneError("");
@@ -558,11 +592,21 @@ export function OrderflowPane({
     }
   }
 
+  const pendingDeskTickets = useMemo(
+    () => (desk?.tickets ?? []).filter((tk) => tk.status === "PENDING_PM"),
+    [desk],
+  );
+  const openDeskPositions = useMemo(
+    () => (desk?.positions ?? []).filter((p) => p.status === "OPEN"),
+    [desk],
+  );
+
   const tabs: { id: OrderflowTab; label: string }[] = [
     { id: "footprint", label: "Footprint" },
     { id: "dom", label: "DOM" },
     { id: "tape", label: "Tape" },
     { id: "intel", label: "Intel" },
+    { id: "desk", label: "Desk" },
   ];
 
   return (
@@ -805,6 +849,113 @@ export function OrderflowPane({
               ))}
             </ul>
           </section>
+        </div>
+      )}
+
+      {tab === "desk" && (
+        <div
+          className="trade-pane-body trade-desk-dock"
+          data-testid="trade-desk-dock"
+        >
+          <div className="trade-desk-head">
+            <span className="trade-source-pill">
+              {t(deskStatusLabel(desk?.control))}
+            </span>
+            <span className="subtle">{activeScriptId || "ema-rsi-trend"}</span>
+          </div>
+
+          <dl className="trade-metric-grid">
+            <div>
+              <dt>{t("Equity")}</dt>
+              <dd>{formatCurrencyUSD(desk?.account.equityUsd ?? 100000)}</dd>
+            </div>
+            <div>
+              <dt>{t("Daily loss")}</dt>
+              <dd>{`${(desk?.account.dailyLossPct ?? 0).toFixed(2)}%`}</dd>
+            </div>
+            <div>
+              <dt>{t("Open positions")}</dt>
+              <dd>{openDeskPositions.length}</dd>
+            </div>
+          </dl>
+
+          <div className="trade-desk-controls">
+            <select
+              aria-label={t("Desk mode")}
+              value={cycleMode}
+              onChange={(e) => setCycleMode(e.target.value as DeskMode)}
+            >
+              <option value="shadow">{t("Shadow")}</option>
+              <option value="paper">{t("Paper")}</option>
+            </select>
+            <button
+              type="button"
+              className="trade-mini-btn trade-desk-run"
+              disabled={deskBusy || core.mode !== "ready"}
+              onClick={() => onRunDeskCycle?.(cycleMode)}
+            >
+              {t("Run 8-Seat Cycle")}
+            </button>
+            <button
+              type="button"
+              className="trade-mini-btn"
+              onClick={() => onOpenLab?.()}
+            >
+              {t("Open Lab")}
+            </button>
+          </div>
+
+          {deskError && (
+            <p className="trade-pane-error" role="alert">
+              {deskError}
+            </p>
+          )}
+
+          {pendingDeskTickets.map((tk) => (
+            <div className="trade-desk-card" key={tk.id}>
+              <div className="trade-desk-row">
+                <strong>{`${tk.symbol} ${tk.side.toUpperCase()} @ ${formatPrice(tk.entryPrice)}`}</strong>
+                <span>{`R:R ${tk.riskReward.toFixed(2)}`}</span>
+              </div>
+              <div className="trade-desk-actions">
+                <button
+                  type="button"
+                  className="trade-mini-btn"
+                  disabled={deskBusy}
+                  onClick={() => onApproveTicket?.(tk.id)}
+                >
+                  {t("Approve")}
+                </button>
+                <button
+                  type="button"
+                  className="trade-mini-btn"
+                  disabled={deskBusy}
+                  onClick={() => onRejectTicket?.(tk.id)}
+                >
+                  {t("Reject")}
+                </button>
+              </div>
+            </div>
+          ))}
+
+          {openDeskPositions.map((pos) => (
+            <div className="trade-desk-card" key={pos.id}>
+              <div className="trade-desk-row">
+                <strong>{`${pos.symbol} ${pos.side.toUpperCase()} @ ${formatPrice(pos.entryPrice)}`}</strong>
+                <span>{formatCurrencyUSD(pos.unrealizedPnlUsd)}</span>
+              </div>
+              <div className="trade-desk-actions">
+                <button
+                  type="button"
+                  className="trade-mini-btn"
+                  disabled={deskBusy}
+                  onClick={() => onClosePosition?.(pos.id)}
+                >
+                  {t("Close")}
+                </button>
+              </div>
+            </div>
+          ))}
         </div>
       )}
     </aside>

@@ -6531,4 +6531,43 @@ export const pageCopy = {
     "该交易场所暂不支持逐笔成交流",
     "이 거래소에서는 체결 내역을 사용할 수 없습니다",
   ],
+  "Indicator script": [
+    "Индикаторный скрипт",
+    "Script de indicador",
+    "指标脚本",
+    "지표 스크립트",
+  ],
+  Desk: ["Деск", "Mesa", "交易台", "데스크"],
+  "Desk mode": ["Режим деска", "Modo de mesa", "交易台模式", "데스크 모드"],
+  "Desk cycle": ["Цикл деска", "Ciclo de mesa", "交易台周期", "데스크 사이클"],
+  "Plot on chart": [
+    "Показать на графике",
+    "Mostrar en gráfico",
+    "在图表绘制",
+    "차트에 표시",
+  ],
+  "Create trigger": [
+    "Создать триггер",
+    "Crear disparador",
+    "创建触发器",
+    "트리거 생성",
+  ],
+  "Open Lab": [
+    "Открыть лабораторию",
+    "Abrir laboratorio",
+    "打开实验室",
+    "연구소 열기",
+  ],
+  "Save lesson": [
+    "Сохранить правило",
+    "Guardar lección",
+    "保存经验",
+    "교훈 저장",
+  ],
+  "Agent RSS inputs": [
+    "RSS-источники агента",
+    "Fuentes RSS del agente",
+    "智能体 RSS 源",
+    "에이전트 RSS 입력",
+  ],
 } satisfies Record<string, [string, string, string, string]>;

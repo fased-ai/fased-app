@@ -459,7 +459,7 @@ func TestMCPSecurityToolsAndResources(t *testing.T) {
 	if err := json.NewDecoder(discResp.Body).Decode(&disc); err != nil {
 		t.Fatal(err)
 	}
-	if disc.Name != "fased-mcp" || disc.ProtocolVersion != mcpProtocolVersion || disc.ToolCount != 31 || disc.ResourceCount != 11 {
+	if disc.Name != "fased-mcp" || disc.ProtocolVersion != mcpProtocolVersion || disc.ToolCount != 36 || disc.ResourceCount != 11 {
 		t.Fatalf("unexpected MCP discovery payload: %+v", disc)
 	}
 
@@ -502,7 +502,7 @@ func TestMCPSecurityToolsAndResources(t *testing.T) {
 			t.Fatalf("disallowed tool %s exposed by MCP tools/list", disallowed)
 		}
 	}
-	for _, allowed := range []string{"workspace_status", "list_wallets", "draft_task", "draft_swap", "draft_strategy", "get_market_candles", "get_orderbook", "get_footprint", "get_macro_or_sec", "jev_evaluate", "call_external_mcp_tool", "get_world_intel", "get_prediction_markets", "list_event_triggers", "list_notifications", "list_lab_scripts", "run_fasedscript_backtest", "run_four_gate_validation", "get_desk_state", "list_desk_journal", "list_desk_lessons"} {
+	for _, allowed := range []string{"workspace_status", "list_wallets", "draft_task", "draft_swap", "draft_strategy", "draft_lab_script", "draft_event_trigger", "run_desk_cycle", "save_desk_lesson", "sync_world_intel", "get_market_candles", "get_orderbook", "get_footprint", "get_macro_or_sec", "jev_evaluate", "call_external_mcp_tool", "get_world_intel", "get_prediction_markets", "list_event_triggers", "list_notifications", "list_lab_scripts", "run_fasedscript_backtest", "run_four_gate_validation", "get_desk_state", "list_desk_journal", "list_desk_lessons"} {
 		if !toolNames[allowed] {
 			t.Fatalf("expected tool %s missing from MCP tools/list", allowed)
 		}
@@ -522,6 +522,14 @@ func TestMCPSecurityToolsAndResources(t *testing.T) {
 	_, draftCall := callRPC(`{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"draft_task","arguments":{"name":"SOL watch","description":"Check SOL price","intervalSeconds":300}}}`)
 	if draftCall["result"] == nil || draftCall["result"].(map[string]any)["isError"] != false {
 		t.Fatalf("draft_task call failed: %+v", draftCall)
+	}
+	_, lessonCall := callRPC(`{"jsonrpc":"2.0","id":51,"method":"tools/call","params":{"name":"save_desk_lesson","arguments":{"category":"risk","symbol":"BTC","rule":"Never chase extended breakouts above 3 ATR"}}}`)
+	if lessonCall["result"] == nil || lessonCall["result"].(map[string]any)["isError"] != false {
+		t.Fatalf("save_desk_lesson call failed: %+v", lessonCall)
+	}
+	_, labCall := callRPC(`{"jsonrpc":"2.0","id":52,"method":"tools/call","params":{"name":"draft_lab_script","arguments":{"id":"mcp-ema-check","name":"MCP EMA Check","category":"trend","source":"const a = ema(close, 9); plot(\"EMA9\", a, \"accent\", \"overlay\");"}}}`)
+	if labCall["result"] == nil || labCall["result"].(map[string]any)["isError"] != false {
+		t.Fatalf("draft_lab_script call failed: %+v", labCall)
 	}
 
 	// Seed a workspace memory + check fased://memories returns only non-draft memories!

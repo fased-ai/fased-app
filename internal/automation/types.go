@@ -15,11 +15,12 @@ import (
 )
 
 const (
-	KindPrice      = "price"
-	KindIndicator  = "indicator"
-	KindNews       = "news"
-	KindPrediction = "prediction"
-	KindCron       = "cron"
+	KindPrice       = "price"
+	KindIndicator   = "indicator"
+	KindNews        = "news"
+	KindPrediction  = "prediction"
+	KindCron        = "cron"
+	KindFasedScript = "fasedscript"
 
 	CompAbove        = "above"
 	CompBelow        = "below"
@@ -37,6 +38,7 @@ const (
 	ActionJevTriage   = "jev_triage"
 	ActionAgentPrompt = "agent_prompt"
 	ActionPaperAlert  = "paper_alert"
+	ActionDeskCycle   = "desk_cycle"
 
 	SeverityInfo     = "info"
 	SeverityWarn     = "warn"
@@ -59,11 +61,12 @@ var (
 	safeIDPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`)
 
 	validKinds = map[string]bool{
-		KindPrice:      true,
-		KindIndicator:  true,
-		KindNews:       true,
-		KindPrediction: true,
-		KindCron:       true,
+		KindPrice:       true,
+		KindIndicator:   true,
+		KindNews:        true,
+		KindPrediction:  true,
+		KindCron:        true,
+		KindFasedScript: true,
 	}
 
 	validComparators = map[string]bool{
@@ -87,6 +90,7 @@ var (
 		ActionJevTriage:   true,
 		ActionAgentPrompt: true,
 		ActionPaperAlert:  true,
+		ActionDeskCycle:   true,
 	}
 
 	validSeverities = map[string]bool{
@@ -112,6 +116,7 @@ type TriggerCondition struct {
 	Symbol       string  `json:"symbol,omitempty"`
 	Interval     string  `json:"interval,omitempty"`
 	Indicator    string  `json:"indicator,omitempty"`
+	ScriptID     string  `json:"scriptId,omitempty"`
 	Comparator   string  `json:"comparator,omitempty"`
 	Threshold    float64 `json:"threshold,omitempty"`
 	Category     string  `json:"category,omitempty"`
@@ -128,6 +133,8 @@ type TriggerCondition struct {
 type TriggerAction struct {
 	Type           string `json:"type"`
 	PromptTemplate string `json:"promptTemplate,omitempty"`
+	DeskMode       string `json:"deskMode,omitempty"`
+	ScriptID       string `json:"scriptId,omitempty"`
 	SendTelegram   bool   `json:"sendTelegram,omitempty"`
 	SendWebhook    bool   `json:"sendWebhook,omitempty"`
 	Severity       string `json:"severity,omitempty"`
@@ -376,6 +383,40 @@ func NormalizeTriggerInput(in TriggerInput) (Trigger, error) {
 			return Trigger{}, cErr
 		}
 		cond.CronExpr = expr
+
+	case KindFasedScript:
+		venueRaw := strings.TrimSpace(cond.Venue)
+		if venueRaw == "" {
+			venueRaw = marketdata.VenueHyperliquid
+		}
+		v, vErr := marketdata.NormalizeVenue(venueRaw)
+		if vErr != nil {
+			return Trigger{}, vErr
+		}
+		symRaw := strings.TrimSpace(cond.Symbol)
+		if symRaw == "" {
+			symRaw = "BTC"
+		}
+		sym, sErr := marketdata.NormalizeSymbol(symRaw)
+		if sErr != nil {
+			return Trigger{}, sErr
+		}
+		ivRaw := strings.TrimSpace(cond.Interval)
+		if ivRaw == "" {
+			ivRaw = "1h"
+		}
+		normIV, ivErr := marketdata.NormalizeInterval(ivRaw)
+		if ivErr != nil {
+			return Trigger{}, ivErr
+		}
+		sid, sidErr := ValidateSafeID(cond.ScriptID)
+		if sidErr != nil {
+			return Trigger{}, sidErr
+		}
+		cond.Venue = v
+		cond.Symbol = sym
+		cond.Interval = normIV
+		cond.ScriptID = sid
 	}
 
 	act := in.Action
@@ -391,6 +432,28 @@ func NormalizeTriggerInput(in TriggerInput) (Trigger, error) {
 	}
 	act.Type = actType
 	act.PromptTemplate = strings.TrimSpace(act.PromptTemplate)
+	if actType == ActionDeskCycle {
+		dm := strings.ToLower(strings.TrimSpace(act.DeskMode))
+		if dm == "" {
+			dm = "shadow"
+		}
+		if dm != "shadow" && dm != "paper" {
+			return Trigger{}, fmt.Errorf("unsupported deskMode %q (shadow or paper only)", act.DeskMode)
+		}
+		act.DeskMode = dm
+		if strings.TrimSpace(act.ScriptID) != "" {
+			sid, sErr := ValidateSafeID(act.ScriptID)
+			if sErr != nil {
+				return Trigger{}, sErr
+			}
+			act.ScriptID = sid
+		} else {
+			act.ScriptID = ""
+		}
+	} else {
+		act.DeskMode = ""
+		act.ScriptID = ""
+	}
 	sev := strings.ToLower(strings.TrimSpace(act.Severity))
 	if sev == "" {
 		if kind == KindNews && cond.MinUrgency >= 0.75 {

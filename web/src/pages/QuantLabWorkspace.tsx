@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Badge } from "../components/shared";
 import {
+  CandlestickChart,
   Check,
   FlaskConical,
   Pause,
@@ -11,9 +12,12 @@ import {
   Shield,
   Trash2,
   X,
+  Zap,
 } from "../icons";
 import { useUI } from "../ui-preferences";
 import { useWorkspace } from "../workspace";
+import { parseTradeWorkspaceConfig, TRADE_STORAGE_KEY } from "../market-data";
+import { TRIGGER_DRAFT_KEY, type TriggerDraftSeed } from "../automation";
 import {
   approveDeskTicket,
   buildEquityPolyline,
@@ -78,7 +82,7 @@ const OUTCOME_FILTERS = [
 
 export function QuantLabWorkspace() {
   const { t } = useUI();
-  const { core, route } = useWorkspace();
+  const { core, route, streamClient, navigate } = useWorkspace();
 
   const [tab, setTab] = useState<LabTab>(() => tabFromRoute(route));
   const [busy, setBusy] = useState(false);
@@ -212,51 +216,20 @@ export function QuantLabWorkspace() {
   }, [loadDesk]);
 
   useEffect(() => {
-    if (core.mode !== "ready") return;
-    const ctrl = new AbortController();
+    if (!streamClient || core.mode !== "ready") return;
     let reloadTimer: number | undefined;
-    let backoffMs = 1000;
-
-    async function connect() {
-      while (!ctrl.signal.aborted) {
-        try {
-          await core.streamGet("desk/stream", {
-            signal: ctrl.signal,
-            onEvent: (frame) => {
-              backoffMs = 1000;
-              if (
-                frame.event &&
-                frame.event !== "ready" &&
-                frame.event !== "heartbeat"
-              ) {
-                if (reloadTimer !== undefined) window.clearTimeout(reloadTimer);
-                reloadTimer = window.setTimeout(() => {
-                  reloadTimer = undefined;
-                  void loadDeskRef.current();
-                }, 150);
-              }
-            },
-          });
-        } catch (err) {
-          if (
-            ctrl.signal.aborted ||
-            (err instanceof DOMException && err.name === "AbortError")
-          ) {
-            return;
-          }
-        }
-        if (ctrl.signal.aborted) return;
-        await new Promise((resolve) => window.setTimeout(resolve, backoffMs));
-        backoffMs = Math.min(30000, backoffMs * 2);
-      }
-    }
-
-    void connect();
+    const unsub = streamClient.subscribe("desk", () => {
+      if (reloadTimer !== undefined) window.clearTimeout(reloadTimer);
+      reloadTimer = window.setTimeout(() => {
+        reloadTimer = undefined;
+        void loadDeskRef.current();
+      }, 150);
+    });
     return () => {
-      ctrl.abort();
+      unsub();
       if (reloadTimer !== undefined) window.clearTimeout(reloadTimer);
     };
-  }, [core]);
+  }, [streamClient, core.mode]);
 
   async function onSaveScript() {
     if (core.mode !== "ready") return;
@@ -481,6 +454,49 @@ export function QuantLabWorkspace() {
     }
   }
 
+  function onPlotOnChart() {
+    const activeScript =
+      selectedScriptId || scriptIdInput.trim() || "ema-rsi-trend";
+    try {
+      const parsed = parseTradeWorkspaceConfig(
+        localStorage.getItem(TRADE_STORAGE_KEY),
+      );
+      const updated = {
+        ...parsed,
+        tiles: parsed.tiles.map((tile) =>
+          tile.id === parsed.activeTileId
+            ? {
+                ...tile,
+                venue,
+                symbol,
+                interval: interval as typeof tile.interval,
+                scriptId: activeScript,
+              }
+            : tile,
+        ),
+      };
+      localStorage.setItem(TRADE_STORAGE_KEY, JSON.stringify(updated));
+    } catch {}
+    navigate("trade");
+  }
+
+  function onCreateTrigger() {
+    const activeScript =
+      selectedScriptId || scriptIdInput.trim() || "ema-rsi-trend";
+    const seed: TriggerDraftSeed = {
+      kind: "fasedscript",
+      name: `${scriptNameInput || activeScript} (${symbol})`.slice(0, 64),
+      venue,
+      symbol,
+      interval,
+      scriptId: activeScript,
+    };
+    try {
+      sessionStorage.setItem(TRIGGER_DRAFT_KEY, JSON.stringify(seed));
+    } catch {}
+    navigate("agents/tasks");
+  }
+
   async function onDeleteLesson(id: string) {
     if (core.mode !== "ready") return;
     setBusy(true);
@@ -598,6 +614,7 @@ export function QuantLabWorkspace() {
                       <button
                         type="button"
                         className="lab-row-title"
+                        title={s.description || s.name}
                         onClick={() => selectScriptRecord(s)}
                       >
                         {s.name}
@@ -619,9 +636,6 @@ export function QuantLabWorkspace() {
                         )}
                       </div>
                     </div>
-                    {s.description && (
-                      <div className="lab-muted">{s.description}</div>
-                    )}
                   </div>
                 ))}
               </div>
@@ -707,6 +721,22 @@ export function QuantLabWorkspace() {
                   >
                     <Shield size={14} aria-hidden="true" />
                     <span>{t("Run 4-Gate")}</span>
+                  </button>
+                  <button
+                    type="button"
+                    className="secondary"
+                    onClick={onPlotOnChart}
+                  >
+                    <CandlestickChart size={14} aria-hidden="true" />
+                    <span>{t("Plot on chart")}</span>
+                  </button>
+                  <button
+                    type="button"
+                    className="secondary"
+                    onClick={onCreateTrigger}
+                  >
+                    <Zap size={14} aria-hidden="true" />
+                    <span>{t("Create trigger")}</span>
                   </button>
                 </div>
               </div>
@@ -1325,15 +1355,22 @@ export function QuantLabWorkspace() {
                       <article className="lab-seat-card" key={seat.id}>
                         <div className="lab-row-top">
                           <strong>{seat.title}</strong>
-                          <span
-                            className={`lab-status-pill ${seat.canExecutePaper ? "is-warn" : ""}`}
-                          >
-                            {seat.canExecutePaper
-                              ? t("Paper only")
-                              : t("Read only")}
-                          </span>
+                          <div className="lab-actions-row">
+                            <span
+                              className="lab-status-pill"
+                              title={seat.allowedTools.join(", ")}
+                            >
+                              {seat.allowedTools.length}
+                            </span>
+                            <span
+                              className={`lab-status-pill ${seat.canExecutePaper ? "is-warn" : ""}`}
+                            >
+                              {seat.canExecutePaper
+                                ? t("Paper only")
+                                : t("Read only")}
+                            </span>
+                          </div>
                         </div>
-                        <div className="lab-muted">{seat.role}</div>
                         {art && (
                           <div className="lab-text-sm">
                             {`${art.verdict}: ${art.summary}`}
@@ -1413,6 +1450,24 @@ export function QuantLabWorkspace() {
                     </div>
                     {entry.reason && (
                       <div className="lab-text-sm">{entry.reason}</div>
+                    )}
+                    {entry.outcome === "CLOSED_LOSS" && (
+                      <div className="lab-actions-row">
+                        <button
+                          type="button"
+                          className="secondary"
+                          onClick={() => {
+                            setLessonCat("risk");
+                            setLessonSymbol(entry.symbol);
+                            setLessonRule(
+                              entry.reason ||
+                                `${entry.symbol} closed loss (${formatRMultiple(entry.pnlR)})`,
+                            );
+                          }}
+                        >
+                          <span>{t("Save lesson")}</span>
+                        </button>
+                      </div>
                     )}
                   </div>
                 ))}

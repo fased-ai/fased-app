@@ -97,6 +97,19 @@ test("Trade workspace renders 1x1..4x4 Lightweight Charts, Orderflow tabs, persi
   await expect(orderflow).toContainText("CPIAUCSL");
   await expect(orderflow).toContainText("10-Q");
 
+  // Select FasedScript overlay on tile-1 and verify unified Desk dock tab in OrderflowPane.
+  await tile1
+    .getByLabel("Indicator script", { exact: true })
+    .selectOption("ema-rsi-trend");
+  await orderflow.getByRole("tab", { name: "Desk", exact: true }).click();
+  const deskDock = orderflow.getByTestId("trade-desk-dock");
+  await expect(deskDock).toBeVisible();
+  await expect(deskDock).toContainText("Active");
+  await deskDock
+    .getByRole("button", { name: "Run 8-Seat Cycle", exact: true })
+    .click();
+  await expect(deskDock).toContainText("$100,000.00");
+
   // Persistent Watchlist add -> reload -> click picks symbol into active tile.
   const watchlist = page.getByRole("complementary", {
     name: "Watchlist",

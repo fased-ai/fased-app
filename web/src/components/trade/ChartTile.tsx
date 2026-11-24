@@ -4,6 +4,13 @@ import { useUI } from "../../ui-preferences";
 import { Trash2 } from "../../icons";
 import type { CrosshairBus, FasedStreamClient } from "../../stream-store";
 import {
+  evaluateLabIndicator,
+  type LabScript,
+  type PaperPosition,
+  type ScriptPlotSeries,
+  type ScriptSignalMarker,
+} from "../../quantlab-desk";
+import {
   CANDLE_STYLES,
   CHART_INTERVALS,
   CHART_VENUES,
@@ -36,6 +43,8 @@ export function ChartTile({
   streamClient,
   crosshairBus,
   syncCrosshair = true,
+  labScripts = [],
+  deskPositions = [],
   intelEvents = [],
   showEvents = true,
   onSelect,
@@ -51,6 +60,8 @@ export function ChartTile({
   streamClient?: FasedStreamClient;
   crosshairBus?: CrosshairBus;
   syncCrosshair?: boolean;
+  labScripts?: LabScript[];
+  deskPositions?: PaperPosition[];
   intelEvents?: IntelEvent[];
   showEvents?: boolean;
   onSelect: () => void;
@@ -66,6 +77,9 @@ export function ChartTile({
   const [sourceLabel, setSourceLabel] = useState("loading");
   const [error, setError] = useState("");
   const [tool, setTool] = useState<DrawingToolMode>("none");
+  const [scriptTimes, setScriptTimes] = useState<number[]>([]);
+  const [scriptPlots, setScriptPlots] = useState<ScriptPlotSeries[]>([]);
+  const [scriptSignals, setScriptSignals] = useState<ScriptSignalMarker[]>([]);
 
   const chartHandleRef = useRef<ChartAdapterHandle | null>(null);
   const priceTextRef = useRef<HTMLElement | null>(null);
@@ -150,6 +164,45 @@ export function ChartTile({
     tile.interval,
     tile.style,
     t,
+  ]);
+
+  useEffect(() => {
+    if (!tile.scriptId || core.mode !== "ready") {
+      setScriptTimes([]);
+      setScriptPlots([]);
+      setScriptSignals([]);
+      return;
+    }
+    let cancelled = false;
+    void evaluateLabIndicator(core, {
+      scriptId: tile.scriptId,
+      venue: tile.venue,
+      symbol: tile.symbol,
+      interval: tile.interval,
+      limit: 160,
+    })
+      .then((res) => {
+        if (cancelled) return;
+        setScriptTimes(res.times ?? []);
+        setScriptPlots(res.plots ?? []);
+        setScriptSignals(res.signals ?? []);
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setScriptTimes([]);
+        setScriptPlots([]);
+        setScriptSignals([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    core.mode,
+    core.request,
+    tile.scriptId,
+    tile.venue,
+    tile.symbol,
+    tile.interval,
   ]);
 
   const latest = useMemo(() => candles[candles.length - 1] ?? null, [candles]);
@@ -247,6 +300,26 @@ export function ChartTile({
           <option value="paper_sell">{t("Paper sell")}</option>
         </select>
 
+        {labScripts.length > 0 && (
+          <select
+            aria-label={t("Indicator script")}
+            value={tile.scriptId ?? ""}
+            onChange={(e) =>
+              onChangeTile({
+                ...tile,
+                scriptId: e.target.value || undefined,
+              })
+            }
+          >
+            <option value="">{t("None")}</option>
+            {labScripts.map((sc) => (
+              <option key={sc.id} value={sc.id}>
+                {sc.name}
+              </option>
+            ))}
+          </select>
+        )}
+
         {overlayCount > 0 && (
           <button
             type="button"
@@ -304,6 +377,10 @@ export function ChartTile({
           tool={tool}
           drawings={activeDrawings}
           paperOrders={activeOrders}
+          scriptTimes={scriptTimes}
+          scriptPlots={scriptPlots}
+          scriptSignals={scriptSignals}
+          deskPositions={deskPositions}
           eventPins={matchedPins}
           crosshairBus={crosshairBus}
           syncCrosshair={syncCrosshair}

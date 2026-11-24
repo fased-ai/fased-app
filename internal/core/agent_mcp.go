@@ -48,9 +48,14 @@ var mcpReadTools = map[string]bool{
 }
 
 var mcpDraftTools = map[string]bool{
-	"draft_task":     true,
-	"draft_swap":     true,
-	"draft_strategy": true,
+	"draft_task":          true,
+	"draft_swap":          true,
+	"draft_strategy":      true,
+	"draft_lab_script":    true,
+	"draft_event_trigger": true,
+	"run_desk_cycle":      true,
+	"save_desk_lesson":    true,
+	"sync_world_intel":    true,
 }
 
 type mcpResourceDescriptor struct {

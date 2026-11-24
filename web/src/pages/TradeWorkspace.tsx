@@ -1,10 +1,22 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useCore } from "../core";
 import { useUI } from "../ui-preferences";
+import { useWorkspace } from "../workspace";
 import { Badge } from "../components/shared";
 import { Crosshair, Grid2x2, Layers, List, Pin } from "../icons";
-import { CrosshairBus, FasedStreamClient } from "../stream-store";
+import { CrosshairBus } from "../stream-store";
 import { fetchIntelEvents, type IntelEvent } from "../world-intel";
+import {
+  approveDeskTicket,
+  closeDeskPosition,
+  getDeskState,
+  listLabScripts,
+  rejectDeskTicket,
+  runDeskCycle,
+  type DeskMode,
+  type DeskSnapshot,
+  type LabScript,
+} from "../quantlab-desk";
 import {
   defaultTradeWorkspaceConfig,
   ensureTilesForLayout,
@@ -36,6 +48,7 @@ const LAYOUTS: { id: TradeLayoutMode; label: string }[] = [
 export function TradeWorkspace() {
   const { t } = useUI();
   const core = useCore();
+  const { streamClient, navigate } = useWorkspace();
   const [config, setConfig] = useState<TradeWorkspaceConfig>(() => {
     try {
       return parseTradeWorkspaceConfig(localStorage.getItem(TRADE_STORAGE_KEY));
@@ -45,30 +58,61 @@ export function TradeWorkspace() {
   });
   const [showEvents, setShowEvents] = useState(true);
   const [intelEvents, setIntelEvents] = useState<IntelEvent[]>([]);
+  const [labScripts, setLabScripts] = useState<LabScript[]>([]);
+  const [desk, setDesk] = useState<DeskSnapshot | null>(null);
+  const [deskBusy, setDeskBusy] = useState(false);
+  const [deskError, setDeskError] = useState("");
 
-  const streamClientRef = useRef<FasedStreamClient | null>(null);
-  if (!streamClientRef.current) {
-    streamClientRef.current = new FasedStreamClient();
-  }
   const crosshairBusRef = useRef<CrosshairBus | null>(null);
   if (!crosshairBusRef.current) {
     crosshairBusRef.current = new CrosshairBus();
   }
 
-  useEffect(() => {
-    return () => {
-      streamClientRef.current?.dispose();
-      streamClientRef.current = null;
-    };
-  }, []);
+  const refreshDesk = useCallback(async () => {
+    if (core.mode !== "ready") return;
+    try {
+      const snap = await getDeskState(core);
+      setDesk(snap);
+    } catch {}
+  }, [core.mode, core.request]);
 
   useEffect(() => {
-    streamClientRef.current?.setCore({
-      mode: core.mode,
-      request: core.request,
-      streamGet: core.streamGet,
+    if (core.mode !== "ready") {
+      setLabScripts([]);
+      setDesk(null);
+      return;
+    }
+    let cancelled = false;
+    void listLabScripts(core)
+      .then((res) => {
+        if (!cancelled) setLabScripts(res.scripts ?? []);
+      })
+      .catch(() => {});
+    void getDeskState(core)
+      .then((snap) => {
+        if (!cancelled) setDesk(snap);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [core.mode, core.request]);
+
+  useEffect(() => {
+    if (!streamClient || core.mode !== "ready") return;
+    let timer: number | undefined;
+    const unsub = streamClient.subscribe("desk", () => {
+      if (timer !== undefined) window.clearTimeout(timer);
+      timer = window.setTimeout(() => {
+        timer = undefined;
+        void refreshDesk();
+      }, 150);
     });
-  }, [core.mode, core.request, core.streamGet]);
+    return () => {
+      if (timer !== undefined) window.clearTimeout(timer);
+      unsub();
+    };
+  }, [streamClient, core.mode, refreshDesk]);
 
   useEffect(() => {
     if (core.mode !== "ready" || !showEvents) return;
@@ -182,6 +226,76 @@ export function TradeWorkspace() {
     });
   }
 
+  const openDeskPositions = useMemo(
+    () => (desk?.positions ?? []).filter((p) => p.status === "OPEN"),
+    [desk],
+  );
+
+  async function handleRunDeskCycle(mode: DeskMode) {
+    if (core.mode !== "ready" || !activeTile || deskBusy) return;
+    setDeskBusy(true);
+    setDeskError("");
+    try {
+      await runDeskCycle(core, {
+        venue: activeTile.venue,
+        symbol: activeTile.symbol,
+        interval: activeTile.interval,
+        scriptId: activeTile.scriptId || "ema-rsi-trend",
+        mode,
+        limit: 120,
+      });
+      await refreshDesk();
+    } catch (err) {
+      setDeskError(err instanceof Error ? err.message : "Desk cycle failed");
+    } finally {
+      setDeskBusy(false);
+    }
+  }
+
+  async function handleApproveTicket(id: string) {
+    if (core.mode !== "ready" || deskBusy) return;
+    setDeskBusy(true);
+    setDeskError("");
+    try {
+      await approveDeskTicket(core, id);
+      await refreshDesk();
+    } catch (err) {
+      setDeskError(err instanceof Error ? err.message : "Approval failed");
+    } finally {
+      setDeskBusy(false);
+    }
+  }
+
+  async function handleRejectTicket(id: string) {
+    if (core.mode !== "ready" || deskBusy) return;
+    setDeskBusy(true);
+    setDeskError("");
+    try {
+      await rejectDeskTicket(core, id, "PM rejected in Trade dock");
+      await refreshDesk();
+    } catch (err) {
+      setDeskError(err instanceof Error ? err.message : "Rejection failed");
+    } finally {
+      setDeskBusy(false);
+    }
+  }
+
+  async function handleClosePosition(id: string) {
+    if (core.mode !== "ready" || deskBusy) return;
+    setDeskBusy(true);
+    setDeskError("");
+    try {
+      await closeDeskPosition(core, id, { reason: "PM_MANUAL_CLOSE" });
+      await refreshDesk();
+    } catch (err) {
+      setDeskError(
+        err instanceof Error ? err.message : "Close position failed",
+      );
+    } finally {
+      setDeskBusy(false);
+    }
+  }
+
   return (
     <section className="trade-workspace" aria-label={t("Trade")}>
       <header className="trade-toolbar">
@@ -288,6 +402,11 @@ export function TradeWorkspace() {
             const drawings = config.drawingsBySymbol?.[ovKey] ?? tile.drawings;
             const paperOrders =
               config.paperOrdersBySymbol?.[ovKey] ?? tile.paperOrders;
+            const matchingPositions = openDeskPositions.filter(
+              (p) =>
+                (!p.venue || p.venue === tile.venue) &&
+                p.symbol.toUpperCase() === tile.symbol.toUpperCase(),
+            );
             return (
               <ChartTile
                 key={tile.id}
@@ -295,9 +414,11 @@ export function TradeWorkspace() {
                 active={tile.id === activeTile?.id}
                 drawings={drawings}
                 paperOrders={paperOrders}
-                streamClient={streamClientRef.current ?? undefined}
+                streamClient={streamClient}
                 crosshairBus={crosshairBusRef.current ?? undefined}
                 syncCrosshair={config.syncCrosshair}
+                labScripts={labScripts}
+                deskPositions={matchingPositions}
                 intelEvents={intelEvents}
                 showEvents={showEvents}
                 onSelect={() =>
@@ -322,9 +443,18 @@ export function TradeWorkspace() {
             symbol={activeTile.symbol}
             interval={activeTile.interval}
             tab={config.orderflowTab}
-            streamClient={streamClientRef.current ?? undefined}
+            streamClient={streamClient}
             crosshairBus={crosshairBusRef.current ?? undefined}
             syncCrosshair={config.syncCrosshair}
+            desk={desk}
+            activeScriptId={activeTile.scriptId}
+            deskBusy={deskBusy}
+            deskError={deskError}
+            onRunDeskCycle={(mode) => void handleRunDeskCycle(mode)}
+            onApproveTicket={(id) => void handleApproveTicket(id)}
+            onRejectTicket={(id) => void handleRejectTicket(id)}
+            onClosePosition={(id) => void handleClosePosition(id)}
+            onOpenLab={() => navigate("lab/desk")}
             onChangeTab={(nextTab: OrderflowTab) =>
               setConfig((prev) => ({ ...prev, orderflowTab: nextTab }))
             }

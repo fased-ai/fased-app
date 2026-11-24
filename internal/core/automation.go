@@ -7,11 +7,13 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/fased-ai/fased-app/internal/automation"
 	"github.com/fased-ai/fased-app/internal/decision"
+	"github.com/fased-ai/fased-app/internal/desk"
 	"github.com/fased-ai/fased-app/internal/httpapi"
 	"github.com/fased-ai/fased-app/internal/marketdata"
 	"github.com/fased-ai/fased-app/internal/telegram"
@@ -65,8 +67,40 @@ func (s *Store) automationService() (*automation.Service, error) {
 			}
 			return decSvc.Evaluate(ctx, req)
 		},
+		ScriptReader: func(ctx context.Context, scriptID string) (string, error) {
+			ql, qErr := s.quantLabService()
+			if qErr != nil {
+				return "", qErr
+			}
+			rec, found, err := ql.GetScript(ctx, scriptID)
+			if err != nil {
+				return "", err
+			}
+			if !found {
+				return "", os.ErrNotExist
+			}
+			return rec.Source, nil
+		},
+		OnDeskCycle: func(ctx context.Context, _ automation.Trigger, venue, symbol, interval, scriptID, mode string) (string, error) {
+			ds, dErr := s.deskService()
+			if dErr != nil {
+				return "", dErr
+			}
+			res, rErr := ds.RunCycle(ctx, desk.CycleRequest{
+				Venue:    venue,
+				Symbol:   symbol,
+				Interval: interval,
+				ScriptID: scriptID,
+				Mode:     mode,
+				Limit:    120,
+			})
+			if rErr != nil {
+				return "", rErr
+			}
+			return fmt.Sprintf("Desk cycle %s (%s): %s", res.ID, res.Mode, res.FinalStatus), nil
+		},
 		OnAgentPrompt: func(ctx context.Context, tr automation.Trigger, prompt string, _ bool) {
-			s.appendAutomationAgentNote(ctx, tr, prompt)
+			s.dispatchAutomationAgentPrompt(ctx, tr, prompt)
 		},
 	})
 	if err != nil {
@@ -112,7 +146,7 @@ func (s *Store) telegramService() (*telegram.Service, error) {
 	return tg, nil
 }
 
-func (s *Store) appendAutomationAgentNote(ctx context.Context, tr automation.Trigger, prompt string) {
+func (s *Store) dispatchAutomationAgentPrompt(ctx context.Context, tr automation.Trigger, prompt string) {
 	v2, err := s.ensureAgentV2(ctx)
 	if err != nil || v2 == nil {
 		return
@@ -122,9 +156,11 @@ func (s *Store) appendAutomationAgentNote(ctx context.Context, tr automation.Tri
 		return
 	}
 	var targetID string
+	var profileID string
 	for _, th := range threads {
 		if th.SourceKind == "automation" && th.Title == "Event Automation Feed" {
 			targetID = th.ID
+			profileID = th.ProfileID
 			break
 		}
 	}
@@ -134,14 +170,52 @@ func (s *Store) appendAutomationAgentNote(ctx context.Context, tr automation.Tri
 			return
 		}
 		targetID = created.ID
+		profileID = created.ProfileID
 		_, _ = v2.db.ExecContext(ctx, `UPDATE threads SET source_kind='automation', source_ref=? WHERE id=?`, tr.ID, targetID)
+	}
+	if _, pErr := resolveAgentV2Provider(ctx, s, "", "", "", "", profileID); pErr == nil {
+		turnCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+		defer cancel()
+		if _, tErr := s.RunAgentV2Turn(turnCtx, targetID, AgentV2PromptInput{Content: prompt}, nil); tErr == nil {
+			return
+		}
 	}
 	_, _ = s.AppendMessage(ctx, AgentV2Message{
 		ThreadID: targetID,
-		Role:     "assistant",
+		Role:     "user",
 		Content:  prompt,
 		Status:   "completed",
 	})
+	_, _ = s.AppendMessage(ctx, AgentV2Message{
+		ThreadID: targetID,
+		Role:     "assistant",
+		Content:  "Trigger recorded. Connect an AI provider in Settings to run autonomous triage.",
+		Status:   "completed",
+	})
+}
+
+func (s *Store) notifyApprovalRequired(ctx context.Context, approvalID, title, summary string, allowTelegramButtons bool) {
+	if s == nil {
+		return
+	}
+	s.automationMu.Lock()
+	initialized := s.automationSvc != nil
+	s.automationMu.Unlock()
+	if !initialized {
+		if _, err := os.Stat(filepath.Join(s.dir, "automation", "automation.sqlite")); err != nil {
+			return
+		}
+	}
+	autoSvc, err := s.automationService()
+	if err != nil {
+		return
+	}
+	_, _ = s.telegramService()
+	metaBytes, _ := json.Marshal(map[string]any{
+		"approvalId":           approvalID,
+		"allowTelegramButtons": allowTelegramButtons,
+	})
+	_, _ = autoSvc.NotifyApproval(ctx, title, summary, string(metaBytes))
 }
 
 type coreTelegramHooks struct {

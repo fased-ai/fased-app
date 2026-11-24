@@ -170,6 +170,18 @@ test("Quant Lab IDE, 4-Gate validation, Multi-Seat Paper/Shadow Desk, Overview w
   await page.goto(`${url}/#desk`);
   await expect(page.getByTestId("desk-seat-roster")).toBeVisible();
 
+  // Plot on chart jumps straight to #trade with active script selected on tile-1.
+  await page.getByTestId("lab-tab-scripts").click();
+  await page
+    .getByRole("button", { name: "Plot on chart", exact: true })
+    .click();
+  await expect(page).toHaveURL(/#trade$/);
+  await expect(
+    page
+      .getByTestId("chart-tile-tile-1")
+      .getByLabel("Indicator script", { exact: true }),
+  ).toHaveValue("ema-rsi-trend");
+
   await page.goto(`${url}/#overview`);
   await page.getByRole("button", { name: "Add widgets", exact: true }).click();
   const dlg = page.getByRole("dialog", { name: "Widgets", exact: true });

@@ -170,7 +170,7 @@ export type Watchlist = {
 };
 
 export type TradeLayoutMode = "1x1" | "1x2" | "2x2" | "3x3" | "4x4";
-export type OrderflowTab = "footprint" | "dom" | "tape" | "intel";
+export type OrderflowTab = "footprint" | "dom" | "tape" | "intel" | "desk";
 export type DrawingToolMode =
   "none" | "hline" | "trendline" | "fib" | "paper_buy" | "paper_sell";
 
@@ -196,6 +196,7 @@ export type ChartTileConfig = {
   symbol: string;
   interval: Interval;
   style: CandleStyle;
+  scriptId?: string;
   drawings: ChartDrawing[];
   paperOrders: PaperOrderPreview[];
 };
@@ -358,7 +359,7 @@ export function parseTradeWorkspaceConfig(
       ? (v.layout as TradeLayoutMode)
       : def.layout;
     const orderflowTab: OrderflowTab = (
-      ["footprint", "dom", "tape", "intel"] as const
+      ["footprint", "dom", "tape", "intel", "desk"] as const
     ).includes(v.orderflowTab as OrderflowTab)
       ? (v.orderflowTab as OrderflowTab)
       : def.orderflowTab;
@@ -417,6 +418,9 @@ export function parseTradeWorkspaceConfig(
         style: CANDLE_STYLES.some((s) => s.id === item?.style)
           ? (item.style as CandleStyle)
           : "standard",
+        ...(typeof item?.scriptId === "string" && item.scriptId.trim()
+          ? { scriptId: item.scriptId.trim() }
+          : {}),
         drawings: [],
         paperOrders: [],
       };

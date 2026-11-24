@@ -119,7 +119,7 @@ func newBotClient(override http.RoundTripper, nowFn func() time.Time) *botClient
 			IdleConnTimeout:       30 * time.Second,
 			TLSHandshakeTimeout:   5 * time.Second,
 			ResponseHeaderTimeout: 35 * time.Second,
-			TLSClientConfig:       &tls.Config{MinVersion: tls.VersionTLS13},
+			TLSClientConfig:       &tls.Config{MinVersion: tls.VersionTLS12},
 		}
 	}
 	return &botClient{

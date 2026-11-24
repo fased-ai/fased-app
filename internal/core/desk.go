@@ -43,12 +43,26 @@ func (s *Store) deskService() (*desk.Service, error) {
 			}
 			return series.Candles, nil
 		},
+		OrderBookReader: func(ctx context.Context, venue, symbol string) (marketdata.OrderBookSnapshot, error) {
+			md, mErr := s.marketDataService()
+			if mErr != nil {
+				return marketdata.OrderBookSnapshot{}, mErr
+			}
+			return md.GetOrderBook(ctx, venue, symbol, 10)
+		},
 		IntelEvents: func(ctx context.Context, filter worldintel.EventFilter) ([]worldintel.IntelEvent, error) {
 			wi, wErr := s.worldIntelService()
 			if wErr != nil {
 				return nil, wErr
 			}
 			return wi.ListEvents(ctx, filter)
+		},
+		PredictionReader: func(ctx context.Context, filter worldintel.PredictionFilter) (worldintel.PredictionList, error) {
+			wi, wErr := s.worldIntelService()
+			if wErr != nil {
+				return worldintel.PredictionList{}, wErr
+			}
+			return wi.ListPredictions(ctx, filter)
 		},
 		LabRunsReader: func(ctx context.Context, limit int) ([]quantlab.ValidationRunSummary, error) {
 			ql, qErr := s.quantLabService()
@@ -98,6 +112,15 @@ func (s *Store) deskService() (*desk.Service, error) {
 				Urgency:   urgency,
 				Untrusted: false,
 			})
+		},
+		OnApprovalTicket: func(ctx context.Context, ticket desk.OrderTicket) {
+			s.notifyApprovalRequired(
+				ctx,
+				ticket.ID,
+				fmt.Sprintf("PM approval needed: %s %s", strings.ToUpper(ticket.Side), ticket.Symbol),
+				fmt.Sprintf("%s %s %.4f @ %.4f (R:R %.2f, risk $%.2f)", ticket.Venue, ticket.Symbol, ticket.Quantity, ticket.EntryPrice, ticket.RiskReward, ticket.RiskUSD),
+				false,
+			)
 		},
 	})
 	if err != nil {

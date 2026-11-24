@@ -2,6 +2,7 @@ package telegram
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
@@ -273,6 +274,17 @@ func (s *Service) SendNotification(ctx context.Context, n automation.Notificatio
 	var buttons [][]InlineKeyboardButton
 	if isKill {
 		buttons = [][]InlineKeyboardButton{{{Text: "Status", CallbackData: "status"}}}
+	} else if isApproval && strings.TrimSpace(n.MetadataJSON) != "" {
+		var meta struct {
+			ApprovalID           string `json:"approvalId"`
+			AllowTelegramButtons bool   `json:"allowTelegramButtons"`
+		}
+		if json.Unmarshal([]byte(n.MetadataJSON), &meta) == nil && meta.AllowTelegramButtons && meta.ApprovalID != "" {
+			buttons = [][]InlineKeyboardButton{{
+				{Text: "Approve " + shortID(meta.ApprovalID), CallbackData: "approve:" + meta.ApprovalID},
+				{Text: "Reject " + shortID(meta.ApprovalID), CallbackData: "reject:" + meta.ApprovalID},
+			}}
+		}
 	}
 
 	nowSec := s.now().UTC().Unix()

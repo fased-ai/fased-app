@@ -206,7 +206,14 @@ export function ShellNavigation() {
                   <Plug size={18} />
                   {t("Providers")}
                 </button>
-                <a href="#settings" onClick={closeMore}>
+                <a
+                  href="#settings"
+                  onClick={(e) => {
+                    e.preventDefault();
+                    closeMore();
+                    openSettingsModal("general");
+                  }}
+                >
                   <Settings2 size={18} />
                   {t("Settings")}
                 </a>

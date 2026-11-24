@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   automationStateLabel,
   deleteEventTrigger,
@@ -12,15 +12,18 @@ import {
   slugifyTriggerId,
   summarizeTriggerCondition,
   testEventTrigger,
+  TRIGGER_DRAFT_KEY,
   type AutomationControlState,
   type EventTrigger,
   type NotificationItem,
   type NotificationSeverity,
   type TriggerActionType,
   type TriggerComparator,
+  type TriggerDraftSeed,
   type TriggerIndicator,
   type TriggerKind,
 } from "../../automation";
+import { listLabScripts, type LabScript } from "../../quantlab-desk";
 import { Bell, Pause, Play, RefreshCw, Shield, Trash2, Zap } from "../../icons";
 import { useUI } from "../../ui-preferences";
 import { useWorkspace } from "../../workspace";
@@ -28,7 +31,7 @@ import "./EventTriggersPanel.css";
 
 export function EventTriggersPanel() {
   const { t } = useUI();
-  const { core, openSettingsModal } = useWorkspace();
+  const { core, streamClient, openSettingsModal } = useWorkspace();
 
   const [state, setState] = useState<AutomationControlState | null>(null);
   const [triggers, setTriggers] = useState<EventTrigger[]>([]);
@@ -54,7 +57,10 @@ export function EventTriggersPanel() {
   const [minUrgency, setMinUrgency] = useState("0.6");
   const [minSpreadPct, setMinSpreadPct] = useState("8");
   const [cronExpr, setCronExpr] = useState("*/15 * * * *");
+  const [scriptId, setScriptId] = useState("ema-rsi-trend");
+  const [labScripts, setLabScripts] = useState<LabScript[]>([]);
   const [actionType, setActionType] = useState<TriggerActionType>("notify");
+  const [deskMode, setDeskMode] = useState<"shadow" | "paper">("shadow");
   const [severity, setSeverity] = useState<NotificationSeverity>("warn");
   const [cooldown, setCooldown] = useState("300");
   const [sendTelegram, setSendTelegram] = useState(true);
@@ -63,15 +69,17 @@ export function EventTriggersPanel() {
   const loadAll = useCallback(async () => {
     if (core.mode !== "ready") return;
     try {
-      const [st, tr, ntfs] = await Promise.all([
+      const [st, tr, ntfs, sc] = await Promise.all([
         getAutomationState(core),
         listEventTriggers(core),
         listNotifications(core, { unreadOnly, limit: 40 }),
+        listLabScripts(core).catch(() => ({ scripts: [] })),
       ]);
       setState(st);
       setTriggers(tr.triggers ?? []);
       setNotifications(ntfs.notifications ?? []);
       setUnreadCount(ntfs.unreadCount ?? 0);
+      setLabScripts(sc.scripts ?? []);
     } catch (err) {
       setError(
         err instanceof Error ? err.message : t("Failed to load automation"),
@@ -79,9 +87,49 @@ export function EventTriggersPanel() {
     }
   }, [core, unreadOnly, t]);
 
+  const loadAllRef = useRef(loadAll);
+  loadAllRef.current = loadAll;
+
   useEffect(() => {
     void loadAll();
   }, [loadAll]);
+
+  useEffect(() => {
+    if (!streamClient || core.mode !== "ready") return;
+    let timer: number | undefined;
+    const unsub = streamClient.subscribe("automation", () => {
+      if (timer !== undefined) window.clearTimeout(timer);
+      timer = window.setTimeout(() => {
+        timer = undefined;
+        void loadAllRef.current();
+      }, 150);
+    });
+    return () => {
+      if (timer !== undefined) window.clearTimeout(timer);
+      unsub();
+    };
+  }, [streamClient, core.mode]);
+
+  useEffect(() => {
+    try {
+      const raw = sessionStorage.getItem(TRIGGER_DRAFT_KEY);
+      if (!raw) return;
+      sessionStorage.removeItem(TRIGGER_DRAFT_KEY);
+      const seed = JSON.parse(raw) as Partial<TriggerDraftSeed>;
+      if (seed.kind) setKind(seed.kind);
+      if (seed.name) setName(seed.name);
+      if (seed.venue) setVenue(seed.venue);
+      if (seed.symbol) setSymbol(seed.symbol);
+      if (seed.interval) setInterval(seed.interval);
+      if (seed.scriptId) setScriptId(seed.scriptId);
+      if (seed.category !== undefined) setCategory(seed.category);
+      if (seed.region !== undefined) setRegion(seed.region);
+      if (seed.ticker !== undefined) setTicker(seed.ticker);
+      if (typeof seed.minUrgency === "number") {
+        setMinUrgency(String(seed.minUrgency));
+      }
+    } catch {}
+  }, []);
 
   if (core.mode !== "ready") return null;
 
@@ -131,22 +179,34 @@ export function EventTriggersPanel() {
                 comparator,
                 threshold: Number(threshold) || 0,
               }
-            : kind === "news"
+            : kind === "fasedscript"
               ? {
-                  category,
-                  region,
-                  ticker,
-                  minUrgency: Number(minUrgency) || 0,
+                  venue,
+                  symbol,
+                  interval,
+                  scriptId: scriptId || "ema-rsi-trend",
                 }
-              : kind === "prediction"
+              : kind === "news"
                 ? {
-                    minSpreadPct: Number(minSpreadPct) || 5,
+                    category,
+                    region,
+                    ticker,
+                    minUrgency: Number(minUrgency) || 0,
                   }
-                : {
-                    cronExpr,
-                  },
+                : kind === "prediction"
+                  ? {
+                      minSpreadPct: Number(minSpreadPct) || 5,
+                    }
+                  : {
+                      cronExpr,
+                    },
         action: {
           type: actionType,
+          deskMode: actionType === "desk_cycle" ? deskMode : undefined,
+          scriptId:
+            actionType === "desk_cycle"
+              ? scriptId || "ema-rsi-trend"
+              : undefined,
           severity,
           sendTelegram,
           sendWebhook,
@@ -321,6 +381,7 @@ export function EventTriggersPanel() {
                   <option value="news">{t("World Intel")}</option>
                   <option value="price">{t("Price")}</option>
                   <option value="indicator">{t("Indicator")}</option>
+                  <option value="fasedscript">{t("FasedScript")}</option>
                   <option value="prediction">{t("Prediction spread")}</option>
                   <option value="cron">{t("Cron schedule")}</option>
                 </select>
@@ -339,11 +400,56 @@ export function EventTriggersPanel() {
                   <option value="jev_triage">{t("Jev triage")}</option>
                   <option value="agent_prompt">{t("Agent prompt")}</option>
                   <option value="paper_alert">{t("Paper alert")}</option>
+                  <option value="desk_cycle">{t("Desk cycle")}</option>
                 </select>
               </div>
             </div>
 
-            {(kind === "price" || kind === "indicator") && (
+            {actionType === "desk_cycle" && (
+              <div className="auto-form-row">
+                <div className="auto-field">
+                  <label htmlFor="auto-trig-desk-mode">{t("Desk mode")}</label>
+                  <select
+                    id="auto-trig-desk-mode"
+                    aria-label={t("Desk mode")}
+                    value={deskMode}
+                    onChange={(e) =>
+                      setDeskMode(e.target.value as "shadow" | "paper")
+                    }
+                  >
+                    <option value="shadow">{t("Shadow")}</option>
+                    <option value="paper">{t("Paper")}</option>
+                  </select>
+                </div>
+                {kind !== "fasedscript" && (
+                  <div className="auto-field">
+                    <label htmlFor="auto-trig-action-script">
+                      {t("FasedScript")}
+                    </label>
+                    <select
+                      id="auto-trig-action-script"
+                      aria-label={t("FasedScript")}
+                      value={scriptId}
+                      onChange={(e) => setScriptId(e.target.value)}
+                    >
+                      {labScripts.length > 0 ? (
+                        labScripts.map((sc) => (
+                          <option key={sc.id} value={sc.id}>
+                            {sc.name}
+                          </option>
+                        ))
+                      ) : (
+                        <option value="ema-rsi-trend">ema-rsi-trend</option>
+                      )}
+                    </select>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {(kind === "price" ||
+              kind === "indicator" ||
+              kind === "fasedscript") && (
               <>
                 <div className="auto-form-row">
                   <div className="auto-field">
@@ -371,86 +477,141 @@ export function EventTriggersPanel() {
                       onChange={(e) => setSymbol(e.target.value)}
                     />
                   </div>
-                </div>
-                <div className="auto-form-row">
-                  {kind === "indicator" ? (
-                    <div className="auto-field">
-                      <label htmlFor="auto-trig-ind">{t("Indicator")}</label>
-                      <select
-                        id="auto-trig-ind"
-                        aria-label={t("Indicator")}
-                        value={indicator}
-                        onChange={(e) =>
-                          setIndicator(e.target.value as TriggerIndicator)
-                        }
-                      >
-                        <option value="rsi_14">RSI(14)</option>
-                        <option value="ema_cross">EMA 9/21</option>
-                        <option value="vwap_cross">VWAP Cross</option>
-                        <option value="volume_spike">Volume Spike</option>
-                        <option value="cvd_delta">CVD Delta</option>
-                      </select>
-                    </div>
-                  ) : (
-                    <div className="auto-field">
-                      <label htmlFor="auto-trig-iv">{t("Interval")}</label>
-                      <select
-                        id="auto-trig-iv"
-                        aria-label={t("Interval")}
-                        value={interval}
-                        onChange={(e) => setInterval(e.target.value)}
-                      >
-                        <option value="1m">1m</option>
-                        <option value="5m">5m</option>
-                        <option value="15m">15m</option>
-                        <option value="1h">1h</option>
-                        <option value="4h">4h</option>
-                      </select>
-                    </div>
-                  )}
                   <div className="auto-field">
-                    <label htmlFor="auto-trig-comp">{t("Comparator")}</label>
+                    <label htmlFor="auto-trig-iv">{t("Interval")}</label>
                     <select
-                      id="auto-trig-comp"
-                      aria-label={t("Comparator")}
-                      value={comparator}
-                      onChange={(e) =>
-                        setComparator(e.target.value as TriggerComparator)
-                      }
+                      id="auto-trig-iv"
+                      aria-label={t("Interval")}
+                      value={interval}
+                      onChange={(e) => setInterval(e.target.value)}
                     >
-                      <option value="above">{t("Above")}</option>
-                      <option value="below">{t("Below")}</option>
-                      <option value="cross_above">{t("Cross above")}</option>
-                      <option value="cross_below">{t("Cross below")}</option>
-                      <option value="pct_change_gte">{t("% change")}</option>
+                      <option value="1m">1m</option>
+                      <option value="5m">5m</option>
+                      <option value="15m">15m</option>
+                      <option value="1h">1h</option>
+                      <option value="4h">4h</option>
                     </select>
                   </div>
                 </div>
-                <div className="auto-form-row">
-                  <div className="auto-field">
-                    <label htmlFor="auto-trig-thresh">{t("Threshold")}</label>
-                    <input
-                      id="auto-trig-thresh"
-                      type="number"
-                      step="any"
-                      aria-label={t("Threshold")}
-                      value={threshold}
-                      onChange={(e) => setThreshold(e.target.value)}
-                    />
+                {kind === "fasedscript" ? (
+                  <div className="auto-form-row">
+                    <div className="auto-field">
+                      <label htmlFor="auto-trig-script">
+                        {t("FasedScript")}
+                      </label>
+                      <select
+                        id="auto-trig-script"
+                        aria-label={t("FasedScript")}
+                        value={scriptId}
+                        onChange={(e) => setScriptId(e.target.value)}
+                      >
+                        {labScripts.length > 0 ? (
+                          labScripts.map((sc) => (
+                            <option key={sc.id} value={sc.id}>
+                              {sc.name}
+                            </option>
+                          ))
+                        ) : (
+                          <option value="ema-rsi-trend">ema-rsi-trend</option>
+                        )}
+                      </select>
+                    </div>
+                    <div className="auto-field">
+                      <label htmlFor="auto-trig-cd-script">
+                        {t("Cooldown (s)")}
+                      </label>
+                      <input
+                        id="auto-trig-cd-script"
+                        type="number"
+                        min="10"
+                        max="86400"
+                        aria-label={t("Cooldown (s)")}
+                        value={cooldown}
+                        onChange={(e) => setCooldown(e.target.value)}
+                      />
+                    </div>
                   </div>
-                  <div className="auto-field">
-                    <label htmlFor="auto-trig-cd">{t("Cooldown (s)")}</label>
-                    <input
-                      id="auto-trig-cd"
-                      type="number"
-                      min="10"
-                      max="86400"
-                      aria-label={t("Cooldown (s)")}
-                      value={cooldown}
-                      onChange={(e) => setCooldown(e.target.value)}
-                    />
-                  </div>
-                </div>
+                ) : (
+                  <>
+                    <div className="auto-form-row">
+                      {kind === "indicator" && (
+                        <div className="auto-field">
+                          <label htmlFor="auto-trig-ind">
+                            {t("Indicator")}
+                          </label>
+                          <select
+                            id="auto-trig-ind"
+                            aria-label={t("Indicator")}
+                            value={indicator}
+                            onChange={(e) =>
+                              setIndicator(e.target.value as TriggerIndicator)
+                            }
+                          >
+                            <option value="rsi_14">RSI(14)</option>
+                            <option value="ema_cross">EMA 9/21</option>
+                            <option value="vwap_cross">VWAP Cross</option>
+                            <option value="volume_spike">Volume Spike</option>
+                            <option value="cvd_delta">CVD Delta</option>
+                          </select>
+                        </div>
+                      )}
+                      <div className="auto-field">
+                        <label htmlFor="auto-trig-comp">
+                          {t("Comparator")}
+                        </label>
+                        <select
+                          id="auto-trig-comp"
+                          aria-label={t("Comparator")}
+                          value={comparator}
+                          onChange={(e) =>
+                            setComparator(e.target.value as TriggerComparator)
+                          }
+                        >
+                          <option value="above">{t("Above")}</option>
+                          <option value="below">{t("Below")}</option>
+                          <option value="cross_above">
+                            {t("Cross above")}
+                          </option>
+                          <option value="cross_below">
+                            {t("Cross below")}
+                          </option>
+                          <option value="pct_change_gte">
+                            {t("% change")}
+                          </option>
+                        </select>
+                      </div>
+                    </div>
+                    <div className="auto-form-row">
+                      <div className="auto-field">
+                        <label htmlFor="auto-trig-thresh">
+                          {t("Threshold")}
+                        </label>
+                        <input
+                          id="auto-trig-thresh"
+                          type="number"
+                          step="any"
+                          aria-label={t("Threshold")}
+                          value={threshold}
+                          onChange={(e) => setThreshold(e.target.value)}
+                        />
+                      </div>
+                      <div className="auto-field">
+                        <label htmlFor="auto-trig-cd">
+                          {t("Cooldown (s)")}
+                        </label>
+                        <input
+                          id="auto-trig-cd"
+                          type="number"
+                          min="10"
+                          max="86400"
+                          aria-label={t("Cooldown (s)")}
+                          value={cooldown}
+                          onChange={(e) => setCooldown(e.target.value)}
+                        />
+                      </div>
+                    </div>
+                  </>
+                )}
               </>
             )}
 
@@ -656,7 +817,7 @@ export function EventTriggersPanel() {
                       disabled={busy}
                       onClick={() => {
                         setBusy(true);
-                        void testEventTrigger(core, tr.id, false)
+                        void testEventTrigger(core, tr.id, true)
                           .then((res) => {
                             setStatusMsg(res.summary);
                             return loadAll();

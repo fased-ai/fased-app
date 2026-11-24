@@ -329,3 +329,177 @@ func TestServiceTriggersControlsCooldownDedupAndWebhook(t *testing.T) {
 		t.Fatalf("expected clean unkill state, got %+v err=%v", unkilled, err)
 	}
 }
+
+func TestCVDRealBuySellAndUTCVWAPReset(t *testing.T) {
+	t.Parallel()
+	day1 := time.Date(2026, 11, 24, 22, 0, 0, 0, time.UTC).Unix()
+	candles := make([]marketdata.Candle, 16)
+	for i := 0; i < 16; i++ {
+		ts := day1 + int64(i)*3600
+		buyV, sellV := 10.0, 40.0 // net bearish flow despite green candle closes
+		if i == 15 {
+			buyV, sellV = 100.0, 20.0
+		}
+		candles[i] = marketdata.Candle{
+			Time:       ts,
+			Open:       100,
+			High:       110,
+			Low:        95,
+			Close:      105, // always green vs open!
+			Volume:     buyV + sellV,
+			BuyVolume:  buyV,
+			SellVolume: sellV,
+		}
+	}
+	cvdCurr, cvdPrev, ok := ComputeCVDDelta(candles, 4)
+	if !ok || cvdPrev >= 0 || cvdCurr <= cvdPrev {
+		t.Fatalf("expected ComputeCVDDelta to use BuyVolume-SellVolume (negative prior, improving current), got curr=%.2f prev=%.2f ok=%v", cvdCurr, cvdPrev, ok)
+	}
+
+	// Huge day-1 outlier volume at elevated price must NOT poison UTC day-2 session VWAP.
+	vwapCandles := []marketdata.Candle{
+		{Time: time.Date(2026, 11, 24, 23, 0, 0, 0, time.UTC).Unix(), Open: 500, High: 505, Low: 495, Close: 500, Volume: 1_000_000},
+		{Time: time.Date(2026, 11, 25, 0, 0, 0, 0, time.UTC).Unix(), Open: 100, High: 102, Low: 98, Close: 100, Volume: 10},
+		{Time: time.Date(2026, 11, 25, 1, 0, 0, 0, time.UTC).Unix(), Open: 100, High: 105, Low: 100, Close: 104, Volume: 20},
+	}
+	deltaCurr, _, ok := ComputeVWAPDelta(vwapCandles)
+	if !ok || deltaCurr <= 0 {
+		t.Fatalf("expected positive close-VWAP delta after UTC day reset, got %.4f ok=%v", deltaCurr, ok)
+	}
+}
+
+func TestFasedScriptTriggerDeskCycleAndPermanentDedup(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	mu := sync.Mutex{}
+	now := time.Date(2026, 11, 24, 14, 0, 0, 0, time.UTC)
+
+	candles := sampleRisingCandles(40, 50000)
+	var deskCalls []string
+	publishedSec := time.Date(2026, 11, 24, 13, 55, 0, 0, time.UTC).Unix()
+	newsEvents := []worldintel.IntelEvent{
+		{
+			ID:          "ev-perm-1",
+			SourceName:  "GDELT",
+			Category:    worldintel.CategoryEnergy,
+			Region:      worldintel.RegionMENA,
+			Title:       "Permanent dedup news test",
+			Urgency:     0.9,
+			Sentiment:   "bearish",
+			PublishedAt: publishedSec,
+			URL:         "https://example.org/perm",
+			Untrusted:   true,
+		},
+	}
+
+	svc, err := NewService(Config{
+		DataDir: dir,
+		Now: func() time.Time {
+			mu.Lock()
+			defer mu.Unlock()
+			return now
+		},
+		MarketReader: func(_ context.Context, _, _, _ string, _ int) ([]marketdata.Candle, error) {
+			return candles, nil
+		},
+		IntelEvents: func(_ context.Context, _ worldintel.EventFilter) ([]worldintel.IntelEvent, error) {
+			return newsEvents, nil
+		},
+		ScriptReader: func(_ context.Context, scriptID string) (string, error) {
+			return "strategy({ long: close > 0, stopLossPct: 2.0 });", nil
+		},
+		OnDeskCycle: func(_ context.Context, _ Trigger, venue, symbol, interval, scriptID, mode string) (string, error) {
+			deskCalls = append(deskCalls, venue+":"+symbol+":"+interval+":"+scriptID+":"+mode)
+			return "Desk cycle cyc-1 (" + mode + "): SHADOW", nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewService: %v", err)
+	}
+	defer svc.Close()
+
+	// ActionDeskCycle strictly rejects live deskMode.
+	if _, err := svc.SaveTrigger(t.Context(), TriggerInput{
+		ID:              "bad-live-desk",
+		Name:            "Reject live",
+		Kind:            KindFasedScript,
+		CooldownSeconds: 30,
+		Condition:       TriggerCondition{ScriptID: "always-long", Symbol: "BTC"},
+		Action:          TriggerAction{Type: ActionDeskCycle, DeskMode: "live"},
+	}); err == nil {
+		t.Fatal("expected deskMode=live rejection")
+	}
+
+	if _, err := svc.SaveTrigger(t.Context(), TriggerInput{
+		ID:              "script-desk",
+		Name:            "Always Long Script",
+		Kind:            KindFasedScript,
+		CooldownSeconds: 15,
+		Condition:       TriggerCondition{ScriptID: "always-long", Venue: "hyperliquid", Symbol: "BTC", Interval: "1h"},
+		Action:          TriggerAction{Type: ActionDeskCycle, DeskMode: "shadow", Severity: SeverityWarn},
+	}); err != nil {
+		t.Fatalf("SaveTrigger script-desk: %v", err)
+	}
+
+	if _, err := svc.SaveTrigger(t.Context(), TriggerInput{
+		ID:              "news-perm",
+		Name:            "News Perm",
+		Kind:            KindNews,
+		CooldownSeconds: 15,
+		Condition:       TriggerCondition{Category: worldintel.CategoryEnergy, MinUrgency: 0.5},
+		Action:          TriggerAction{Type: ActionNotify, Severity: SeverityInfo},
+	}); err != nil {
+		t.Fatalf("SaveTrigger news-perm: %v", err)
+	}
+
+	if _, err := svc.SaveTrigger(t.Context(), TriggerInput{
+		ID:              "cron-min-dedup",
+		Name:            "Cron 1m Dedup",
+		Kind:            KindCron,
+		CooldownSeconds: 10,
+		Condition:       TriggerCondition{CronExpr: "* * * * *"},
+		Action:          TriggerAction{Type: ActionNotify, Severity: SeverityInfo},
+	}); err != nil {
+		t.Fatalf("SaveTrigger cron-min-dedup: %v", err)
+	}
+
+	sweep1, err := svc.EvaluateNow(t.Context())
+	if err != nil || sweep1.Fired != 3 {
+		t.Fatalf("expected 3 fired on initial sweep, got %+v err=%v", sweep1, err)
+	}
+	if len(deskCalls) != 1 || deskCalls[0] != "hyperliquid:BTC:1h:always-long:shadow" {
+		t.Fatalf("unexpected OnDeskCycle invocation: %v", deskCalls)
+	}
+	var scriptRes *EvalResult
+	for i := range sweep1.Results {
+		if sweep1.Results[i].TriggerID == "script-desk" {
+			scriptRes = &sweep1.Results[i]
+			break
+		}
+	}
+	if scriptRes == nil || scriptRes.Notification == nil || !strings.Contains(scriptRes.Notification.Body, "Desk cycle cyc-1") {
+		t.Fatalf("expected Desk cycle summary in script-desk notification body, got %+v", scriptRes)
+	}
+
+	// Advance 25s (< 60s minute bucket, > 2x 10s cron cooldown, > 15s script/news cooldown) -> cron STILL duplicates!
+	mu.Lock()
+	now = now.Add(25 * time.Second)
+	mu.Unlock()
+	sweep2, err := svc.EvaluateNow(t.Context())
+	if err != nil || sweep2.Fired != 0 {
+		t.Fatalf("expected 0 fired (permanent fingerprint dedup for fasedscript, news, same-minute cron), got %+v err=%v", sweep2, err)
+	}
+
+	// Advance 5 minutes (> 2x cooldown) -> same candle/news STILL suppressed!
+	mu.Lock()
+	now = now.Add(5 * time.Minute)
+	mu.Unlock()
+	evScript, err := svc.EvaluateTrigger(t.Context(), "script-desk", false, false)
+	if err != nil || evScript.Fired || evScript.Suppressed != "duplicate" {
+		t.Fatalf("expected script-desk permanent duplicate suppression on same candle, got %+v err=%v", evScript, err)
+	}
+	evNews, err := svc.EvaluateTrigger(t.Context(), "news-perm", false, false)
+	if err != nil || evNews.Fired {
+		t.Fatalf("expected news-perm not to re-fire same news article after cooldown*2, got %+v err=%v", evNews, err)
+	}
+}

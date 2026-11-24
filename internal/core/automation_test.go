@@ -204,4 +204,27 @@ func TestAutomationTelegramAndMCPIntegration(t *testing.T) {
 	if delResp.StatusCode != http.StatusOK {
 		t.Fatalf("DELETE trigger expected 200, got %d", delResp.StatusCode)
 	}
+
+	// FasedScript trigger + ActionDeskCycle + NotifyOnApproval integration.
+	scriptTrigBody := `{"id":"lab-desk-trig","name":"Lab Script Desk","kind":"fasedscript","cooldownSeconds":60,"condition":{"venue":"hyperliquid","symbol":"BTC","interval":"1h","scriptId":"ema-rsi-trend"},"action":{"type":"desk_cycle","deskMode":"shadow","severity":"info"}}`
+	stPut := doV2JSONRequest(t, http.MethodPut, ts.URL+"/api/v1/automation/triggers", ts.URL, token, csrf, scriptTrigBody, "application/json")
+	if stPut.StatusCode != http.StatusOK {
+		raw, _ := io.ReadAll(stPut.Body)
+		stPut.Body.Close()
+		t.Fatalf("PUT fasedscript trigger expected 200, got %d: %s", stPut.StatusCode, raw)
+	}
+	stPut.Body.Close()
+
+	// Verify NotifyOnApproval delivers approval notification with Telegram inline callbacks cleanly.
+	s.notifyApprovalRequired(t.Context(), "ap-notify-1", "Approval required: Test Draft", "Summary for approval notification", true)
+	ntfResp := doV2JSONRequest(t, http.MethodGet, ts.URL+"/api/v1/automation/notifications?limit=20", ts.URL, token, "", "", "")
+	if ntfResp.StatusCode != http.StatusOK {
+		ntfResp.Body.Close()
+		t.Fatalf("GET notifications expected 200, got %d", ntfResp.StatusCode)
+	}
+	ntfRaw, _ := io.ReadAll(ntfResp.Body)
+	ntfResp.Body.Close()
+	if !strings.Contains(string(ntfRaw), "Approval required: Test Draft") {
+		t.Fatalf("expected approval notification persisted, got %s", ntfRaw)
+	}
 }

@@ -1,6 +1,7 @@
-import { lazy, Suspense, useState } from "react";
+import { lazy, Suspense, useEffect, useState } from "react";
 import { Plus } from "../icons";
 import { SectionHead } from "../components/shared";
+import { TRIGGER_DRAFT_KEY } from "../automation";
 import { AgentChatV2 } from "../components/AgentChatV2";
 import { useCore } from "../core";
 import { useUI } from "../ui-preferences";
@@ -31,7 +32,26 @@ export function LocalAgents() {
   const core = useCore();
   const { agents, setProfileOpen, tab, setAgentSettingsDrafts } =
     useWorkspace();
-  const [taskPanel, setTaskPanel] = useState("automations");
+  const [taskPanel, setTaskPanel] = useState(() => {
+    try {
+      if (
+        typeof sessionStorage !== "undefined" &&
+        sessionStorage.getItem(TRIGGER_DRAFT_KEY)
+      ) {
+        return "triggers";
+      }
+    } catch {}
+    return "automations";
+  });
+
+  useEffect(() => {
+    if (tab !== "tasks") return;
+    try {
+      if (sessionStorage.getItem(TRIGGER_DRAFT_KEY)) {
+        setTaskPanel("triggers");
+      }
+    } catch {}
+  }, [tab]);
 
   return (
     <>
