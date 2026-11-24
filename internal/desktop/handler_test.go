@@ -180,6 +180,16 @@ func TestNativeTransportDoesNotSupplyAuthority(t *testing.T) {
 	if got := request("POST", "/api/v1/updates/application/owner", `{}`, "http://wails.localhost", session.Token, session.CSRF); got.Code != 404 {
 		t.Fatal("native update owner endpoint exposed", got.Code)
 	}
+	if got := request("POST", "/api/v1/updates/desktop-release", `{}`, "http://wails.localhost", session.Token, session.CSRF); got.Code != 404 {
+		t.Fatal("desktop-release POST should be refused by desktop allowlist", got.Code)
+	}
+	getDesktopReq := httptest.NewRequest("GET", "http://wails.localhost/api/v1/updates/desktop-release", nil)
+	if !PublicRequestAllowed(getDesktopReq) {
+		t.Fatal("GET /api/v1/updates/desktop-release should be allowed by desktop proxy")
+	}
+	if PublicRequestAllowed(httptest.NewRequest("GET", "http://wails.localhost/api/v1/updates/desktop-release?foo=1", nil)) {
+		t.Fatal("GET /api/v1/updates/desktop-release with query should be refused by desktop proxy")
+	}
 	if got := request("POST", "/api/v1/ai/connection", `{"action":"lock"}`, "http://wails.localhost", session.Token, session.CSRF); got.Code != 200 {
 		t.Fatalf("provider control: %d %s", got.Code, got.Body)
 	}

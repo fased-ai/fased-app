@@ -251,7 +251,7 @@ func allowed(method, route string) bool {
 		return method == "PUT"
 	case "/api/v1/accounts/rpc-check", "/api/v1/accounts/read":
 		return method == "POST"
-	case "/api/v1/updates/status":
+	case "/api/v1/updates/status", "/api/v1/updates/desktop-release":
 		return method == "GET"
 	case "/api/v1/setup":
 		return method == "GET" || method == "PUT"

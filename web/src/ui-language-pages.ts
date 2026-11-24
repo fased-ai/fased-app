@@ -5554,4 +5554,47 @@ export const pageCopy = {
     "启动参数",
     "실행 인수",
   ],
+  "Desktop release": [
+    "Десктоп-релиз",
+    "Versión de escritorio",
+    "桌面发布版本",
+    "데스크톱 릴리스",
+  ],
+  "Check desktop release": [
+    "Проверить десктоп-релиз",
+    "Buscar versión de escritorio",
+    "检查桌面版本",
+    "데스크톱 릴리스 확인",
+  ],
+  "Latest release": [
+    "Последний релиз",
+    "Última versión",
+    "最新版本",
+    "최신 릴리스",
+  ],
+  "Release notes": [
+    "Примечания к релизу",
+    "Notas de la versión",
+    "发行说明",
+    "릴리스 노트",
+  ],
+  Unsigned: ["Без подписи", "Sin firmar", "未签名", "서명되지 않음"],
+  "Verified downloads": [
+    "Проверенные загрузки",
+    "Descargas verificadas",
+    "已校验下载",
+    "검증된 다운로드",
+  ],
+  "Desktop release manifest is not published yet.": [
+    "Манифест десктоп-релиза ещё не опубликован.",
+    "El manifiesto de escritorio aún no se ha publicado.",
+    "桌面发布清单尚未发布。",
+    "데스크톱 릴리스 매니페스트가 아직 게시되지 않았습니다.",
+  ],
+  "Could not check desktop release feed.": [
+    "Не удалось проверить ленту десктоп-релизов.",
+    "No se pudo comprobar el canal de escritorio.",
+    "无法检查桌面发布源。",
+    "데스크톱 릴리스 피드를 확인할 수 없습니다.",
+  ],
 } satisfies Record<string, [string, string, string, string]>;
