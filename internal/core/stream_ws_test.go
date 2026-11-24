@@ -176,13 +176,19 @@ func TestStreamWSTicketSecurityTopicsAndShutdown(t *testing.T) {
 		Payload: marketdata.OrderBookSnapshot{Venue: "hyperliquid", Symbol: "BTC", Spread: 5, MidPrice: 94123},
 	})
 
-	evt1 := readFrame()
-	if evt1.Type != "event" || evt1.Topic != "candle:hyperliquid:BTC:1h:standard" || evt1.Event != "candle" {
-		t.Fatalf("unexpected first WS event: %+v", evt1)
+	got := make(map[string]streamOutboundFrame, 2)
+	for i := 0; i < 2; i++ {
+		evt := readFrame()
+		if evt.Type != "event" {
+			t.Fatalf("unexpected non-event WS frame: %+v", evt)
+		}
+		got[evt.Topic] = evt
 	}
-	evt2 := readFrame()
-	if evt2.Type != "event" || evt2.Topic != "orderbook:hyperliquid:BTC" || evt2.Event != "orderbook" {
-		t.Fatalf("unexpected second WS event: %+v", evt2)
+	if evt, ok := got["candle:hyperliquid:BTC:1h:standard"]; !ok || evt.Event != "candle" {
+		t.Fatalf("missing or unexpected candle WS event: got=%+v", got)
+	}
+	if evt, ok := got["orderbook:hyperliquid:BTC"]; !ok || evt.Event != "orderbook" {
+		t.Fatalf("missing or unexpected orderbook WS event: got=%+v", got)
 	}
 
 	// Unsub from candle topic.

@@ -217,7 +217,7 @@ export function buildChartEventPins(
       ? Math.max(60, sortedCandles[1].time - sortedCandles[0].time)
       : 3600;
   const minTime = sortedCandles[0].time - step;
-  const maxTime = sortedCandles[sortedCandles.length - 1].time + step;
+  const maxTime = sortedCandles[sortedCandles.length - 1].time + 2 * step;
   const byTime = new Map<number, ChartEventPin>();
 
   for (const ev of events) {

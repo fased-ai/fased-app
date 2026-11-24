@@ -149,6 +149,37 @@ describe("world-intel helpers and API wrappers", () => {
       buildChartEventPins(oneMinCandles, staleEvents).map((p) => p.eventId),
     ).toEqual(["in-range"]);
 
+    // Events in the open/most-recent bar (e.g. :40 past the hour when bars end at previous hour) must still pin.
+    const hourlyCandles = [
+      {
+        time: 1760000000 - 3600,
+        open: 100,
+        high: 101,
+        low: 99,
+        close: 100,
+        volume: 5,
+      },
+      {
+        time: 1760000000,
+        open: 100,
+        high: 101,
+        low: 99,
+        close: 100,
+        volume: 5,
+      },
+    ];
+    const openHourEvent: IntelEvent[] = [
+      {
+        ...sampleEvents[0],
+        id: "open-hour",
+        publishedAt: 1760000000 + 3600 + 2400,
+      },
+    ];
+    const openHourPins = buildChartEventPins(hourlyCandles, openHourEvent);
+    expect(openHourPins.map((p) => ({ id: p.eventId, time: p.time }))).toEqual([
+      { id: "open-hour", time: 1760000000 },
+    ]);
+
     expect(buildIntelChatPrompt(sampleEvents[0])).toContain("untrusted");
     expect(formatProbPct(0.624)).toBe("62%");
     expect(formatCompactUSD(1840000)).toBe("$1.84M");
