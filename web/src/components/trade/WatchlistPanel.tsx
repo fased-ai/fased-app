@@ -1,0 +1,158 @@
+import { useEffect, useState } from "react";
+import { useCore } from "../../core";
+import { useUI } from "../../ui-preferences";
+import { Plus, Trash2 } from "../../icons";
+import {
+  CHART_VENUES,
+  fetchWatchlists,
+  saveWatchlist,
+  type Venue,
+  type Watchlist,
+  type WatchlistItem,
+} from "../../market-data";
+
+export function WatchlistPanel({
+  activeVenue,
+  activeSymbol,
+  onSelectItem,
+}: {
+  activeVenue: string;
+  activeSymbol: string;
+  onSelectItem: (item: WatchlistItem) => void;
+}) {
+  const { t } = useUI();
+  const core = useCore();
+  const [lists, setLists] = useState<Watchlist[]>([]);
+  const [venue, setVenue] = useState<Venue>("hyperliquid");
+  const [symbol, setSymbol] = useState("");
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    let mounted = true;
+    fetchWatchlists(core, controller.signal)
+      .then((res) => {
+        if (mounted) setLists(res);
+      })
+      .catch(() => {});
+    return () => {
+      mounted = false;
+      controller.abort();
+    };
+  }, [core]);
+
+  const current: Watchlist = lists[0] ?? {
+    id: "core-desk",
+    name: "Core Desk",
+    items: [],
+  };
+
+  async function addItem(e: React.FormEvent) {
+    e.preventDefault();
+    const sym = symbol.trim();
+    if (!sym || saving) return;
+    setSaving(true);
+    try {
+      const next: Watchlist = {
+        ...current,
+        items: [
+          ...current.items.filter(
+            (x) => !(x.venue === venue && x.symbol === sym),
+          ),
+          { venue, symbol: sym, interval: "1h", style: "standard" },
+        ],
+      };
+      const saved = await saveWatchlist(core, next);
+      setLists([saved, ...lists.slice(1)]);
+      setSymbol("");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function removeItem(item: WatchlistItem) {
+    if (saving) return;
+    setSaving(true);
+    try {
+      const next: Watchlist = {
+        ...current,
+        items: current.items.filter(
+          (x) => !(x.venue === item.venue && x.symbol === item.symbol),
+        ),
+      };
+      const saved = await saveWatchlist(core, next);
+      setLists([saved, ...lists.slice(1)]);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <aside className="panel trade-watchlist" aria-label={t("Watchlist")}>
+      <div className="trade-pane-head">
+        <h2>{t("Watchlist")}</h2>
+        <span className="trade-source-pill">{current.items.length}</span>
+      </div>
+
+      <form className="trade-watchlist-form" onSubmit={(e) => void addItem(e)}>
+        <select
+          aria-label={t("Watchlist venue")}
+          value={venue}
+          onChange={(e) => setVenue(e.target.value as Venue)}
+        >
+          {CHART_VENUES.map((v) => (
+            <option key={v} value={v}>
+              {v}
+            </option>
+          ))}
+        </select>
+        <input
+          aria-label={t("Add ticker")}
+          placeholder={t("Ticker")}
+          value={symbol}
+          onChange={(e) => setSymbol(e.target.value)}
+        />
+        <button
+          type="submit"
+          className="trade-mini-btn"
+          disabled={saving}
+          aria-label={t("Add to watchlist")}
+        >
+          <Plus size={14} />
+        </button>
+      </form>
+
+      <ul className="trade-watchlist-items">
+        {current.items.map((item) => {
+          const isActive =
+            item.venue === activeVenue && item.symbol === activeSymbol;
+          return (
+            <li
+              key={`${item.venue}:${item.symbol}`}
+              className={isActive ? "is-active" : ""}
+            >
+              <button
+                type="button"
+                className="trade-watchlist-pick"
+                onClick={() => onSelectItem(item)}
+              >
+                <strong>{item.symbol}</strong>
+                <span>
+                  {item.venue} · {item.interval || "1h"}
+                </span>
+              </button>
+              <button
+                type="button"
+                className="trade-mini-btn"
+                aria-label={`${t("Remove")} ${item.symbol}`}
+                onClick={() => void removeItem(item)}
+              >
+                <Trash2 size={13} />
+              </button>
+            </li>
+          );
+        })}
+      </ul>
+    </aside>
+  );
+}

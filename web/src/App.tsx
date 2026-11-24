@@ -20,6 +20,11 @@ import { ErrorBoundary } from "./components/ErrorBoundary";
 const Agents = lazy(() =>
   import("./pages/Agents").then((m) => ({ default: m.Agents })),
 );
+const TradeWorkspace = lazy(() =>
+  import("./pages/TradeWorkspace").then((m) => ({
+    default: m.TradeWorkspace,
+  })),
+);
 function WorkspaceShell() {
   const { t: uiText } = useUI();
   const { preferences, t } = useUI();
@@ -56,6 +61,7 @@ function WorkspaceShell() {
   useEffect(() => {
     const labels: Record<string, string> = {
       overview: t("Dashboard"),
+      trade: t("Trade"),
       agents: t("Agents"),
       wallets: t("Wallets"),
       terminals: t("Terminals"),
@@ -108,6 +114,10 @@ function WorkspaceShell() {
             )}
             {section === "overview" ? (
               <Overview />
+            ) : section === "trade" ? (
+              <Suspense fallback={<p role="status">{uiText("Loading")}</p>}>
+                <TradeWorkspace />
+              </Suspense>
             ) : section === "wallets" ? (
               <Wallets />
             ) : section === "agents" ? (

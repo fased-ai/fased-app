@@ -104,6 +104,10 @@ describe("UI translation catalog hygiene", () => {
       "pages/NewsInputs.tsx",
       "pages/Overview.tsx",
       "pages/Settings.tsx",
+      "pages/TradeWorkspace.tsx",
+      "components/trade/ChartTile.tsx",
+      "components/trade/OrderflowPane.tsx",
+      "components/trade/WatchlistPanel.tsx",
     ];
     const missing: string[] = [];
     for (const rel of activeCoreFiles) {
