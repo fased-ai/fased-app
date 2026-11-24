@@ -29,6 +29,10 @@ var mcpReadTools = map[string]bool{
 	"search_memories":       true,
 	"search_news":           true,
 	"list_strategies":       true,
+	"get_market_candles":    true,
+	"get_orderbook":         true,
+	"get_footprint":         true,
+	"get_macro_or_sec":      true,
 }
 
 var mcpDraftTools = map[string]bool{
@@ -73,6 +77,12 @@ var mcpResources = []mcpResourceDescriptor{
 		URI:         "fased://strategies",
 		Name:        "Trading strategies",
 		Description: "Saved non-custodial strategies and paper trading definitions.",
+		MimeType:    "application/json",
+	},
+	{
+		URI:         "fased://market/watchlists",
+		Name:        "Market watchlists",
+		Description: "Saved market data watchlists and tracked instruments.",
 		MimeType:    "application/json",
 	},
 }
@@ -359,6 +369,16 @@ func readMCPResource(ctx context.Context, s *Store, uri string) (any, error) {
 		return map[string]any{"memories": filtered, "count": len(filtered)}, nil
 	case "fased://strategies":
 		return toolListStrategies(ctx, s, "", json.RawMessage(`{}`))
+	case "fased://market/watchlists":
+		svc, err := s.marketDataService()
+		if err != nil {
+			return nil, err
+		}
+		lists, err := svc.ListWatchlists(ctx)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"watchlists": lists, "count": len(lists)}, nil
 	default:
 		return nil, errors.New("unknown MCP resource uri")
 	}

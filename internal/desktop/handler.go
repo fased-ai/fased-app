@@ -307,6 +307,9 @@ func validPathSegment(seg string) bool {
 // StreamingRoute reports whether route may return a long-lived text/event-stream
 // response from the core.
 func StreamingRoute(route string) bool {
+	if route == "/api/v1/market/stream" {
+		return true
+	}
 	if !strings.HasPrefix(route, "/api/v1/agents/v2/") {
 		return false
 	}
@@ -387,6 +390,9 @@ func allowed(method, route string) bool {
 	if allowedAgentsV2(method, route) {
 		return true
 	}
+	if strings.HasPrefix(route, "/api/v1/market/watchlists/") {
+		return method == http.MethodDelete && validPathSegment(strings.TrimPrefix(route, "/api/v1/market/watchlists/"))
+	}
 	switch route {
 	case "/api/v1/health", "/api/v1/auth/state", "/api/v1/signer/status", "/api/v1/installation/claim-code":
 		return method == "GET"
@@ -414,6 +420,10 @@ func allowed(method, route string) bool {
 		return method == "POST"
 	case "/api/v1/auth/devices", "/api/v1/auth/pair/devices":
 		return method == "GET" || method == "POST"
+	case "/api/v1/market/instruments", "/api/v1/market/candles", "/api/v1/market/orderbook", "/api/v1/market/trades", "/api/v1/market/footprint", "/api/v1/market/macro", "/api/v1/market/sec", "/api/v1/market/cohorts", "/api/v1/market/stream":
+		return method == http.MethodGet
+	case "/api/v1/market/watchlists":
+		return method == http.MethodGet || method == http.MethodPut
 	}
 	return false
 }
@@ -458,7 +468,7 @@ func responseLimit(route string) int64 {
 	if route == "/api/v1/agents" || strings.HasPrefix(route, "/api/v1/agents/v2/") {
 		return 4 * 1024 * 1024
 	}
-	if route == "/api/v1/mcp" {
+	if route == "/api/v1/mcp" || strings.HasPrefix(route, "/api/v1/market/") {
 		return 1 * 1024 * 1024
 	}
 	if route == "/api/v1/accounts/read" {
@@ -532,6 +542,64 @@ func allowedQuery(r *http.Request) bool {
 			switch key {
 			case "profileId", "q", "scope", "limit", "excludeDrafts":
 			default:
+				return false
+			}
+		}
+		return true
+	case r.Method == http.MethodGet && r.URL.Path == "/api/v1/market/instruments":
+		for key := range q {
+			if key != "venue" {
+				return false
+			}
+		}
+		return true
+	case r.Method == http.MethodGet && r.URL.Path == "/api/v1/market/candles":
+		for key := range q {
+			switch key {
+			case "venue", "symbol", "interval", "style", "limit", "brickSize", "rangeSize", "reversal", "boxSize", "lineBreakCount", "tickCount", "volumeThreshold":
+			default:
+				return false
+			}
+		}
+		return true
+	case r.Method == http.MethodGet && (r.URL.Path == "/api/v1/market/orderbook" || r.URL.Path == "/api/v1/market/trades"):
+		for key := range q {
+			if key != "venue" && key != "symbol" && key != "limit" {
+				return false
+			}
+		}
+		return true
+	case r.Method == http.MethodGet && r.URL.Path == "/api/v1/market/footprint":
+		for key := range q {
+			if key != "venue" && key != "symbol" && key != "interval" && key != "stepSize" && key != "limit" {
+				return false
+			}
+		}
+		return true
+	case r.Method == http.MethodGet && r.URL.Path == "/api/v1/market/macro":
+		for key := range q {
+			if key != "seriesId" && key != "limit" {
+				return false
+			}
+		}
+		return true
+	case r.Method == http.MethodGet && r.URL.Path == "/api/v1/market/sec":
+		for key := range q {
+			if key != "cik" && key != "limit" {
+				return false
+			}
+		}
+		return true
+	case r.Method == http.MethodGet && r.URL.Path == "/api/v1/market/cohorts":
+		for key := range q {
+			if key != "window" {
+				return false
+			}
+		}
+		return true
+	case r.Method == http.MethodGet && r.URL.Path == "/api/v1/market/stream":
+		for key := range q {
+			if key != "venue" && key != "symbol" && key != "interval" && key != "style" {
 				return false
 			}
 		}
