@@ -307,7 +307,7 @@ func validPathSegment(seg string) bool {
 // StreamingRoute reports whether route may return a long-lived text/event-stream
 // response from the core.
 func StreamingRoute(route string) bool {
-	if route == "/api/v1/market/stream" || route == "/api/v1/intel/stream" || route == "/api/v1/automation/stream" {
+	if route == "/api/v1/market/stream" || route == "/api/v1/intel/stream" || route == "/api/v1/automation/stream" || route == "/api/v1/desk/stream" {
 		return true
 	}
 	if !strings.HasPrefix(route, "/api/v1/agents/v2/") {
@@ -339,7 +339,7 @@ func RequestBodyLimit(route string) int64 {
 		return 640 * 1024
 	case strings.HasPrefix(route, "/api/v1/agents/v2/"):
 		return 256 * 1024
-	case route == "/api/v1/mcp" || strings.HasPrefix(route, "/api/v1/mcp/clients") || strings.HasPrefix(route, "/api/v1/decision/") || strings.HasPrefix(route, "/api/v1/intel/") || strings.HasPrefix(route, "/api/v1/automation/") || strings.HasPrefix(route, "/api/v1/lab/"):
+	case route == "/api/v1/mcp" || strings.HasPrefix(route, "/api/v1/mcp/clients") || strings.HasPrefix(route, "/api/v1/decision/") || strings.HasPrefix(route, "/api/v1/intel/") || strings.HasPrefix(route, "/api/v1/automation/") || strings.HasPrefix(route, "/api/v1/lab/") || strings.HasPrefix(route, "/api/v1/desk/"):
 		return 64 * 1024
 	default:
 		return 16 * 1024
@@ -420,6 +420,29 @@ func allowed(method, route string) bool {
 	if strings.HasPrefix(route, "/api/v1/lab/runs/") {
 		return method == http.MethodGet && validPathSegment(strings.TrimPrefix(route, "/api/v1/lab/runs/"))
 	}
+	if strings.HasPrefix(route, "/api/v1/desk/tickets/") {
+		rel := strings.TrimPrefix(route, "/api/v1/desk/tickets/")
+		if strings.HasSuffix(rel, "/approve") {
+			return method == http.MethodPost && validPathSegment(strings.TrimSuffix(rel, "/approve"))
+		}
+		if strings.HasSuffix(rel, "/reject") {
+			return method == http.MethodPost && validPathSegment(strings.TrimSuffix(rel, "/reject"))
+		}
+		return false
+	}
+	if strings.HasPrefix(route, "/api/v1/desk/positions/") {
+		rel := strings.TrimPrefix(route, "/api/v1/desk/positions/")
+		if rel == "mark" {
+			return method == http.MethodPost
+		}
+		if strings.HasSuffix(rel, "/close") {
+			return method == http.MethodPost && validPathSegment(strings.TrimSuffix(rel, "/close"))
+		}
+		return false
+	}
+	if strings.HasPrefix(route, "/api/v1/desk/lessons/") {
+		return method == http.MethodDelete && validPathSegment(strings.TrimPrefix(route, "/api/v1/desk/lessons/"))
+	}
 	switch route {
 	case "/api/v1/health", "/api/v1/auth/state", "/api/v1/signer/status", "/api/v1/installation/claim-code":
 		return method == "GET"
@@ -477,6 +500,14 @@ func allowed(method, route string) bool {
 		return method == http.MethodPost
 	case "/api/v1/lab/runs":
 		return method == http.MethodGet
+	case "/api/v1/desk/state", "/api/v1/desk/cycles", "/api/v1/desk/tickets", "/api/v1/desk/positions", "/api/v1/desk/journal", "/api/v1/desk/report", "/api/v1/desk/stream":
+		return method == http.MethodGet
+	case "/api/v1/desk/limits":
+		return method == http.MethodPut
+	case "/api/v1/desk/control", "/api/v1/desk/cycle", "/api/v1/desk/positions/mark":
+		return method == http.MethodPost
+	case "/api/v1/desk/lessons":
+		return method == http.MethodGet || method == http.MethodPut
 	}
 	return false
 }
@@ -524,7 +555,7 @@ func responseLimit(route string) int64 {
 	if strings.HasPrefix(route, "/api/v1/lab/") {
 		return 2 * 1024 * 1024
 	}
-	if route == "/api/v1/mcp" || strings.HasPrefix(route, "/api/v1/mcp/clients") || strings.HasPrefix(route, "/api/v1/decision/") || strings.HasPrefix(route, "/api/v1/market/") || strings.HasPrefix(route, "/api/v1/intel/") || strings.HasPrefix(route, "/api/v1/automation/") {
+	if route == "/api/v1/mcp" || strings.HasPrefix(route, "/api/v1/mcp/clients") || strings.HasPrefix(route, "/api/v1/decision/") || strings.HasPrefix(route, "/api/v1/market/") || strings.HasPrefix(route, "/api/v1/intel/") || strings.HasPrefix(route, "/api/v1/automation/") || strings.HasPrefix(route, "/api/v1/desk/") {
 		return 1 * 1024 * 1024
 	}
 	if route == "/api/v1/accounts/read" {
@@ -700,6 +731,27 @@ func allowedQuery(r *http.Request) bool {
 	case r.Method == http.MethodGet && r.URL.Path == "/api/v1/lab/runs":
 		for key := range q {
 			if key != "limit" {
+				return false
+			}
+		}
+		return true
+	case r.Method == http.MethodGet && (r.URL.Path == "/api/v1/desk/cycles" || r.URL.Path == "/api/v1/desk/lessons"):
+		for key := range q {
+			if key != "limit" {
+				return false
+			}
+		}
+		return true
+	case r.Method == http.MethodGet && (r.URL.Path == "/api/v1/desk/tickets" || r.URL.Path == "/api/v1/desk/positions"):
+		for key := range q {
+			if key != "status" && key != "limit" {
+				return false
+			}
+		}
+		return true
+	case r.Method == http.MethodGet && r.URL.Path == "/api/v1/desk/journal":
+		for key := range q {
+			if key != "symbol" && key != "outcome" && key != "limit" {
 				return false
 			}
 		}

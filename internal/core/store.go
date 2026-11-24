@@ -19,6 +19,7 @@ import (
 
 	"github.com/fased-ai/fased-app/internal/automation"
 	"github.com/fased-ai/fased-app/internal/decision"
+	"github.com/fased-ai/fased-app/internal/desk"
 	"github.com/fased-ai/fased-app/internal/marketdata"
 	"github.com/fased-ai/fased-app/internal/mcpclient"
 	"github.com/fased-ai/fased-app/internal/providersecrets"
@@ -77,6 +78,8 @@ type Store struct {
 	telegramTransport             http.RoundTripper // Tests only; never configuration, CLI or IPC.
 	quantLabMu                    sync.Mutex
 	quantLabSvc                   *quantlab.Service
+	deskMu                        sync.Mutex
+	deskSvc                       *desk.Service
 	dir                           string
 	instanceID                    string
 	pauseFault                    func(string) error // Test-only interruption injection, never configuration or IPC.
@@ -466,7 +469,15 @@ func (s *Store) Close() error {
 	if ql != nil {
 		qlErr = ql.Close()
 	}
-	return errors.Join(v2Err, mdErr, decErr, mcpCErr, wiErr, autoErr, qlErr, s.db.Close())
+	s.deskMu.Lock()
+	dk := s.deskSvc
+	s.deskSvc = nil
+	s.deskMu.Unlock()
+	var dkErr error
+	if dk != nil {
+		dkErr = dk.Close()
+	}
+	return errors.Join(v2Err, mdErr, decErr, mcpCErr, wiErr, autoErr, qlErr, dkErr, s.db.Close())
 }
 func randomToken() (string, error) {
 	b := make([]byte, 32)

@@ -505,6 +505,48 @@ func agentV2ToolRegistry() []agentToolEntry {
 		},
 		{
 			spec: AgentToolSpec{
+				Name:        "get_desk_state",
+				Tier:        toolTierRead,
+				Description: "Inspect Multi-Seat Trading Desk control state, kill switches, hard risk limits, seat policies, isolated paper account equity, open paper positions, pending PM tickets, cooldown bench, and decay report.",
+				Parameters: map[string]any{
+					"type":       "object",
+					"properties": map[string]any{},
+				},
+			},
+			execute: toolGetDeskState,
+		},
+		{
+			spec: AgentToolSpec{
+				Name:        "list_desk_journal",
+				Tier:        toolTierRead,
+				Description: "Read Multi-Seat Trading Desk Trade Journal entries with optional symbol, outcome, and limit filters.",
+				Parameters: map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"symbol":  map[string]any{"type": "string", "description": "Optional asset symbol filter."},
+						"outcome": map[string]any{"type": "string", "description": "Optional outcome filter (SHADOW, PENDING_PM, FILLED, CLOSED_WIN, CLOSED_LOSS, KILLED_BY_SKEPTIC, FAILED_RISK_CHECK, REJECTED_BY_PM)."},
+						"limit":   map[string]any{"type": "integer", "description": "Maximum entries to return (1-250)."},
+					},
+				},
+			},
+			execute: toolListDeskJournal,
+		},
+		{
+			spec: AgentToolSpec{
+				Name:        "list_desk_lessons",
+				Tier:        toolTierRead,
+				Description: "List active Multi-Seat Trading Desk lessons and rules read by every seat before acting.",
+				Parameters: map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"limit": map[string]any{"type": "integer", "description": "Maximum lessons to return (1-100)."},
+					},
+				},
+			},
+			execute: toolListDeskLessons,
+		},
+		{
+			spec: AgentToolSpec{
 				Name:        "delegate_to_agent",
 				Tier:        toolTierRead,
 				Description: "Delegate a read-only research or analysis subtask to another workspace agent profile and return its concise synthesis without mutating thread messages or running action tools.",

@@ -42,6 +42,9 @@ var mcpReadTools = map[string]bool{
 	"list_lab_scripts":         true,
 	"run_fasedscript_backtest": true,
 	"run_four_gate_validation": true,
+	"get_desk_state":           true,
+	"list_desk_journal":        true,
+	"list_desk_lessons":        true,
 }
 
 var mcpDraftTools = map[string]bool{
@@ -116,6 +119,12 @@ var mcpResources = []mcpResourceDescriptor{
 		URI:         "fased://lab/scripts",
 		Name:        "FasedScript library",
 		Description: "Built-in and custom FasedScript indicator/strategy definitions and tunable input bounds.",
+		MimeType:    "application/json",
+	},
+	{
+		URI:         "fased://desk/state",
+		Name:        "Multi-Seat Desk state",
+		Description: "Multi-Seat Trading Desk policies, kill switches, isolated paper account equity, positions, bench, and decay report.",
 		MimeType:    "application/json",
 	},
 }
@@ -436,6 +445,8 @@ func readMCPResource(ctx context.Context, s *Store, uri string) (any, error) {
 		return toolListEventTriggers(ctx, s, "", []byte(`{}`))
 	case "fased://lab/scripts":
 		return toolListLabScripts(ctx, s, "", []byte(`{}`))
+	case "fased://desk/state":
+		return toolGetDeskState(ctx, s, "", []byte(`{}`))
 	default:
 		return nil, errors.New("unknown MCP resource uri")
 	}
