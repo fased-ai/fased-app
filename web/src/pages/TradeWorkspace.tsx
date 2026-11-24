@@ -1,7 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
+import { useCore } from "../core";
 import { useUI } from "../ui-preferences";
 import { Badge } from "../components/shared";
-import { Crosshair, Grid2x2, Layers, List } from "../icons";
+import { Crosshair, Grid2x2, Layers, List, Pin } from "../icons";
+import { fetchIntelEvents, type IntelEvent } from "../world-intel";
 import {
   defaultTradeWorkspaceConfig,
   ensureTilesForLayout,
@@ -30,6 +32,7 @@ const LAYOUTS: { id: TradeLayoutMode; label: string }[] = [
 
 export function TradeWorkspace() {
   const { t } = useUI();
+  const core = useCore();
   const [config, setConfig] = useState<TradeWorkspaceConfig>(() => {
     try {
       return parseTradeWorkspaceConfig(localStorage.getItem(TRADE_STORAGE_KEY));
@@ -38,6 +41,21 @@ export function TradeWorkspace() {
     }
   });
   const [crosshair, setCrosshair] = useState<CrosshairSyncPoint | null>(null);
+  const [showEvents, setShowEvents] = useState(true);
+  const [intelEvents, setIntelEvents] = useState<IntelEvent[]>([]);
+
+  useEffect(() => {
+    if (core.mode !== "ready" || !showEvents) return;
+    let cancelled = false;
+    void fetchIntelEvents(core, { limit: 40 })
+      .then((res) => {
+        if (!cancelled) setIntelEvents(res.events ?? []);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [core, showEvents]);
 
   useEffect(() => {
     try {
@@ -167,6 +185,16 @@ export function TradeWorkspace() {
             <Layers size={14} />
             {t("Orderflow")}
           </button>
+
+          <button
+            type="button"
+            className={`trade-toggle-btn ${showEvents ? "is-selected" : ""}`}
+            aria-pressed={showEvents}
+            onClick={() => setShowEvents((prev) => !prev)}
+          >
+            <Pin size={14} />
+            {t("Events")}
+          </button>
         </div>
       </header>
 
@@ -191,6 +219,8 @@ export function TradeWorkspace() {
               tile={tile}
               active={tile.id === activeTile?.id}
               syncedCrosshair={config.syncCrosshair ? crosshair : null}
+              intelEvents={intelEvents}
+              showEvents={showEvents}
               onSelect={() =>
                 setConfig((prev) =>
                   prev.activeTileId === tile.id

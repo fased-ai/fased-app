@@ -117,11 +117,13 @@ function getRoute() {
     hyperliquid: "terminals/hyperliquid",
     charts: "trade",
     markets: "trade",
+    worldmap: "intel",
+    predictions: "intel",
   };
   const route = aliases[raw] ?? raw;
   if (route === "terminals/asset" || route === "terminals/loss")
     return "terminals/satcoin";
-  return /^(overview|trade|activity|settings|providers|terminals(\/(satcoin|hyperliquid|jupiter))?|agents\/(chat|review|bots|tasks|news|memory|settings)|wallets\/(overview|accounts|permissions|security|activity))$/.test(
+  return /^(overview|trade|intel|activity|settings|providers|terminals(\/(satcoin|hyperliquid|jupiter))?|agents\/(chat|review|bots|tasks|news|memory|settings)|wallets\/(overview|accounts|permissions|security|activity))$/.test(
     route,
   )
     ? route
@@ -461,6 +463,7 @@ function useWorkspaceState() {
           ["Tasks", "agents/tasks"],
           ["Agents", "agents/settings"],
           ["Trade", "trade"],
+          ["Intel", "intel"],
           ["News", "agents/news"],
           ["Wallets", "wallets/overview"],
           ["Settings", "settings"],

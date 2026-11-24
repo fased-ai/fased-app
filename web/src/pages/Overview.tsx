@@ -12,6 +12,7 @@ import {
   ArrowUp,
   Bot,
   Clock3,
+  Globe2,
   History,
   LayoutDashboard,
   Maximize2,
@@ -37,11 +38,20 @@ import {
   type WidgetID,
   type WidgetSize,
 } from "../dashboard";
+import {
+  fetchIntelEvents,
+  fetchPredictions,
+  formatProbPct,
+  type IntelEvent,
+  type PredictionList,
+} from "../world-intel";
 
 const icons = {
   agents: Bot,
   tasks: Clock3,
   news: Newspaper,
+  intel: Globe2,
+  predictions: TrendingUp,
   wallets: Wallet,
   activity: History,
   mining: Pickaxe,
@@ -52,6 +62,8 @@ const paths = {
   agents: "agents/settings",
   tasks: "agents/tasks",
   news: "agents/news",
+  intel: "intel",
+  predictions: "intel",
   wallets: "wallets/overview",
   activity: "activity",
   mining: "terminals/satcoin",
@@ -85,6 +97,34 @@ export function Overview() {
   const [adding, setAdding] = useState(false);
   const [expanded, setExpanded] = useState<WidgetID>();
   const [openMenu, setOpenMenu] = useState<WidgetID | null>(null);
+  const [intelEvents, setIntelEvents] = useState<IntelEvent[]>([]);
+  const [predList, setPredList] = useState<PredictionList | null>(null);
+  const hasIntelWidget = layout.widgets.some((w) => w.id === "intel");
+  const hasPredWidget = layout.widgets.some((w) => w.id === "predictions");
+  useEffect(() => {
+    if (core.mode !== "ready" || !hasIntelWidget) return;
+    let cancelled = false;
+    void fetchIntelEvents(core, { limit: 5 })
+      .then((res) => {
+        if (!cancelled) setIntelEvents(res.events ?? []);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [core, hasIntelWidget]);
+  useEffect(() => {
+    if (core.mode !== "ready" || !hasPredWidget) return;
+    let cancelled = false;
+    void fetchPredictions(core, { limit: 5 })
+      .then((res) => {
+        if (!cancelled) setPredList(res);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [core, hasPredWidget]);
   const board = useRef<HTMLDivElement>(null);
   const dragging = useRef<WidgetID | undefined>(undefined);
   function closeMenus() {
@@ -362,6 +402,74 @@ export function Overview() {
         </div>
       );
     }
+    if (id === "intel")
+      return (
+        <div className="dashboard-rows">
+          {intelEvents.slice(0, 5).map((ev) => (
+            <button
+              key={ev.id}
+              className="dashboard-row headline"
+              onClick={() => open(paths.intel)}
+            >
+              <span className="dashboard-copy">
+                <strong>{ev.title}</strong>
+                <small>{`${ev.sourceName} · ${ev.region.toUpperCase()}`}</small>
+              </span>
+              <span className="mono">{`${Math.round(ev.urgency * 100)}%`}</span>
+            </button>
+          ))}
+          {!intelEvents.length && (
+            <div className="dashboard-empty">
+              <button className="text-button" onClick={() => open(paths.intel)}>
+                {t("World Intel")}
+                <ArrowRight size={14} />
+              </button>
+            </div>
+          )}
+        </div>
+      );
+    if (id === "predictions")
+      return (
+        <div className="dashboard-rows">
+          {(predList?.arbitrage ?? []).slice(0, 1).map((arb) => (
+            <button
+              key={arb.id}
+              className="dashboard-row"
+              onClick={() => open(paths.predictions)}
+            >
+              <span className="dashboard-copy">
+                <strong>{`${t("Arbitrage")}: ${arb.topic}`}</strong>
+                <small>{`Poly ${formatProbPct(arb.polymarketProb)} · Kalshi ${formatProbPct(arb.kalshiProb)}`}</small>
+              </span>
+              <span className="mono">{`Δ ${arb.spreadPct.toFixed(1)}%`}</span>
+            </button>
+          ))}
+          {(predList?.markets ?? []).slice(0, 4).map((mkt) => (
+            <button
+              key={mkt.id}
+              className="dashboard-row"
+              onClick={() => open(paths.predictions)}
+            >
+              <span className="dashboard-copy">
+                <strong>{mkt.question}</strong>
+                <small>{mkt.venue}</small>
+              </span>
+              <span className="mono">{formatProbPct(mkt.yesProb)}</span>
+            </button>
+          ))}
+          {!predList?.markets?.length && (
+            <div className="dashboard-empty">
+              <button
+                className="text-button"
+                onClick={() => open(paths.predictions)}
+              >
+                {t("Predictions")}
+                <ArrowRight size={14} />
+              </button>
+            </div>
+          )}
+        </div>
+      );
     return (
       <div className="dashboard-empty">
         <span>

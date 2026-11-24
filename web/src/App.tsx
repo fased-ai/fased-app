@@ -25,6 +25,11 @@ const TradeWorkspace = lazy(() =>
     default: m.TradeWorkspace,
   })),
 );
+const WorldIntelWorkspace = lazy(() =>
+  import("./pages/WorldIntelWorkspace").then((m) => ({
+    default: m.WorldIntelWorkspace,
+  })),
+);
 function WorkspaceShell() {
   const { t: uiText } = useUI();
   const { preferences, t } = useUI();
@@ -62,6 +67,7 @@ function WorkspaceShell() {
     const labels: Record<string, string> = {
       overview: t("Dashboard"),
       trade: t("Trade"),
+      intel: t("World Intel"),
       agents: t("Agents"),
       wallets: t("Wallets"),
       terminals: t("Terminals"),
@@ -117,6 +123,10 @@ function WorkspaceShell() {
             ) : section === "trade" ? (
               <Suspense fallback={<p role="status">{uiText("Loading")}</p>}>
                 <TradeWorkspace />
+              </Suspense>
+            ) : section === "intel" ? (
+              <Suspense fallback={<p role="status">{uiText("Loading")}</p>}>
+                <WorldIntelWorkspace />
               </Suspense>
             ) : section === "wallets" ? (
               <Wallets />

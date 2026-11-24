@@ -2,14 +2,19 @@ import { useEffect, useRef } from "react";
 import {
   CandlestickSeries,
   createChart,
+  createSeriesMarkers,
   HistogramSeries,
   LineSeries,
   LineStyle,
   type IChartApi,
   type IPriceLine,
   type ISeriesApi,
+  type ISeriesMarkersPluginApi,
+  type SeriesMarker,
+  type Time,
   type UTCTimestamp,
 } from "lightweight-charts";
+import type { ChartEventPin } from "../../world-intel";
 import {
   computeFibLevels,
   type Candle,
@@ -52,6 +57,7 @@ export function FasedChartAdapter({
   tool,
   drawings,
   paperOrders,
+  eventPins = [],
   syncedCrosshair,
   onCrosshairMove,
   onAddDrawing,
@@ -62,6 +68,7 @@ export function FasedChartAdapter({
   tool: DrawingToolMode;
   drawings: ChartDrawing[];
   paperOrders: PaperOrderPreview[];
+  eventPins?: ChartEventPin[];
   syncedCrosshair: CrosshairSyncPoint | null;
   onCrosshairMove?: (pt: CrosshairSyncPoint) => void;
   onAddDrawing: (d: ChartDrawing) => void;
@@ -73,6 +80,7 @@ export function FasedChartAdapter({
   const volumeSeriesRef = useRef<ISeriesApi<"Histogram"> | null>(null);
   const priceLinesRef = useRef<IPriceLine[]>([]);
   const trendSeriesRef = useRef<ISeriesApi<"Line">[]>([]);
+  const markersPluginRef = useRef<ISeriesMarkersPluginApi<Time> | null>(null);
   const paletteRef = useRef<ChartPalette>(resolveThemePalette());
   const pendingAnchorRef = useRef<{ time: number; price: number } | null>(null);
   const suppressEmitRef = useRef(false);
@@ -148,6 +156,7 @@ export function FasedChartAdapter({
     chartRef.current = chart;
     candleSeriesRef.current = cSeries;
     volumeSeriesRef.current = vSeries;
+    markersPluginRef.current = createSeriesMarkers(cSeries, []);
 
     const applyTheme = () => {
       const next = resolveThemePalette();
@@ -250,6 +259,8 @@ export function FasedChartAdapter({
     return () => {
       ro.disconnect();
       mo.disconnect();
+      markersPluginRef.current?.detach();
+      markersPluginRef.current = null;
       priceLinesRef.current = [];
       trendSeriesRef.current = [];
       candleSeriesRef.current = null;
@@ -294,6 +305,34 @@ export function FasedChartAdapter({
     );
     chart.timeScale().fitContent();
   }, [candles]);
+
+  useEffect(() => {
+    const markersPlugin = markersPluginRef.current;
+    if (!markersPlugin) return;
+    if (!candles.length || !eventPins.length) {
+      markersPlugin.setMarkers([]);
+      return;
+    }
+    const p = paletteRef.current;
+    const markers: SeriesMarker<Time>[] = eventPins.map((pin) => ({
+      time: pin.time as UTCTimestamp,
+      position: "aboveBar",
+      shape:
+        pin.sentiment === "bullish"
+          ? "arrowUp"
+          : pin.sentiment === "bearish"
+            ? "arrowDown"
+            : "circle",
+      color:
+        pin.urgency >= 0.7 || pin.sentiment === "bearish"
+          ? p.coral
+          : pin.sentiment === "bullish"
+            ? p.cyan
+            : p.violet,
+      text: pin.label,
+    }));
+    markersPlugin.setMarkers(markers);
+  }, [candles.length, eventPins]);
 
   useEffect(() => {
     const cSeries = candleSeriesRef.current;
