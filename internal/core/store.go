@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -76,13 +77,33 @@ type Store struct {
 	researchRead                  func(context.Context, researchFactResult) (json.RawMessage, error) // Test-only local projection fault; never configuration/IPC.
 }
 
-func sqliteDSN(dbPath string) string {
+func isWindowsDriveSlashPath(p string) bool {
+	return len(p) >= 2 && ((p[0] >= 'A' && p[0] <= 'Z') || (p[0] >= 'a' && p[0] <= 'z')) && p[1] == ':'
+}
+
+func sqliteFileURIFromSlash(slashPath, rawQuery string) string {
 	u := url.URL{
 		Scheme:   "file",
-		Path:     filepath.ToSlash(dbPath),
-		RawQuery: "_pragma=busy_timeout(5000)&_pragma=foreign_keys(1)&_pragma=synchronous(FULL)",
+		RawQuery: rawQuery,
+	}
+	switch {
+	case isWindowsDriveSlashPath(slashPath):
+		u.Path = "/" + slashPath
+	case strings.HasPrefix(slashPath, "/"):
+		u.Path = slashPath
+	default:
+		u.OmitHost = true
+		u.Path = slashPath
 	}
 	return u.String()
+}
+
+func sqliteFileURI(dbPath, rawQuery string) string {
+	return sqliteFileURIFromSlash(filepath.ToSlash(dbPath), rawQuery)
+}
+
+func sqliteDSN(dbPath string) string {
+	return sqliteFileURI(dbPath, "_pragma=busy_timeout(5000)&_pragma=foreign_keys(1)&_pragma=synchronous(FULL)")
 }
 
 func OpenStore(dir string) (_ *Store, resultErr error) {

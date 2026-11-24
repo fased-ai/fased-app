@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"errors"
 	"github.com/fased-ai/fased-app/internal/update"
-	"net/url"
 	"os"
 	"path/filepath"
 )
@@ -36,7 +35,7 @@ func inspectFixtureMetadata(ctx context.Context, dir, probe string, pause *Fixtu
 			return out, e
 		}
 	}
-	db, e := sql.Open("sqlite", (&url.URL{Scheme: "file", Path: p, RawQuery: "mode=ro&immutable=1&_pragma=query_only(1)"}).String())
+	db, e := sql.Open("sqlite", sqliteFileURI(p, "mode=ro&immutable=1&_pragma=query_only(1)"))
 	if e != nil {
 		return out, e
 	}

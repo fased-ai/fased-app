@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"time"
 
 	"github.com/fased-ai/fased-app/internal/core"
 	"github.com/fased-ai/fased-app/internal/privateaccess"
@@ -505,11 +506,29 @@ func Uninstall(ctx context.Context, paths Paths) error {
 	// Only digest-verified application files are removed. The SQLite directory and
 	// unclassified files are deliberately outside this deletion inventory.
 	for name := range m.Files {
-		if err = os.Remove(filepath.Join(m.Root, name)); err != nil && !errors.Is(err, os.ErrNotExist) {
+		if err = removeInstalledFile(filepath.Join(m.Root, name)); err != nil {
 			return err
 		}
 	}
 	return os.Remove(filepath.Join(m.Root, "install.json"))
+}
+
+func removeInstalledFile(path string) error {
+	attempts := 1
+	if runtime.GOOS == "windows" {
+		attempts = 30
+	}
+	var err error
+	for i := 0; i < attempts; i++ {
+		err = os.Remove(path)
+		if err == nil || errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		if i+1 < attempts {
+			time.Sleep(100 * time.Millisecond)
+		}
+	}
+	return err
 }
 
 func EngineName() string  { return engineName }
