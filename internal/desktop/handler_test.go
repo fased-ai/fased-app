@@ -552,3 +552,37 @@ func TestNativeMarketDataRoutesAndSSE(t *testing.T) {
 		t.Fatalf("desktop market SSE passthrough failed: code=%d flushed=%v body=%q", rec.Code, rec.Flushed, rec.Body.String())
 	}
 }
+
+func TestNativeDecisionAndExternalMCPRoutes(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		method string
+		url    string
+		want   bool
+	}{
+		{http.MethodGet, "http://wails.localhost/api/v1/decision/config", true},
+		{http.MethodPut, "http://wails.localhost/api/v1/decision/config", true},
+		{http.MethodPost, "http://wails.localhost/api/v1/decision/evaluate", true},
+		{http.MethodGet, "http://wails.localhost/api/v1/decision/config?bad=1", false},
+		{http.MethodGet, "http://wails.localhost/api/v1/mcp/clients", true},
+		{http.MethodPut, "http://wails.localhost/api/v1/mcp/clients", true},
+		{http.MethodPost, "http://wails.localhost/api/v1/mcp/clients/alpha/sync", true},
+		{http.MethodPost, "http://wails.localhost/api/v1/mcp/clients/alpha/call", true},
+		{http.MethodDelete, "http://wails.localhost/api/v1/mcp/clients/alpha", true},
+		{http.MethodDelete, "http://wails.localhost/api/v1/mcp/clients/alpha/sync", false},
+		{http.MethodPost, "http://wails.localhost/api/v1/mcp/clients/bad/path/sync", false},
+		{http.MethodGet, "http://wails.localhost/api/v1/mcp/clients/bad/route", false},
+	}
+	for _, tc := range cases {
+		req := httptest.NewRequest(tc.method, tc.url, nil)
+		if got := PublicRequestAllowed(req); got != tc.want {
+			t.Fatalf("PublicRequestAllowed(%s %s) = %v, want %v", tc.method, tc.url, got, tc.want)
+		}
+	}
+	if RequestBodyLimit("/api/v1/decision/evaluate") != 64*1024 || RequestBodyLimit("/api/v1/mcp/clients/alpha/call") != 64*1024 {
+		t.Fatal("expected 64 KiB request limit on decision and external MCP client routes")
+	}
+	if responseLimit("/api/v1/decision/evaluate") != 1*1024*1024 || responseLimit("/api/v1/mcp/clients/alpha/call") != 1*1024*1024 {
+		t.Fatal("expected 1 MiB response limit on decision and external MCP client routes")
+	}
+}

@@ -34,6 +34,7 @@ import { ProviderModelsPanel } from "../pages/ProviderModelsPanel";
 import { AddProviderWizard } from "./AddProviderWizard";
 import { ApplicationUpdatesPanel } from "./ApplicationUpdatesPanel";
 import { InstanceSummary, RemoteConnection } from "./InstanceConnection";
+import { IntegrationsPanel } from "./IntegrationsPanel";
 import { RemoteDevices } from "./RemoteDevices";
 import { UpdateStatusPanel } from "./UpdateStatusPanel";
 import { Dialog, ToggleSwitch } from "./shared";
@@ -707,6 +708,8 @@ export function SettingsModal() {
                   </form>
                   {manifestError && <p role="alert">{manifestError}</p>}
                 </div>
+
+                <IntegrationsPanel />
 
                 <UpdateStatusPanel />
               </>

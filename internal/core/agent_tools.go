@@ -352,6 +352,41 @@ func agentV2ToolRegistry() []agentToolEntry {
 		},
 		{
 			spec: AgentToolSpec{
+				Name:        "jev_evaluate",
+				Tier:        toolTierRead,
+				Description: "Evaluate structured state and market text with TypeSafe Jev (System-1 probabilistic noul, choice, or score triage with automatic offline fallback).",
+				Parameters: map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"state":     map[string]any{"type": "string", "description": "Headline, event, or market state summary to classify."},
+						"questions": map[string]any{"type": "object", "description": "Map of question IDs to question specs ({type: 'noul'|'choice'|'score', instructions, choices, rubric})."},
+						"context":   map[string]any{"type": "string", "description": "Optional evaluation context."},
+						"model":     map[string]any{"type": "string", "description": "Optional model identifier (defaults to configured jev-latest)."},
+					},
+					"required": []string{"state", "questions"},
+				},
+			},
+			execute: toolJevEvaluate,
+		},
+		{
+			spec: AgentToolSpec{
+				Name:        "call_external_mcp_tool",
+				Tier:        toolTierRead,
+				Description: "Call a configured external MCP server tool (subject to enabled state, read-only guard, and tool allowlist; responses are tagged untrusted=true).",
+				Parameters: map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"serverId":  map[string]any{"type": "string", "description": "Configured external MCP server ID."},
+						"tool":      map[string]any{"type": "string", "description": "Tool name exposed by the external MCP server."},
+						"arguments": map[string]any{"type": "object", "description": "JSON argument object passed to the external MCP tool."},
+					},
+					"required": []string{"serverId", "tool"},
+				},
+			},
+			execute: toolCallExternalMCP,
+		},
+		{
+			spec: AgentToolSpec{
 				Name:        "delegate_to_agent",
 				Tier:        toolTierRead,
 				Description: "Delegate a read-only research or analysis subtask to another workspace agent profile and return its concise synthesis without mutating thread messages or running action tools.",

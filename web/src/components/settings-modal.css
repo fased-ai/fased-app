@@ -503,3 +503,60 @@
   padding: 5px 12px;
   font-size: 12px;
 }
+.wt .settings-mcp-form {
+  display: grid;
+  gap: 8px;
+}
+.wt .settings-mcp-form-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+}
+.wt .settings-checkbox-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--wt-text);
+  cursor: pointer;
+}
+.wt .settings-mcp-server-list {
+  display: grid;
+  gap: 8px;
+}
+.wt .settings-mcp-server-row {
+  display: grid;
+  gap: 6px;
+  padding: 8px 10px;
+  border: 1px solid var(--wt-border);
+  border-radius: 8px;
+  background: var(--wt-surface);
+}
+.wt .settings-mcp-server-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.wt .settings-mcp-server-meta code {
+  font-size: 11px;
+  color: var(--wt-muted);
+}
+.wt .settings-mcp-server-badges {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+.wt .settings-mcp-server-badges button {
+  min-height: 28px;
+  padding: 4px 10px;
+  font-size: 12px;
+}
+.wt .settings-mcp-endpoint,
+.wt .settings-mcp-tools {
+  font-size: 12px;
+  color: var(--wt-muted);
+  overflow-wrap: anywhere;
+}

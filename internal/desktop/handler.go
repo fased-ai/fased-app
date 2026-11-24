@@ -339,7 +339,7 @@ func RequestBodyLimit(route string) int64 {
 		return 640 * 1024
 	case strings.HasPrefix(route, "/api/v1/agents/v2/"):
 		return 256 * 1024
-	case route == "/api/v1/mcp":
+	case route == "/api/v1/mcp" || strings.HasPrefix(route, "/api/v1/mcp/clients") || strings.HasPrefix(route, "/api/v1/decision/"):
 		return 64 * 1024
 	default:
 		return 16 * 1024
@@ -393,6 +393,17 @@ func allowed(method, route string) bool {
 	if strings.HasPrefix(route, "/api/v1/market/watchlists/") {
 		return method == http.MethodDelete && validPathSegment(strings.TrimPrefix(route, "/api/v1/market/watchlists/"))
 	}
+	if strings.HasPrefix(route, "/api/v1/mcp/clients/") {
+		rel := strings.TrimPrefix(route, "/api/v1/mcp/clients/")
+		switch {
+		case strings.HasSuffix(rel, "/sync"):
+			return method == http.MethodPost && validPathSegment(strings.TrimSuffix(rel, "/sync"))
+		case strings.HasSuffix(rel, "/call"):
+			return method == http.MethodPost && validPathSegment(strings.TrimSuffix(rel, "/call"))
+		default:
+			return method == http.MethodDelete && validPathSegment(rel)
+		}
+	}
 	switch route {
 	case "/api/v1/health", "/api/v1/auth/state", "/api/v1/signer/status", "/api/v1/installation/claim-code":
 		return method == "GET"
@@ -423,6 +434,12 @@ func allowed(method, route string) bool {
 	case "/api/v1/market/instruments", "/api/v1/market/candles", "/api/v1/market/orderbook", "/api/v1/market/trades", "/api/v1/market/footprint", "/api/v1/market/macro", "/api/v1/market/sec", "/api/v1/market/cohorts", "/api/v1/market/stream":
 		return method == http.MethodGet
 	case "/api/v1/market/watchlists":
+		return method == http.MethodGet || method == http.MethodPut
+	case "/api/v1/decision/config":
+		return method == http.MethodGet || method == http.MethodPut
+	case "/api/v1/decision/evaluate":
+		return method == http.MethodPost
+	case "/api/v1/mcp/clients":
 		return method == http.MethodGet || method == http.MethodPut
 	}
 	return false
@@ -468,7 +485,7 @@ func responseLimit(route string) int64 {
 	if route == "/api/v1/agents" || strings.HasPrefix(route, "/api/v1/agents/v2/") {
 		return 4 * 1024 * 1024
 	}
-	if route == "/api/v1/mcp" || strings.HasPrefix(route, "/api/v1/market/") {
+	if route == "/api/v1/mcp" || strings.HasPrefix(route, "/api/v1/mcp/clients") || strings.HasPrefix(route, "/api/v1/decision/") || strings.HasPrefix(route, "/api/v1/market/") {
 		return 1 * 1024 * 1024
 	}
 	if route == "/api/v1/accounts/read" {
