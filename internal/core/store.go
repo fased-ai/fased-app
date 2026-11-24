@@ -23,6 +23,7 @@ import (
 	"github.com/fased-ai/fased-app/internal/providersecrets"
 	"github.com/fased-ai/fased-app/internal/signer"
 	"github.com/fased-ai/fased-app/internal/update"
+	"github.com/fased-ai/fased-app/internal/worldintel"
 	_ "modernc.org/sqlite"
 )
 
@@ -63,6 +64,9 @@ type Store struct {
 	mcpClientSvc                  *mcpclient.Service
 	decisionTransport             http.RoundTripper // Tests only; never configuration, CLI or IPC.
 	mcpClientTransport            http.RoundTripper // Tests only; never configuration, CLI or IPC.
+	worldIntelMu                  sync.Mutex
+	worldIntelSvc                 *worldintel.Service
+	worldIntelTransport           http.RoundTripper // Tests only; never configuration, CLI or IPC.
 	dir                           string
 	instanceID                    string
 	pauseFault                    func(string) error // Test-only interruption injection, never configuration or IPC.
@@ -427,7 +431,15 @@ func (s *Store) Close() error {
 	if mcpC != nil {
 		mcpCErr = mcpC.Close()
 	}
-	return errors.Join(v2Err, mdErr, decErr, mcpCErr, s.db.Close())
+	s.worldIntelMu.Lock()
+	wi := s.worldIntelSvc
+	s.worldIntelSvc = nil
+	s.worldIntelMu.Unlock()
+	var wiErr error
+	if wi != nil {
+		wiErr = wi.Close()
+	}
+	return errors.Join(v2Err, mdErr, decErr, mcpCErr, wiErr, s.db.Close())
 }
 func randomToken() (string, error) {
 	b := make([]byte, 32)

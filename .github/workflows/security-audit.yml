@@ -65,7 +65,8 @@ jobs:
             "./internal/wenpm1:FuzzDecodeFrames" \
             "./internal/marketdata:FuzzMarketDataParsersAndTransforms" \
             "./internal/decision:FuzzJevEvaluateParser" \
-            "./internal/mcpclient:FuzzMCPClientJSONRPC"; do
+            "./internal/mcpclient:FuzzMCPClientJSONRPC" \
+            "./internal/worldintel:FuzzWorldIntelParsers"; do
             pkg="${target%%:*}"
             fn="${target##*:}"
             echo "=== Fuzzing ${pkg} :: ${fn} (${FUZZ_TIME}) ==="

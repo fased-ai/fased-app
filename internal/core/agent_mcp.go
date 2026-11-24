@@ -35,6 +35,8 @@ var mcpReadTools = map[string]bool{
 	"get_macro_or_sec":       true,
 	"jev_evaluate":           true,
 	"call_external_mcp_tool": true,
+	"get_world_intel":        true,
+	"get_prediction_markets": true,
 }
 
 var mcpDraftTools = map[string]bool{
@@ -91,6 +93,12 @@ var mcpResources = []mcpResourceDescriptor{
 		URI:         "fased://mcp/clients",
 		Name:        "External MCP clients",
 		Description: "Configured external MCP client servers, read-only policy flags, and discovered tool schemas.",
+		MimeType:    "application/json",
+	},
+	{
+		URI:         "fased://intel/events",
+		Name:        "World intelligence events",
+		Description: "Recent geo-tagged global news, macro, seismic, and prediction-market intelligence (tagged untrusted=true).",
 		MimeType:    "application/json",
 	},
 }
@@ -397,6 +405,16 @@ func readMCPResource(ctx context.Context, s *Store, uri string) (any, error) {
 			return nil, err
 		}
 		return map[string]any{"clients": clients, "count": len(clients)}, nil
+	case "fased://intel/events":
+		svc, err := s.worldIntelService()
+		if err != nil {
+			return nil, err
+		}
+		summary, err := svc.GetMapSummary(ctx, "", 0, 72)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"events": summary.Events, "clusters": summary.Clusters, "regionCounts": summary.RegionCounts, "count": len(summary.Events), "untrusted": true}, nil
 	default:
 		return nil, errors.New("unknown MCP resource uri")
 	}
