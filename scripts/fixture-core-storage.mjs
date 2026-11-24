@@ -294,6 +294,7 @@ func ValidManagedAccountRef(r AccountRef) bool {
     "secp256k1.go",
     "eip712.go",
     "hyperliquid.go",
+    "agent_vault_types.go",
     "ordinary_public.go",
     "history_recovery.go",
     "history_reader_test.go",

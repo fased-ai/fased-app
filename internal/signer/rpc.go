@@ -50,36 +50,46 @@ func packageFixturePath(path string) bool {
 // Request is a closed set of owner and fixture operations. No real sign/submit.
 // Passwords are bytes so callers can clear their own buffers after use.
 type Request struct {
-	VaultPassword  []byte                   `json:"vaultPassword,omitempty"`
-	SnapshotSHA256 string                   `json:"snapshotSha256,omitempty"`
-	RPCOrigin      string                   `json:"rpcOrigin,omitempty"`
-	RPCKey         []byte                   `json:"rpcKey,omitempty"`
-	Install        *update.InstallRequest   `json:"install,omitempty"`
-	Preflight      *update.PreflightRequest `json:"preflight,omitempty"`
-	Stage          *update.StageRequest     `json:"stage,omitempty"`
-	Update         *update.IntentRequest    `json:"update,omitempty"`
-	ProbeID        string                   `json:"probeId,omitempty"`
-	IntentID       string                   `json:"intentId,omitempty"`
-	Action         string                   `json:"action"`
-	Password       []byte                   `json:"password,omitempty"`
-	NewPassword    []byte                   `json:"newPassword,omitempty"`
-	Document       []byte                   `json:"document,omitempty"`
-	UnlockSeconds  int                      `json:"unlockSeconds,omitempty"`
+	VaultPassword       []byte                           `json:"vaultPassword,omitempty"`
+	SnapshotSHA256      string                           `json:"snapshotSha256,omitempty"`
+	RPCOrigin           string                           `json:"rpcOrigin,omitempty"`
+	RPCKey              []byte                           `json:"rpcKey,omitempty"`
+	Install             *update.InstallRequest           `json:"install,omitempty"`
+	Preflight           *update.PreflightRequest         `json:"preflight,omitempty"`
+	Stage               *update.StageRequest             `json:"stage,omitempty"`
+	Update              *update.IntentRequest            `json:"update,omitempty"`
+	HyperliquidPolicy   *HyperliquidPolicy               `json:"hyperliquidPolicy,omitempty"`
+	HyperliquidOrder    *HyperliquidOrderIntent          `json:"hyperliquidOrder,omitempty"`
+	HyperliquidLeverage *HyperliquidUpdateLeverageIntent `json:"hyperliquidLeverage,omitempty"`
+	HyperliquidCancel   *HyperliquidCancelIntent         `json:"hyperliquidCancel,omitempty"`
+	AgentVault          *AgentVaultPolicy                `json:"agentVault,omitempty"`
+	AgentVaultID        string                           `json:"agentVaultId,omitempty"`
+	AgentVaultSpend     *AgentVaultSpendRecord           `json:"agentVaultSpend,omitempty"`
+	ProbeID             string                           `json:"probeId,omitempty"`
+	IntentID            string                           `json:"intentId,omitempty"`
+	Action              string                           `json:"action"`
+	Password            []byte                           `json:"password,omitempty"`
+	NewPassword         []byte                           `json:"newPassword,omitempty"`
+	Document            []byte                           `json:"document,omitempty"`
+	UnlockSeconds       int                              `json:"unlockSeconds,omitempty"`
 	PublicInput
 }
 type Response struct {
-	Swap            *SwapReceipt           `json:"swap,omitempty"`
-	Installation    *update.Installation   `json:"installation,omitempty"`
-	Preflight       *update.Preflight      `json:"preflight,omitempty"`
-	Stage           *update.StageStatus    `json:"stage,omitempty"`
-	UpdateInventory *update.SignerSnapshot `json:"updateInventory,omitempty"`
-	UpdateIntent    *update.Intent         `json:"updateIntent,omitempty"`
-	Approvals       []ApprovalReceipt      `json:"approvals,omitempty"`
-	Status          Status                 `json:"status"`
-	Document        []byte                 `json:"document,omitempty"`
-	Error           string                 `json:"error,omitempty"`
-	Fixture         *FixtureSummary        `json:"fixture,omitempty"`
-	Operation       *FixtureOperation      `json:"operation,omitempty"`
+	Swap              *SwapReceipt             `json:"swap,omitempty"`
+	Installation      *update.Installation     `json:"installation,omitempty"`
+	Preflight         *update.Preflight        `json:"preflight,omitempty"`
+	Stage             *update.StageStatus      `json:"stage,omitempty"`
+	UpdateInventory   *update.SignerSnapshot   `json:"updateInventory,omitempty"`
+	UpdateIntent      *update.Intent           `json:"updateIntent,omitempty"`
+	Approvals         []ApprovalReceipt        `json:"approvals,omitempty"`
+	HyperliquidStatus *HyperliquidStatus       `json:"hyperliquidStatus,omitempty"`
+	HyperliquidSigned *HyperliquidSignedAction `json:"hyperliquidSigned,omitempty"`
+	AgentVaults       []AgentVaultUsage        `json:"agentVaults,omitempty"`
+	Status            Status                   `json:"status"`
+	Document          []byte                   `json:"document,omitempty"`
+	Error             string                   `json:"error,omitempty"`
+	Fixture           *FixtureSummary          `json:"fixture,omitempty"`
+	Operation         *FixtureOperation        `json:"operation,omitempty"`
 }
 
 func execute(v *Vault, r Request, owner bool) Response {
@@ -138,6 +148,35 @@ func execute(v *Vault, r Request, owner bool) Response {
 		}
 		if onchain.Hash(expected) != onchain.Hash(r) {
 			return Response{Error: "one typed swap action required"}
+		}
+	}
+	if r.HyperliquidPolicy != nil || r.HyperliquidOrder != nil || r.HyperliquidLeverage != nil || r.HyperliquidCancel != nil || r.AgentVault != nil || r.AgentVaultID != "" || r.AgentVaultSpend != nil ||
+		r.Action == "hyperliquid-status" || r.Action == "hyperliquid-policy" || r.Action == "hyperliquid-sign-leverage" || r.Action == "hyperliquid-sign-order" || r.Action == "hyperliquid-sign-cancel" ||
+		r.Action == "agent-vault-set" || r.Action == "agent-vault-revoke" || r.Action == "agent-vault-list" || r.Action == "agent-vault-record-loss" {
+		expected := Request{Action: r.Action}
+		switch r.Action {
+		case "hyperliquid-status", "agent-vault-list":
+		case "hyperliquid-policy":
+			expected.HyperliquidPolicy = r.HyperliquidPolicy
+		case "hyperliquid-sign-leverage":
+			expected.HyperliquidLeverage = r.HyperliquidLeverage
+			expected.AgentVaultID = r.AgentVaultID
+		case "hyperliquid-sign-order":
+			expected.HyperliquidOrder = r.HyperliquidOrder
+			expected.AgentVaultID = r.AgentVaultID
+		case "hyperliquid-sign-cancel":
+			expected.HyperliquidCancel = r.HyperliquidCancel
+		case "agent-vault-set":
+			expected.AgentVault = r.AgentVault
+		case "agent-vault-revoke":
+			expected.AgentVaultID = r.AgentVaultID
+		case "agent-vault-record-loss":
+			expected.AgentVaultSpend = r.AgentVaultSpend
+		default:
+			return Response{Error: "unexpected hyperliquid or agent vault fields"}
+		}
+		if onchain.Hash(expected) != onchain.Hash(r) {
+			return Response{Error: "one typed hyperliquid or agent vault action required"}
 		}
 	}
 	if v.network != "" {
@@ -337,6 +376,99 @@ func execute(v *Vault, r Request, owner bool) Response {
 	case "fixture-operation":
 		op, e := v.FixtureOperation(r.OperationID)
 		return fixtureResponse(v, nil, op, e)
+	case "hyperliquid-status":
+		st, e := v.HyperliquidStatus()
+		out := Response{HyperliquidStatus: st, Status: v.Status()}
+		if e != nil {
+			out.Error = e.Error()
+		}
+		return out
+	case "hyperliquid-policy":
+		if r.HyperliquidPolicy == nil {
+			return Response{Error: "hyperliquid policy required", Status: v.Status()}
+		}
+		if e := v.SetHyperliquidPolicy(*r.HyperliquidPolicy); e != nil {
+			return Response{Error: e.Error(), Status: v.Status()}
+		}
+		st, e := v.HyperliquidStatus()
+		out := Response{HyperliquidStatus: st, Status: v.Status()}
+		if e != nil {
+			out.Error = e.Error()
+		}
+		return out
+	case "hyperliquid-sign-leverage":
+		if r.HyperliquidLeverage == nil {
+			return Response{Error: "hyperliquid leverage intent required", Status: v.Status()}
+		}
+		signed, e := v.SignHyperliquidUpdateLeverageIPC(*r.HyperliquidLeverage, r.AgentVaultID)
+		out := Response{HyperliquidSigned: signed, Status: v.Status()}
+		if e != nil {
+			out.Error = e.Error()
+		}
+		return out
+	case "hyperliquid-sign-order":
+		if r.HyperliquidOrder == nil {
+			return Response{Error: "hyperliquid order intent required", Status: v.Status()}
+		}
+		signed, e := v.SignHyperliquidOrderIPC(*r.HyperliquidOrder, r.AgentVaultID)
+		out := Response{HyperliquidSigned: signed, Status: v.Status()}
+		if e != nil {
+			out.Error = e.Error()
+		}
+		return out
+	case "hyperliquid-sign-cancel":
+		if r.HyperliquidCancel == nil {
+			return Response{Error: "hyperliquid cancel intent required", Status: v.Status()}
+		}
+		signed, e := v.SignHyperliquidCancelIPC(*r.HyperliquidCancel)
+		out := Response{HyperliquidSigned: signed, Status: v.Status()}
+		if e != nil {
+			out.Error = e.Error()
+		}
+		return out
+	case "agent-vault-set":
+		if r.AgentVault == nil {
+			return Response{Error: "agent vault policy required", Status: v.Status()}
+		}
+		if e := v.SetAgentVaultPolicy(*r.AgentVault); e != nil {
+			return Response{Error: e.Error(), Status: v.Status()}
+		}
+		vaults, e := v.AgentVaults()
+		out := Response{AgentVaults: vaults, Status: v.Status()}
+		if e != nil {
+			out.Error = e.Error()
+		}
+		return out
+	case "agent-vault-revoke":
+		if e := v.RevokeAgentVault(r.AgentVaultID); e != nil {
+			return Response{Error: e.Error(), Status: v.Status()}
+		}
+		vaults, e := v.AgentVaults()
+		out := Response{AgentVaults: vaults, Status: v.Status()}
+		if e != nil {
+			out.Error = e.Error()
+		}
+		return out
+	case "agent-vault-list":
+		vaults, e := v.AgentVaults()
+		out := Response{AgentVaults: vaults, Status: v.Status()}
+		if e != nil {
+			out.Error = e.Error()
+		}
+		return out
+	case "agent-vault-record-loss":
+		if r.AgentVaultSpend == nil {
+			return Response{Error: "agent vault spend record required", Status: v.Status()}
+		}
+		if e := v.RecordAgentVaultLoss(*r.AgentVaultSpend); e != nil {
+			return Response{Error: e.Error(), Status: v.Status()}
+		}
+		vaults, e := v.AgentVaults()
+		out := Response{AgentVaults: vaults, Status: v.Status()}
+		if e != nil {
+			out.Error = e.Error()
+		}
+		return out
 	default:
 		err = ErrUnavailable
 	}
@@ -351,7 +483,7 @@ func execute(v *Vault, r Request, owner bool) Response {
 // this allowlist after authenticating the actual kernel peer UID.
 func AppActionAllowed(action string) bool {
 	switch action {
-	case "status", "fixture-approvals", "fixture-state", "fixture-reserve", "fixture-execute", "fixture-reconcile", "fixture-operation", "swap-sign", "swap-receipt", "swap-reconcile", "swap-cancel":
+	case "status", "fixture-approvals", "fixture-state", "fixture-reserve", "fixture-execute", "fixture-reconcile", "fixture-operation", "swap-sign", "swap-receipt", "swap-reconcile", "swap-cancel", "hyperliquid-status", "hyperliquid-sign-leverage", "hyperliquid-sign-order", "hyperliquid-sign-cancel", "agent-vault-list":
 		return true
 	}
 	return false

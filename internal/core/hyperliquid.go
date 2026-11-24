@@ -65,10 +65,37 @@ type hyperliquidReviewEntry struct {
 	bootID string
 }
 
+type hyperliquidSignerBackend interface {
+	Address() (string, error)
+	SignUpdateLeverage(ctx context.Context, intent signer.HyperliquidUpdateLeverageIntent, policy signer.HyperliquidPolicy) (*signer.HyperliquidSignedAction, error)
+	SignOrder(ctx context.Context, intent signer.HyperliquidOrderIntent, policy signer.HyperliquidPolicy) (*signer.HyperliquidSignedAction, error)
+	SignCancel(ctx context.Context, intent signer.HyperliquidCancelIntent, policy signer.HyperliquidPolicy) (*signer.HyperliquidSignedAction, error)
+}
+
+type vaultHyperliquidSigner struct {
+	vault *signer.Vault
+}
+
+func (b vaultHyperliquidSigner) Address() (string, error) {
+	return b.vault.HyperliquidAddress()
+}
+
+func (b vaultHyperliquidSigner) SignUpdateLeverage(_ context.Context, intent signer.HyperliquidUpdateLeverageIntent, policy signer.HyperliquidPolicy) (*signer.HyperliquidSignedAction, error) {
+	return b.vault.SignHyperliquidUpdateLeverage(intent, policy)
+}
+
+func (b vaultHyperliquidSigner) SignOrder(_ context.Context, intent signer.HyperliquidOrderIntent, policy signer.HyperliquidPolicy) (*signer.HyperliquidSignedAction, error) {
+	return b.vault.SignHyperliquidOrder(intent, policy)
+}
+
+func (b vaultHyperliquidSigner) SignCancel(_ context.Context, intent signer.HyperliquidCancelIntent, policy signer.HyperliquidPolicy) (*signer.HyperliquidSignedAction, error) {
+	return b.vault.SignHyperliquidCancel(intent, policy)
+}
+
 type hyperliquidRuntime struct {
 	mu        sync.Mutex
 	client    *hyperliquid.Client
-	vault     *signer.Vault
+	signer    hyperliquidSignerBackend
 	store     *hyperliquid.OrderStore
 	policy    signer.HyperliquidPolicy
 	address   string
@@ -115,6 +142,17 @@ func (s *Store) ConfigureHyperliquidControlled(client *hyperliquid.Client, vault
 	if s == nil || client == nil || vault == nil || !client.Controlled() {
 		return signer.ErrUnavailable
 	}
+	addr, err := vault.HyperliquidAddress()
+	if err != nil {
+		return err
+	}
+	return s.configureHyperliquidRuntime(client, vaultHyperliquidSigner{vault: vault}, policy, addr, 0)
+}
+
+func (s *Store) configureHyperliquidRuntime(client *hyperliquid.Client, backend hyperliquidSignerBackend, policy signer.HyperliquidPolicy, addr string, signerLastNonce uint64) error {
+	if s == nil || client == nil || backend == nil || !client.Controlled() {
+		return signer.ErrUnavailable
+	}
 	if hyperliquidActivationEnabled || signer.HyperliquidActivationEnabled {
 		return signer.ErrUnavailable
 	}
@@ -125,7 +163,7 @@ func (s *Store) ConfigureHyperliquidControlled(client *hyperliquid.Client, vault
 	if err := signer.ValidateHyperliquidPolicy(policy, now); err != nil {
 		return err
 	}
-	addr, err := vault.HyperliquidAddress()
+	canonAddr, err := signer.ValidateEthereumAddress(addr)
 	if err != nil {
 		return err
 	}
@@ -136,10 +174,10 @@ func (s *Store) ConfigureHyperliquidControlled(client *hyperliquid.Client, vault
 		return err
 	}
 	markets.FetchedAt = now
-	acct, err := client.FetchAccountState(initCtx, addr)
+	acct, err := client.FetchAccountState(initCtx, canonAddr)
 	if err != nil {
 		acct = hyperliquid.AccountState{
-			Address:    addr,
+			Address:    canonAddr,
 			Positions:  []hyperliquid.Position{},
 			OpenOrders: []hyperliquid.OpenOrder{},
 		}
@@ -164,21 +202,22 @@ func (s *Store) ConfigureHyperliquidControlled(client *hyperliquid.Client, vault
 		}
 		savedLastNonce = loadedNonce
 	}
+	lastNonce := max(savedLastNonce, signerLastNonce)
 	nextNonce := uint64(s.now().UnixMilli())
-	if savedLastNonce >= nextNonce {
-		nextNonce = savedLastNonce + 1
+	if lastNonce >= nextNonce {
+		nextNonce = lastNonce + 1
 	}
 	rt := &hyperliquidRuntime{
 		client:    client,
-		vault:     vault,
+		signer:    backend,
 		store:     orderStore,
 		policy:    policy,
-		address:   addr,
+		address:   canonAddr,
 		markets:   markets,
 		account:   acct,
 		reviews:   map[string]hyperliquidReviewEntry{},
 		orders:    savedOrders,
-		lastNonce: savedLastNonce,
+		lastNonce: lastNonce,
 		nextNonce: nextNonce,
 	}
 	hyperliquidRuntimeMu.Lock()
@@ -386,15 +425,19 @@ func (s *Store) changeHyperliquid(ctx context.Context, c AgentCommand) (*Hyperli
 		levIntent := entry.review.LeverageIntent
 		intent := entry.review.Preview.Intent
 		policy := rt.policy
-		vault := rt.vault
+		signerBackend := rt.signer
 		client := rt.client
 		addr := rt.address
 		orderStore := rt.store
-		signedLev, err := vault.SignHyperliquidUpdateLeverage(levIntent, policy)
+		rt.mu.Unlock()
+
+		signLevCtx, cancelSignLev := context.WithTimeout(ctx, 5*time.Second)
+		signedLev, err := signerBackend.SignUpdateLeverage(signLevCtx, levIntent, policy)
+		cancelSignLev()
 		if err != nil {
-			rt.mu.Unlock()
 			return nil, "", err
 		}
+		rt.mu.Lock()
 		if levIntent.Nonce > rt.lastNonce {
 			rt.lastNonce = levIntent.Nonce
 		}
@@ -439,11 +482,15 @@ func (s *Store) changeHyperliquid(ctx context.Context, c AgentCommand) (*Hyperli
 
 		rt.mu.Lock()
 		rt.account = acct
-		signed, err := vault.SignHyperliquidOrder(intent, policy)
+		rt.mu.Unlock()
+
+		signOrdCtx, cancelSignOrd := context.WithTimeout(ctx, 5*time.Second)
+		signed, err := signerBackend.SignOrder(signOrdCtx, intent, policy)
+		cancelSignOrd()
 		if err != nil {
-			rt.mu.Unlock()
 			return nil, "", err
 		}
+		rt.mu.Lock()
 		if intent.Nonce > rt.lastNonce {
 			rt.lastNonce = intent.Nonce
 		}
@@ -639,7 +686,7 @@ func (s *Store) changeHyperliquid(ctx context.Context, c AgentCommand) (*Hyperli
 		}
 		nonce := rt.nextNonce
 		policy := rt.policy
-		vault := rt.vault
+		signerBackend := rt.signer
 		client := rt.client
 		orderStore := rt.store
 		cancelIntent := signer.HyperliquidCancelIntent{
@@ -650,11 +697,15 @@ func (s *Store) changeHyperliquid(ctx context.Context, c AgentCommand) (*Hyperli
 			Nonce:      nonce,
 			ExpiresAt:  min(now+hyperliquidReviewTTLSeconds, policy.ExpiresAt),
 		}
-		signed, err := vault.SignHyperliquidCancel(cancelIntent, policy)
+		rt.mu.Unlock()
+
+		signCanCtx, cancelSignCan := context.WithTimeout(ctx, 5*time.Second)
+		signed, err := signerBackend.SignCancel(signCanCtx, cancelIntent, policy)
+		cancelSignCan()
 		if err != nil {
-			rt.mu.Unlock()
 			return nil, "", err
 		}
+		rt.mu.Lock()
 		if cancelIntent.Nonce > rt.lastNonce {
 			rt.lastNonce = cancelIntent.Nonce
 		}

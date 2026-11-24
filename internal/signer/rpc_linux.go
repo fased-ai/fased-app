@@ -236,6 +236,48 @@ func ServeControlledOwnerCustody(ctx context.Context, c Config) (*Server, error)
 	}
 	return serveCustodyConfigured(ctx, c, false, nil, nil, true)
 }
+
+// ServeControlledHyperliquid starts an OS-isolated controlled signer server with
+// Hyperliquid journaled custody enabled on a Version-1 Vault. Ordinary Serve never
+// enables Hyperliquid signing, and mainnet remains blocked while HyperliquidActivationEnabled is false.
+func ServeControlledHyperliquid(ctx context.Context, c Config) (*Server, error) {
+	if c.Version != 1 {
+		return nil, ErrUnavailable
+	}
+	if _, e := os.Lstat(filepath.Dir(c.StateDir) + "/fixture-inspection-v1/forward.json"); !os.IsNotExist(e) {
+		return nil, errors.New("guarded fixture startup required before state access")
+	}
+	if err := c.Validate(); err != nil {
+		return nil, err
+	}
+	if err := VerifyExecutable(); err != nil {
+		return nil, err
+	}
+	if os.Geteuid() != c.SignerUID || os.Getuid() != c.SignerUID {
+		return nil, errors.New("daemon must run only as its configured unprivileged signer UID")
+	}
+	if err := protectedDirectory(c.StateDir, c.SignerUID, 0700); err != nil {
+		return nil, err
+	}
+	if err := protectedDirectory(c.SocketDir, c.SignerUID, 0755); err != nil {
+		return nil, err
+	}
+	if err := unix.Prctl(unix.PR_SET_DUMPABLE, 0, 0, 0, 0); err != nil {
+		return nil, err
+	}
+	if err := unix.Prctl(unix.PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0); err != nil {
+		return nil, err
+	}
+	v, err := openVaultNetwork(c.StateDir, c.SignerID, false, "")
+	if err != nil {
+		return nil, err
+	}
+	if err := v.ConfigureHyperliquidControlled(true); err != nil {
+		_ = v.Close()
+		return nil, err
+	}
+	return serveListeners(ctx, c, v)
+}
 func serveCustodyConfigured(ctx context.Context, c Config, guarded bool, observer SwapObserver, factory func(onchain.CredentialAccess) (SwapObserver, error), controlledOrdinary bool) (*Server, error) {
 	if c.Version == 3 && c.Network == "" {
 		return nil, ErrUnavailable
