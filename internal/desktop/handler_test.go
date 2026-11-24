@@ -487,3 +487,68 @@ func TestNativeDesktopAgentV2SSEMemoryAndMCP(t *testing.T) {
 		t.Fatalf("delete thread: %d %s", got.Code, got.Body)
 	}
 }
+
+func TestNativeMarketDataRoutesAndSSE(t *testing.T) {
+	for _, tc := range []struct {
+		method string
+		url    string
+		want   bool
+	}{
+		{http.MethodGet, "http://wails.localhost/api/v1/market/instruments?venue=hyperliquid", true},
+		{http.MethodGet, "http://wails.localhost/api/v1/market/instruments?evil=1", false},
+		{http.MethodGet, "http://wails.localhost/api/v1/market/candles?venue=hyperliquid&symbol=BTC&interval=1h&style=renko&limit=50", true},
+		{http.MethodGet, "http://wails.localhost/api/v1/market/candles?badParam=1", false},
+		{http.MethodGet, "http://wails.localhost/api/v1/market/orderbook?venue=binance&symbol=BTCUSDT&limit=10", true},
+		{http.MethodGet, "http://wails.localhost/api/v1/market/trades?venue=hyperliquid&symbol=SOL&limit=20", true},
+		{http.MethodGet, "http://wails.localhost/api/v1/market/footprint?venue=hyperliquid&symbol=BTC&interval=15m&stepSize=5&limit=10", true},
+		{http.MethodGet, "http://wails.localhost/api/v1/market/macro?seriesId=CPIAUCSL&limit=20", true},
+		{http.MethodGet, "http://wails.localhost/api/v1/market/sec?cik=0000320193&limit=10", true},
+		{http.MethodGet, "http://wails.localhost/api/v1/market/cohorts?window=week", true},
+		{http.MethodGet, "http://wails.localhost/api/v1/market/watchlists", true},
+		{http.MethodPut, "http://wails.localhost/api/v1/market/watchlists", true},
+		{http.MethodPost, "http://wails.localhost/api/v1/market/watchlists", false},
+		{http.MethodDelete, "http://wails.localhost/api/v1/market/watchlists/core-desk", true},
+		{http.MethodDelete, "http://wails.localhost/api/v1/market/watchlists/../bad", false},
+		{http.MethodGet, "http://wails.localhost/api/v1/market/stream?venue=hyperliquid&symbol=BTC&interval=1h&style=standard", true},
+		{http.MethodPost, "http://wails.localhost/api/v1/market/stream", false},
+	} {
+		req := httptest.NewRequest(tc.method, tc.url, nil)
+		if got := PublicRequestAllowed(req); got != tc.want {
+			t.Fatalf("PublicRequestAllowed(%s %s) = %v, want %v", tc.method, tc.url, got, tc.want)
+		}
+	}
+
+	if !StreamingRoute("/api/v1/market/stream") {
+		t.Fatal("expected StreamingRoute(/api/v1/market/stream) to return true")
+	}
+	if responseLimit("/api/v1/market/candles") != 1*1024*1024 {
+		t.Fatal("expected /api/v1/market/candles responseLimit = 1 MiB")
+	}
+
+	sseServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/v1/market/stream" {
+			w.Header().Set("Content-Type", "text/event-stream; charset=utf-8")
+			w.WriteHeader(http.StatusOK)
+			flusher := w.(http.Flusher)
+			_, _ = w.Write([]byte("event: snapshot\ndata: {\"symbol\":\"BTC\"}\n\n"))
+			flusher.Flush()
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer sseServer.Close()
+
+	h := NewHandler("fixture-market-sse", nil)
+	h.newClient = func(context.Context, string) (*core.Client, bool, json.RawMessage, error) {
+		c := sseServer.Client()
+		c.Timeout = 50 * time.Millisecond
+		return &core.Client{Endpoint: core.Endpoint{URL: sseServer.URL, InstanceID: "fixture-market-sse"}, HTTP: c}, false, nil, nil
+	}
+	req := httptest.NewRequest(http.MethodGet, "http://wails.localhost/api/v1/market/stream?venue=hyperliquid&symbol=BTC&interval=1h", nil)
+	req.Header.Set("Accept", "text/event-stream")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"symbol":"BTC"`) || !rec.Flushed {
+		t.Fatalf("desktop market SSE passthrough failed: code=%d flushed=%v body=%q", rec.Code, rec.Flushed, rec.Body.String())
+	}
+}

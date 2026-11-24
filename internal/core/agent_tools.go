@@ -278,6 +278,80 @@ func agentV2ToolRegistry() []agentToolEntry {
 		},
 		{
 			spec: AgentToolSpec{
+				Name:        "get_market_candles",
+				Tier:        toolTierRead,
+				Description: "Fetch normalized OHLCV or non-time transformed candles (standard, heikin_ashi, renko, range, kagi, point_figure, three_line_break, tick, volume) from read-only market venues.",
+				Parameters: map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"venue":    map[string]any{"type": "string", "description": "Venue slug: hyperliquid, binance, bybit, kraken, or solana."},
+						"symbol":   map[string]any{"type": "string", "description": "Ticker symbol or Solana pool/mint (e.g. BTC, BTCUSDT)."},
+						"interval": map[string]any{"type": "string", "description": "Timeframe: 1m, 5m, 15m, 1h, 4h, 1d."},
+						"style":    map[string]any{"type": "string", "description": "Chart style: standard, heikin_ashi, renko, range, kagi, point_figure, three_line_break, tick, volume."},
+						"limit":    map[string]any{"type": "integer", "description": "Maximum base bars to load (1-2000)."},
+					},
+					"required": []string{"symbol"},
+				},
+			},
+			execute: toolGetMarketCandles,
+		},
+		{
+			spec: AgentToolSpec{
+				Name:        "get_orderbook",
+				Tier:        toolTierRead,
+				Description: "Fetch bounded read-only L2 orderbook bids, asks, spread, and mid price for a market symbol.",
+				Parameters: map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"venue":  map[string]any{"type": "string", "description": "Venue slug: hyperliquid, binance, or bybit."},
+						"symbol": map[string]any{"type": "string", "description": "Ticker symbol (e.g. BTC, ETH, BTCUSDT)."},
+						"limit":  map[string]any{"type": "integer", "description": "Levels per side (1-100)."},
+					},
+					"required": []string{"symbol"},
+				},
+			},
+			execute: toolGetOrderBook,
+		},
+		{
+			spec: AgentToolSpec{
+				Name:        "get_footprint",
+				Tier:        toolTierRead,
+				Description: "Compute read-only orderflow footprint levels, Bid/Ask volume, Delta, cumulative CVD, VPOC, and 70% Value Area (VAL/VAH) for a symbol.",
+				Parameters: map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"venue":    map[string]any{"type": "string", "description": "Venue slug: hyperliquid, binance, bybit, kraken, or solana."},
+						"symbol":   map[string]any{"type": "string", "description": "Ticker symbol."},
+						"interval": map[string]any{"type": "string", "description": "Timeframe (1m, 5m, 15m, 1h, 4h, 1d)."},
+						"stepSize": map[string]any{"type": "number", "description": "Optional price bucket step size."},
+						"limit":    map[string]any{"type": "integer", "description": "Bars to calculate (1-200)."},
+					},
+					"required": []string{"symbol"},
+				},
+			},
+			execute: toolGetFootprint,
+		},
+		{
+			spec: AgentToolSpec{
+				Name:        "get_macro_or_sec",
+				Tier:        toolTierRead,
+				Description: "Fetch read-only FRED macro series (kind='macro', e.g. CPIAUCSL, UNRATE, DFF), SEC EDGAR filings (kind='sec', e.g. cik='0000320193'), or Hyperliquid trader cohorts (kind='cohorts').",
+				Parameters: map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"kind":     map[string]any{"type": "string", "description": "Data kind: macro, sec, or cohorts."},
+						"seriesId": map[string]any{"type": "string", "description": "FRED series ID when kind=macro (e.g. CPIAUCSL)."},
+						"cik":      map[string]any{"type": "string", "description": "SEC EDGAR CIK when kind=sec (e.g. 0000320193)."},
+						"window":   map[string]any{"type": "string", "description": "Leaderboard window when kind=cohorts (day, week, month, allTime)."},
+						"limit":    map[string]any{"type": "integer", "description": "Maximum rows to return."},
+					},
+					"required": []string{"kind"},
+				},
+			},
+			execute: toolGetMacroOrSEC,
+		},
+		{
+			spec: AgentToolSpec{
 				Name:        "delegate_to_agent",
 				Tier:        toolTierRead,
 				Description: "Delegate a read-only research or analysis subtask to another workspace agent profile and return its concise synthesis without mutating thread messages or running action tools.",

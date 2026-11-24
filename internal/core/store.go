@@ -17,6 +17,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/fased-ai/fased-app/internal/marketdata"
 	"github.com/fased-ai/fased-app/internal/providersecrets"
 	"github.com/fased-ai/fased-app/internal/signer"
 	"github.com/fased-ai/fased-app/internal/update"
@@ -52,6 +53,8 @@ type Store struct {
 	agentV2MirrorMu               sync.Mutex
 	agentV2                       *agentV2Store
 	agentV2TransportOverride      http.RoundTripper // Tests only; never configuration, CLI or IPC.
+	marketDataMu                  sync.Mutex
+	marketData                    *marketdata.Service
 	marketDataTransport           http.RoundTripper // Tests only; never configuration, CLI or IPC.
 	dir                           string
 	instanceID                    string
@@ -396,7 +399,15 @@ func (s *Store) Close() error {
 	if v2 != nil {
 		v2Err = v2.close()
 	}
-	return errors.Join(v2Err, s.db.Close())
+	s.marketDataMu.Lock()
+	md := s.marketData
+	s.marketData = nil
+	s.marketDataMu.Unlock()
+	var mdErr error
+	if md != nil {
+		mdErr = md.Close()
+	}
+	return errors.Join(v2Err, mdErr, s.db.Close())
 }
 func randomToken() (string, error) {
 	b := make([]byte, 32)
