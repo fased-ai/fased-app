@@ -8,21 +8,23 @@ Self-hosted agents for trading research and automation. Run Fased on your comput
 
 **[Install](#install) · [User guide](docs/index.md) · [Providers](docs/guide/providers.md) · [Network](docs/guide/network.md) · [Status](docs/reference/status.md)**
 
-> **Status:** Attested Ubuntu 24.04 x86-64 Local/Remote installation and shared UI/CLI updates, cross-platform CLI & unsigned desktop pre-release packages (Linux, macOS, Windows), live AI providers (OAuth, API key, local server, and Host CLI/ACP) with native OS-protected credentials, Agent V2 with MCP, and watch-only Solana wallets with live read-only RPC are available. Live wallet signing, trading execution, and WEN mining activation remain strictly disabled; Fased Network is planned. See [Availability](docs/reference/status.md).
+> **Status:** Attested Ubuntu 24.04 x86-64 Local/Remote installation and shared UI/CLI updates, cross-platform CLI & unsigned desktop pre-release packages (Linux, macOS, Windows), live AI providers (OAuth, API key, local server, and Host CLI/ACP) with native OS-protected credentials, TypeSafe Jev System-1 decisions, Agent V2 with `/api/v1/mcp` server and external MCP client, watch-only Solana wallets with live read-only RPC, and connected Stages 1–3 research/charting/intelligence/automation/QuantLab/Paper-Desk workspaces (`Trade`, `Intel`, `Lab`, `Tasks` + Telegram) are available. Live wallet signing, real-money trading execution, and in-app auto-updates remain strictly disabled; **WEN `SAT` mining execution is NOT READY / DO NOT IMPLEMENT NOW**. See [Availability](docs/reference/status.md).
 
 ## What’s inside
 
-| Feature           | Use it for                                                                                                                                               |
-| ----------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Dashboard**     | Arrange your workspace and open the features you use.                                                                                                    |
-| **Providers**     | Connect OAuth sign-in, API-key, local-server, or Host CLI/ACP accounts (`codex`, `claude`, `antigravity`, `gemini`, `grok`) with OS-protected secrets.   |
-| **Agents & Chat** | Give each agent instructions, rules, tools and persistent threads (`agents.sqlite`), use `/compact`, `/side`, voice input and local/Remote MCP access.   |
-| **Tasks**         | Schedule reminders, watch news, mirror completed runs into agent threads and pause automation. Deterministic tasks need no AI provider.                  |
-| **News & Memory** | Follow RSS/Atom feeds and retain scoped, pinned or searchable context you can inspect, edit or forget.                                                   |
-| **Wallets & RPC** | Watch-only Solana accounts with live read-only RPC (keyless public RPC or OS-protected RPC keys) and portable backups; signing remains disabled.         |
-| **Ops & Backup**  | Run `fased-app doctor` diagnostics, hot SQLite `fased-app backup` / `restore`, and unified **Settings** for appearance, devices, updates and MCP access. |
+| Feature                  | Use it for                                                                                                                                                                                                                           |
+| ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **Dashboard**            | Arrange your workspace with live overview cards from Trade, Intel, Lab/Desk, Tasks, and Wallets.                                                                                                                                     |
+| **Trade**                | Multi-chart `1×1`–`4×4` Lightweight Charts v5 workspace with 9 candle styles, Orderflow (`Footprint`, `DOM`, `Tape`, `VP`, `CVD`, `Intel`), FasedScript overlays, and Paper/Shadow `Desk` dock.                                      |
+| **News & Intel**         | Clean-room global WorldMap (`GDELT`, `USGS`, `RSS`, `SEC`, `FRED`), Polymarket↔Kalshi odds & arbitrage scanner, and clickable chart event pins.                                                                                      |
+| **Lab & Paper Desk**     | Sandboxed `FasedScript` strategy DSL, deterministic 4-Gate validation (plateau, 1,000× bar perm, walk-forward + holdout, 200× WF perm), and 8-seat Paper/Shadow Trading Desk (`Chief → Journal`).                                    |
+| **Providers, Jev & MCP** | Connect OAuth sign-in, API-key, local-server, or Host CLI/ACP accounts (`codex`, `claude`, `antigravity`, `gemini`, `grok`), configure TypeSafe Jev System-1, and connect SSRF-guarded external MCP servers alongside `/api/v1/mcp`. |
+| **Agents & Chat**        | Persistent `agents.sqlite` threads, `/compact`, `/side`, voice input, FTS5 memory & rules, and 39 Agent V2 tools / 36 MCP tools (`draft_lab_script`, `draft_event_trigger`, `run_desk_cycle`, etc.).                                 |
+| **Tasks & Telegram**     | Schedule cron jobs and event-driven triggers (`price`, `indicator`, `fasedscript`, `news`, `prediction`), webhooks, and fail-closed Telegram alerts/approvals without requiring an AI provider for deterministic checks.             |
+| **Wallets & RPC**        | Watch-only Solana accounts with live read-only RPC (keyless public RPC or OS-protected RPC keys) and portable backups; signing and live execution remain disabled.                                                                   |
+| **Ops & Backup**         | Run `fased-app doctor` diagnostics, hot SQLite `fased-app backup` / `restore` across core and Stage 1–3 databases, and unified **Settings** for appearance, devices, updates, notifications, and MCP access.                         |
 
-Onchain, Hyperliquid, Mining and the trading-focused Fased Network have separate [roadmaps and availability](docs/reference/status.md). They are not live trading services in this build.
+Onchain live execution, Hyperliquid live perps, and Fased Network have separate [roadmaps and availability](docs/reference/status.md). WEN `SAT` mining execution is marked **NOT READY / DO NOT IMPLEMENT NOW** (`miningActivationEnabled: false`). Real-money order placement is disabled in this build.
 
 ## Install
 

@@ -12,6 +12,11 @@ on:
         required: false
         default: false
         type: boolean
+      require_signed:
+        description: Fail closed if macOS or Windows signing/notarization secrets are missing (default false)
+        required: false
+        default: false
+        type: boolean
 permissions:
   contents: read
 concurrency:
@@ -193,6 +198,7 @@ jobs:
           WINDOWS_SIGN_CERT_PFX_BASE64: ${{ secrets.WINDOWS_SIGN_CERT_PFX_BASE64 }}
           WINDOWS_SIGN_CERT_PASSWORD: ${{ secrets.WINDOWS_SIGN_CERT_PASSWORD }}
           WINDOWS_SIGN_TIMESTAMP_URL: ${{ secrets.WINDOWS_SIGN_TIMESTAMP_URL }}
+          FASED_REQUIRE_SIGNED: ${{ inputs.require_signed }}
         run: npm run package:native
       - name: Clean up ephemeral Apple signing credentials
         if: always() && runner.os == 'macOS'

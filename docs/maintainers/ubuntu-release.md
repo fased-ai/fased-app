@@ -6,7 +6,7 @@ The selected candidate, installed identities, active checkout, results and exact
 
 The protected workflow builds and attests one browser-first Linux core/signer bundle. The same bytes must complete real-host Local and Remote acceptance. Current records completed and missing legs. The publisher retains the existing authenticated-evidence requirements.
 
-`package_only=true` is the default. Every new candidate build uses the same headless bundle and attestation steps, with GTK/WebKit confined to the manually dispatched retained-native compatibility workflow. The historical installed-acceptance job requires an explicit original run/attempt replay. New builds produce package evidence only. The publisher still requires its authenticated Local receipt. Admission of the new real-host receipt remains OPEN and publication stays held. Historical VM workflows require separate authority.
+`package_only=true` is the default. Every new candidate build uses the same headless bundle and attestation steps, with GTK/WebKit confined to the manually dispatched retained-native compatibility workflow. Certified Ubuntu 24.04 x86-64 Local and Remote public releases (`v0.1.41` + `v0.1.41-desktop`) are published with their attested candidate artifacts and owner-verified live VPS receipts; unreleased future candidates build package evidence only and remain unpublished until their matching Local/Remote acceptance and explicit owner publication authority are recorded in Current. Historical VM workflows require separate authority.
 
 ## Status and authority
 

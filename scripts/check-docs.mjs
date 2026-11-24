@@ -188,6 +188,31 @@ function validate(files, documentationOnly) {
     for (const match of text.matchAll(/\b(?:href|src)=["']([^"']+)["']/g))
       checkLink(name, match[1], sitePage);
   }
+  if (files.has("docs/satcoin-mining.md")) {
+    const sat = files.get("docs/satcoin-mining.md");
+    if (
+      /8[×x]\s+boost is limited to 60,000|50 net SOL and 15,000 SAT|74\/1\/10\/10\/5/.test(
+        sat,
+      )
+    ) {
+      errors.push(
+        "docs/satcoin-mining.md: contains obsolete Oct-26 PM1 math; reconcile with WEN NOT READY hold",
+      );
+    }
+    if (!/NOT READY|not ready/i.test(sat)) {
+      errors.push(
+        "docs/satcoin-mining.md: missing explicit NOT READY hold notice",
+      );
+    }
+  }
+  if (files.has("docs/design-language.md")) {
+    const dl = files.get("docs/design-language.md");
+    if (/#FF5A36/i.test(dl) || !/#ff4f7c/i.test(dl)) {
+      errors.push(
+        "docs/design-language.md: must cite actual #ff4f7c CSS accent rather than stale #FF5A36",
+      );
+    }
+  }
   return errors;
 }
 
