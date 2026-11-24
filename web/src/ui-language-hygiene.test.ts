@@ -82,4 +82,41 @@ describe("UI translation catalog hygiene", () => {
     );
     expect(missing).toEqual([]);
   });
+
+  it("has zero missing translation keys across active Core UI components", () => {
+    const activeCoreFiles = [
+      "App.tsx",
+      "components/AddProviderWizard.tsx",
+      "components/AgentChatV2.tsx",
+      "components/AgentRulesMemoryPanel.tsx",
+      "components/AgentUsagePanel.tsx",
+      "components/ApplicationUpdatesPanel.tsx",
+      "components/CoreGate.tsx",
+      "components/ErrorBoundary.tsx",
+      "components/InstanceConnection.tsx",
+      "components/RemoteDevices.tsx",
+      "components/SettingsModal.tsx",
+      "components/ShellNavigation.tsx",
+      "components/UpdateStatusPanel.tsx",
+      "pages/AgentMemorySection.tsx",
+      "pages/AgentTasks.tsx",
+      "pages/AgentTaskDrafts.tsx",
+      "pages/NewsInputs.tsx",
+      "pages/Overview.tsx",
+      "pages/Settings.tsx",
+    ];
+    const missing: string[] = [];
+    for (const rel of activeCoreFiles) {
+      const txt = readFileSync(new URL(rel, import.meta.url), "utf8");
+      const re = /\b(?:t|uiText)\(\s*"((?:[^"\\]|\\.)+)"/g;
+      let m: RegExpExecArray | null;
+      while ((m = re.exec(txt)) !== null) {
+        const key = JSON.parse(`"${m[1]}"`) as string;
+        if (!Object.hasOwn(catalog, key)) {
+          missing.push(`${rel}: ${JSON.stringify(key)}`);
+        }
+      }
+    }
+    expect(missing).toEqual([]);
+  });
 });

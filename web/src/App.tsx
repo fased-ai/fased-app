@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useState } from "react";
+import { lazy, Suspense, useEffect, useState, type ReactNode } from "react";
 import { NoticeResult } from "./components/NoticeResult";
 import { ShellNavigation } from "./components/ShellNavigation";
 import { UIProvider, useUI } from "./ui-preferences";
@@ -15,6 +15,7 @@ import { Terminals } from "./pages/Terminals";
 import { Settings } from "./pages/Settings";
 import { CoreProvider } from "./core";
 import { CoreGate } from "./components/CoreGate";
+import { ErrorBoundary } from "./components/ErrorBoundary";
 
 const Agents = lazy(() =>
   import("./pages/Agents").then((m) => ({ default: m.Agents })),
@@ -36,9 +37,35 @@ function WorkspaceShell() {
     navigate,
   } = useWorkspace();
   const [agentsMounted, setAgentsMounted] = useState(section === "agents");
+  const [online, setOnline] = useState(
+    typeof navigator === "undefined" ? true : navigator.onLine !== false,
+  );
   useEffect(() => {
     if (section === "agents") setAgentsMounted(true);
   }, [section]);
+  useEffect(() => {
+    const onOnline = () => setOnline(true);
+    const onOffline = () => setOnline(false);
+    window.addEventListener("online", onOnline);
+    window.addEventListener("offline", onOffline);
+    return () => {
+      window.removeEventListener("online", onOnline);
+      window.removeEventListener("offline", onOffline);
+    };
+  }, []);
+  useEffect(() => {
+    const labels: Record<string, string> = {
+      overview: t("Dashboard"),
+      agents: t("Agents"),
+      wallets: t("Wallets"),
+      terminals: t("Terminals"),
+      providers: t("Providers"),
+      settings: t("Settings"),
+      activity: t("Activity"),
+    };
+    const label = labels[section] || "";
+    document.title = label ? `Fased · ${label}` : "Fased";
+  }, [section, t]);
   return (
     <>
       <a
@@ -56,6 +83,11 @@ function WorkspaceShell() {
       >
         <ShellNavigation />
         <div className="shell-body">
+          {!online && (
+            <div className="storage-warning" role="status">
+              {uiText("Offline — waiting to reconnect")}
+            </div>
+          )}
           {core.error && core.mode === "ready" && (
             <div className="storage-warning" role="alert">
               {core.error}
@@ -164,21 +196,25 @@ function WorkspaceShell() {
                 <small>{uiText("Provider")}</small>
                 <strong>{providerNames[profile.provider]}</strong>
                 <small>{uiText("Wallet authority")}</small>
-                <strong>{uiText("None assigned")}</strong>
+                <strong>
+                  {core.mode === "ready" && !core.capabilities?.walletSigner
+                    ? uiText("Read-only")
+                    : uiText("None assigned")}
+                </strong>
               </div>
               <button
                 className="secondary"
                 onClick={() => navigate("agents/chat")}
               >
                 <MessageSquare size={15} />
-                {uiText(" Open agent chat")}
+                {uiText("Open agent chat")}
               </button>
               <button
                 className="text-button"
                 onClick={() => navigate("agents/memory")}
               >
                 <BookOpen size={14} />
-                {uiText(" Inspect memory")}
+                {uiText("Inspect memory")}
               </button>
             </div>
           </aside>
@@ -202,16 +238,31 @@ function WorkspaceShell() {
   );
 }
 
+function LocalizedErrorBoundary({ children }: { children: ReactNode }) {
+  const { t } = useUI();
+  return (
+    <ErrorBoundary
+      title={t("Something went wrong")}
+      reloadLabel={t("Reload")}
+      retryLabel={t("Try again")}
+    >
+      {children}
+    </ErrorBoundary>
+  );
+}
+
 export default function App() {
   return (
     <UIProvider>
-      <CoreProvider>
-        <WorkspaceProvider>
-          <CoreGate>
-            <WorkspaceShell />
-          </CoreGate>
-        </WorkspaceProvider>
-      </CoreProvider>
+      <LocalizedErrorBoundary>
+        <CoreProvider>
+          <WorkspaceProvider>
+            <CoreGate>
+              <WorkspaceShell />
+            </CoreGate>
+          </WorkspaceProvider>
+        </CoreProvider>
+      </LocalizedErrorBoundary>
     </UIProvider>
   );
 }

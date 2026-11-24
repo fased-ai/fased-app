@@ -63,8 +63,13 @@ export function NewsSourcePicker({
             max={1440}
             step="any"
             required
-            value={age / 60}
-            onChange={(e) => onAge(Math.round(e.target.valueAsNumber * 60))}
+            value={Number.isFinite(age) && age > 0 ? age / 60 : ""}
+            onChange={(e) => {
+              const v = e.target.valueAsNumber;
+              if (Number.isFinite(v) && v > 0) {
+                onAge(Math.round(v * 60));
+              }
+            }}
           />
         </label>
       )}
@@ -304,10 +309,13 @@ export function NewsInputs({ view: v }: { view: AgentView }) {
                     max={1440}
                     step="any"
                     required
-                    value={age / 60}
-                    onChange={(e) =>
-                      setAge(Math.round(e.target.valueAsNumber * 60))
-                    }
+                    value={Number.isFinite(age) && age > 0 ? age / 60 : ""}
+                    onChange={(e) => {
+                      const v = e.target.valueAsNumber;
+                      if (Number.isFinite(v) && v > 0) {
+                        setAge(Math.round(v * 60));
+                      }
+                    }}
                   />
                 </label>
                 <div className="agent-inline">

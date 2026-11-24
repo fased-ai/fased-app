@@ -61,12 +61,19 @@ function usePreferenceState() {
   useLayoutEffect(() => {
     const media = matchMedia("(prefers-color-scheme: dark)");
     const apply = () => {
-      document.documentElement.dataset.theme =
+      const resolved =
         preferences.theme === "system"
           ? media.matches
             ? "dark"
             : "light"
           : preferences.theme;
+      document.documentElement.dataset.theme = resolved;
+      const meta = document.querySelector<HTMLMetaElement>(
+        'meta[name="theme-color"]',
+      );
+      if (meta) {
+        meta.content = resolved === "light" ? "#f5f4f8" : "#0d0d12";
+      }
     };
     apply();
     media.addEventListener("change", apply);

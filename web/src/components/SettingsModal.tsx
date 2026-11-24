@@ -28,6 +28,7 @@ import {
   SlidersHorizontal,
 } from "../icons";
 import { AppearanceSettings, useUI } from "../ui-preferences";
+import { resolveMcpDisplayOrigin } from "../desktop-runtime";
 import { useWorkspace, type SettingsTab } from "../workspace";
 import { ProviderModelsPanel } from "../pages/ProviderModelsPanel";
 import { AddProviderWizard } from "./AddProviderWizard";
@@ -575,13 +576,13 @@ export function SettingsModal() {
                   </div>
                   <div className="settings-endpoint-row">
                     <code className="mono">
-                      {`${window.location.origin}${mcp?.endpoint ?? "/api/v1/mcp"}`}
+                      {`${resolveMcpDisplayOrigin(window.location.href)}${mcp?.endpoint ?? "/api/v1/mcp"}`}
                     </code>
                     <button
                       type="button"
                       className="secondary"
                       onClick={() => {
-                        const target = `${window.location.origin}${mcp?.endpoint ?? "/api/v1/mcp"}`;
+                        const target = `${resolveMcpDisplayOrigin(window.location.href)}${mcp?.endpoint ?? "/api/v1/mcp"}`;
                         void navigator.clipboard?.writeText(target);
                         setMcpCopied(true);
                         setTimeout(() => setMcpCopied(false), 1200);

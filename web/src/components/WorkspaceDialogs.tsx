@@ -662,9 +662,13 @@ export function WorkspaceDialogs() {
                               ? "Google"
                               : item.authMethod === "sign-in"
                                 ? "ChatGPT"
-                                : item.authMethod === "local"
-                                  ? "Server"
-                                  : "API key",
+                                : item.authMethod === "cli"
+                                  ? item.binary === "antigravity"
+                                    ? "ACP"
+                                    : "CLI"
+                                  : item.authMethod === "local"
+                                    ? "Server"
+                                    : "API key",
                           )}
                         </option>
                       ))}

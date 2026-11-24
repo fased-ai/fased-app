@@ -58,6 +58,21 @@ export function shouldAllowNativeContextMenu(
   return isEditableTarget(target) || selectionText.trim().length > 0;
 }
 
+export function resolveMcpDisplayOrigin(locationHref: string): string {
+  try {
+    const parsed = new URL(locationHref);
+    if (
+      (parsed.protocol === "http:" || parsed.protocol === "https:") &&
+      parsed.hostname !== "wails.localhost"
+    ) {
+      return parsed.origin;
+    }
+  } catch {
+    // Fall through to default local core loopback origin.
+  }
+  return "http://127.0.0.1:7331";
+}
+
 let desktopRuntimeInitialized = false;
 
 export function initDesktopRuntime(): void {

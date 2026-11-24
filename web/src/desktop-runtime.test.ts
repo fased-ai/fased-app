@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   isSafeExternalWebURL,
+  resolveMcpDisplayOrigin,
   shouldAllowNativeContextMenu,
 } from "./desktop-runtime";
 
@@ -56,5 +57,20 @@ describe("desktop-runtime helpers", () => {
       false,
     );
     expect(shouldAllowNativeContextMenu(null, "")).toBe(false);
+  });
+
+  it("maps Wails desktop origins to local core HTTP origin for MCP display", () => {
+    expect(resolveMcpDisplayOrigin("wails://wails/#settings")).toBe(
+      "http://127.0.0.1:7331",
+    );
+    expect(resolveMcpDisplayOrigin("http://wails.localhost/#overview")).toBe(
+      "http://127.0.0.1:7331",
+    );
+    expect(resolveMcpDisplayOrigin("http://127.0.0.1:7341/#overview")).toBe(
+      "http://127.0.0.1:7341",
+    );
+    expect(
+      resolveMcpDisplayOrigin("https://fased.tail7bbde2.ts.net/#overview"),
+    ).toBe("https://fased.tail7bbde2.ts.net");
   });
 });
