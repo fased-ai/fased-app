@@ -6515,4 +6515,20 @@ export const pageCopy = {
   ],
   Validation: ["Валидация", "Validación", "验证", "검증"],
   "Win rate": ["Винрейт", "Tasa de acierto", "胜率", "승률"],
+  Buy: ["Покупка", "Compra", "买入", "매수"],
+  Sell: ["Продажа", "Venta", "卖出", "매도"],
+  Ticks: ["Тики", "Ticks", "逐笔成交", "틱"],
+  Estimated: ["Оценка", "Estimado", "估算", "추정"],
+  "DOM unavailable for this venue": [
+    "Стакан недоступен для этой площадки",
+    "Libro de órdenes no disponible para este mercado",
+    "该交易场所暂不支持深度盘口",
+    "이 거래소에서는 호가창을 사용할 수 없습니다",
+  ],
+  "Tape unavailable for this venue": [
+    "Лента сделок недоступна для этой площадки",
+    "Cinta de operaciones no disponible para este mercado",
+    "该交易场所暂不支持逐笔成交流",
+    "이 거래소에서는 체결 내역을 사용할 수 없습니다",
+  ],
 } satisfies Record<string, [string, string, string, string]>;

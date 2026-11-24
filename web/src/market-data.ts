@@ -92,11 +92,14 @@ export type FootprintBar = {
   low: number;
   close: number;
   volume: number;
+  candleVolume?: number;
   delta: number;
   cvd: number;
   vpoc: number;
   vah: number;
   val: number;
+  sourceKind?: "ticks" | "partial_ticks" | "ohlcv_estimated";
+  tickCoverage?: number;
   levels: FootprintLevel[];
 };
 
@@ -206,6 +209,8 @@ export type TradeWorkspaceConfig = {
   showOrderflow: boolean;
   orderflowTab: OrderflowTab;
   tiles: ChartTileConfig[];
+  drawingsBySymbol?: Record<string, ChartDrawing[]>;
+  paperOrdersBySymbol?: Record<string, PaperOrderPreview[]>;
 };
 
 export type CrosshairSyncPoint = {
@@ -223,6 +228,22 @@ export const CHART_VENUES: readonly Venue[] = [
   "kraken",
   "solana",
 ];
+
+export const DOM_SUPPORTED_VENUES = new Set([
+  "hyperliquid",
+  "binance",
+  "bybit",
+]);
+export const TAPE_SUPPORTED_VENUES = new Set([
+  "hyperliquid",
+  "binance",
+  "bybit",
+  "kraken",
+]);
+
+export function symbolOverlayKey(venue: string, symbol: string): string {
+  return `${venue.trim().toLowerCase()}:${symbol.trim().toUpperCase()}`;
+}
 
 export const CHART_INTERVALS: readonly Interval[] = [
   "1m",
@@ -318,6 +339,8 @@ export function defaultTradeWorkspaceConfig(): TradeWorkspaceConfig {
     showOrderflow: true,
     orderflowTab: "footprint",
     tiles: [0, 1, 2, 3].map(createTile),
+    drawingsBySymbol: {},
+    paperOrdersBySymbol: {},
   };
 }
 
@@ -339,31 +362,65 @@ export function parseTradeWorkspaceConfig(
     ).includes(v.orderflowTab as OrderflowTab)
       ? (v.orderflowTab as OrderflowTab)
       : def.orderflowTab;
+    const drawingsBySymbol: Record<string, ChartDrawing[]> = {};
+    if (v.drawingsBySymbol && typeof v.drawingsBySymbol === "object") {
+      for (const [k, list] of Object.entries(v.drawingsBySymbol).slice(0, 64)) {
+        if (Array.isArray(list) && list.length > 0) {
+          drawingsBySymbol[k] = list.slice(-32);
+        }
+      }
+    }
+    const paperOrdersBySymbol: Record<string, PaperOrderPreview[]> = {};
+    if (v.paperOrdersBySymbol && typeof v.paperOrdersBySymbol === "object") {
+      for (const [k, list] of Object.entries(v.paperOrdersBySymbol).slice(
+        0,
+        64,
+      )) {
+        if (Array.isArray(list) && list.length > 0) {
+          paperOrdersBySymbol[k] = list.slice(-16);
+        }
+      }
+    }
     const rawTiles = Array.isArray(v.tiles) ? v.tiles : [];
-    const tiles: ChartTileConfig[] = rawTiles.slice(0, 16).map((item, idx) => ({
-      id:
-        typeof item?.id === "string" && item.id.trim()
-          ? item.id
-          : `tile-${idx + 1}`,
-      venue:
+    const tiles: ChartTileConfig[] = rawTiles.slice(0, 16).map((item, idx) => {
+      const venue =
         typeof item?.venue === "string" && item.venue.trim()
           ? item.venue
-          : createTile(idx).venue,
-      symbol:
+          : createTile(idx).venue;
+      const symbol =
         typeof item?.symbol === "string" && item.symbol.trim()
           ? item.symbol
-          : createTile(idx).symbol,
-      interval: CHART_INTERVALS.includes(item?.interval as Interval)
-        ? (item.interval as Interval)
-        : "1h",
-      style: CANDLE_STYLES.some((s) => s.id === item?.style)
-        ? (item.style as CandleStyle)
-        : "standard",
-      drawings: Array.isArray(item?.drawings) ? item.drawings.slice(0, 32) : [],
-      paperOrders: Array.isArray(item?.paperOrders)
-        ? item.paperOrders.slice(0, 16)
-        : [],
-    }));
+          : createTile(idx).symbol;
+      const ovKey = symbolOverlayKey(venue, symbol);
+      const legacyDrawings = Array.isArray(item?.drawings)
+        ? item.drawings.slice(-32)
+        : [];
+      if (legacyDrawings.length > 0 && !drawingsBySymbol[ovKey]?.length) {
+        drawingsBySymbol[ovKey] = legacyDrawings;
+      }
+      const legacyOrders = Array.isArray(item?.paperOrders)
+        ? item.paperOrders.slice(-16)
+        : [];
+      if (legacyOrders.length > 0 && !paperOrdersBySymbol[ovKey]?.length) {
+        paperOrdersBySymbol[ovKey] = legacyOrders;
+      }
+      return {
+        id:
+          typeof item?.id === "string" && item.id.trim()
+            ? item.id
+            : `tile-${idx + 1}`,
+        venue,
+        symbol,
+        interval: CHART_INTERVALS.includes(item?.interval as Interval)
+          ? (item.interval as Interval)
+          : "1h",
+        style: CANDLE_STYLES.some((s) => s.id === item?.style)
+          ? (item.style as CandleStyle)
+          : "standard",
+        drawings: [],
+        paperOrders: [],
+      };
+    });
     const padded = ensureTilesForLayout(tiles, layout);
     const activeTileId =
       typeof v.activeTileId === "string" &&
@@ -379,6 +436,8 @@ export function parseTradeWorkspaceConfig(
       showOrderflow: v.showOrderflow !== false,
       orderflowTab,
       tiles: padded,
+      drawingsBySymbol,
+      paperOrdersBySymbol,
     };
   } catch {
     return def;
@@ -393,18 +452,23 @@ export function computeFibLevels(
   const high = Math.max(p1Price, p2Price);
   const low = Math.min(p1Price, p2Price);
   const span = high - low;
+  const digits = Math.max(Math.abs(p1Price), Math.abs(p2Price)) < 0.01 ? 8 : 4;
   return FIB_RATIOS.map((ratio) => ({
     ratio,
-    price: Number((high - span * ratio).toFixed(4)),
+    price: Number((high - span * ratio).toFixed(digits)),
     label: `${(ratio * 100).toFixed(1)}%`,
   }));
 }
 
 export function formatMarketPrice(price: number): string {
   if (!Number.isFinite(price)) return "—";
-  if (Math.abs(price) >= 1000) return price.toFixed(2);
-  if (Math.abs(price) >= 1) return price.toFixed(3);
-  return price.toFixed(5);
+  const abs = Math.abs(price);
+  if (abs === 0) return "0.00";
+  if (abs >= 1000) return price.toFixed(2);
+  if (abs >= 1) return price.toFixed(3);
+  if (abs >= 0.01) return price.toFixed(5);
+  const decimals = Math.min(10, Math.max(6, -Math.floor(Math.log10(abs)) + 4));
+  return price.toFixed(decimals).replace(/0+$/, "").replace(/\.$/, "");
 }
 
 export function formatCompactVolume(vol: number): string {

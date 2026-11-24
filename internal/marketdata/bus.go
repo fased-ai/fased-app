@@ -1,6 +1,7 @@
 package marketdata
 
 import (
+	"strings"
 	"sync"
 )
 
@@ -76,11 +77,19 @@ func matchesFilters(filters []Filter, evt Event) bool {
 }
 
 func matchesFilter(f Filter, evt Event) bool {
-	if f.Venue != "" && evt.Venue != "" && f.Venue != evt.Venue {
+	if f.Venue != "" && evt.Venue != "" && !strings.EqualFold(f.Venue, evt.Venue) {
 		return false
 	}
-	if f.Symbol != "" && evt.Symbol != "" && f.Symbol != evt.Symbol {
-		return false
+	if f.Symbol != "" && evt.Symbol != "" {
+		if !strings.EqualFold(f.Symbol, evt.Symbol) {
+			venue := evt.Venue
+			if venue == "" {
+				venue = f.Venue
+			}
+			if venue == "" || !strings.EqualFold(venueQuerySymbol(venue, f.Symbol), venueQuerySymbol(venue, evt.Symbol)) {
+				return false
+			}
+		}
 	}
 	if f.Interval != "" && evt.Interval != "" && f.Interval != evt.Interval {
 		return false

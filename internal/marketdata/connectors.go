@@ -12,6 +12,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 )
 
 func parseFloatStrict(raw any) (float64, bool) {
@@ -238,10 +239,47 @@ func cohortEntryFromRow(row leaderboardRowPayload, rank int) (CohortEntry, bool)
 	return entry, true
 }
 
+func cohortROIForWindow(entry CohortEntry, window string) float64 {
+	switch window {
+	case "day":
+		return entry.DayROI
+	case "month":
+		return entry.MonthROI
+	case "allTime":
+		return entry.AllTimeROI
+	default:
+		return entry.WeekROI
+	}
+}
+
+func finalizeCohortSnapshot(entries []CohortEntry, window string, updatedAt int64, source string, fixture bool) CohortSnapshot {
+	sort.SliceStable(entries, func(i, j int) bool {
+		ri := cohortROIForWindow(entries[i], window)
+		rj := cohortROIForWindow(entries[j], window)
+		if ri != rj {
+			return ri > rj
+		}
+		return entries[i].AccountValue > entries[j].AccountValue
+	})
+	for i := range entries {
+		entries[i].Rank = i + 1
+	}
+	return CohortSnapshot{
+		Venue:     VenueHyperliquid,
+		Window:    window,
+		UpdatedAt: updatedAt,
+		Entries:   entries,
+		Source:    source,
+		Fixture:   fixture,
+	}
+}
+
 // ParseHyperliquidLeaderboardReader streams a Hyperliquid leaderboard JSON response
 // and stops once 50 valid ranked entries have been collected.
 func ParseHyperliquidLeaderboardReader(r io.Reader, window string, updatedAt int64) (CohortSnapshot, error) {
-	if window == "" {
+	if norm, err := NormalizeCohortWindow(window); err == nil {
+		window = norm
+	} else {
 		window = "week"
 	}
 	dec := json.NewDecoder(r)
@@ -293,13 +331,7 @@ func ParseHyperliquidLeaderboardReader(r io.Reader, window string, updatedAt int
 			if entry, keep := cohortEntryFromRow(row, rowIndex); keep {
 				entries = append(entries, entry)
 				if len(entries) >= 50 {
-					return CohortSnapshot{
-						Venue:     VenueHyperliquid,
-						Window:    window,
-						UpdatedAt: updatedAt,
-						Entries:   entries,
-						Source:    "hyperliquid-leaderboard",
-					}, nil
+					return finalizeCohortSnapshot(entries, window, updatedAt, "hyperliquid-leaderboard", false), nil
 				}
 			}
 		}
@@ -319,13 +351,7 @@ func ParseHyperliquidLeaderboardReader(r io.Reader, window string, updatedAt int
 		return CohortSnapshot{}, fmt.Errorf("decode hyperliquid leaderboard: expected closing object")
 	}
 
-	return CohortSnapshot{
-		Venue:     VenueHyperliquid,
-		Window:    window,
-		UpdatedAt: updatedAt,
-		Entries:   entries,
-		Source:    "hyperliquid-leaderboard",
-	}, nil
+	return finalizeCohortSnapshot(entries, window, updatedAt, "hyperliquid-leaderboard", false), nil
 }
 
 // ParseHyperliquidLeaderboard extracts ranked cohorts for a given window ("day", "week", "month", "allTime").
@@ -716,47 +742,83 @@ func (c *upstreamClient) fetchCandles(ctx context.Context, venue, symbol, interv
 
 func (c *upstreamClient) resolveSolanaPool(ctx context.Context, symbolOrPool string) (string, error) {
 	cleaned := strings.TrimSpace(symbolOrPool)
-	if len(cleaned) >= 32 && len(cleaned) <= 44 && !strings.ContainsAny(cleaned, "/-:") {
-		// Look up DexScreener pairs if this is a token mint rather than a pool address.
-		u := fmt.Sprintf("https://api.dexscreener.com/latest/dex/tokens/%s", url.PathEscape(cleaned))
-		raw, err := c.get(ctx, u)
-		if err == nil {
-			var ds struct {
-				Pairs []struct {
-					ChainID     string `json:"chainId"`
-					PairAddress string `json:"pairAddress"`
-				} `json:"pairs"`
+	cacheKey := "sol:" + cleaned
+	if c.poolCache != nil {
+		if hit, ok := c.poolCache.get(cacheKey); ok {
+			return hit, nil
+		}
+	}
+	lookup := func() (any, error) {
+		if c.poolCache != nil {
+			if hit, ok := c.poolCache.get(cacheKey); ok {
+				return hit, nil
 			}
-			if jsonErr := json.Unmarshal(raw, &ds); jsonErr == nil {
-				for _, p := range ds.Pairs {
-					if strings.EqualFold(p.ChainID, "solana") && p.PairAddress != "" {
-						return p.PairAddress, nil
+		}
+		if len(cleaned) >= 32 && len(cleaned) <= 44 && !strings.ContainsAny(cleaned, "/-:") {
+			// Look up DexScreener pairs if this is a token mint rather than a pool address.
+			u := fmt.Sprintf("https://api.dexscreener.com/latest/dex/tokens/%s", url.PathEscape(cleaned))
+			raw, err := c.get(ctx, u)
+			if err == nil {
+				var ds struct {
+					Pairs []struct {
+						ChainID     string `json:"chainId"`
+						PairAddress string `json:"pairAddress"`
+					} `json:"pairs"`
+				}
+				if jsonErr := json.Unmarshal(raw, &ds); jsonErr == nil {
+					for _, p := range ds.Pairs {
+						if strings.EqualFold(p.ChainID, "solana") && p.PairAddress != "" {
+							if c.poolCache != nil {
+								c.poolCache.set(cacheKey, p.PairAddress, 15*time.Minute)
+							}
+							return p.PairAddress, nil
+						}
 					}
 				}
 			}
+			if c.poolCache != nil {
+				c.poolCache.set(cacheKey, cleaned, 15*time.Minute)
+			}
+			return cleaned, nil
 		}
-		return cleaned, nil
+		u := fmt.Sprintf("https://api.dexscreener.com/latest/dex/search?q=%s", url.QueryEscape(cleaned))
+		raw, err := c.get(ctx, u)
+		if err != nil {
+			return "", err
+		}
+		var ds struct {
+			Pairs []struct {
+				ChainID     string `json:"chainId"`
+				PairAddress string `json:"pairAddress"`
+			} `json:"pairs"`
+		}
+		if err := json.Unmarshal(raw, &ds); err != nil {
+			return "", err
+		}
+		for _, p := range ds.Pairs {
+			if strings.EqualFold(p.ChainID, "solana") && p.PairAddress != "" {
+				if c.poolCache != nil {
+					c.poolCache.set(cacheKey, p.PairAddress, 15*time.Minute)
+				}
+				return p.PairAddress, nil
+			}
+		}
+		return "", fmt.Errorf("no solana pool resolved for %q", symbolOrPool)
 	}
-	u := fmt.Sprintf("https://api.dexscreener.com/latest/dex/search?q=%s", url.QueryEscape(cleaned))
-	raw, err := c.get(ctx, u)
+	if c.poolFlight != nil {
+		v, err := c.poolFlight.Do(cacheKey, lookup)
+		if err != nil {
+			return "", err
+		}
+		pool, _ := v.(string)
+		return pool, nil
+	}
+	v, err := lookup()
 	if err != nil {
 		return "", err
 	}
-	var ds struct {
-		Pairs []struct {
-			ChainID     string `json:"chainId"`
-			PairAddress string `json:"pairAddress"`
-		} `json:"pairs"`
-	}
-	if err := json.Unmarshal(raw, &ds); err != nil {
-		return "", err
-	}
-	for _, p := range ds.Pairs {
-		if strings.EqualFold(p.ChainID, "solana") && p.PairAddress != "" {
-			return p.PairAddress, nil
-		}
-	}
-	return "", fmt.Errorf("no solana pool resolved for %q", symbolOrPool)
+	pool, _ := v.(string)
+	return pool, nil
 }
 
 func (c *upstreamClient) fetchOrderBook(ctx context.Context, venue, symbol string, limit int, nowMs int64) (OrderBookSnapshot, error) {
@@ -869,6 +931,102 @@ func (c *upstreamClient) fetchTrades(ctx context.Context, venue, symbol string, 
 			out = append(out, TradeTick{
 				ID:    strconv.FormatInt(r.ID, 10),
 				Time:  r.Time,
+				Price: px,
+				Size:  sz,
+				Side:  side,
+			})
+		}
+		return out, nil
+	case VenueBybit:
+		u := fmt.Sprintf("https://api.bybit.com/v5/market/recent-trade?category=linear&symbol=%s&limit=%d", url.QueryEscape(qSym), minInt(limit, 60))
+		raw, err := c.get(ctx, u)
+		if err != nil {
+			return nil, err
+		}
+		var resp struct {
+			RetCode int    `json:"retCode"`
+			RetMsg  string `json:"retMsg"`
+			Result  struct {
+				List []struct {
+					ExecID string `json:"execId"`
+					Price  string `json:"price"`
+					Size   string `json:"size"`
+					Side   string `json:"side"`
+					Time   string `json:"time"`
+				} `json:"list"`
+			} `json:"result"`
+		}
+		if err := json.Unmarshal(raw, &resp); err != nil {
+			return nil, err
+		}
+		if resp.RetCode != 0 {
+			return nil, fmt.Errorf("bybit API error %d: %s", resp.RetCode, strings.TrimSpace(resp.RetMsg))
+		}
+		out := make([]TradeTick, 0, len(resp.Result.List))
+		for _, r := range resp.Result.List {
+			px, okP := parseFloatStrict(r.Price)
+			sz, okS := parseFloatStrict(r.Size)
+			tsMs, okT := parseFloatStrict(r.Time)
+			if !okP || !okS || !okT || px <= 0 {
+				continue
+			}
+			side := "sell"
+			if strings.EqualFold(r.Side, "Buy") {
+				side = "buy"
+			}
+			out = append(out, TradeTick{
+				ID:    r.ExecID,
+				Time:  int64(tsMs),
+				Price: px,
+				Size:  sz,
+				Side:  side,
+			})
+		}
+		return out, nil
+	case VenueKraken:
+		u := fmt.Sprintf("https://api.kraken.com/0/public/Trades?pair=%s&count=%d", url.QueryEscape(qSym), minInt(limit, 100))
+		raw, err := c.get(ctx, u)
+		if err != nil {
+			return nil, err
+		}
+		var resp struct {
+			Error  []string                   `json:"error"`
+			Result map[string]json.RawMessage `json:"result"`
+		}
+		if err := json.Unmarshal(raw, &resp); err != nil {
+			return nil, err
+		}
+		if len(resp.Error) > 0 {
+			return nil, fmt.Errorf("kraken API error: %s", strings.Join(resp.Error, "; "))
+		}
+		var rows [][]any
+		for k, v := range resp.Result {
+			if k == "last" {
+				continue
+			}
+			if json.Unmarshal(v, &rows) == nil {
+				break
+			}
+		}
+		out := make([]TradeTick, 0, len(rows))
+		for i, r := range rows {
+			if len(r) < 4 {
+				continue
+			}
+			px, okP := parseFloatStrict(r[0])
+			sz, okS := parseFloatStrict(r[1])
+			tsSec, okT := parseFloatStrict(r[2])
+			if !okP || !okS || !okT || px <= 0 {
+				continue
+			}
+			side := "sell"
+			if s, _ := r[3].(string); strings.EqualFold(s, "b") {
+				side = "buy"
+			}
+			tsMs := int64(tsSec * 1000)
+			out = append(out, TradeTick{
+				ID:    fmt.Sprintf("krk-%d-%d", tsMs, i),
+				Time:  tsMs,
 				Price: px,
 				Size:  sz,
 				Side:  side,

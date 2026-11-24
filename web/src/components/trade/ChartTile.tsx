@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useCore } from "../../core";
 import { useUI } from "../../ui-preferences";
 import { Trash2 } from "../../icons";
+import type { CrosshairBus, FasedStreamClient } from "../../stream-store";
 import {
   CANDLE_STYLES,
   CHART_INTERVALS,
@@ -13,7 +14,6 @@ import {
   type CandleStyle,
   type ChartDrawing,
   type ChartTileConfig,
-  type CrosshairSyncPoint,
   type DrawingToolMode,
   type Interval,
   type PaperOrderPreview,
@@ -23,37 +23,41 @@ import {
   matchEventsForSymbol,
   type IntelEvent,
 } from "../../world-intel";
-import { FasedChartAdapter } from "./FasedChartAdapter";
-
-export type LiveMarketUpdate = {
-  venue: string;
-  symbol: string;
-  interval?: string;
-  style?: string;
-  payload: Candle | { candles?: Candle[] };
-  seq: number;
-};
+import {
+  FasedChartAdapter,
+  type ChartAdapterHandle,
+} from "./FasedChartAdapter";
 
 export function ChartTile({
   tile,
   active,
-  syncedCrosshair,
-  liveUpdate = null,
+  drawings,
+  paperOrders,
+  streamClient,
+  crosshairBus,
+  syncCrosshair = true,
   intelEvents = [],
   showEvents = true,
   onSelect,
   onChangeTile,
-  onCrosshairMove,
+  onAddDrawing,
+  onAddPaperOrder,
+  onClearOverlays,
 }: {
   tile: ChartTileConfig;
   active: boolean;
-  syncedCrosshair: CrosshairSyncPoint | null;
-  liveUpdate?: LiveMarketUpdate | null;
+  drawings?: ChartDrawing[];
+  paperOrders?: PaperOrderPreview[];
+  streamClient?: FasedStreamClient;
+  crosshairBus?: CrosshairBus;
+  syncCrosshair?: boolean;
   intelEvents?: IntelEvent[];
   showEvents?: boolean;
   onSelect: () => void;
   onChangeTile: (next: ChartTileConfig) => void;
-  onCrosshairMove: (pt: CrosshairSyncPoint) => void;
+  onAddDrawing?: (d: ChartDrawing) => void;
+  onAddPaperOrder?: (o: PaperOrderPreview) => void;
+  onClearOverlays?: () => void;
 }) {
   const { t } = useUI();
   const core = useCore();
@@ -62,6 +66,15 @@ export function ChartTile({
   const [sourceLabel, setSourceLabel] = useState("loading");
   const [error, setError] = useState("");
   const [tool, setTool] = useState<DrawingToolMode>("none");
+
+  const chartHandleRef = useRef<ChartAdapterHandle | null>(null);
+  const priceTextRef = useRef<HTMLElement | null>(null);
+  const volTextRef = useRef<HTMLSpanElement | null>(null);
+
+  const activeDrawings = drawings ?? tile.drawings;
+  const activeOrders = paperOrders ?? tile.paperOrders;
+  const overlayCount = activeDrawings.length + activeOrders.length;
+  const seriesKey = `${tile.venue}:${tile.symbol}:${tile.interval}:${tile.style}`;
 
   useEffect(() => {
     setSymbolDraft(tile.symbol);
@@ -107,33 +120,37 @@ export function ChartTile({
   ]);
 
   useEffect(() => {
-    if (!liveUpdate) return;
-    if (
-      liveUpdate.venue !== tile.venue ||
-      liveUpdate.symbol.toUpperCase() !== tile.symbol.toUpperCase()
-    ) {
-      return;
-    }
-    if (liveUpdate.interval && liveUpdate.interval !== tile.interval) return;
-    if (liveUpdate.style && liveUpdate.style !== tile.style) return;
-
-    const p = liveUpdate.payload;
-    if (p && "candles" in p && Array.isArray(p.candles)) {
-      setCandles(p.candles);
-    } else if (p && "close" in p) {
-      setCandles((prev) => {
-        if (prev.length === 0) return [p];
-        const last = prev[prev.length - 1];
-        if (last.time === p.time) {
-          return [...prev.slice(0, -1), p];
+    if (!streamClient || core.mode !== "ready") return;
+    const topic = `candle:${tile.venue}:${tile.symbol}:${tile.interval}:${tile.style}`;
+    return streamClient.subscribe(topic, (msg) => {
+      const payload = msg.payload as
+        Candle | { candles?: Candle[] } | undefined;
+      if (!payload) return;
+      if ("candles" in payload && Array.isArray(payload.candles)) {
+        if (payload.candles.length > 0) {
+          setCandles(payload.candles);
         }
-        if (p.time > last.time) {
-          return [...prev.slice(-199), p];
+        return;
+      }
+      if ("close" in payload && typeof payload.close === "number") {
+        chartHandleRef.current?.updateCandle(payload);
+        if (priceTextRef.current) {
+          priceTextRef.current.textContent = formatMarketPrice(payload.close);
         }
-        return prev;
-      });
-    }
-  }, [liveUpdate, tile.venue, tile.symbol, tile.interval, tile.style]);
+        if (volTextRef.current) {
+          volTextRef.current.textContent = `${t("Vol")} ${formatCompactVolume(payload.volume)}`;
+        }
+      }
+    });
+  }, [
+    streamClient,
+    core.mode,
+    tile.venue,
+    tile.symbol,
+    tile.interval,
+    tile.style,
+    t,
+  ]);
 
   const latest = useMemo(() => candles[candles.length - 1] ?? null, [candles]);
   const matchedPins = useMemo(
@@ -230,14 +247,18 @@ export function ChartTile({
           <option value="paper_sell">{t("Paper sell")}</option>
         </select>
 
-        {(tile.drawings.length > 0 || tile.paperOrders.length > 0) && (
+        {overlayCount > 0 && (
           <button
             type="button"
             className="trade-mini-btn"
             aria-label={t("Clear drawings")}
-            onClick={() =>
-              onChangeTile({ ...tile, drawings: [], paperOrders: [] })
-            }
+            onClick={() => {
+              if (onClearOverlays) {
+                onClearOverlays();
+              } else {
+                onChangeTile({ ...tile, drawings: [], paperOrders: [] });
+              }
+            }}
           >
             <Trash2 size={13} />
           </button>
@@ -248,15 +269,17 @@ export function ChartTile({
         {latest ? (
           <>
             <span>
-              <strong>{formatMarketPrice(latest.close)}</strong>
+              <strong ref={priceTextRef}>
+                {formatMarketPrice(latest.close)}
+              </strong>
             </span>
-            <span>
+            <span ref={volTextRef}>
               {t("Vol")} {formatCompactVolume(latest.volume)}
             </span>
             <span className="trade-source-pill">{sourceLabel}</span>
-            {tile.drawings.length + tile.paperOrders.length > 0 && (
+            {overlayCount > 0 && (
               <span>
-                {tile.drawings.length + tile.paperOrders.length} {t("overlays")}
+                {overlayCount} {t("overlays")}
               </span>
             )}
             {matchedPins.length > 0 && (
@@ -276,25 +299,37 @@ export function ChartTile({
       <div className="trade-tile-canvas">
         <FasedChartAdapter
           tileId={tile.id}
+          seriesKey={seriesKey}
           candles={candles}
           tool={tool}
-          drawings={tile.drawings}
-          paperOrders={tile.paperOrders}
+          drawings={activeDrawings}
+          paperOrders={activeOrders}
           eventPins={matchedPins}
-          syncedCrosshair={syncedCrosshair}
-          onCrosshairMove={onCrosshairMove}
-          onAddDrawing={(d: ChartDrawing) =>
-            onChangeTile({
-              ...tile,
-              drawings: [...tile.drawings, d].slice(-32),
-            })
-          }
-          onAddPaperOrder={(o: PaperOrderPreview) =>
-            onChangeTile({
-              ...tile,
-              paperOrders: [...tile.paperOrders, o].slice(-16),
-            })
-          }
+          crosshairBus={crosshairBus}
+          syncCrosshair={syncCrosshair}
+          onReadyHandle={(handle) => {
+            chartHandleRef.current = handle;
+          }}
+          onAddDrawing={(d: ChartDrawing) => {
+            if (onAddDrawing) {
+              onAddDrawing(d);
+            } else {
+              onChangeTile({
+                ...tile,
+                drawings: [...tile.drawings, d].slice(-32),
+              });
+            }
+          }}
+          onAddPaperOrder={(o: PaperOrderPreview) => {
+            if (onAddPaperOrder) {
+              onAddPaperOrder(o);
+            } else {
+              onChangeTile({
+                ...tile,
+                paperOrders: [...tile.paperOrders, o].slice(-16),
+              });
+            }
+          }}
         />
       </div>
     </article>

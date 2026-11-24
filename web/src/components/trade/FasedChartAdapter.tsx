@@ -15,6 +15,7 @@ import {
   type UTCTimestamp,
 } from "lightweight-charts";
 import type { ChartEventPin } from "../../world-intel";
+import type { CrosshairBus } from "../../stream-store";
 import {
   computeFibLevels,
   type Candle,
@@ -23,6 +24,59 @@ import {
   type DrawingToolMode,
   type PaperOrderPreview,
 } from "../../market-data";
+
+export type ChartAdapterHandle = {
+  updateCandle: (c: Candle) => void;
+};
+
+function pricePrecisionFor(price: number): {
+  precision: number;
+  minMove: number;
+} {
+  const abs = Math.abs(price);
+  if (!Number.isFinite(abs) || abs === 0 || abs >= 100) {
+    return { precision: 2, minMove: 0.01 };
+  }
+  if (abs >= 0.01) {
+    return { precision: 4, minMove: 0.0001 };
+  }
+  if (abs >= 0.0001) {
+    return { precision: 6, minMove: 0.000001 };
+  }
+  return { precision: 8, minMove: 0.00000001 };
+}
+
+function findNearestBarForTime(
+  list: Candle[],
+  targetTime: number,
+): Candle | null {
+  if (list.length === 0 || !Number.isFinite(targetTime)) return null;
+  let lo = 0;
+  let hi = list.length - 1;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (list[mid].time < targetTime) lo = mid + 1;
+    else hi = mid;
+  }
+  let best = list[lo];
+  if (lo > 0) {
+    const prev = list[lo - 1];
+    if (Math.abs(prev.time - targetTime) < Math.abs(best.time - targetTime)) {
+      best = prev;
+    }
+  }
+  const avgStep =
+    list.length >= 2
+      ? Math.max(
+          60,
+          Math.abs(list[list.length - 1].time - list[0].time) /
+            (list.length - 1),
+        )
+      : 3600;
+  const maxGap = Math.max(avgStep, 3600);
+  if (Math.abs(best.time - targetTime) > maxGap) return null;
+  return best;
+}
 
 type ChartPalette = {
   surface: string;
@@ -53,23 +107,31 @@ function resolveThemePalette(): ChartPalette {
 
 export function FasedChartAdapter({
   tileId,
+  seriesKey = tileId,
   candles,
   tool,
   drawings,
   paperOrders,
   eventPins = [],
-  syncedCrosshair,
+  syncedCrosshair = null,
+  crosshairBus,
+  syncCrosshair = true,
+  onReadyHandle,
   onCrosshairMove,
   onAddDrawing,
   onAddPaperOrder,
 }: {
   tileId: string;
+  seriesKey?: string;
   candles: Candle[];
   tool: DrawingToolMode;
   drawings: ChartDrawing[];
   paperOrders: PaperOrderPreview[];
   eventPins?: ChartEventPin[];
-  syncedCrosshair: CrosshairSyncPoint | null;
+  syncedCrosshair?: CrosshairSyncPoint | null;
+  crosshairBus?: CrosshairBus;
+  syncCrosshair?: boolean;
+  onReadyHandle?: (handle: ChartAdapterHandle | null) => void;
   onCrosshairMove?: (pt: CrosshairSyncPoint) => void;
   onAddDrawing: (d: ChartDrawing) => void;
   onAddPaperOrder: (o: PaperOrderPreview) => void;
@@ -78,6 +140,12 @@ export function FasedChartAdapter({
   const chartRef = useRef<IChartApi | null>(null);
   const candleSeriesRef = useRef<ISeriesApi<"Candlestick"> | null>(null);
   const volumeSeriesRef = useRef<ISeriesApi<"Histogram"> | null>(null);
+  const candlesRef = useRef<Candle[]>([]);
+  const fittedSeriesKeyRef = useRef<string>("");
+  const seriesKeyRef = useRef(seriesKey);
+  seriesKeyRef.current = seriesKey;
+  const syncEnabledRef = useRef(syncCrosshair);
+  syncEnabledRef.current = syncCrosshair;
   const priceLinesRef = useRef<IPriceLine[]>([]);
   const trendSeriesRef = useRef<ISeriesApi<"Line">[]>([]);
   const markersPluginRef = useRef<ISeriesMarkersPluginApi<Time> | null>(null);
@@ -88,11 +156,13 @@ export function FasedChartAdapter({
   const toolRef = useRef(tool);
   toolRef.current = tool;
   const callbacksRef = useRef({
+    onReadyHandle,
     onCrosshairMove,
     onAddDrawing,
     onAddPaperOrder,
   });
   callbacksRef.current = {
+    onReadyHandle,
     onCrosshairMove,
     onAddDrawing,
     onAddPaperOrder,
@@ -202,11 +272,15 @@ export function FasedChartAdapter({
       const rawPoint = param.point
         ? cSeries.coordinateToPrice(param.point.y)
         : null;
-      callbacksRef.current.onCrosshairMove?.({
+      const pt: CrosshairSyncPoint = {
         sourceId: tileId,
         time: t,
         price: typeof rawPoint === "number" ? rawPoint : null,
-      });
+      };
+      if (syncEnabledRef.current) {
+        crosshairBus?.publish(pt);
+      }
+      callbacksRef.current.onCrosshairMove?.(pt);
     });
 
     chart.subscribeClick((param) => {
@@ -214,7 +288,8 @@ export function FasedChartAdapter({
       if (activeTool === "none" || !param.point) return;
       const price = cSeries.coordinateToPrice(param.point.y);
       if (typeof price !== "number" || !Number.isFinite(price)) return;
-      const snappedPrice = Number(price.toFixed(price >= 100 ? 2 : 4));
+      const { precision } = pricePrecisionFor(price);
+      const snappedPrice = Number(price.toFixed(precision));
       const clickTime =
         typeof param.time === "number"
           ? param.time
@@ -256,7 +331,63 @@ export function FasedChartAdapter({
       }
     });
 
+    callbacksRef.current.onReadyHandle?.({
+      updateCandle: (c: Candle) => {
+        const list = candlesRef.current;
+        const pal = paletteRef.current;
+        if (list.length === 0) {
+          candlesRef.current = [c];
+          const fmt = pricePrecisionFor(c.close);
+          cSeries.applyOptions({
+            priceFormat: { type: "price", ...fmt },
+          });
+          cSeries.setData([
+            {
+              time: c.time as UTCTimestamp,
+              open: c.open,
+              high: c.high,
+              low: c.low,
+              close: c.close,
+            },
+          ]);
+          vSeries.setData([
+            {
+              time: c.time as UTCTimestamp,
+              value: c.volume,
+              color: c.close >= c.open ? pal.cyan : pal.coral,
+            },
+          ]);
+          if (fittedSeriesKeyRef.current !== seriesKeyRef.current) {
+            chart.timeScale().fitContent();
+            fittedSeriesKeyRef.current = seriesKeyRef.current;
+          }
+          return;
+        }
+        const last = list[list.length - 1];
+        if (c.time < last.time) return;
+        if (c.time === last.time) {
+          list[list.length - 1] = c;
+        } else {
+          list.push(c);
+          if (list.length > 200) list.shift();
+        }
+        cSeries.update({
+          time: c.time as UTCTimestamp,
+          open: c.open,
+          high: c.high,
+          low: c.low,
+          close: c.close,
+        });
+        vSeries.update({
+          time: c.time as UTCTimestamp,
+          value: c.volume,
+          color: c.close >= c.open ? pal.cyan : pal.coral,
+        });
+      },
+    });
+
     return () => {
+      callbacksRef.current.onReadyHandle?.(null);
       ro.disconnect();
       mo.disconnect();
       markersPluginRef.current?.detach();
@@ -266,9 +397,11 @@ export function FasedChartAdapter({
       candleSeriesRef.current = null;
       volumeSeriesRef.current = null;
       chartRef.current = null;
+      candlesRef.current = [];
+      fittedSeriesKeyRef.current = "";
       chart.remove();
     };
-  }, [tileId]);
+  }, [tileId, crosshairBus]);
 
   useEffect(() => {
     const cSeries = candleSeriesRef.current;
@@ -286,6 +419,20 @@ export function FasedChartAdapter({
         deduped.push(c);
       }
     }
+    candlesRef.current = deduped;
+
+    if (deduped.length === 0) {
+      fittedSeriesKeyRef.current = "";
+      cSeries.setData([]);
+      vSeries.setData([]);
+      return;
+    }
+
+    const refPrice = deduped[deduped.length - 1].close;
+    const fmt = pricePrecisionFor(refPrice);
+    cSeries.applyOptions({
+      priceFormat: { type: "price", ...fmt },
+    });
 
     cSeries.setData(
       deduped.map((c) => ({
@@ -303,8 +450,11 @@ export function FasedChartAdapter({
         color: c.close >= c.open ? p.cyan : p.coral,
       })),
     );
-    chart.timeScale().fitContent();
-  }, [candles]);
+    if (fittedSeriesKeyRef.current !== seriesKey) {
+      chart.timeScale().fitContent();
+      fittedSeriesKeyRef.current = seriesKey;
+    }
+  }, [candles, seriesKey]);
 
   useEffect(() => {
     const markersPlugin = markersPluginRef.current;
@@ -413,31 +563,43 @@ export function FasedChartAdapter({
   }, [drawings, paperOrders]);
 
   useEffect(() => {
-    const chart = chartRef.current;
-    const cSeries = candleSeriesRef.current;
-    if (!chart || !cSeries) return;
-    if (!syncedCrosshair || syncedCrosshair.sourceId === tileId) return;
-    suppressEmitRef.current = true;
-    try {
-      if (
-        syncedCrosshair.time !== null &&
-        syncedCrosshair.price !== null &&
-        candles.length > 0
-      ) {
-        chart.setCrosshairPosition(
-          syncedCrosshair.price,
-          syncedCrosshair.time as UTCTimestamp,
-          cSeries,
-        );
-      } else {
+    const applySync = (pt: CrosshairSyncPoint | null) => {
+      const chart = chartRef.current;
+      const cSeries = candleSeriesRef.current;
+      if (!chart || !cSeries) return;
+      if (!syncEnabledRef.current || !pt) {
         chart.clearCrosshairPosition();
+        return;
       }
-    } catch {
-      /* ignore out-of-range timestamps across disparate intervals */
-    } finally {
-      suppressEmitRef.current = false;
+      if (pt.sourceId === tileId) return;
+      suppressEmitRef.current = true;
+      try {
+        if (pt.time !== null && candlesRef.current.length > 0) {
+          const match = findNearestBarForTime(candlesRef.current, pt.time);
+          if (match) {
+            chart.setCrosshairPosition(
+              match.close,
+              match.time as UTCTimestamp,
+              cSeries,
+            );
+          } else {
+            chart.clearCrosshairPosition();
+          }
+        } else {
+          chart.clearCrosshairPosition();
+        }
+      } catch {
+        /* ignore out-of-range timestamps across disparate intervals */
+      } finally {
+        suppressEmitRef.current = false;
+      }
+    };
+
+    if (crosshairBus) {
+      return crosshairBus.subscribe(applySync);
     }
-  }, [syncedCrosshair, tileId, candles.length]);
+    applySync(syncedCrosshair);
+  }, [crosshairBus, syncedCrosshair, tileId, candles.length, syncCrosshair]);
 
   return <div ref={hostRef} className="trade-chart-host" />;
 }

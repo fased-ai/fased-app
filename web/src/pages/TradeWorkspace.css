@@ -456,6 +456,32 @@
   gap: 6px;
 }
 
+.trade-pane-error {
+  margin: 0;
+  padding: 6px 8px;
+  font-size: 0.76rem;
+  color: var(--wt-text);
+  background: var(--wt-bg);
+  border: 1px solid var(--wt-coral);
+  border-radius: 6px;
+}
+
+.trade-pane-empty {
+  padding: 12px 10px;
+  font-size: 0.78rem;
+  color: var(--wt-muted);
+  background: var(--wt-bg);
+  border: 1px solid var(--wt-border);
+  border-radius: 8px;
+  text-align: center;
+}
+
+.trade-provenance-row {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
 @media (max-width: 1100px) {
   .trade-workbench.has-watchlist.has-orderflow,
   .trade-workbench.has-watchlist:not(.has-orderflow),

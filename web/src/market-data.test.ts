@@ -2,11 +2,14 @@ import { describe, expect, it } from "vitest";
 import {
   computeFibLevels,
   defaultTradeWorkspaceConfig,
+  DOM_SUPPORTED_VENUES,
   ensureTilesForLayout,
   formatCompactVolume,
   formatMarketPrice,
   layoutTileCount,
   parseTradeWorkspaceConfig,
+  symbolOverlayKey,
+  TAPE_SUPPORTED_VENUES,
 } from "./market-data";
 
 describe("market-data workspace config and helpers", () => {
@@ -27,7 +30,7 @@ describe("market-data workspace config and helpers", () => {
     expect(new Set(expanded.map((t) => t.id)).size).toBe(16);
   });
 
-  it("parses malformed workspace JSON safely and clamps bounds", () => {
+  it("parses malformed workspace JSON safely and migrates legacy per-tile overlays into symbol-scoped storage", () => {
     const bad = parseTradeWorkspaceConfig("{not json");
     expect(bad.layout).toBe("2x2");
     expect(bad.tiles.length).toBeGreaterThanOrEqual(4);
@@ -42,17 +45,46 @@ describe("market-data workspace config and helpers", () => {
     );
     expect(weird.layout).toBe("2x2");
     expect(weird.orderflowTab).toBe("footprint");
+
+    const migrated = parseTradeWorkspaceConfig(
+      JSON.stringify({
+        version: 1,
+        layout: "1x1",
+        tiles: [
+          {
+            id: "tile-1",
+            venue: "hyperliquid",
+            symbol: "btc",
+            interval: "1h",
+            style: "standard",
+            drawings: [
+              { id: "d1", kind: "hline", p1: { time: 1, price: 94000 } },
+            ],
+            paperOrders: [],
+          },
+        ],
+      }),
+    );
+    const key = symbolOverlayKey("hyperliquid", "BTC");
+    expect(migrated.drawingsBySymbol?.[key]).toHaveLength(1);
+    expect(migrated.tiles[0].drawings).toEqual([]);
   });
 
-  it("computes Fibonacci retracement levels and finite formatters", () => {
+  it("computes Fibonacci retracement levels, venue capabilities, and sub-penny formatters", () => {
     const levels = computeFibLevels(100, 200);
     expect(levels.map((l) => l.price)).toEqual([
       200, 176.4, 161.8, 150, 138.2, 121.4, 100,
     ]);
+    const tinyFib = computeFibLevels(0.0001, 0.0002);
+    expect(tinyFib[3].price).toBe(0.00015);
     expect(computeFibLevels(Number.NaN, 10)).toEqual([]);
     expect(formatMarketPrice(94500.5)).toBe("94500.50");
     expect(formatMarketPrice(12.3456)).toBe("12.346");
+    expect(formatMarketPrice(0.00001234)).toBe("0.00001234");
     expect(formatCompactVolume(2_500_000)).toBe("2.50M");
     expect(formatCompactVolume(Number.NaN)).toBe("0");
+    expect(DOM_SUPPORTED_VENUES.has("solana")).toBe(false);
+    expect(DOM_SUPPORTED_VENUES.has("kraken")).toBe(false);
+    expect(TAPE_SUPPORTED_VENUES.has("kraken")).toBe(true);
   });
 });

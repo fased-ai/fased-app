@@ -35,6 +35,14 @@ var allowedUpstreamHosts = map[string]bool{
 	"www.sec.gov":                true,
 }
 
+var allowedUpstreamWSHosts = map[string]bool{
+	"api.hyperliquid.xyz":        true,
+	"data-stream.binance.vision": true,
+	"stream.binance.com":         true,
+	"stream.bybit.com":           true,
+	"ws.kraken.com":              true,
+}
+
 var cgnatPrefix = mustParseCIDR("100.64.0.0/10")
 
 func mustParseCIDR(cidr string) *net.IPNet {
@@ -123,9 +131,11 @@ func dialPublicAddress(ctx context.Context, dialer *net.Dialer, network, addr st
 	return nil, lastErr
 }
 
-// upstreamClient wraps an SSRF-safe, redirect-disabled, TLS 1.3 HTTP client.
+// upstreamClient wraps an SSRF-safe, redirect-disabled, TLS 1.2+ HTTP client.
 type upstreamClient struct {
-	http *http.Client
+	http       *http.Client
+	poolCache  *ttlCache[string]
+	poolFlight *callGroup
 }
 
 func newUpstreamClient(override http.RoundTripper) *upstreamClient {
@@ -157,6 +167,46 @@ func newUpstreamClient(override http.RoundTripper) *upstreamClient {
 			CheckRedirect: func(*http.Request, []*http.Request) error {
 				return http.ErrUseLastResponse
 			},
+		},
+		poolCache:  newTTLCache[string](256, nil),
+		poolFlight: newCallGroup(),
+	}
+}
+
+func validateUpstreamWSURL(rawURL string) (*url.URL, error) {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return nil, fmt.Errorf("invalid upstream WebSocket URL: %w", err)
+	}
+	if !strings.EqualFold(u.Scheme, "wss") {
+		return nil, fmt.Errorf("refusing non-WSS upstream scheme %q", u.Scheme)
+	}
+	host := strings.ToLower(u.Hostname())
+	if !allowedUpstreamWSHosts[host] {
+		return nil, fmt.Errorf("upstream WS host %q is not in marketdata allowlist", host)
+	}
+	return u, nil
+}
+
+func newUpstreamWSHttpClient() *http.Client {
+	dialer := &net.Dialer{
+		Timeout:   6 * time.Second,
+		KeepAlive: 25 * time.Second,
+	}
+	transport := &http.Transport{
+		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			return dialPublicAddress(ctx, dialer, network, addr)
+		},
+		ForceAttemptHTTP2:   false,
+		TLSHandshakeTimeout: 6 * time.Second,
+		TLSClientConfig: &tls.Config{
+			MinVersion: tls.VersionTLS12,
+		},
+	}
+	return &http.Client{
+		Transport: transport,
+		CheckRedirect: func(*http.Request, []*http.Request) error {
+			return http.ErrUseLastResponse
 		},
 	}
 }

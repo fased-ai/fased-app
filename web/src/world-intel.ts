@@ -212,9 +212,16 @@ export function buildChartEventPins(
 ): ChartEventPin[] {
   if (!candles.length || !events.length) return [];
   const sortedCandles = [...candles].sort((a, b) => a.time - b.time);
+  const step =
+    sortedCandles.length >= 2
+      ? Math.max(60, sortedCandles[1].time - sortedCandles[0].time)
+      : 3600;
+  const minTime = sortedCandles[0].time - step;
+  const maxTime = sortedCandles[sortedCandles.length - 1].time + 2 * step;
   const byTime = new Map<number, ChartEventPin>();
 
   for (const ev of events) {
+    if (ev.publishedAt < minTime || ev.publishedAt > maxTime) continue;
     let best = sortedCandles[0];
     let bestDiff = Math.abs(sortedCandles[0].time - ev.publishedAt);
     for (let i = 1; i < sortedCandles.length; i++) {
