@@ -115,8 +115,12 @@ export function ShellNavigation() {
         data-tooltip={rail ? t(p.name) : undefined}
         onClick={closeMore}
         className={
-          !rail && (p.name === "Tasks" || p.name === "Agents")
-            ? "shell-overflow-route"
+          !rail
+            ? p.name === "Tasks" || p.name === "Agents"
+              ? "shell-overflow-route"
+              : ["Trade", "Intel", "Lab"].includes(p.name)
+                ? "shell-wide-overflow-route"
+                : undefined
             : undefined
         }
       >
@@ -154,12 +158,18 @@ export function ShellNavigation() {
           Fased
         </a>
         <nav className="shell-top-nav" aria-label={t("Main navigation")}>
-          {shellPages.slice(0, 3).map((p) => (
+          {shellPages.slice(0, 6).map((p) => (
             <a
               key={p.path}
               href={`#${p.path}`}
               aria-current={route === p.path ? "page" : undefined}
-              className={p.name !== "Chat" ? "shell-top-extra" : undefined}
+              className={
+                p.name === "Tasks" || p.name === "Agents"
+                  ? "shell-top-extra"
+                  : ["Trade", "Intel", "Lab"].includes(p.name)
+                    ? "shell-top-extra shell-top-wide"
+                    : undefined
+              }
             >
               {t(p.name)}
             </a>
@@ -172,7 +182,7 @@ export function ShellNavigation() {
               aria-controls="shell-more"
               className="shell-more-toggle"
               data-active={
-                shellPages.slice(3).some((p) => p.path === route) ||
+                shellPages.slice(6).some((p) => p.path === route) ||
                 ["activity", "settings", "providers"].includes(route) ||
                 route.startsWith("wallets/")
               }

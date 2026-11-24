@@ -580,124 +580,122 @@ export function QuantLabWorkspace() {
       )}
 
       {tab === "scripts" && (
-        <div className="lab-grid-two">
-          <div className="lab-col">
-            <section className="lab-card">
-              <div className="lab-card-head">
-                <h2>{t("FasedScript")}</h2>
-                <button
-                  type="button"
-                  className="secondary"
-                  disabled={busy}
-                  onClick={() => {
-                    setSelectedScriptId("");
-                    setScriptIdInput("custom-script");
-                    setScriptNameInput("Custom Strategy");
-                    setScriptCatInput("trend");
-                    setScriptSourceInput(
-                      'const ef = ema(close, 8);\nconst es = ema(close, 21);\nplot("EF", ef, "accent", "overlay");\nstrategy({ long: crossover(ef, es), exitLong: crossunder(ef, es), stopLossPct: 2.0 });',
-                    );
-                  }}
-                >
-                  <Plus size={14} aria-hidden="true" />
-                  <span>{t("New script")}</span>
-                </button>
-              </div>
+        <div className="lab-grid-three">
+          <section className="lab-card lab-scripts-rail">
+            <div className="lab-card-head">
+              <h2>{t("FasedScript")}</h2>
+              <button
+                type="button"
+                className="secondary"
+                disabled={busy}
+                onClick={() => {
+                  setSelectedScriptId("");
+                  setScriptIdInput("custom-script");
+                  setScriptNameInput("Custom Strategy");
+                  setScriptCatInput("trend");
+                  setScriptSourceInput(
+                    'const ef = ema(close, 8);\nconst es = ema(close, 21);\nplot("EF", ef, "accent", "overlay");\nstrategy({ long: crossover(ef, es), exitLong: crossunder(ef, es), stopLossPct: 2.0 });',
+                  );
+                }}
+              >
+                <Plus size={14} aria-hidden="true" />
+                <span>{t("New script")}</span>
+              </button>
+            </div>
 
-              <div className="lab-script-list">
-                {scripts.map((s) => (
-                  <div
-                    key={s.id}
-                    className={`lab-row-card ${selectedScriptId === s.id ? "is-selected" : ""}`}
-                  >
-                    <div className="lab-row-top">
-                      <button
-                        type="button"
-                        className="lab-row-title"
-                        title={s.description || s.name}
-                        onClick={() => selectScriptRecord(s)}
-                      >
-                        {s.name}
-                      </button>
-                      <div className="lab-actions-row">
-                        <span className="lab-status-pill">
-                          {s.builtIn ? t("Built-in") : s.category}
-                        </span>
-                        {!s.builtIn && (
-                          <button
-                            type="button"
-                            className="icon-button"
-                            aria-label={`${t("Delete")} ${s.name}`}
-                            disabled={busy}
-                            onClick={() => void onDeleteScript(s.id)}
-                          >
-                            <Trash2 size={14} aria-hidden="true" />
-                          </button>
-                        )}
-                      </div>
+            <div className="lab-script-list">
+              {scripts.map((s) => (
+                <div
+                  key={s.id}
+                  className={`lab-row-card ${selectedScriptId === s.id ? "is-selected" : ""}`}
+                >
+                  <div className="lab-row-top">
+                    <button
+                      type="button"
+                      className="lab-row-title"
+                      title={s.description || s.name}
+                      onClick={() => selectScriptRecord(s)}
+                    >
+                      {s.name}
+                    </button>
+                    <div className="lab-actions-row">
+                      <span className="lab-status-pill">
+                        {s.builtIn ? t("Built-in") : s.category}
+                      </span>
+                      {!s.builtIn && (
+                        <button
+                          type="button"
+                          className="icon-button"
+                          aria-label={`${t("Delete")} ${s.name}`}
+                          disabled={busy}
+                          onClick={() => void onDeleteScript(s.id)}
+                        >
+                          <Trash2 size={14} aria-hidden="true" />
+                        </button>
+                      )}
                     </div>
                   </div>
-                ))}
-              </div>
-            </section>
-
-            <section className="lab-card">
-              <div className="lab-card-head">
-                <h2>{t("Script editor")}</h2>
-                <button
-                  type="button"
-                  className="primary"
-                  disabled={busy || core.mode !== "ready"}
-                  onClick={() => void onSaveScript()}
-                >
-                  {t("Save script")}
-                </button>
-              </div>
-
-              <div className="lab-field-grid">
-                <div className="lab-field">
-                  <label htmlFor="lab-script-id">{t("Script ID")}</label>
-                  <input
-                    id="lab-script-id"
-                    value={scriptIdInput}
-                    onChange={(e) => setScriptIdInput(e.target.value)}
-                  />
                 </div>
-                <div className="lab-field">
-                  <label htmlFor="lab-script-name">{t("Name")}</label>
-                  <input
-                    id="lab-script-name"
-                    value={scriptNameInput}
-                    onChange={(e) => setScriptNameInput(e.target.value)}
-                  />
-                </div>
-                <div className="lab-field">
-                  <label htmlFor="lab-script-cat">{t("Category")}</label>
-                  <select
-                    id="lab-script-cat"
-                    value={scriptCatInput}
-                    onChange={(e) => setScriptCatInput(e.target.value)}
-                  >
-                    <option value="trend">trend</option>
-                    <option value="mean_reversion">mean_reversion</option>
-                    <option value="breakout">breakout</option>
-                    <option value="volatility">volatility</option>
-                    <option value="indicator">indicator</option>
-                  </select>
-                </div>
-              </div>
+              ))}
+            </div>
+          </section>
 
+          <section className="lab-card">
+            <div className="lab-card-head">
+              <h2>{t("Script editor")}</h2>
+              <button
+                type="button"
+                className="primary"
+                disabled={busy || core.mode !== "ready"}
+                onClick={() => void onSaveScript()}
+              >
+                {t("Save script")}
+              </button>
+            </div>
+
+            <div className="lab-field-grid">
               <div className="lab-field">
-                <label htmlFor="lab-script-code">{t("Source code")}</label>
-                <textarea
-                  id="lab-script-code"
-                  className="lab-code-editor"
-                  value={scriptSourceInput}
-                  onChange={(e) => setScriptSourceInput(e.target.value)}
+                <label htmlFor="lab-script-id">{t("Script ID")}</label>
+                <input
+                  id="lab-script-id"
+                  value={scriptIdInput}
+                  onChange={(e) => setScriptIdInput(e.target.value)}
                 />
               </div>
-            </section>
-          </div>
+              <div className="lab-field">
+                <label htmlFor="lab-script-name">{t("Name")}</label>
+                <input
+                  id="lab-script-name"
+                  value={scriptNameInput}
+                  onChange={(e) => setScriptNameInput(e.target.value)}
+                />
+              </div>
+              <div className="lab-field">
+                <label htmlFor="lab-script-cat">{t("Category")}</label>
+                <select
+                  id="lab-script-cat"
+                  value={scriptCatInput}
+                  onChange={(e) => setScriptCatInput(e.target.value)}
+                >
+                  <option value="trend">trend</option>
+                  <option value="mean_reversion">mean_reversion</option>
+                  <option value="breakout">breakout</option>
+                  <option value="volatility">volatility</option>
+                  <option value="indicator">indicator</option>
+                </select>
+              </div>
+            </div>
+
+            <div className="lab-field">
+              <label htmlFor="lab-script-code">{t("Source code")}</label>
+              <textarea
+                id="lab-script-code"
+                className="lab-code-editor"
+                value={scriptSourceInput}
+                onChange={(e) => setScriptSourceInput(e.target.value)}
+              />
+            </div>
+          </section>
 
           <div className="lab-col">
             <section className="lab-card">
@@ -1074,6 +1072,50 @@ export function QuantLabWorkspace() {
             </div>
           </div>
 
+          <section className="lab-card" data-testid="desk-seat-roster">
+            <div className="lab-card-head">
+              <h2>{t("Desk seats")}</h2>
+              <span className="lab-status-pill">{desk?.seats.length ?? 8}</span>
+            </div>
+            <div className="lab-seats-grid">
+              {(desk?.seats ?? []).map((seat) => {
+                const art = latestCycle?.artifacts.find(
+                  (a) => a.seat === seat.id,
+                );
+                return (
+                  <article
+                    className={`lab-seat-card ${art ? "has-artifact" : ""}`}
+                    key={seat.id}
+                  >
+                    <div className="lab-row-top">
+                      <strong>{seat.title}</strong>
+                      <div className="lab-actions-row">
+                        <span
+                          className="lab-status-pill"
+                          title={seat.allowedTools.join(", ")}
+                        >
+                          {seat.allowedTools.length}
+                        </span>
+                        <span
+                          className={`lab-status-pill ${seat.canExecutePaper ? "is-warn" : ""}`}
+                        >
+                          {seat.canExecutePaper
+                            ? t("Paper only")
+                            : t("Read only")}
+                        </span>
+                      </div>
+                    </div>
+                    {art && (
+                      <div className="lab-text-sm">
+                        {`${art.verdict}: ${art.summary}`}
+                      </div>
+                    )}
+                  </article>
+                );
+              })}
+            </div>
+          </section>
+
           <div className="lab-grid-two">
             <div className="lab-col">
               <section className="lab-card">
@@ -1337,49 +1379,6 @@ export function QuantLabWorkspace() {
                     </div>
                   </div>
                 )}
-              </section>
-
-              <section className="lab-card" data-testid="desk-seat-roster">
-                <div className="lab-card-head">
-                  <h2>{t("Desk seats")}</h2>
-                  <span className="lab-status-pill">
-                    {desk?.seats.length ?? 8}
-                  </span>
-                </div>
-                <div className="lab-seats-grid">
-                  {(desk?.seats ?? []).map((seat) => {
-                    const art = latestCycle?.artifacts.find(
-                      (a) => a.seat === seat.id,
-                    );
-                    return (
-                      <article className="lab-seat-card" key={seat.id}>
-                        <div className="lab-row-top">
-                          <strong>{seat.title}</strong>
-                          <div className="lab-actions-row">
-                            <span
-                              className="lab-status-pill"
-                              title={seat.allowedTools.join(", ")}
-                            >
-                              {seat.allowedTools.length}
-                            </span>
-                            <span
-                              className={`lab-status-pill ${seat.canExecutePaper ? "is-warn" : ""}`}
-                            >
-                              {seat.canExecutePaper
-                                ? t("Paper only")
-                                : t("Read only")}
-                            </span>
-                          </div>
-                        </div>
-                        {art && (
-                          <div className="lab-text-sm">
-                            {`${art.verdict}: ${art.summary}`}
-                          </div>
-                        )}
-                      </article>
-                    );
-                  })}
-                </div>
               </section>
             </div>
           </div>

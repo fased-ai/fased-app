@@ -1,8 +1,9 @@
 .trade-workspace {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 8px;
   min-width: 0;
+  font-variant-numeric: tabular-nums;
 }
 
 .trade-toolbar {
@@ -10,11 +11,11 @@
   flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
-  gap: 10px;
-  padding: 10px 14px;
+  gap: 8px;
+  padding: 8px 12px;
   background: var(--wt-surface);
   border: 1px solid var(--wt-border);
-  border-radius: 12px;
+  border-radius: 8px;
 }
 
 .trade-title-group {
@@ -65,35 +66,43 @@
 
 .trade-layout-group button.is-selected,
 .trade-toggle-btn.is-selected,
-.trade-tabs button.is-selected {
-  background: var(--wt-raised);
-  border-color: var(--wt-violet);
+.trade-tabs button.is-selected,
+.trade-venue-filter-btn.is-selected {
+  background: var(--wt-accent-soft);
+  border-color: var(--wt-coral);
   color: var(--wt-text);
 }
 
 .trade-workbench {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
-  gap: 10px;
+  gap: 8px;
   min-width: 0;
   align-items: stretch;
 }
 
 .trade-workbench.has-watchlist.has-orderflow {
-  grid-template-columns: 220px minmax(0, 1fr) 310px;
+  grid-template-columns: 215px minmax(0, 1fr) 325px;
 }
 
 .trade-workbench.has-watchlist:not(.has-orderflow) {
-  grid-template-columns: 220px minmax(0, 1fr);
+  grid-template-columns: 215px minmax(0, 1fr);
 }
 
 .trade-workbench:not(.has-watchlist).has-orderflow {
-  grid-template-columns: minmax(0, 1fr) 310px;
+  grid-template-columns: minmax(0, 1fr) 325px;
+}
+
+.trade-center-col {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
 }
 
 .trade-grid {
   display: grid;
-  gap: 10px;
+  gap: 8px;
   min-width: 0;
 }
 
@@ -124,7 +133,7 @@
   min-height: 270px;
   background: var(--wt-surface);
   border: 1px solid var(--wt-border);
-  border-radius: 10px;
+  border-radius: 8px;
   overflow: hidden;
 }
 
@@ -138,7 +147,7 @@
 }
 
 .trade-tile.is-active {
-  border-color: var(--wt-violet);
+  border-color: var(--wt-coral);
 }
 
 .trade-tile-bar {
@@ -256,8 +265,43 @@
 }
 
 .trade-watchlist-items li.is-active {
-  border-color: var(--wt-violet);
-  background: var(--wt-raised);
+  border-color: var(--wt-coral);
+  background: var(--wt-accent-soft);
+}
+
+.trade-watchlist-filter {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.trade-watchlist-filter input {
+  width: 100%;
+  box-sizing: border-box;
+  min-width: 0;
+  padding: 4px 8px;
+  font-size: 0.75rem;
+  color: var(--wt-text);
+  background: var(--wt-bg);
+  border: 1px solid var(--wt-border);
+  border-radius: 6px;
+}
+
+.trade-venue-filter-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.trade-venue-filter-btn {
+  padding: 2px 6px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: var(--wt-muted);
+  background: var(--wt-bg);
+  border: 1px solid var(--wt-border);
+  border-radius: 5px;
+  cursor: pointer;
 }
 
 .trade-watchlist-pick {
@@ -508,8 +552,61 @@
 }
 
 .trade-desk-run {
-  border-color: var(--wt-violet);
-  background: var(--wt-raised);
+  border-color: var(--wt-coral);
+  background: var(--wt-coral);
+  color: var(--shell-primary-text);
+}
+
+.trade-desk-run:hover {
+  background: var(--shell-primary-hover);
+  border-color: var(--shell-primary-hover);
+}
+
+.trade-bottom-dock {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 10px;
+  background: var(--wt-surface);
+  border: 1px solid var(--wt-border);
+  border-radius: 8px;
+  min-width: 0;
+}
+
+.trade-bottom-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.trade-bottom-stats {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  font-size: 0.76rem;
+  color: var(--wt-text);
+}
+
+.trade-bottom-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.trade-bottom-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  padding: 5px 8px;
+  background: var(--wt-bg);
+  border: 1px solid var(--wt-border);
+  border-radius: 6px;
+  font-size: 0.76rem;
 }
 
 .trade-desk-card {

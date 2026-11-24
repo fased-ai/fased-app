@@ -9,6 +9,8 @@ import { fetchIntelEvents, type IntelEvent } from "../world-intel";
 import {
   approveDeskTicket,
   closeDeskPosition,
+  formatCurrencyUSD,
+  formatPrice,
   getDeskState,
   listLabScripts,
   rejectDeskTicket,
@@ -230,6 +232,10 @@ export function TradeWorkspace() {
     () => (desk?.positions ?? []).filter((p) => p.status === "OPEN"),
     [desk],
   );
+  const pendingDeskTickets = useMemo(
+    () => (desk?.tickets ?? []).filter((tk) => tk.status === "PENDING_PM"),
+    [desk],
+  );
 
   async function handleRunDeskCycle(mode: DeskMode) {
     if (core.mode !== "ready" || !activeTile || deskBusy) return;
@@ -393,48 +399,127 @@ export function TradeWorkspace() {
           />
         )}
 
-        <div
-          className={`trade-grid layout-${config.layout}`}
-          data-testid="trade-chart-grid"
-        >
-          {visibleTiles.map((tile) => {
-            const ovKey = symbolOverlayKey(tile.venue, tile.symbol);
-            const drawings = config.drawingsBySymbol?.[ovKey] ?? tile.drawings;
-            const paperOrders =
-              config.paperOrdersBySymbol?.[ovKey] ?? tile.paperOrders;
-            const matchingPositions = openDeskPositions.filter(
-              (p) =>
-                (!p.venue || p.venue === tile.venue) &&
-                p.symbol.toUpperCase() === tile.symbol.toUpperCase(),
-            );
-            return (
-              <ChartTile
-                key={tile.id}
-                tile={tile}
-                active={tile.id === activeTile?.id}
-                drawings={drawings}
-                paperOrders={paperOrders}
-                streamClient={streamClient}
-                crosshairBus={crosshairBusRef.current ?? undefined}
-                syncCrosshair={config.syncCrosshair}
-                labScripts={labScripts}
-                deskPositions={matchingPositions}
-                intelEvents={intelEvents}
-                showEvents={showEvents}
-                onSelect={() =>
-                  setConfig((prev) =>
-                    prev.activeTileId === tile.id
-                      ? prev
-                      : { ...prev, activeTileId: tile.id },
-                  )
-                }
-                onChangeTile={updateTile}
-                onAddDrawing={(d) => addDrawing(tile, d)}
-                onAddPaperOrder={(o) => addPaperOrder(tile, o)}
-                onClearOverlays={() => clearOverlays(tile)}
-              />
-            );
-          })}
+        <div className="trade-center-col">
+          <div
+            className={`trade-grid layout-${config.layout}`}
+            data-testid="trade-chart-grid"
+          >
+            {visibleTiles.map((tile) => {
+              const ovKey = symbolOverlayKey(tile.venue, tile.symbol);
+              const drawings =
+                config.drawingsBySymbol?.[ovKey] ?? tile.drawings;
+              const paperOrders =
+                config.paperOrdersBySymbol?.[ovKey] ?? tile.paperOrders;
+              const matchingPositions = openDeskPositions.filter(
+                (p) =>
+                  (!p.venue || p.venue === tile.venue) &&
+                  p.symbol.toUpperCase() === tile.symbol.toUpperCase(),
+              );
+              return (
+                <ChartTile
+                  key={tile.id}
+                  tile={tile}
+                  active={tile.id === activeTile?.id}
+                  drawings={drawings}
+                  paperOrders={paperOrders}
+                  streamClient={streamClient}
+                  crosshairBus={crosshairBusRef.current ?? undefined}
+                  syncCrosshair={config.syncCrosshair}
+                  labScripts={labScripts}
+                  deskPositions={matchingPositions}
+                  intelEvents={intelEvents}
+                  showEvents={showEvents}
+                  onSelect={() =>
+                    setConfig((prev) =>
+                      prev.activeTileId === tile.id
+                        ? prev
+                        : { ...prev, activeTileId: tile.id },
+                    )
+                  }
+                  onChangeTile={updateTile}
+                  onAddDrawing={(d) => addDrawing(tile, d)}
+                  onAddPaperOrder={(o) => addPaperOrder(tile, o)}
+                  onClearOverlays={() => clearOverlays(tile)}
+                />
+              );
+            })}
+          </div>
+
+          <section
+            className="panel trade-bottom-dock"
+            data-testid="trade-bottom-dock"
+            aria-label={t("Positions")}
+          >
+            <div className="trade-bottom-head">
+              <div className="trade-bottom-stats">
+                <span className="trade-source-pill">
+                  {t(desk?.limits.mode === "paper" ? "Paper" : "Shadow")}
+                </span>
+                <span>
+                  {`${t("Equity")}: ${formatCurrencyUSD(desk?.account.equityUsd ?? 100000)}`}
+                </span>
+                <span>
+                  {`${t("Open positions")}: ${openDeskPositions.length}`}
+                </span>
+                <span>
+                  {`${t("Pending tickets")}: ${pendingDeskTickets.length}`}
+                </span>
+              </div>
+              <button
+                type="button"
+                className="trade-mini-btn"
+                onClick={() => navigate("lab/desk")}
+              >
+                {t("Open Lab")}
+              </button>
+            </div>
+
+            {(pendingDeskTickets.length > 0 ||
+              openDeskPositions.length > 0) && (
+              <div className="trade-bottom-rows">
+                {pendingDeskTickets.map((tk) => (
+                  <div className="trade-bottom-row" key={tk.id}>
+                    <span>
+                      {`${tk.symbol} ${tk.side.toUpperCase()} @ ${formatPrice(tk.entryPrice)} · R:R ${tk.riskReward.toFixed(2)}`}
+                    </span>
+                    <div className="trade-desk-actions">
+                      <button
+                        type="button"
+                        className="trade-mini-btn trade-desk-run"
+                        disabled={deskBusy}
+                        onClick={() => void handleApproveTicket(tk.id)}
+                      >
+                        {t("Approve")}
+                      </button>
+                      <button
+                        type="button"
+                        className="trade-mini-btn"
+                        disabled={deskBusy}
+                        onClick={() => void handleRejectTicket(tk.id)}
+                      >
+                        {t("Reject")}
+                      </button>
+                    </div>
+                  </div>
+                ))}
+                {openDeskPositions.map((pos) => (
+                  <div className="trade-bottom-row" key={pos.id}>
+                    <span>
+                      {`${pos.symbol} ${pos.side.toUpperCase()} · ${pos.quantity} @ ${formatPrice(pos.entryPrice)} · ${formatCurrencyUSD(pos.unrealizedPnlUsd)}`}
+                    </span>
+                    <button
+                      type="button"
+                      className="trade-mini-btn"
+                      disabled={deskBusy}
+                      onClick={() => void handleClosePosition(pos.id)}
+                    >
+                      {t("Close")}
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </section>
         </div>
 
         {config.showOrderflow && activeTile && (
