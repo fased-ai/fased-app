@@ -1008,6 +1008,35 @@ func (s *Store) PendingApprovalsCountForMessage(ctx context.Context, messageID s
 	return n, err
 }
 
+// ListPendingApprovals returns bounded pending Agent V2 approval requests.
+func (s *Store) ListPendingApprovals(ctx context.Context, limit int) ([]AgentApproval, error) {
+	v2, err := s.ensureAgentV2(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if limit <= 0 || limit > 100 {
+		limit = 25
+	}
+	rows, err := v2.db.QueryContext(ctx,
+		`SELECT id,thread_id,message_id,tool_call_id,tool_name,title,summary,payload_json,status,decision_note,created_at,decided_at
+		 FROM approvals WHERE status='pending' ORDER BY created_at DESC, id DESC LIMIT ?`, limit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []AgentApproval
+	for rows.Next() {
+		var ap AgentApproval
+		if err := rows.Scan(&ap.ID, &ap.ThreadID, &ap.MessageID, &ap.ToolCallID, &ap.ToolName, &ap.Title, &ap.Summary, &ap.PayloadJSON, &ap.Status, &ap.DecisionNote, &ap.CreatedAt, &ap.DecidedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, ap)
+	}
+	return out, rows.Err()
+}
+
 type MemoryInput struct {
 	ProfileID string `json:"profileId,omitempty"`
 	Scope     string `json:"scope,omitempty"`

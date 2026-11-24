@@ -137,7 +137,7 @@ jobs:
       - name: Go fuzz seed corpus regression
         env:
           FASED_FAST_TEST_KDF: "1"
-        run: go test -run='^Fuzz' ./internal/core ./internal/decision ./internal/marketdata ./internal/mcpclient ./internal/signer ./internal/update ./internal/wenpm1 ./internal/worldintel
+        run: go test -run='^Fuzz' ./internal/core ./internal/decision ./internal/marketdata ./internal/mcpclient ./internal/signer ./internal/update ./internal/wenpm1 ./internal/worldintel ./internal/automation ./internal/telegram
       - name: Full race coverage in bounded core groups
         if: needs.classify.outputs.scope == 'full'
         env:

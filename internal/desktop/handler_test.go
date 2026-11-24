@@ -645,3 +645,70 @@ func TestNativeWorldIntelRoutesAndSSE(t *testing.T) {
 		t.Fatalf("desktop intel SSE passthrough failed: code=%d flushed=%v body=%q", rec.Code, rec.Flushed, rec.Body.String())
 	}
 }
+
+func TestNativeAutomationRoutesAndSSE(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		method string
+		url    string
+		want   bool
+	}{
+		{http.MethodGet, "http://wails.localhost/api/v1/automation/state", true},
+		{http.MethodPost, "http://wails.localhost/api/v1/automation/state", true},
+		{http.MethodGet, "http://wails.localhost/api/v1/automation/triggers", true},
+		{http.MethodPut, "http://wails.localhost/api/v1/automation/triggers", true},
+		{http.MethodPost, "http://wails.localhost/api/v1/automation/triggers/btc-price/test", true},
+		{http.MethodDelete, "http://wails.localhost/api/v1/automation/triggers/btc-price", true},
+		{http.MethodDelete, "http://wails.localhost/api/v1/automation/triggers/bad/path", false},
+		{http.MethodPost, "http://wails.localhost/api/v1/automation/evaluate", true},
+		{http.MethodGet, "http://wails.localhost/api/v1/automation/notifications?limit=25&unreadOnly=1&severity=warn", true},
+		{http.MethodGet, "http://wails.localhost/api/v1/automation/notifications?evil=1", false},
+		{http.MethodPost, "http://wails.localhost/api/v1/automation/notifications/read", true},
+		{http.MethodGet, "http://wails.localhost/api/v1/automation/webhook", true},
+		{http.MethodPut, "http://wails.localhost/api/v1/automation/webhook", true},
+		{http.MethodGet, "http://wails.localhost/api/v1/automation/telegram", true},
+		{http.MethodPut, "http://wails.localhost/api/v1/automation/telegram", true},
+		{http.MethodPost, "http://wails.localhost/api/v1/automation/telegram/test", true},
+		{http.MethodPost, "http://wails.localhost/api/v1/automation/telegram/simulate", true},
+		{http.MethodGet, "http://wails.localhost/api/v1/automation/stream", true},
+	}
+	for _, tc := range cases {
+		req := httptest.NewRequest(tc.method, tc.url, nil)
+		if got := PublicRequestAllowed(req); got != tc.want {
+			t.Fatalf("PublicRequestAllowed(%s %s) = %v, want %v", tc.method, tc.url, got, tc.want)
+		}
+	}
+	if !StreamingRoute("/api/v1/automation/stream") {
+		t.Fatal("expected StreamingRoute(/api/v1/automation/stream) to return true")
+	}
+	if RequestBodyLimit("/api/v1/automation/telegram") != 64*1024 || responseLimit("/api/v1/automation/notifications") != 1*1024*1024 {
+		t.Fatal("expected 64 KiB request limit and 1 MiB response limit on automation routes")
+	}
+
+	sseServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/v1/automation/stream" {
+			w.Header().Set("Content-Type", "text/event-stream; charset=utf-8")
+			w.WriteHeader(http.StatusOK)
+			flusher := w.(http.Flusher)
+			_, _ = w.Write([]byte("event: ready\ndata: {\"unreadCount\":0}\n\n"))
+			flusher.Flush()
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer sseServer.Close()
+
+	h := NewHandler("fixture-auto-sse", nil)
+	h.newClient = func(context.Context, string) (*core.Client, bool, json.RawMessage, error) {
+		c := sseServer.Client()
+		c.Timeout = 50 * time.Millisecond
+		return &core.Client{Endpoint: core.Endpoint{URL: sseServer.URL, InstanceID: "fixture-auto-sse"}, HTTP: c}, false, nil, nil
+	}
+	req := httptest.NewRequest(http.MethodGet, "http://wails.localhost/api/v1/automation/stream", nil)
+	req.Header.Set("Accept", "text/event-stream")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"unreadCount":0`) || !rec.Flushed {
+		t.Fatalf("desktop automation SSE passthrough failed: code=%d flushed=%v body=%q", rec.Code, rec.Flushed, rec.Body.String())
+	}
+}

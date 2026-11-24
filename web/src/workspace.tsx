@@ -22,7 +22,12 @@ export type ProvidersPreset = {
   method?: "api-key" | "sign-in" | "local";
 };
 export type SettingsTab =
-  "general" | "providers" | "instance" | "updates" | "diagnostics";
+  | "general"
+  | "providers"
+  | "instance"
+  | "notifications"
+  | "updates"
+  | "diagnostics";
 export type PendingChatPrompt = {
   id: string;
   profileId: string;

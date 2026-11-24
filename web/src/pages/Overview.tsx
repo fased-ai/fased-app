@@ -10,6 +10,7 @@ import {
   ArrowDown,
   ArrowRight,
   ArrowUp,
+  Bell,
   Bot,
   Clock3,
   Globe2,
@@ -45,6 +46,14 @@ import {
   type IntelEvent,
   type PredictionList,
 } from "../world-intel";
+import {
+  automationStateLabel,
+  getAutomationState,
+  listNotifications,
+  setAutomationState,
+  type AutomationControlState,
+  type NotificationItem,
+} from "../automation";
 
 const icons = {
   agents: Bot,
@@ -52,6 +61,7 @@ const icons = {
   news: Newspaper,
   intel: Globe2,
   predictions: TrendingUp,
+  alerts: Bell,
   wallets: Wallet,
   activity: History,
   mining: Pickaxe,
@@ -64,6 +74,7 @@ const paths = {
   news: "agents/news",
   intel: "intel",
   predictions: "intel",
+  alerts: "agents/tasks",
   wallets: "wallets/overview",
   activity: "activity",
   mining: "terminals/satcoin",
@@ -99,8 +110,32 @@ export function Overview() {
   const [openMenu, setOpenMenu] = useState<WidgetID | null>(null);
   const [intelEvents, setIntelEvents] = useState<IntelEvent[]>([]);
   const [predList, setPredList] = useState<PredictionList | null>(null);
+  const [autoState, setAutoState] = useState<AutomationControlState | null>(
+    null,
+  );
+  const [alertItems, setAlertItems] = useState<NotificationItem[]>([]);
+  const [alertUnread, setAlertUnread] = useState(0);
   const hasIntelWidget = layout.widgets.some((w) => w.id === "intel");
   const hasPredWidget = layout.widgets.some((w) => w.id === "predictions");
+  const hasAlertsWidget = layout.widgets.some((w) => w.id === "alerts");
+  useEffect(() => {
+    if (core.mode !== "ready" || !hasAlertsWidget) return;
+    let cancelled = false;
+    void Promise.all([
+      getAutomationState(core),
+      listNotifications(core, { limit: 3 }),
+    ])
+      .then(([st, ntfs]) => {
+        if (cancelled) return;
+        setAutoState(st);
+        setAlertItems(ntfs.notifications ?? []);
+        setAlertUnread(ntfs.unreadCount ?? 0);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [core, hasAlertsWidget]);
   useEffect(() => {
     if (core.mode !== "ready" || !hasIntelWidget) return;
     let cancelled = false;
@@ -470,6 +505,67 @@ export function Overview() {
           )}
         </div>
       );
+    if (id === "alerts") {
+      const stateText = automationStateLabel(autoState);
+      return (
+        <div className="dashboard-rows" data-testid="overview-alerts-widget">
+          <div className="dashboard-row">
+            <span className="dashboard-copy">
+              <strong>{t(stateText)}</strong>
+              <small>{t("{count} unread", { count: alertUnread })}</small>
+            </span>
+            <button
+              type="button"
+              className="secondary"
+              disabled={core.mode !== "ready"}
+              onClick={() => {
+                if (core.mode !== "ready") return;
+                const action = autoState?.killSwitchActive
+                  ? "unkill"
+                  : autoState?.paused
+                    ? "resume"
+                    : "pause";
+                void setAutomationState(core, action)
+                  .then((next) => setAutoState(next))
+                  .catch(() => {});
+              }}
+            >
+              {t(
+                autoState?.killSwitchActive
+                  ? "Clear kill switch"
+                  : autoState?.paused
+                    ? "Resume"
+                    : "Pause",
+              )}
+            </button>
+          </div>
+          {alertItems.slice(0, 3).map((item) => (
+            <button
+              key={item.id}
+              className="dashboard-row"
+              onClick={() => open(paths.alerts)}
+            >
+              <span className="dashboard-copy">
+                <strong>{item.title}</strong>
+                <small>{item.severity}</small>
+              </span>
+              <ArrowRight size={14} />
+            </button>
+          ))}
+          {alertItems.length === 0 && (
+            <div className="dashboard-empty">
+              <button
+                className="text-button"
+                onClick={() => open(paths.alerts)}
+              >
+                {t("Event triggers")}
+                <ArrowRight size={14} />
+              </button>
+            </div>
+          )}
+        </div>
+      );
+    }
     return (
       <div className="dashboard-empty">
         <span>

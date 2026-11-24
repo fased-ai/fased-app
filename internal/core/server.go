@@ -301,6 +301,70 @@ func (s *Server) startAgentTasks() {
 			}
 		}()
 	}
+	if !s.Store.sessionFixture && !s.agentFixture {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			defer recoverBackgroundPanic("automation-evaluator")
+			ticker := time.NewTicker(15 * time.Second)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-ticker.C:
+					autoDB := filepath.Join(s.Store.dir, "automation", "automation.sqlite")
+					s.Store.automationMu.Lock()
+					initialized := s.Store.automationSvc != nil
+					s.Store.automationMu.Unlock()
+					if !initialized {
+						if _, statErr := os.Stat(autoDB); statErr != nil {
+							continue
+						}
+					}
+					svc, err := s.Store.automationService()
+					if err != nil {
+						continue
+					}
+					evalCtx, stop := context.WithTimeout(ctx, 10*time.Second)
+					if _, eErr := svc.EvaluateNow(evalCtx); eErr != nil && !errors.Is(eErr, context.Canceled) {
+						coreLogger.Warn("automation evaluator sweep held", "err", sanitizeDiagValue(eErr.Error(), 200))
+					}
+					stop()
+				}
+			}
+		}()
+
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			defer recoverBackgroundPanic("telegram-poller")
+			waitReady := time.NewTicker(5 * time.Second)
+			for {
+				autoDB := filepath.Join(s.Store.dir, "automation", "automation.sqlite")
+				s.Store.automationMu.Lock()
+				initialized := s.Store.telegramSvc != nil
+				s.Store.automationMu.Unlock()
+				if initialized {
+					break
+				}
+				if _, statErr := os.Stat(autoDB); statErr == nil {
+					break
+				}
+				select {
+				case <-ctx.Done():
+					waitReady.Stop()
+					return
+				case <-waitReady.C:
+				}
+			}
+			waitReady.Stop()
+			if tg, err := s.Store.telegramService(); err == nil {
+				tg.RunPollingLoop(ctx)
+			}
+		}()
+	}
+
 	wg.Add(1)
 	go func() {
 		defer wg.Done()

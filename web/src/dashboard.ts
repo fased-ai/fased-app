@@ -4,6 +4,7 @@ export const widgetNames = {
   news: "News",
   intel: "World Intel",
   predictions: "Predictions",
+  alerts: "Alerts",
   wallets: "Wallets",
   activity: "Activity",
   mining: "Mining",
