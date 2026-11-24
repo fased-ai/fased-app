@@ -6570,4 +6570,11 @@ export const pageCopy = {
     "智能体 RSS 源",
     "에이전트 RSS 입력",
   ],
+  "Filter markets": [
+    "Фильтр рынков",
+    "Filtrar mercados",
+    "筛选市场",
+    "마켓 필터",
+  ],
+  Categories: ["Категории", "Categorías", "分类", "카테고리"],
 } satisfies Record<string, [string, string, string, string]>;

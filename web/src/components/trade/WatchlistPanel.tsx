@@ -25,6 +25,8 @@ export function WatchlistPanel({
   const [lists, setLists] = useState<Watchlist[]>([]);
   const [venue, setVenue] = useState<Venue>("hyperliquid");
   const [symbol, setSymbol] = useState("");
+  const [filterQuery, setFilterQuery] = useState("");
+  const [venueFilter, setVenueFilter] = useState<"all" | Venue>("all");
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
@@ -46,6 +48,18 @@ export function WatchlistPanel({
     name: "Core Desk",
     items: [],
   };
+  const visibleItems = current.items.filter((item) => {
+    if (venueFilter !== "all" && item.venue !== venueFilter) return false;
+    const q = filterQuery.trim().toLowerCase();
+    if (
+      q &&
+      !item.symbol.toLowerCase().includes(q) &&
+      !item.venue.toLowerCase().includes(q)
+    ) {
+      return false;
+    }
+    return true;
+  });
 
   async function addItem(e: React.FormEvent) {
     e.preventDefault();
@@ -122,8 +136,43 @@ export function WatchlistPanel({
         </button>
       </form>
 
+      <div className="trade-watchlist-filter">
+        <input
+          type="search"
+          aria-label={t("Filter markets")}
+          placeholder={t("Filter markets")}
+          value={filterQuery}
+          onChange={(e) => setFilterQuery(e.target.value)}
+        />
+        <div
+          className="trade-venue-filter-row"
+          role="group"
+          aria-label={t("Filter markets")}
+        >
+          {(
+            [
+              { id: "all", label: t("All") },
+              { id: "hyperliquid", label: "HL" },
+              { id: "binance", label: "Binance" },
+              { id: "kraken", label: "Kraken" },
+              { id: "solana", label: "Solana" },
+            ] as const
+          ).map((chip) => (
+            <button
+              key={chip.id}
+              type="button"
+              className={`trade-venue-filter-btn ${venueFilter === chip.id ? "is-selected" : ""}`}
+              aria-pressed={venueFilter === chip.id}
+              onClick={() => setVenueFilter(chip.id)}
+            >
+              {chip.label}
+            </button>
+          ))}
+        </div>
+      </div>
+
       <ul className="trade-watchlist-items">
-        {current.items.map((item) => {
+        {visibleItems.map((item) => {
           const isActive =
             item.venue === activeVenue && item.symbol === activeSymbol;
           return (

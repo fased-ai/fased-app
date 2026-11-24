@@ -295,6 +295,41 @@ export function WorldIntelWorkspace() {
       {error && <p role="alert">{error}</p>}
 
       <div className="intel-layout">
+        <aside className="intel-sources-rail" aria-label={t("Categories")}>
+          <div className="intel-rail-group">
+            {INTEL_CATEGORIES.map((c) => (
+              <button
+                key={c.id || "all"}
+                type="button"
+                className={`intel-filter-pill ${category === c.id ? "is-selected" : ""}`}
+                aria-pressed={category === c.id}
+                onClick={() => setCategory(c.id)}
+              >
+                {t(c.label)}
+              </button>
+            ))}
+          </div>
+          <div className="intel-rail-sources">
+            {sources.slice(0, 8).map((src) => (
+              <button
+                key={src.id}
+                type="button"
+                className="intel-rail-source"
+                onClick={() => setTab("sources")}
+              >
+                <span className="intel-rail-source-name">{src.name}</span>
+                <span
+                  className={`intel-source-dot ${src.enabled ? "is-on" : ""}`}
+                  aria-hidden="true"
+                />
+              </button>
+            ))}
+          </div>
+          <a className="intel-rail-link" href="#agents/news">
+            {t("Agent RSS inputs")}
+          </a>
+        </aside>
+
         <div className="intel-left-col">
           <WorldMapView
             events={filteredEvents}
@@ -506,6 +541,24 @@ export function WorldIntelWorkspace() {
                     <div className="intel-meta-pills mono">
                       <span className="pill">{`Polymarket ${formatProbPct(arb.polymarketProb)}`}</span>
                       <span className="pill">{`Kalshi ${formatProbPct(arb.kalshiProb)}`}</span>
+                    </div>
+                    <div className="intel-prob-bars" aria-hidden="true">
+                      <div className="intel-prob-track">
+                        <div
+                          className="intel-prob-fill is-poly"
+                          style={{
+                            width: `${Math.max(4, Math.min(100, Math.round(arb.polymarketProb * 100)))}%`,
+                          }}
+                        />
+                      </div>
+                      <div className="intel-prob-track">
+                        <div
+                          className="intel-prob-fill is-kalshi"
+                          style={{
+                            width: `${Math.max(4, Math.min(100, Math.round(arb.kalshiProb * 100)))}%`,
+                          }}
+                        />
+                      </div>
                     </div>
                   </article>
                 ))}
