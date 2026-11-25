@@ -97,7 +97,7 @@ Fresh completion writes `remote-fresh-acceptance.json`. Released mode preserves 
 
 Before public-port closure prove non-root private administration AND provider console/rescue independent of Tailscale and its login provider. Private SSH over the same tailnet is not a substitute. Without independent access, leave installation incomplete rather than lock out the owner or silently open a public listener. A different provider/access design requires explicit acceptance. Preserve essential networking and unrelated host policy.
 
-Access loss, expired identity, reboot, device replacement and vendor failure must preserve state and deny unverified authority. No access failure may unlock the signer, enlarge grants or replay uncertain tasks. Actual independent recovery and closure rollback remain B01 exits. Portable encrypted key/state restore outside the original VPS/tailnet is B05's prerequisite for real-wallet use, not an install-time wallet/password requirement. See [recovery guidance](../guide/install.md#recovery-and-availability).
+Access loss, expired identity, reboot, device replacement and vendor failure must preserve state and deny unverified authority. No access failure may unlock the signer, enlarge grants or replay uncertain tasks. Actual independent recovery and closure rollback remain B01 exits. Portable encrypted key/state restore outside the original VPS/tailnet is B05's prerequisite for real-wallet use, not an install-time wallet/password requirement. See [recovery guidance](https://docs.fased.ai/guide/install#recovery-and-availability).
 
 ### Evidence and completion
 

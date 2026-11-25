@@ -14,4 +14,4 @@ When WEN Lean V1 (`LV1X`) integration is separately designed, audited, and expli
 3. Require verified Lean V1 program bindings inside the isolated `fased-signer` before any financial permission can be requested or enabled.
 4. Keep manual, CLI, and agent triggers subject to separate per-action permissions — connecting a wallet or provider never grants mining authority.
 
-Use [WEN documentation](https://docs.wen.network), [Satcoin documentation](https://docs.satcoin.app), and [Availability](reference/status.md) for current boundaries.
+Use [WEN documentation](https://docs.wen.network), [Satcoin documentation](https://docs.satcoin.app), and [Availability](https://docs.fased.ai/reference/status) for current boundaries.

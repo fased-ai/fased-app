@@ -1,6 +1,6 @@
 # Installation and update contract
 
-The [user guide](guide/install.md) describes the customer flow. The shared Fased plan defines the packaged Linux architecture, Current records its status, and the shared implementation plan owns B01's checklist.
+The [user guide](https://docs.fased.ai/guide/install) describes the customer flow. The shared Fased plan defines the packaged Linux architecture, Current records its status, and the shared implementation plan owns B01's checklist.
 
 Recorded 0.1.11 installation/update and distribution evidence remains valid for its original environments. Attested dual-arch Linux Local and mandatory-Tailscale Remote installation/updates (`v0.2.0`, `linux/amd64` + `linux/arm64`) and dual-track cross-platform CLI & unsigned desktop pre-releases (`v0.2.0-desktop`) are published; the required path is a terminal installer for one verified prebuilt core/signer bundle, a browser-based wizard, fixed app/signer services and persistent data, and one UI/CLI Update/recovery operation. Format-4 installation, `internal/vpsnetwork` dual-stack firewall/SSH lockdown, `fased-app host migrate-units`, `install.sh --remote --refresh-helper` (supporting chained helper transitions and required once on pre-`0.1.45` Format-4 Remote hosts on `v0.1.45` before updating to 9-asset `v0.2.0+` releases), and dual-arch attested release assembly cover Ubuntu 24.04/26.04/26.10, Debian 12/13, and Fedora 41–45 on `linux/amd64` and `linux/arm64`. `apt`/`dnf` is used only for needed OS prerequisites; a desktop client is not required.
 
@@ -14,4 +14,4 @@ Recorded 0.1.11 installation/update and distribution evidence remains valid for 
 
 Manual installation/update acceptance closes at that actual installed result. The [release guide](maintainers/ubuntu-release.md) separately requires authenticated package evidence, installed agent acceptance and publication authority. Customer Automatic, mining and live execution remain held. Select additional shared-controller checks only for changed behavior or a specific unresolved concern.
 
-Before real-wallet use, complete protected setup and independent encrypted backup/restore in B05. [Recovery and availability](guide/install.md#recovery-and-availability) records the access-provider boundary. Existing keys, credentials, data and recovery holds remain protected throughout maintenance and code retirement.
+Before real-wallet use, complete protected setup and independent encrypted backup/restore in B05. [Recovery and availability](https://docs.fased.ai/guide/install#recovery-and-availability) records the access-provider boundary. Existing keys, credentials, data and recovery holds remain protected throughout maintenance and code retirement.

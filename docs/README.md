@@ -2,7 +2,7 @@
 
 Fased is the self-hosted agent, research, charting, intelligence, and paper-strategy operating system in the Fcode Lab ecosystem. A shared design language never pools keys or grants spending authority.
 
-**Availability:** Attested Ubuntu 24.04 x86-64 Local/Remote installers, cross-platform CLI & unsigned desktop pre-release builds, live AI providers (OAuth, API key, local server, Host CLI/ACP), watch-only Solana RPC, and Stages 1–3 research/charting/intelligence/automation/QuantLab/Paper-Desk capabilities are shipped (`v0.1.41+`). Live wallet signing, real-money trading execution, and auto-updates remain strictly disabled. **WEN `SAT` mining execution is marked `NOT READY / DO NOT IMPLEMENT NOW` (`miningActivationEnabled: false`).** See the [User guide](index.md) and [Availability](reference/status.md).
+**Availability:** Attested Ubuntu 24.04 x86-64 Local/Remote installers, cross-platform CLI & unsigned desktop pre-release builds, live AI providers (OAuth, API key, local server, Host CLI/ACP), watch-only Solana RPC, and Stages 1–3 research/charting/intelligence/automation/QuantLab/Paper-Desk capabilities are shipped (`v0.1.41+`). Live wallet signing, real-money trading execution, and auto-updates remain strictly disabled. **WEN `SAT` mining execution is marked `NOT READY / DO NOT IMPLEMENT NOW` (`miningActivationEnabled: false`).** See the [User guide](https://docs.fased.ai) and [Availability](https://docs.fased.ai/reference/status).
 
 The active shell navigation covers **Overview, Trade, Intel (News), Lab (FasedScript & Paper Desk), Chat, Tasks, Agents, and Wallets**, with a unified bottom-left **Settings** modal (`General`, `Providers`, `Instance`, `Notifications`, `Updates`, `Diagnostics`).
 
