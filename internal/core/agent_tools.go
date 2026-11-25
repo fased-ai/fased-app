@@ -799,6 +799,87 @@ func agentV2ToolRegistry() []agentToolEntry {
 			preview: previewSyncWorldIntel,
 			execute: executeSyncWorldIntel,
 		},
+		{
+			spec: AgentToolSpec{
+				Name:        "get_cex_status",
+				Tier:        toolTierRead,
+				Description: "Inspect Stage 5 multi-venue CEX router locks, supported venues, non-secret trade-only credentials, and paper/sandbox orders.",
+				Parameters: map[string]any{
+					"type":       "object",
+					"properties": map[string]any{},
+				},
+			},
+			execute: toolGetCEXStatus,
+		},
+		{
+			spec: AgentToolSpec{
+				Name:        "get_equities_status",
+				Tier:        toolTierRead,
+				Description: "Inspect Stage 5 Alpaca Paper / IBKR DU* Paper equities router locks and recent paper order history.",
+				Parameters: map[string]any{
+					"type":       "object",
+					"properties": map[string]any{},
+				},
+			},
+			execute: toolGetEquitiesStatus,
+		},
+		{
+			spec: AgentToolSpec{
+				Name:        "get_options_chain",
+				Tier:        toolTierRead,
+				Description: "Fetch a normalized 21-character OCC options chain and quotes for a stock or ETF underlying.",
+				Parameters: map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"symbol": map[string]any{"type": "string", "description": "Underlying equity or ETF ticker (default SPY)."},
+					},
+				},
+			},
+			execute: toolGetOptionsChain,
+		},
+		{
+			spec: AgentToolSpec{
+				Name:        "draft_cex_order",
+				Tier:        toolTierAction,
+				Description: "Create and simulate a paper/sandbox CEX order draft with compile-time mainnet lock. Requires owner approval.",
+				Parameters: map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"venue":     map[string]any{"type": "string", "description": "CEX venue: binance, bybit, okx, kraken, coinbase, or deribit."},
+						"symbol":    map[string]any{"type": "string", "description": "Trading pair symbol (e.g., BTCUSDT)."},
+						"side":      map[string]any{"type": "string", "description": "BUY or SELL."},
+						"orderType": map[string]any{"type": "string", "description": "LIMIT or MARKET."},
+						"quantity":  map[string]any{"type": "number", "description": "Positive order size."},
+						"price":     map[string]any{"type": "number", "description": "Limit price when orderType=LIMIT."},
+					},
+					"required": []string{"venue", "symbol", "side", "quantity"},
+				},
+			},
+			preview: previewDraftCEXOrder,
+			execute: executeDraftCEXOrder,
+		},
+		{
+			spec: AgentToolSpec{
+				Name:        "draft_equities_order",
+				Tier:        toolTierAction,
+				Description: "Create and simulate a paper equities or OCC options order draft for Alpaca Paper or IBKR DU* Paper. Requires owner approval.",
+				Parameters: map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"venue":      map[string]any{"type": "string", "description": "alpaca or ibkr."},
+						"accountId":  map[string]any{"type": "string", "description": "Optional DU* paper account ID for IBKR."},
+						"symbol":     map[string]any{"type": "string", "description": "Ticker (e.g., SPY) or 21-char OCC option symbol."},
+						"side":       map[string]any{"type": "string", "description": "BUY or SELL."},
+						"orderType":  map[string]any{"type": "string", "description": "LIMIT or MARKET."},
+						"quantity":   map[string]any{"type": "number", "description": "Positive share or contract count."},
+						"limitPrice": map[string]any{"type": "number", "description": "Limit price when orderType=LIMIT."},
+					},
+					"required": []string{"venue", "symbol", "side", "quantity"},
+				},
+			},
+			preview: previewDraftEquitiesOrder,
+			execute: executeDraftEquitiesOrder,
+		},
 	}
 }
 

@@ -675,6 +675,11 @@ func defaultInstrumentsCatalog(nowSec int64) []Instrument {
 		{Venue: VenueLighter, Symbol: "ETH", Base: "ETH", Quote: "USDC", AssetClass: "crypto_perp", TickSize: 0.01, LotSize: 0.0001, MaxLeverage: 25, UpdatedAt: nowSec},
 		{Venue: VenueLighter, Symbol: "BTC", Base: "BTC", Quote: "USDC", AssetClass: "crypto_perp", TickSize: 0.1, LotSize: 0.00001, MaxLeverage: 40, UpdatedAt: nowSec},
 		{Venue: VenueLighter, Symbol: "SOL", Base: "SOL", Quote: "USDC", AssetClass: "crypto_perp", TickSize: 0.01, LotSize: 0.01, MaxLeverage: 20, UpdatedAt: nowSec},
+		{Venue: VenueOKX, Symbol: "BTC-USDT-SWAP", Base: "BTC", Quote: "USDT", AssetClass: "crypto_perp", TickSize: 0.1, LotSize: 0.01, MaxLeverage: 50, UpdatedAt: nowSec},
+		{Venue: VenueCoinbase, Symbol: "BTC-USD", Base: "BTC", Quote: "USD", AssetClass: "crypto_spot", TickSize: 0.01, LotSize: 0.0001, UpdatedAt: nowSec},
+		{Venue: VenueDeribit, Symbol: "BTC-PERPETUAL", Base: "BTC", Quote: "USD", AssetClass: "crypto_perp", TickSize: 0.5, LotSize: 10, MaxLeverage: 50, UpdatedAt: nowSec},
+		{Venue: VenueAlpaca, Symbol: "SPY", Base: "SPY", Quote: "USD", AssetClass: "equity", TickSize: 0.01, LotSize: 1, UpdatedAt: nowSec},
+		{Venue: VenueAlpaca, Symbol: "NVDA", Base: "NVDA", Quote: "USD", AssetClass: "equity", TickSize: 0.01, LotSize: 1, UpdatedAt: nowSec},
 		{Venue: VenueFRED, Symbol: "CPIAUCSL", Base: "CPIAUCSL", Quote: "INDEX", AssetClass: "macro", UpdatedAt: nowSec},
 		{Venue: VenueSEC, Symbol: "0000320193", Base: "AAPL", Quote: "USD", AssetClass: "sec_filing", UpdatedAt: nowSec},
 	}
@@ -692,6 +697,12 @@ func seedPriceForSymbol(venue, symbol string) (float64, uint64) {
 		return 3350.0, digest
 	case "SOL", "SO11111111111111111111111111111111111111112":
 		return 218.0, digest
+	case "SPY":
+		return 598.40, digest
+	case "NVDA":
+		return 142.85, digest
+	case "AAPL":
+		return 234.50, digest
 	default:
 		return 100.0 + float64(digest%500), digest
 	}

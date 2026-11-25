@@ -85,6 +85,17 @@ func venueQuerySymbol(venue, symbol string) string {
 			return "XBTUSD"
 		}
 		return up
+	case VenueOKX:
+		base := normalizeCoinBase(s)
+		return base + "-USDT-SWAP"
+	case VenueCoinbase:
+		base := normalizeCoinBase(s)
+		return base + "-USD"
+	case VenueDeribit:
+		base := normalizeCoinBase(s)
+		return base + "-PERPETUAL"
+	case VenueAlpaca:
+		return strings.ToUpper(s)
 	default:
 		return s
 	}

@@ -113,7 +113,18 @@ var (
 	stage4LiveExecutionHook        func(*Store) bool
 	stage4ClearHook                func(*Store)
 	stage4EnsureHyperliquidIPCHook func(context.Context, *Store) bool
+	extraClearHooksMu              sync.Mutex
+	extraClearHooks                []func(*Store)
 )
+
+func registerStoreCloseHook(fn func(*Store)) {
+	if fn == nil {
+		return
+	}
+	extraClearHooksMu.Lock()
+	extraClearHooks = append(extraClearHooks, fn)
+	extraClearHooksMu.Unlock()
+}
 
 func (s *Store) hyperliquidRuntime() *hyperliquidRuntime {
 	if s == nil {
@@ -130,6 +141,12 @@ func (s *Store) clearHyperliquidRuntime() error {
 	}
 	if stage4ClearHook != nil {
 		stage4ClearHook(s)
+	}
+	extraClearHooksMu.Lock()
+	hooks := append([]func(*Store){}, extraClearHooks...)
+	extraClearHooksMu.Unlock()
+	for _, fn := range hooks {
+		fn(s)
 	}
 	hyperliquidRuntimeMu.Lock()
 	old := hyperliquidRuntimes[s]

@@ -703,6 +703,9 @@ func (h *HTTPHandler) api(w http.ResponseWriter, r *http.Request) {
 			h.deskAPI(w, r, token)
 			return
 		}
+		if stage5RouteHook != nil && stage5RouteHook(h, w, r, token) {
+			return
+		}
 		switch r.URL.Path {
 		case "/api/v1/execution/status":
 			h.executionStatusAPI(w, r)
@@ -735,6 +738,9 @@ func (h *HTTPHandler) api(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 404, "unknown API operation")
 	}
 }
+
+var stage5RouteHook func(*HTTPHandler, http.ResponseWriter, *http.Request, string) bool
+
 func (h *HTTPHandler) ratePeerKey(r *http.Request) string {
 	if id, ok := r.Context().Value(remoteIdentityKey{}).(tailnet.Identity); ok && id.NodeID != "" {
 		return "node:" + id.NodeID
