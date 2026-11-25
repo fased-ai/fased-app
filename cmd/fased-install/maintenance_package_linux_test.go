@@ -383,6 +383,29 @@ func TestFreshPackageCandidateRetirementRequiresOriginalIdlePair(t *testing.T) {
 		t.Fatal("an unrelated helper lineage authorized archive validation")
 	}
 
+	// Chained transitions (H0 -> H1 -> H2) preserve archived initial H0 evidence
+	// via Ancestors while live candidate retirement under active H2 still rejects H0.
+	h1 := strings.Repeat("8", 64)
+	chainedLineage := update.PackageHelperTransition{
+		Version: 1, Owner: owner, Instance: id,
+		PreviousHelper: h1, NextHelper: active.ImageSHA256,
+		Ancestors:     []string{a.ImageSHA256},
+		JournalSHA256: strings.Repeat("6", 64),
+	}
+	verified = false
+	readChained := func(uid int, location, instance string) (update.PackageHelperTransition, error) {
+		return chainedLineage, nil
+	}
+	if err = archivedPackageCandidateMatches(active, "local", id, receipt, r, readChained, verify); err != nil || !verified {
+		t.Fatal("valid chained ancestor archive refused", err)
+	}
+	receiptUnknown := receipt
+	receiptUnknown.InstallerSHA256 = strings.Repeat("5", 64)
+	verified = false
+	if err = archivedPackageCandidateMatches(active, "local", id, receiptUnknown, r, readChained, verify); err == nil || verified {
+		t.Fatal("unrecorded helper unexpectedly matched chained archive lineage")
+	}
+
 	configured := m
 	configured.Network = "devnet"
 	configuredRaw, err := json.Marshal(configured)
