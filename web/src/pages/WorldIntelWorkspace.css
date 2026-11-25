@@ -295,6 +295,7 @@
   background: var(--wt-bg);
   border: 1px solid var(--wt-border);
   border-radius: 10px;
+  min-width: 0;
 }
 
 .intel-card-row {
@@ -303,6 +304,7 @@
   align-items: center;
   justify-content: space-between;
   gap: 8px;
+  min-width: 0;
 }
 
 .intel-card-title {
@@ -315,12 +317,19 @@
   border: 0;
   padding: 0;
   cursor: pointer;
+  min-width: 0;
+  max-width: 100%;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  line-height: 1.35;
 }
 
 .intel-card-summary {
   margin: 0;
   font-size: 0.78rem;
   color: var(--wt-muted);
+  overflow-wrap: anywhere;
+  line-height: 1.4;
 }
 
 .intel-meta-pills {
@@ -363,6 +372,7 @@
   background: var(--wt-raised);
   border: 1px solid var(--wt-coral);
   border-radius: 8px;
+  min-width: 0;
 }
 
 .intel-prob-bars {

@@ -181,6 +181,7 @@
   align-items: center;
   justify-content: space-between;
   gap: 8px;
+  min-width: 0;
 }
 
 .lab-row-title {
@@ -192,16 +193,23 @@
   font-size: 0.88rem;
   text-align: left;
   cursor: pointer;
+  min-width: 0;
+  max-width: 100%;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  line-height: 1.35;
 }
 
 .lab-muted {
   color: var(--wt-muted);
   font-size: 0.78rem;
+  overflow-wrap: anywhere;
 }
 
 .lab-text-sm {
   color: var(--wt-text);
   font-size: 0.8rem;
+  overflow-wrap: anywhere;
 }
 
 .lab-metrics-grid {
