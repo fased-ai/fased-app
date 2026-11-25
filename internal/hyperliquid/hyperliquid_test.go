@@ -475,3 +475,87 @@ func TestParseExchangeStatusesTopLevelStringError(t *testing.T) {
 		t.Fatalf("unexpected parsed result: %+v", res)
 	}
 }
+
+func TestParseExchangeStatusesCancelStringArrayAndOrderStatusFilledSize(t *testing.T) {
+	t.Parallel()
+
+	cancelRes, err := parseExchangeStatuses([]byte(`{"status":"ok","response":{"type":"cancel","data":{"statuses":["success"]}}}`))
+	if err != nil || cancelRes.State != "cancelled" || cancelRes.Message != "success" {
+		t.Fatalf("unexpected cancel string array result: %+v, err=%v", cancelRes, err)
+	}
+
+	partial, err := parseOrderStatusResponse([]byte(`{
+		"status":"order",
+		"order":{
+			"status":"open",
+			"order":{"oid":42,"origSz":"1.5","sz":"0.25","limitPx":"3200.5","cloid":"0xabc"}
+		}
+	}`), 0, "")
+	if err != nil || partial.State != "resting" || partial.FilledSize != "1.25" || partial.AvgPrice != "3200.5" {
+		t.Fatalf("unexpected partial fill orderStatus result: %+v, err=%v", partial, err)
+	}
+
+	unfilled, err := parseOrderStatusResponse([]byte(`{
+		"status":"order",
+		"order":{
+			"status":"open",
+			"order":{"oid":43,"origSz":"1.5","sz":"1.5","limitPx":"3200.5","cloid":"0xdef"}
+		}
+	}`), 0, "")
+	if err != nil || unfilled.FilledSize != "0" {
+		t.Fatalf("expected 0 filledSize when sz == origSz, got %+v, err=%v", unfilled, err)
+	}
+}
+
+func TestPreviewOrderPerpPricePrecision(t *testing.T) {
+	t.Parallel()
+	now := time.Now().Unix()
+	snap := MarketSnapshot{
+		Network: "testnet",
+		Markets: []MarketMeta{
+			{AssetIndex: 0, Symbol: "BTC", SzDecimals: 5, MaxLeverage: 40, MarkPrice: "100000"},
+			{AssetIndex: 1, Symbol: "ETH", SzDecimals: 4, MaxLeverage: 25, MarkPrice: "3200"},
+			{AssetIndex: 2, Symbol: "ALT", SzDecimals: 0, MaxLeverage: 10, MarkPrice: "0.12345"},
+		},
+	}
+	policy := signer.HyperliquidPolicy{
+		Version:                   1,
+		Network:                   "testnet",
+		AllowedAssets:             []string{"BTC", "ETH", "ALT"},
+		MaxLeverage:               10,
+		MaxNotionalMicroUSD:       10_000_000_000,
+		MaxOrderPriceBpsDeviation: 500,
+		ExpiresAt:                 now + 3600,
+	}
+
+	for _, tc := range []struct {
+		name    string
+		asset   string
+		price   string
+		size    string
+		wantErr string
+	}{
+		{name: "integer price always valid", asset: "BTC", price: "100000", size: "0.01"},
+		{name: "5 sig figs valid", asset: "ETH", price: "3200.5", size: "0.1"},
+		{name: "sub-dollar 5 sig figs valid", asset: "ALT", price: "0.12345", size: "10"},
+		{name: "exceeds 5 sig figs rejected", asset: "ETH", price: "3200.55", size: "0.1", wantErr: "5 significant figures"},
+		{name: "exceeds max decimals rejected", asset: "BTC", price: "99999.12", size: "0.01", wantErr: "decimal places"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, _, err := PreviewOrder(snap, policy, OrderDraft{
+				Asset:       tc.asset,
+				IsBuy:       true,
+				LimitPrice:  tc.price,
+				Size:        tc.size,
+				Leverage:    5,
+				TimeInForce: "Gtc",
+			}, 0, 100, now)
+			if tc.wantErr == "" && err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if tc.wantErr != "" && (err == nil || !strings.Contains(err.Error(), tc.wantErr)) {
+				t.Fatalf("expected error containing %q, got %v", tc.wantErr, err)
+			}
+		})
+	}
+}

@@ -457,58 +457,60 @@ func (s *Store) changeHyperliquid(ctx context.Context, c AgentCommand) (*Hyperli
 		orderStore := rt.store
 		rt.mu.Unlock()
 
-		signLevCtx, cancelSignLev := context.WithTimeout(ctx, 5*time.Second)
-		signedLev, err := signerBackend.SignUpdateLeverage(signLevCtx, levIntent, policy)
-		cancelSignLev()
-		if err != nil {
-			return nil, "", err
-		}
-		rt.mu.Lock()
-		if levIntent.Nonce > rt.lastNonce {
-			rt.lastNonce = levIntent.Nonce
-		}
-		rt.mu.Unlock()
-
-		if orderStore != nil {
-			if err := orderStore.SaveLastNonce(ctx, levIntent.Nonce); err != nil {
+		if !intent.ReduceOnly {
+			signLevCtx, cancelSignLev := context.WithTimeout(ctx, 5*time.Second)
+			signedLev, err := signerBackend.SignUpdateLeverage(signLevCtx, levIntent, policy)
+			cancelSignLev()
+			if err != nil {
 				return nil, "", err
 			}
-		}
-
-		// Apply explicit leverage & margin-mode configuration BEFORE signing/submitting the order.
-		levCtx, cancelLev := context.WithTimeout(ctx, 5*time.Second)
-		levRes, levErr := client.SubmitSignedUpdateLeverage(levCtx, levIntent, signedLev, policy.VaultAddress)
-		cancelLev()
-		if levErr != nil {
-			return nil, "", fmt.Errorf("hyperliquid updateLeverage failed: %w", levErr)
-		}
-		if levRes.State != "ok" {
-			return nil, "", fmt.Errorf("hyperliquid updateLeverage rejected: %s", levRes.Message)
-		}
-
-		verifyCtx, cancelVerify := context.WithTimeout(ctx, 5*time.Second)
-		acct, acctErr := client.FetchAccountState(verifyCtx, addr)
-		cancelVerify()
-		if acctErr != nil {
-			return nil, "", fmt.Errorf("hyperliquid leverage verification unavailable: %w", acctErr)
-		}
-		expectedMode := "isolated"
-		if levIntent.IsCross {
-			expectedMode = "cross"
-		}
-		for _, pos := range acct.Positions {
-			if pos.Symbol == intent.Asset {
-				if pos.Leverage != levIntent.Leverage || pos.MarginMode != expectedMode {
-					return nil, "", fmt.Errorf("hyperliquid leverage verification mismatch for %s: got %dx %s, want %dx %s",
-						intent.Asset, pos.Leverage, pos.MarginMode, levIntent.Leverage, expectedMode)
-				}
-				break
+			rt.mu.Lock()
+			if levIntent.Nonce > rt.lastNonce {
+				rt.lastNonce = levIntent.Nonce
 			}
-		}
+			rt.mu.Unlock()
 
-		rt.mu.Lock()
-		rt.account = acct
-		rt.mu.Unlock()
+			if orderStore != nil {
+				if err := orderStore.SaveLastNonce(ctx, levIntent.Nonce); err != nil {
+					return nil, "", err
+				}
+			}
+
+			// Apply explicit leverage & margin-mode configuration BEFORE signing/submitting the order.
+			levCtx, cancelLev := context.WithTimeout(ctx, 5*time.Second)
+			levRes, levErr := client.SubmitSignedUpdateLeverage(levCtx, levIntent, signedLev, policy.VaultAddress)
+			cancelLev()
+			if levErr != nil {
+				return nil, "", fmt.Errorf("hyperliquid updateLeverage failed: %w", levErr)
+			}
+			if levRes.State != "ok" {
+				return nil, "", fmt.Errorf("hyperliquid updateLeverage rejected: %s", levRes.Message)
+			}
+
+			verifyCtx, cancelVerify := context.WithTimeout(ctx, 5*time.Second)
+			acct, acctErr := client.FetchAccountState(verifyCtx, addr)
+			cancelVerify()
+			if acctErr != nil {
+				return nil, "", fmt.Errorf("hyperliquid leverage verification unavailable: %w", acctErr)
+			}
+			expectedMode := "isolated"
+			if levIntent.IsCross {
+				expectedMode = "cross"
+			}
+			for _, pos := range acct.Positions {
+				if pos.Symbol == intent.Asset {
+					if pos.Leverage != levIntent.Leverage || pos.MarginMode != expectedMode {
+						return nil, "", fmt.Errorf("hyperliquid leverage verification mismatch for %s: got %dx %s, want %dx %s",
+							intent.Asset, pos.Leverage, pos.MarginMode, levIntent.Leverage, expectedMode)
+					}
+					break
+				}
+			}
+
+			rt.mu.Lock()
+			rt.account = acct
+			rt.mu.Unlock()
+		}
 
 		signOrdCtx, cancelSignOrd := context.WithTimeout(ctx, 5*time.Second)
 		signed, err := signerBackend.SignOrder(signOrdCtx, intent, policy)

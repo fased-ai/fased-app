@@ -567,6 +567,68 @@ func TestHyperliquidUpdateLeverageFailureAndDriftAbortOrder(t *testing.T) {
 	}
 }
 
+func TestHyperliquidReduceOnlySkipsUpdateLeverage(t *testing.T) {
+	dir := fixtureDir(t)
+	vaultParent := fixtureDir(t)
+	client, vault, policy, rt := setupHyperliquidControlledDeps(t, vaultParent)
+	defer func() {
+		_ = vault.ConfigureHyperliquidControlled(false)
+		_ = vault.Close()
+	}()
+
+	server, err := Start(t.Context(), dir, "127.0.0.1:0", "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	claimFixture(t, server.Store)
+	if err := server.ConfigureHyperliquidControlled(client, vault, policy); err != nil {
+		t.Fatal(err)
+	}
+	view, err := server.Store.Agents(t.Context(), "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	revView, err := server.Store.ChangeAgents(t.Context(), AgentCommand{
+		Action:   "hyperliquid-review",
+		Revision: view.Revision,
+		Hyperliquid: &HyperliquidCommand{
+			Request: &hyperliquid.OrderDraft{
+				Asset:       "BTC",
+				IsBuy:       false,
+				LimitPrice:  "96250",
+				Size:        "0.05",
+				Leverage:    5,
+				ReduceOnly:  true,
+				TimeInForce: "Gtc",
+			},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	subView, err := server.Store.ChangeAgents(t.Context(), AgentCommand{
+		Action:      "hyperliquid-submit",
+		Revision:    view.Revision,
+		Hyperliquid: &HyperliquidCommand{Digest: revView.Hyperliquid.Review.Digest},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(subView.Hyperliquid.Orders) != 1 || subView.Hyperliquid.Orders[0].State != "resting" {
+		t.Fatalf("unexpected reduceOnly submitted orders: %+v", subView.Hyperliquid.Orders)
+	}
+	rt.mu.Lock()
+	actions := slices.Clone(rt.exchangeActions)
+	rt.mu.Unlock()
+	if slices.Contains(actions, "updateLeverage") {
+		t.Fatalf("reduceOnly order must skip updateLeverage, got exchange actions: %v", actions)
+	}
+	if !slices.Contains(actions, "order") {
+		t.Fatalf("expected order action to be sent, got: %v", actions)
+	}
+}
+
 func TestHyperliquidOrderPersistenceAndCloidReconcileAcrossRestart(t *testing.T) {
 	dir := fixtureDir(t)
 	vaultParent := fixtureDir(t)

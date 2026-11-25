@@ -130,7 +130,7 @@ export function HyperliquidTerminal() {
         <div className="row-actions">
           <Badge>
             {t(
-              active?.activationEnabled
+              active?.liveExecution || active?.activationEnabled
                 ? "Execution active"
                 : "Execution disabled",
             )}
@@ -235,6 +235,7 @@ export function HyperliquidTerminal() {
                       <th>{t("Symbol")}</th>
                       <th>{t("Size")}</th>
                       <th>{t("Entry price")}</th>
+                      <th>{t("Liquidation price")}</th>
                       <th>{t("Position value")}</th>
                       <th>{t("PnL")}</th>
                       <th>{t("Leverage")}</th>
@@ -246,6 +247,11 @@ export function HyperliquidTerminal() {
                         <td>{pos.symbol}</td>
                         <td className="mono">{pos.size}</td>
                         <td className="mono">${pos.entryPrice}</td>
+                        <td className="mono">
+                          {pos.liquidationPrice
+                            ? `$${pos.liquidationPrice}`
+                            : "—"}
+                        </td>
                         <td className="mono">${pos.positionValue}</td>
                         <td className="mono">${pos.unrealizedPnl}</td>
                         <td>
@@ -284,13 +290,24 @@ export function HyperliquidTerminal() {
                         <td>{ord.asset}</td>
                         <td>{t(ord.isBuy ? "Long" : "Short")}</td>
                         <td className="mono">${ord.limitPrice}</td>
-                        <td className="mono">{ord.size}</td>
+                        <td className="mono">
+                          {ord.size}
+                          {(ord.filledSize || ord.avgPrice) && (
+                            <div className="muted">
+                              {t("Filled")}: {ord.filledSize || "0"}
+                              {ord.avgPrice ? ` @ $${ord.avgPrice}` : ""}
+                            </div>
+                          )}
+                        </td>
                         <td>{ord.leverage}x</td>
                         <td className="mono">
                           {shortenHex(ord.typedDataDigest)}
                         </td>
                         <td>
                           <Badge>{t(hyperliquidOrderState(ord.state))}</Badge>
+                          {ord.message && (
+                            <div className="muted">{ord.message}</div>
+                          )}
                         </td>
                         <td>
                           <div className="row-actions">
@@ -314,7 +331,9 @@ export function HyperliquidTerminal() {
                             )}
                             {ord.orderId > 0 &&
                               ord.state !== "cancelled" &&
-                              ord.state !== "canceled" && (
+                              ord.state !== "canceled" &&
+                              ord.state !== "filled" &&
+                              ord.state !== "rejected" && (
                                 <button
                                   type="button"
                                   className="text-button"

@@ -6681,4 +6681,10 @@ export const pageCopy = {
     "주식 모의 주문",
   ],
   Strike: ["Страйк", "Strike", "行权价", "행사가"],
+  "Liquidation price": [
+    "Цена ликвидации",
+    "Precio de liquidación",
+    "强平价格",
+    "청산 가격",
+  ],
 } satisfies Record<string, [string, string, string, string]>;

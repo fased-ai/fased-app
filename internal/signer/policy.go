@@ -615,7 +615,7 @@ func (l *ledger) append(v *Vault, r journalRecord) error {
 }
 
 func (l *ledger) allowStage4PolicyReplay() bool {
-	return l != nil && (l.ref.Version == 1 || (l.ref.Version == 3 && l.ref.Network == "devnet"))
+	return l != nil && (l.ref.Version == 1 || (l.ref.Version == 3 && (l.ref.Network == "devnet" || l.ref.Network == "mainnet" || l.ref.Network == "mainnet-beta")))
 }
 
 func (v *Vault) openLedger() error {
