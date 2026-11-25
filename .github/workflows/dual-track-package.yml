@@ -237,11 +237,11 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "24"
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: fased-cli-archives
           path: .evidence/dual-track-cli
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: fased-desktop-${{ matrix.os }}
           path: .evidence
@@ -275,19 +275,19 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "24"
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: fased-cli-archives
           path: .evidence/dual-track-cli
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: fased-desktop-ubuntu-24.04
           path: .evidence/desktop-artifacts/ubuntu-24.04
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: fased-desktop-macos-15
           path: .evidence/desktop-artifacts/macos-15
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: fased-desktop-windows-2025
           path: .evidence/desktop-artifacts/windows-2025
@@ -312,7 +312,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: fased-dual-track-release
           path: .evidence/dual-track-release

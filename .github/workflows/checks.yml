@@ -212,7 +212,7 @@ jobs:
         with:
           go-version: "1.26.x"
           cache: true
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: ci-built-binaries
           path: .
@@ -273,7 +273,7 @@ jobs:
         with:
           go-version: "1.26.x"
           cache: true
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: ci-built-binaries
           path: .
@@ -313,7 +313,7 @@ jobs:
           go-version: "1.26.x"
           cache: true
       - run: npm ci
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: ci-built-binaries
           path: .
@@ -372,7 +372,7 @@ jobs:
         with:
           go-version: "1.26.x"
           cache: true
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: ci-built-binaries
           path: .
@@ -548,7 +548,7 @@ jobs:
         with:
           go-version: "1.26.x"
           cache: true
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: ci-built-binaries
           path: .
