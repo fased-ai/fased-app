@@ -182,3 +182,77 @@ func TestCEXServiceLifecycleEncryptionAndSSRF(t *testing.T) {
 		t.Fatalf("expected testnet binance URL to pass: %v", err)
 	}
 }
+
+func TestCEXMainnetCappedPolicyAndCeiling(t *testing.T) {
+	svc, err := NewService(Config{DataDir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("NewService failed: %v", err)
+	}
+	defer svc.Close()
+
+	// Default keeps mainnet locked and CappedMode off.
+	st, err := svc.Status(context.Background())
+	if err != nil || !st.MainnetLocked || st.CappedMode {
+		t.Fatalf("expected default locked status, got %+v err=%v", st, err)
+	}
+	if err := svc.ConfigureMainnetCapped(0); err == nil {
+		t.Fatal("expected 0 max order to fail")
+	}
+	if err := svc.ConfigureMainnetCapped(250_000_001); err == nil {
+		t.Fatal("expected >$250 max order to fail")
+	}
+	if err := svc.ConfigureMainnetCapped(50_000_000); err != nil {
+		t.Fatalf("ConfigureMainnetCapped($50) failed: %v", err)
+	}
+	st, err = svc.Status(context.Background())
+	if err != nil || st.MainnetLocked || !st.CappedMode || st.MaxOrderMicroUSD != 50_000_000 {
+		t.Fatalf("unexpected capped status: %+v err=%v", st, err)
+	}
+
+	// Withdrawal permissions still rejected under mainnet-capped.
+	if _, err := svc.SaveCredential(context.Background(), CredentialInput{
+		Venue:       VenueBinance,
+		Environment: "mainnet",
+		APIKey:      "key-123456",
+		APISecret:   "secret-12345678",
+		Permissions: []string{"SPOT_TRADE", "WITHDRAW"},
+	}); !errors.Is(err, ErrWithdrawalScopeDenied) {
+		t.Fatalf("expected ErrWithdrawalScopeDenied, got %v", err)
+	}
+
+	// Valid trade-only mainnet credential succeeds.
+	if _, err := svc.SaveCredential(context.Background(), CredentialInput{
+		Venue:       VenueBinance,
+		Environment: "mainnet",
+		APIKey:      "key-123456",
+		APISecret:   "secret-12345678",
+		Permissions: []string{"SPOT_TRADE"},
+	}); err != nil {
+		t.Fatalf("SaveCredential mainnet trade-only failed: %v", err)
+	}
+
+	// Over $50 order rejected; <= $50 LIMIT order accepted.
+	if _, err := svc.SubmitOrder(context.Background(), OrderRequest{
+		Venue:       VenueBinance,
+		Symbol:      "BTCUSDT",
+		Side:        "BUY",
+		OrderType:   "LIMIT",
+		Quantity:    0.002,
+		Price:       60000, // $120 > $50 cap
+		Environment: "mainnet",
+	}); err == nil {
+		t.Fatal("expected >$50 CEX mainnet order to fail")
+	}
+	rec, err := svc.SubmitOrder(context.Background(), OrderRequest{
+		Venue:       VenueBinance,
+		Symbol:      "BTCUSDT",
+		Side:        "BUY",
+		OrderType:   "LIMIT",
+		Quantity:    0.0005,
+		Price:       60000, // $30 <= $50 cap
+		Environment: "mainnet",
+	})
+	if err != nil || rec.Status != "mainnet_capped_signed" {
+		t.Fatalf("expected mainnet_capped_signed, got %+v err=%v", rec, err)
+	}
+}

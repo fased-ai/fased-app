@@ -228,20 +228,46 @@ func run(args []string, in *os.File, out, errOut io.Writer) error {
 	host := flags.String("host", "", "setup deployment preference: local or vps")
 	wallet := flags.String("wallet-mode", "", "setup wallet preference: skip, watch, external, automation")
 	provider := flags.String("provider", "", "setup AI preference: none, openai, anthropic, xai")
-	executionProfile := flags.String("execution-profile", signer.ExecutionProfileOff, "Stage 4 non-WEN execution profile: off or testnet")
-	agentVaultID := flags.String("agent-vault-id", "", "optional typed AgentVault ID for Stage 4 testnet execution")
+	executionProfile := flags.String("execution-profile", signer.ExecutionProfileOff, "Stage 4 non-WEN execution profile: off, testnet, or mainnet-capped")
+	agentVaultID := flags.String("agent-vault-id", "", "optional typed AgentVault ID for Stage 4 testnet or mainnet-capped execution")
 	solanaDevnetRPC := flags.String("solana-devnet-rpc", "", "optional HTTPS Solana Devnet JSON-RPC endpoint for Stage 4 rehearsal")
+	confirmMainnetCapped := flags.Bool("confirm-mainnet-capped", false, "explicit owner confirmation required for --execution-profile=mainnet-capped")
+	mainnetMaxOrderMicroUSD := flags.Uint64("mainnet-max-order-micro-usd", 0, "per-order ceiling in micro-USD (<= 250000000 = $250) for mainnet-capped")
+	mainnetMaxDailyMicroUSD := flags.Uint64("mainnet-max-daily-micro-usd", 0, "daily spend ceiling in micro-USD (<= 1000000000 = $1000) for mainnet-capped")
 	if err = flags.Parse(args[1:]); err != nil {
 		return err
 	}
-	if *executionProfile != signer.ExecutionProfileOff && *executionProfile != signer.ExecutionProfileTestnet {
-		return errors.New("execution profile must be off or testnet")
+	if *executionProfile != signer.ExecutionProfileOff && *executionProfile != signer.ExecutionProfileTestnet && *executionProfile != signer.ExecutionProfileMainnetCapped {
+		return errors.New("execution profile must be off, testnet, or mainnet-capped")
 	}
-	if (*agentVaultID != "" || *solanaDevnetRPC != "") && *executionProfile != signer.ExecutionProfileTestnet {
-		return errors.New("--agent-vault-id and --solana-devnet-rpc require --execution-profile=testnet")
+	if *executionProfile != signer.ExecutionProfileMainnetCapped && (*confirmMainnetCapped || *mainnetMaxOrderMicroUSD != 0 || *mainnetMaxDailyMicroUSD != 0) {
+		return errors.New("--confirm-mainnet-capped and --mainnet-max-*-micro-usd require --execution-profile=mainnet-capped")
+	}
+	if *agentVaultID != "" && *executionProfile == signer.ExecutionProfileOff {
+		return errors.New("--agent-vault-id requires --execution-profile=testnet or mainnet-capped")
+	}
+	if *solanaDevnetRPC != "" && *executionProfile != signer.ExecutionProfileTestnet {
+		return errors.New("--solana-devnet-rpc requires --execution-profile=testnet")
 	}
 	if *executionProfile == signer.ExecutionProfileTestnet && (args[0] != "serve" || *custodyConfig == "" || *sessionFixture || *aiFixture) {
 		return errors.New("--execution-profile=testnet requires serve with --custody-config and no development fixture modes")
+	}
+	var mainnetPolicy signer.MainnetCappedPolicy
+	if *executionProfile == signer.ExecutionProfileMainnetCapped {
+		if args[0] != "serve" || *custodyConfig == "" || *sessionFixture || *aiFixture {
+			return errors.New("--execution-profile=mainnet-capped requires serve with --custody-config and no development fixture modes")
+		}
+		if *agentVaultID == "" {
+			return errors.New("--execution-profile=mainnet-capped requires --agent-vault-id")
+		}
+		mainnetPolicy = signer.MainnetCappedPolicy{
+			Confirmed:        *confirmMainnetCapped,
+			MaxOrderMicroUSD: *mainnetMaxOrderMicroUSD,
+			MaxDailyMicroUSD: *mainnetMaxDailyMicroUSD,
+		}
+		if err = mainnetPolicy.Validate(); err != nil {
+			return err
+		}
 	}
 	if *instanceLocation != "local" && *instanceLocation != "remote" {
 		return errors.New("instance location must be local or remote")
@@ -336,6 +362,7 @@ func run(args []string, in *os.File, out, errOut io.Writer) error {
 		}
 		return serveInstalledRuntimeWithStage4(*installationRoot, *dir, *listen, *publicOrigin, *researchOrigin, *instanceLocation, *remoteTransport, source, ownerUID, installedProviderFixture, *requirePassword, out, core.TestnetExecutionConfig{
 			Profile:         *executionProfile,
+			MainnetPolicy:   mainnetPolicy,
 			AgentVaultID:    *agentVaultID,
 			SolanaDevnetRPC: *solanaDevnetRPC,
 		}, *custodyConfig)
@@ -565,13 +592,16 @@ func serveInstalledRuntimeWithStage4(installationRoot, dir, listen, publicOrigin
 		}
 	}
 
-	if err == nil && stage4Cfg.Profile == signer.ExecutionProfileTestnet {
+	if err == nil && (stage4Cfg.Profile == signer.ExecutionProfileTestnet || stage4Cfg.Profile == signer.ExecutionProfileMainnetCapped) {
 		if len(custodyConfig) != 1 || custodyConfig[0] == "" {
-			err = errors.New("stage 4 testnet execution requires custody config")
+			err = errors.New("stage 4 execution requires custody config")
 		} else {
 			var sCfg signer.Config
 			sCfg, err = signer.LoadConfig(custodyConfig[0])
-			if err == nil && (sCfg.Network == "mainnet" || sCfg.Network == "mainnet-beta") {
+			if err == nil && stage4Cfg.Profile == signer.ExecutionProfileTestnet && (sCfg.Network == "mainnet" || sCfg.Network == "mainnet-beta") {
+				err = signer.ErrUnavailable
+			}
+			if err == nil && stage4Cfg.Profile == signer.ExecutionProfileMainnetCapped && sCfg.Network == "devnet" {
 				err = signer.ErrUnavailable
 			}
 			if err == nil {

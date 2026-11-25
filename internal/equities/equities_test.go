@@ -110,3 +110,45 @@ func TestEquitiesServicePaperOrdersAndOptionsChain(t *testing.T) {
 		t.Fatalf("unexpected StatusView: %+v err=%v", st, err)
 	}
 }
+
+func TestEquitiesMainnetCappedPolicyAndCeiling(t *testing.T) {
+	svc, err := NewService(Config{DataDir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("NewService failed: %v", err)
+	}
+	defer svc.Close()
+
+	if err := svc.ConfigureMainnetCapped(250_000_001); err == nil {
+		t.Fatal("expected >$250 max order to fail")
+	}
+	if err := svc.ConfigureMainnetCapped(100_000_000); err != nil {
+		t.Fatalf("ConfigureMainnetCapped($100) failed: %v", err)
+	}
+	st, err := svc.Status(context.Background())
+	if err != nil || st.LiveLocked || !st.CappedMode || st.MaxOrderMicroUSD != 100_000_000 {
+		t.Fatalf("unexpected capped status: %+v err=%v", st, err)
+	}
+	if _, err := svc.SubmitOrder(context.Background(), OrderRequest{
+		Venue:       VenueAlpaca,
+		Symbol:      "SPY",
+		Side:        "BUY",
+		OrderType:   "LIMIT",
+		Quantity:    1,
+		LimitPrice:  590, // $590 > $100 cap
+		Environment: "live",
+	}); err == nil {
+		t.Fatal("expected over-cap live equity order to fail")
+	}
+	rec, err := svc.SubmitOrder(context.Background(), OrderRequest{
+		Venue:       VenueAlpaca,
+		Symbol:      "AAPL",
+		Side:        "BUY",
+		OrderType:   "LIMIT",
+		Quantity:    0.2,
+		LimitPrice:  250, // $50 <= $100 cap
+		Environment: "live",
+	})
+	if err != nil || rec.Status != "mainnet_capped_routed" {
+		t.Fatalf("expected mainnet_capped_routed, got %+v err=%v", rec, err)
+	}
+}

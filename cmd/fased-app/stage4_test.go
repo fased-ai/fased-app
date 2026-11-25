@@ -16,17 +16,32 @@ func TestServeStage4FlagsValidation(t *testing.T) {
 		{
 			name: "invalid profile",
 			args: []string{"serve", "--execution-profile", "mainnet"},
-			want: "execution profile must be off or testnet",
+			want: "execution profile must be off, testnet, or mainnet-capped",
 		},
 		{
-			name: "vault flag requires testnet profile",
+			name: "vault flag requires testnet or mainnet-capped profile",
 			args: []string{"serve", "--agent-vault-id", strings.Repeat("a", 32)},
-			want: "require --execution-profile=testnet",
+			want: "--agent-vault-id requires --execution-profile=testnet or mainnet-capped",
 		},
 		{
 			name: "rpc flag requires testnet profile",
 			args: []string{"serve", "--solana-devnet-rpc", "https://api.devnet.solana.com"},
-			want: "require --execution-profile=testnet",
+			want: "--solana-devnet-rpc requires --execution-profile=testnet",
+		},
+		{
+			name: "mainnet-capped requires agent-vault-id",
+			args: []string{"serve", "--execution-profile", "mainnet-capped", "--confirm-mainnet-capped", "--custody-config", "/tmp/id.json"},
+			want: "--execution-profile=mainnet-capped requires --agent-vault-id",
+		},
+		{
+			name: "mainnet-capped requires confirm-mainnet-capped",
+			args: []string{"serve", "--execution-profile", "mainnet-capped", "--agent-vault-id", strings.Repeat("a", 32), "--custody-config", "/tmp/id.json"},
+			want: "requires explicit owner confirmation",
+		},
+		{
+			name: "mainnet-capped enforces $250 order ceiling",
+			args: []string{"serve", "--execution-profile", "mainnet-capped", "--confirm-mainnet-capped", "--agent-vault-id", strings.Repeat("a", 32), "--mainnet-max-order-micro-usd", "300000000", "--custody-config", "/tmp/id.json"},
+			want: "250000000",
 		},
 		{
 			name: "testnet profile requires custody config",

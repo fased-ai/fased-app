@@ -178,6 +178,8 @@ type OrderReceipt struct {
 type StatusView struct {
 	ActivationEnabled bool           `json:"activationEnabled"`
 	LiveLocked        bool           `json:"liveLocked"`
+	CappedMode        bool           `json:"cappedMode,omitempty"`
+	MaxOrderMicroUSD  uint64         `json:"maxOrderMicroUsd,omitempty"`
 	AlpacaPaperOrigin string         `json:"alpacaPaperOrigin"`
 	IBKRLocalOrigin   string         `json:"ibkrLocalOrigin"`
 	RecentOrders      []OrderReceipt `json:"recentOrders"`
@@ -187,17 +189,21 @@ type StatusView struct {
 // ValidateVenueOrigin enforces compile-time live locks: Alpaca is restricted to Paper
 // endpoints and IBKR is restricted to loopback localhost Client Portal Gateway with DU* accounts.
 func ValidateVenueOrigin(venue, env, rawURL, accountID string) error {
+	return validateVenueOrigin(venue, env, rawURL, accountID, false)
+}
+
+func validateVenueOrigin(venue, env, rawURL, accountID string, allowLiveCapped bool) error {
 	v := strings.ToLower(strings.TrimSpace(venue))
 	e := strings.ToLower(strings.TrimSpace(env))
 	if e == "" {
 		e = "paper"
 	}
-	if e == "live" && !EquitiesActivationEnabled {
+	if e == "live" && !EquitiesActivationEnabled && !allowLiveCapped {
 		return ErrExecutionDisabled
 	}
 	switch v {
 	case VenueAlpaca:
-		if e != "paper" {
+		if e != "paper" && !(allowLiveCapped && e == "live") {
 			return ErrExecutionDisabled
 		}
 		if rawURL != "" {
@@ -212,10 +218,10 @@ func ValidateVenueOrigin(venue, env, rawURL, accountID string) error {
 		}
 		return nil
 	case VenueIBKR:
-		if e != "paper" {
+		if e != "paper" && !(allowLiveCapped && e == "live") {
 			return ErrExecutionDisabled
 		}
-		if acct := strings.ToUpper(strings.TrimSpace(accountID)); acct != "" && !ibkrPaperPattern.MatchString(acct) {
+		if acct := strings.ToUpper(strings.TrimSpace(accountID)); acct != "" && !allowLiveCapped && !ibkrPaperPattern.MatchString(acct) {
 			return errors.New("ibkr account must be a DU* paper account while EquitiesActivationEnabled is false")
 		}
 		if rawURL != "" {
@@ -238,6 +244,11 @@ func ValidateVenueOrigin(venue, env, rawURL, accountID string) error {
 
 // ValidateOrderRequest normalizes and validates an equity/OCC option order request.
 func ValidateOrderRequest(req *OrderRequest) (bool, error) {
+	return validateOrderRequest(req, 0)
+}
+
+func validateOrderRequest(req *OrderRequest, maxOrderMicroUSD uint64) (bool, error) {
+	allowLiveCapped := maxOrderMicroUSD > 0
 	if req == nil {
 		return false, errors.New("order request required")
 	}
@@ -247,7 +258,7 @@ func ValidateOrderRequest(req *OrderRequest) (bool, error) {
 		req.Environment = "paper"
 	}
 	req.AccountID = strings.ToUpper(strings.TrimSpace(req.AccountID))
-	if err := ValidateVenueOrigin(req.Venue, req.Environment, "", req.AccountID); err != nil {
+	if err := validateVenueOrigin(req.Venue, req.Environment, "", req.AccountID, allowLiveCapped); err != nil {
 		return false, err
 	}
 	symUpper := strings.ToUpper(strings.TrimSpace(req.Symbol))
@@ -286,6 +297,18 @@ func ValidateOrderRequest(req *OrderRequest) (bool, error) {
 	req.TimeInForce = strings.ToUpper(strings.TrimSpace(req.TimeInForce))
 	if req.TimeInForce == "" {
 		req.TimeInForce = "DAY"
+	}
+	if allowLiveCapped && req.Environment == "live" {
+		if req.OrderType != "LIMIT" || req.LimitPrice <= 0 {
+			return false, errors.New("mainnet-capped equities order requires LIMIT with positive limitPrice")
+		}
+		multiplier := 1.0
+		if isOption {
+			multiplier = 100.0
+		}
+		if req.Quantity*req.LimitPrice*multiplier*1_000_000 > float64(maxOrderMicroUSD) {
+			return false, errors.New("equities order notional exceeds mainnet-capped limit")
+		}
 	}
 	return isOption, nil
 }

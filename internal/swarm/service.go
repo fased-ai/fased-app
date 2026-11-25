@@ -8,8 +8,11 @@ import (
 	"encoding/hex"
 	"errors"
 	"strings"
+	"sync"
 	"time"
 )
+
+const hardMaxCappedOrderMicroUSD uint64 = 250_000_000
 
 // Config parameterizes the opt-in Stage 6 Fased Network Swarm service.
 type Config struct {
@@ -21,10 +24,29 @@ type Config struct {
 // Service manages opt-in Swarm configuration, Ed25519 peer registry,
 // replay-protected A2A ingestion, and bounded event pub/sub.
 type Service struct {
-	store       *store
-	bus         *Bus
-	fixtureMode bool
-	now         func() time.Time
+	store            *store
+	bus              *Bus
+	fixtureMode      bool
+	now              func() time.Time
+	mu               sync.RWMutex
+	cappedEnabled    bool
+	maxOrderMicroUSD uint64
+}
+
+// ConfigureMainnetCapped records opt-in small-cap ceiling metadata while keeping
+// SwarmLiveCopyEnabled strictly false and Untrusted=true on all A2A payloads.
+func (s *Service) ConfigureMainnetCapped(maxOrderMicroUSD uint64) error {
+	if s == nil {
+		return errors.New("swarm service closed")
+	}
+	if maxOrderMicroUSD == 0 || maxOrderMicroUSD > hardMaxCappedOrderMicroUSD {
+		return errors.New("swarm mainnet-capped max order must be between 1 and 250000000 micro-USD ($250)")
+	}
+	s.mu.Lock()
+	s.cappedEnabled = true
+	s.maxOrderMicroUSD = maxOrderMicroUSD
+	s.mu.Unlock()
+	return nil
 }
 
 // NewService opens <dataDir>/swarm/swarm.sqlite with Swarm disabled (opt-in) by default.
@@ -109,15 +131,20 @@ func (s *Service) Status(ctx context.Context) (StatusView, error) {
 	if err != nil {
 		return StatusView{}, err
 	}
+	s.mu.RLock()
+	capped, maxUSD := s.cappedEnabled, s.maxOrderMicroUSD
+	s.mu.RUnlock()
 	return StatusView{
-		Config:         cfg,
-		LiveCopyLocked: !SwarmLiveCopyEnabled,
-		WENHeld:        true,
-		PeerCount:      len(peers),
-		SignalCount:    len(signals),
-		Peers:          peers,
-		RecentSignals:  signals,
-		FixtureMode:    s.fixtureMode,
+		Config:           cfg,
+		LiveCopyLocked:   !SwarmLiveCopyEnabled,
+		CappedMode:       capped,
+		MaxOrderMicroUSD: maxUSD,
+		WENHeld:          true,
+		PeerCount:        len(peers),
+		SignalCount:      len(signals),
+		Peers:            peers,
+		RecentSignals:    signals,
+		FixtureMode:      s.fixtureMode,
 	}, nil
 }
 

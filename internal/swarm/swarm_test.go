@@ -121,3 +121,25 @@ func TestSwarmOptInReplaySkewAndLiveLock(t *testing.T) {
 		t.Fatal("timed out waiting for Swarm bus event")
 	}
 }
+
+func TestSwarmMainnetCappedKeepsLiveCopyLockedAndWENHeld(t *testing.T) {
+	svc, err := NewService(Config{DataDir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("NewService failed: %v", err)
+	}
+	defer svc.Close()
+
+	if err := svc.ConfigureMainnetCapped(250_000_001); err == nil {
+		t.Fatal("expected >$250 max order to fail")
+	}
+	if err := svc.ConfigureMainnetCapped(75_000_000); err != nil {
+		t.Fatalf("ConfigureMainnetCapped($75) failed: %v", err)
+	}
+	st, err := svc.Status(context.Background())
+	if err != nil {
+		t.Fatalf("Status failed: %v", err)
+	}
+	if !st.LiveCopyLocked || !st.WENHeld || !st.CappedMode || st.MaxOrderMicroUSD != 75_000_000 {
+		t.Fatalf("unexpected swarm capped status: %+v", st)
+	}
+}

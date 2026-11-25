@@ -7,8 +7,11 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 )
+
+const hardMaxCappedOrderMicroUSD uint64 = 250_000_000
 
 // Config parameterizes the Stage 5 CEX execution service.
 type Config struct {
@@ -20,10 +23,35 @@ type Config struct {
 // Service coordinates trade-only CEX credential sealing, permission checks,
 // multi-venue signing, and compile-time locked paper/testnet order routing.
 type Service struct {
-	store       *store
-	client      *Client
-	fixtureMode bool
-	now         func() time.Time
+	store            *store
+	client           *Client
+	fixtureMode      bool
+	now              func() time.Time
+	mu               sync.RWMutex
+	cappedEnabled    bool
+	maxOrderMicroUSD uint64
+}
+
+// ConfigureMainnetCapped unlocks opt-in small-cap Mainnet CEX routing within hard
+// $250/order and mandatory trade-only permission guarantees.
+func (s *Service) ConfigureMainnetCapped(maxOrderMicroUSD uint64) error {
+	if s == nil {
+		return errors.New("cex service closed")
+	}
+	if maxOrderMicroUSD == 0 || maxOrderMicroUSD > hardMaxCappedOrderMicroUSD {
+		return errors.New("cex mainnet-capped max order must be between 1 and 250000000 micro-USD ($250)")
+	}
+	s.mu.Lock()
+	s.cappedEnabled = true
+	s.maxOrderMicroUSD = maxOrderMicroUSD
+	s.mu.Unlock()
+	return nil
+}
+
+func (s *Service) cappedPolicy() (bool, uint64) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.cappedEnabled, s.maxOrderMicroUSD
 }
 
 // NewService opens <dataDir>/cex/cex.sqlite and initializes an SSRF-safe CEX router.
@@ -65,9 +93,12 @@ func (s *Service) Status(ctx context.Context) (StatusView, error) {
 	if err != nil {
 		return StatusView{}, err
 	}
+	capped, maxUSD := s.cappedPolicy()
 	return StatusView{
 		ActivationEnabled: CEXActivationEnabled,
-		MainnetLocked:     !CEXActivationEnabled,
+		MainnetLocked:     !CEXActivationEnabled && !capped,
+		CappedMode:        capped,
+		MaxOrderMicroUSD:  maxUSD,
 		SupportedVenues:   SupportedVenues(),
 		Credentials:       creds,
 		RecentOrders:      orders,
@@ -81,7 +112,8 @@ func (s *Service) SaveCredential(ctx context.Context, in CredentialInput) (Crede
 	if s == nil || s.store == nil {
 		return CredentialStatus{}, errors.New("cex service closed")
 	}
-	if err := ValidateCredentialInput(&in); err != nil {
+	capped, _ := s.cappedPolicy()
+	if err := validateCredentialInput(&in, capped); err != nil {
 		return CredentialStatus{}, err
 	}
 	defer func() {
@@ -111,7 +143,8 @@ func (s *Service) SubmitOrder(ctx context.Context, req OrderRequest) (OrderRecei
 	if s == nil || s.store == nil {
 		return OrderReceipt{}, errors.New("cex service closed")
 	}
-	if err := ValidateOrderRequest(&req); err != nil {
+	_, maxUSD := s.cappedPolicy()
+	if err := validateOrderRequest(&req, maxUSD); err != nil {
 		return OrderReceipt{}, err
 	}
 
@@ -149,7 +182,10 @@ func (s *Service) SubmitOrder(ctx context.Context, req OrderRequest) (OrderRecei
 
 	status := "paper_simulated"
 	msg := fmt.Sprintf("%s %s %.6g %s recorded in paper mode (mainnet locked)", req.Venue, req.Side, req.Quantity, req.Symbol)
-	if !req.SimulateOnly && req.Environment != "paper" && secret != "" {
+	if req.Environment == "mainnet" && maxUSD > 0 {
+		status = "mainnet_capped_signed"
+		msg = fmt.Sprintf("%s %s %.6g %s signed under mainnet-capped ($%g cap)", req.Venue, req.Side, req.Quantity, req.Symbol, float64(maxUSD)/1_000_000)
+	} else if !req.SimulateOnly && req.Environment != "paper" && secret != "" {
 		status = "testnet_signed_dryrun"
 		msg = fmt.Sprintf("%s %s %.6g %s signed for %s sandbox (live mainnet locked)", req.Venue, req.Side, req.Quantity, req.Symbol, req.Environment)
 	}

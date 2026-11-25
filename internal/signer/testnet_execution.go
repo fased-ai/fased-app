@@ -166,7 +166,7 @@ func isStage4TestnetAction(action string) bool {
 	switch action {
 	case "hyperliquid-status", "hyperliquid-policy", "hyperliquid-sign-leverage", "hyperliquid-sign-order", "hyperliquid-sign-cancel",
 		"agent-vault-set", "agent-vault-revoke", "agent-vault-list", "agent-vault-record-loss",
-		"solana-devnet-sign",
+		"solana-devnet-sign", "solana-mainnet-capped-sign",
 		"polymarket-status", "polymarket-sign-order",
 		"kalshi-status", "kalshi-generate-key", "kalshi-provision-key", "kalshi-sign-request",
 		"lighter-status", "lighter-sign-order", "lighter-sign-cancel", "lighter-sign-leverage":

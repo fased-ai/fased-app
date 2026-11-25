@@ -115,15 +115,32 @@ func run(args []string, input *os.File, out, errOut io.Writer) error {
 	guardSource := flags.String("guard-source-sha256", "", "fixed replacement source digest")
 	guardStage := flags.String("guard-stage", "", "pair verification before or after replacement")
 	windowInstance := flags.String("window-instance", "", "exact enrolled instance for the isolated owner window")
-	executionProfile := flags.String("execution-profile", signer.ExecutionProfileOff, "Stage 4 non-WEN execution profile: off or testnet")
+	executionProfile := flags.String("execution-profile", signer.ExecutionProfileOff, "Stage 4 non-WEN execution profile: off, testnet, or mainnet-capped")
+	confirmMainnetCapped := flags.Bool("confirm-mainnet-capped", false, "explicit owner confirmation required for --execution-profile=mainnet-capped")
+	mainnetMaxOrderMicroUSD := flags.Uint64("mainnet-max-order-micro-usd", 0, "per-order ceiling in micro-USD (<= 250000000 = $250) for mainnet-capped")
+	mainnetMaxDailyMicroUSD := flags.Uint64("mainnet-max-daily-micro-usd", 0, "daily spend ceiling in micro-USD (<= 1000000000 = $1000) for mainnet-capped")
 	if err := flags.Parse(args[1:]); err != nil {
 		return err
 	}
-	if *executionProfile != signer.ExecutionProfileOff && *executionProfile != signer.ExecutionProfileTestnet {
-		return errors.New("execution profile must be off or testnet")
+	if *executionProfile != signer.ExecutionProfileOff && *executionProfile != signer.ExecutionProfileTestnet && *executionProfile != signer.ExecutionProfileMainnetCapped {
+		return errors.New("execution profile must be off, testnet, or mainnet-capped")
 	}
-	if *executionProfile == signer.ExecutionProfileTestnet && args[0] != "serve" {
+	if *executionProfile != signer.ExecutionProfileMainnetCapped && (*confirmMainnetCapped || *mainnetMaxOrderMicroUSD != 0 || *mainnetMaxDailyMicroUSD != 0) {
+		return errors.New("--confirm-mainnet-capped and --mainnet-max-*-micro-usd require --execution-profile=mainnet-capped")
+	}
+	if *executionProfile != signer.ExecutionProfileOff && args[0] != "serve" {
 		return errors.New("execution profile applies only to serve")
+	}
+	var mainnetPolicy signer.MainnetCappedPolicy
+	if *executionProfile == signer.ExecutionProfileMainnetCapped {
+		mainnetPolicy = signer.MainnetCappedPolicy{
+			Confirmed:        *confirmMainnetCapped,
+			MaxOrderMicroUSD: *mainnetMaxOrderMicroUSD,
+			MaxDailyMicroUSD: *mainnetMaxDailyMicroUSD,
+		}
+		if err := mainnetPolicy.Validate(); err != nil {
+			return err
+		}
 	}
 	if flags.NArg() != 0 || (*fixture == *ordinary) || *configPath == "" {
 		return errors.New("select one custody mode and an identity configuration")
@@ -166,6 +183,9 @@ func run(args []string, input *os.File, out, errOut io.Writer) error {
 		return signer.ErrUnavailable
 	}
 	if *executionProfile == signer.ExecutionProfileTestnet && (c.Version == 2 || c.Network == "mainnet-beta" || c.Network == "mainnet" || (c.Version == 3 && c.Network != "devnet")) {
+		return signer.ErrUnavailable
+	}
+	if *executionProfile == signer.ExecutionProfileMainnetCapped && (c.Version == 2 || c.Network == "devnet" || (c.Version == 3 && c.Network != "mainnet" && c.Network != "mainnet-beta")) {
 		return signer.ErrUnavailable
 	}
 	if args[0] == "ordinary-reader-handoff" {
@@ -228,18 +248,26 @@ func run(args []string, input *os.File, out, errOut io.Writer) error {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 	if args[0] == "serve" {
-		serve := signer.Serve
-		if *fixture && c.Version == 3 && compiledFixtureServe != nil {
-			serve = compiledFixtureServe
-		} else if *executionProfile == signer.ExecutionProfileTestnet {
-			serve = signer.ServeTestnetExecution
+		var server *signer.Server
+		var err error
+		if *executionProfile == signer.ExecutionProfileMainnetCapped && !(*fixture && c.Version == 3 && compiledFixtureServe != nil) {
+			server, err = signer.ServeMainnetCappedExecution(ctx, c, mainnetPolicy)
+		} else {
+			serve := signer.Serve
+			if *fixture && c.Version == 3 && compiledFixtureServe != nil {
+				serve = compiledFixtureServe
+			} else if *executionProfile == signer.ExecutionProfileTestnet {
+				serve = signer.ServeTestnetExecution
+			}
+			server, err = serve(ctx, c)
 		}
-		server, err := serve(ctx, c)
 		if err != nil {
 			return err
 		}
 		defer server.Close()
-		if *executionProfile == signer.ExecutionProfileTestnet {
+		if *executionProfile == signer.ExecutionProfileMainnetCapped {
+			fmt.Fprintf(out, "Mainnet-capped signer ready; pid=%d uid=%d; small-cap policy-gated non-WEN signing enabled.\n", os.Getpid(), os.Geteuid())
+		} else if *executionProfile == signer.ExecutionProfileTestnet {
 			fmt.Fprintf(out, "Testnet signer ready; pid=%d uid=%d; devnet and testnet policy-gated signing enabled.\n", os.Getpid(), os.Geteuid())
 		} else if *ordinary {
 			fmt.Fprintf(out, "Protected signer ready; pid=%d uid=%d.\n", os.Getpid(), os.Geteuid())

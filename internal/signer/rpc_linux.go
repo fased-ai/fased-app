@@ -283,6 +283,48 @@ func ServeControlledHyperliquid(ctx context.Context, c Config) (*Server, error) 
 	return serveListeners(ctx, c, v)
 }
 
+// ServeMainnetCappedExecution starts an OS-isolated signer server with owner-confirmed
+// small-cap non-WEN Mainnet signing enabled under hard per-order/daily ceilings and
+// Typed Agent Vault limits. Devnet and Version-2 managed vaults remain rejected.
+func ServeMainnetCappedExecution(ctx context.Context, c Config, policy MainnetCappedPolicy) (*Server, error) {
+	if err := policy.Validate(); err != nil {
+		return nil, err
+	}
+	var network string
+	switch c.Version {
+	case 1:
+		if c.Network != "" {
+			return nil, ErrUnavailable
+		}
+	case 3:
+		if (c.Network != "mainnet" && c.Network != "mainnet-beta") || c.Mode != OrdinaryCustodyMode || c.Profile != OwnerCustodyProfile {
+			return nil, ErrUnavailable
+		}
+		if !OrdinaryOwnerAdmissionEnabled() && c.Provenance != ControlledCustodyProfile {
+			return nil, ErrUnavailable
+		}
+		namespace := ordinaryOwnerNamespace
+		if c.Provenance == ControlledCustodyProfile {
+			namespace = ordinaryOwnerTestNamespace
+		}
+		network = namespace + c.Network
+	default:
+		return nil, ErrUnavailable
+	}
+	if err := prepareControlledDaemon(c); err != nil {
+		return nil, err
+	}
+	v, err := openVaultNetwork(c.StateDir, c.SignerID, false, network)
+	if err != nil {
+		return nil, err
+	}
+	if err := v.ConfigureMainnetCappedExecution(policy); err != nil {
+		_ = v.Close()
+		return nil, err
+	}
+	return serveListeners(ctx, c, v)
+}
+
 // ServeTestnetExecution starts an OS-isolated signer server with Stage 4 non-WEN
 // Solana Devnet & Hyperliquid Testnet signing enabled under owner-persisted policy
 // and Typed Agent Vault caps. Version-2 managed vaults and Mainnet remain blocked.

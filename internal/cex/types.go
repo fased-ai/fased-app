@@ -173,6 +173,8 @@ type OrderReceipt struct {
 type StatusView struct {
 	ActivationEnabled bool               `json:"activationEnabled"`
 	MainnetLocked     bool               `json:"mainnetLocked"`
+	CappedMode        bool               `json:"cappedMode,omitempty"`
+	MaxOrderMicroUSD  uint64             `json:"maxOrderMicroUsd,omitempty"`
 	SupportedVenues   []VenueSpec        `json:"supportedVenues"`
 	Credentials       []CredentialStatus `json:"credentials"`
 	RecentOrders      []OrderReceipt     `json:"recentOrders"`
@@ -239,6 +241,10 @@ func VerifyTradeOnlyPermissions(venue string, perms []string) ([]string, error) 
 
 // ValidateCredentialInput validates inputs before sealing into cex.sqlite.
 func ValidateCredentialInput(in *CredentialInput) error {
+	return validateCredentialInput(in, false)
+}
+
+func validateCredentialInput(in *CredentialInput, allowMainnetCapped bool) error {
 	if in == nil {
 		return errors.New("credential input required")
 	}
@@ -257,10 +263,10 @@ func ValidateCredentialInput(in *CredentialInput) error {
 	if in.Environment == "" {
 		in.Environment = "testnet"
 	}
-	if in.Environment == "mainnet" && !CEXActivationEnabled {
+	if in.Environment == "mainnet" && !CEXActivationEnabled && !allowMainnetCapped {
 		return ErrExecutionDisabled
 	}
-	if in.Environment != "testnet" && in.Environment != "sandbox" && in.Environment != "paper" {
+	if in.Environment != "testnet" && in.Environment != "sandbox" && in.Environment != "paper" && !(allowMainnetCapped && in.Environment == "mainnet") {
 		return errors.New("cex environment must be testnet, sandbox, or paper")
 	}
 	in.APIKey = strings.TrimSpace(in.APIKey)
@@ -282,6 +288,11 @@ func ValidateCredentialInput(in *CredentialInput) error {
 
 // ValidateOrderRequest validates and normalizes a CEX order request.
 func ValidateOrderRequest(req *OrderRequest) error {
+	return validateOrderRequest(req, 0)
+}
+
+func validateOrderRequest(req *OrderRequest, maxOrderMicroUSD uint64) error {
+	allowMainnetCapped := maxOrderMicroUSD > 0
 	if req == nil {
 		return errors.New("order request required")
 	}
@@ -322,11 +333,19 @@ func ValidateOrderRequest(req *OrderRequest) error {
 	if req.Environment == "" {
 		req.Environment = "paper"
 	}
-	if req.Environment == "mainnet" && !CEXActivationEnabled {
+	if req.Environment == "mainnet" && !CEXActivationEnabled && !allowMainnetCapped {
 		return ErrExecutionDisabled
 	}
-	if req.Environment != "paper" && req.Environment != "testnet" && req.Environment != "sandbox" {
+	if req.Environment != "paper" && req.Environment != "testnet" && req.Environment != "sandbox" && !(allowMainnetCapped && req.Environment == "mainnet") {
 		return errors.New("cex environment must be paper, testnet, or sandbox")
+	}
+	if allowMainnetCapped && req.Environment == "mainnet" {
+		if req.OrderType != "LIMIT" || req.Price <= 0 {
+			return errors.New("mainnet-capped cex order requires LIMIT with positive price")
+		}
+		if req.Quantity*req.Price*1_000_000 > float64(maxOrderMicroUSD) {
+			return errors.New("cex order notional exceeds mainnet-capped limit")
+		}
 	}
 	req.ClientOrderID = strings.TrimSpace(req.ClientOrderID)
 	if len(req.ClientOrderID) > 64 {

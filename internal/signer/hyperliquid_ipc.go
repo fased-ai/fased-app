@@ -141,6 +141,12 @@ func (v *Vault) allowStage4HyperliquidVaultLocked() bool {
 	if v.closed || v.ledger == nil {
 		return false
 	}
+	if v.mainnetCappedEnabled && v.mainnetCappedPolicy.Validate() == nil {
+		if v.network == "devnet" {
+			return false
+		}
+		return (v.network == "" || v.network == "mainnet" || v.network == "mainnet-beta") && (v.ledger.ref.Version == 1 || v.ledger.ref.Version == 3)
+	}
 	if v.network == "mainnet" || v.network == "mainnet-beta" {
 		return false
 	}
@@ -369,6 +375,14 @@ func (v *Vault) validateAgentVaultForVenueLocked(agentVaultID, venue, asset stri
 	if leverage > 0 && leverage > p.MaxLeverage {
 		return errors.New("agent vault leverage limit exceeded")
 	}
+	if v.mainnetCappedEnabled {
+		if v.mainnetCappedPolicy.MaxOrderMicroUSD == 0 || p.MaxOrderMicroUSD > MainnetCappedHardMaxOrderMicroUSD || p.DailySpendMicroUSD > MainnetCappedHardMaxDailyMicroUSD || p.DailyLossMicroUSD == 0 {
+			return errors.New("agent vault exceeds mainnet-capped ceiling")
+		}
+		if notional > 0 && notional > v.mainnetCappedPolicy.MaxOrderMicroUSD {
+			return errors.New("mainnet-capped per-order spend limit exceeded")
+		}
+	}
 	if notional > 0 && notional > p.MaxOrderMicroUSD {
 		return errors.New("agent vault per-order spend limit exceeded")
 	}
@@ -383,7 +397,11 @@ func (v *Vault) validateAgentVaultForVenueLocked(agentVaultID, venue, asset stri
 		if loss >= p.DailyLossMicroUSD {
 			return errors.New("agent vault daily loss circuit breaker tripped")
 		}
-		if ^uint64(0)-spent < notional || spent+notional > p.DailySpendMicroUSD {
+		dailyCap := p.DailySpendMicroUSD
+		if v.mainnetCappedEnabled && v.mainnetCappedPolicy.MaxDailyMicroUSD > 0 && v.mainnetCappedPolicy.MaxDailyMicroUSD < dailyCap {
+			dailyCap = v.mainnetCappedPolicy.MaxDailyMicroUSD
+		}
+		if ^uint64(0)-spent < notional || spent+notional > dailyCap {
 			return errors.New("agent vault daily spend limit exceeded")
 		}
 	}
