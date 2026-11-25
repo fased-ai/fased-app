@@ -304,18 +304,29 @@
   cursor: pointer;
 }
 
-.trade-watchlist-pick {
+.wt button.trade-watchlist-pick {
   display: flex;
   flex-direction: column;
   align-items: flex-start;
   gap: 2px;
+  width: 100%;
+  height: auto;
+  min-height: 0;
   background: transparent;
   border: 0;
+  border-radius: 0;
   padding: 2px;
   color: var(--wt-text);
   cursor: pointer;
   text-align: left;
   min-width: 0;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+:root.wt button.trade-watchlist-pick:hover:not(:disabled) {
+  background: transparent;
+  border-color: transparent;
 }
 
 .trade-watchlist-pick strong {

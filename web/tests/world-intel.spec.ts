@@ -132,6 +132,32 @@ test("World Intel map, prediction arbitrage, chart event pins, Overview widgets,
         overflow,
         `[${theme}] ${hash} horizontal overflow on mobile=${isMobile}`,
       ).toBeLessThanOrEqual(0);
+      if (hash === "#intel") {
+        await expect(page.locator(".intel-card-title").first()).toBeVisible();
+        const wrapCheck = await page.evaluate(() => {
+          const list = document.querySelector(".intel-list");
+          const titles = Array.from(
+            document.querySelectorAll(".intel-card-title"),
+          ).map((el) => ({
+            text: (el.textContent || "").slice(0, 60),
+            whiteSpace: getComputedStyle(el).whiteSpace,
+            scrollWidth: el.scrollWidth,
+            clientWidth: el.clientWidth,
+          }));
+          return {
+            listOverflow: list ? list.scrollWidth - list.clientWidth : 0,
+            titles,
+          };
+        });
+        expect(wrapCheck.listOverflow).toBeLessThanOrEqual(1);
+        for (const t of wrapCheck.titles) {
+          expect(t.whiteSpace, `title wrap failed: ${t.text}`).toBe("normal");
+          expect(
+            t.scrollWidth,
+            `title overflow (${t.text}): ${t.scrollWidth} > ${t.clientWidth}`,
+          ).toBeLessThanOrEqual(t.clientWidth + 1);
+        }
+      }
     }
   }
 
