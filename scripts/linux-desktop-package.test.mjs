@@ -102,6 +102,7 @@ test("stageLinuxAppDir and stageLinuxDebTree create complete desktop bundles", a
     assert.equal(deb.debVer, "0.1.34~rc.1");
     assert.match(deb.control, /^Package: fased-app$/m);
     assert.match(deb.control, /^Architecture: amd64$/m);
+    assert.match(deb.control, /^Depends:.*libwebkit2gtk-4\.1-0.*bubblewrap/m);
     assert.equal(
       (await lstat(join(debRoot, "usr/bin/fased-app"))).isSymbolicLink(),
       true,

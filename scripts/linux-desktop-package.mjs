@@ -137,6 +137,7 @@ export async function stageLinuxDebTree({
     "Section: utils",
     "Priority: optional",
     `Architecture: ${debArch}`,
+    "Depends: libwebkit2gtk-4.1-0 | libwebkit2gtk-4.0-37, libgtk-3-0t64 | libgtk-3-0, bubblewrap, xdg-utils, ca-certificates",
     "Maintainer: Fased AI <maintainers@fased.ai>",
     "Description: Self-hosted personal and financial AI agent",
     " Shared Fased Go core, isolated signer, and native desktop wrapper.",

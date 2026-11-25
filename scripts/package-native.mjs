@@ -46,7 +46,7 @@ if (process.platform === "linux") {
   execFileSync(
     "go",
     ["build", "-trimpath", "-o", signer, "./cmd/fased-signer"],
-    { stdio: "inherit" },
+    { stdio: "inherit", env: { ...process.env, CGO_ENABLED: "0" } },
   );
 }
 execFileSync(

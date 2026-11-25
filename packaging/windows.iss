@@ -8,7 +8,7 @@
 #define IconFile GetEnv("FASED_PACKAGE_ICON")
 [Setup]
 AppId=org.fased.app
-AppName=Fased App Engineering
+AppName=Fased App
 AppVersion={#AppVersion}
 #if IconFile != ""
 SetupIconFile={#IconFile}
@@ -21,7 +21,7 @@ OutputBaseFilename=fased-app-windows-setup-unsigned
 Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern
-UninstallDisplayName=Fased App Engineering (keeps workspace data)
+UninstallDisplayName=Fased App (keeps workspace data)
 [Files]
 Source: "{#Payload}\*"; DestDir: "{app}\bundle"; Flags: ignoreversion
 [Icons]
@@ -56,7 +56,7 @@ begin
   begin
     CoreInstallAttempted := True;
     Code := 0;
-    CoreInstallConfirmed := Exec(ExpandConstant('{app}\bundle\fased-app.exe'), 'install --bundle "' + ExpandConstant('{app}\bundle') + '"', '', SW_HIDE, ewWaitUntilTerminated, Code);
+    CoreInstallConfirmed := Exec(ExpandConstant('{app}\bundle\fased-app.exe'), 'install --upgrade --bundle "' + ExpandConstant('{app}\bundle') + '"', '', SW_HIDE, ewWaitUntilTerminated, Code);
     if CoreInstallConfirmed then CoreInstallConfirmed := Code = 0;
     if not CoreInstallConfirmed then
     begin

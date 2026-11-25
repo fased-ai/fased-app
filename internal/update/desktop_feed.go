@@ -25,15 +25,23 @@ type DesktopAsset struct {
 	Kind   string `json:"kind"`
 }
 
+// PlatformSigningStatus tracks per-OS code signing, notarization, and provenance attestation.
+type PlatformSigningStatus struct {
+	Signed    bool `json:"signed"`
+	Notarized bool `json:"notarized,omitempty"`
+	Attested  bool `json:"attested,omitempty"`
+}
+
 // DesktopManifest binds the companion desktop and multi-OS CLI release inventory
 // to an exact semver product version and immutable release tag.
 type DesktopManifest struct {
-	SchemaVersion int                     `json:"schemaVersion"`
-	Version       string                  `json:"version"`
-	ReleaseTag    string                  `json:"releaseTag"`
-	Source        string                  `json:"source"`
-	Signed        bool                    `json:"signed"`
-	Assets        map[string]DesktopAsset `json:"assets"`
+	SchemaVersion     int                              `json:"schemaVersion"`
+	Version           string                           `json:"version"`
+	ReleaseTag        string                           `json:"releaseTag"`
+	Source            string                           `json:"source"`
+	Signed            bool                             `json:"signed"`
+	SigningByPlatform map[string]PlatformSigningStatus `json:"signingByPlatform,omitempty"`
+	Assets            map[string]DesktopAsset          `json:"assets"`
 }
 
 type semverTriplet struct {
