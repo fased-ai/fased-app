@@ -164,6 +164,172 @@ func ValidateDevnetMessage(messageBytes []byte, expectedFeePayer [32]byte) error
 	return nil
 }
 
+// ValidateSolanaMainnetMessage parses a legacy or v0/ALT Solana transaction message,
+// verifying single writable fee-payer signer == expectedFeePayer, non-zero blockhash,
+// strict non-WEN program allowlisting, System::Transfer-only safety, Jupiter RouteV2
+// discriminators, bounded Address Table Lookups, and zero trailing bytes.
+func ValidateSolanaMainnetMessage(messageBytes []byte, expectedFeePayer [32]byte) error {
+	if len(messageBytes) < 3+1+64+32+1 || len(messageBytes)+65 > 1232 {
+		return errors.New("solana mainnet message length out of bounds")
+	}
+	pos := 0
+	versioned := false
+	if (messageBytes[0] & 0x80) != 0 {
+		if messageBytes[0] != 0x80 {
+			return errors.New("unsupported Solana transaction message version")
+		}
+		versioned = true
+		pos = 1
+	}
+	if pos+3 > len(messageBytes) {
+		return errors.New("truncated mainnet message header")
+	}
+	numReq := int(messageBytes[pos])
+	numROSigned := int(messageBytes[pos+1])
+	numROUnsigned := int(messageBytes[pos+2])
+	pos += 3
+	if numReq != 1 || numROSigned != 0 {
+		return errors.New("mainnet message must require exactly one writable fee-payer signer")
+	}
+
+	accountCount, n, err := decodeShort(messageBytes[pos:])
+	if err != nil {
+		return err
+	}
+	pos += n
+	if accountCount < 2 || accountCount > 48 || numROUnsigned > accountCount-numReq {
+		return errors.New("mainnet message account header out of bounds")
+	}
+	if pos+accountCount*32+32+1 > len(messageBytes) {
+		return errors.New("truncated mainnet message accounts or blockhash")
+	}
+	accounts := make([][32]byte, accountCount)
+	for i := 0; i < accountCount; i++ {
+		copy(accounts[i][:], messageBytes[pos:pos+32])
+		pos += 32
+	}
+	if accounts[0] != expectedFeePayer {
+		return errors.New("mainnet message fee payer mismatch")
+	}
+
+	var zeroHash [32]byte
+	if bytes.Equal(messageBytes[pos:pos+32], zeroHash[:]) {
+		return errors.New("non-zero recent blockhash required")
+	}
+	pos += 32
+
+	ixCount, n, err := decodeShort(messageBytes[pos:])
+	if err != nil {
+		return err
+	}
+	pos += n
+	if ixCount < 1 || ixCount > 12 {
+		return errors.New("mainnet message instruction count out of bounds")
+	}
+
+	maxAcctIdx := 0
+	for i := 0; i < ixCount; i++ {
+		if pos >= len(messageBytes) {
+			return errors.New("truncated mainnet instruction")
+		}
+		progIdx := int(messageBytes[pos])
+		pos++
+		if progIdx < numReq || progIdx >= accountCount {
+			return errors.New("mainnet instruction program index invalid")
+		}
+		progID := Base58(accounts[progIdx][:])
+		if !AllowedDevnetProgramID(progID) {
+			return errors.New("program not permitted on mainnet-capped executor")
+		}
+		acctIdxCount, n, err := decodeShort(messageBytes[pos:])
+		if err != nil {
+			return err
+		}
+		pos += n
+		if acctIdxCount > 64 || pos+acctIdxCount > len(messageBytes) {
+			return errors.New("truncated mainnet instruction accounts")
+		}
+		acctIdxs := make([]int, acctIdxCount)
+		for j := 0; j < acctIdxCount; j++ {
+			idx := int(messageBytes[pos+j])
+			acctIdxs[j] = idx
+			if idx > maxAcctIdx {
+				maxAcctIdx = idx
+			}
+			if !versioned && idx >= accountCount {
+				return errors.New("mainnet legacy instruction account index out of range")
+			}
+		}
+		pos += acctIdxCount
+		dataLen, n, err := decodeShort(messageBytes[pos:])
+		if err != nil {
+			return err
+		}
+		pos += n
+		if dataLen > 1024 || pos+dataLen > len(messageBytes) {
+			return errors.New("truncated mainnet instruction data")
+		}
+		data := messageBytes[pos : pos+dataLen]
+		pos += dataLen
+
+		switch progID {
+		case System:
+			if len(data) != 12 || binary.LittleEndian.Uint32(data[0:4]) != 2 || len(acctIdxs) != 2 || acctIdxs[0] != 0 {
+				return errors.New("only System::Transfer authorized under mainnet-capped execution")
+			}
+		case Jupiter:
+			if len(data) < 38 || (!bytes.Equal(data[:8], routeV2[:]) && !bytes.Equal(data[:8], sharedRouteV2[:])) {
+				return errors.New("only Jupiter RouteV2 or SharedRouteV2 swaps permitted under mainnet-capped")
+			}
+		}
+	}
+
+	totalAccounts := accountCount
+	if versioned {
+		lookupCount, n, err := decodeShort(messageBytes[pos:])
+		if err != nil {
+			return err
+		}
+		pos += n
+		if lookupCount > 4 {
+			return errors.New("address lookup table count exceeds bound")
+		}
+		for i := 0; i < lookupCount; i++ {
+			if pos+32 >= len(messageBytes) {
+				return errors.New("truncated address lookup table key")
+			}
+			pos += 32
+			wCount, n, err := decodeShort(messageBytes[pos:])
+			if err != nil {
+				return err
+			}
+			pos += n
+			if wCount > 256 || pos+wCount > len(messageBytes) {
+				return errors.New("truncated address lookup writable indexes")
+			}
+			pos += wCount
+			rCount, n, err := decodeShort(messageBytes[pos:])
+			if err != nil {
+				return err
+			}
+			pos += n
+			if rCount > 256 || pos+rCount > len(messageBytes) {
+				return errors.New("truncated address lookup readonly indexes")
+			}
+			pos += rCount
+			totalAccounts += wCount + rCount
+		}
+		if totalAccounts > 255 || maxAcctIdx >= totalAccounts {
+			return errors.New("v0 instruction account index exceeds loaded table bounds")
+		}
+	}
+
+	if pos != len(messageBytes) {
+		return errors.New("unexpected trailing bytes in mainnet message")
+	}
+	return nil
+}
+
 // BuildDevnetComputeMemoMessage constructs a canonical legacy Solana transaction message
 // with SetComputeUnitLimit, SetComputeUnitPrice, and SPL Memo v2 instructions.
 func BuildDevnetComputeMemoMessage(feePayer [32]byte, recentBlockhash [32]byte, cuLimit uint32, cuPriceMicroLamports uint64, memo string) ([]byte, error) {
@@ -246,27 +412,38 @@ func AssembleSignedLegacyTransaction(sig [64]byte, messageBytes []byte) ([]byte,
 	return pkt, Base58(sig[:])
 }
 
-// DevnetExecutor talks strictly to a verified Solana Devnet JSON-RPC endpoint
-// (verified against SolanaDevnetGenesisHash) for opt-in Stage 4 testing.
+// DevnetExecutor talks strictly to a verified Solana JSON-RPC endpoint
+// (verified against expectedGenesis) for opt-in Stage 4 execution.
 type DevnetExecutor struct {
-	rpcURL        string
-	sanitizedHost string
-	http          *http.Client
-	seq           atomic.Uint64
+	rpcURL          string
+	sanitizedHost   string
+	expectedGenesis string
+	http            *http.Client
+	seq             atomic.Uint64
 }
 
-// NewDevnetExecutor constructs a Devnet JSON-RPC client. In production (rt == nil),
-// only HTTPS endpoints resolving to public unicast IPs are accepted.
+// NewDevnetExecutor constructs a Devnet JSON-RPC client pinned strictly to SolanaDevnetGenesisHash.
+// In production (rt == nil), only HTTPS endpoints resolving to public unicast IPs are accepted.
 func NewDevnetExecutor(rpcURL string, rt http.RoundTripper) (*DevnetExecutor, error) {
+	return newSolanaExecutor(rpcURL, SolanaDevnetGenesisHash, rt)
+}
+
+// NewMainnetExecutor constructs a Mainnet-Beta JSON-RPC client pinned strictly to SolanaMainnetGenesisHash.
+// In production (rt == nil), only HTTPS endpoints resolving to public unicast IPs are accepted.
+func NewMainnetExecutor(rpcURL string, rt http.RoundTripper) (*DevnetExecutor, error) {
+	return newSolanaExecutor(rpcURL, SolanaMainnetGenesisHash, rt)
+}
+
+func newSolanaExecutor(rpcURL, expectedGenesis string, rt http.RoundTripper) (*DevnetExecutor, error) {
 	u, err := url.Parse(rpcURL)
 	if err != nil || u.Hostname() == "" || u.User != nil || u.Fragment != "" || len(rpcURL) > 2048 {
-		return nil, errors.New("valid Solana Devnet RPC URL required")
+		return nil, errors.New("valid Solana RPC URL required")
 	}
 	if rt == nil && u.Scheme != "https" {
-		return nil, errors.New("Solana Devnet RPC requires HTTPS")
+		return nil, errors.New("Solana RPC requires HTTPS")
 	}
 	if rt != nil && u.Scheme != "https" && u.Scheme != "http" {
-		return nil, errors.New("invalid Solana Devnet RPC scheme")
+		return nil, errors.New("invalid Solana RPC scheme")
 	}
 	sanitizedHost := u.Scheme + "://" + u.Host
 	var clientHTTP *http.Client
@@ -274,7 +451,7 @@ func NewDevnetExecutor(rpcURL string, rt http.RoundTripper) (*DevnetExecutor, er
 		clientHTTP = &http.Client{
 			Transport:     rt,
 			Timeout:       10 * time.Second,
-			CheckRedirect: func(*http.Request, []*http.Request) error { return errors.New("devnet RPC redirects denied") },
+			CheckRedirect: func(*http.Request, []*http.Request) error { return errors.New("Solana RPC redirects denied") },
 		}
 	} else {
 		tr := &http.Transport{
@@ -297,13 +474,14 @@ func NewDevnetExecutor(rpcURL string, rt http.RoundTripper) (*DevnetExecutor, er
 		clientHTTP = &http.Client{
 			Transport:     tr,
 			Timeout:       10 * time.Second,
-			CheckRedirect: func(*http.Request, []*http.Request) error { return errors.New("devnet RPC redirects denied") },
+			CheckRedirect: func(*http.Request, []*http.Request) error { return errors.New("Solana RPC redirects denied") },
 		}
 	}
 	return &DevnetExecutor{
-		rpcURL:        rpcURL,
-		sanitizedHost: sanitizedHost,
-		http:          clientHTTP,
+		rpcURL:          rpcURL,
+		sanitizedHost:   sanitizedHost,
+		expectedGenesis: expectedGenesis,
+		http:            clientHTTP,
 	}, nil
 }
 
@@ -363,14 +541,18 @@ func (d *DevnetExecutor) rpcCall(ctx context.Context, method string, params any,
 	return nil
 }
 
-// VerifyGenesis refuses any RPC endpoint that does not match SolanaDevnetGenesisHash.
+// VerifyGenesis refuses any RPC endpoint that does not match the executor's expected genesis hash.
 func (d *DevnetExecutor) VerifyGenesis(ctx context.Context) error {
+	want := d.expectedGenesis
+	if want == "" {
+		want = SolanaDevnetGenesisHash
+	}
 	var genesis string
 	if err := d.rpcCall(ctx, "getGenesisHash", []any{}, &genesis); err != nil {
 		return err
 	}
-	if genesis != SolanaDevnetGenesisHash {
-		return errors.New("RPC endpoint is not Solana Devnet")
+	if genesis != want {
+		return errors.New("RPC endpoint genesis hash mismatch")
 	}
 	return nil
 }

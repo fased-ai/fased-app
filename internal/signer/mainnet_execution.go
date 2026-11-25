@@ -23,6 +23,15 @@ const (
 	MainnetCappedHardMaxDailyMicroUSD uint64 = 1_000_000_000
 )
 
+func init() {
+	hyperliquidMainnetCappedHook = func(v *Vault) (bool, uint64) {
+		if v == nil || !v.mainnetCappedEnabled {
+			return false, 0
+		}
+		return true, v.mainnetCappedPolicy.MaxOrderMicroUSD
+	}
+}
+
 // MainnetCappedPolicy defines hard owner-confirmed runtime ceilings for non-WEN
 // Stage 4/5 execution when --execution-profile=mainnet-capped is explicitly selected.
 type MainnetCappedPolicy struct {
@@ -134,7 +143,7 @@ func (v *Vault) SignSolanaMainnetCappedIPC(intent SolanaMainnetCappedSignIntent,
 	defer wipe(priv)
 	var feePayer [32]byte
 	copy(feePayer[:], priv[ed25519.SeedSize:])
-	if err := onchain.ValidateDevnetMessage(msgBytes, feePayer); err != nil {
+	if err := onchain.ValidateSolanaMainnetMessage(msgBytes, feePayer); err != nil {
 		return nil, err
 	}
 	dayUTC := nowTime.UTC().Format("2006-01-02")

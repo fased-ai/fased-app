@@ -30,6 +30,7 @@ type TestnetExecutionConfig struct {
 	SignerCall         func(context.Context, signer.Request) (signer.Response, error)
 	AgentVaultID       string
 	SolanaDevnetRPC    string
+	SolanaMainnetRPC   string
 	SolanaRoundTripper http.RoundTripper
 	HyperliquidClient  *hyperliquid.Client
 	PolymarketClient   *polymarket.Client
@@ -50,7 +51,10 @@ type ExecutionStatusView struct {
 	WENHeld                 bool   `json:"wenHeld"`
 	SolanaDevnetReady       bool   `json:"solanaDevnetReady"`
 	SolanaDevnetHost        string `json:"solanaDevnetHost,omitempty"`
+	SolanaMainnetReady      bool   `json:"solanaMainnetReady,omitempty"`
+	SolanaMainnetHost       string `json:"solanaMainnetHost,omitempty"`
 	HyperliquidTestnet      bool   `json:"hyperliquidTestnet"`
+	HyperliquidMainnet      bool   `json:"hyperliquidMainnet,omitempty"`
 	PolymarketTestnetReady  bool   `json:"polymarketTestnetReady"`
 	PolymarketSignerAddress string `json:"polymarketSignerAddress,omitempty"`
 	KalshiDemoReady         bool   `json:"kalshiDemoReady"`
@@ -103,6 +107,8 @@ type stage4Runtime struct {
 	agentVaultID      string
 	devnetExecutor    *onchain.DevnetExecutor
 	devnetHost        string
+	mainnetExecutor   *onchain.DevnetExecutor
+	mainnetHost       string
 	hyperliquidClient *hyperliquid.Client
 	polymarketClient  *polymarket.Client
 	kalshiClient      *kalshi.Client
@@ -125,6 +131,13 @@ func init() {
 	stage4LiveExecutionHook = func(s *Store) bool {
 		rt := s.stage4Runtime()
 		return rt != nil && (rt.profile == signer.ExecutionProfileTestnet || rt.profile == signer.ExecutionProfileMainnetCapped) && !hyperliquidActivationEnabled && !signer.HyperliquidActivationEnabled
+	}
+	stage4MainnetCappedHook = func(s *Store) (bool, uint64) {
+		rt := s.stage4Runtime()
+		if rt != nil && rt.profile == signer.ExecutionProfileMainnetCapped {
+			return true, rt.mainnetPolicy.MaxOrderMicroUSD
+		}
+		return false, 0
 	}
 	stage4ClearHook = func(s *Store) {
 		s.clearStage4Runtime()
@@ -248,13 +261,13 @@ func (s *Store) ConfigureTestnetExecution(ctx context.Context, cfg TestnetExecut
 }
 
 // ensureHyperliquidIPC lazily binds Core's Hyperliquid runtime over signer IPC
-// once the signer vault has been unlocked and a testnet policy is active.
+// once the signer vault has been unlocked and an eligible policy is active.
 func (s *Store) ensureHyperliquidIPC(ctx context.Context) bool {
 	if s.hyperliquidRuntime() != nil {
 		return true
 	}
 	rt := s.stage4Runtime()
-	if rt == nil || rt.profile != signer.ExecutionProfileTestnet || rt.signerCall == nil || rt.hyperliquidClient == nil {
+	if rt == nil || (rt.profile != signer.ExecutionProfileTestnet && rt.profile != signer.ExecutionProfileMainnetCapped) || rt.signerCall == nil || rt.hyperliquidClient == nil {
 		return false
 	}
 	rt.mu.Lock()
@@ -271,7 +284,14 @@ func (s *Store) ensureHyperliquidIPC(ctx context.Context) bool {
 	if err != nil || hlResp.HyperliquidStatus == nil || !hlResp.HyperliquidStatus.Enabled || hlResp.HyperliquidStatus.Policy == nil {
 		return false
 	}
-	if hlResp.HyperliquidStatus.Policy.Network != "testnet" || hlResp.HyperliquidStatus.Address == "" {
+	wantNet := "testnet"
+	if rt.profile == signer.ExecutionProfileMainnetCapped {
+		wantNet = "mainnet"
+		if !rt.hyperliquidClient.MainnetCapped() {
+			return false
+		}
+	}
+	if hlResp.HyperliquidStatus.Policy.Network != wantNet || hlResp.HyperliquidStatus.Address == "" {
 		return false
 	}
 	if err := s.ConfigureHyperliquidIPC(rt.hyperliquidClient, rt.signerCall, rt.agentVaultID); err != nil {
@@ -306,6 +326,31 @@ func (s *Store) configureMainnetCappedExecution(ctx context.Context, cfg Testnet
 	if stResp.Status.Account != nil && stResp.Status.Account.Network == "devnet" {
 		return signer.ErrUnavailable
 	}
+
+	var mainnetExec *onchain.DevnetExecutor
+	var mainnetHost string
+	if rpcURL := strings.TrimSpace(cfg.SolanaMainnetRPC); rpcURL != "" {
+		mainnetExec, err = onchain.NewMainnetExecutor(rpcURL, cfg.SolanaRoundTripper)
+		if err != nil {
+			return err
+		}
+		mainnetHost = mainnetExec.SanitizedHost()
+	}
+
+	hlResp, hlErr := cfg.SignerCall(checkCtx, signer.Request{Action: "hyperliquid-status"})
+	var hlClient *hyperliquid.Client
+	if cfg.HyperliquidClient != nil {
+		if !cfg.HyperliquidClient.Controlled() || !cfg.HyperliquidClient.MainnetCapped() || cfg.HyperliquidClient.Network() != "mainnet" {
+			return signer.ErrUnavailable
+		}
+		hlClient = cfg.HyperliquidClient
+	} else if hlErr == nil && hlResp.HyperliquidStatus != nil && hlResp.HyperliquidStatus.Enabled {
+		hlClient, err = hyperliquid.NewMainnetCappedExecutionClient()
+		if err != nil {
+			return err
+		}
+	}
+
 	if err := s.configureStage5MainnetCapped(cfg.MainnetPolicy.MaxOrderMicroUSD); err != nil {
 		return err
 	}
@@ -314,12 +359,28 @@ func (s *Store) configureMainnetCappedExecution(ctx context.Context, cfg Testnet
 	}
 	stage4RuntimeMu.Lock()
 	stage4Runtimes[s] = &stage4Runtime{
-		profile:       signer.ExecutionProfileMainnetCapped,
-		mainnetPolicy: cfg.MainnetPolicy,
-		signerCall:    cfg.SignerCall,
-		agentVaultID:  strings.TrimSpace(cfg.AgentVaultID),
+		profile:           signer.ExecutionProfileMainnetCapped,
+		mainnetPolicy:     cfg.MainnetPolicy,
+		signerCall:        cfg.SignerCall,
+		agentVaultID:      strings.TrimSpace(cfg.AgentVaultID),
+		mainnetExecutor:   mainnetExec,
+		mainnetHost:       mainnetHost,
+		hyperliquidClient: hlClient,
 	}
 	stage4RuntimeMu.Unlock()
+
+	if hlClient != nil && hlErr == nil && hlResp.HyperliquidStatus != nil && hlResp.HyperliquidStatus.Enabled && hlResp.HyperliquidStatus.Policy != nil {
+		if hlResp.HyperliquidStatus.Policy.Network != "mainnet" {
+			s.clearStage4Runtime()
+			return signer.ErrUnavailable
+		}
+		if hlResp.HyperliquidStatus.Address != "" {
+			if err := s.ConfigureHyperliquidIPC(hlClient, cfg.SignerCall, strings.TrimSpace(cfg.AgentVaultID)); err != nil {
+				s.clearStage4Runtime()
+				return err
+			}
+		}
+	}
 	return nil
 }
 
@@ -344,7 +405,7 @@ func (s *Store) executionStatus(ctx context.Context) ExecutionStatusView {
 	view.Profile = rt.profile
 	view.Available = true
 	hlReady := s.ensureHyperliquidIPC(ctx)
-	hasLiveStage4Venue := rt.devnetExecutor != nil || hlReady || rt.polymarketClient != nil || rt.kalshiClient != nil || rt.lighterClient != nil
+	hasLiveStage4Venue := rt.devnetExecutor != nil || rt.mainnetExecutor != nil || hlReady || rt.polymarketClient != nil || rt.kalshiClient != nil || rt.lighterClient != nil
 	view.WalletSigner = hasLiveStage4Venue
 	view.FinancialExecution = hasLiveStage4Venue
 	if rt.profile == signer.ExecutionProfileMainnetCapped {
@@ -355,7 +416,10 @@ func (s *Store) executionStatus(ctx context.Context) ExecutionStatusView {
 	}
 	view.SolanaDevnetReady = rt.devnetExecutor != nil
 	view.SolanaDevnetHost = rt.devnetHost
-	view.HyperliquidTestnet = hlReady
+	view.SolanaMainnetReady = rt.mainnetExecutor != nil
+	view.SolanaMainnetHost = rt.mainnetHost
+	view.HyperliquidTestnet = hlReady && rt.profile == signer.ExecutionProfileTestnet
+	view.HyperliquidMainnet = hlReady && rt.profile == signer.ExecutionProfileMainnetCapped
 	view.AgentVaultID = rt.agentVaultID
 	if rt.signerCall != nil {
 		probeCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
@@ -546,7 +610,7 @@ func (h *HTTPHandler) signerStatusAPI(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	hlReady := h.store.ensureHyperliquidIPC(r.Context())
-	hasLiveStage4Venue := rt.devnetExecutor != nil || hlReady || rt.polymarketClient != nil || rt.kalshiClient != nil || rt.lighterClient != nil
+	hasLiveStage4Venue := rt.devnetExecutor != nil || rt.mainnetExecutor != nil || hlReady || rt.polymarketClient != nil || rt.kalshiClient != nil || rt.lighterClient != nil
 	writeJSON(w, 200, map[string]any{
 		"available":              true,
 		"executionEnabled":       hasLiveStage4Venue,
@@ -555,7 +619,9 @@ func (h *HTTPHandler) signerStatusAPI(w http.ResponseWriter, r *http.Request) {
 		"mainnetCapped":          rt.profile == signer.ExecutionProfileMainnetCapped,
 		"wenHeld":                !miningActivationEnabled,
 		"solanaDevnetReady":      rt.devnetExecutor != nil,
-		"hyperliquidTestnet":     hlReady,
+		"solanaMainnetReady":     rt.mainnetExecutor != nil,
+		"hyperliquidTestnet":     hlReady && rt.profile == signer.ExecutionProfileTestnet,
+		"hyperliquidMainnet":     hlReady && rt.profile == signer.ExecutionProfileMainnetCapped,
 		"polymarketTestnetReady": rt.polymarketClient != nil,
 		"kalshiDemoReady":        rt.kalshiClient != nil,
 		"lighterTestnetReady":    rt.lighterClient != nil,
@@ -606,6 +672,174 @@ func (h *HTTPHandler) solanaDevnetRehearseAPI(w http.ResponseWriter, r *http.Req
 		return
 	}
 	res, err := h.store.rehearseSolanaDevnet(r.Context(), req)
+	if err != nil {
+		code := 400
+		if errors.Is(err, signer.ErrUnavailable) {
+			code = 403
+		}
+		writeError(w, code, err.Error())
+		return
+	}
+	writeJSON(w, 200, res)
+}
+
+// SolanaMainnetExecuteRequest parameterizes a bounded non-WEN Solana Mainnet-Beta transaction
+// (legacy or v0/ALT message) executed under --execution-profile=mainnet-capped.
+type SolanaMainnetExecuteRequest struct {
+	AgentVaultID      string `json:"agentVaultId,omitempty"`
+	Asset             string `json:"asset,omitempty"`
+	Memo              string `json:"memo,omitempty"`
+	MessageBase64     string `json:"messageBase64,omitempty"`
+	EstimatedMicroUSD uint64 `json:"estimatedMicroUsd"`
+	SimulateOnly      bool   `json:"simulateOnly,omitempty"`
+}
+
+func (s *Store) executeSolanaMainnet(ctx context.Context, req SolanaMainnetExecuteRequest) (*SolanaDevnetRehearseResult, error) {
+	rt := s.stage4Runtime()
+	if rt == nil || rt.profile != signer.ExecutionProfileMainnetCapped || rt.mainnetExecutor == nil || rt.signerCall == nil {
+		return nil, signer.ErrUnavailable
+	}
+	vaultID := strings.TrimSpace(req.AgentVaultID)
+	if vaultID == "" {
+		vaultID = rt.agentVaultID
+	}
+	if vaultID == "" {
+		return nil, errors.New("agentVaultId required for solana mainnet-capped execution")
+	}
+	asset := strings.ToUpper(strings.TrimSpace(req.Asset))
+	if asset == "" {
+		asset = "SOL"
+	}
+	if req.EstimatedMicroUSD == 0 || req.EstimatedMicroUSD > rt.mainnetPolicy.MaxOrderMicroUSD {
+		return nil, errors.New("solana mainnet-capped estimated spend outside policy bounds")
+	}
+
+	callCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	defer cancel()
+
+	if err := rt.mainnetExecutor.VerifyGenesis(callCtx); err != nil {
+		return nil, err
+	}
+	_, bh, lastValidHeight, _, err := rt.mainnetExecutor.LatestBlockhash(callCtx)
+	if err != nil {
+		return nil, err
+	}
+	fee, _, err := rt.mainnetExecutor.EstimatePriorityFee(callCtx)
+	if err != nil {
+		return nil, err
+	}
+	stResp, err := rt.signerCall(callCtx, signer.Request{Action: "status"})
+	if err != nil {
+		return nil, err
+	}
+	if !stResp.Status.MainnetCapped || stResp.Status.Account == nil {
+		return nil, signer.ErrUnavailable
+	}
+	if stResp.Status.Account.Network == "devnet" {
+		return nil, signer.ErrUnavailable
+	}
+
+	var msgBytes []byte
+	if b64 := strings.TrimSpace(req.MessageBase64); b64 != "" {
+		msgBytes, err = base64.StdEncoding.DecodeString(b64)
+		if err != nil {
+			return nil, errors.New("invalid base64 mainnet transaction message")
+		}
+	} else {
+		memo := strings.TrimSpace(req.Memo)
+		if memo == "" {
+			return nil, errors.New("messageBase64 or memo required for solana mainnet execution")
+		}
+		pubRaw, pErr := hex.DecodeString(stResp.Status.Account.PublicKey)
+		if pErr != nil || len(pubRaw) != 32 {
+			return nil, errors.New("invalid signer Ed25519 public key")
+		}
+		var feePayer [32]byte
+		copy(feePayer[:], pubRaw)
+		msgBytes, err = onchain.BuildDevnetComputeMemoMessage(feePayer, bh, 50_000, fee, memo)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	var opRand [8]byte
+	if _, err := rand.Read(opRand[:]); err != nil {
+		return nil, err
+	}
+	opID := "sol-mainnet-" + hex.EncodeToString(opRand[:])
+
+	signResp, err := rt.signerCall(callCtx, signer.Request{
+		Action:       "solana-mainnet-capped-sign",
+		AgentVaultID: vaultID,
+		SolanaMainnetCappedSign: &signer.SolanaMainnetCappedSignIntent{
+			Network:           "mainnet-beta",
+			GenesisHash:       onchain.SolanaMainnetGenesisHash,
+			OperationID:       opID,
+			Asset:             asset,
+			EstimatedMicroUSD: req.EstimatedMicroUSD,
+			MessageBase64:     base64.StdEncoding.EncodeToString(msgBytes),
+			ExpiresAt:         time.Now().Unix() + 120,
+		},
+	})
+	if err != nil {
+		return nil, err
+	}
+	if signResp.SolanaDevnetSigned == nil {
+		return nil, errors.New("missing signed mainnet transaction")
+	}
+	signedTxBytes, err := base64.StdEncoding.DecodeString(signResp.SolanaDevnetSigned.SignedTxBase64)
+	if err != nil {
+		return nil, errors.New("invalid signed mainnet packet")
+	}
+
+	simSlot, simErr, err := rt.mainnetExecutor.SimulateTransaction(callCtx, signedTxBytes)
+	if err != nil {
+		return nil, err
+	}
+	if !req.SimulateOnly && simErr != "" {
+		return nil, fmt.Errorf("solana mainnet simulation failed: %s", simErr)
+	}
+
+	result := &SolanaDevnetRehearseResult{
+		Network:                  "mainnet-beta",
+		GenesisHash:              onchain.SolanaMainnetGenesisHash,
+		RPCHost:                  rt.mainnetHost,
+		AgentVaultID:             vaultID,
+		OperationID:              opID,
+		Signature:                signResp.SolanaDevnetSigned.Signature,
+		MessageSHA256:            signResp.SolanaDevnetSigned.MessageSHA256,
+		SignerPublicKey:          signResp.SolanaDevnetSigned.PublicKeyBase58,
+		PriorityFeeMicroLamports: fee,
+		SimulateOnly:             req.SimulateOnly,
+		SimulatedOK:              simErr == "",
+		SimulatedSlot:            simSlot,
+		SimulationError:          simErr,
+	}
+	if !req.SimulateOnly {
+		rbRes, rbErr := rt.mainnetExecutor.SendWithRebroadcast(callCtx, signedTxBytes, signResp.SolanaDevnetSigned.Signature, lastValidHeight, onchain.RebroadcastConfig{})
+		result.Broadcasted = rbRes.Attempted
+		result.Confirmed = rbRes.Confirmed
+		result.Attempts = rbRes.Attempts
+		if rbErr != nil {
+			return result, rbErr
+		}
+	}
+	return result, nil
+}
+
+func (h *HTTPHandler) solanaMainnetExecuteAPI(w http.ResponseWriter, r *http.Request, token string) {
+	if r.Method != http.MethodPost {
+		writeError(w, 405, "method not allowed")
+		return
+	}
+	if !h.mutation(w, r) || !h.csrf(w, r, token) {
+		return
+	}
+	var req SolanaMainnetExecuteRequest
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	res, err := h.store.executeSolanaMainnet(r.Context(), req)
 	if err != nil {
 		code := 400
 		if errors.Is(err, signer.ErrUnavailable) {

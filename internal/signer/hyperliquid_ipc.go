@@ -33,7 +33,7 @@ func (l *ledger) applyHyperliquidPolicy(r journalRecord) error {
 		return errors.New("hyperliquid policy record required")
 	}
 	p := clone(*r.HyperliquidPolicy)
-	if err := ValidateHyperliquidPolicy(p, r.At); err != nil {
+	if err := ValidateHyperliquidPolicyForProfile(p, r.At, l.allowStage4PolicyReplay(), MainnetCappedHardMaxOrderMicroUSD); err != nil {
 		return err
 	}
 	l.hlPolicy = &p
@@ -210,7 +210,7 @@ func (v *Vault) SetHyperliquidPolicy(policy HyperliquidPolicy) error {
 	if _, err := v.requireControlledHyperliquidUnlockedLocked(); err != nil {
 		return err
 	}
-	if err := ValidateHyperliquidPolicy(policy, v.now().Unix()); err != nil {
+	if err := ValidateHyperliquidPolicyForProfile(policy, v.now().Unix(), v.mainnetCappedEnabled, v.mainnetCappedPolicy.MaxOrderMicroUSD); err != nil {
 		return err
 	}
 	p := clone(policy)
@@ -453,7 +453,7 @@ func (v *Vault) SignHyperliquidOrderIPC(intent HyperliquidOrderIntent, agentVaul
 		lastNonce = v.ledger.hlLastNonce
 	}
 	nowTime := v.now()
-	notional, err := ValidateHyperliquidOrderIntent(intent, policy, lastNonce, nowTime.Unix())
+	notional, err := ValidateHyperliquidOrderIntentForProfile(intent, policy, lastNonce, nowTime.Unix(), v.mainnetCappedEnabled, v.mainnetCappedPolicy.MaxOrderMicroUSD)
 	if err != nil {
 		return nil, err
 	}

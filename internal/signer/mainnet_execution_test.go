@@ -1,6 +1,8 @@
 package signer
 
 import (
+	"crypto/ed25519"
+	"encoding/base64"
 	"encoding/hex"
 	"strings"
 	"testing"
@@ -114,6 +116,51 @@ func TestVaultMainnetCappedSolanaSigningAndLimits(t *testing.T) {
 	}
 	if signed.GenesisHash != onchain.SolanaMainnetGenesisHash || signed.Signature == "" {
 		t.Fatalf("unexpected signed tx receipt: %+v", signed)
+	}
+
+	// Valid v0/ALT message passes mainnet-capped signer validation.
+	pubRaw, err := onchain.Key(signed.PublicKeyBase58)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var v0BH [32]byte
+	for i := range v0BH {
+		v0BH[i] = byte(i + 33)
+	}
+	altKey, _, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	jupData := make([]byte, 40)
+	copy(jupData[:8], []byte{187, 100, 250, 204, 49, 196, 175, 20}) // RouteV2
+	jupKeyRaw, err := onchain.Key(onchain.Jupiter)
+	if err != nil {
+		t.Fatal(err)
+	}
+	v0Msg := make([]byte, 0, 256)
+	v0Msg = append(v0Msg, 0x80, 1, 0, 1) // v0, 1 signer, 0 RO signed, 1 RO unsigned
+	v0Msg = append(v0Msg, 2)             // 2 static accounts: feePayer, Jupiter
+	v0Msg = append(v0Msg, pubRaw...)
+	v0Msg = append(v0Msg, jupKeyRaw...)
+	v0Msg = append(v0Msg, v0BH[:]...)
+	v0Msg = append(v0Msg, 1) // 1 ix
+	v0Msg = append(v0Msg, 1, 1, 2, byte(len(jupData)))
+	v0Msg = append(v0Msg, jupData...)
+	v0Msg = append(v0Msg, 1) // 1 address lookup table
+	v0Msg = append(v0Msg, altKey...)
+	v0Msg = append(v0Msg, 1, 0, 0) // 1 writable index (0), 0 readonly
+	v0B64 := base64.StdEncoding.EncodeToString(v0Msg)
+	v0Signed, err := v.SignSolanaMainnetCappedIPC(SolanaMainnetCappedSignIntent{
+		Network:           "mainnet-beta",
+		GenesisHash:       onchain.SolanaMainnetGenesisHash,
+		OperationID:       "op-main-v0",
+		Asset:             "SOL",
+		EstimatedMicroUSD: 5_000_000,
+		MessageBase64:     v0B64,
+		ExpiresAt:         exp,
+	}, vaultID)
+	if err != nil || v0Signed.Signature == "" {
+		t.Fatalf("expected v0/ALT mainnet-capped sign to pass, got err=%v", err)
 	}
 
 	// Over $50 per-order cap rejected.

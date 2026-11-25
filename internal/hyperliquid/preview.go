@@ -55,6 +55,11 @@ func validatePerpPricePrecision(normPrice string, szDecimals int) error {
 // and signer policy, returning a deterministic EIP-712 review preview without touching
 // private key material.
 func PreviewOrder(snapshot MarketSnapshot, policy signer.HyperliquidPolicy, req OrderDraft, lastNonce, nextNonce uint64, now int64) (OrderPreview, signer.HyperliquidOrderIntent, error) {
+	return PreviewOrderForProfile(snapshot, policy, req, lastNonce, nextNonce, now, false, 0)
+}
+
+// PreviewOrderForProfile validates an operator OrderDraft with optional mainnet-capped ceilings.
+func PreviewOrderForProfile(snapshot MarketSnapshot, policy signer.HyperliquidPolicy, req OrderDraft, lastNonce, nextNonce uint64, now int64, mainnetCapped bool, maxOrderMicroUSD uint64) (OrderPreview, signer.HyperliquidOrderIntent, error) {
 	market, ok := findMarket(snapshot, req.Asset)
 	if !ok {
 		return OrderPreview{}, signer.HyperliquidOrderIntent{}, errors.New("unknown Hyperliquid perpetual market")
@@ -112,7 +117,7 @@ func PreviewOrder(snapshot MarketSnapshot, policy signer.HyperliquidPolicy, req 
 		Nonce:              nextNonce,
 		ExpiresAt:          expiresAt,
 	}
-	notional, err := signer.ValidateHyperliquidOrderIntent(intent, policy, lastNonce, now)
+	notional, err := signer.ValidateHyperliquidOrderIntentForProfile(intent, policy, lastNonce, now, mainnetCapped, maxOrderMicroUSD)
 	if err != nil {
 		return OrderPreview{}, signer.HyperliquidOrderIntent{}, err
 	}
