@@ -70,6 +70,9 @@ type Request struct {
 	KalshiSign          *KalshiSignIntent                `json:"kalshiSign,omitempty"`
 	KalshiKey           *KalshiKeyProvision              `json:"kalshiKey,omitempty"`
 	KalshiKeyID         string                           `json:"kalshiKeyId,omitempty"`
+	LighterOrder        *LighterOrderIntent              `json:"lighterOrder,omitempty"`
+	LighterCancel       *LighterCancelIntent             `json:"lighterCancel,omitempty"`
+	LighterLeverage     *LighterUpdateLeverageIntent     `json:"lighterLeverage,omitempty"`
 	ProbeID             string                           `json:"probeId,omitempty"`
 	IntentID            string                           `json:"intentId,omitempty"`
 	Action              string                           `json:"action"`
@@ -94,6 +97,8 @@ type Response struct {
 	PolymarketSigned   *PolymarketSignedOrder   `json:"polymarketSigned,omitempty"`
 	KalshiStatus       *KalshiStatus            `json:"kalshiStatus,omitempty"`
 	KalshiSigned       *KalshiSignedRequest     `json:"kalshiSigned,omitempty"`
+	LighterStatus      *LighterStatus           `json:"lighterStatus,omitempty"`
+	LighterSigned      *LighterSignedTx         `json:"lighterSigned,omitempty"`
 	AgentVaults        []AgentVaultUsage        `json:"agentVaults,omitempty"`
 	Status             Status                   `json:"status"`
 	Document           []byte                   `json:"document,omitempty"`
@@ -165,14 +170,15 @@ func execute(v *Vault, r Request, owner bool) Response {
 			return Response{Error: "one typed swap action required"}
 		}
 	}
-	if r.HyperliquidPolicy != nil || r.HyperliquidOrder != nil || r.HyperliquidLeverage != nil || r.HyperliquidCancel != nil || r.AgentVault != nil || r.AgentVaultID != "" || r.AgentVaultSpend != nil || r.SolanaDevnetSign != nil || r.PolymarketOrder != nil || r.KalshiSign != nil || r.KalshiKey != nil || r.KalshiKeyID != "" ||
+	if r.HyperliquidPolicy != nil || r.HyperliquidOrder != nil || r.HyperliquidLeverage != nil || r.HyperliquidCancel != nil || r.AgentVault != nil || r.AgentVaultID != "" || r.AgentVaultSpend != nil || r.SolanaDevnetSign != nil || r.PolymarketOrder != nil || r.KalshiSign != nil || r.KalshiKey != nil || r.KalshiKeyID != "" || r.LighterOrder != nil || r.LighterCancel != nil || r.LighterLeverage != nil ||
 		r.Action == "hyperliquid-status" || r.Action == "hyperliquid-policy" || r.Action == "hyperliquid-sign-leverage" || r.Action == "hyperliquid-sign-order" || r.Action == "hyperliquid-sign-cancel" ||
 		r.Action == "agent-vault-set" || r.Action == "agent-vault-revoke" || r.Action == "agent-vault-list" || r.Action == "agent-vault-record-loss" || r.Action == "solana-devnet-sign" ||
 		r.Action == "polymarket-status" || r.Action == "polymarket-sign-order" ||
-		r.Action == "kalshi-status" || r.Action == "kalshi-generate-key" || r.Action == "kalshi-provision-key" || r.Action == "kalshi-sign-request" {
+		r.Action == "kalshi-status" || r.Action == "kalshi-generate-key" || r.Action == "kalshi-provision-key" || r.Action == "kalshi-sign-request" ||
+		r.Action == "lighter-status" || r.Action == "lighter-sign-order" || r.Action == "lighter-sign-cancel" || r.Action == "lighter-sign-leverage" {
 		expected := Request{Action: r.Action}
 		switch r.Action {
-		case "hyperliquid-status", "agent-vault-list", "polymarket-status", "kalshi-status":
+		case "hyperliquid-status", "agent-vault-list", "polymarket-status", "kalshi-status", "lighter-status":
 		case "hyperliquid-policy":
 			expected.HyperliquidPolicy = r.HyperliquidPolicy
 		case "hyperliquid-sign-leverage":
@@ -195,6 +201,15 @@ func execute(v *Vault, r Request, owner bool) Response {
 			expected.KalshiKey = r.KalshiKey
 		case "kalshi-sign-request":
 			expected.KalshiSign = r.KalshiSign
+			expected.AgentVaultID = r.AgentVaultID
+		case "lighter-sign-order":
+			expected.LighterOrder = r.LighterOrder
+			expected.AgentVaultID = r.AgentVaultID
+		case "lighter-sign-cancel":
+			expected.LighterCancel = r.LighterCancel
+			expected.AgentVaultID = r.AgentVaultID
+		case "lighter-sign-leverage":
+			expected.LighterLeverage = r.LighterLeverage
 			expected.AgentVaultID = r.AgentVaultID
 		case "agent-vault-set":
 			expected.AgentVault = r.AgentVault
@@ -562,6 +577,43 @@ func execute(v *Vault, r Request, owner bool) Response {
 			out.Error = e.Error()
 		}
 		return out
+	case "lighter-status":
+		st, e := v.LighterStatus()
+		out := Response{LighterStatus: st, Status: v.Status()}
+		if e != nil {
+			out.Error = e.Error()
+		}
+		return out
+	case "lighter-sign-order":
+		if r.LighterOrder == nil {
+			return Response{Error: "lighter order intent required", Status: v.Status()}
+		}
+		signed, e := v.SignLighterOrderIPC(*r.LighterOrder, r.AgentVaultID)
+		out := Response{LighterSigned: signed, Status: v.Status()}
+		if e != nil {
+			out.Error = e.Error()
+		}
+		return out
+	case "lighter-sign-cancel":
+		if r.LighterCancel == nil {
+			return Response{Error: "lighter cancel intent required", Status: v.Status()}
+		}
+		signed, e := v.SignLighterCancelIPC(*r.LighterCancel, r.AgentVaultID)
+		out := Response{LighterSigned: signed, Status: v.Status()}
+		if e != nil {
+			out.Error = e.Error()
+		}
+		return out
+	case "lighter-sign-leverage":
+		if r.LighterLeverage == nil {
+			return Response{Error: "lighter leverage intent required", Status: v.Status()}
+		}
+		signed, e := v.SignLighterUpdateLeverageIPC(*r.LighterLeverage, r.AgentVaultID)
+		out := Response{LighterSigned: signed, Status: v.Status()}
+		if e != nil {
+			out.Error = e.Error()
+		}
+		return out
 	default:
 		err = ErrUnavailable
 	}
@@ -576,7 +628,7 @@ func execute(v *Vault, r Request, owner bool) Response {
 // this allowlist after authenticating the actual kernel peer UID.
 func AppActionAllowed(action string) bool {
 	switch action {
-	case "status", "fixture-approvals", "fixture-state", "fixture-reserve", "fixture-execute", "fixture-reconcile", "fixture-operation", "swap-sign", "swap-receipt", "swap-reconcile", "swap-cancel", "hyperliquid-status", "hyperliquid-sign-leverage", "hyperliquid-sign-order", "hyperliquid-sign-cancel", "agent-vault-list", "solana-devnet-sign", "polymarket-status", "polymarket-sign-order", "kalshi-status", "kalshi-sign-request":
+	case "status", "fixture-approvals", "fixture-state", "fixture-reserve", "fixture-execute", "fixture-reconcile", "fixture-operation", "swap-sign", "swap-receipt", "swap-reconcile", "swap-cancel", "hyperliquid-status", "hyperliquid-sign-leverage", "hyperliquid-sign-order", "hyperliquid-sign-cancel", "agent-vault-list", "solana-devnet-sign", "polymarket-status", "polymarket-sign-order", "kalshi-status", "kalshi-sign-request", "lighter-status", "lighter-sign-order", "lighter-sign-cancel", "lighter-sign-leverage":
 		return true
 	}
 	return false

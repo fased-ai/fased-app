@@ -391,7 +391,7 @@ func run(args []string, input *os.File, out, errOut io.Writer) error {
 		r.UnlockSeconds = int(*lifetime / time.Second)
 	case "fixture-update-inventory":
 		r.ProbeID = update.NewProbe()
-	case "status", "lock", "hyperliquid-status", "agent-vault-list", "polymarket-status", "kalshi-status":
+	case "status", "lock", "hyperliquid-status", "agent-vault-list", "polymarket-status", "kalshi-status", "lighter-status":
 	case "hyperliquid-policy", "agent-vault-set", "agent-vault-revoke", "agent-vault-record-loss", "kalshi-generate-key":
 		if !owner || !*requestStdin {
 			return errors.New("typed owner JSON request via --request-stdin required")
@@ -458,7 +458,7 @@ func isTypedOwnerSignerAction(action string) bool {
 }
 
 func isTypedOutputSignerAction(action string) bool {
-	return action == "hyperliquid-status" || action == "agent-vault-list" || action == "polymarket-status" || action == "kalshi-status" || isTypedOwnerSignerAction(action)
+	return action == "hyperliquid-status" || action == "agent-vault-list" || action == "polymarket-status" || action == "kalshi-status" || action == "lighter-status" || isTypedOwnerSignerAction(action)
 }
 
 func decodeStrictJSON(document []byte, dst any) error {

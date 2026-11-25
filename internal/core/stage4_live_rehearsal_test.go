@@ -13,6 +13,7 @@ import (
 
 	"github.com/fased-ai/fased-app/internal/hyperliquid"
 	"github.com/fased-ai/fased-app/internal/kalshi"
+	"github.com/fased-ai/fased-app/internal/lighter"
 	"github.com/fased-ai/fased-app/internal/onchain"
 	"github.com/fased-ai/fased-app/internal/polymarket"
 	"github.com/fased-ai/fased-app/internal/signer"
@@ -481,6 +482,173 @@ func TestLiveStage4PredictionVenuesRehearsal(t *testing.T) {
 				"demoHttpStatus": kRes.Submission.StatusCode,
 				"demoCode":       kRes.Submission.UpstreamCode,
 				"demoMessage":    kRes.Submission.Message,
+			},
+		}
+		rawSummary, _ := json.MarshalIndent(summary, "", "  ")
+		if err := os.WriteFile(summaryPath, append(rawSummary, '\n'), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func TestLiveStage4LighterRehearsal(t *testing.T) {
+	if os.Getenv("FASED_LIVE_STAGE4_REHEARSAL") != "1" {
+		t.Skip("live Stage 4 rehearsal disabled unless FASED_LIVE_STAGE4_REHEARSAL=1")
+	}
+
+	dir := fixtureDir(t)
+	signerDir := fixtureDir(t)
+	if err := os.Chmod(signerDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	signerID := "12121212121212121212121212121212"
+	pass := []byte("live-lighter-rehearsal-pass-2026")
+	vaultID := "34343434343434343434343434343434"
+
+	v, err := signer.Open(signerDir, signerID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := v.Create(pass); err != nil {
+		_ = v.Close()
+		t.Fatal(err)
+	}
+	if err := v.Unlock(pass, 10*time.Minute); err != nil {
+		_ = v.Close()
+		t.Fatal(err)
+	}
+	if err := v.ConfigureTestnetExecution(true); err != nil {
+		_ = v.Close()
+		t.Fatal(err)
+	}
+
+	now := time.Now().Unix()
+	if err := v.SetAgentVaultPolicy(signer.AgentVaultPolicy{
+		Version:            1,
+		VaultID:            vaultID,
+		AgentID:            "live-lighter-agent",
+		AllowedVenues:      []string{"lighter"},
+		AllowedAssets:      []string{"SOL", "ETH", "BTC"},
+		MaxOrderMicroUSD:   25_000_000, // $25 per-order cap
+		DailySpendMicroUSD: 50_000_000, // $50 daily cap
+		DailyLossMicroUSD:  10_000_000,
+		MaxLeverage:        5,
+		ExpiresAt:          now + 3600,
+	}); err != nil {
+		_ = v.Close()
+		t.Fatal(err)
+	}
+
+	srv, err := Start(t.Context(), dir, "127.0.0.1:0", "", nil)
+	if err != nil {
+		_ = v.Close()
+		t.Fatal(err)
+	}
+	defer func() {
+		_ = srv.Close(context.Background())
+		_ = v.Close()
+	}()
+	token := claimFixture(t, srv.Store)
+	if err := srv.ConfigureTestnetExecution(t.Context(), TestnetExecutionConfig{
+		Profile:      signer.ExecutionProfileTestnet,
+		SignerCall:   stage4TestSignerRelay(v),
+		AgentVaultID: vaultID,
+	}); err != nil {
+		t.Fatalf("ConfigureTestnetExecution live failed: %v", err)
+	}
+
+	// Fetch real Lighter Testnet /orderBooks metadata + submit ephemeral signed tx over TLS.
+	lClient := lighter.NewTestnetClient()
+	books, err := lClient.FetchOrderBooks(t.Context())
+	if err != nil || len(books) == 0 {
+		t.Fatalf("live Lighter FetchOrderBooks failed (len=%d): %v", len(books), err)
+	}
+	sampleSym := books[0].Symbol
+	for _, b := range books {
+		if b.Symbol == "SOL" || b.Symbol == "ETH" {
+			sampleSym = b.Symbol
+			break
+		}
+	}
+
+	h := srv.HTTP.Handler.(*HTTPHandler)
+	body, _ := json.Marshal(LighterRehearseRequest{
+		Symbol:       sampleSym,
+		Side:         "BUY",
+		Price:        "10.0",
+		Size:         "1.0",
+		Leverage:     2,
+		AccountIndex: 123456,
+		Nonce:        1,
+		FetchMarket:  true,
+		Submit:       true,
+	})
+	resp := stage4Req(h, "POST", srv.URL, "/api/v1/execution/lighter/rehearse", string(body), token, srv.URL, csrfToken(token))
+	if resp.Code != 200 {
+		t.Fatalf("live lighter rehearse failed (%d): %s", resp.Code, resp.Body.String())
+	}
+	var res LighterRehearseResult
+	if err := json.Unmarshal(resp.Body.Bytes(), &res); err != nil {
+		t.Fatal(err)
+	}
+	if !res.SchnorrValid || res.ChainID != signer.LighterTestnetChainID || res.Submission == nil || res.Submission.StatusCode == 0 {
+		t.Fatalf("unexpected live LighterRehearseResult: %+v", res)
+	}
+
+	// Mainnet chainId 304 fails closed with ErrUnavailable, and ReadOnlyMainnetClient fails closed with ErrExecutionDisabled.
+	if _, err := v.SignLighterOrderIPC(signer.LighterOrderIntent{
+		Network:           "mainnet",
+		ChainID:           signer.LighterMainnetChainID,
+		OperationID:       "l-live-mainnet-lock",
+		Asset:             sampleSym,
+		EstimatedMicroUSD: 1_000_000,
+		AccountIndex:      123456,
+		MarketIndex:       res.MarketID,
+		ClientOrderIndex:  1,
+		BaseAmount:        10,
+		Price:             100,
+		OrderType:         0,
+		TimeInForce:       1,
+		OrderExpiry:       (now + 3600) * 1000,
+		Nonce:             1,
+		ExpiredAt:         (now + 300) * 1000,
+		IntentExpiresAt:   now + 300,
+	}, vaultID); !errors.Is(err, signer.ErrUnavailable) {
+		t.Fatalf("expected ErrUnavailable for Lighter mainnet sign, got %v", err)
+	}
+
+	roMain := lighter.NewReadOnlyMainnetClient()
+	if _, err := roMain.SubmitSignedTx(t.Context(), &signer.LighterSignedTx{
+		Network:    "mainnet",
+		ChainID:    signer.LighterMainnetChainID,
+		TxType:     signer.LighterTxTypeCreateOrder,
+		TxInfoJSON: `{}`,
+	}); !errors.Is(err, lighter.ErrExecutionDisabled) {
+		t.Fatalf("expected ErrExecutionDisabled for mainnet Lighter submit, got %v", err)
+	}
+
+	if summaryPath := strings.TrimSpace(os.Getenv("FASED_STAGE4_LIGHTER_SUMMARY_PATH")); summaryPath != "" {
+		if err := os.MkdirAll(filepath.Dir(summaryPath), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		summary := map[string]any{
+			"timestamp":   time.Now().UTC().Format(time.RFC3339),
+			"profile":     "testnet",
+			"mainnetLock": true,
+			"wenHeld":     !miningActivationEnabled,
+			"lighterTestnet": map[string]any{
+				"origin":            res.Origin,
+				"chainId":           res.ChainID,
+				"orderBooksCount":   len(books),
+				"sampleSymbol":      res.Symbol,
+				"marketId":          res.MarketID,
+				"publicKeyHex":      res.PublicKeyHex,
+				"txHashHex":         res.TxHashHex,
+				"schnorrValid":      res.SchnorrValid,
+				"mainnetLocked":     true,
+				"sendTxHttpStatus":  res.Submission.StatusCode,
+				"sendTxUpstreamCd":  res.Submission.Code,
+				"sendTxUpstreamMsg": res.Submission.Message,
 			},
 		}
 		rawSummary, _ := json.MarshalIndent(summary, "", "  ")

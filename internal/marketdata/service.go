@@ -672,6 +672,9 @@ func defaultInstrumentsCatalog(nowSec int64) []Instrument {
 		{Venue: VenueBybit, Symbol: "BTCUSDT", Base: "BTC", Quote: "USDT", AssetClass: "crypto_perp", TickSize: 0.1, LotSize: 0.001, MaxLeverage: 50, UpdatedAt: nowSec},
 		{Venue: VenueKraken, Symbol: "XBTUSD", Base: "BTC", Quote: "USD", AssetClass: "crypto_spot", TickSize: 0.1, LotSize: 0.0001, UpdatedAt: nowSec},
 		{Venue: VenueSolana, Symbol: "So11111111111111111111111111111111111111112", Base: "SOL", Quote: "USDC", AssetClass: "solana_dex", TickSize: 0.01, LotSize: 0.01, UpdatedAt: nowSec},
+		{Venue: VenueLighter, Symbol: "ETH", Base: "ETH", Quote: "USDC", AssetClass: "crypto_perp", TickSize: 0.01, LotSize: 0.0001, MaxLeverage: 25, UpdatedAt: nowSec},
+		{Venue: VenueLighter, Symbol: "BTC", Base: "BTC", Quote: "USDC", AssetClass: "crypto_perp", TickSize: 0.1, LotSize: 0.00001, MaxLeverage: 40, UpdatedAt: nowSec},
+		{Venue: VenueLighter, Symbol: "SOL", Base: "SOL", Quote: "USDC", AssetClass: "crypto_perp", TickSize: 0.01, LotSize: 0.01, MaxLeverage: 20, UpdatedAt: nowSec},
 		{Venue: VenueFRED, Symbol: "CPIAUCSL", Base: "CPIAUCSL", Quote: "INDEX", AssetClass: "macro", UpdatedAt: nowSec},
 		{Venue: VenueSEC, Symbol: "0000320193", Base: "AAPL", Quote: "USD", AssetClass: "sec_filing", UpdatedAt: nowSec},
 	}

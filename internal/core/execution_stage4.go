@@ -16,6 +16,7 @@ import (
 
 	"github.com/fased-ai/fased-app/internal/hyperliquid"
 	"github.com/fased-ai/fased-app/internal/kalshi"
+	"github.com/fased-ai/fased-app/internal/lighter"
 	"github.com/fased-ai/fased-app/internal/onchain"
 	"github.com/fased-ai/fased-app/internal/polymarket"
 	"github.com/fased-ai/fased-app/internal/signer"
@@ -32,6 +33,7 @@ type TestnetExecutionConfig struct {
 	HyperliquidClient  *hyperliquid.Client
 	PolymarketClient   *polymarket.Client
 	KalshiClient       *kalshi.Client
+	LighterClient      *lighter.Client
 }
 
 // ExecutionStatusView describes live Stage 4 testnet execution readiness without leaking credentials.
@@ -50,6 +52,8 @@ type ExecutionStatusView struct {
 	KalshiDemoReady         bool   `json:"kalshiDemoReady"`
 	KalshiKeyConfigured     bool   `json:"kalshiKeyConfigured"`
 	KalshiKeyID             string `json:"kalshiKeyId,omitempty"`
+	LighterTestnetReady     bool   `json:"lighterTestnetReady"`
+	LighterPublicKey        string `json:"lighterPublicKey,omitempty"`
 	AgentVaultID            string `json:"agentVaultId,omitempty"`
 	SignerTestnetActive     bool   `json:"signerTestnetActive"`
 	SignerPublicKey         string `json:"signerPublicKey,omitempty"`
@@ -96,6 +100,7 @@ type stage4Runtime struct {
 	hyperliquidOn    bool
 	polymarketClient *polymarket.Client
 	kalshiClient     *kalshi.Client
+	lighterClient    *lighter.Client
 }
 
 var (
@@ -211,6 +216,10 @@ func (s *Store) ConfigureTestnetExecution(ctx context.Context, cfg TestnetExecut
 	if kClient == nil {
 		kClient = kalshi.NewDemoClient()
 	}
+	lClient := cfg.LighterClient
+	if lClient == nil {
+		lClient = lighter.NewTestnetClient()
+	}
 
 	stage4RuntimeMu.Lock()
 	stage4Runtimes[s] = &stage4Runtime{
@@ -222,6 +231,7 @@ func (s *Store) ConfigureTestnetExecution(ctx context.Context, cfg TestnetExecut
 		hyperliquidOn:    hlOn,
 		polymarketClient: pmClient,
 		kalshiClient:     kClient,
+		lighterClient:    lClient,
 	}
 	stage4RuntimeMu.Unlock()
 	return nil
@@ -238,7 +248,7 @@ func (server *Server) ConfigureTestnetExecution(ctx context.Context, cfg Testnet
 func (s *Store) executionStatus(ctx context.Context) ExecutionStatusView {
 	view := ExecutionStatusView{
 		Profile:       signer.ExecutionProfileOff,
-		MainnetLocked: !hyperliquidActivationEnabled && !signer.HyperliquidActivationEnabled && !signer.PolymarketActivationEnabled && !signer.KalshiActivationEnabled,
+		MainnetLocked: !hyperliquidActivationEnabled && !signer.HyperliquidActivationEnabled && !signer.PolymarketActivationEnabled && !signer.KalshiActivationEnabled && !signer.LighterActivationEnabled,
 		WENHeld:       !miningActivationEnabled,
 	}
 	rt := s.stage4Runtime()
@@ -271,6 +281,10 @@ func (s *Store) executionStatus(ctx context.Context) ExecutionStatusView {
 			view.KalshiDemoReady = kResp.KalshiStatus.Enabled && rt.kalshiClient != nil
 			view.KalshiKeyConfigured = kResp.KalshiStatus.Configured
 			view.KalshiKeyID = kResp.KalshiStatus.KeyID
+		}
+		if lResp, lErr := rt.signerCall(probeCtx, signer.Request{Action: "lighter-status"}); lErr == nil && lResp.LighterStatus != nil {
+			view.LighterTestnetReady = lResp.LighterStatus.Enabled && rt.lighterClient != nil
+			view.LighterPublicKey = lResp.LighterStatus.PublicKeyHex
 		}
 		cancel()
 	}
@@ -441,12 +455,13 @@ func (h *HTTPHandler) signerStatusAPI(w http.ResponseWriter, r *http.Request) {
 		"available":              true,
 		"executionEnabled":       true,
 		"profile":                rt.profile,
-		"mainnetLocked":          !hyperliquidActivationEnabled && !signer.HyperliquidActivationEnabled && !signer.PolymarketActivationEnabled && !signer.KalshiActivationEnabled,
+		"mainnetLocked":          !hyperliquidActivationEnabled && !signer.HyperliquidActivationEnabled && !signer.PolymarketActivationEnabled && !signer.KalshiActivationEnabled && !signer.LighterActivationEnabled,
 		"wenHeld":                !miningActivationEnabled,
 		"solanaDevnetReady":      rt.devnetExecutor != nil,
 		"hyperliquidTestnet":     rt.hyperliquidOn || h.store.hyperliquidRuntime() != nil,
 		"polymarketTestnetReady": rt.polymarketClient != nil,
 		"kalshiDemoReady":        rt.kalshiClient != nil,
+		"lighterTestnetReady":    rt.lighterClient != nil,
 	})
 }
 

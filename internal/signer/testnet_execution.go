@@ -168,7 +168,8 @@ func isStage4TestnetAction(action string) bool {
 		"agent-vault-set", "agent-vault-revoke", "agent-vault-list", "agent-vault-record-loss",
 		"solana-devnet-sign",
 		"polymarket-status", "polymarket-sign-order",
-		"kalshi-status", "kalshi-generate-key", "kalshi-provision-key", "kalshi-sign-request":
+		"kalshi-status", "kalshi-generate-key", "kalshi-provision-key", "kalshi-sign-request",
+		"lighter-status", "lighter-sign-order", "lighter-sign-cancel", "lighter-sign-leverage":
 		return true
 	}
 	return false

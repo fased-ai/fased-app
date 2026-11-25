@@ -20,6 +20,7 @@ func FuzzMarketDataParsersAndTransforms(f *testing.F) {
 		_, _ = ParseBybitKlines(data)
 		_, _ = ParseKrakenOHLC(data)
 		_, _ = ParseGeckoTerminalOHLCV(data)
+		_, _ = ParseLighterCandles(data)
 		_, _ = ParseFREDCSV(data, "CPIAUCSL", 1760000000)
 		_, _ = ParseSECSubmissions(data, "0000320193", 10)
 		_, _ = ParseHyperliquidLeaderboard(data, "week", 1760000000)

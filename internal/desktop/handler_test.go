@@ -788,6 +788,10 @@ func TestNativeDeskRoutes(t *testing.T) {
 		{http.MethodPost, "http://wails.localhost/api/v1/execution/kalshi/status", false},
 		{http.MethodPost, "http://wails.localhost/api/v1/execution/kalshi/rehearse", true},
 		{http.MethodGet, "http://wails.localhost/api/v1/execution/kalshi/rehearse", false},
+		{http.MethodGet, "http://wails.localhost/api/v1/execution/lighter/status", true},
+		{http.MethodPost, "http://wails.localhost/api/v1/execution/lighter/status", false},
+		{http.MethodPost, "http://wails.localhost/api/v1/execution/lighter/rehearse", true},
+		{http.MethodGet, "http://wails.localhost/api/v1/execution/lighter/rehearse", false},
 	}
 	for _, tc := range cases {
 		req := httptest.NewRequest(tc.method, tc.url, nil)
