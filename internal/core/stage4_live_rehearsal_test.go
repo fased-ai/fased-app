@@ -1,6 +1,7 @@
 package core
 
 import (
+	"bytes"
 	"context"
 	"encoding/hex"
 	"encoding/json"
@@ -650,6 +651,226 @@ func TestLiveStage4LighterRehearsal(t *testing.T) {
 				"sendTxUpstreamCd":  res.Submission.Code,
 				"sendTxUpstreamMsg": res.Submission.Message,
 			},
+		}
+		rawSummary, _ := json.MarshalIndent(summary, "", "  ")
+		if err := os.WriteFile(summaryPath, append(rawSummary, '\n'), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func TestLiveStage4FundedDevnetAndDaemonSoak(t *testing.T) {
+	if os.Getenv("FASED_LIVE_STAGE4_SOAK") != "1" {
+		t.Skip("live Stage 4 funded soak disabled unless FASED_LIVE_STAGE4_SOAK=1")
+	}
+	devnetRPC := strings.TrimSpace(os.Getenv("FASED_DEVNET_RPC_URL"))
+	kpPath := strings.TrimSpace(os.Getenv("FASED_DEVNET_FUNDED_KEYPAIR_PATH"))
+	if devnetRPC == "" || kpPath == "" {
+		t.Fatal("FASED_DEVNET_RPC_URL and FASED_DEVNET_FUNDED_KEYPAIR_PATH are required")
+	}
+	rawKP, err := os.ReadFile(kpPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var kpBytes []byte
+	if err := json.Unmarshal(rawKP, &kpBytes); err != nil || len(kpBytes) != 64 {
+		t.Fatalf("expected 64-byte Solana JSON keypair array in %s (len=%d err=%v)", kpPath, len(kpBytes), err)
+	}
+	seed := bytes.Clone(kpBytes[:32])
+	defer clear(kpBytes)
+	defer clear(seed)
+
+	dir := fixtureDir(t)
+	signerDir := fixtureDir(t)
+	if err := os.Chmod(signerDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	signerID := "fedcba9876543210fedcba9876543210"
+	pass := []byte("live-funded-soak-passphrase-2026")
+	defer clear(pass)
+	vaultID := "aabbccddeeff00112233445566778899"
+
+	v, err := signer.Open(signerDir, signerID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := v.ImportFixtureSeed(seed, pass); err != nil {
+		_ = v.Close()
+		t.Fatal(err)
+	}
+	if err := v.Unlock(pass, 10*time.Minute); err != nil {
+		_ = v.Close()
+		t.Fatal(err)
+	}
+	if err := v.ConfigureTestnetExecution(true); err != nil {
+		_ = v.Close()
+		t.Fatal(err)
+	}
+
+	now := time.Now().Unix()
+	if err := v.SetHyperliquidPolicy(signer.HyperliquidPolicy{
+		Version:                   1,
+		Network:                   "testnet",
+		AllowedAssets:             []string{"BTC", "ETH"},
+		MaxLeverage:               5,
+		MaxNotionalMicroUSD:       50_000_000,
+		MaxOrderPriceBpsDeviation: 500,
+		ExpiresAt:                 now + 3600,
+	}); err != nil {
+		_ = v.Close()
+		t.Fatal(err)
+	}
+	// Verify WEN venue is explicitly rejected by Typed Agent Vaults.
+	if err := v.SetAgentVaultPolicy(signer.AgentVaultPolicy{
+		Version:            1,
+		VaultID:            vaultID,
+		AgentID:            "wen-forbidden-agent",
+		AllowedVenues:      []string{"wen"},
+		AllowedAssets:      []string{"SAT"},
+		MaxOrderMicroUSD:   5_000_000,
+		DailySpendMicroUSD: 10_000_000,
+		DailyLossMicroUSD:  2_000_000,
+		MaxLeverage:        1,
+		ExpiresAt:          now + 3600,
+	}); err == nil {
+		_ = v.Close()
+		t.Fatal("expected WEN venue to be rejected by Typed Agent Vaults")
+	}
+
+	if err := v.SetAgentVaultPolicy(signer.AgentVaultPolicy{
+		Version:            1,
+		VaultID:            vaultID,
+		AgentID:            "live-funded-soak-agent",
+		AllowedVenues:      []string{"solana", "hyperliquid", "polymarket", "kalshi", "lighter"},
+		AllowedAssets:      []string{"SOL", "BTC", "ETH", "USDC"},
+		MaxOrderMicroUSD:   25_000_000, // $25 per-order cap
+		DailySpendMicroUSD: 50_000_000, // $50 daily cap
+		DailyLossMicroUSD:  10_000_000, // $10 daily loss breaker
+		MaxLeverage:        5,
+		ExpiresAt:          now + 3600,
+	}); err != nil {
+		_ = v.Close()
+		t.Fatal(err)
+	}
+
+	srv, err := Start(t.Context(), dir, "127.0.0.1:0", "", nil)
+	if err != nil {
+		_ = v.Close()
+		t.Fatal(err)
+	}
+	defer func() {
+		_ = srv.Close(context.Background())
+		_ = v.Close()
+	}()
+	token := claimFixture(t, srv.Store)
+	if err := srv.ConfigureTestnetExecution(t.Context(), TestnetExecutionConfig{
+		Profile:         signer.ExecutionProfileTestnet,
+		SignerCall:      stage4TestSignerRelay(v),
+		AgentVaultID:    vaultID,
+		SolanaDevnetRPC: devnetRPC,
+	}); err != nil {
+		t.Fatalf("ConfigureTestnetExecution funded soak failed: %v", err)
+	}
+
+	h := srv.HTTP.Handler.(*HTTPHandler)
+	health := srv.Store.Health()
+	if !health.Capabilities["walletSigner"] || !health.Capabilities["financialExecution"] || health.Capabilities["updater"] {
+		t.Fatalf("unexpected health capabilities: %+v", health.Capabilities)
+	}
+	statusResp := stage4Req(h, "GET", srv.URL, "/api/v1/execution/status", "", token, "", "")
+	if statusResp.Code != 200 {
+		t.Fatalf("GET /api/v1/execution/status failed (%d): %s", statusResp.Code, statusResp.Body.String())
+	}
+	var stView ExecutionStatusView
+	if err := json.Unmarshal(statusResp.Body.Bytes(), &stView); err != nil {
+		t.Fatal(err)
+	}
+	if !stView.WENHeld || !stView.MainnetLocked || !stView.SolanaDevnetReady || !stView.HyperliquidTestnet {
+		t.Fatalf("unexpected execution status invariants: %+v", stView)
+	}
+
+	vaultsResp := stage4Req(h, "GET", srv.URL, "/api/v1/vaults", "", token, "", "")
+	if vaultsResp.Code != 200 || !strings.Contains(vaultsResp.Body.String(), vaultID) {
+		t.Fatalf("GET /api/v1/vaults unexpected (%d): %s", vaultsResp.Code, vaultsResp.Body.String())
+	}
+
+	// Over-cap Solana request ($30 > $25 cap) MUST fail before broadcast.
+	overCapResp := stage4Req(h, "POST", srv.URL, "/api/v1/execution/solana-devnet/rehearse", `{"memo":"fased-overcap","estimatedMicroUsd":30000000,"simulateOnly":true}`, token, srv.URL, csrfToken(token))
+	if overCapResp.Code == 200 {
+		t.Fatalf("expected over-cap Solana Devnet rehearsal to fail, got 200: %s", overCapResp.Body.String())
+	}
+
+	// Real funded Solana Devnet on-chain broadcast (SendWithRebroadcast + priority fee + slot confirmation).
+	liveResp := stage4Req(h, "POST", srv.URL, "/api/v1/execution/solana-devnet/rehearse", `{"memo":"fased-stage4-funded-soak","estimatedMicroUsd":1000,"simulateOnly":false}`, token, srv.URL, csrfToken(token))
+	if liveResp.Code != 200 {
+		t.Fatalf("funded Solana Devnet broadcast failed (%d): %s", liveResp.Code, liveResp.Body.String())
+	}
+	var liveRes SolanaDevnetRehearseResult
+	if err := json.Unmarshal(liveResp.Body.Bytes(), &liveRes); err != nil {
+		t.Fatal(err)
+	}
+	if !liveRes.Broadcasted || !liveRes.Confirmed || liveRes.Signature == "" || liveRes.GenesisHash != onchain.SolanaDevnetGenesisHash {
+		t.Fatalf("unexpected funded Devnet broadcast result: %+v", liveRes)
+	}
+	if strings.Contains(liveRes.RPCHost, "api-key=") || strings.Contains(liveRes.RPCHost, "?") {
+		t.Fatalf("RPCHost leaked query parameters: %q", liveRes.RPCHost)
+	}
+
+	// Daily loss circuit breaker blocks further signs once DailyLossMicroUSD >= $10.
+	dayUTC := time.Now().UTC().Format("2006-01-02")
+	if err := v.RecordAgentVaultLoss(signer.AgentVaultSpendRecord{
+		VaultID:      vaultID,
+		OperationID:  "soak-loss-breaker-1",
+		Venue:        "solana",
+		Asset:        "SOL",
+		DayUTC:       dayUTC,
+		LossMicroUSD: 10_500_000,
+	}); err != nil {
+		t.Fatalf("RecordAgentVaultLoss failed: %v", err)
+	}
+	afterLossResp := stage4Req(h, "POST", srv.URL, "/api/v1/execution/solana-devnet/rehearse", `{"memo":"after-loss-breaker","estimatedMicroUsd":1000,"simulateOnly":true}`, token, srv.URL, csrfToken(token))
+	if afterLossResp.Code == 200 {
+		t.Fatalf("expected daily-loss breaker to block sign, got 200: %s", afterLossResp.Body.String())
+	}
+
+	// Permanent vault revocation blocks all further signs.
+	if err := v.RevokeAgentVault(vaultID); err != nil {
+		t.Fatalf("RevokeAgentVault failed: %v", err)
+	}
+	afterRevokeResp := stage4Req(h, "POST", srv.URL, "/api/v1/execution/solana-devnet/rehearse", `{"memo":"after-revoke","estimatedMicroUsd":1000,"simulateOnly":true}`, token, srv.URL, csrfToken(token))
+	if afterRevokeResp.Code == 200 {
+		t.Fatalf("expected revoked agent vault to block sign, got 200: %s", afterRevokeResp.Body.String())
+	}
+	vaultsAfter, err := v.AgentVaults()
+	if err != nil || len(vaultsAfter) == 0 || !vaultsAfter[0].Policy.Revoked {
+		t.Fatalf("expected revoked agent vault usage recorded, got %+v err=%v", vaultsAfter, err)
+	}
+
+	if summaryPath := strings.TrimSpace(os.Getenv("FASED_STAGE4_SOAK_SUMMARY_PATH")); summaryPath != "" {
+		if err := os.MkdirAll(filepath.Dir(summaryPath), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		summary := map[string]any{
+			"timestamp":          time.Now().UTC().Format(time.RFC3339),
+			"profile":            "testnet",
+			"mainnetLocked":      stView.MainnetLocked,
+			"wenHeld":            stView.WENHeld,
+			"wenVenueRejected":   true,
+			"overCapBlocked":     true,
+			"lossBreakerTripped": true,
+			"vaultRevoked":       true,
+			"solanaDevnetFundedBroadcast": map[string]any{
+				"rpcHost":                  liveRes.RPCHost,
+				"genesisHash":              liveRes.GenesisHash,
+				"signerPublicKey":          liveRes.SignerPublicKey,
+				"priorityFeeMicroLamports": liveRes.PriorityFeeMicroLamports,
+				"simulatedSlot":            liveRes.SimulatedSlot,
+				"broadcasted":              liveRes.Broadcasted,
+				"confirmed":                liveRes.Confirmed,
+				"attempts":                 liveRes.Attempts,
+				"signature":                liveRes.Signature,
+			},
+			"vaultUsage": vaultsAfter[0],
 		}
 		rawSummary, _ := json.MarshalIndent(summary, "", "  ")
 		if err := os.WriteFile(summaryPath, append(rawSummary, '\n'), 0o600); err != nil {

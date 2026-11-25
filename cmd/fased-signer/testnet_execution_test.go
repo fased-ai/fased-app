@@ -26,6 +26,16 @@ func TestDecodeTypedSignerStdin(t *testing.T) {
 	if err := decodeTypedSignerStdin("agent-vault-revoke", []byte(`{"vaultId":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}`), &revReq); err != nil || revReq.AgentVaultID != strings.Repeat("a", 32) {
 		t.Fatalf("agent-vault-revoke decode failed: %+v err=%v", revReq, err)
 	}
+	var kalReq signer.Request
+	if err := decodeTypedSignerStdin("kalshi-provision-key", []byte(`{"environment":"demo","keyId":"demo-key-1","privateKeyPem":"LS0tLS1CRUdJTi1UU1QtLS0tLQ=="}`), &kalReq); err != nil {
+		t.Fatalf("kalshi-provision-key decode failed: %v", err)
+	}
+	if kalReq.KalshiKey == nil || kalReq.KalshiKey.Environment != "demo" || kalReq.KalshiKey.KeyID != "demo-key-1" {
+		t.Fatalf("unexpected kalshi-provision-key decode: %+v", kalReq.KalshiKey)
+	}
+	if !isTypedOwnerSignerAction("kalshi-provision-key") || !isTypedOutputSignerAction("kalshi-provision-key") {
+		t.Fatal("expected kalshi-provision-key typed owner/output routing")
+	}
 	if !isTypedOutputSignerAction("hyperliquid-status") || !isTypedOutputSignerAction("agent-vault-list") {
 		t.Fatal("expected hyperliquid-status and agent-vault-list typed outputs")
 	}

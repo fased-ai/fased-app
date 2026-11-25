@@ -435,3 +435,94 @@ func TestStage4TestnetActivationDevnetRehearsalAndTools(t *testing.T) {
 		t.Fatalf("expected capabilities cleared on off profile: %+v", offHealth.Capabilities)
 	}
 }
+
+func TestStage4LockedSignerLazyHyperliquidBinding(t *testing.T) {
+	dir := fixtureDir(t)
+	signerDir := fixtureDir(t)
+	if err := os.Chmod(signerDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	signerID := strings.Repeat("b", 32)
+	pass := []byte("locked-signer-lazy-hl-pass-2026")
+	vaultID := strings.Repeat("c", 32)
+
+	v, err := signer.Open(signerDir, signerID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := v.Create(pass); err != nil {
+		_ = v.Close()
+		t.Fatal(err)
+	}
+	if err := v.Unlock(pass, time.Minute); err != nil {
+		_ = v.Close()
+		t.Fatal(err)
+	}
+	if err := v.ConfigureTestnetExecution(true); err != nil {
+		_ = v.Close()
+		t.Fatal(err)
+	}
+	now := time.Now().Unix()
+	if err := v.SetHyperliquidPolicy(signer.HyperliquidPolicy{
+		Version:                   1,
+		Network:                   "testnet",
+		AllowedAssets:             []string{"BTC"},
+		MaxLeverage:               3,
+		MaxNotionalMicroUSD:       10_000_000,
+		MaxOrderPriceBpsDeviation: 500,
+		ExpiresAt:                 now + 3600,
+	}); err != nil {
+		_ = v.Close()
+		t.Fatal(err)
+	}
+	// Lock signer BEFORE starting Core: HyperliquidStatus now reports Address == "" and Enabled == false.
+	v.Lock()
+
+	srv, err := Start(t.Context(), dir, "127.0.0.1:0", "", nil)
+	if err != nil {
+		_ = v.Close()
+		t.Fatal(err)
+	}
+	defer func() {
+		_ = srv.Close(context.Background())
+		_ = v.Close()
+	}()
+	cassette, err := os.ReadFile(filepath.Join("..", "hyperliquid", "testdata", "meta_and_asset_ctxs.json"))
+	if err != nil {
+		cassette, err = os.ReadFile(filepath.Join("internal", "hyperliquid", "testdata", "meta_and_asset_ctxs.json"))
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	hlClient, err := hyperliquid.NewControlledClient("testnet", &coreHyperliquidMockTransport{
+		marketsRaw: cassette,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	relay := stage4TestSignerRelay(v)
+	// Startup MUST succeed even while signer is locked with a persisted testnet policy.
+	if err := srv.ConfigureTestnetExecution(t.Context(), TestnetExecutionConfig{
+		Profile:           signer.ExecutionProfileTestnet,
+		SignerCall:        relay,
+		AgentVaultID:      vaultID,
+		HyperliquidClient: hlClient,
+	}); err != nil {
+		t.Fatalf("ConfigureTestnetExecution should tolerate locked signer at boot: %v", err)
+	}
+	if status := srv.Store.executionStatus(t.Context()); status.HyperliquidTestnet {
+		t.Fatal("expected HyperliquidTestnet=false while signer remains locked")
+	}
+
+	// Unlock signer: executionStatus and Agents must lazily bind Hyperliquid IPC.
+	if err := v.Unlock(pass, time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	if status := srv.Store.executionStatus(t.Context()); !status.HyperliquidTestnet {
+		t.Fatalf("expected lazy HyperliquidTestnet=true after unlock, got %+v", status)
+	}
+	agentsView, err := srv.Store.Agents(t.Context(), "", "")
+	if err != nil || agentsView.Hyperliquid == nil || !agentsView.Hyperliquid.LiveExecution {
+		t.Fatalf("expected Agents().Hyperliquid lazily wired after unlock, got view=%+v err=%v", agentsView.Hyperliquid, err)
+	}
+}
