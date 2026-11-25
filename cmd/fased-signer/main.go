@@ -391,8 +391,8 @@ func run(args []string, input *os.File, out, errOut io.Writer) error {
 		r.UnlockSeconds = int(*lifetime / time.Second)
 	case "fixture-update-inventory":
 		r.ProbeID = update.NewProbe()
-	case "status", "lock", "hyperliquid-status", "agent-vault-list":
-	case "hyperliquid-policy", "agent-vault-set", "agent-vault-revoke", "agent-vault-record-loss":
+	case "status", "lock", "hyperliquid-status", "agent-vault-list", "polymarket-status", "kalshi-status":
+	case "hyperliquid-policy", "agent-vault-set", "agent-vault-revoke", "agent-vault-record-loss", "kalshi-generate-key":
 		if !owner || !*requestStdin {
 			return errors.New("typed owner JSON request via --request-stdin required")
 		}
@@ -451,14 +451,14 @@ func run(args []string, input *os.File, out, errOut io.Writer) error {
 
 func isTypedOwnerSignerAction(action string) bool {
 	switch action {
-	case "hyperliquid-policy", "agent-vault-set", "agent-vault-revoke", "agent-vault-record-loss":
+	case "hyperliquid-policy", "agent-vault-set", "agent-vault-revoke", "agent-vault-record-loss", "kalshi-generate-key":
 		return true
 	}
 	return false
 }
 
 func isTypedOutputSignerAction(action string) bool {
-	return action == "hyperliquid-status" || action == "agent-vault-list" || isTypedOwnerSignerAction(action)
+	return action == "hyperliquid-status" || action == "agent-vault-list" || action == "polymarket-status" || action == "kalshi-status" || isTypedOwnerSignerAction(action)
 }
 
 func decodeStrictJSON(document []byte, dst any) error {
@@ -504,6 +504,14 @@ func decodeTypedSignerStdin(action string, document []byte, dst *signer.Request)
 			return err
 		}
 		dst.AgentVaultSpend = &rec
+	case "kalshi-generate-key":
+		var body struct {
+			KeyID string `json:"keyId"`
+		}
+		if err := decodeStrictJSON(document, &body); err != nil {
+			return err
+		}
+		dst.KalshiKeyID = body.KeyID
 	default:
 		return signer.ErrUnavailable
 	}

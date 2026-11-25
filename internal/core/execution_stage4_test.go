@@ -59,6 +59,36 @@ func stage4TestSignerRelay(v *signer.Vault) func(context.Context, signer.Request
 				return signer.Response{}, err
 			}
 			return signer.Response{SolanaDevnetSigned: signed, Status: v.Status()}, nil
+		case "polymarket-status":
+			st, err := v.PolymarketStatus()
+			if err != nil {
+				return signer.Response{}, err
+			}
+			return signer.Response{PolymarketStatus: st, Status: v.Status()}, nil
+		case "polymarket-sign-order":
+			if r.PolymarketOrder == nil {
+				return signer.Response{}, errors.New("polymarket order intent required")
+			}
+			signed, err := v.SignPolymarketOrderIPC(*r.PolymarketOrder, r.AgentVaultID)
+			if err != nil {
+				return signer.Response{}, err
+			}
+			return signer.Response{PolymarketSigned: signed, Status: v.Status()}, nil
+		case "kalshi-status":
+			st, err := v.KalshiStatus()
+			if err != nil {
+				return signer.Response{}, err
+			}
+			return signer.Response{KalshiStatus: st, Status: v.Status()}, nil
+		case "kalshi-sign-request":
+			if r.KalshiSign == nil {
+				return signer.Response{}, errors.New("kalshi sign intent required")
+			}
+			signed, err := v.SignKalshiRequestIPC(*r.KalshiSign, r.AgentVaultID)
+			if err != nil {
+				return signer.Response{}, err
+			}
+			return signer.Response{KalshiSigned: signed, Status: v.Status()}, nil
 		default:
 			return base(ctx, r)
 		}

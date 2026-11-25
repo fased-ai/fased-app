@@ -710,6 +710,18 @@ func (h *HTTPHandler) api(w http.ResponseWriter, r *http.Request) {
 		case "/api/v1/execution/solana-devnet/rehearse":
 			h.solanaDevnetRehearseAPI(w, r, token)
 			return
+		case "/api/v1/execution/polymarket/status":
+			h.polymarketStatusAPI(w, r)
+			return
+		case "/api/v1/execution/polymarket/rehearse":
+			h.polymarketRehearseAPI(w, r, token)
+			return
+		case "/api/v1/execution/kalshi/status":
+			h.kalshiStatusAPI(w, r)
+			return
+		case "/api/v1/execution/kalshi/rehearse":
+			h.kalshiRehearseAPI(w, r, token)
+			return
 		case "/api/v1/vaults":
 			h.agentVaultsAPI(w, r)
 			return
