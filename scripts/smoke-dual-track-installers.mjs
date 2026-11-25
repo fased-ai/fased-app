@@ -280,9 +280,9 @@ async function pollHealthOk(port, timeoutMs = 20000) {
   throw new Error(`Timed out waiting for ${url}: ${lastErr}`);
 }
 
-function verifyDesktopPackages({ packagesDir, workDir, cliDir, arch }) {
-  const out = { checked: [], signed: false, notarized: false };
-  if (!existsSync(packagesDir)) {
+export function verifyDesktopPackages({ packagesDir, workDir, cliDir, arch }) {
+  const out = { checked: [], cliOnly: true, signed: false, notarized: false };
+  if (!packagesDir || !existsSync(packagesDir)) {
     return out;
   }
   const files = readdirSync(packagesDir);
@@ -298,8 +298,19 @@ function verifyDesktopPackages({ packagesDir, workDir, cliDir, arch }) {
     out.notarized = Boolean(nativeMeta.notarized);
   }
 
+  const matchesLinuxArch = (name) => {
+    if (!arch) return true;
+    if (arch === "amd64")
+      return !name.includes("arm64") && !name.includes("aarch64");
+    return (
+      name.includes(arch) || (arch === "arm64" && name.includes("aarch64"))
+    );
+  };
+
   if (process.platform === "linux") {
-    const debName = files.find((f) => f.endsWith(".deb"));
+    const debName = files.find(
+      (f) => f.endsWith(".deb") && matchesLinuxArch(f),
+    );
     if (debName) {
       const debPath = path.join(packagesDir, debName);
       execFileSync("dpkg-deb", ["-I", debPath], { timeout: 20000 });
@@ -314,7 +325,9 @@ function verifyDesktopPackages({ packagesDir, workDir, cliDir, arch }) {
       );
       out.checked.push(debName);
     }
-    const appImageName = files.find((f) => f.endsWith(".AppImage"));
+    const appImageName = files.find(
+      (f) => f.endsWith(".AppImage") && matchesLinuxArch(f),
+    );
     if (appImageName) {
       const appImagePath = path.join(packagesDir, appImageName);
       const extractRoot = path.join(workDir, "appimage-extract");
@@ -444,7 +457,29 @@ function verifyDesktopPackages({ packagesDir, workDir, cliDir, arch }) {
     }
   }
   assert.ok(arch === "amd64" || arch === "arm64");
+  out.cliOnly = out.checked.length === 0;
   return out;
+}
+
+/** Parses optional --cli-dir, --desktop-dir, and --output flags for host smoke execution. */
+export function parseSmokeArgs(argv = process.argv.slice(2)) {
+  const opts = {};
+  for (let i = 0; i < argv.length; i += 1) {
+    const arg = argv[i];
+    if (arg === "--cli-dir" && argv[i + 1]) {
+      opts.cliDir = path.resolve(argv[++i]);
+    } else if (
+      (arg === "--desktop-dir" || arg === "--packages-dir") &&
+      argv[i + 1]
+    ) {
+      opts.packagesDir = path.resolve(argv[++i]);
+    } else if (arg === "--output" && argv[i + 1]) {
+      opts.outputPath = path.resolve(argv[++i]);
+    } else {
+      throw new Error(`Unknown or incomplete smoke argument: ${arg}`);
+    }
+  }
+  return opts;
 }
 
 function resolveInstalledPaths() {
@@ -630,6 +665,7 @@ export async function runHostSmoke({
   packagesDir = path.resolve(
     process.env.FASED_SMOKE_PACKAGES_DIR || ".evidence/packages",
   ),
+  outputPath = "",
 } = {}) {
   const { os: targetOS, arch: targetArch } = hostOsArch();
   const manifestSummary = verifyChecksumsAndManifest(cliDir);
@@ -907,10 +943,13 @@ export async function runHostSmoke({
     };
     const evidenceDir = path.resolve(".evidence");
     mkdirSync(evidenceDir, { recursive: true });
-    const receiptPath = path.join(
-      evidenceDir,
-      `dual-track-host-smoke-${process.platform}-${process.arch}.json`,
-    );
+    const receiptPath =
+      outputPath ||
+      path.join(
+        evidenceDir,
+        `dual-track-host-smoke-${process.platform}-${process.arch}.json`,
+      );
+    mkdirSync(path.dirname(receiptPath), { recursive: true });
     writeFileSync(receiptPath, JSON.stringify(receipt, null, 2) + "\n", {
       mode: 0o600,
     });
@@ -969,6 +1008,6 @@ if (
   process.argv[1] &&
   import.meta.url === pathToFileURL(process.argv[1]).href
 ) {
-  const receipt = await runHostSmoke();
+  const receipt = await runHostSmoke(parseSmokeArgs());
   console.log(JSON.stringify(receipt, null, 2));
 }

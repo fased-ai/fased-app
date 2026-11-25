@@ -7,10 +7,12 @@ import os from "node:os";
 import path from "node:path";
 import {
   createLoopbackFixtureTLS,
+  parseSmokeArgs,
   resolveOpenSSLBinary,
   runInstallerCommand,
   startLoopbackArchiveServer,
   verifyChecksumsAndManifest,
+  verifyDesktopPackages,
 } from "./smoke-dual-track-installers.mjs";
 
 const sha256Hex = (buf) => createHash("sha256").update(buf).digest("hex");
@@ -170,5 +172,46 @@ test("resolveOpenSSLBinary probes cleanly across platforms without ReferenceErro
       String(err),
       /Unable to locate openssl executable on Windows host/,
     );
+  }
+});
+
+test("parseSmokeArgs and verifyDesktopPackages support CLI-only linux/arm64 hosts cleanly", () => {
+  const parsed = parseSmokeArgs([
+    "--cli-dir",
+    "./dist-cli",
+    "--desktop-dir",
+    "./dist-pkg",
+    "--output",
+    "./out.json",
+  ]);
+  assert.equal(parsed.cliDir, path.resolve("./dist-cli"));
+  assert.equal(parsed.packagesDir, path.resolve("./dist-pkg"));
+  assert.equal(parsed.outputPath, path.resolve("./out.json"));
+  assert.throws(() => parseSmokeArgs(["--unknown"]), /Unknown/);
+
+  const workDir = mkdtempSync(path.join(os.tmpdir(), "fased-cli-only-smoke-"));
+  try {
+    const missing = verifyDesktopPackages({
+      packagesDir: path.join(workDir, "absent"),
+      workDir,
+      cliDir: workDir,
+      arch: "arm64",
+    });
+    assert.equal(missing.cliOnly, true);
+    assert.deepEqual(missing.checked, []);
+
+    if (process.platform === "linux") {
+      // An amd64-only .deb in packagesDir must not break an arm64 CLI-only smoke pass.
+      writeFileSync(path.join(workDir, "fased-app-linux-amd64.deb"), "dummy");
+      const arm64Only = verifyDesktopPackages({
+        packagesDir: workDir,
+        workDir,
+        cliDir: workDir,
+        arch: "arm64",
+      });
+      assert.equal(arm64Only.cliOnly, true);
+    }
+  } finally {
+    rmSync(workDir, { recursive: true, force: true });
   }
 });

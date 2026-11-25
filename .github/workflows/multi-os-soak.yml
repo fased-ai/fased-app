@@ -1,0 +1,86 @@
+name: Multi-OS & ARM64 Host Soak
+
+on:
+  workflow_dispatch:
+    inputs:
+      distros:
+        description: "Comma-separated Linux container distros to soak"
+        type: string
+        required: false
+        default: "debian:12,debian:13,fedora:41,fedora:42,fedora:43,ubuntu:24.04"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: multi-os-soak-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  arm64-native-soak:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+      - run: npm ci
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.x"
+          cache: true
+      - name: Build frontend assets & Linux sandbox prerequisite
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends bubblewrap
+          npm run build
+      - name: Native linux/arm64 Go -race suites
+        env:
+          FASED_FAST_TEST_KDF: "1"
+        run: |
+          go test -race ./internal/hostplatform ./internal/vpsnetwork ./internal/custodyinstall ./internal/maintenance ./internal/update ./internal/signer
+      - name: Native linux/arm64 dual-track CLI host smoke
+        run: |
+          node scripts/build-dual-track-cli.mjs
+          node scripts/smoke-dual-track-installers.mjs --cli-dir .evidence/dual-track-cli --desktop-dir .evidence/nonexistent-cli-only --output .evidence/dual-track-host-smoke-linux-arm64.json
+      - name: Native linux/arm64 Multi-OS container soak (Debian 12/13, Fedora 41-43, Ubuntu 24.04)
+        run: |
+          mkdir -p .evidence/multi-os-soak
+          node scripts/soak-multi-os.mjs --runtime docker --arch arm64 --distros "${{ inputs.distros || 'debian:12,debian:13,fedora:41,fedora:42,fedora:43,ubuntu:24.04' }}" --output .evidence/multi-os-soak/multi-os-soak-arm64.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: multi-os-soak-arm64
+          include-hidden-files: true
+          path: |
+            .evidence/multi-os-soak/multi-os-soak-arm64.json
+            .evidence/dual-track-host-smoke-linux-arm64.json
+          retention-days: 14
+
+  amd64-multi-os-soak:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+      - run: npm ci
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.x"
+          cache: true
+      - name: Build frontend assets
+        run: npm run build
+      - name: Linux amd64 Multi-OS container soak (Debian 12/13, Fedora 41-43, Ubuntu 24.04)
+        run: |
+          mkdir -p .evidence/multi-os-soak
+          node scripts/soak-multi-os.mjs --runtime docker --arch amd64 --distros "${{ inputs.distros || 'debian:12,debian:13,fedora:41,fedora:42,fedora:43,ubuntu:24.04' }}" --output .evidence/multi-os-soak/multi-os-soak-amd64.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: multi-os-soak-amd64
+          include-hidden-files: true
+          path: .evidence/multi-os-soak/multi-os-soak-amd64.json
+          retention-days: 14
