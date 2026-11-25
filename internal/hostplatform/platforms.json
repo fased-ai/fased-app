@@ -1,12 +1,66 @@
 [
   {
+    "id": "debian",
+    "version": "12",
+    "codename": "bookworm",
+    "gtk": "libgtk-3-0",
+    "architectures": ["amd64", "arm64"],
+    "restrictedNamespaces": false,
+    "remote": true
+  },
+  {
+    "id": "debian",
+    "version": "13",
+    "codename": "trixie",
+    "gtk": "libgtk-3-0t64",
+    "architectures": ["amd64", "arm64"],
+    "restrictedNamespaces": false,
+    "remote": true
+  },
+  {
+    "id": "fedora",
+    "version": "41",
+    "codename": "",
+    "gtk": "gtk3",
+    "architectures": ["amd64", "arm64"],
+    "restrictedNamespaces": false,
+    "remote": true
+  },
+  {
+    "id": "fedora",
+    "version": "42",
+    "codename": "",
+    "gtk": "gtk3",
+    "architectures": ["amd64", "arm64"],
+    "restrictedNamespaces": false,
+    "remote": true
+  },
+  {
+    "id": "fedora",
+    "version": "43",
+    "codename": "",
+    "gtk": "gtk3",
+    "architectures": ["amd64", "arm64"],
+    "restrictedNamespaces": false,
+    "remote": true
+  },
+  {
+    "id": "fedora",
+    "version": "44",
+    "codename": "",
+    "gtk": "gtk3",
+    "architectures": ["amd64", "arm64"],
+    "restrictedNamespaces": false,
+    "remote": true
+  },
+  {
     "id": "fedora",
     "version": "45",
     "codename": "",
     "gtk": "gtk3",
-    "architectures": ["amd64"],
+    "architectures": ["amd64", "arm64"],
     "restrictedNamespaces": false,
-    "remote": false
+    "remote": true
   },
   {
     "id": "ubuntu",

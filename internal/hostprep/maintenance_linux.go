@@ -138,6 +138,9 @@ func prepareProtectedPackages(p hostplatform.Platform, profile string, run func(
 	packages = append(packages, manager.PolicyKit)
 	if profile == "remote" {
 		packages = append(packages, "nftables", "openssh-server")
+		if p.Family == "dnf" {
+			packages = append(packages, "policycoreutils-python-utils")
+		}
 	}
 	var missing []string
 	for _, name := range packages {
@@ -174,7 +177,7 @@ func protectedOS(ctx context.Context, input []byte, out io.Writer, args ...strin
 	c.Env = []string{"PATH=/usr/sbin:/usr/bin:/sbin:/bin", "HOME=/nonexistent", "LANG=C", "DEBIAN_FRONTEND=noninteractive"}
 	c.Stdin = bytes.NewReader(input)
 	c.Stderr = out
-	if args[0] == "/usr/bin/apt-get" || args[0] == "/usr/bin/dnf" || len(args) == 2 && args[0] == "/usr/bin/tailscale" && args[1] == "up" {
+	if args[0] == "/usr/bin/apt-get" || (args[0] == "/usr/bin/dnf" && len(args) > 1 && args[1] != "repoquery") || len(args) == 2 && args[0] == "/usr/bin/tailscale" && args[1] == "up" {
 		c.Stdout = out
 		return nil, c.Run()
 	}

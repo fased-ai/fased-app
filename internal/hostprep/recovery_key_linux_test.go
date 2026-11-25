@@ -68,3 +68,39 @@ func TestRecoveryKeyRefusesSymlink(t *testing.T) {
 		t.Fatal("foreign path changed")
 	}
 }
+
+func TestRecoveryKeyMultiCandidateSelectsSingleKey(t *testing.T) {
+	k1 := recoveryKey(t)
+	k2 := recoveryKey(t)
+	k3 := recoveryKey(t)
+	candidates := k1 + "\n# comment\n" + k2 + "\n" + k1 + "\n"
+
+	for _, tc := range []struct {
+		name, input, want string
+		wantErr           bool
+	}{
+		{"default selects first", "\n", k1, false},
+		{"explicit index selects second", "2\n", k2, false},
+		{"custom pasted key", k3 + "\n", k3, false},
+		{"out-of-range index fails closed", "9\n", "", true},
+		{"invalid input fails closed", "not-a-key\n", "", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			home := t.TempDir()
+			err := prepareRecoveryKey(home, bufio.NewReader(strings.NewReader(tc.input)), io.Discard, candidates)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatal("invalid selection accepted")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			got, rErr := os.ReadFile(filepath.Join(home, ".ssh", "authorized_keys"))
+			if rErr != nil || string(got) != tc.want+"\n" {
+				t.Fatalf("authorized_keys = %q (%v), want %q", string(got), rErr, tc.want+"\n")
+			}
+		})
+	}
+}

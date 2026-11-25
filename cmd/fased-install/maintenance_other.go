@@ -53,6 +53,10 @@ func maintenancePackageTransitionCommand([]string) error {
 	return errors.New("protected package maintenance requires Linux")
 }
 
+func maintenancePackageMigrateUnitsCommand([]string, io.Writer) error {
+	return errors.New("protected package maintenance requires Linux")
+}
+
 func maintenancePackageAdoptLocalCommand(string, []string, io.Writer) error {
 	return errors.New("protected Local adoption requires Linux")
 }

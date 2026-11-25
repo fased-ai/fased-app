@@ -103,6 +103,31 @@ func maintenancePackageTransitionCommand(args []string) error {
 	return custodyinstall.TransitionPackageHelper(ctx, owner, location, instance, args[7])
 }
 
+func maintenancePackageMigrateUnitsCommand(args []string, out io.Writer) error {
+	if os.Getuid() != 0 || os.Geteuid() != 0 {
+		return errors.New("administrator package unit migration required")
+	}
+	owner, location, instance, err := packageMaintenanceArguments(args)
+	if err != nil {
+		return err
+	}
+	if err = requireFixturePackage(owner, location, instance, false); err != nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	migrated, err := custodyinstall.MigratePackageUnits(ctx, owner, location, instance)
+	if err != nil {
+		return err
+	}
+	if migrated {
+		_, err = fmt.Fprintln(out, "migrated")
+	} else {
+		_, err = fmt.Fprintln(out, "already-hardened")
+	}
+	return err
+}
+
 func maintenancePackageGateCommand(args []string) error {
 	if len(args) != 8 || args[6] != "--role" || (args[7] != "app" && args[7] != "signer") {
 		return errors.New("fixed package service role required")

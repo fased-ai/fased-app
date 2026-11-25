@@ -342,11 +342,8 @@ func RecordConfinedEnrollmentIntent(m Manifest) error {
 
 func verifyCustodyPlatform(release []byte, arch, location string) error {
 	if location == "remote" {
-		p, err := hostplatform.LookupRemote(string(release), arch)
-		if err != nil || p.ID != "ubuntu" || p.Version != "24.04" {
-			return errors.New("Remote custody currently requires the Ubuntu 24.04 profile")
-		}
-		return nil
+		_, err := hostplatform.LookupRemote(string(release), arch)
+		return err
 	}
 	if location != "" && location != "local" {
 		return errors.New("choose the original Local or Remote profile")

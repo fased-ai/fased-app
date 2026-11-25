@@ -233,7 +233,7 @@ export function renderEntry(template, config) {
       .filter((p) => p.remote)
       .map((p) => `${p.id}:${p.version}) ;;`)
       .join("\n") +
-    '\n*) die "This release supports Local; Remote requires a supported Ubuntu release and update authority." ;;\nesac';
+    '\n*) die "This release supports Local; Remote requires a supported Linux release (Ubuntu 24.04+, Debian 12/13, or Fedora 41-45) and update authority." ;;\nesac';
   const result = template.replace(/@([A-Z0-9_]+)@/g, (_, key) => {
     if (!(key in values)) throw Error("Unknown installer stamp");
     return values[key];

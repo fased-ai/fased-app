@@ -108,6 +108,9 @@ func run(args []string, in *os.File, out, errOut io.Writer) error {
 	if len(args) > 0 && args[0] == "vps" {
 		return vpsCommand(args[1:], in, out, errOut)
 	}
+	if len(args) > 0 && args[0] == "host" {
+		return hostSubcommand(args[1:], out, errOut)
+	}
 	if len(args) > 0 && args[0] == "connect" {
 		return connectCommand(args[1:], out, errOut)
 	}

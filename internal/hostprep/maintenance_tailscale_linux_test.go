@@ -82,7 +82,7 @@ func TestFreshTailscaleRefusesPriorOrChangedState(t *testing.T) {
 	if err := noPriorTailscaleState(func(string) (os.FileInfo, error) { return nil, os.ErrNotExist }); err != nil {
 		t.Fatal(err)
 	}
-	for _, existing := range []string{"/var/lib/tailscale", "/etc/tailscale", "/etc/default/tailscaled", "/run/tailscale/tailscaled.sock", "/usr/sbin/tailscaled", "/etc/systemd/system/tailscaled.service.d"} {
+	for _, existing := range []string{"/var/lib/tailscale", "/etc/tailscale", "/etc/default/tailscaled", "/etc/sysconfig/tailscaled", "/run/tailscale/tailscaled.sock", "/usr/sbin/tailscaled", "/etc/systemd/system/tailscaled.service.d"} {
 		if err := noPriorTailscaleState(func(path string) (os.FileInfo, error) {
 			if path == existing {
 				return nil, nil
@@ -154,4 +154,32 @@ func TestFreshTailscaleSocketRequiresOriginalRootDaemon(t *testing.T) {
 			t.Fatal("unexpected socket peer admission")
 		}
 	}
+}
+
+func TestTailscaleDefaultHashAndDnfCandidate(t *testing.T) {
+	t.Run("default hash falls back to /etc/sysconfig/tailscaled", func(t *testing.T) {
+		got, err := tailscaleDefaultHashWith(func(path string) (preparationFile, error) {
+			if path == "/etc/sysconfig/tailscaled" {
+				return preparationFile{root: true, regular: true, mode: 0644, data: []byte("PORT=\"41641\"\n")}, nil
+			}
+			return preparationFile{}, os.ErrNotExist
+		})
+		if err != nil || len(got) != 64 {
+			t.Fatalf("sysconfig fallback failed: %q %v", got, err)
+		}
+		if _, err := tailscaleDefaultHashWith(func(string) (preparationFile, error) { return preparationFile{}, os.ErrNotExist }); err == nil {
+			t.Fatal("missing tailscaled defaults accepted")
+		}
+	})
+
+	t.Run("dnf candidate validation", func(t *testing.T) {
+		if v, err := tailscaleDnfCandidate([]byte("1.104.7\n")); err != nil || v != "1.104.7" {
+			t.Fatalf("valid RPM candidate rejected: %q %v", v, err)
+		}
+		for _, bad := range []string{"", "1.104.4\n", "1.104.7\n1.104.8\n", strings.Repeat("1", 1025)} {
+			if _, err := tailscaleDnfCandidate([]byte(bad)); err == nil {
+				t.Fatalf("unsafe dnf candidate accepted: %q", bad)
+			}
+		}
+	})
 }

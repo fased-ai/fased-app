@@ -188,7 +188,7 @@ server_transport='' server_domain='' purge=0
 candidate_dir='' candidate_packet='' package_instance='' refresh_instance='' previous_helper=''
 while (($#)); do
   case "$1" in
-    --refresh-helper) [[ $action == install && $# -ge 2 ]] || die 'Choose one Local helper transition.'; action=refresh-helper; refresh_instance=$2; shift 2 ;;
+    --refresh-helper) [[ $action == install ]] || die 'Choose one maintenance action.'; action=refresh-helper; if (( $# >= 2 )) && [[ $2 != -* ]]; then refresh_instance=$2; shift 2; else shift 1; fi ;;
     --previous-helper) (($# >= 2)) || die 'Missing predecessor helper.'; previous_helper=$2; shift 2 ;;
     --local) profile=local; shift ;;
     --remote) profile=remote; shift ;;
@@ -209,7 +209,7 @@ while (($#)); do
     --listen) (($# >= 2)) || die 'Missing listener.'; listen=$2; shift 2 ;;
     --candidate-dir) (($# >= 2)) || die 'Missing candidate directory.'; candidate_dir=$2; shift 2 ;;
     --candidate-packet-sha256) (($# >= 2)) || die 'Missing candidate identity.'; candidate_packet=$2; shift 2 ;;
-    --help|-h) printf 'Usage: install.sh [--local|--remote|--server|--connect] [--transport tailscale|cloudflare|domain|ssh] [--domain HOST] [--open|--start|--stop|--status|--recover|--update|--setup|--wallets|--uninstall] [--purge] [--wallet-instance ID --wallet-network NETWORK] [--local --refresh-helper INSTANCE --previous-helper SHA256] [--operator USER] [--listen 127.0.0.1:PORT]\n'; exit 0 ;;
+    --help|-h) printf 'Usage: install.sh [--local|--remote|--server|--connect] [--transport tailscale|cloudflare|domain|ssh] [--domain HOST] [--open|--start|--stop|--status|--recover|--update|--setup|--wallets|--uninstall] [--purge] [--wallet-instance ID --wallet-network NETWORK] [--local|--remote --refresh-helper [INSTANCE] [--previous-helper SHA256]] [--operator USER] [--listen 127.0.0.1:PORT]\n'; exit 0 ;;
     *) die "Unknown option: $1" ;;
   esac
 done
@@ -237,7 +237,9 @@ else
   [[ -z $wallet_instance && -z $wallet_network ]] || die 'Wallet options require --wallets.'
 fi
 if [[ $action == refresh-helper ]]; then
-  [[ $profile == local && -z $operator && $(/usr/bin/id -u) != 0 && $development_only == 0 && $refresh_instance =~ ^[a-f0-9]{32}$ && $previous_helper =~ ^[a-f0-9]{64}$ ]] || die 'Use the verified Local installer as the instance owner with the exact predecessor helper.'
+  [[ ( $profile == local || $profile == remote ) && -z $operator && $(/usr/bin/id -u) != 0 && $development_only == 0 ]] || die 'Use the verified Local or Remote installer as the instance owner.'
+  [[ -z $refresh_instance || $refresh_instance =~ ^[a-f0-9]{32}$ ]] || die 'Use one exact 32-character hex instance ID.'
+  [[ -z $previous_helper || $previous_helper =~ ^[a-f0-9]{64}$ ]] || die 'Use one exact 64-character hex predecessor helper digest.'
 else
   [[ -z $previous_helper ]] || die 'A predecessor helper requires --refresh-helper.'
 fi
@@ -376,7 +378,26 @@ owner_maintenance_setup() {
   [[ $actual == "$installer_sha256" ]] || die 'Protected installer checksum differs.'
   /usr/bin/sudo -- /usr/bin/sync -f -- "$protected"
   if [[ $action == refresh-helper ]]; then
-    /usr/bin/sudo -- "$protected" maintenance-package-transition --owner "$(/usr/bin/id -u)" --location local --instance "$refresh_instance" --previous-helper "$previous_helper"
+    local owner_uid package_parent authority_file
+    owner_uid=$(/usr/bin/id -u)
+    if [[ -z $refresh_instance ]]; then
+      package_parent="/var/lib/fased-app-package/$owner_uid/$profile"
+      [[ -d $package_parent && ! -L $package_parent ]] || die 'No installed package instance found for helper refresh.'
+      local -a instances=()
+      while IFS= read -r -d '' entry; do
+        local name=${entry##*/}
+        if [[ $name =~ ^[a-f0-9]{32}$ ]]; then instances+=("$name"); fi
+      done < <(/usr/bin/find "$package_parent" -mindepth 1 -maxdepth 1 -type d -print0)
+      (( ${#instances[@]} == 1 )) || die 'Specify exact --refresh-helper INSTANCE when zero or multiple instances exist.'
+      refresh_instance=${instances[0]}
+    fi
+    if [[ -z $previous_helper ]]; then
+      authority_file="/var/lib/fased-maintenance/instances/$owner_uid/$profile/$refresh_instance/authority.json"
+      [[ -f $authority_file && ! -L $authority_file ]] || die 'Predecessor helper authority record is unavailable; specify --previous-helper.'
+      previous_helper=$(/usr/bin/sed -n 's/.*"imageSha256"[[:space:]]*:[[:space:]]*"\([a-f0-9]\{64\}\)".*/\1/p' "$authority_file" | /usr/bin/head -n1)
+      [[ $previous_helper =~ ^[a-f0-9]{64}$ ]] || die 'Cannot read predecessor helper digest; specify --previous-helper.'
+    fi
+    /usr/bin/sudo -- "$protected" maintenance-package-transition --owner "$owner_uid" --location "$profile" --instance "$refresh_instance" --previous-helper "$previous_helper"
     printf 'Fased maintenance is ready. Use Update in the browser or run fased update.\n'
     return
   fi
@@ -709,8 +730,11 @@ else runtime=''; fi
 # The unprivileged wizard confirms it and writes only its own recovery account.
 recovery_key=''
 if [[ $profile == remote && $action == install && $ssh_user == root && -f /root/.ssh/authorized_keys && ! -L /root/.ssh/authorized_keys ]]; then
-  mapfile -t recovery_candidates < <(/usr/bin/awk '($1 == "ssh-ed25519" || $1 == "ssh-rsa" || $1 ~ /^ecdsa-sha2-nistp(256|384|521)$/) && NF >= 2 { print $1 " " $2 }' /root/.ssh/authorized_keys)
-  if [[ ${#recovery_candidates[@]} == 1 ]]; then recovery_key=${recovery_candidates[0]}; fi
+  mapfile -t recovery_candidates < <(/usr/bin/awk '($1 == "ssh-ed25519" || $1 == "ssh-rsa" || $1 ~ /^ecdsa-sha2-nistp(256|384|521)$/) && NF >= 2 && !seen[$1 " " $2]++ { print $1 " " $2; if (++count >= 16) exit }' /root/.ssh/authorized_keys)
+  if (( ${#recovery_candidates[@]} > 0 )); then
+    printf -v recovery_key '%s\n' "${recovery_candidates[@]}"
+    recovery_key=${recovery_key%$'\n'}
+  fi
 fi
 body="$(declare -f die owner_install); owner_install"
 if [[ $has_tty != 1 ]]; then exec 3</dev/null; fi
