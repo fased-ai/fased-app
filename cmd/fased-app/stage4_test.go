@@ -29,6 +29,11 @@ func TestServeStage4FlagsValidation(t *testing.T) {
 			want: "--solana-devnet-rpc requires --execution-profile=testnet",
 		},
 		{
+			name: "mainnet rpc flag requires mainnet-capped profile",
+			args: []string{"serve", "--execution-profile", "testnet", "--solana-mainnet-rpc", "https://api.mainnet-beta.solana.com"},
+			want: "--solana-mainnet-rpc requires --execution-profile=mainnet-capped",
+		},
+		{
 			name: "mainnet-capped requires agent-vault-id",
 			args: []string{"serve", "--execution-profile", "mainnet-capped", "--confirm-mainnet-capped", "--custody-config", "/tmp/id.json"},
 			want: "--execution-profile=mainnet-capped requires --agent-vault-id",

@@ -189,4 +189,97 @@ func TestDevnetExecutorLifecycleAndGenesisGuard(t *testing.T) {
 	if err := exec.VerifyGenesis(t.Context()); err == nil {
 		t.Fatal("expected mainnet genesis rejection")
 	}
+
+	// MainnetExecutor pinned to SolanaMainnetGenesisHash passes on mainnet genesis and rejects devnet.
+	mainExec, err := NewMainnetExecutor(srv.URL, srv.Client().Transport)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := mainExec.VerifyGenesis(t.Context()); err != nil {
+		t.Fatalf("MainnetExecutor VerifyGenesis failed on mainnet genesis: %v", err)
+	}
+	genesis = SolanaDevnetGenesisHash
+	if err := mainExec.VerifyGenesis(t.Context()); err == nil {
+		t.Fatal("expected MainnetExecutor to reject devnet genesis")
+	}
+}
+
+func TestSolanaMainnetV0ALTValidation(t *testing.T) {
+	t.Parallel()
+	pub, _, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	altKey, _, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var feePayer, bh [32]byte
+	copy(feePayer[:], pub)
+	for i := range bh {
+		bh[i] = byte(i + 41)
+	}
+	jupKey, err := Key(Jupiter)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sysKey, err := Key(System)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	jupData := make([]byte, 40)
+	copy(jupData[:8], routeV2[:])
+	validV0 := make([]byte, 0, 256)
+	validV0 = append(validV0, 0x80, 1, 0, 1, 2)
+	validV0 = append(validV0, feePayer[:]...)
+	validV0 = append(validV0, jupKey...)
+	validV0 = append(validV0, bh[:]...)
+	validV0 = append(validV0, 1, 1, 1, 2, byte(len(jupData)))
+	validV0 = append(validV0, jupData...)
+	validV0 = append(validV0, 1)
+	validV0 = append(validV0, altKey...)
+	validV0 = append(validV0, 1, 0, 0)
+	if err := ValidateSolanaMainnetMessage(validV0, feePayer); err != nil {
+		t.Fatalf("expected valid v0/ALT message to pass, got %v", err)
+	}
+
+	// Trailing byte rejected.
+	if err := ValidateSolanaMainnetMessage(append(append([]byte(nil), validV0...), 0x00), feePayer); err == nil {
+		t.Fatal("expected trailing byte rejection in v0 message")
+	}
+
+	// Out-of-bounds loaded table index rejected.
+	oobV0 := append([]byte(nil), validV0...)
+	oobV0[len(oobV0)-1-2-32-len(jupData)-2] = 5 // acctIdx=5 with only 3 total accounts
+	if err := ValidateSolanaMainnetMessage(oobV0, feePayer); err == nil {
+		t.Fatal("expected out-of-range v0 lookup index rejection")
+	}
+
+	// Unauthorized System::Assign opcode rejected in v0 message.
+	assignData := make([]byte, 12)
+	binary.LittleEndian.PutUint32(assignData[0:4], 1)
+	badSysV0 := make([]byte, 0, 192)
+	badSysV0 = append(badSysV0, 0x80, 1, 0, 1, 2)
+	badSysV0 = append(badSysV0, feePayer[:]...)
+	badSysV0 = append(badSysV0, sysKey...)
+	badSysV0 = append(badSysV0, bh[:]...)
+	badSysV0 = append(badSysV0, 1, 1, 1, 0, byte(len(assignData)))
+	badSysV0 = append(badSysV0, assignData...)
+	badSysV0 = append(badSysV0, 0) // 0 lookup tables
+	if err := ValidateSolanaMainnetMessage(badSysV0, feePayer); err == nil {
+		t.Fatal("expected non-Transfer System opcode to be rejected")
+	}
+
+	// Non-allowlisted program rejected.
+	unknownProg, _, _ := ed25519.GenerateKey(nil)
+	badProgV0 := make([]byte, 0, 192)
+	badProgV0 = append(badProgV0, 0x80, 1, 0, 1, 2)
+	badProgV0 = append(badProgV0, feePayer[:]...)
+	badProgV0 = append(badProgV0, unknownProg...)
+	badProgV0 = append(badProgV0, bh[:]...)
+	badProgV0 = append(badProgV0, 1, 1, 1, 0, 4, 1, 2, 3, 4, 0)
+	if err := ValidateSolanaMainnetMessage(badProgV0, feePayer); err == nil {
+		t.Fatal("expected unknown program in v0 message to fail")
+	}
 }

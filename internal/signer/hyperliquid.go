@@ -20,6 +20,8 @@ const (
 	HyperliquidMaxHardNotionalMicroUSD uint64 = 100_000_000_000
 
 	hyperliquidDomainTag = "hyperliquid:v1"
+
+	hyperliquidMainnetCappedMaxOrderHardCap uint64 = 250_000_000
 )
 
 type hyperliquidVaultState struct {
@@ -32,7 +34,15 @@ var (
 	hyperliquidVaultStates       = map[*Vault]*hyperliquidVaultState{}
 	hyperliquidJournalFloor      func(*Vault) uint64
 	recordHyperliquidJournalSign func(*Vault, string, uint64, string) error
+	hyperliquidMainnetCappedHook func(*Vault) (bool, uint64)
 )
+
+func (v *Vault) hyperliquidMainnetCappedStateLocked() (bool, uint64) {
+	if hyperliquidMainnetCappedHook == nil {
+		return false, 0
+	}
+	return hyperliquidMainnetCappedHook(v)
+}
 
 // HyperliquidPolicy bounds controlled Hyperliquid L1 order signing inside internal/signer.
 type HyperliquidPolicy struct {
@@ -233,13 +243,19 @@ func validHyperliquidCloid(cloid string) bool {
 // ValidateHyperliquidPolicy enforces hard signer bounds on asset universe, leverage,
 // notional USD, price collar, optional vault address, and expiry.
 func ValidateHyperliquidPolicy(p HyperliquidPolicy, now int64) error {
+	return ValidateHyperliquidPolicyForProfile(p, now, false, 0)
+}
+
+// ValidateHyperliquidPolicyForProfile validates a Hyperliquid policy, allowing mainnet when
+// HyperliquidActivationEnabled or explicit mainnetCapped mode is active within hard caps.
+func ValidateHyperliquidPolicyForProfile(p HyperliquidPolicy, now int64, mainnetCapped bool, maxOrderMicroUSD uint64) error {
 	if p.Version != 1 {
 		return errors.New("unsupported Hyperliquid policy version")
 	}
 	if p.Network != "testnet" && p.Network != "mainnet" {
 		return errors.New("Hyperliquid policy network must be testnet or mainnet")
 	}
-	if p.Network == "mainnet" && !HyperliquidActivationEnabled {
+	if p.Network == "mainnet" && !HyperliquidActivationEnabled && !mainnetCapped {
 		return ErrUnavailable
 	}
 	if len(p.AllowedAssets) == 0 || len(p.AllowedAssets) > 32 {
@@ -258,6 +274,14 @@ func ValidateHyperliquidPolicy(p HyperliquidPolicy, now int64) error {
 	if p.MaxNotionalMicroUSD < 1_000_000 || p.MaxNotionalMicroUSD > HyperliquidMaxHardNotionalMicroUSD {
 		return errors.New("Hyperliquid notional cap out of bounds")
 	}
+	if p.Network == "mainnet" && mainnetCapped && !HyperliquidActivationEnabled {
+		if maxOrderMicroUSD == 0 || maxOrderMicroUSD > hyperliquidMainnetCappedMaxOrderHardCap {
+			return errors.New("mainnet-capped per-order ceiling invalid for Hyperliquid policy")
+		}
+		if p.MaxNotionalMicroUSD > maxOrderMicroUSD {
+			return errors.New("Hyperliquid policy notional exceeds mainnet-capped ceiling")
+		}
+	}
 	if p.MaxOrderPriceBpsDeviation == 0 || p.MaxOrderPriceBpsDeviation > 5000 {
 		return errors.New("Hyperliquid price collar must be within 1..5000 bps")
 	}
@@ -275,7 +299,12 @@ func ValidateHyperliquidPolicy(p HyperliquidPolicy, now int64) error {
 // ValidateHyperliquidOrderIntent validates an order intent against policy bounds,
 // fat-finger price collar, monotonic nonce, TIF, cloid, and expiry.
 func ValidateHyperliquidOrderIntent(intent HyperliquidOrderIntent, policy HyperliquidPolicy, lastNonce uint64, now int64) (uint64, error) {
-	if err := ValidateHyperliquidPolicy(policy, now); err != nil {
+	return ValidateHyperliquidOrderIntentForProfile(intent, policy, lastNonce, now, false, 0)
+}
+
+// ValidateHyperliquidOrderIntentForProfile validates an order intent with optional mainnet-capped profile allowance.
+func ValidateHyperliquidOrderIntentForProfile(intent HyperliquidOrderIntent, policy HyperliquidPolicy, lastNonce uint64, now int64, mainnetCapped bool, maxOrderMicroUSD uint64) (uint64, error) {
+	if err := ValidateHyperliquidPolicyForProfile(policy, now, mainnetCapped, maxOrderMicroUSD); err != nil {
 		return 0, err
 	}
 	if intent.Network != policy.Network {
@@ -312,6 +341,9 @@ func ValidateHyperliquidOrderIntent(intent HyperliquidOrderIntent, policy Hyperl
 	if notional > policy.MaxNotionalMicroUSD {
 		return 0, errors.New("Hyperliquid order notional exceeds policy cap")
 	}
+	if intent.Network == "mainnet" && mainnetCapped && !HyperliquidActivationEnabled && maxOrderMicroUSD > 0 && notional > maxOrderMicroUSD {
+		return 0, errors.New("Hyperliquid order notional exceeds mainnet-capped limit")
+	}
 	bps, hasRem, err := PriceDeviationBps(intent.LimitPrice, intent.ReferenceMarkPrice)
 	if err != nil {
 		return 0, err
@@ -325,7 +357,16 @@ func ValidateHyperliquidOrderIntent(intent HyperliquidOrderIntent, policy Hyperl
 
 // ValidateHyperliquidUpdateLeverageIntent validates leverage/margin-mode configuration against policy and nonce.
 func ValidateHyperliquidUpdateLeverageIntent(intent HyperliquidUpdateLeverageIntent, policy HyperliquidPolicy, lastNonce uint64, now int64) error {
-	if err := ValidateHyperliquidPolicy(policy, now); err != nil {
+	return ValidateHyperliquidUpdateLeverageIntentForProfile(intent, policy, lastNonce, now, false, 0)
+}
+
+// ValidateHyperliquidUpdateLeverageIntentForProfile validates leverage/margin-mode configuration with optional mainnet-capped allowance.
+func ValidateHyperliquidUpdateLeverageIntentForProfile(intent HyperliquidUpdateLeverageIntent, policy HyperliquidPolicy, lastNonce uint64, now int64, mainnetCapped bool, maxOrderMicroUSD uint64) error {
+	return validateHyperliquidUpdateLeverageIntentWithProfile(intent, policy, lastNonce, now, mainnetCapped, maxOrderMicroUSD)
+}
+
+func validateHyperliquidUpdateLeverageIntentWithProfile(intent HyperliquidUpdateLeverageIntent, policy HyperliquidPolicy, lastNonce uint64, now int64, mainnetCapped bool, maxOrderMicroUSD uint64) error {
+	if err := ValidateHyperliquidPolicyForProfile(policy, now, mainnetCapped, maxOrderMicroUSD); err != nil {
 		return err
 	}
 	if intent.Network != policy.Network {
@@ -351,7 +392,11 @@ func ValidateHyperliquidUpdateLeverageIntent(intent HyperliquidUpdateLeverageInt
 
 // ValidateHyperliquidCancelIntent validates a cancel-by-oid intent against policy and nonce.
 func ValidateHyperliquidCancelIntent(intent HyperliquidCancelIntent, policy HyperliquidPolicy, lastNonce uint64, now int64) error {
-	if err := ValidateHyperliquidPolicy(policy, now); err != nil {
+	return validateHyperliquidCancelIntentWithProfile(intent, policy, lastNonce, now, false, 0)
+}
+
+func validateHyperliquidCancelIntentWithProfile(intent HyperliquidCancelIntent, policy HyperliquidPolicy, lastNonce uint64, now int64, mainnetCapped bool, maxOrderMicroUSD uint64) error {
+	if err := ValidateHyperliquidPolicyForProfile(policy, now, mainnetCapped, maxOrderMicroUSD); err != nil {
 		return err
 	}
 	if intent.Network != policy.Network {
@@ -448,7 +493,8 @@ func (v *Vault) signHyperliquidActionLocked(network, vaultAddress string, action
 	if !v.unlocked() {
 		return nil, ErrLocked
 	}
-	if network == "mainnet" && !HyperliquidActivationEnabled {
+	hlCapped, _ := v.hyperliquidMainnetCappedStateLocked()
+	if network == "mainnet" && !HyperliquidActivationEnabled && !hlCapped {
 		return nil, ErrUnavailable
 	}
 	connectionID, err := HyperliquidActionConnectionID(actionMsgpack, nonce, vaultAddress)
@@ -524,7 +570,8 @@ func (v *Vault) signHyperliquidOrderLocked(intent HyperliquidOrderIntent, policy
 		}
 	}
 
-	notional, err := ValidateHyperliquidOrderIntent(intent, policy, lastNonce, v.now().Unix())
+	hlCapped, hlCapMaxOrder := v.hyperliquidMainnetCappedStateLocked()
+	notional, err := ValidateHyperliquidOrderIntentForProfile(intent, policy, lastNonce, v.now().Unix(), hlCapped, hlCapMaxOrder)
 	if err != nil {
 		return nil, err
 	}
@@ -580,7 +627,8 @@ func (v *Vault) signHyperliquidUpdateLeverageLocked(intent HyperliquidUpdateLeve
 		}
 	}
 
-	if err := ValidateHyperliquidUpdateLeverageIntent(intent, policy, lastNonce, v.now().Unix()); err != nil {
+	hlCapped, hlCapMaxOrder := v.hyperliquidMainnetCappedStateLocked()
+	if err := validateHyperliquidUpdateLeverageIntentWithProfile(intent, policy, lastNonce, v.now().Unix(), hlCapped, hlCapMaxOrder); err != nil {
 		return nil, err
 	}
 	actionMsgpack, err := EncodeHyperliquidUpdateLeverageAction(intent)
@@ -635,7 +683,8 @@ func (v *Vault) signHyperliquidCancelLocked(intent HyperliquidCancelIntent, poli
 		}
 	}
 
-	if err := ValidateHyperliquidCancelIntent(intent, policy, lastNonce, v.now().Unix()); err != nil {
+	hlCapped, hlCapMaxOrder := v.hyperliquidMainnetCappedStateLocked()
+	if err := validateHyperliquidCancelIntentWithProfile(intent, policy, lastNonce, v.now().Unix(), hlCapped, hlCapMaxOrder); err != nil {
 		return nil, err
 	}
 	actionMsgpack, err := EncodeHyperliquidCancelAction(intent)

@@ -67,6 +67,7 @@ type Request struct {
 	AgentVaultSpend         *AgentVaultSpendRecord           `json:"agentVaultSpend,omitempty"`
 	SolanaDevnetSign        *SolanaDevnetSignIntent          `json:"solanaDevnetSign,omitempty"`
 	SolanaMainnetCappedSign *SolanaMainnetCappedSignIntent   `json:"solanaMainnetCappedSign,omitempty"`
+	SolanaWithdraw          *SolanaWithdrawIntent            `json:"solanaWithdraw,omitempty"`
 	PolymarketOrder         *PolymarketOrderIntent           `json:"polymarketOrder,omitempty"`
 	KalshiSign              *KalshiSignIntent                `json:"kalshiSign,omitempty"`
 	KalshiKey               *KalshiKeyProvision              `json:"kalshiKey,omitempty"`
@@ -125,7 +126,7 @@ func execute(v *Vault, r Request, owner bool) Response {
 			if !v.ordinaryTradeEnabled {
 				return Response{Error: ErrUnavailable.Error()}
 			}
-		case "status", "create", "import-ordinary-seed", "unlock", "lock", "backup", "backup-history", "verify-backup", "restore", "fixture-update-inventory", "fixture-update-status", "fixture-update-prepare", "fixture-update-abort", "fixture-update-stage-write", "fixture-update-stage-status", "fixture-update-stage-finish", "fixture-update-preflight", "fixture-install-controller":
+		case "status", "create", "import-ordinary-seed", "unlock", "lock", "backup", "backup-history", "verify-backup", "restore", "fixture-update-inventory", "fixture-update-status", "fixture-update-prepare", "fixture-update-abort", "fixture-update-stage-write", "fixture-update-stage-status", "fixture-update-stage-finish", "fixture-update-preflight", "fixture-install-controller", "solana-withdraw-sign":
 		default:
 			if !(v.stage4ExecutionAllowed() && isStage4TestnetAction(r.Action)) {
 				return Response{Error: ErrUnavailable.Error()}
@@ -171,9 +172,9 @@ func execute(v *Vault, r Request, owner bool) Response {
 			return Response{Error: "one typed swap action required"}
 		}
 	}
-	if r.HyperliquidPolicy != nil || r.HyperliquidOrder != nil || r.HyperliquidLeverage != nil || r.HyperliquidCancel != nil || r.AgentVault != nil || r.AgentVaultID != "" || r.AgentVaultSpend != nil || r.SolanaDevnetSign != nil || r.SolanaMainnetCappedSign != nil || r.PolymarketOrder != nil || r.KalshiSign != nil || r.KalshiKey != nil || r.KalshiKeyID != "" || r.LighterOrder != nil || r.LighterCancel != nil || r.LighterLeverage != nil ||
+	if r.HyperliquidPolicy != nil || r.HyperliquidOrder != nil || r.HyperliquidLeverage != nil || r.HyperliquidCancel != nil || r.AgentVault != nil || r.AgentVaultID != "" || r.AgentVaultSpend != nil || r.SolanaDevnetSign != nil || r.SolanaMainnetCappedSign != nil || r.SolanaWithdraw != nil || r.PolymarketOrder != nil || r.KalshiSign != nil || r.KalshiKey != nil || r.KalshiKeyID != "" || r.LighterOrder != nil || r.LighterCancel != nil || r.LighterLeverage != nil ||
 		r.Action == "hyperliquid-status" || r.Action == "hyperliquid-policy" || r.Action == "hyperliquid-sign-leverage" || r.Action == "hyperliquid-sign-order" || r.Action == "hyperliquid-sign-cancel" ||
-		r.Action == "agent-vault-set" || r.Action == "agent-vault-revoke" || r.Action == "agent-vault-list" || r.Action == "agent-vault-record-loss" || r.Action == "solana-devnet-sign" || r.Action == "solana-mainnet-capped-sign" ||
+		r.Action == "agent-vault-set" || r.Action == "agent-vault-revoke" || r.Action == "agent-vault-list" || r.Action == "agent-vault-record-loss" || r.Action == "solana-devnet-sign" || r.Action == "solana-mainnet-capped-sign" || r.Action == "solana-withdraw-sign" ||
 		r.Action == "polymarket-status" || r.Action == "polymarket-sign-order" ||
 		r.Action == "kalshi-status" || r.Action == "kalshi-generate-key" || r.Action == "kalshi-provision-key" || r.Action == "kalshi-sign-request" ||
 		r.Action == "lighter-status" || r.Action == "lighter-sign-order" || r.Action == "lighter-sign-cancel" || r.Action == "lighter-sign-leverage" {
@@ -196,6 +197,8 @@ func execute(v *Vault, r Request, owner bool) Response {
 		case "solana-mainnet-capped-sign":
 			expected.SolanaMainnetCappedSign = r.SolanaMainnetCappedSign
 			expected.AgentVaultID = r.AgentVaultID
+		case "solana-withdraw-sign":
+			expected.SolanaWithdraw = r.SolanaWithdraw
 		case "polymarket-sign-order":
 			expected.PolymarketOrder = r.PolymarketOrder
 			expected.AgentVaultID = r.AgentVaultID
@@ -230,7 +233,7 @@ func execute(v *Vault, r Request, owner bool) Response {
 	}
 	if v.network != "" {
 		switch r.Action {
-		case "receipt-rpc-save", "receipt-rpc-unlock", "swap-approve", "swap-sign", "swap-receipt", "swap-reconcile", "swap-cancel", "status", "create", "import-managed-seed", "import-ordinary-seed", "unlock", "lock", "backup", "backup-history", "verify-backup", "restore", "fixture-update-inventory", "fixture-update-status", "fixture-update-prepare", "fixture-update-abort", "fixture-update-stage-write", "fixture-update-stage-status", "fixture-update-stage-finish", "fixture-update-preflight", "fixture-install-controller":
+		case "receipt-rpc-save", "receipt-rpc-unlock", "swap-approve", "swap-sign", "swap-receipt", "swap-reconcile", "swap-cancel", "status", "create", "import-managed-seed", "import-ordinary-seed", "unlock", "lock", "backup", "backup-history", "verify-backup", "restore", "fixture-update-inventory", "fixture-update-status", "fixture-update-prepare", "fixture-update-abort", "fixture-update-stage-write", "fixture-update-stage-status", "fixture-update-stage-finish", "fixture-update-preflight", "fixture-install-controller", "solana-withdraw-sign":
 		default:
 			if !(v.stage4ExecutionAllowed() && isStage4TestnetAction(r.Action)) {
 				return Response{Error: ErrUnavailable.Error()}
@@ -535,6 +538,16 @@ func execute(v *Vault, r Request, owner bool) Response {
 			return Response{Error: "solana mainnet-capped sign intent required", Status: v.Status()}
 		}
 		signed, e := v.SignSolanaMainnetCappedIPC(*r.SolanaMainnetCappedSign, r.AgentVaultID)
+		out := Response{SolanaDevnetSigned: signed, Status: v.Status()}
+		if e != nil {
+			out.Error = e.Error()
+		}
+		return out
+	case "solana-withdraw-sign":
+		if r.SolanaWithdraw == nil {
+			return Response{Error: "solana withdrawal intent required", Status: v.Status()}
+		}
+		signed, e := v.SignSolanaWithdrawal(*r.SolanaWithdraw)
 		out := Response{SolanaDevnetSigned: signed, Status: v.Status()}
 		if e != nil {
 			out.Error = e.Error()

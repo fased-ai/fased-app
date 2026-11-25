@@ -59,6 +59,15 @@ func stage4TestSignerRelay(v *signer.Vault) func(context.Context, signer.Request
 				return signer.Response{}, err
 			}
 			return signer.Response{SolanaDevnetSigned: signed, Status: v.Status()}, nil
+		case "solana-mainnet-capped-sign":
+			if r.SolanaMainnetCappedSign == nil {
+				return signer.Response{}, errors.New("solana mainnet-capped sign intent required")
+			}
+			signed, err := v.SignSolanaMainnetCappedIPC(*r.SolanaMainnetCappedSign, r.AgentVaultID)
+			if err != nil {
+				return signer.Response{}, err
+			}
+			return signer.Response{SolanaDevnetSigned: signed, Status: v.Status()}, nil
 		case "polymarket-status":
 			st, err := v.PolymarketStatus()
 			if err != nil {

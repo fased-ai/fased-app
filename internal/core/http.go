@@ -716,6 +716,9 @@ func (h *HTTPHandler) api(w http.ResponseWriter, r *http.Request) {
 		case "/api/v1/execution/solana-devnet/rehearse":
 			h.solanaDevnetRehearseAPI(w, r, token)
 			return
+		case "/api/v1/execution/solana-mainnet/execute":
+			h.solanaMainnetExecuteAPI(w, r, token)
+			return
 		case "/api/v1/execution/polymarket/status":
 			h.polymarketStatusAPI(w, r)
 			return

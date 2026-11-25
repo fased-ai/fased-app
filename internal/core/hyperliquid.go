@@ -111,11 +111,19 @@ var (
 	hyperliquidRuntimeMu           sync.RWMutex
 	hyperliquidRuntimes            = map[*Store]*hyperliquidRuntime{}
 	stage4LiveExecutionHook        func(*Store) bool
+	stage4MainnetCappedHook        func(*Store) (bool, uint64)
 	stage4ClearHook                func(*Store)
 	stage4EnsureHyperliquidIPCHook func(context.Context, *Store) bool
 	extraClearHooksMu              sync.Mutex
 	extraClearHooks                []func(*Store)
 )
+
+func (s *Store) stage4MainnetCapped() (bool, uint64) {
+	if stage4MainnetCappedHook == nil {
+		return false, 0
+	}
+	return stage4MainnetCappedHook(s)
+}
 
 func registerStoreCloseHook(fn func(*Store)) {
 	if fn == nil {
@@ -179,11 +187,16 @@ func (s *Store) configureHyperliquidRuntime(client *hyperliquid.Client, backend 
 	if hyperliquidActivationEnabled || signer.HyperliquidActivationEnabled {
 		return signer.ErrUnavailable
 	}
-	if policy.Network == "mainnet" || policy.Network != client.Network() {
+	cappedProfile, maxOrderMicro := s.stage4MainnetCapped()
+	allowMainnetCapped := cappedProfile && client.MainnetCapped()
+	if (policy.Network == "mainnet" && !allowMainnetCapped) || policy.Network != client.Network() {
 		return signer.ErrUnavailable
 	}
 	now := s.now().Unix()
-	if err := signer.ValidateHyperliquidPolicy(policy, now); err != nil {
+	if !allowMainnetCapped {
+		maxOrderMicro = 0
+	}
+	if err := signer.ValidateHyperliquidPolicyForProfile(policy, now, allowMainnetCapped, maxOrderMicro); err != nil {
 		return err
 	}
 	canonAddr, err := signer.ValidateEthereumAddress(addr)
@@ -294,11 +307,13 @@ func (s *Store) hyperliquidProjection(revision int64, review *HyperliquidReview)
 	}
 	policyCopy := rt.policy
 	policyCopy.AllowedAssets = slices.Clone(rt.policy.AllowedAssets)
+	cappedProfile, _ := s.stage4MainnetCapped()
+	allowMainnetCapped := cappedProfile && rt.client != nil && rt.client.MainnetCapped() && rt.policy.Network == "mainnet"
 	return &HyperliquidView{
 		Version:           hyperliquidVersion,
 		Available:         true,
 		ActivationEnabled: hyperliquidActivationEnabled,
-		LiveExecution:     stage4LiveExecutionHook != nil && stage4LiveExecutionHook(s) && rt.policy.Network == "testnet",
+		LiveExecution:     stage4LiveExecutionHook != nil && stage4LiveExecutionHook(s) && (rt.policy.Network == "testnet" || allowMainnetCapped),
 		Network:           rt.policy.Network,
 		SignerAddress:     rt.address,
 		Policy:            policyCopy,
@@ -402,7 +417,12 @@ func (s *Store) changeHyperliquid(ctx context.Context, c AgentCommand) (*Hyperli
 		lastNonce := rt.lastNonce
 		markets := rt.markets
 		policy := rt.policy
-		preview, _, err := hyperliquid.PreviewOrder(markets, policy, draft, levNonce, orderNonce, now)
+		cappedProfile, previewMaxOrder := s.stage4MainnetCapped()
+		previewMainnetCapped := cappedProfile && policy.Network == "mainnet"
+		if !previewMainnetCapped {
+			previewMaxOrder = 0
+		}
+		preview, _, err := hyperliquid.PreviewOrderForProfile(markets, policy, draft, levNonce, orderNonce, now, previewMainnetCapped, previewMaxOrder)
 		if err != nil {
 			rt.mu.Unlock()
 			return nil, "", err
@@ -416,7 +436,7 @@ func (s *Store) changeHyperliquid(ctx context.Context, c AgentCommand) (*Hyperli
 			Nonce:      levNonce,
 			ExpiresAt:  preview.Intent.ExpiresAt,
 		}
-		if err := signer.ValidateHyperliquidUpdateLeverageIntent(levIntent, policy, lastNonce, now); err != nil {
+		if err := signer.ValidateHyperliquidUpdateLeverageIntentForProfile(levIntent, policy, lastNonce, now, previewMainnetCapped, previewMaxOrder); err != nil {
 			rt.mu.Unlock()
 			return nil, "", err
 		}

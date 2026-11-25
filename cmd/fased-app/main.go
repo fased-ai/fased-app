@@ -231,6 +231,7 @@ func run(args []string, in *os.File, out, errOut io.Writer) error {
 	executionProfile := flags.String("execution-profile", signer.ExecutionProfileOff, "Stage 4 non-WEN execution profile: off, testnet, or mainnet-capped")
 	agentVaultID := flags.String("agent-vault-id", "", "optional typed AgentVault ID for Stage 4 testnet or mainnet-capped execution")
 	solanaDevnetRPC := flags.String("solana-devnet-rpc", "", "optional HTTPS Solana Devnet JSON-RPC endpoint for Stage 4 rehearsal")
+	solanaMainnetRPC := flags.String("solana-mainnet-rpc", "", "optional HTTPS Solana Mainnet-Beta JSON-RPC endpoint for Stage 4 mainnet-capped execution")
 	confirmMainnetCapped := flags.Bool("confirm-mainnet-capped", false, "explicit owner confirmation required for --execution-profile=mainnet-capped")
 	mainnetMaxOrderMicroUSD := flags.Uint64("mainnet-max-order-micro-usd", 0, "per-order ceiling in micro-USD (<= 250000000 = $250) for mainnet-capped")
 	mainnetMaxDailyMicroUSD := flags.Uint64("mainnet-max-daily-micro-usd", 0, "daily spend ceiling in micro-USD (<= 1000000000 = $1000) for mainnet-capped")
@@ -248,6 +249,9 @@ func run(args []string, in *os.File, out, errOut io.Writer) error {
 	}
 	if *solanaDevnetRPC != "" && *executionProfile != signer.ExecutionProfileTestnet {
 		return errors.New("--solana-devnet-rpc requires --execution-profile=testnet")
+	}
+	if *solanaMainnetRPC != "" && *executionProfile != signer.ExecutionProfileMainnetCapped {
+		return errors.New("--solana-mainnet-rpc requires --execution-profile=mainnet-capped")
 	}
 	if *executionProfile == signer.ExecutionProfileTestnet && (args[0] != "serve" || *custodyConfig == "" || *sessionFixture || *aiFixture) {
 		return errors.New("--execution-profile=testnet requires serve with --custody-config and no development fixture modes")
@@ -361,10 +365,11 @@ func run(args []string, in *os.File, out, errOut io.Writer) error {
 			source = "local"
 		}
 		return serveInstalledRuntimeWithStage4(*installationRoot, *dir, *listen, *publicOrigin, *researchOrigin, *instanceLocation, *remoteTransport, source, ownerUID, installedProviderFixture, *requirePassword, out, core.TestnetExecutionConfig{
-			Profile:         *executionProfile,
-			MainnetPolicy:   mainnetPolicy,
-			AgentVaultID:    *agentVaultID,
-			SolanaDevnetRPC: *solanaDevnetRPC,
+			Profile:          *executionProfile,
+			MainnetPolicy:    mainnetPolicy,
+			AgentVaultID:     *agentVaultID,
+			SolanaDevnetRPC:  *solanaDevnetRPC,
+			SolanaMainnetRPC: *solanaMainnetRPC,
 		}, *custodyConfig)
 	case "setup-link":
 		return ownerSetupLink(ctx, *dir, *publicOrigin, out)

@@ -31,11 +31,12 @@ type ControlledTransport interface {
 
 // Client is a bounded Hyperliquid Exchange & Info REST adapter.
 type Client struct {
-	network     string
-	origin      string
-	http        *http.Client
-	controlled  bool
-	testnetOnly bool
+	network       string
+	origin        string
+	http          *http.Client
+	controlled    bool
+	testnetOnly   bool
+	mainnetCapped bool
 }
 
 // ValidateOrigin requires an exact match to the pinned Hyperliquid mainnet or testnet origin.
@@ -184,6 +185,18 @@ func NewTestnetExecutionClient() (*Client, error) {
 	return c, nil
 }
 
+// NewMainnetCappedExecutionClient constructs an opt-in owner-confirmed Hyperliquid
+// Mainnet execution client pinned strictly to MainnetAPIOrigin under mainnet-capped ceilings.
+func NewMainnetCappedExecutionClient() (*Client, error) {
+	c, err := NewClient("mainnet")
+	if err != nil {
+		return nil, err
+	}
+	c.controlled = true
+	c.mainnetCapped = true
+	return c, nil
+}
+
 // NewControlledClient attaches an isolated test transport for controlled Hyperliquid verification.
 func NewControlledClient(network string, rt ControlledTransport) (*Client, error) {
 	if rt == nil || !rt.ControlledFixture() {
@@ -205,10 +218,23 @@ func NewControlledClient(network string, rt ControlledTransport) (*Client, error
 	}, nil
 }
 
+// NewControlledMainnetCappedClient attaches an isolated test transport for mainnet-capped Hyperliquid tests.
+func NewControlledMainnetCappedClient(rt ControlledTransport) (*Client, error) {
+	c, err := NewControlledClient("mainnet", rt)
+	if err != nil {
+		return nil, err
+	}
+	c.mainnetCapped = true
+	return c, nil
+}
+
 func (c *Client) Network() string { return c.network }
 func (c *Client) Origin() string  { return c.origin }
 func (c *Client) Controlled() bool {
 	return c != nil && c.controlled
+}
+func (c *Client) MainnetCapped() bool {
+	return c != nil && c.mainnetCapped
 }
 
 func (c *Client) postJSON(ctx context.Context, path string, reqBody any) ([]byte, error) {
@@ -589,7 +615,7 @@ func (c *Client) canSubmit(network string) error {
 	if network != c.network || (c.testnetOnly && network != "testnet") {
 		return ErrExecutionDisabled
 	}
-	if network == "mainnet" && !signer.HyperliquidActivationEnabled {
+	if network == "mainnet" && !signer.HyperliquidActivationEnabled && !c.mainnetCapped {
 		return ErrExecutionDisabled
 	}
 	return nil

@@ -2,12 +2,22 @@ package core
 
 import (
 	"context"
+	"crypto/ed25519"
+	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/fased-ai/fased-app/internal/cex"
 	"github.com/fased-ai/fased-app/internal/equities"
+	"github.com/fased-ai/fased-app/internal/hyperliquid"
+	"github.com/fased-ai/fased-app/internal/onchain"
 	"github.com/fased-ai/fased-app/internal/signer"
 	"github.com/fased-ai/fased-app/internal/swarm"
 )
@@ -122,5 +132,218 @@ func TestStage456MainnetCappedGateAndDefaultOffInvariants(t *testing.T) {
 	_ = json.Unmarshal(sigResp.Body.Bytes(), &ss)
 	if ss["mainnetCapped"] != true || ss["mainnetLocked"] != true || ss["executionEnabled"] != false || ss["wenHeld"] != true {
 		t.Fatalf("unexpected signer-status: %+v", ss)
+	}
+}
+
+func TestMainnetCappedSolanaAndHyperliquidEndToEnd(t *testing.T) {
+	dir := fixtureDir(t)
+	vaultParent := fixtureDir(t)
+	vaultID := strings.Repeat("e", 32)
+	pass := []byte("mainnet-capped-e2e-pass-2026")
+
+	v, err := signer.OpenControlledOwnerCustody(vaultParent, vaultID, "mainnet-beta")
+	if err != nil {
+		t.Fatalf("OpenControlledOwnerCustody: %v", err)
+	}
+	defer func() { _ = v.Close() }()
+	if err := v.Create(pass); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if err := v.Unlock(pass, 10*time.Minute); err != nil {
+		t.Fatalf("Unlock: %v", err)
+	}
+	if err := v.ConfigureMainnetCappedExecution(signer.MainnetCappedPolicy{
+		Confirmed:        true,
+		MaxOrderMicroUSD: 100_000_000, // $100
+		MaxDailyMicroUSD: 250_000_000, // $250
+	}); err != nil {
+		t.Fatalf("ConfigureMainnetCappedExecution: %v", err)
+	}
+	if err := v.SetHyperliquidPolicy(signer.HyperliquidPolicy{
+		Version:                   1,
+		Network:                   "mainnet",
+		AllowedAssets:             []string{"BTC", "ETH"},
+		MaxLeverage:               5,
+		MaxNotionalMicroUSD:       100_000_000,
+		MaxOrderPriceBpsDeviation: 500,
+		ExpiresAt:                 time.Now().Add(time.Hour).Unix(),
+	}); err != nil {
+		t.Fatalf("SetHyperliquidPolicy(mainnet): %v", err)
+	}
+	agentVaultID := hex.EncodeToString([]byte("mainnetcapvault1"))
+	if err := v.SetAgentVaultPolicy(signer.AgentVaultPolicy{
+		Version:            1,
+		VaultID:            agentVaultID,
+		AgentID:            "operator",
+		AllowedVenues:      []string{"solana", "hyperliquid"},
+		AllowedAssets:      []string{"SOL", "BTC", "ETH"},
+		MaxOrderMicroUSD:   100_000_000,
+		DailySpendMicroUSD: 250_000_000,
+		DailyLossMicroUSD:  50_000_000,
+		MaxLeverage:        5,
+		ExpiresAt:          time.Now().Add(time.Hour).Unix(),
+	}); err != nil {
+		t.Fatalf("SetAgentVaultPolicy: %v", err)
+	}
+
+	var bh [32]byte
+	for i := range bh {
+		bh[i] = byte(i + 5)
+	}
+	bhB58 := onchain.Base58(bh[:])
+	rpcSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			ID     uint64 `json:"id"`
+			Method string `json:"method"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		var result any
+		switch req.Method {
+		case "getGenesisHash":
+			result = onchain.SolanaMainnetGenesisHash
+		case "getLatestBlockhash":
+			result = map[string]any{
+				"context": map[string]any{"slot": 200},
+				"value":   map[string]any{"blockhash": bhB58, "lastValidBlockHeight": 999999},
+			}
+		case "getRecentPrioritizationFees":
+			result = []map[string]any{{"slot": 200, "prioritizationFee": 500}}
+		case "simulateTransaction":
+			result = map[string]any{"context": map[string]any{"slot": 201}, "value": map[string]any{"err": nil}}
+		case "getBlockHeight":
+			result = uint64(999000)
+		case "sendTransaction":
+			result = ""
+		case "getSignatureStatuses":
+			result = map[string]any{"value": []map[string]any{{"err": nil, "confirmationStatus": "confirmed"}}}
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"jsonrpc": "2.0", "id": req.ID, "result": result})
+	}))
+	defer rpcSrv.Close()
+
+	cassette, err := os.ReadFile(filepath.Join("..", "hyperliquid", "testdata", "meta_and_asset_ctxs.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	hlTransport := &coreHyperliquidMockTransport{
+		marketsRaw:   cassette,
+		nextOid:      9000,
+		orderStates:  map[uint64]string{},
+		orderByCloid: map[string]uint64{},
+		cloidByOid:   map[uint64]string{},
+		appliedLev: map[string]struct {
+			leverage uint32
+			isCross  bool
+		}{},
+	}
+	hlClient, err := hyperliquid.NewControlledMainnetCappedClient(hlTransport)
+	if err != nil {
+		t.Fatalf("NewControlledMainnetCappedClient: %v", err)
+	}
+
+	srv, err := Start(t.Context(), dir, "127.0.0.1:0", "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer srv.Close(context.Background())
+	token := claimFixture(t, srv.Store)
+	h := srv.HTTP.Handler.(*HTTPHandler)
+
+	if err := srv.ConfigureTestnetExecution(t.Context(), TestnetExecutionConfig{
+		Profile: signer.ExecutionProfileMainnetCapped,
+		MainnetPolicy: signer.MainnetCappedPolicy{
+			Confirmed:        true,
+			MaxOrderMicroUSD: 100_000_000,
+			MaxDailyMicroUSD: 250_000_000,
+		},
+		AgentVaultID:       agentVaultID,
+		SignerCall:         stage4TestSignerRelay(v),
+		SolanaMainnetRPC:   rpcSrv.URL,
+		SolanaRoundTripper: rpcSrv.Client().Transport,
+		HyperliquidClient:  hlClient,
+	}); err != nil {
+		t.Fatalf("ConfigureTestnetExecution(mainnet-capped) failed: %v", err)
+	}
+	defer srv.Store.clearStage4Runtime()
+	defer func() { _ = srv.Store.clearHyperliquidRuntime() }()
+
+	execResp := stage4Req(h, http.MethodGet, srv.URL, "/api/v1/execution/status", "", token, "", "")
+	var ev ExecutionStatusView
+	if execResp.Code != 200 || json.Unmarshal(execResp.Body.Bytes(), &ev) != nil {
+		t.Fatalf("GET /api/v1/execution/status failed (%d): %s", execResp.Code, execResp.Body.String())
+	}
+	if !ev.WalletSigner || !ev.FinancialExecution || ev.MainnetLocked || !ev.MainnetCapped || !ev.SolanaMainnetReady || !ev.HyperliquidMainnet || !ev.WENHeld {
+		t.Fatalf("unexpected wired mainnet-capped status: %+v", ev)
+	}
+
+	// 1. Solana Mainnet-Beta v0/ALT message execution succeeds under cap and rejects >$100.
+	st := v.Status()
+	pubRaw, _ := hex.DecodeString(st.Account.PublicKey)
+	jupKey, _ := onchain.Key(onchain.Jupiter)
+	altKey, _, _ := ed25519.GenerateKey(nil)
+	jupData := make([]byte, 40)
+	copy(jupData[:8], []byte{187, 100, 250, 204, 49, 196, 175, 20})
+	v0Msg := make([]byte, 0, 256)
+	v0Msg = append(v0Msg, 0x80, 1, 0, 1, 2)
+	v0Msg = append(v0Msg, pubRaw...)
+	v0Msg = append(v0Msg, jupKey...)
+	v0Msg = append(v0Msg, bh[:]...)
+	v0Msg = append(v0Msg, 1, 1, 1, 2, byte(len(jupData)))
+	v0Msg = append(v0Msg, jupData...)
+	v0Msg = append(v0Msg, 1)
+	v0Msg = append(v0Msg, altKey...)
+	v0Msg = append(v0Msg, 1, 0, 0)
+
+	execBody, _ := json.Marshal(SolanaMainnetExecuteRequest{
+		Asset:             "SOL",
+		MessageBase64:     base64.StdEncoding.EncodeToString(v0Msg),
+		EstimatedMicroUSD: 40_000_000,
+	})
+	solResp := stage4Req(h, http.MethodPost, srv.URL, "/api/v1/execution/solana-mainnet/execute", string(execBody), token, srv.URL, csrfToken(token))
+	if solResp.Code != 200 {
+		t.Fatalf("POST /api/v1/execution/solana-mainnet/execute failed (%d): %s", solResp.Code, solResp.Body.String())
+	}
+	overBody, _ := json.Marshal(SolanaMainnetExecuteRequest{
+		Asset:             "SOL",
+		MessageBase64:     base64.StdEncoding.EncodeToString(v0Msg),
+		EstimatedMicroUSD: 150_000_000,
+	})
+	overResp := stage4Req(h, http.MethodPost, srv.URL, "/api/v1/execution/solana-mainnet/execute", string(overBody), token, srv.URL, csrfToken(token))
+	if overResp.Code != 400 {
+		t.Fatalf("expected >$100 Solana mainnet order to return 400, got %d: %s", overResp.Code, overResp.Body.String())
+	}
+
+	// 2. Hyperliquid Mainnet-Capped order review + submit enforces $100 cap.
+	agView, err := srv.Store.Agents(t.Context(), "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if agView.Hyperliquid == nil || !agView.Hyperliquid.LiveExecution || agView.Hyperliquid.Network != "mainnet" {
+		t.Fatalf("expected live mainnet Hyperliquid view, got %+v", agView.Hyperliquid)
+	}
+	hlRev, err := srv.Store.ChangeAgents(t.Context(), AgentCommand{
+		Action:   "hyperliquid-review",
+		Revision: agView.Revision,
+		Hyperliquid: &HyperliquidCommand{
+			Request: &hyperliquid.OrderDraft{
+				Asset:       "ETH",
+				IsBuy:       true,
+				LimitPrice:  "3200",
+				Size:        "0.02",
+				Leverage:    2,
+				TimeInForce: "Gtc",
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("mainnet-capped hyperliquid-review failed: %v", err)
+	}
+	hlSub, err := srv.Store.ChangeAgents(t.Context(), AgentCommand{
+		Action:      "hyperliquid-submit",
+		Revision:    agView.Revision,
+		Hyperliquid: &HyperliquidCommand{Digest: hlRev.Hyperliquid.Review.Digest},
+	})
+	if err != nil || len(hlSub.Hyperliquid.Orders) != 1 || hlSub.Hyperliquid.Orders[0].State != "resting" {
+		t.Fatalf("mainnet-capped hyperliquid-submit failed: orders=%+v err=%v", hlSub, err)
 	}
 }
