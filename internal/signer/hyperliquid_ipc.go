@@ -10,13 +10,13 @@ import (
 
 func init() {
 	hyperliquidJournalFloor = func(v *Vault) uint64 {
-		if v != nil && v.ledger != nil && v.ledger.ref.Version == 1 {
+		if v != nil && v.ledger.allowStage4PolicyReplay() {
 			return v.ledger.hlLastNonce
 		}
 		return 0
 	}
 	recordHyperliquidJournalSign = func(v *Vault, action string, nonce uint64, digest string) error {
-		if v == nil || v.ledger == nil || v.ledger.main == nil || v.ledger.ref.Version != 1 {
+		if v == nil || v.ledger == nil || v.ledger.main == nil || !v.ledger.allowStage4PolicyReplay() {
 			return nil
 		}
 		return v.ledger.append(v, journalRecord{
@@ -137,8 +137,21 @@ func (l *ledger) applyAgentVaultSpend(r journalRecord) error {
 	return nil
 }
 
+func (v *Vault) allowStage4HyperliquidVaultLocked() bool {
+	if v.closed || v.ledger == nil {
+		return false
+	}
+	if v.network == "mainnet" || v.network == "mainnet-beta" {
+		return false
+	}
+	if v.ledger.ref.Version == 1 && !v.ordinary && v.network == "" {
+		return true
+	}
+	return v.testnetExecEnabled && v.ledger.ref.Version == 3 && v.network == "devnet"
+}
+
 func (v *Vault) requireControlledHyperliquidUnlockedLocked() (*hyperliquidVaultState, error) {
-	if v.closed || v.ordinary || v.network != "" || v.ledger == nil || v.ledger.main == nil || v.ledger.ref.Version != 1 {
+	if !v.allowStage4HyperliquidVaultLocked() || v.ledger.main == nil {
 		return nil, ErrUnavailable
 	}
 	st, ok := v.hyperliquidState()
@@ -209,7 +222,7 @@ func (v *Vault) HyperliquidStatus() (*HyperliquidStatus, error) {
 	}
 	v.mu.Lock()
 	defer v.mu.Unlock()
-	if v.closed || v.ordinary || v.network != "" || v.ledger == nil || v.ledger.ref.Version != 1 {
+	if !v.allowStage4HyperliquidVaultLocked() {
 		return nil, ErrUnavailable
 	}
 	st, ok := v.hyperliquidState()
@@ -319,7 +332,7 @@ func (v *Vault) AgentVaults() ([]AgentVaultUsage, error) {
 	}
 	v.mu.Lock()
 	defer v.mu.Unlock()
-	if v.closed || v.ordinary || v.network != "" || v.ledger == nil || v.ledger.ref.Version != 1 {
+	if !v.allowStage4HyperliquidVaultLocked() {
 		return nil, ErrUnavailable
 	}
 	st, ok := v.hyperliquidState()
@@ -330,9 +343,12 @@ func (v *Vault) AgentVaults() ([]AgentVaultUsage, error) {
 	return v.agentVaultUsageLocked(dayUTC), nil
 }
 
-func (v *Vault) validateAgentVaultForHyperliquidLocked(agentVaultID, asset string, leverage uint32, notional uint64, reduceOnly bool, nowUnix int64, dayUTC string) error {
+func (v *Vault) validateAgentVaultForVenueLocked(agentVaultID, venue, asset string, leverage uint32, notional uint64, reduceOnly bool, nowUnix int64, dayUTC string) error {
 	if agentVaultID == "" {
 		return nil
+	}
+	if !AllowedAgentVaultVenue(venue) {
+		return errors.New("unsupported agent vault venue")
 	}
 	p, ok := v.ledger.agentVaults[agentVaultID]
 	if !ok {
@@ -344,13 +360,13 @@ func (v *Vault) validateAgentVaultForHyperliquidLocked(agentVaultID, asset strin
 	if nowUnix >= p.ExpiresAt {
 		return errors.New("agent vault expired")
 	}
-	if !slices.Contains(p.AllowedVenues, "hyperliquid") {
-		return errors.New("agent vault forbids hyperliquid venue")
+	if !slices.Contains(p.AllowedVenues, venue) {
+		return fmt.Errorf("agent vault forbids %s venue", venue)
 	}
 	if !slices.Contains(p.AllowedAssets, asset) {
 		return errors.New("agent vault forbids asset")
 	}
-	if leverage > p.MaxLeverage {
+	if leverage > 0 && leverage > p.MaxLeverage {
 		return errors.New("agent vault leverage limit exceeded")
 	}
 	if notional > 0 && notional > p.MaxOrderMicroUSD {
@@ -389,7 +405,7 @@ func (v *Vault) SignHyperliquidUpdateLeverageIPC(intent HyperliquidUpdateLeverag
 		return nil, errors.New("hyperliquid policy not configured on signer")
 	}
 	nowTime := v.now()
-	if err := v.validateAgentVaultForHyperliquidLocked(agentVaultID, intent.Asset, intent.Leverage, 0, false, nowTime.Unix(), nowTime.UTC().Format("2006-01-02")); err != nil {
+	if err := v.validateAgentVaultForVenueLocked(agentVaultID, "hyperliquid", intent.Asset, intent.Leverage, 0, false, nowTime.Unix(), nowTime.UTC().Format("2006-01-02")); err != nil {
 		return nil, err
 	}
 	return v.signHyperliquidUpdateLeverageLocked(intent, clone(*v.ledger.hlPolicy))
@@ -424,7 +440,7 @@ func (v *Vault) SignHyperliquidOrderIPC(intent HyperliquidOrderIntent, agentVaul
 		return nil, err
 	}
 	dayUTC := nowTime.UTC().Format("2006-01-02")
-	if err := v.validateAgentVaultForHyperliquidLocked(agentVaultID, intent.Asset, intent.Leverage, notional, intent.ReduceOnly, nowTime.Unix(), dayUTC); err != nil {
+	if err := v.validateAgentVaultForVenueLocked(agentVaultID, "hyperliquid", intent.Asset, intent.Leverage, notional, intent.ReduceOnly, nowTime.Unix(), dayUTC); err != nil {
 		return nil, err
 	}
 

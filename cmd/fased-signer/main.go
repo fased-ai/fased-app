@@ -4,6 +4,7 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -114,8 +115,15 @@ func run(args []string, input *os.File, out, errOut io.Writer) error {
 	guardSource := flags.String("guard-source-sha256", "", "fixed replacement source digest")
 	guardStage := flags.String("guard-stage", "", "pair verification before or after replacement")
 	windowInstance := flags.String("window-instance", "", "exact enrolled instance for the isolated owner window")
+	executionProfile := flags.String("execution-profile", signer.ExecutionProfileOff, "Stage 4 non-WEN execution profile: off or testnet")
 	if err := flags.Parse(args[1:]); err != nil {
 		return err
+	}
+	if *executionProfile != signer.ExecutionProfileOff && *executionProfile != signer.ExecutionProfileTestnet {
+		return errors.New("execution profile must be off or testnet")
+	}
+	if *executionProfile == signer.ExecutionProfileTestnet && args[0] != "serve" {
+		return errors.New("execution profile applies only to serve")
 	}
 	if flags.NArg() != 0 || (*fixture == *ordinary) || *configPath == "" {
 		return errors.New("select one custody mode and an identity configuration")
@@ -155,6 +163,9 @@ func run(args []string, input *os.File, out, errOut io.Writer) error {
 		return signer.ErrUnavailable
 	}
 	if *ordinary && (c.Version != 3 || c.Mode != signer.OrdinaryCustodyMode || c.Profile != signer.OwnerCustodyProfile || c.Provenance != signer.OwnerKeyProvenance) {
+		return signer.ErrUnavailable
+	}
+	if *executionProfile == signer.ExecutionProfileTestnet && (c.Version == 2 || c.Network == "mainnet-beta" || c.Network == "mainnet" || (c.Version == 3 && c.Network != "devnet")) {
 		return signer.ErrUnavailable
 	}
 	if args[0] == "ordinary-reader-handoff" {
@@ -220,13 +231,17 @@ func run(args []string, input *os.File, out, errOut io.Writer) error {
 		serve := signer.Serve
 		if *fixture && c.Version == 3 && compiledFixtureServe != nil {
 			serve = compiledFixtureServe
+		} else if *executionProfile == signer.ExecutionProfileTestnet {
+			serve = signer.ServeTestnetExecution
 		}
 		server, err := serve(ctx, c)
 		if err != nil {
 			return err
 		}
 		defer server.Close()
-		if *ordinary {
+		if *executionProfile == signer.ExecutionProfileTestnet {
+			fmt.Fprintf(out, "Testnet signer ready; pid=%d uid=%d; devnet and testnet policy-gated signing enabled.\n", os.Getpid(), os.Geteuid())
+		} else if *ordinary {
 			fmt.Fprintf(out, "Protected signer ready; pid=%d uid=%d.\n", os.Getpid(), os.Geteuid())
 		} else {
 			fmt.Fprintf(out, "Disposable signer ready; pid=%d uid=%d; real wallets and signing unavailable.\n", os.Getpid(), os.Geteuid())
@@ -264,9 +279,15 @@ func run(args []string, input *os.File, out, errOut io.Writer) error {
 		if e != nil {
 			return e
 		}
-		r.PublicInput, err = signer.ParsePublicInput(document)
-		if err != nil {
-			return errors.New("invalid public fixture request")
+		if isTypedOwnerSignerAction(*action) {
+			if err = decodeTypedSignerStdin(*action, document, &r); err != nil {
+				return err
+			}
+		} else {
+			r.PublicInput, err = signer.ParsePublicInput(document)
+			if err != nil {
+				return errors.New("invalid public fixture request")
+			}
 		}
 	}
 	reader := bufio.NewReader(io.LimitReader(input, 4096))
@@ -370,7 +391,11 @@ func run(args []string, input *os.File, out, errOut io.Writer) error {
 		r.UnlockSeconds = int(*lifetime / time.Second)
 	case "fixture-update-inventory":
 		r.ProbeID = update.NewProbe()
-	case "status", "lock":
+	case "status", "lock", "hyperliquid-status", "agent-vault-list":
+	case "hyperliquid-policy", "agent-vault-set", "agent-vault-revoke", "agent-vault-record-loss":
+		if !owner || !*requestStdin {
+			return errors.New("typed owner JSON request via --request-stdin required")
+		}
 	case "fixture-approvals", "fixture-state", "fixture-policy", "fixture-grant", "fixture-revoke", "fixture-recover-authority", "fixture-reserve", "fixture-execute", "fixture-reconcile", "fixture-operation":
 	case "create", "unlock", "backup", "backup-history":
 		r.Password, err = password("Fixture password", r.Action != "unlock")
@@ -418,8 +443,69 @@ func run(args []string, input *os.File, out, errOut io.Writer) error {
 			return err
 		}
 	}
-	if len(r.Action) >= 8 && r.Action[:8] == "fixture-" {
+	if len(r.Action) >= 8 && r.Action[:8] == "fixture-" || isTypedOutputSignerAction(r.Action) {
 		return json.NewEncoder(out).Encode(response)
 	}
 	return json.NewEncoder(out).Encode(response.Status.PublicView())
+}
+
+func isTypedOwnerSignerAction(action string) bool {
+	switch action {
+	case "hyperliquid-policy", "agent-vault-set", "agent-vault-revoke", "agent-vault-record-loss":
+		return true
+	}
+	return false
+}
+
+func isTypedOutputSignerAction(action string) bool {
+	return action == "hyperliquid-status" || action == "agent-vault-list" || isTypedOwnerSignerAction(action)
+}
+
+func decodeStrictJSON(document []byte, dst any) error {
+	if len(document) > 16*1024 {
+		return errors.New("typed signer request exceeds size limit")
+	}
+	d := json.NewDecoder(bytes.NewReader(document))
+	d.DisallowUnknownFields()
+	if err := d.Decode(dst); err != nil {
+		return errors.New("invalid typed signer request")
+	}
+	if d.Decode(new(any)) != io.EOF {
+		return errors.New("trailing typed signer request data")
+	}
+	return nil
+}
+
+func decodeTypedSignerStdin(action string, document []byte, dst *signer.Request) error {
+	switch action {
+	case "hyperliquid-policy":
+		var p signer.HyperliquidPolicy
+		if err := decodeStrictJSON(document, &p); err != nil {
+			return err
+		}
+		dst.HyperliquidPolicy = &p
+	case "agent-vault-set":
+		var p signer.AgentVaultPolicy
+		if err := decodeStrictJSON(document, &p); err != nil {
+			return err
+		}
+		dst.AgentVault = &p
+	case "agent-vault-revoke":
+		var body struct {
+			VaultID string `json:"vaultId"`
+		}
+		if err := decodeStrictJSON(document, &body); err != nil {
+			return err
+		}
+		dst.AgentVaultID = body.VaultID
+	case "agent-vault-record-loss":
+		var rec signer.AgentVaultSpendRecord
+		if err := decodeStrictJSON(document, &rec); err != nil {
+			return err
+		}
+		dst.AgentVaultSpend = &rec
+	default:
+		return signer.ErrUnavailable
+	}
+	return nil
 }

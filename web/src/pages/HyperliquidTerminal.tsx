@@ -31,6 +31,7 @@ export function HyperliquidTerminal() {
   const [limitPrice, setLimitPrice] = useState("");
   const [size, setSize] = useState("0.5");
   const [leverage, setLeverage] = useState("5");
+  const [isCross, setIsCross] = useState(false);
   const [timeInForce, setTimeInForce] = useState<"Gtc" | "Ioc" | "Alo">("Gtc");
   const [reduceOnly, setReduceOnly] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -41,6 +42,8 @@ export function HyperliquidTerminal() {
   const active = view ?? agents.view?.hyperliquid;
   const markets = active?.markets ?? [];
   const selectedMarket = markets.find((m) => m.symbol === asset) ?? markets[0];
+  const isolatedOnly = Boolean(selectedMarket?.onlyIsolated);
+  const effectiveCross = !isolatedOnly && isCross;
 
   useEffect(() => {
     if (markets.length === 0) return;
@@ -164,6 +167,7 @@ export function HyperliquidTerminal() {
               onClick={() => {
                 setAsset(m.symbol);
                 setLimitPrice(m.markPrice);
+                if (m.onlyIsolated) setIsCross(false);
                 setReview(undefined);
               }}
             >
@@ -290,37 +294,40 @@ export function HyperliquidTerminal() {
                         </td>
                         <td>
                           <div className="row-actions">
-                            {ord.orderId > 0 && (
-                              <>
+                            {(ord.orderId > 0 ||
+                              Boolean(ord.clientOrderId)) && (
+                              <button
+                                type="button"
+                                className="text-button"
+                                disabled={busy}
+                                onClick={() =>
+                                  void command("hyperliquid-reconcile", {
+                                    orderId: ord.orderId,
+                                    ...(ord.clientOrderId
+                                      ? { clientOrderId: ord.clientOrderId }
+                                      : {}),
+                                  })
+                                }
+                              >
+                                {t("Reconcile")}
+                              </button>
+                            )}
+                            {ord.orderId > 0 &&
+                              ord.state !== "cancelled" &&
+                              ord.state !== "canceled" && (
                                 <button
                                   type="button"
                                   className="text-button"
                                   disabled={busy}
                                   onClick={() =>
-                                    void command("hyperliquid-reconcile", {
+                                    void command("hyperliquid-cancel", {
                                       orderId: ord.orderId,
                                     })
                                   }
                                 >
-                                  {t("Reconcile")}
+                                  {t("Cancel")}
                                 </button>
-                                {ord.state !== "cancelled" &&
-                                  ord.state !== "canceled" && (
-                                    <button
-                                      type="button"
-                                      className="text-button"
-                                      disabled={busy}
-                                      onClick={() =>
-                                        void command("hyperliquid-cancel", {
-                                          orderId: ord.orderId,
-                                        })
-                                      }
-                                    >
-                                      {t("Cancel")}
-                                    </button>
-                                  )}
-                              </>
-                            )}
+                              )}
                           </div>
                         </td>
                       </tr>
@@ -362,6 +369,35 @@ export function HyperliquidTerminal() {
               }}
             >
               {t("Short")}
+            </button>
+          </div>
+
+          <div
+            className="segmented-control"
+            role="group"
+            aria-label={t("Margin")}
+          >
+            <button
+              type="button"
+              aria-pressed={!effectiveCross}
+              disabled={busy}
+              onClick={() => {
+                setIsCross(false);
+                setReview(undefined);
+              }}
+            >
+              {t("Isolated")}
+            </button>
+            <button
+              type="button"
+              aria-pressed={effectiveCross}
+              disabled={busy || isolatedOnly}
+              onClick={() => {
+                setIsCross(true);
+                setReview(undefined);
+              }}
+            >
+              {t("Cross")}
             </button>
           </div>
 
@@ -455,6 +491,7 @@ export function HyperliquidTerminal() {
                     limitPrice,
                     size,
                     leverage: parsedLev,
+                    isCross: effectiveCross,
                     reduceOnly,
                     timeInForce,
                   },

@@ -553,6 +553,30 @@ func agentV2ToolRegistry() []agentToolEntry {
 		},
 		{
 			spec: AgentToolSpec{
+				Name:        "get_execution_status",
+				Tier:        toolTierRead,
+				Description: "Inspect Stage 4 non-WEN execution profile status, Mainnet/WEN holds, Devnet RPC host readiness, and signer testnet status.",
+				Parameters: map[string]any{
+					"type":       "object",
+					"properties": map[string]any{},
+				},
+			},
+			execute: toolGetExecutionStatus,
+		},
+		{
+			spec: AgentToolSpec{
+				Name:        "list_agent_vaults",
+				Tier:        toolTierRead,
+				Description: "List signer-enforced Typed Agent Vaults alongside current UTC-day spend and daily-loss usage.",
+				Parameters: map[string]any{
+					"type":       "object",
+					"properties": map[string]any{},
+				},
+			},
+			execute: toolListAgentVaults,
+		},
+		{
+			spec: AgentToolSpec{
 				Name:        "delegate_to_agent",
 				Tier:        toolTierRead,
 				Description: "Delegate a read-only research or analysis subtask to another workspace agent profile and return its concise synthesis without mutating thread messages or running action tools.",

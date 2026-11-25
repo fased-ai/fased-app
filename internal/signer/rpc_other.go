@@ -17,8 +17,10 @@ func LoadConfig(string) (Config, error) {
 
 type Server struct{}
 
-func Serve(context.Context, Config) (*Server, error) { return nil, ErrUnavailable }
-func (*Server) Close() error                         { return nil }
+func Serve(context.Context, Config) (*Server, error)                      { return nil, ErrUnavailable }
+func ServeControlledHyperliquid(context.Context, Config) (*Server, error) { return nil, ErrUnavailable }
+func ServeTestnetExecution(context.Context, Config) (*Server, error)      { return nil, ErrUnavailable }
+func (*Server) Close() error                                              { return nil }
 func call(context.Context, Config, bool, Request) (Response, error) {
 	return Response{}, ErrUnavailable
 }

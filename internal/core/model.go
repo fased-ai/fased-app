@@ -86,8 +86,14 @@ func (s *Store) aiConnectionsCapability() bool {
 	return providerActivationEnabled && s.provider.apiCredentials
 }
 
+var stage4CapabilitiesHook func(*Store) (walletSigner, financialExecution, updater bool)
+
 func (s *Store) Health() Health {
-	return Health{Status: "ok", APIVersion: APIVersion, Version: Version, InstanceID: s.instanceID, Capabilities: map[string]bool{"persistentSetup": true, "ownerAuthentication": true, "walletSigner": false, "financialExecution": false, "aiConnections": s.aiConnectionsCapability(), "updater": false}}
+	walletSigner, financialExecution, updater := false, false, false
+	if stage4CapabilitiesHook != nil {
+		walletSigner, financialExecution, updater = stage4CapabilitiesHook(s)
+	}
+	return Health{Status: "ok", APIVersion: APIVersion, Version: Version, InstanceID: s.instanceID, Capabilities: map[string]bool{"persistentSetup": true, "ownerAuthentication": true, "walletSigner": walletSigner, "financialExecution": financialExecution, "aiConnections": s.aiConnectionsCapability(), "updater": updater}}
 }
 
 type Endpoint struct {

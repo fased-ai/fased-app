@@ -656,11 +656,7 @@ func (h *HTTPHandler) api(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 200, map[string]bool{"authenticated": false})
 		return
 	case "/api/v1/signer/status":
-		if r.Method != http.MethodGet {
-			writeError(w, 405, "method not allowed")
-			return
-		}
-		writeJSON(w, 200, map[string]any{"available": false, "executionEnabled": false, "reason": "real wallets unavailable; public fixture references are managed through accounts"})
+		h.signerStatusAPI(w, r)
 		return
 	default:
 		if r.URL.Path == "/api/v1/stream/ticket" {
@@ -705,6 +701,17 @@ func (h *HTTPHandler) api(w http.ResponseWriter, r *http.Request) {
 		}
 		if strings.HasPrefix(r.URL.Path, "/api/v1/desk/") {
 			h.deskAPI(w, r, token)
+			return
+		}
+		switch r.URL.Path {
+		case "/api/v1/execution/status":
+			h.executionStatusAPI(w, r)
+			return
+		case "/api/v1/execution/solana-devnet/rehearse":
+			h.solanaDevnetRehearseAPI(w, r, token)
+			return
+		case "/api/v1/vaults":
+			h.agentVaultsAPI(w, r)
 			return
 		}
 		writeError(w, 404, "unknown API operation")

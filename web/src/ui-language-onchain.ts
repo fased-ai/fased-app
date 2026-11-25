@@ -381,4 +381,6 @@ export const onchainCopy = {
   SOL: ["SOL", "SOL", "SOL", "SOL"],
   Allocation: ["Распределение", "Asignación", "分配", "할당"],
   "Market pool": ["Рыночный пул", "Fondo de mercado", "市场池", "시장 풀"],
+  Isolated: ["Изолированная", "Aislado", "逐仓", "격리"],
+  Cross: ["Кросс", "Cruzado", "全仓", "교차"],
 } satisfies Record<string, [string, string, string, string]>;

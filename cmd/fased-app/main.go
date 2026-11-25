@@ -233,8 +233,20 @@ func run(args []string, in *os.File, out, errOut io.Writer) error {
 	host := flags.String("host", "", "setup deployment preference: local or vps")
 	wallet := flags.String("wallet-mode", "", "setup wallet preference: skip, watch, external, automation")
 	provider := flags.String("provider", "", "setup AI preference: none, openai, anthropic, xai")
+	executionProfile := flags.String("execution-profile", signer.ExecutionProfileOff, "Stage 4 non-WEN execution profile: off or testnet")
+	agentVaultID := flags.String("agent-vault-id", "", "optional typed AgentVault ID for Stage 4 testnet execution")
+	solanaDevnetRPC := flags.String("solana-devnet-rpc", "", "optional HTTPS Solana Devnet JSON-RPC endpoint for Stage 4 rehearsal")
 	if err = flags.Parse(args[1:]); err != nil {
 		return err
+	}
+	if *executionProfile != signer.ExecutionProfileOff && *executionProfile != signer.ExecutionProfileTestnet {
+		return errors.New("execution profile must be off or testnet")
+	}
+	if (*agentVaultID != "" || *solanaDevnetRPC != "") && *executionProfile != signer.ExecutionProfileTestnet {
+		return errors.New("--agent-vault-id and --solana-devnet-rpc require --execution-profile=testnet")
+	}
+	if *executionProfile == signer.ExecutionProfileTestnet && (args[0] != "serve" || *custodyConfig == "" || *sessionFixture || *aiFixture) {
+		return errors.New("--execution-profile=testnet requires serve with --custody-config and no development fixture modes")
 	}
 	if *instanceLocation != "local" && *instanceLocation != "remote" {
 		return errors.New("instance location must be local or remote")
@@ -346,7 +358,11 @@ func run(args []string, in *os.File, out, errOut io.Writer) error {
 				source = "remote"
 			}
 		}
-		return serveInstalledRuntimeWithTransport(*installationRoot, *dir, *listen, *publicOrigin, *researchOrigin, *instanceLocation, *remoteTransport, source, ownerUID, installedProviderFixture, *requirePassword, out, *custodyConfig)
+		return serveInstalledRuntimeWithStage4(*installationRoot, *dir, *listen, *publicOrigin, *researchOrigin, *instanceLocation, *remoteTransport, source, ownerUID, installedProviderFixture, *requirePassword, out, core.TestnetExecutionConfig{
+			Profile:         *executionProfile,
+			AgentVaultID:    *agentVaultID,
+			SolanaDevnetRPC: *solanaDevnetRPC,
+		}, *custodyConfig)
 	case "setup-link":
 		return ownerSetupLink(ctx, *dir, *publicOrigin, out)
 	case "claim-code":
@@ -530,6 +546,10 @@ func serveInstalledRuntimeWithOptions(installationRoot, dir, listen, publicOrigi
 	return serveInstalledRuntimeWithTransport(installationRoot, dir, listen, publicOrigin, researchOrigin, location, "", source, ownerUID, fixture, requirePassword, out, custodyConfig...)
 }
 func serveInstalledRuntimeWithTransport(installationRoot, dir, listen, publicOrigin, researchOrigin, location, remoteTransport, source string, ownerUID int, fixture, requirePassword bool, out io.Writer, custodyConfig ...string) error {
+	return serveInstalledRuntimeWithStage4(installationRoot, dir, listen, publicOrigin, researchOrigin, location, remoteTransport, source, ownerUID, fixture, requirePassword, out, core.TestnetExecutionConfig{}, custodyConfig...)
+}
+
+func serveInstalledRuntimeWithStage4(installationRoot, dir, listen, publicOrigin, researchOrigin, location, remoteTransport, source string, ownerUID int, fixture, requirePassword bool, out io.Writer, stage4Cfg core.TestnetExecutionConfig, custodyConfig ...string) error {
 	start := core.Start
 	if fixture {
 		if installationRoot == "" || source != location || (source != "local" && source != "remote") || researchOrigin != "" || len(custodyConfig) > 1 || len(custodyConfig) == 1 && custodyConfig[0] != "" {
@@ -571,6 +591,23 @@ func serveInstalledRuntimeWithTransport(installationRoot, dir, listen, publicOri
 		}
 	}
 
+	if err == nil && stage4Cfg.Profile == signer.ExecutionProfileTestnet {
+		if len(custodyConfig) != 1 || custodyConfig[0] == "" {
+			err = errors.New("stage 4 testnet execution requires custody config")
+		} else {
+			var sCfg signer.Config
+			sCfg, err = signer.LoadConfig(custodyConfig[0])
+			if err == nil && (sCfg.Network == "mainnet" || sCfg.Network == "mainnet-beta") {
+				err = signer.ErrUnavailable
+			}
+			if err == nil {
+				stage4Cfg.SignerCall = func(callCtx context.Context, req signer.Request) (signer.Response, error) {
+					return signer.Call(callCtx, sCfg, false, req)
+				}
+				err = server.ConfigureTestnetExecution(context.Background(), stage4Cfg)
+			}
+		}
+	}
 	if err == nil && len(custodyConfig) == 1 && compiledInstalledWalletRead != nil {
 		var closeFixture func()
 		closeFixture, err = compiledInstalledWalletRead(server, custodyConfig[0])
