@@ -128,11 +128,13 @@ function getRoute() {
     strategies: "lab",
     quantlab: "lab",
     desk: "lab/desk",
+    hub: "network",
+    swarm: "network",
   };
   const route = aliases[raw] ?? raw;
   if (route === "terminals/asset" || route === "terminals/loss")
     return "terminals/satcoin";
-  return /^(overview|trade|intel|lab(\/(scripts|desk|journal))?|activity|settings|providers|terminals(\/(satcoin|hyperliquid|jupiter))?|agents\/(chat|review|bots|tasks|news|memory|settings)|wallets\/(overview|accounts|permissions|security|activity))$/.test(
+  return /^(overview|trade|intel|lab(\/(scripts|desk|journal))?|network|activity|settings|providers|terminals(\/(satcoin|hyperliquid|jupiter))?|agents\/(chat|review|bots|tasks|news|memory|settings)|wallets\/(overview|accounts|permissions|security|activity))$/.test(
     route,
   )
     ? route

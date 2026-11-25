@@ -31,6 +31,7 @@ export default defineConfig({
     "portable-wallet-restore.spec.ts",
     "wen-mining.spec.ts",
     "hyperliquid.spec.ts",
+    "core-network-stage56.spec.ts",
   ],
   outputDir: ".evidence/core-browser",
   reporter: [

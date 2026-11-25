@@ -410,7 +410,7 @@ test("static vet, fuzz seed regression, and release assembler tests stay wired i
   assert.match(checks, /- run: go -C desktop test \.\/\.\.\./);
   assert.match(
     checks,
-    /go test -run='\^Fuzz' \.\/internal\/core \.\/internal\/decision \.\/internal\/marketdata \.\/internal\/mcpclient \.\/internal\/signer \.\/internal\/update \.\/internal\/wenpm1 \.\/internal\/worldintel \.\/internal\/automation \.\/internal\/telegram \.\/internal\/fasedscript \.\/internal\/quantlab \.\/internal\/desk \.\/internal\/cex \.\/internal\/equities/,
+    /go test -run='\^Fuzz' \.\/internal\/core \.\/internal\/decision \.\/internal\/marketdata \.\/internal\/mcpclient \.\/internal\/signer \.\/internal\/update \.\/internal\/wenpm1 \.\/internal\/worldintel \.\/internal\/automation \.\/internal\/telegram \.\/internal\/fasedscript \.\/internal\/quantlab \.\/internal\/desk \.\/internal\/cex \.\/internal\/equities \.\/internal\/hub \.\/internal\/swarm/,
   );
   assert.match(desktop, /- run: go -C desktop vet \.\/\.\.\./);
   assert.match(audit, /govulncheck/);

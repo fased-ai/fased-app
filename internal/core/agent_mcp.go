@@ -50,6 +50,9 @@ var mcpReadTools = map[string]bool{
 	"get_cex_status":           true,
 	"get_equities_status":      true,
 	"get_options_chain":        true,
+	"list_hub_packages":        true,
+	"get_swarm_status":         true,
+	"list_swarm_signals":       true,
 }
 
 var mcpDraftTools = map[string]bool{
@@ -63,6 +66,8 @@ var mcpDraftTools = map[string]bool{
 	"sync_world_intel":     true,
 	"draft_cex_order":      true,
 	"draft_equities_order": true,
+	"draft_hub_install":    true,
+	"draft_swarm_signal":   true,
 }
 
 type mcpResourceDescriptor struct {
@@ -149,6 +154,18 @@ var mcpResources = []mcpResourceDescriptor{
 		URI:         "fased://equities/status",
 		Name:        "Stage 5 Equities router status",
 		Description: "Compile-time live lock, Alpaca Paper / IBKR DU* Paper origins, and paper/OCC option order log.",
+		MimeType:    "application/json",
+	},
+	{
+		URI:         "fased://hub/packages",
+		Name:        "Community Hub packages",
+		Description: "Ed25519-verified Community Hub artifacts and declarative WEN SAT hold metadata.",
+		MimeType:    "application/json",
+	},
+	{
+		URI:         "fased://swarm/status",
+		Name:        "Swarm network status",
+		Description: "Opt-in Fased Network Swarm configuration, peers, and verified A2A signals.",
 		MimeType:    "application/json",
 	},
 }
@@ -475,6 +492,10 @@ func readMCPResource(ctx context.Context, s *Store, uri string) (any, error) {
 		return toolGetCEXStatus(ctx, s, "", []byte(`{}`))
 	case "fased://equities/status":
 		return toolGetEquitiesStatus(ctx, s, "", []byte(`{}`))
+	case "fased://hub/packages":
+		return toolListHubPackages(ctx, s, "", []byte(`{}`))
+	case "fased://swarm/status":
+		return toolGetSwarmStatus(ctx, s, "", []byte(`{}`))
 	default:
 		return nil, errors.New("unknown MCP resource uri")
 	}

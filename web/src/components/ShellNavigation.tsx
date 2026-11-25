@@ -195,7 +195,9 @@ export function ShellNavigation() {
               className="shell-more-toggle"
               data-active={
                 shellPages.slice(6).some((p) => p.path === route) ||
-                ["activity", "settings", "providers"].includes(route) ||
+                ["activity", "network", "settings", "providers"].includes(
+                  route,
+                ) ||
                 route.startsWith("wallets/")
               }
               onClick={() => setMore(!more)}
@@ -211,6 +213,10 @@ export function ShellNavigation() {
               >
                 {links(visiblePages.slice(1))}
                 <hr />
+                <a href="#network" onClick={closeMore}>
+                  <Globe2 size={18} />
+                  {t("Network")}
+                </a>
                 <a href="#activity" onClick={closeMore}>
                   <History size={18} />
                   {t("Activity")}

@@ -171,7 +171,7 @@ type parsedStreamTopic struct {
 func parseStreamTopic(raw string) (parsedStreamTopic, error) {
 	trimmed := strings.TrimSpace(raw)
 	switch trimmed {
-	case "intel", "automation", "desk":
+	case "intel", "automation", "desk", "swarm":
 		return parsedStreamTopic{raw: trimmed, kind: trimmed}, nil
 	}
 	parts := strings.Split(trimmed, ":")
@@ -442,6 +442,35 @@ func (h *HTTPHandler) streamWSAPI(w http.ResponseWriter, r *http.Request) {
 							Event:     evt.Type,
 							Timestamp: evt.Timestamp,
 							Payload:   evt,
+						})
+					}
+				}
+			}()
+		case "swarm":
+			svc, sErr := h.store.swarmService()
+			if sErr != nil {
+				stopEntry()
+				return errors.New("swarm unavailable")
+			}
+			ch, unsub := svc.Subscribe()
+			subWG.Add(1)
+			go func() {
+				defer subWG.Done()
+				defer unsub()
+				for {
+					select {
+					case <-subCtx.Done():
+						return
+					case evt, ok := <-ch:
+						if !ok {
+							return
+						}
+						enqueue(streamOutboundFrame{
+							Type:      "event",
+							Topic:     parsed.raw,
+							Event:     evt.Type,
+							Timestamp: evt.Timestamp,
+							Payload:   evt.Envelope,
 						})
 					}
 				}

@@ -73,7 +73,9 @@ jobs:
             "./internal/quantlab:FuzzQuantLabInputs" \
             "./internal/desk:FuzzDeskInputs" \
             "./internal/cex:FuzzCEXOrderAndPermissionParsers" \
-            "./internal/equities:FuzzEquitiesAndOCCParsers"; do
+            "./internal/equities:FuzzEquitiesAndOCCParsers" \
+            "./internal/hub:FuzzHubManifestAndSignature" \
+            "./internal/swarm:FuzzSwarmEnvelopeAndA2A"; do
             pkg="${target%%:*}"
             fn="${target##*:}"
             echo "=== Fuzzing ${pkg} :: ${fn} (${FUZZ_TIME}) ==="
