@@ -439,7 +439,34 @@ func (h *HTTPHandler) marketDataStreamSSE(w http.ResponseWriter, r *http.Request
 		initial = &series
 	}
 
-	subCh, unsubscribe := svc.SubscribeMulti(filters)
+	busFilters := make([]marketdata.Filter, 0, len(filters))
+	derivedStyles := make(map[string][]string)
+	wantStandard := make(map[string]bool)
+	styleKeyFor := func(v, s, iv string) string {
+		return strings.ToLower(strings.TrimSpace(v)) + "|" + strings.ToUpper(strings.TrimSpace(s)) + "|" + strings.ToLower(strings.TrimSpace(iv))
+	}
+	for _, f := range filters {
+		k := styleKeyFor(f.Venue, f.Symbol, f.Interval)
+		if f.Style != "" && f.Style != marketdata.StyleStandard && f.Style != marketdata.StyleTick && f.Style != marketdata.StyleVolume {
+			list := derivedStyles[k]
+			exists := false
+			for _, item := range list {
+				if item == f.Style {
+					exists = true
+					break
+				}
+			}
+			if !exists {
+				derivedStyles[k] = append(list, f.Style)
+			}
+			f.Style = marketdata.StyleStandard
+		} else if f.Style == marketdata.StyleStandard || f.Style == "" {
+			wantStandard[k] = true
+		}
+		busFilters = append(busFilters, f)
+	}
+
+	subCh, unsubscribe := svc.SubscribeMulti(busFilters)
 	defer unsubscribe()
 
 	var releaseFeeds []func()
@@ -510,6 +537,32 @@ func (h *HTTPHandler) marketDataStreamSSE(w http.ResponseWriter, r *http.Request
 			evtName := evt.Type
 			if evtName == "" {
 				evtName = "update"
+			}
+			if evt.Type == "candle" && evt.Style == marketdata.StyleStandard {
+				ek := styleKeyFor(evt.Venue, evt.Symbol, evt.Interval)
+				styles := derivedStyles[ek]
+				if len(derivedStyles) == 0 || len(styles) == 0 || wantStandard[ek] {
+					if !writeSSE(evtName, evt) {
+						return
+					}
+				}
+				for _, reqStyle := range styles {
+					cached, has := svc.CachedCandles(evt.Venue, evt.Symbol, evt.Interval, 160)
+					if !has || len(cached) == 0 {
+						continue
+					}
+					transformed, tErr := marketdata.TransformCandles(cached, marketdata.TransformOptions{Style: reqStyle})
+					if tErr != nil || len(transformed) == 0 {
+						continue
+					}
+					derivedEvt := evt
+					derivedEvt.Style = reqStyle
+					derivedEvt.Payload = transformed[len(transformed)-1]
+					if !writeSSE(evtName, derivedEvt) {
+						return
+					}
+				}
+				continue
 			}
 			if !writeSSE(evtName, evt) {
 				return

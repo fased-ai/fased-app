@@ -173,12 +173,17 @@ func (s *Store) dispatchAutomationAgentPrompt(ctx context.Context, tr automation
 		profileID = created.ProfileID
 		_, _ = v2.db.ExecContext(ctx, `UPDATE threads SET source_kind='automation', source_ref=? WHERE id=?`, tr.ID, targetID)
 	}
+	var fallbackMsg string
 	if _, pErr := resolveAgentV2Provider(ctx, s, "", "", "", "", profileID); pErr == nil {
 		turnCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 		defer cancel()
-		if _, tErr := s.RunAgentV2Turn(turnCtx, targetID, AgentV2PromptInput{Content: prompt}, nil); tErr == nil {
+		_, tErr := s.RunAgentV2Turn(turnCtx, targetID, AgentV2PromptInput{Content: prompt}, nil)
+		if tErr == nil {
 			return
 		}
+		fallbackMsg = "Trigger recorded. Autonomous AI triage failed: " + sanitizeDiagValue(tErr.Error(), 160)
+	} else {
+		fallbackMsg = "Trigger recorded. Connect an AI provider in Settings to run autonomous triage."
 	}
 	_, _ = s.AppendMessage(ctx, AgentV2Message{
 		ThreadID: targetID,
@@ -189,7 +194,7 @@ func (s *Store) dispatchAutomationAgentPrompt(ctx context.Context, tr automation
 	_, _ = s.AppendMessage(ctx, AgentV2Message{
 		ThreadID: targetID,
 		Role:     "assistant",
-		Content:  "Trigger recorded. Connect an AI provider in Settings to run autonomous triage.",
+		Content:  fallbackMsg,
 		Status:   "completed",
 	})
 }

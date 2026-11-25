@@ -632,6 +632,37 @@ func AggregateTicksToCandles(ticks []TradeTick, opts TransformOptions) ([]Candle
 	return out, nil
 }
 
+func distributeEstimatedCandleBuckets(buckets map[int64]*FootprintLevel, stepSize float64, c Candle, fillVol float64) {
+	if fillVol <= 0 {
+		return
+	}
+	var buyVol, sellVol float64
+	if (c.BuyVolume > 0 || c.SellVolume > 0) && c.Volume > 0 {
+		scale := math.Min(1, fillVol/c.Volume)
+		buyVol = c.BuyVolume * scale
+		sellVol = c.SellVolume * scale
+	} else {
+		span := math.Max(c.High-c.Low, stepSize)
+		buyRatio := 0.5
+		if c.High > c.Low {
+			buyRatio = 0.25 + 0.5*((c.Close-c.Low)/span)
+		}
+		buyVol = fillVol * buyRatio
+		sellVol = fillVol - buyVol
+	}
+	// Distribute candle volume deterministically across O/H/L/C buckets.
+	prices := []float64{c.Low, (c.Low + c.Close) / 2, (c.High + c.Close) / 2, c.High}
+	weights := []float64{0.2, 0.3, 0.3, 0.2}
+	for j, p := range prices {
+		if buyVol > 0 {
+			addFootprintBucket(buckets, stepSize, p, buyVol*weights[j], true)
+		}
+		if sellVol > 0 {
+			addFootprintBucket(buckets, stepSize, p, sellVol*weights[j], false)
+		}
+	}
+}
+
 // ComputeFootprintAndProfile bins trades (or candle volume estimates) into FootprintBar
 // levels with Delta, running CVD, VPOC, and 70% Value Area bounds (VAL/VAH).
 func ComputeFootprintAndProfile(candles []Candle, ticks []TradeTick, stepSize float64) ([]FootprintBar, error) {
@@ -674,36 +705,17 @@ func ComputeFootprintAndProfile(candles []Candle, ticks []TradeTick, stepSize fl
 
 		buckets := make(map[int64]*FootprintLevel)
 		var barMatchedTicks bool
+		var matchedVol float64
 		for tickIdx < len(sortedTicks) && sortedTicks[tickIdx].Time < endMs {
 			t := sortedTicks[tickIdx]
 			tickIdx++
 			barMatchedTicks = true
+			matchedVol += t.Size
 			addFootprintBucket(buckets, stepSize, t.Price, t.Size, t.Side == "buy")
 		}
 
 		if !barMatchedTicks {
-			buyVol := c.BuyVolume
-			sellVol := c.SellVolume
-			if buyVol == 0 && sellVol == 0 && c.Volume > 0 {
-				span := math.Max(c.High-c.Low, stepSize)
-				buyRatio := 0.5
-				if c.High > c.Low {
-					buyRatio = 0.25 + 0.5*((c.Close-c.Low)/span)
-				}
-				buyVol = c.Volume * buyRatio
-				sellVol = c.Volume - buyVol
-			}
-			// Distribute candle volume deterministically across O/H/L/C buckets.
-			prices := []float64{c.Low, (c.Low + c.Close) / 2, (c.High + c.Close) / 2, c.High}
-			weights := []float64{0.2, 0.3, 0.3, 0.2}
-			for j, p := range prices {
-				if buyVol > 0 {
-					addFootprintBucket(buckets, stepSize, p, buyVol*weights[j], true)
-				}
-				if sellVol > 0 {
-					addFootprintBucket(buckets, stepSize, p, sellVol*weights[j], false)
-				}
-			}
+			distributeEstimatedCandleBuckets(buckets, stepSize, c, c.Volume)
 		}
 
 		levels := make([]FootprintLevel, 0, len(buckets))
@@ -725,7 +737,7 @@ func ComputeFootprintAndProfile(candles []Candle, ticks []TradeTick, stepSize fl
 		var tickCoverage float64
 		if barMatchedTicks {
 			if c.Volume > 0 {
-				cov := math.Min(1, barVol/c.Volume)
+				cov := math.Min(1, matchedVol/c.Volume)
 				tickCoverage = math.Round(cov*10000) / 10000
 				if cov >= 0.85 {
 					sourceKind = "ticks"

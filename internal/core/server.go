@@ -326,7 +326,7 @@ func (s *Server) startAgentTasks() {
 					if err != nil {
 						continue
 					}
-					evalCtx, stop := context.WithTimeout(ctx, 10*time.Second)
+					evalCtx, stop := context.WithTimeout(ctx, 30*time.Second)
 					if _, eErr := svc.EvaluateNow(evalCtx); eErr != nil && !errors.Is(eErr, context.Canceled) {
 						coreLogger.Warn("automation evaluator sweep held", "err", sanitizeDiagValue(eErr.Error(), 200))
 					}

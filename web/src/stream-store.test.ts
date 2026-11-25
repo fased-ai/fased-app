@@ -208,6 +208,87 @@ describe("FasedStreamClient and CrosshairBus", () => {
     fbClient.dispose();
   });
 
+  it("delivers Wails SSE intel/desk non-market streams and matches heikin_ashi + aliased symbols", async () => {
+    const routes: string[] = [];
+    const handlers = new Map<string, (f: SSEFrame) => void>();
+    const streamGet = vi.fn().mockImplementation(
+      (
+        route: string,
+        opts: { signal?: AbortSignal; onEvent: (f: SSEFrame) => void },
+      ) =>
+        new Promise<void>((resolve) => {
+          routes.push(route);
+          handlers.set(route, opts.onEvent);
+          opts.signal?.addEventListener("abort", () => resolve(), {
+            once: true,
+          });
+        }),
+    );
+
+    const wailsClient = new FasedStreamClient({
+      isWails: () => true,
+    });
+    wailsClient.setCore({
+      mode: "ready",
+      request: vi.fn(),
+      streamGet,
+    });
+
+    const intelSeen: unknown[] = [];
+    const deskSeen: unknown[] = [];
+    const candleSeen: unknown[] = [];
+    const u1 = wailsClient.subscribe("intel", (m) => intelSeen.push(m.payload));
+    const u2 = wailsClient.subscribe("desk", (m) => deskSeen.push(m.payload));
+    const u3 = wailsClient.subscribe(
+      "candle:hyperliquid:BTC-PERP:15m:heikin_ashi",
+      (m) => candleSeen.push(m.payload),
+    );
+    await vi.advanceTimersByTimeAsync(50);
+    await Promise.resolve();
+    expect(wailsClient.getStatus()).toBe("sse");
+    expect(routes).toContain("intel/stream");
+    expect(routes).toContain("desk/stream");
+    const marketRoute = routes.find((r) => r.startsWith("market/stream"));
+    expect(marketRoute).toBeTruthy();
+
+    handlers.get("intel/stream")?.({
+      event: "sync_complete",
+      data: JSON.stringify({ type: "sync_complete", timestamp: 1760000100000 }),
+    });
+    handlers.get("desk/stream")?.({
+      event: "cycle_complete",
+      data: JSON.stringify({
+        type: "cycle_complete",
+        timestamp: 1760000200000,
+      }),
+    });
+    handlers.get(marketRoute!)?.({
+      event: "candle",
+      data: JSON.stringify({
+        type: "candle",
+        venue: "hyperliquid",
+        symbol: "BTC",
+        interval: "15m",
+        style: "heikin_ashi",
+        payload: { time: 1760000300, close: 95123 },
+      }),
+    });
+
+    await vi.advanceTimersByTimeAsync(20);
+    expect(intelSeen).toEqual([
+      { type: "sync_complete", timestamp: 1760000100000 },
+    ]);
+    expect(deskSeen).toEqual([
+      { type: "cycle_complete", timestamp: 1760000200000 },
+    ]);
+    expect(candleSeen).toEqual([{ time: 1760000300, close: 95123 }]);
+
+    u1();
+    u2();
+    u3();
+    wailsClient.dispose();
+  });
+
   it("delivers CrosshairBus updates synchronously to listeners outside React", () => {
     const bus = new CrosshairBus();
     const got: unknown[] = [];

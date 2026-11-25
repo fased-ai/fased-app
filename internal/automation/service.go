@@ -473,21 +473,25 @@ func (s *Service) evaluateTrigger(ctx context.Context, tr Trigger, dryRun, ignor
 		_ = s.store.updateNotificationDelivery(ctx, ntf.ID, status)
 	}
 
+	// Persist LastFiredAt/FireCount before running synchronous LLM triage so a
+	// slow or timed-out prompt cannot leave the trigger un-updated and re-fire every sweep.
+	tr.LastFiredAt = nowSec
+	tr.LastFingerprint = ev.fingerprint
+	tr.FireCount++
+	if err := s.store.updateTriggerRuntime(ctx, tr); err != nil {
+		return res, err
+	}
+
 	if tr.Action.Type == ActionAgentPrompt || tr.Action.Type == ActionPaperAlert {
 		prompt := s.buildAgentPrompt(tr, ntf)
 		s.promptMu.RLock()
 		promptHook := s.onAgentPrompt
 		s.promptMu.RUnlock()
 		if promptHook != nil {
-			promptHook(ctx, tr, prompt, ev.untrusted)
+			promptCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 45*time.Second)
+			promptHook(promptCtx, tr, prompt, ev.untrusted)
+			cancel()
 		}
-	}
-
-	tr.LastFiredAt = nowSec
-	tr.LastFingerprint = ev.fingerprint
-	tr.FireCount++
-	if err := s.store.updateTriggerRuntime(ctx, tr); err != nil {
-		return res, err
 	}
 
 	s.bus.Publish(StreamEvent{
