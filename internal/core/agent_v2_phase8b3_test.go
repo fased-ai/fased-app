@@ -459,7 +459,7 @@ func TestMCPSecurityToolsAndResources(t *testing.T) {
 	if err := json.NewDecoder(discResp.Body).Decode(&disc); err != nil {
 		t.Fatal(err)
 	}
-	if disc.Name != "fased-mcp" || disc.ProtocolVersion != mcpProtocolVersion || disc.ToolCount != 36 || disc.ResourceCount != 11 {
+	if disc.Name != "fased-mcp" || disc.ProtocolVersion != mcpProtocolVersion || disc.ToolCount != 38 || disc.ResourceCount != 11 {
 		t.Fatalf("unexpected MCP discovery payload: %+v", disc)
 	}
 
