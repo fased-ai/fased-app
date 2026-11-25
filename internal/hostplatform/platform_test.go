@@ -1,8 +1,10 @@
 package hostplatform
 
 import (
+	"encoding/json"
 	"os"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -175,4 +177,63 @@ func TestRemoteMappingsKeepRequiredAuthorityBoundary(t *testing.T) {
 			}
 		}
 	}
+}
+
+func TestSoakLiveHostPlatform(t *testing.T) {
+	if os.Getenv("FASED_SOAK_LIVE_HOST") != "1" {
+		t.Skip("live host platform soak disabled unless FASED_SOAK_LIVE_HOST=1")
+	}
+	raw, err := os.ReadFile("/etc/os-release")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cur, err := Current()
+	if err != nil {
+		t.Fatalf("Current() failed: %v", err)
+	}
+	remote, err := LookupRemote(string(raw), runtime.GOARCH)
+	if err != nil {
+		t.Fatalf("LookupRemote() failed on live host %s/%s: %v", cur.ID, cur.Version, err)
+	}
+	mgr, err := cur.PackageManager()
+	if err != nil {
+		t.Fatalf("PackageManager() failed: %v", err)
+	}
+	for _, bin := range []string{mgr.Query[0], mgr.Install[0]} {
+		info, err := os.Stat(bin)
+		if err != nil {
+			t.Fatalf("missing package manager binary %s: %v", bin, err)
+		}
+		if info.Mode()&0o111 == 0 {
+			t.Fatalf("package manager binary %s is not executable: %v", bin, info.Mode())
+		}
+	}
+	out := struct {
+		ID                   string   `json:"id"`
+		Version              string   `json:"version"`
+		Codename             string   `json:"codename"`
+		Family               string   `json:"family"`
+		Arch                 string   `json:"arch"`
+		Remote               bool     `json:"remote"`
+		RestrictedNamespaces bool     `json:"restrictedNamespaces"`
+		QueryBin             string   `json:"queryBin"`
+		InstallBin           string   `json:"installBin"`
+		RuntimePackages      []string `json:"runtimePackages"`
+	}{
+		ID:                   remote.ID,
+		Version:              remote.Version,
+		Codename:             remote.Codename,
+		Family:               remote.Family,
+		Arch:                 runtime.GOARCH,
+		Remote:               remote.Remote,
+		RestrictedNamespaces: cur.RestrictedNamespaces,
+		QueryBin:             mgr.Query[0],
+		InstallBin:           mgr.Install[0],
+		RuntimePackages:      remote.Packages(true),
+	}
+	enc, err := json.Marshal(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("SOAK_HOST_PLATFORM:%s", enc)
 }
