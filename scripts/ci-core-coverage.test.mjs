@@ -158,11 +158,11 @@ test("full race groups retain every package and require parallel scenarios and d
   );
   assert.match(scenarios, /runs-on: ubuntu-24\.04\n\s+timeout-minutes: 10/);
   for (const prerequisite of [
-    "actions/checkout@v4",
-    "actions/setup-node@v4",
+    "actions/checkout@v7",
+    "actions/setup-node@v7",
     'node-version: "24"',
     "npm ci",
-    "actions/setup-go@v5",
+    "actions/setup-go@v7",
     'go-version: "1.26.x"',
     "npm run build",
     "npm run build:core",
@@ -255,7 +255,7 @@ test("ordinary admission checks run once in parallel without consuming the manag
     workflow.indexOf("  handoff:\n"),
   );
   const download = scenarios.indexOf(
-    "      - uses: actions/download-artifact@v4\n",
+    "      - uses: actions/download-artifact@v8\n",
   );
   assert.ok(
     buildArtifacts.indexOf("      - run: npm run build:core\n") >
