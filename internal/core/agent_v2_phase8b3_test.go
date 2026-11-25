@@ -514,22 +514,114 @@ func TestMCPSecurityToolsAndResources(t *testing.T) {
 		t.Fatalf("expected -32602 for disallowed tool call, got %+v", disallowedCall)
 	}
 
-	// Allowed read & non-custodial draft tool calls succeed cleanly.
+	// Allowed read & approval-gated draft tool calls succeed cleanly.
 	_, wsCall := callRPC(`{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"workspace_status","arguments":{}}}`)
 	if wsCall["result"] == nil || wsCall["result"].(map[string]any)["isError"] != false {
 		t.Fatalf("workspace_status call failed: %+v", wsCall)
 	}
+	extractMCPPayload := func(rpcResp map[string]any, label string) map[string]any {
+		t.Helper()
+		resMap, ok := rpcResp["result"].(map[string]any)
+		if !ok || resMap["isError"] != false {
+			t.Fatalf("%s call failed: %+v", label, rpcResp)
+		}
+		items, ok := resMap["content"].([]any)
+		if !ok || len(items) == 0 {
+			t.Fatalf("%s missing content: %+v", label, rpcResp)
+		}
+		text, _ := items[0].(map[string]any)["text"].(string)
+		var decoded map[string]any
+		if err := json.Unmarshal([]byte(text), &decoded); err != nil {
+			t.Fatalf("%s invalid JSON payload %q: %v", label, text, err)
+		}
+		return decoded
+	}
+
 	_, draftCall := callRPC(`{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"draft_task","arguments":{"name":"SOL watch","description":"Check SOL price","intervalSeconds":300}}}`)
-	if draftCall["result"] == nil || draftCall["result"].(map[string]any)["isError"] != false {
-		t.Fatalf("draft_task call failed: %+v", draftCall)
+	draftPayload := extractMCPPayload(draftCall, "draft_task")
+	if draftPayload["status"] != "awaiting_approval" || draftPayload["executed"] != false || strings.TrimSpace(fmt.Sprint(draftPayload["approvalId"])) == "" {
+		t.Fatalf("expected MCP draft_task awaiting_approval, got %+v", draftPayload)
 	}
+
 	_, lessonCall := callRPC(`{"jsonrpc":"2.0","id":51,"method":"tools/call","params":{"name":"save_desk_lesson","arguments":{"category":"risk","symbol":"BTC","rule":"Never chase extended breakouts above 3 ATR"}}}`)
-	if lessonCall["result"] == nil || lessonCall["result"].(map[string]any)["isError"] != false {
-		t.Fatalf("save_desk_lesson call failed: %+v", lessonCall)
+	lessonPayload := extractMCPPayload(lessonCall, "save_desk_lesson")
+	if lessonPayload["status"] != "awaiting_approval" || lessonPayload["executed"] != false {
+		t.Fatalf("expected MCP save_desk_lesson awaiting_approval, got %+v", lessonPayload)
 	}
+	lessonApprovalID, _ := lessonPayload["approvalId"].(string)
+	if lessonApprovalID == "" {
+		t.Fatalf("missing approvalId for save_desk_lesson: %+v", lessonPayload)
+	}
+	if deskSvc, err := s.deskService(); err == nil {
+		if lessons, err := deskSvc.ListLessons(t.Context(), 50); err == nil {
+			for _, l := range lessons {
+				if strings.Contains(l.Rule, "Never chase extended breakouts above 3 ATR") {
+					t.Fatalf("MCP save_desk_lesson executed before owner approval: %+v", l)
+				}
+			}
+		}
+	}
+
 	_, labCall := callRPC(`{"jsonrpc":"2.0","id":52,"method":"tools/call","params":{"name":"draft_lab_script","arguments":{"id":"mcp-ema-check","name":"MCP EMA Check","category":"trend","source":"const a = ema(close, 9); plot(\"EMA9\", a, \"accent\", \"overlay\");"}}}`)
-	if labCall["result"] == nil || labCall["result"].(map[string]any)["isError"] != false {
-		t.Fatalf("draft_lab_script call failed: %+v", labCall)
+	labPayload := extractMCPPayload(labCall, "draft_lab_script")
+	if labPayload["status"] != "awaiting_approval" || labPayload["executed"] != false {
+		t.Fatalf("expected MCP draft_lab_script awaiting_approval, got %+v", labPayload)
+	}
+	labApprovalID, _ := labPayload["approvalId"].(string)
+	if labApprovalID == "" {
+		t.Fatalf("missing approvalId for draft_lab_script: %+v", labPayload)
+	}
+	if qlSvc, err := s.quantLabService(); err == nil {
+		if scripts, err := qlSvc.ListScripts(t.Context()); err == nil {
+			for _, sc := range scripts {
+				if sc.ID == "mcp-ema-check" {
+					t.Fatalf("MCP draft_lab_script executed before owner approval: %+v", sc)
+				}
+			}
+		}
+	}
+
+	if _, err := s.ResolveAgentV2Approval(t.Context(), lessonApprovalID, "approve", "", false, nil); err != nil {
+		t.Fatalf("ResolveAgentV2Approval(save_desk_lesson) failed: %v", err)
+	}
+	if _, err := s.ResolveAgentV2Approval(t.Context(), labApprovalID, "approve", "", false, nil); err != nil {
+		t.Fatalf("ResolveAgentV2Approval(draft_lab_script) failed: %v", err)
+	}
+	deskSvc, err := s.deskService()
+	if err != nil {
+		t.Fatalf("deskService failed: %v", err)
+	}
+	lessons, err := deskSvc.ListLessons(t.Context(), 50)
+	if err != nil {
+		t.Fatalf("ListLessons failed: %v", err)
+	}
+	foundLesson := false
+	for _, l := range lessons {
+		if strings.Contains(l.Rule, "Never chase extended breakouts above 3 ATR") {
+			foundLesson = true
+			break
+		}
+	}
+	if !foundLesson {
+		t.Fatalf("expected approved MCP save_desk_lesson to persist, got %+v", lessons)
+	}
+	qlSvc, err := s.quantLabService()
+	if err != nil {
+		t.Fatalf("quantLabService failed: %v", err)
+	}
+	scripts, err := qlSvc.ListScripts(t.Context())
+	if err != nil {
+		t.Fatalf("ListScripts failed: %v", err)
+	}
+	foundScript := false
+	for _, sc := range scripts {
+		if sc.ID == "mcp-ema-check" {
+			foundScript = true
+			break
+		}
+	}
+	if !foundScript {
+		t.Fatalf("expected approved MCP draft_lab_script to persist, got %+v", scripts)
 	}
 
 	// Seed a workspace memory + check fased://memories returns only non-draft memories!

@@ -23,6 +23,7 @@ var (
 	ErrSignatureInvalid = errors.New("hub package Ed25519 signature verification failed")
 	ErrPackageTooLarge  = errors.New("hub package payload exceeds 256 KiB limit")
 	ErrPackageNotFound  = errors.New("hub package not found")
+	ErrAuthorMismatch   = errors.New("hub package id is already owned by a different author key")
 
 	idPattern      = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{2,63}$`)
 	versionPattern = regexp.MustCompile(`^v?\d+\.\d+\.\d+$`)

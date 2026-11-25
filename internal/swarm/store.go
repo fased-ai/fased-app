@@ -21,6 +21,7 @@ import (
 const (
 	swarmDirName = "swarm"
 	swarmDBName  = "swarm.sqlite"
+	swarmKeyName = "swarm.key"
 	maxSignals   = 200
 )
 
@@ -112,30 +113,127 @@ CREATE INDEX IF NOT EXISTS idx_swarm_signals_ts ON swarm_signals(verified_at DES
 	return st, nil
 }
 
+func writeSwarmKeyFile(path string, seed []byte) error {
+	if len(seed) != ed25519.SeedSize {
+		return errors.New("swarm key seed must be 32 bytes")
+	}
+	dir := filepath.Dir(path)
+	tmp, err := os.CreateTemp(dir, ".swarm.key.*")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	cleanup := true
+	defer func() {
+		if cleanup {
+			_ = os.Remove(tmpName)
+		}
+	}()
+	if _, err := tmp.Write(seed); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Chmod(0o600); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(tmpName, path); err != nil {
+		return err
+	}
+	cleanup = false
+	_ = os.Chmod(path, 0o600)
+	return nil
+}
+
 func (s *store) ensureConfigRow(ctx context.Context) error {
+	keyPath := filepath.Join(s.dir, swarmKeyName)
+	keyBytes, keyErr := os.ReadFile(keyPath)
+	if keyErr == nil && len(keyBytes) == ed25519.SeedSize {
+		copy(s.seed[:], keyBytes)
+		clear(keyBytes)
+		var existingSeed []byte
+		rowErr := s.db.QueryRowContext(ctx, `SELECT local_seed FROM swarm_config WHERE id = 1`).Scan(&existingSeed)
+		if rowErr == nil {
+			if len(existingSeed) > 0 {
+				clear(existingSeed)
+				if _, err := s.db.ExecContext(ctx, `UPDATE swarm_config SET local_seed = X'' WHERE id = 1`); err != nil {
+					return err
+				}
+			}
+			return nil
+		}
+		if !errors.Is(rowErr, sql.ErrNoRows) {
+			return rowErr
+		}
+		localPeerID := "peer-" + hex.EncodeToString(s.seed[:6])
+		nowUnix := s.now().UTC().Unix()
+		_, err := s.db.ExecContext(ctx, `
+INSERT INTO swarm_config(id, enabled, copy_mode, local_peer_id, local_seed, updated_at)
+VALUES(1, 0, 'shadow', ?, X'', ?)
+`, localPeerID, nowUnix)
+		return err
+	}
+	if keyBytes != nil {
+		clear(keyBytes)
+	}
+	if keyErr != nil && !errors.Is(keyErr, os.ErrNotExist) {
+		return keyErr
+	}
+
 	var seedBytes []byte
 	err := s.db.QueryRowContext(ctx, `SELECT local_seed FROM swarm_config WHERE id = 1`).Scan(&seedBytes)
 	if err == nil && len(seedBytes) == ed25519.SeedSize {
+		if wErr := writeSwarmKeyFile(keyPath, seedBytes); wErr != nil {
+			clear(seedBytes)
+			return wErr
+		}
 		copy(s.seed[:], seedBytes)
 		clear(seedBytes)
-		return nil
+		_, err = s.db.ExecContext(ctx, `UPDATE swarm_config SET local_seed = X'' WHERE id = 1`)
+		return err
+	}
+	if seedBytes != nil {
+		clear(seedBytes)
 	}
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return err
 	}
+
 	var seed [32]byte
 	if _, rErr := io.ReadFull(rand.Reader, seed[:]); rErr != nil {
 		return rErr
 	}
+	if wErr := writeSwarmKeyFile(keyPath, seed[:]); wErr != nil {
+		clear(seed[:])
+		return wErr
+	}
 	copy(s.seed[:], seed[:])
 	localPeerID := "peer-" + hex.EncodeToString(seed[:6])
+	clear(seed[:])
 	nowUnix := s.now().UTC().Unix()
 	_, err = s.db.ExecContext(ctx, `
 INSERT INTO swarm_config(id, enabled, copy_mode, local_peer_id, local_seed, updated_at)
-VALUES(1, 0, 'shadow', ?, ?, ?)
-`, localPeerID, seed[:], nowUnix)
-	clear(seed[:])
+VALUES(1, 0, 'shadow', ?, X'', ?)
+ON CONFLICT(id) DO UPDATE SET local_peer_id = excluded.local_peer_id, local_seed = X'', updated_at = excluded.updated_at
+`, localPeerID, nowUnix)
 	return err
+}
+
+func (s *store) hasPeerPubKey(ctx context.Context, pubKeyHex string) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var exists int
+	err := s.db.QueryRowContext(ctx, `SELECT 1 FROM swarm_peers WHERE lower(pubkey_hex) = ? LIMIT 1`, strings.ToLower(strings.TrimSpace(pubKeyHex))).Scan(&exists)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 func (s *store) close() error {

@@ -2,6 +2,7 @@ package core
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"io"
@@ -348,6 +349,44 @@ func (h *HTTPHandler) mcpAPI(w http.ResponseWriter, r *http.Request, token strin
 			profileID := defaultMCPProfileID(r.Context(), h.store)
 			callCtx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 			defer cancel()
+			if isDraft {
+				if entry.preview == nil {
+					writeMCPRPCError(w, req.ID, -32602, "draft tool requires approval handler")
+					return
+				}
+				draft, prevErr := entry.preview(callCtx, h.store, profileID, args)
+				if prevErr != nil {
+					writeMCPRPCResult(w, req.ID, map[string]any{
+						"isError": true,
+						"content": []map[string]any{
+							{"type": "text", "text": encodeToolResultJSON(map[string]any{"error": prevErr.Error()})},
+						},
+					})
+					return
+				}
+				ap, thread, apErr := queueMCPToolApproval(callCtx, h.store, profileID, params.Name, args, draft)
+				if apErr != nil {
+					writeMCPRPCError(w, req.ID, -32603, "failed to queue approval: "+apErr.Error())
+					return
+				}
+				h.store.notifyApprovalRequired(callCtx, ap.ID, "Approval required: "+ap.Title, ap.Summary, true)
+				res := map[string]any{
+					"status":     "awaiting_approval",
+					"executed":   false,
+					"approvalId": ap.ID,
+					"threadId":   thread.ID,
+					"toolName":   params.Name,
+					"title":      ap.Title,
+					"summary":    ap.Summary,
+				}
+				writeMCPRPCResult(w, req.ID, map[string]any{
+					"isError": false,
+					"content": []map[string]any{
+						{"type": "text", "text": encodeToolResultJSON(res)},
+					},
+				})
+				return
+			}
 			res, execErr := entry.execute(callCtx, h.store, profileID, args)
 			if execErr != nil {
 				writeMCPRPCResult(w, req.ID, map[string]any{
@@ -409,6 +448,81 @@ func (h *HTTPHandler) mcpAPI(w http.ResponseWriter, r *http.Request, token strin
 	default:
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 	}
+}
+
+func ensureMCPApprovalThread(ctx context.Context, s *Store, profileID string) (AgentThread, error) {
+	v2, err := s.ensureAgentV2(ctx)
+	if err != nil {
+		return AgentThread{}, err
+	}
+	profileID = s.validProfileOrDefault(ctx, profileID)
+	var existingID string
+	err = v2.db.QueryRowContext(ctx, `
+SELECT id FROM threads
+WHERE profile_id=? AND source_kind='mcp' AND source_ref='mcp-approvals' AND archived=0
+ORDER BY updated_at DESC LIMIT 1`, profileID).Scan(&existingID)
+	if err == nil && existingID != "" {
+		return s.getThreadRow(ctx, v2, existingID)
+	}
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return AgentThread{}, err
+	}
+	th, err := s.CreateThread(ctx, profileID, "MCP Approvals", "", "")
+	if err != nil {
+		return AgentThread{}, err
+	}
+	if _, err := v2.db.ExecContext(ctx, `UPDATE threads SET source_kind='mcp', source_ref='mcp-approvals' WHERE id=?`, th.ID); err != nil {
+		return AgentThread{}, err
+	}
+	th.SourceKind = "mcp"
+	th.SourceRef = "mcp-approvals"
+	return th, nil
+}
+
+func queueMCPToolApproval(ctx context.Context, s *Store, profileID, toolName string, rawArgs json.RawMessage, draft approvalDraft) (AgentApproval, AgentThread, error) {
+	th, err := ensureMCPApprovalThread(ctx, s, profileID)
+	if err != nil {
+		return AgentApproval{}, AgentThread{}, err
+	}
+	msg, err := s.AppendMessage(ctx, AgentV2Message{
+		ThreadID: th.ID,
+		Role:     "assistant",
+		Content:  draft.Summary,
+		Status:   "awaiting_approval",
+	})
+	if err != nil {
+		return AgentApproval{}, AgentThread{}, err
+	}
+	callID, err := randomToken()
+	if err != nil {
+		return AgentApproval{}, AgentThread{}, err
+	}
+	tc, err := s.CreateToolCall(ctx, AgentToolCall{
+		ThreadID:  th.ID,
+		MessageID: msg.ID,
+		CallID:    "mcp_" + callID,
+		ToolName:  toolName,
+		Tier:      toolTierAction,
+		ArgsJSON:  string(rawArgs),
+		Status:    "awaiting_approval",
+	})
+	if err != nil {
+		return AgentApproval{}, AgentThread{}, err
+	}
+	ap, err := s.CreateApproval(ctx, AgentApproval{
+		ThreadID:    th.ID,
+		MessageID:   msg.ID,
+		ToolCallID:  tc.ID,
+		ToolName:    toolName,
+		Title:       draft.Title,
+		Summary:     draft.Summary,
+		PayloadJSON: draft.PayloadJSON,
+		Status:      "pending",
+	})
+	if err != nil {
+		return AgentApproval{}, AgentThread{}, err
+	}
+	return ap, th, nil
 }
 
 func defaultMCPProfileID(ctx context.Context, s *Store) string {

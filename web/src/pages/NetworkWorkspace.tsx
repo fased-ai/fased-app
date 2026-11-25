@@ -408,7 +408,7 @@ export function NetworkWorkspace() {
               <h2>{t("CEX Venues")}</h2>
               <div className="network-pill-row">
                 <Badge tone="warn">
-                  {cex.mainnetLocked ? t("Mainnet Locked") : t("Live")}
+                  {cex.mainnetLocked ? t("Mainnet Locked") : t("Paper")}
                 </Badge>
                 <Badge>{t("Withdrawal-disabled")}</Badge>
               </div>
@@ -499,7 +499,7 @@ export function NetworkWorkspace() {
             <div className="network-card-head">
               <h2>{t("Equities & OCC Options")}</h2>
               <Badge tone="warn">
-                {equities.liveLocked ? t("Live Locked") : t("Live")}
+                {equities.liveLocked ? t("Live Locked") : t("Paper")}
               </Badge>
             </div>
             <div className="network-field-grid">

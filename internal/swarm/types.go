@@ -26,6 +26,7 @@ var (
 	ErrReplayDetected   = errors.New("swarm envelope replay nonce already seen")
 	ErrTimestampSkew    = errors.New("swarm envelope timestamp exceeds 5-minute clock skew window")
 	ErrInvalidSignature = errors.New("swarm envelope Ed25519 signature verification failed")
+	ErrUnknownPeer      = errors.New("swarm envelope sender is not a registered peer")
 
 	idPattern     = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{2,63}$`)
 	symbolPattern = regexp.MustCompile(`^[A-Z0-9._:/-]{1,24}$`)
