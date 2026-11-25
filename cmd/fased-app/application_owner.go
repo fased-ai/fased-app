@@ -13,10 +13,8 @@ import (
 
 	"github.com/fased-ai/fased-app/internal/bootstrap"
 	"github.com/fased-ai/fased-app/internal/core"
-	"github.com/fased-ai/fased-app/internal/custodyinstall"
 	"github.com/fased-ai/fased-app/internal/localinstall"
 	"github.com/fased-ai/fased-app/internal/update"
-	"github.com/fased-ai/fased-app/internal/vpsinstall"
 )
 
 // Publisher-reviewed Go binding only. No environment/CLI/file/HTTP source override
@@ -63,38 +61,7 @@ func maintainUpdateCommand(args []string, out, errOut io.Writer) error {
 		return errors.New("fixed installed owner entry and exact operation required")
 	}
 	if *remote {
-		if *prefix != "" || *data != "" {
-			return errors.New("Remote uses its fixed installed identity, not custom directories")
-		}
-		m, e := vpsinstall.Load(os.Getuid())
-		if e != nil {
-			m, e = vpsinstall.LoadApplicationMaintenance(os.Getuid(), *id)
-			if e != nil {
-				return e
-			}
-		}
-		ctx, cancel := context.WithTimeout(context.Background(), 14*time.Minute)
-		defer cancel()
-		source := compiledApplicationUpdateSource
-		if compiledApplicationChannel != nil {
-			parent, e := vpsinstall.ApplicationAcquisitionParent(m)
-			if e != nil {
-				return e
-			}
-			source = installedChannelSource(parent)
-			compiledApplicationReaderSource = installedReaderChannelSource(parent)
-		}
-		if *unattended {
-			image, err := os.Executable()
-			if err != nil {
-				return err
-			}
-			if err = vpsinstall.ValidateApplicationMaintenanceEntry(m, image); err != nil {
-				return err
-			}
-			return maintainRemoteUpdateWithSystem(ctx, m, *id, *rollback, source, out, &custodyinstall.System{NonInteractive: true, Out: errOut}, false)
-		}
-		return maintainRemoteUpdate(ctx, m, *id, *rollback, source, out)
+		return errors.New("legacy app-only Remote maintain-update has been retired")
 	}
 	if *unattended {
 		return errors.New("unattended entry requires the fixed installed Remote actor")

@@ -4,10 +4,10 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"github.com/fased-ai/fased-app/internal/custodyinstall"
 	"github.com/fased-ai/fased-app/internal/localinstall"
-	"github.com/fased-ai/fased-app/internal/vpsinstall"
 	"io"
 	"os"
 	"os/exec"
@@ -23,23 +23,17 @@ func completeInstalledEntry(profile string, in io.Reader, out, errOut io.Writer)
 	var executable string
 	args := []string{"install-command"}
 	if profile == "remote" {
-		m, e := vpsinstall.Load(os.Getuid())
-		if e != nil {
-			return e
-		}
-		executable = m.Core
-		args = append(args, "--remote")
-	} else {
-		paths, e := localinstall.DefaultPaths()
-		if e != nil {
-			return e
-		}
-		m, e := localinstall.Load(paths)
-		if e != nil {
-			return e
-		}
-		executable = filepath.Join(m.Root, localinstall.EngineName())
+		return errors.New("legacy app-only Remote installation is retired; use Format-4 Remote setup")
 	}
+	paths, e := localinstall.DefaultPaths()
+	if e != nil {
+		return e
+	}
+	m, e := localinstall.Load(paths)
+	if e != nil {
+		return e
+	}
+	executable = filepath.Join(m.Root, localinstall.EngineName())
 	c := exec.Command(executable, args...)
 	c.Stdin, c.Stdout, c.Stderr = in, out, errOut
 	return c.Run()

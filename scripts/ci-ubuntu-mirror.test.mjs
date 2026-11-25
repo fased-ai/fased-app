@@ -144,22 +144,6 @@ test("optional native compatibility prepares sources without root project execut
   );
 });
 
-test("installed enrollment uses the same signed mirror before its real installer", () => {
-  const workflow = readFileSync(
-    new URL("../.github/workflows/checks.yml", import.meta.url),
-    "utf8",
-  );
-  const job = workflow.split("\n  inspection-installed:\n")[1];
-  assert.match(
-    job,
-    /node scripts\/ci-ubuntu-mirror.mjs\n\s+sudo install -m 0644 .evidence\/ubuntu.sources \/etc\/apt\/sources.list.d\/ubuntu.sources/,
-  );
-  assert.ok(
-    job.indexOf("node scripts/ci-ubuntu-mirror.mjs") <
-      job.indexOf("node scripts/check-enrollment-install.mjs"),
-  );
-});
-
 test("release image fallback keeps the existing VM image digest", () => {
   const workflow = readFileSync(
     new URL("../.github/workflows/release.yml", import.meta.url),

@@ -1,19 +1,14 @@
 package main
 
 import (
-	"bufio"
 	"bytes"
-	"errors"
-	"github.com/fased-ai/fased-app/internal/custodyinstall"
-	"github.com/fased-ai/fased-app/internal/privateaccess"
-	"github.com/fased-ai/fased-app/internal/vpsinstall"
-	"github.com/fased-ai/fased-app/internal/vpsnetwork"
 	"io"
 	"os"
-	"runtime"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/fased-ai/fased-app/internal/vpsnetwork"
 )
 
 func shortFixtureDir(t *testing.T, prefix string) string {
@@ -30,47 +25,6 @@ func shortFixtureDir(t *testing.T, prefix string) string {
 	return dir
 }
 
-func TestManagedRemoteRequiresBundleBeforeHostAccess(t *testing.T) {
-	previousLoader := loadEnrolledTarget
-	loadEnrolledTarget = func(string, int) (custodyinstall.Manifest, error) {
-		return custodyinstall.Manifest{}, os.ErrNotExist
-	}
-	t.Cleanup(func() { loadEnrolledTarget = previousLoader })
-	err := hostCommand([]string{"install", "--managed-remote", "--autostart", "--prepare-host", "--access", "ssh"}, io.Discard, io.Discard)
-	if err == nil || !strings.Contains(err.Error(), "verified headless bundle") {
-		t.Fatalf("managed Remote reached the wrong admission path: %v", err)
-	}
-}
-
-func TestRemotePlanSwitchesOnlyAfterProtectedInstanceProof(t *testing.T) {
-	m := vpsinstall.Manifest{OwnerUID: 1000, Data: "/var/lib/fased-app-vps-1000/app-state"}
-	plan := privateaccess.Plan{Mode: "tailscale", Origin: "https://owner.example.ts.net"}
-	legacy, err := remoteIngressPlan(plan, m, false)
-	if err != nil || legacy.Target != "unix:/var/lib/fased-app-vps-1000/app-state/tailscale.sock" {
-		t.Fatal("legacy route changed without proof", legacy, err)
-	}
-	protected, err := remoteIngressPlan(plan, m, true)
-	if err != nil || protected.Target != "unix:/run/fased-vps-1000/tailscale.sock" || protected.Origin != plan.Origin {
-		t.Fatal("verified private listener not selected", protected, err)
-	}
-	m.OwnerUID = 0
-	if _, err := remoteIngressPlan(plan, m, true); err == nil {
-		t.Fatal("unbound owner accepted")
-	}
-}
-
-func TestManagedRemoteOwnerDirectoryHandoff(t *testing.T) {
-	uid, err := managedRemoteOwner(vpsinstall.Root(1000))
-	if err != nil || uid != 1000 {
-		t.Fatal(uid, err)
-	}
-	for _, root := range []string{"", "/var/lib/fased-app-vps-0", "/var/lib/fased-app-vps--1", "/var/lib/fased-app-vps-01", "/other/fased-app-vps-1000", "/var/lib/fased-app-vps-1000/extra", "/var/lib/fased-app-vps-4294967295"} {
-		if _, err = managedRemoteOwner(root); err == nil {
-			t.Fatal("unbound managed owner accepted", root)
-		}
-	}
-}
-
 func TestManagedRemoteNetworkConsentAndHandoff(t *testing.T) {
 	for _, input := range []string{"", "n\n", "yes\nn\n", "yes\n"} {
 		if _, err := networkConsent(strings.NewReader(input), io.Discard); err == nil {
@@ -81,17 +35,17 @@ func TestManagedRemoteNetworkConsentAndHandoff(t *testing.T) {
 	if err != nil || !approval.PrivateUI || !approval.ConsoleRecovery {
 		t.Fatal(approval, err)
 	}
-	var out bytes.Buffer
-	networkHandoff(&out, vpsinstall.Manifest{Core: "/immutable/fased-app"}, vpsinstall.NetworkStatus{Phase: "pending", AttemptID: "attempt", Deadline: time.Date(2026, 10, 28, 12, 0, 0, 0, time.UTC)})
-	if !strings.Contains(out.String(), "second SSH") || !strings.Contains(out.String(), "'vps' 'confirm' 'attempt'") || !strings.Contains(out.String(), "2026-10-28T12:00:00Z") {
-		t.Fatal("missing second-session/recovery instructions", out.String())
-	}
-	out.Reset()
-	networkHandoff(&out, vpsinstall.Manifest{Phase: "package-remote", Core: "/pkg/fased-app", Data: "/pkg/app-state"}, vpsinstall.NetworkStatus{Phase: "pending", AttemptID: "attempt", Deadline: time.Date(2026, 10, 28, 12, 0, 0, 0, time.UTC)})
-	if !strings.Contains(out.String(), "'vps' 'confirm' '--data-dir' '/pkg/app-state' 'attempt'") {
-		t.Fatal("missing package data-dir confirmation instruction", out.String())
-	}
-	for _, args := range [][]string{{"confirm"}, {"confirm", "one", "two"}, {"network", "extra"}, {"harden", "--yes"}, {"start", "--data-dir", "/foreign"}, {"access", "--data-dir", "/foreign"}, {"claim-code", "--data-dir", "/foreign"}} {
+	for _, args := range [][]string{
+		nil,
+		{"confirm"},
+		{"confirm", "one", "two"},
+		{"network", "extra"},
+		{"harden", "--yes"},
+		{"status"},
+		{"start"},
+		{"access"},
+		{"claim-code"},
+	} {
 		if vpsCommand(args, nil, io.Discard, io.Discard) == nil {
 			t.Fatal("invalid network command accepted", args)
 		}
@@ -106,23 +60,7 @@ func TestManagedRemoteNetworkConsentAndHandoff(t *testing.T) {
 	}
 }
 
-func TestManagedRemoteAdmissionAndOwnerBoundary(t *testing.T) {
-	if runtime.GOOS != "linux" {
-		t.Skip("Linux Remote admission")
-	}
-	for _, c := range []struct {
-		bundle                    string
-		desktop, autostart, paths bool
-	}{
-		{"", false, true, false}, {"/bundle", true, true, false}, {"/bundle", false, false, false}, {"/bundle", false, true, true},
-	} {
-		if validateManagedRemote(c.bundle, c.desktop, c.autostart, c.paths) == nil {
-			t.Fatal("unsafe managed input accepted", c)
-		}
-	}
-	if err := validateManagedRemote("/bundle", false, true, false); err != nil {
-		t.Fatal(err)
-	}
+func TestRuntimeUIDValidation(t *testing.T) {
 	for _, ids := range [][2]int{{0, 0}, {1000, 0}, {1000, 1001}, {-1, -1}} {
 		if validateRuntimeUID(ids[0], ids[1]) == nil {
 			t.Fatal("privileged or switched identity accepted", ids)
@@ -130,69 +68,6 @@ func TestManagedRemoteAdmissionAndOwnerBoundary(t *testing.T) {
 	}
 	if validateRuntimeUID(1000, 1000) != nil {
 		t.Fatal("ordinary owner rejected")
-	}
-	for _, args := range [][]string{nil, {"run"}, {"status", "--data-dir", "/foreign"}, {"claim-code", "foreign"}} {
-		if vpsCommand(args, nil, io.Discard, io.Discard) == nil {
-			t.Fatal("unsafe vps command accepted", args)
-		}
-	}
-}
-
-func TestManagedRemoteWizardAndHandoff(t *testing.T) {
-	for _, c := range []struct {
-		input string
-		want  bool
-	}{{"\n", true}, {"bad\nyes\n", true}, {"no\n", false}} {
-		got, err := installationManagedRemote(bufio.NewReader(strings.NewReader(c.input)), io.Discard)
-		if c.want && (err != nil || !got) || !c.want && err == nil {
-			t.Fatal(c, got, err)
-		}
-	}
-	if _, err := installationManagedRemote(bufio.NewReader(strings.NewReader("")), io.Discard); err == nil {
-		t.Fatal("cancelled wizard accepted")
-	}
-	m := vpsinstall.Manifest{Core: "/managed/Fased app/fased-app", Data: "/managed/private data"}
-	for _, started := range []bool{false, true} {
-		var out bytes.Buffer
-		remoteHandoff(&out, m, privateaccess.Plan{Mode: "ssh", Instructions: []string{"PRIVATE-GUIDE"}}, started, "PRIVATE-SETUP-LINK")
-		text := out.String()
-		if !strings.Contains(text, "vps") || !strings.Contains(text, "status") || strings.Contains(text, "custody") || strings.Contains(text, "wallet") {
-			t.Fatal(text)
-		}
-		if strings.Contains(text, "claim-code") || started != strings.Contains(text, "PRIVATE-SETUP-LINK") || started != strings.Contains(text, "PRIVATE-GUIDE") {
-			t.Fatal("unready UI was offered or ready handoff absent", text)
-		}
-		if strings.Contains(text, "password") {
-			t.Fatal("handoff invented another password step", text)
-		}
-	}
-	if remotePublicOrigin(privateaccess.Plan{Mode: "ssh", Origin: "http://127.0.0.1:7331"}) != "" {
-		t.Fatal("SSH exposed as public origin")
-	}
-	if remotePublicOrigin(privateaccess.Plan{Mode: "tailscale", Origin: "https://fixture.ts.net"}) != "https://fixture.ts.net" {
-		t.Fatal("private HTTPS origin lost")
-	}
-}
-
-func TestManagedRemotePendingAccessUsesInstalledCommand(t *testing.T) {
-	m := vpsinstall.Manifest{Core: "/opt/Fased app/fased-app"}
-	cause := errors.New("private HTTPS did not verify")
-	err := remoteAccessPending(m, cause)
-	if !errors.Is(err, cause) || !strings.Contains(err.Error(), installationCommand(m.Core, "vps", "access")) {
-		t.Fatal(err)
-	}
-}
-
-func TestRootEntryHandoffNeverSuggestsRunningGoAsRoot(t *testing.T) {
-	t.Setenv("FASED_INSTALL_ROOT_ENTRY", "1")
-	m := vpsinstall.Manifest{Core: "/fixture/installed/fased-app"}
-	var out bytes.Buffer
-	remoteHandoff(&out, m, privateaccess.Plan{Mode: "tailscale", Instructions: []string{"open https://fixture.ts.net"}}, true, "https://fixture.ts.net/?instance=fixture")
-	if strings.Contains(out.String(), m.Core) || !strings.Contains(out.String(), "--status") || !strings.Contains(out.String(), "--recover") {
-		t.Fatal(out.String())
-	}
-	if e := remoteAccessPending(m, errors.New("fixture pending")); !strings.Contains(e.Error(), "same installer") || strings.Contains(e.Error(), m.Core) {
-		t.Fatal(e)
 	}
 }
 

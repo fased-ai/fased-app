@@ -3,14 +3,10 @@ package main
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"github.com/fased-ai/fased-app/internal/connection"
 	"github.com/fased-ai/fased-app/internal/core"
-	"github.com/fased-ai/fased-app/internal/tailnet"
-	"github.com/fased-ai/fased-app/internal/vpsinstall"
-	"golang.org/x/term"
 	"io"
 	"os"
 	"strings"
@@ -95,72 +91,4 @@ func localOwnerSetupLink(ctx context.Context, dir, origin string) (string, error
 		return "", err
 	}
 	return string(bytes.TrimSpace(out.Bytes())), nil
-}
-
-// The fixed OS helper derives its origin from verified configuration, never
-// caller-selected sudo arguments. Only the trusted terminal receives its proof.
-func remoteOwnerSetupLink(args []string, in *os.File, out io.Writer) error {
-	if len(args) != 2 || args[0] != "--config" {
-		return errors.New("fixed Remote setup configuration required")
-	}
-	image, e := os.Executable()
-	if e != nil {
-		return e
-	}
-	m, e := vpsinstall.ValidateApplicationOwnerHelper(args[1], image, os.Getuid())
-	if e != nil {
-		return e
-	}
-	setupLock, e := core.LockOwnerSetup(m.Data)
-	if e != nil {
-		return e
-	}
-	defer setupLock.Close()
-	store, e := core.OpenStore(m.Data)
-	if e != nil {
-		return e
-	}
-	defer store.Close()
-	claimed, e := store.Claimed(context.Background())
-	if e != nil {
-		return e
-	}
-	if claimed {
-		link, e := connection.OwnerSetupURL(m.PublicOrigin, store.Health().InstanceID, "")
-		if e != nil {
-			return e
-		}
-		_, e = fmt.Fprintln(out, link)
-		return e
-	}
-	owner, e := store.PendingRemoteClaim(context.Background())
-	if in != nil && !term.IsTerminal(int(in.Fd())) {
-		var supplied tailnet.Identity
-		decoder := json.NewDecoder(io.LimitReader(in, 4097))
-		decoder.DisallowUnknownFields()
-		decode := decoder.Decode(&supplied)
-		if decode == nil {
-			var trailing any
-			if decoder.Decode(&trailing) != io.EOF {
-				return errors.New("one verified Remote owner handoff required")
-			}
-			owner = supplied
-			e = nil
-		} else if decode != io.EOF {
-			return errors.New("verified Remote owner handoff required")
-		}
-	}
-	if e != nil {
-		return errors.New("finish the guided Tailscale setup before creating owner access")
-	}
-	code, e := store.IssueRemoteClaim(context.Background(), owner)
-	if e != nil {
-		return e
-	}
-	link, e := connection.OwnerSetupURL(m.PublicOrigin, store.Health().InstanceID, code.Code)
-	if e != nil {
-		return e
-	}
-	_, e = fmt.Fprintln(out, link)
-	return e
 }

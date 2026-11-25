@@ -25,7 +25,6 @@ import (
 	"github.com/fased-ai/fased-app/internal/localinstall"
 	"github.com/fased-ai/fased-app/internal/ownerclient"
 	"github.com/fased-ai/fased-app/internal/privateaccess"
-	"github.com/fased-ai/fased-app/internal/vpsinstall"
 	"golang.org/x/term"
 )
 
@@ -58,7 +57,6 @@ func hostCommand(args []string, out, errOut io.Writer) error {
 	profile := f.String("profile", "", "preselected Local/Remote/Connect installation profile")
 	access := f.String("access", "local", "local or mandatory tailscale private access")
 	vps := f.Bool("vps", false, "require always-on Linux VPS readiness")
-	managedRemote := f.Bool("managed-remote", false, "install Ubuntu Remote using a dedicated locked application account")
 	packageDir := f.String("bundle", "", "verify and install this platform package inventory")
 	verificationOutput := f.String("verification-output", "", "restrict installation/state to paths separate from verified acquisition output")
 	bootstrapSequence := f.String("bootstrap-sequence", "", "verified bootstrap release sequence; no version inference")
@@ -116,13 +114,7 @@ func hostCommand(args []string, out, errOut io.Writer) error {
 		return errors.New("profile requires interactive Remote installation")
 	}
 	paths = localinstall.Paths{Root: *root, Data: *data}
-	if *managedRemote && command != "install" {
-		return errors.New("--managed-remote is an installation option")
-	}
-	if *managedRemote && !*interactive {
-		*vps = true
-	}
-	if *upgrade && (command != "install" || *managedRemote || *vps) {
+	if *upgrade && (command != "install" || *vps) {
 		return errors.New("--upgrade is only supported for Local installation")
 	}
 	budget := 30 * time.Second
@@ -183,49 +175,11 @@ func hostCommand(args []string, out, errOut io.Writer) error {
 			}
 			return openBrowserLaunch(address)
 		}
-		target, found, e := enrolledTarget(paths.Data)
-		if e != nil {
-			return e
-		}
-		if found {
-			if command == "install" {
-				return errors.New("this instance is enrolled; use open or service management; original installation is preserved")
+		if fenceErr := desktopclient.CheckLegacyEnrollmentFence(abs, os.Getuid()); !errors.Is(fenceErr, os.ErrNotExist) {
+			if fenceErr == nil {
+				return errors.New("legacy enrollment fence present; preserve state")
 			}
-			operation := action
-			if command == "open" {
-				operation = "open"
-			}
-			if command == "uninstall" {
-				operation = "remove"
-			}
-			ops := enrolledSystem(&custodyinstall.System{In: os.Stdin, Out: errOut})
-			if command == "open" && ownerLink == "" && target.NativeOwnerAccess && target.Location == "local" {
-				ops.ownerLink = func(ctx context.Context, origin string) (string, error) {
-					return localOwnerSetupLink(ctx, paths.Data, origin)
-				}
-				ops.open = func(url, _ string) error {
-					return openBrowserLaunch(url)
-				}
-			}
-			if command == "open" && ownerLink != "" {
-				if !target.NativeOwnerAccess {
-					return errors.New("install the protected Local native client to open Wallets")
-				}
-				if _, nativeErr := custodyinstall.ProtectedNativeRelease(target); nativeErr != nil {
-					return errors.New("install the protected Local native client to open Wallets")
-				}
-				if err = checkDesktopRuntime(filepath.Join(target.Root, localinstall.DesktopName())); err != nil {
-					return err
-				}
-				ops.open = func(_, _ string) error {
-					process := exec.Command(filepath.Join(target.Root, localinstall.DesktopName()), "--wallet-owner", ownerLink)
-					if err := process.Start(); err != nil {
-						return errors.New("cannot open the protected Fased window")
-					}
-					return process.Process.Release()
-				}
-			}
-			return enrolledLifecycle(ctx, target, operation, *prepareHost, *printOnly, out, ops)
+			return fenceErr
 		}
 	}
 	switch command {
@@ -259,19 +213,7 @@ func hostCommand(args []string, out, errOut io.Writer) error {
 			}
 			*vps = choice == "remote"
 			if *vps {
-				value, e := installationPrivateAccessChoice(r, errOut)
-				if e != nil {
-					return e
-				}
-				*access = value
-			}
-			*managedRemote = false
-			if *vps {
-				dedicated, e := installationManagedRemote(r, errOut)
-				if e != nil {
-					return e
-				}
-				*managedRemote = dedicated
+				return errors.New("Remote installation uses the official Format-4 installer (install.sh --remote)")
 			}
 			autostartChoice, e := installationAutostart(r, errOut, *vps)
 			if e != nil {
@@ -279,22 +221,7 @@ func hostCommand(args []string, out, errOut io.Writer) error {
 			}
 			*autostart = autostartChoice
 		}
-		if *managedRemote {
-			explicitPaths := false
-			f.Visit(func(value *flag.Flag) {
-				if value.Name == "prefix" || value.Name == "data-dir" {
-					explicitPaths = true
-				}
-			})
-			if err := validateManagedRemote(*packageDir, *desktop != "", *autostart, explicitPaths); err != nil {
-				return err
-			}
-		}
 		selectedPaths := paths
-		if *managedRemote {
-			selectedPaths.Root = vpsinstall.Root(os.Getuid())
-			selectedPaths.Data = selectedPaths.Root + "/app-state"
-		}
 		if err = installationOutputSeparation(*verificationOutput, selectedPaths); err != nil {
 			return err
 		}
@@ -320,9 +247,6 @@ func hostCommand(args []string, out, errOut io.Writer) error {
 		if e != nil {
 			return e
 		}
-		if *managedRemote && inventory.Desktop {
-			return errors.New("managed Remote requires a verified headless bundle")
-		}
 		if *nativeBundle != "" && !*vps {
 			native, canonical, err := verifiedNativeInstallation(*nativeBundle, *verificationOutput, *nativeBundleSHA256, runningEngine, inventory, selectedPaths)
 			if err != nil {
@@ -334,52 +258,12 @@ func hostCommand(args []string, out, errOut io.Writer) error {
 			*desktop = filepath.Join(canonical, localinstall.DesktopName())
 		}
 		if *vps {
-			if *access != "tailscale" {
-				return errors.New("Remote requires Tailscale before installation")
-			}
-			if runtime.GOOS != "linux" || !*autostart {
-				return errors.New("VPS installation requires Linux and explicit --autostart")
-			}
-			if !*managedRemote {
-				return errors.New("Remote requires the isolated application service; use --managed-remote")
-			}
+			return errors.New("Remote installation uses the official Format-4 installer (install.sh --remote)")
 		}
 		var accessWizard *bufio.Reader
-		if *vps {
-			accessWizard = wizard
-		}
 		plan, err := installationPrivateAccess(ctx, accessWizard, errOut, *access, *listen, privateaccess.System().Plan, hostprep.PrepareTailscale)
 		if err != nil {
 			return err
-		}
-		if *managedRemote && plan.Mode == "tailscale" {
-			dir, e := remoteAccessDirectory()
-			if e != nil {
-				return e
-			}
-			pending, e := protectedPendingRemoteOrigin(ctx, errOut)
-			if e != nil {
-				return e
-			}
-			resumed := false
-			if pending != "" {
-				existing, loadErr := vpsinstall.Load(os.Getuid())
-				if loadErr == nil {
-					if !sameRemoteInstallerInput(existing, *listen, pending, sequence, release, inventory.Files[localinstall.EngineName()].SHA256) {
-						return errors.New("existing Remote installation differs; preserve it")
-					}
-					plan, e = privateaccess.BindOrigin(plan, pending)
-					resumed = true
-				} else if !errors.Is(loadErr, os.ErrNotExist) {
-					return loadErr
-				}
-			}
-			if !resumed {
-				plan, e = privateaccess.System().SelectIsolated(ctx, dir, plan, pending)
-			}
-			if e != nil {
-				return e
-			}
 		}
 		plan = installationSSHPlan(plan, os.Getenv("SSH_CONNECTION"))
 		*access = plan.Mode
@@ -389,9 +273,6 @@ func hostCommand(args []string, out, errOut io.Writer) error {
 			}
 			*origin = plan.Origin
 		}
-		if *managedRemote && plan.Mode != "tailscale" && *origin != "" {
-			return errors.New("managed Remote HTTPS origin is set by the Tailscale access choice")
-		}
 		if err = localinstall.Validate(paths, localinstall.Options{Listen: *listen, PublicOrigin: *origin}); err != nil {
 			return err
 		}
@@ -399,17 +280,10 @@ func hostCommand(args []string, out, errOut io.Writer) error {
 		if *installRuntime {
 			runtimeDesktop = *desktop
 		}
-		if *interactive && !*prepareHost && (needsHostPreparation(runtimeDesktop) || *managedRemote) {
-			prompt := "Authorize required OS preparation with sudo? [y/N]: "
-			if *managedRemote {
-				prompt = "Authorize Ubuntu preparation, isolated service and bounded update maintenance with sudo? [y/N]: "
-			}
-			fmt.Fprint(errOut, prompt)
+		if *interactive && !*prepareHost && needsHostPreparation(runtimeDesktop) {
+			fmt.Fprint(errOut, "Authorize required OS preparation with sudo? [y/N]: ")
 			choice, _ := wizard.ReadString('\n')
 			*prepareHost = strings.EqualFold(strings.TrimSpace(choice), "y")
-		}
-		if *managedRemote {
-			return managedRemoteInstall(ctx, engine, inventory.Files[localinstall.EngineName()].SHA256, *listen, plan, *prepareHost, *start, out, errOut, wizard, installationAdmission{sequence: sequence, release: release, prepareUpdates: *interactive && *prepareHost})
 		}
 		if err = desktopRuntime(ctx, runtimeDesktop, *packageDir, *data, *installRuntime, *prepareHost, os.Stdin, errOut); err != nil {
 			return err

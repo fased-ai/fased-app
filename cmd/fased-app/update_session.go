@@ -8,7 +8,6 @@ import (
 
 	"github.com/fased-ai/fased-app/internal/core"
 	"github.com/fased-ai/fased-app/internal/custodyinstall"
-	"github.com/fased-ai/fased-app/internal/vpsinstall"
 )
 
 // Only the already installed immutable AppUID helper can turn its protected OS
@@ -47,31 +46,17 @@ func loadUpdateSessionWithIdentities(ctx context.Context, c *core.Client, dir st
 	if e != nil {
 		return e
 	}
-	if health.Connection.OwnerKind == "custody" {
-		m, instance, e := validateRemote(health.Connection.OwnerUID, image, dir)
-		if e != nil {
-			return e
-		}
-		if instance == "" || instance != c.Endpoint.InstanceID || instance != health.InstanceID || m.Location != "remote" || m.Owner != health.Connection.OwnerUID || dir != m.Root+"/app-state" {
-			return errors.New("Remote custody update identity changed")
-		}
-		return loadRemoteAppUpdateSession(ctx, c, dir, m.Owner, m.App.UID)
+	if health.Connection.OwnerKind != "custody" {
+		return errors.New("Remote custody update identity required")
 	}
-	m, e := vpsinstall.ValidateApplicationOwnerHelper(vpsinstall.ConfigPath(health.Connection.OwnerUID), image, os.Getuid())
+	m, instance, e := validateRemote(health.Connection.OwnerUID, image, dir)
 	if e != nil {
 		return e
 	}
-	if m.Data != dir {
-		return errors.New("update session belongs to another installation")
+	if instance == "" || instance != c.Endpoint.InstanceID || instance != health.InstanceID || m.Location != "remote" || m.Owner != health.Connection.OwnerUID || dir != m.Root+"/app-state" {
+		return errors.New("Remote custody update identity changed")
 	}
-	return loadRemoteHelperSession(ctx, c, m)
-}
-
-// Reader callers have already validated the immutable retained target and exact
-// operation. Only ephemeral session rows/file change; identities, schema, holds,
-// approvals and update journals remain untouched, including while core is paused.
-func loadRemoteHelperSession(ctx context.Context, c *core.Client, m vpsinstall.Manifest) error {
-	return loadRemoteAppUpdateSession(ctx, c, m.Data, m.OwnerUID, m.AppUID)
+	return loadRemoteAppUpdateSession(ctx, c, dir, m.Owner, m.App.UID)
 }
 
 // Both callers first validate their own immutable installation domain. Only the

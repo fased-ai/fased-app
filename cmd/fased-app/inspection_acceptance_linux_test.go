@@ -36,7 +36,7 @@ func (acceptanceBoundaryWriter) Write(b []byte) (int, error) {
 	return n, e
 }
 func TestMain(m *testing.M) {
-	configureOrdinaryEnrollmentFixture()
+	configureInstalledWalletReadFixture()
 	if len(os.Args) > 1 && !strings.HasPrefix(os.Args[1], "-test.") {
 		if os.Getuid() == 0 || os.Geteuid() == 0 {
 			fmt.Fprintln(os.Stderr, "test fixture refuses root")
@@ -44,26 +44,6 @@ func TestMain(m *testing.M) {
 		}
 		var diagnostic io.Writer = os.Stderr
 		self, _ := os.Executable()
-		if handled, e := applicationUpdateVMRuntime(self, os.Args[1:]); handled || e != nil {
-			if e != nil {
-				fmt.Fprintln(os.Stderr, e)
-				if errors.Is(e, core.ErrCoreUnavailable) {
-					os.Exit(75)
-				}
-				os.Exit(1)
-			}
-			return
-		}
-		if handled, e := maintenanceAuthorityActorFixture(self, os.Args[1:]); handled {
-			if e != nil {
-				fmt.Fprintln(os.Stderr, e)
-				if errors.Is(e, core.ErrCoreUnavailable) {
-					os.Exit(75)
-				}
-				os.Exit(1)
-			}
-			return
-		}
 		// Delegating parents must never stop while forwarding a child's diagnostic.
 		// Only the immutable owner runner that executes the controller has the barrier.
 		root := fmt.Sprintf("/var/lib/fased-app-custody-%d/", os.Getuid())

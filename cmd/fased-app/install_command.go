@@ -6,7 +6,6 @@ import (
 	"flag"
 	"fmt"
 	"github.com/fased-ai/fased-app/internal/localinstall"
-	"github.com/fased-ai/fased-app/internal/vpsinstall"
 	"io"
 	"os"
 	"path/filepath"
@@ -26,17 +25,7 @@ func installedCommandCommand(args []string, out, errOut io.Writer) error {
 		return errors.New("unexpected command installation arguments")
 	}
 	if *remote {
-		m, e := vpsinstall.Load(os.Getuid())
-		if e != nil {
-			return e
-		}
-		if *printPath {
-			return printInstalledCommand(m.Core, m.Root, m.Data, true, out)
-		}
-		if e = installCommand(m.Core, m.Root, m.Data, true, errOut); e != nil {
-			return e
-		}
-		return prepareRemoteUpdateAuthority(context.Background(), m, remoteSystem(os.Stdin, errOut), io.Discard)
+		return errors.New("legacy app-only Remote install-command has been retired")
 	}
 	paths, e := localinstall.DefaultPaths()
 	if e != nil {

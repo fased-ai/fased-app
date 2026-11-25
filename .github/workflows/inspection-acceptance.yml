@@ -9,7 +9,7 @@ on:
       - "internal/core/**"
       - "internal/bootstrap/**"
       - "internal/localinstall/**"
-      - "internal/vpsinstall/**"
+      - "internal/vpsnetwork/**"
       - "cmd/fased-app/application_*"
       - "cmd/fased-app/maintenance_authority_*"
       - "cmd/fased-app/inspection_*"

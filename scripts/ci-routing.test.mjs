@@ -321,7 +321,7 @@ test("ordinary recovery checks leave signer time for privileged bootstrap withou
   ])
     assert.ok(core.includes(path), `retain evidence: ${path}`);
   for (const paths of [
-    ["internal/vpsinstall/install_linux.go"],
+    ["internal/vpsnetwork/network_linux.go"],
     ["go.mod"],
     [".github/workflows/checks.yml"],
   ]) {

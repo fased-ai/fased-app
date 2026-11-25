@@ -9,20 +9,15 @@ import (
 	"errors"
 	"fmt"
 	"github.com/fased-ai/fased-app/internal/bootstrap"
-	"github.com/fased-ai/fased-app/internal/bundle"
 	"github.com/fased-ai/fased-app/internal/custodyinstall"
-	"github.com/fased-ai/fased-app/internal/enrollment"
-	"github.com/fased-ai/fased-app/internal/vpsinstall"
 	"io"
 	"os"
-	"path/filepath"
 	"strconv"
 	"time"
 
 	"github.com/fased-ai/fased-app/internal/hostprep"
 	"github.com/fased-ai/fased-app/internal/maintenance"
 	"github.com/fased-ai/fased-app/internal/privateaccess"
-	"github.com/fased-ai/fased-app/internal/tailnet"
 	"github.com/fased-ai/fased-app/internal/update"
 )
 
@@ -189,55 +184,12 @@ func maintenanceRequestCommand(args []string, in io.Reader, out io.Writer) error
 		if err == nil {
 			payload, err = json.Marshal(receipt)
 		}
-	case "custody-enrollment-activation":
-		var source enrollment.ProtectedSource
-		source, err = protectedEnrollmentSource(a)
-		if err == nil {
-			err = enrollment.WithProtectedActivation(workCtx, a.Owner, r.Enrollment.OperationID, r.Enrollment.Step, source, func(v enrollment.ProtectedActivation) error {
-				journal, e := update.ReadMaintenanceRecord(a.Owner)
-				initialize := errors.Is(e, os.ErrNotExist) || e == nil && journal.Phase == "idle"
-				if e != nil && !errors.Is(e, os.ErrNotExist) {
-					return e
-				}
-				if !initialize {
-					var target custodyinstall.Manifest
-					if journal.Phase != "completed" || journal.Start != "target" || journal.Installation == nil || journal.Installation.Phase != "completed" || !update.ValidInstallation(*journal.Installation) || update.StrictJSON(journal.Target, &target) != nil || target != v.Target {
-						return errors.New("existing custody update must be recovered before activation")
-					}
-				}
-				for _, name := range []string{"update-active.json", "update-start-blocked.json"} {
-					if _, e = os.Lstat(v.Target.Root + "/" + name); !errors.Is(e, os.ErrNotExist) {
-						return errors.New("existing custody update fence must be preserved")
-					}
-				}
-				m, e := custodyinstall.PrepareProtectedEnrollmentActivation(workCtx, a.Owner, v.Target.ID, v.InstanceID, v.Digest)
-				if e != nil {
-					return e
-				}
-				if initialize {
-					if e = maintenanceCustodyInitialize(workCtx, a); e != nil {
-						return e
-					}
-				}
-				return custodyinstall.StartProtectedEnrollmentServices(workCtx, a.Owner, m, v.InstanceID, v.Running, v.Autostart)
-			})
-		}
-	case "custody-enrollment-cutover":
-		var source enrollment.ProtectedSource
-		source, err = protectedEnrollmentSource(a)
-		if err == nil {
-			err = enrollment.RunProtectedCutover(workCtx, a.Owner, r.Enrollment.OperationID, r.Enrollment.Step, source)
-		}
+	case "custody-enrollment-activation", "custody-enrollment-cutover", "custody-enrollment-prepare", "remote-install":
+		err = errors.New("legacy enrollment/vpsinstall maintenance action has been retired")
 	case "custody-enrollment-empty":
 		err = custodyinstall.CheckProtectedEnrollmentSigner(a.Owner, r.Enrollment.OperationID)
 	case "custody-enrollment-stage":
 		err = custodyinstall.PrepareProtectedEnrollmentStage(a.Owner, r.Enrollment.OperationID)
-	case "custody-enrollment-prepare":
-		var m custodyinstall.Manifest
-		m, err = maintenanceCustodyPrepare(workCtx, a, *r.Enrollment)
-		if err == nil {
-			payload, err = json.Marshal(m)
-		}
 	case "custody-initialize":
 		err = maintenanceCustodyInitialize(workCtx, a)
 	case "custody-ingress-ready":
@@ -264,33 +216,13 @@ func maintenanceRequestCommand(args []string, in io.Reader, out io.Writer) error
 		if err == nil {
 			payload, err = json.Marshal(origin)
 		}
-	case "remote-install":
-		var device tailnet.Identity
-		device, err = maintenanceRemoteInstall(workCtx, a, *r.Remote)
-		if err == nil {
-			payload, err = json.Marshal(device)
-		}
 	default:
-		payload, err = vpsinstall.RunProtected(workCtx, a.Owner, r.Action, r.Peer, io.Discard)
+		err = errors.New("unsupported maintenance action")
 	}
 	if err != nil {
 		return err
 	}
 	return json.NewEncoder(out).Encode(maintenance.Response{Version: 1, Action: r.Action, Complete: true, Payload: payload})
-}
-
-func protectedEnrollmentSource(a maintenance.Authority) (enrollment.ProtectedSource, error) {
-	if a.Profile == "local" {
-		return enrollment.ProtectedSource{}, nil
-	}
-	if a.Profile != "remote" {
-		return enrollment.ProtectedSource{}, errors.New("fixed enrollment profile required")
-	}
-	m, err := vpsinstall.LoadProtected(a.Owner)
-	if err != nil {
-		return enrollment.ProtectedSource{}, err
-	}
-	return enrollment.ProtectedSource{Data: m.Data, Listen: m.Listen, PublicOrigin: m.PublicOrigin, UID: m.AppUID, GID: m.AppGID, ApplicationSequence: m.ApplicationSequence, ApplicationReleaseSHA256: m.ApplicationReleaseSHA256}, nil
 }
 
 // Regular requests retain their bounded EOF framing. Only a fixed enrollment
@@ -353,77 +285,6 @@ func maintenanceOptions(a maintenance.Authority) (bootstrap.Options, error) {
 	}
 	o.Development = seed.DevelopmentOnly
 	return o, nil
-}
-
-func maintenanceRemoteInstall(ctx context.Context, a maintenance.Authority, r maintenance.RemoteInstallRequest) (_ tailnet.Identity, resultErr error) {
-	var empty tailnet.Identity
-	_, approvalErr := privateaccess.ReadProtectedInitialApproval(a.Owner)
-	if err := requireFreshRemoteApproval(a.Owner, a.Home, approvalErr, os.Lstat); err != nil {
-		return empty, err
-	}
-	o, err := maintenanceOptions(a)
-	if err != nil {
-		return empty, err
-	}
-	descriptor, descriptorHash, err := bootstrap.InspectMaintenance(ctx, a.Owner, o)
-	if err != nil {
-		return empty, err
-	}
-	if descriptor.Sequence != r.Sequence || descriptorHash != r.ReleaseSHA256 {
-		return empty, errors.New("independently verified maintenance release differs from the wizard")
-	}
-	device, err := privateaccess.ConfirmProtectedRemoteInitial(ctx, a.Owner, r.Origin, r.Listen, descriptor.Sequence, descriptorHash, "", os.Stderr)
-	if err != nil {
-		return empty, err
-	}
-	p, err := bootstrap.PrepareMaintenance(ctx, a.Owner, o)
-	if err != nil {
-		return empty, err
-	}
-	installStarted := false
-	defer func() {
-		if !installStarted {
-			p.RetainAcquisitionEvidence()
-		}
-		resultErr = errors.Join(resultErr, p.Close())
-	}()
-	report := p.Report()
-	if report.Sequence != r.Sequence || report.DescriptorSHA256 != r.ReleaseSHA256 || !report.ProvenanceVerified && !report.DevelopmentOnly {
-		return empty, errors.New("independently verified maintenance release differs from the wizard")
-	}
-	engine, _ := bundle.Names()
-	manifest, err := bundle.Verify(report.BundleDirectory)
-	if err != nil {
-		return empty, err
-	}
-	if err = privateaccess.BindProtectedInitialCore(a.Owner, r.Origin, r.Listen, report.Sequence, report.DescriptorSHA256, manifest.Files[engine].SHA256); err != nil {
-		return empty, err
-	}
-	installStarted = true
-	_, err = vpsinstall.InstallProtected(ctx, a.Owner, vpsinstall.Options{Core: filepath.Join(report.BundleDirectory, engine), CoreSHA256: manifest.Files[engine].SHA256, Listen: r.Listen, PublicOrigin: r.Origin, ApplicationSequence: report.Sequence, ApplicationReleaseSHA256: report.DescriptorSHA256, PrepareHost: true, Start: r.Start}, io.Discard)
-	if err == nil {
-		p.RetainAcquisitionEvidence()
-	}
-	return device, err
-}
-
-func requireFreshRemoteApproval(owner int, home string, approvalErr error, stat func(string) (os.FileInfo, error)) error {
-	if approvalErr == nil {
-		return nil
-	}
-	if !errors.Is(approvalErr, os.ErrNotExist) {
-		return approvalErr
-	}
-	// Never replace a prior pending claimant or adopt an installation that was
-	// created before this protected approval existed.
-	for _, path := range []string{vpsinstall.Root(owner), filepath.Join(maintenance.OwnerRoot(owner), "remote", "intent.json"), filepath.Join(home, ".config", "fased-app", "vps-access", "owner-handoff.json")} {
-		if _, err := stat(path); err == nil {
-			return errors.New("existing Remote setup lacks protected approval; preserve its original owner")
-		} else if !errors.Is(err, os.ErrNotExist) {
-			return err
-		}
-	}
-	return nil
 }
 
 func readMaintenanceInput(ctx context.Context, in io.Reader) ([]byte, error) {

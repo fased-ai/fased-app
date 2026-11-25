@@ -16,7 +16,6 @@ import (
 
 	"github.com/fased-ai/fased-app/internal/core"
 	"github.com/fased-ai/fased-app/internal/custodyinstall"
-	"github.com/fased-ai/fased-app/internal/enrollment"
 	"github.com/fased-ai/fased-app/internal/update"
 )
 
@@ -26,7 +25,7 @@ func OriginalLocalStartAllowed(data string, owner int) (bool, error) {
 	if runtime.GOOS != "linux" {
 		return true, nil
 	}
-	_, err := enrollment.EnrolledTarget(data, owner)
+	err := CheckLegacyEnrollmentFence(data, owner)
 	if err == nil {
 		return false, nil
 	}
@@ -70,35 +69,33 @@ func newPublicClient(ctx context.Context, dir string) (*core.Client, bool, json.
 			}
 		}
 	}
-	var m custodyinstall.Manifest
-	if packaged {
-		m, err = custodyinstall.LoadPackageInstance(os.Getuid(), root)
-		if err == nil {
-			err = custodyinstall.VerifyPackageInstance(m)
+	if !packaged {
+		if err = CheckLegacyEnrollmentFence(dir, os.Getuid()); !errors.Is(err, os.ErrNotExist) {
+			if err == nil {
+				return nil, false, nil, errors.New("legacy enrollment fence present; preserve state")
+			}
+			return nil, false, nil, err
 		}
-	} else {
-		m, err = enrollment.EnrolledTarget(dir, os.Getuid())
-		if errors.Is(err, os.ErrNotExist) {
-			c, err := core.NewClient(ctx, dir)
-			return c, false, nil, err
-		}
+		c, err := core.NewClient(ctx, dir)
+		return c, false, nil, err
+	}
+	m, err := custodyinstall.LoadPackageInstance(os.Getuid(), root)
+	if err == nil {
+		err = custodyinstall.VerifyPackageInstance(m)
 	}
 	if err != nil {
 		return nil, false, nil, err
 	}
-	// EnrolledTarget verifies the installed image and source fence; the
-	// service-start and native-channel boundaries verify them again. Avoid a
-	// second identical verification between those independent checks.
-	if (!packaged && !m.NativeOwnerAccess) || m.Location != "local" || m.Owner != os.Getuid() {
+	// VerifyPackageInstance verifies the installed image; the service-start and
+	// native-channel boundaries verify them again.
+	if m.Location != "local" || m.Owner != os.Getuid() {
 		return nil, false, nil, errors.New("protected Local native enrollment required")
 	}
-	if packaged {
-		if err = (&custodyinstall.System{}).EnsureNativeRunning(ctx, m); err != nil {
-			return nil, false, nil, err
-		}
+	if err = (&custodyinstall.System{}).EnsureNativeRunning(ctx, m); err != nil {
+		return nil, false, nil, err
 	}
 	commit, err := custodyinstall.ReadEnrollmentCommit(m)
-	if err != nil && packaged {
+	if err != nil {
 		if _, statErr := os.Lstat(filepath.Join(root, "enrollment-ready.json")); !errors.Is(statErr, os.ErrNotExist) {
 			return nil, false, nil, err
 		}
@@ -110,22 +107,11 @@ func newPublicClient(ctx context.Context, dir string) (*core.Client, bool, json.
 	if err != nil {
 		return nil, false, nil, err
 	}
-	if !packaged {
-		if err = (&custodyinstall.System{}).EnsureNativeRunning(ctx, m); err != nil {
-			return nil, false, nil, err
-		}
-	}
 	transport := &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
 		// A paired update may replace the two executable hashes while retaining
 		// the same enrolled instance. Reload only the root-owned manifest and
 		// require the original topology and enrollment commit before redialing.
-		var current custodyinstall.Manifest
-		var err error
-		if packaged {
-			current, err = custodyinstall.LoadPackageInstance(m.Owner, m.Root)
-		} else {
-			current, err = custodyinstall.Load(m.Owner)
-		}
+		current, err := custodyinstall.LoadPackageInstance(m.Owner, m.Root)
 		if err != nil {
 			return nil, err
 		}

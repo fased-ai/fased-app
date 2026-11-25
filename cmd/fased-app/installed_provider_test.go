@@ -9,9 +9,13 @@ import (
 
 func TestInstalledProviderFixtureReachesProtectedValidation(t *testing.T) {
 	var out bytes.Buffer
-	err := run([]string{"serve", "--ai-fixture", "--instance-location", "remote", "--require-sandbox", "--installation-root", "/never-existing-fased-provider-test", "--remote-config", "/never-existing-fased-provider-test/install.json", "--public-origin", "https://fased-test.example.ts.net"}, os.Stdin, &out, &out)
-	if err == nil || strings.Contains(err.Error(), "development fixtures are local-only") || out.Len() != 0 {
+	err := run([]string{"serve", "--ai-fixture", "--instance-location", "local", "--require-sandbox", "--installation-root", "/never-existing-fased-provider-test"}, os.Stdin, &out, &out)
+	if err == nil || strings.Contains(err.Error(), "local development core") || out.Len() != 0 {
 		t.Fatal("installed provider fixture did not reach protected installation validation", err, out.String())
+	}
+	out.Reset()
+	if err := run([]string{"serve", "--ai-fixture", "--instance-location", "remote", "--require-sandbox", "--installation-root", "/never-existing-fased-provider-test", "--remote-config", "/never-existing-fased-provider-test/install.json", "--public-origin", "https://fased-test.example.ts.net"}, os.Stdin, &out, &out); err == nil {
+		t.Fatal("retired --remote-config flag was accepted")
 	}
 }
 

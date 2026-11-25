@@ -17,7 +17,6 @@ import (
 	"github.com/fased-ai/fased-app/internal/localinstall"
 	"github.com/fased-ai/fased-app/internal/maintenance"
 	"github.com/fased-ai/fased-app/internal/update"
-	"github.com/fased-ai/fased-app/internal/vpsinstall"
 	"golang.org/x/sys/unix"
 )
 
@@ -112,17 +111,7 @@ func (p *Prepared) RunUpgrade(ctx context.Context, o UpgradeOptions, in io.Reade
 func (p *Prepared) upgradeArguments(o UpgradeOptions) ([]string, error) {
 	args := []string{"maintain-update", "--operation", update.NewProbe()}
 	if o.Remote {
-		if o.Prefix != "" || o.DataDirectory != "" {
-			return nil, errors.New("managed Remote upgrade uses its existing fixed identity")
-		}
-		m, e := vpsinstall.Load(os.Getuid())
-		if e != nil {
-			return nil, e
-		}
-		if e = p.upgradePathBoundary(m.Root, m.Data); e != nil {
-			return nil, e
-		}
-		return append(args, "--remote"), nil
+		return nil, errors.New("legacy app-only Remote upgrade has been retired; use the Format-4 package installer")
 	}
 	paths, e := localinstall.DefaultPaths()
 	if e != nil {
