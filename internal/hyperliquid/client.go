@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math/big"
 	"net"
 	"net/http"
 	"net/netip"
@@ -529,17 +530,7 @@ func parseExchangeStatuses(raw []byte) (ExchangeSubmissionResult, error) {
 	var payload *struct {
 		Type string `json:"type"`
 		Data *struct {
-			Statuses []struct {
-				Resting *struct {
-					Oid uint64 `json:"oid"`
-				} `json:"resting"`
-				Filled *struct {
-					Oid     uint64 `json:"oid"`
-					TotalSz string `json:"totalSz"`
-					AvgPx   string `json:"avgPx"`
-				} `json:"filled"`
-				Error string `json:"error"`
-			} `json:"statuses"`
+			Statuses []json.RawMessage `json:"statuses"`
 		} `json:"data"`
 	}
 	if err := json.Unmarshal(envelope.Response, &payload); err != nil {
@@ -548,7 +539,29 @@ func parseExchangeStatuses(raw []byte) (ExchangeSubmissionResult, error) {
 	if payload == nil || payload.Data == nil || len(payload.Data.Statuses) == 0 {
 		return ExchangeSubmissionResult{State: "unknown", Message: "missing exchange status entry"}, nil
 	}
-	st := payload.Data.Statuses[0]
+	rawStatus := payload.Data.Statuses[0]
+	var strStatus string
+	if err := json.Unmarshal(rawStatus, &strStatus); err == nil {
+		trimmed := strings.TrimSpace(strStatus)
+		if strings.EqualFold(trimmed, "success") {
+			return ExchangeSubmissionResult{State: "cancelled", Message: "success"}, nil
+		}
+		return ExchangeSubmissionResult{State: "rejected", Message: trimmed}, fmt.Errorf("hyperliquid exchange rejected: %s", trimmed)
+	}
+	var st struct {
+		Resting *struct {
+			Oid uint64 `json:"oid"`
+		} `json:"resting"`
+		Filled *struct {
+			Oid     uint64 `json:"oid"`
+			TotalSz string `json:"totalSz"`
+			AvgPx   string `json:"avgPx"`
+		} `json:"filled"`
+		Error string `json:"error"`
+	}
+	if err := json.Unmarshal(rawStatus, &st); err != nil {
+		return ExchangeSubmissionResult{State: "unknown", Message: "malformed exchange status entry"}, err
+	}
 	if st.Error != "" {
 		return ExchangeSubmissionResult{State: "rejected", Message: st.Error}, nil
 	}
@@ -668,16 +681,51 @@ func (c *Client) SubmitSignedUpdateLeverage(ctx context.Context, intent signer.H
 	return parseUpdateLeverageResponse(raw)
 }
 
+func subtractDecimalStrings(origRaw, remRaw string) (string, bool) {
+	origStr := strings.TrimSpace(origRaw)
+	remStr := strings.TrimSpace(remRaw)
+	if origStr == "" || remStr == "" {
+		return "", false
+	}
+	origRat, ok1 := new(big.Rat).SetString(origStr)
+	remRat, ok2 := new(big.Rat).SetString(remStr)
+	if !ok1 || !ok2 {
+		return "", false
+	}
+	diff := new(big.Rat).Sub(origRat, remRat)
+	if diff.Sign() <= 0 {
+		return "0", true
+	}
+	scale := 0
+	for _, s := range []string{origStr, remStr} {
+		if dot := strings.IndexByte(s, '.'); dot >= 0 {
+			if frac := len(s) - dot - 1; frac > scale {
+				scale = frac
+			}
+		}
+	}
+	if scale < 8 {
+		scale = 8
+	}
+	out := diff.FloatString(scale)
+	if strings.ContainsRune(out, '.') {
+		out = strings.TrimRight(out, "0")
+		out = strings.TrimSuffix(out, ".")
+	}
+	return out, true
+}
+
 func parseOrderStatusResponse(raw []byte, fallbackOID uint64, fallbackCloid string) (ExchangeSubmissionResult, error) {
 	var resp struct {
 		Status string `json:"status"`
 		Order  *struct {
 			Status string `json:"status"`
 			Order  struct {
-				Oid   uint64 `json:"oid"`
-				Sz    string `json:"sz"`
-				Limit string `json:"limitPx"`
-				Cloid string `json:"cloid"`
+				Oid    uint64 `json:"oid"`
+				Sz     string `json:"sz"`
+				OrigSz string `json:"origSz"`
+				Limit  string `json:"limitPx"`
+				Cloid  string `json:"cloid"`
 			} `json:"order"`
 		} `json:"order"`
 	}
@@ -707,11 +755,17 @@ func parseOrderStatusResponse(raw []byte, fallbackOID uint64, fallbackCloid stri
 	if cloid == "" {
 		cloid = fallbackCloid
 	}
+	filledSize := strings.TrimSpace(resp.Order.Order.Sz)
+	if strings.TrimSpace(resp.Order.Order.OrigSz) != "" {
+		if computed, ok := subtractDecimalStrings(resp.Order.Order.OrigSz, resp.Order.Order.Sz); ok {
+			filledSize = computed
+		}
+	}
 	return ExchangeSubmissionResult{
 		State:         state,
 		OrderID:       oid,
 		ClientOrderID: cloid,
-		FilledSize:    resp.Order.Order.Sz,
+		FilledSize:    filledSize,
 		AvgPrice:      resp.Order.Order.Limit,
 	}, nil
 }

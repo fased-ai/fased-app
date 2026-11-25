@@ -163,3 +163,110 @@ func TestVaultMainnetCappedSolanaSigningAndLimits(t *testing.T) {
 		t.Fatalf("expected Close to clear MainnetCapped, got %+v", st)
 	}
 }
+
+func TestVaultV3MainnetCappedPolicyReplay(t *testing.T) {
+	dir := privateSignerTempDir(t)
+	signerID := strings.Repeat("c", 32)
+	pass := []byte("vault-v3-mainnet-capped-pass")
+
+	v, err := OpenControlledOwnerCustody(dir, signerID, "mainnet-beta")
+	if err != nil {
+		t.Fatalf("OpenControlledOwnerCustody failed: %v", err)
+	}
+	if err := v.Create(pass); err != nil {
+		_ = v.Close()
+		t.Fatalf("Create failed: %v", err)
+	}
+	if err := v.Unlock(pass, 10*time.Minute); err != nil {
+		_ = v.Close()
+		t.Fatalf("Unlock failed: %v", err)
+	}
+	if st := v.Status(); st.Account == nil || st.Account.Version != 3 || st.Account.Network != "mainnet-beta" {
+		_ = v.Close()
+		t.Fatalf("expected v3 mainnet-beta vault, got %+v", st.Account)
+	}
+	if err := v.ConfigureMainnetCappedExecution(MainnetCappedPolicy{
+		Confirmed:        true,
+		MaxOrderMicroUSD: 25_000_000,
+		MaxDailyMicroUSD: 100_000_000,
+	}); err != nil {
+		_ = v.Close()
+		t.Fatalf("ConfigureMainnetCappedExecution failed on v3 mainnet-beta vault: %v", err)
+	}
+
+	vaultID := hex.EncodeToString([]byte("v3mainnetvault01"))
+	if err := v.SetAgentVaultPolicy(AgentVaultPolicy{
+		Version:            1,
+		VaultID:            vaultID,
+		AgentID:            "operator",
+		AllowedVenues:      []string{"solana"},
+		AllowedAssets:      []string{"SOL"},
+		MaxOrderMicroUSD:   25_000_000,
+		DailySpendMicroUSD: 100_000_000,
+		DailyLossMicroUSD:  10_000_000,
+		MaxLeverage:        1,
+		ExpiresAt:          time.Now().Add(time.Hour).Unix(),
+	}); err != nil {
+		_ = v.Close()
+		t.Fatalf("SetAgentVaultPolicy failed on v3 mainnet-beta vault: %v", err)
+	}
+
+	memoB64 := buildValidDevnetTestMessage(t, v, "v3-mainnet-capped-proof")
+	exp := time.Now().Add(2 * time.Minute).Unix()
+	signed, err := v.SignSolanaMainnetCappedIPC(SolanaMainnetCappedSignIntent{
+		Network:           "mainnet-beta",
+		GenesisHash:       onchain.SolanaMainnetGenesisHash,
+		OperationID:       "op-v3-main-1",
+		Asset:             "SOL",
+		EstimatedMicroUSD: 20_000_000,
+		MessageBase64:     memoB64,
+		ExpiresAt:         exp,
+	}, vaultID)
+	if err != nil {
+		_ = v.Close()
+		t.Fatalf("SignSolanaMainnetCappedIPC failed on v3 mainnet-beta vault: %v", err)
+	}
+	if signed.Signature == "" {
+		_ = v.Close()
+		t.Fatal("expected non-empty signature")
+	}
+	if err := v.Close(); err != nil {
+		t.Fatalf("Close failed: %v", err)
+	}
+
+	// Reopen the Version-3 mainnet-beta vault and verify policy & spend journal replay cleanly.
+	reopened, err := OpenControlledOwnerCustody(dir, signerID, "mainnet-beta")
+	if err != nil {
+		t.Fatalf("reopen v3 mainnet-beta vault failed: %v", err)
+	}
+	defer func() { _ = reopened.Close() }()
+	if err := reopened.Unlock(pass, 10*time.Minute); err != nil {
+		t.Fatalf("reopened Unlock failed: %v", err)
+	}
+	if err := reopened.ConfigureMainnetCappedExecution(MainnetCappedPolicy{
+		Confirmed:        true,
+		MaxOrderMicroUSD: 25_000_000,
+		MaxDailyMicroUSD: 100_000_000,
+	}); err != nil {
+		t.Fatalf("reopened ConfigureMainnetCappedExecution failed: %v", err)
+	}
+	vaults, err := reopened.AgentVaults()
+	if err != nil {
+		t.Fatalf("AgentVaults failed: %v", err)
+	}
+	if len(vaults) != 1 || vaults[0].Policy.VaultID != vaultID || vaults[0].DailySpentMicroUSD != 20_000_000 {
+		t.Fatalf("expected replayed agent vault policy %s with 20_000_000 daily spend, got %+v", vaultID, vaults)
+	}
+	// Duplicate operationId must still be blocked across journal replay.
+	if _, err := reopened.SignSolanaMainnetCappedIPC(SolanaMainnetCappedSignIntent{
+		Network:           "mainnet-beta",
+		GenesisHash:       onchain.SolanaMainnetGenesisHash,
+		OperationID:       "op-v3-main-1",
+		Asset:             "SOL",
+		EstimatedMicroUSD: 10_000_000,
+		MessageBase64:     memoB64,
+		ExpiresAt:         exp,
+	}, vaultID); err == nil {
+		t.Fatal("expected duplicate operationId to be rejected after v3 journal replay")
+	}
+}

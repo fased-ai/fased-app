@@ -3,6 +3,7 @@ package hyperliquid
 import (
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"strings"
 
 	"github.com/fased-ai/fased-app/internal/signer"
@@ -27,6 +28,29 @@ func fracDigitsCount(normalizedDecimal string) int {
 	return len(normalizedDecimal) - dot - 1
 }
 
+// validatePerpPricePrecision enforces Hyperliquid perpetual price precision:
+// integer prices are always accepted, while non-integer prices are limited to
+// <= 5 significant figures and <= max(0, 6-szDecimals) decimal places.
+func validatePerpPricePrecision(normPrice string, szDecimals int) error {
+	dot := strings.IndexByte(normPrice, '.')
+	if dot < 0 {
+		return nil
+	}
+	maxDecimals := 6 - szDecimals
+	if maxDecimals < 0 {
+		maxDecimals = 0
+	}
+	if fracDigitsCount(normPrice) > maxDecimals {
+		return fmt.Errorf("limit price exceeds maximum %d decimal places for perp szDecimals=%d", maxDecimals, szDecimals)
+	}
+	sig := strings.ReplaceAll(normPrice, ".", "")
+	sig = strings.TrimLeft(sig, "0")
+	if len(sig) > 5 {
+		return errors.New("limit price exceeds 5 significant figures")
+	}
+	return nil
+}
+
 // PreviewOrder validates an operator OrderDraft against live/cached market metadata
 // and signer policy, returning a deterministic EIP-712 review preview without touching
 // private key material.
@@ -47,6 +71,9 @@ func PreviewOrder(snapshot MarketSnapshot, policy signer.HyperliquidPolicy, req 
 	}
 	normPrice, err := signer.NormalizeHyperliquidDecimal(req.LimitPrice)
 	if err != nil {
+		return OrderPreview{}, signer.HyperliquidOrderIntent{}, err
+	}
+	if err := validatePerpPricePrecision(normPrice, market.SzDecimals); err != nil {
 		return OrderPreview{}, signer.HyperliquidOrderIntent{}, err
 	}
 	normSize, err := signer.NormalizeHyperliquidDecimal(req.Size)
