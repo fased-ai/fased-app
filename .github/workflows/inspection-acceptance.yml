@@ -119,7 +119,7 @@ jobs:
             sudo udevadm control --reload-rules
             sudo udevadm trigger --name-match=kvm
           fi
-      - uses: actions/cache@v4
+      - uses: actions/cache@v6
         with:
           path: |
             .evidence/p4-fault-reboot/ubuntu.img
