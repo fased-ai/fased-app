@@ -82,6 +82,16 @@ func TestDevelopmentAuthenticationRejectsInvalidInputs(t *testing.T) {
 	if _, _, e := update.Authenticate(b, tr, now); e != nil {
 		t.Fatal(e)
 	}
+	arm64 := m
+	arm64.Target = update.Target{OS: "linux", Arch: "arm64"}
+	if _, _, e := update.Authenticate(signed(arm64, tr, key), tr, now); e != nil {
+		t.Fatalf("linux/arm64 target refused: %v", e)
+	}
+	badArch := m
+	badArch.Target = update.Target{OS: "linux", Arch: "386"}
+	if _, _, e := update.Authenticate(signed(badArch, tr, key), tr, now); e == nil {
+		t.Fatal("unsupported linux/386 target accepted")
+	}
 	for name, bad := range map[string][]byte{
 		"tamper":                 bytes.Replace(b, []byte(`"sequence":"2"`), []byte(`"sequence":"3"`), 1),
 		"trailing":               append(append([]byte{}, b...), []byte(`{}`)...),

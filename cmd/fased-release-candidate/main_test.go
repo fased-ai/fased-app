@@ -2,6 +2,8 @@ package main
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"github.com/fased-ai/fased-app/internal/bootstrap"
 	"github.com/fased-ai/fased-app/internal/releaseprovenance"
@@ -164,5 +166,41 @@ func TestFinalizedOutputReadOnlyInspection(t *testing.T) {
 	}
 	if err = inspectFinalized(output, release); err == nil {
 		t.Fatal("public output permissions accepted")
+	}
+}
+
+func TestVerifySeedArchFlag(t *testing.T) {
+	arm64Path := filepath.Join("..", "..", "release", "public", "linux-arm64-attested-seed.json")
+	raw, err := os.ReadFile(arm64Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256(raw)
+	pin := hex.EncodeToString(sum[:])
+
+	var out bytes.Buffer
+	if err := run([]string{"verify-seed", "--seed-file", arm64Path, "--seed-sha256", pin, "--arch", "arm64"}, &out); err != nil {
+		t.Fatalf("arm64 seed rejected with --arch arm64: %v", err)
+	}
+	var policy releaseprovenance.Policy
+	if json.Unmarshal(out.Bytes(), &policy) != nil || policy.Repository != "fased-ai/fased-app" {
+		t.Fatalf("unexpected arm64 verify-seed output: %s", out.String())
+	}
+
+	amd64Path := filepath.Join("..", "..", "release", "public", "ubuntu-attested-seed.json")
+	amd64Raw, err := os.ReadFile(amd64Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	amd64Sum := sha256.Sum256(amd64Raw)
+	amd64Pin := hex.EncodeToString(amd64Sum[:])
+
+	out.Reset()
+	if err := run([]string{"verify-seed", "--seed-file", amd64Path, "--seed-sha256", amd64Pin, "--arch", "arm64"}, &out); err == nil {
+		t.Fatal("amd64 seed accepted for --arch arm64")
+	}
+	out.Reset()
+	if err := run([]string{"verify-seed", "--seed-file", arm64Path, "--seed-sha256", pin, "--arch", "386"}, &out); err == nil {
+		t.Fatal("unsupported --arch accepted")
 	}
 }

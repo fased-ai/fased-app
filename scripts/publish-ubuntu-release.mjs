@@ -313,7 +313,7 @@ export function githubPublisher(token) {
         ));
     const upload =
       method === "UPLOAD" &&
-      /^\/repos\/fased-ai\/fased-app\/releases\/[1-9][0-9]*\/assets\?name=(fased-app-linux-amd64\.tar\.gz|fased-install-linux-amd64|fased-app-linux-amd64\.provenance\.sigstore\.json|install\.sh|fased-release\.json)$/.test(
+      /^\/repos\/fased-ai\/fased-app\/releases\/[1-9][0-9]*\/assets\?name=(fased-app-linux-(?:amd64|arm64)\.tar\.gz|fased-install-linux-(?:amd64|arm64)|fased-app-linux-(?:amd64|arm64)\.provenance\.sigstore\.json|install\.sh|fased-release(?:-linux-arm64)?\.json)$/.test(
         path,
       ) &&
       Buffer.isBuffer(body);
@@ -419,8 +419,17 @@ export async function stageCandidate(
     "fased-app-linux-amd64.provenance.sigstore.json",
     "install.sh",
   ];
-  if (c.releaseAuthority === "github-attestation-v1")
+  if (c.releaseAuthority === "github-attestation-v1") {
     names.push("fased-release.json");
+    if (Array.isArray(c.assets) && c.assets.length === 9) {
+      names.push(
+        "fased-app-linux-arm64.tar.gz",
+        "fased-install-linux-arm64",
+        "fased-app-linux-arm64.provenance.sigstore.json",
+        "fased-release-linux-arm64.json",
+      );
+    }
+  }
   if (
     c.repository !== "fased-ai/fased-app" ||
     c.repositoryId !== "1426211857" ||

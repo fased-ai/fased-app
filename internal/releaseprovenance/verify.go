@@ -71,6 +71,17 @@ func (p Policy) Validate() error {
 	}
 	return nil
 }
+func archiveArch(name string) (string, bool) {
+	switch name {
+	case "fased-app-linux-amd64.tar.gz":
+		return "amd64", true
+	case "fased-app-linux-arm64.tar.gz":
+		return "arm64", true
+	default:
+		return "", false
+	}
+}
+
 func (e Expected) Validate() error {
 	if e.BuildRef != "" && e.BuildRef != "refs/heads/main" {
 		return errors.New("protected main staging ref required")
@@ -83,8 +94,8 @@ func (e Expected) Validate() error {
 			return errors.New("the installer and both exact Linux package digests are required")
 		}
 	}
-	if e.ArchiveName != "fased-app-linux-amd64.tar.gz" || !canonicalHash(e.ArchiveSHA256, 32) || !canonicalHash(e.SourceCommit, 20) || e.WorkflowCommit != e.SourceCommit || len(e.Tag) > 80 || !versionTag.MatchString(e.Tag) || !canonicalNumber(e.RunID) || !canonicalNumber(e.RunAttempt) {
-		return errors.New("exact Ubuntu artifact, local workflow and immutable release identities required")
+	if _, ok := archiveArch(e.ArchiveName); !ok || !canonicalHash(e.ArchiveSHA256, 32) || !canonicalHash(e.SourceCommit, 20) || e.WorkflowCommit != e.SourceCommit || len(e.Tag) > 80 || !versionTag.MatchString(e.Tag) || !canonicalNumber(e.RunID) || !canonicalNumber(e.RunAttempt) {
+		return errors.New("exact Linux artifact, local workflow and immutable release identities required")
 	}
 	return nil
 }
@@ -149,13 +160,17 @@ type statement struct {
 
 func validateStatement(raw []byte, p Policy, e Expected) error {
 	var s statement
+	arch, ok := archiveArch(e.ArchiveName)
+	if !ok {
+		return errors.New("unsupported release archive architecture")
+	}
 	expectedSubjects := map[string]string{e.ArchiveName: e.ArchiveSHA256}
 	if e.InstallerSHA256 != "" {
-		expectedSubjects["fased-install-linux-amd64"] = e.InstallerSHA256
+		expectedSubjects["fased-install-linux-"+arch] = e.InstallerSHA256
 	}
 	if e.DebSHA256 != "" {
-		expectedSubjects["fased-app-linux-amd64.deb"] = e.DebSHA256
-		expectedSubjects["fased-app-linux-amd64.rpm"] = e.RPMSHA256
+		expectedSubjects["fased-app-linux-"+arch+".deb"] = e.DebSHA256
+		expectedSubjects["fased-app-linux-"+arch+".rpm"] = e.RPMSHA256
 	}
 	if update.StrictJSON(raw, &s) != nil || s.Type != "https://in-toto.io/Statement/v1" || s.PredicateType != "https://slsa.dev/provenance/v1" || len(s.Subject) != len(expectedSubjects) {
 		return errors.New("exact release statement subjects required")

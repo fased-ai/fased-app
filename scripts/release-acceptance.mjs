@@ -79,13 +79,15 @@ export function isMainBoundCandidate(packet) {
   );
 }
 
-export function attestedInventory(c, packet, raw) {
+export function attestedInventory(c, packet, raw, arch = "amd64") {
+  if (arch !== "amd64" && arch !== "arm64")
+    throw Error("Unsupported Linux release architecture");
   const names = [
-    "fased-app-linux-amd64.tar.gz",
-    "fased-install-linux-amd64",
-    "fased-app-linux-amd64.provenance.sigstore.json",
+    `fased-app-linux-${arch}.tar.gz`,
+    `fased-install-linux-${arch}`,
+    `fased-app-linux-${arch}.provenance.sigstore.json`,
     "install.sh",
-    "fased-release.json",
+    arch === "arm64" ? "fased-release-linux-arm64.json" : "fased-release.json",
   ];
   if (
     (packet.version === 1
@@ -110,7 +112,7 @@ export function attestedInventory(c, packet, raw) {
     packet.installer,
     packet.release.provenance,
     packet.entry,
-    { file: "fased-release.json", size: raw.length, sha256: sha(raw) },
+    { file: names[4], size: raw.length, sha256: sha(raw) },
   ];
   if (
     identities.some(
@@ -136,6 +138,54 @@ export function attestedInventory(c, packet, raw) {
       size: a.size,
       sha256: a.sha256,
     })),
+  };
+}
+
+export function attestedMultiArchInventory(
+  c,
+  amd64Packet,
+  amd64Raw,
+  arm64Packet,
+  arm64Raw,
+) {
+  const amd = attestedInventory(c, amd64Packet, amd64Raw, "amd64");
+  const arm = attestedInventory(c, arm64Packet, arm64Raw, "arm64");
+  if (amd64Packet.version !== 4 || arm64Packet.version !== 4)
+    throw Error("Dual-arch attested releases require format-4 bundles");
+  if (
+    amd64Packet.productVersion !== arm64Packet.productVersion ||
+    amd64Packet.source !== arm64Packet.source ||
+    amd64Packet.release?.sourceTree !== arm64Packet.release?.sourceTree ||
+    amd64Packet.release?.packageLockSha256 !==
+      arm64Packet.release?.packageLockSha256 ||
+    amd64Packet.release?.goSumSha256 !== arm64Packet.release?.goSumSha256 ||
+    amd64Packet.release?.workflowCommit !==
+      arm64Packet.release?.workflowCommit ||
+    amd64Packet.release?.runId !== arm64Packet.release?.runId ||
+    amd64Packet.release?.runAttempt !== arm64Packet.release?.runAttempt ||
+    amd64Packet.entry?.size !== arm64Packet.entry?.size ||
+    amd64Packet.entry?.sha256 !== arm64Packet.entry?.sha256
+  )
+    throw Error(
+      "Dual-arch attested packets differ in lockstep identity or entry",
+    );
+  const seen = new Map();
+  for (const asset of [...amd.assets, ...arm.assets]) {
+    if (!seen.has(asset.name)) {
+      seen.set(asset.name, asset);
+    } else {
+      const existing = seen.get(asset.name);
+      if (existing.size !== asset.size || existing.sha256 !== asset.sha256)
+        throw Error(`Shared dual-arch asset mismatch for ${asset.name}`);
+    }
+  }
+  const combined = [...seen.values()];
+  if (combined.length !== 9)
+    throw Error("Complete 9-asset dual-arch inventory required");
+  return {
+    ...amd,
+    multiArch: true,
+    assets: combined,
   };
 }
 export function acceptanceBinding(packet, inventory) {
@@ -917,30 +967,49 @@ async function verifiedProducer(packet, inventory, api, observed = {}) {
       "GET",
       `${repo}/actions/runs/${packet.release.runId}/attempts/${packet.release.runAttempt}/jobs`,
     ));
-  const producer = jobs.jobs?.filter((j) => j.name === "ubuntu-amd64");
-  if (
-    producer?.length !== 1 ||
-    producer[0].status !== "completed" ||
-    producer[0].conclusion !== "success" ||
-    !producer[0].steps?.some(
-      (s) =>
-        s.name ===
-          "Verify original provenance offline and stage public signing inputs" &&
-        s.conclusion === "success",
+  const requireProvenanceJob = (jobName) => {
+    const matched = jobs.jobs?.filter((j) => j.name === jobName);
+    if (
+      matched?.length !== 1 ||
+      matched[0].status !== "completed" ||
+      matched[0].conclusion !== "success" ||
+      !matched[0].steps?.some(
+        (s) =>
+          s.name ===
+            "Verify original provenance offline and stage public signing inputs" &&
+          s.conclusion === "success",
+      )
     )
-  )
-    throw Error(
-      "Original attested build must have succeeded; no rebuild is permitted",
-    );
+      throw Error(
+        "Original attested build must have succeeded; no rebuild is permitted",
+      );
+  };
+  requireProvenanceJob("ubuntu-amd64");
+  if (inventory?.multiArch === true || inventory?.assets?.length === 9) {
+    requireProvenanceJob("ubuntu-arm64");
+    const combined = jobs.jobs?.filter((j) => j.name === "linux-multiarch");
+    if (
+      combined?.length !== 1 ||
+      combined[0].status !== "completed" ||
+      combined[0].conclusion !== "success"
+    )
+      throw Error(
+        "Original dual-arch candidate assembly must have succeeded; no rebuild is permitted",
+      );
+  }
   return run;
 }
 
-async function originalCandidateArtifact(packet, api) {
+async function originalCandidateArtifact(packet, api, inventory) {
   const { runId, runAttempt } = packet.release;
+  const multiArch =
+    inventory?.multiArch === true || inventory?.assets?.length === 9;
+  const artifactName = multiArch
+    ? `linux-multiarch-release-candidate-${runAttempt}`
+    : `ubuntu-amd64-release-candidate-${runAttempt}`;
   const listed = await api("GET", `${repo}/actions/runs/${runId}/artifacts`);
   const artifacts = listed.artifacts?.filter(
-    (a) =>
-      a.name === `ubuntu-amd64-release-candidate-${runAttempt}` && !a.expired,
+    (a) => a.name === artifactName && !a.expired,
   );
   if (
     artifacts?.length !== 1 ||
@@ -1550,7 +1619,7 @@ async function realHostCandidateArtifact(packet, inventory, api) {
   )
     throw Error("Exact protected format-4 candidate required for Local review");
   await verifiedProducer(packet, inventory, api);
-  return originalCandidateArtifact(packet, api);
+  return originalCandidateArtifact(packet, api, inventory);
 }
 
 async function readAuthenticatedInstalledAcceptance(

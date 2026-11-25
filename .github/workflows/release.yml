@@ -271,3 +271,151 @@ jobs:
             .evidence/b01-staged-installed/local/staged-vm-failure.json
             # Retain completed public lifecycle proof if the later agent leg fails.
             .evidence/b01-staged-installed/local/installed-acceptance.json
+  ubuntu-arm64:
+    needs: candidate-inputs
+    if: inputs.candidate_run == '' && inputs.candidate_attempt == '' && !inputs.fedora_predecessor && inputs.automatic_predecessor_pins == '' && github.ref == 'refs/heads/main' && github.sha == inputs.source && github.repository == 'fased-ai/fased-app' && github.repository_id == '1426211857' && github.repository_owner_id == '279582504'
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    env:
+      GOTOOLCHAIN: local
+      GOFLAGS: -mod=readonly
+      FASED_RELEASE_SOURCE: ${{ inputs.source }}
+      FASED_PACKAGE_ONLY: ${{ inputs.package_only }}
+      FASED_TARGET_ARCH: arm64
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "24"
+          cache: npm
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Require approved production inputs before building
+        id: prepare
+        run: node scripts/prepare-ubuntu-release.mjs prepare
+      - name: Build the locked UI once
+        run: |
+          npm ci
+          npm run build
+      - name: Build and package the reviewed core, signer and verifier once
+        env:
+          FASED_RELEASE_VERSION: ${{ steps.prepare.outputs.version }}
+          GOFLAGS: -mod=readonly -overlay=${{ steps.prepare.outputs.overlay }}
+        run: |
+          go mod verify
+          export CGO_ENABLED=0
+          go build -trimpath -o .evidence/bin/fased-signer ./cmd/fased-signer
+          node scripts/build-core.mjs --version="$FASED_RELEASE_VERSION" --wallet-signer=.evidence/bin/fased-signer --source="$GITHUB_SHA"
+          node scripts/build-core.mjs --installer --version="$FASED_RELEASE_VERSION" --wallet-signer=.evidence/bin/fased-signer --source="$GITHUB_SHA"
+          go run -ldflags "-X github.com/fased-ai/fased-app/internal/core.Version=$FASED_RELEASE_VERSION" ./cmd/fased-package --engine .evidence/bin/fased-app --signer .evidence/bin/fased-signer --source "$GITHUB_SHA" --out .evidence/ubuntu-release-arm64 --linux-bundle-format
+          cp .evidence/bin/fased-install .evidence/ubuntu-release-arm64/fased-install-linux-arm64
+          node scripts/prepare-ubuntu-release.mjs inventory
+      - name: Attest the browser-first Linux arm64 bundle
+        id: provenance
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: |
+            .evidence/ubuntu-release-arm64/fased-app-linux-arm64.tar.gz
+            .evidence/ubuntu-release-arm64/fased-install-linux-arm64
+          push-to-registry: false
+          create-storage-record: false
+      - name: Verify original provenance offline and stage public signing inputs
+        env:
+          FASED_PROVENANCE_BUNDLE: ${{ steps.provenance.outputs.bundle-path }}
+        run: |
+          cp "$FASED_PROVENANCE_BUNDLE" .evidence/ubuntu-release-arm64/fased-app-linux-arm64.provenance.sigstore.json
+          go run ./cmd/fased-release-candidate verify-provenance --policy-file .evidence/ubuntu-release-arm64/provenance-policy.json --expected-file .evidence/ubuntu-release-arm64/expected-provenance.json --bundle-file .evidence/ubuntu-release-arm64/fased-app-linux-arm64.provenance.sigstore.json > .evidence/ubuntu-release-arm64/verified-provenance.json
+          node scripts/prepare-ubuntu-release.mjs finish
+      - name: Verify native arm64 candidate and preserve artifact modes
+        run: |
+          chmod 500 .evidence/ubuntu-release-arm64/fased-install-linux-arm64
+          .evidence/ubuntu-release-arm64/fased-install-linux-arm64 --verify-candidate "$PWD/.evidence/ubuntu-release-arm64"
+          chmod 600 .evidence/ubuntu-release-arm64/fased-app-linux-arm64.tar.gz .evidence/ubuntu-release-arm64/fased-install-linux-arm64 .evidence/ubuntu-release-arm64/fased-app-linux-arm64.provenance.sigstore.json .evidence/ubuntu-release-arm64/install.sh .evidence/ubuntu-release-arm64/fased-release-linux-arm64.json .evidence/ubuntu-release-arm64/first-install-seed.json
+      - name: Retain original verified arm64 release artifacts
+        if: ${{ always() && steps.prepare.outcome == 'success' }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ubuntu-arm64-release-candidate-${{ github.run_attempt }}
+          include-hidden-files: true
+          retention-days: 7
+          if-no-files-found: error
+          path: |
+            .evidence/ubuntu-release-arm64/fased-app-linux-arm64.tar.gz
+            .evidence/ubuntu-release-arm64/fased-app-linux-arm64.json
+            .evidence/ubuntu-release-arm64/fased-install-linux-arm64
+            .evidence/ubuntu-release-arm64/fased-app-linux-arm64.provenance.sigstore.json
+            .evidence/ubuntu-release-arm64/verified-provenance.json
+            .evidence/ubuntu-release-arm64/expected-provenance.json
+            .evidence/ubuntu-release-arm64/provenance-policy.json
+            .evidence/ubuntu-release-arm64/first-install-seed.json
+            .evidence/ubuntu-release-arm64/install.sh
+            .evidence/ubuntu-release-arm64/build-inputs.json
+            .evidence/ubuntu-release-arm64/artifact-inventory.json
+            .evidence/ubuntu-release-arm64/signing-inputs.json
+            .evidence/ubuntu-release-arm64/fased-release-linux-arm64.json
+  linux-multiarch:
+    needs: [candidate-inputs, ubuntu-amd64, ubuntu-arm64]
+    if: inputs.candidate_run == '' && inputs.candidate_attempt == '' && !inputs.fedora_predecessor && inputs.automatic_predecessor_pins == '' && github.ref == 'refs/heads/main' && github.sha == inputs.source && github.repository == 'fased-ai/fased-app' && github.repository_id == '1426211857' && github.repository_owner_id == '279582504'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    env:
+      GOTOOLCHAIN: local
+      GOFLAGS: -mod=readonly
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "24"
+          cache: npm
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: ubuntu-amd64-release-candidate-${{ github.run_attempt }}
+          path: .evidence/ubuntu-release-amd64
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: ubuntu-arm64-release-candidate-${{ github.run_attempt }}
+          path: .evidence/ubuntu-release-arm64
+      - name: Assemble and re-verify multi-arch candidate bundle
+        run: |
+          node scripts/prepare-ubuntu-release.mjs combine
+          chmod 500 .evidence/linux-multiarch-release/fased-install-linux-amd64
+          .evidence/linux-multiarch-release/fased-install-linux-amd64 --verify-candidate "$PWD/.evidence/linux-multiarch-release"
+          chmod 600 .evidence/linux-multiarch-release/fased-app-linux-amd64.tar.gz .evidence/linux-multiarch-release/fased-install-linux-amd64 .evidence/linux-multiarch-release/fased-app-linux-amd64.provenance.sigstore.json .evidence/linux-multiarch-release/fased-release.json .evidence/linux-multiarch-release/fased-app-linux-arm64.tar.gz .evidence/linux-multiarch-release/fased-install-linux-arm64 .evidence/linux-multiarch-release/fased-app-linux-arm64.provenance.sigstore.json .evidence/linux-multiarch-release/fased-release-linux-arm64.json .evidence/linux-multiarch-release/install.sh .evidence/linux-multiarch-release/first-install-seed.json .evidence/linux-multiarch-release/first-install-seed-arm64.json .evidence/linux-multiarch-release/signing-inputs.json .evidence/linux-multiarch-release/multiarch-manifest.json
+      - name: Retain multi-arch release candidate
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: linux-multiarch-release-candidate-${{ github.run_attempt }}
+          include-hidden-files: true
+          retention-days: 7
+          if-no-files-found: error
+          path: |
+            .evidence/linux-multiarch-release/fased-app-linux-amd64.tar.gz
+            .evidence/linux-multiarch-release/fased-install-linux-amd64
+            .evidence/linux-multiarch-release/fased-app-linux-amd64.provenance.sigstore.json
+            .evidence/linux-multiarch-release/fased-release.json
+            .evidence/linux-multiarch-release/fased-app-linux-arm64.tar.gz
+            .evidence/linux-multiarch-release/fased-install-linux-arm64
+            .evidence/linux-multiarch-release/fased-app-linux-arm64.provenance.sigstore.json
+            .evidence/linux-multiarch-release/fased-release-linux-arm64.json
+            .evidence/linux-multiarch-release/install.sh
+            .evidence/linux-multiarch-release/first-install-seed.json
+            .evidence/linux-multiarch-release/first-install-seed-arm64.json
+            .evidence/linux-multiarch-release/signing-inputs.json
+            .evidence/linux-multiarch-release/multiarch-manifest.json

@@ -46,11 +46,15 @@ type Binding struct {
 }
 
 func (b Binding) valid() bool {
+	return b.validForArch(runtime.GOARCH)
+}
+
+func (b Binding) validForArch(arch string) bool {
 	profile := b.Version == 1 && b.Purpose == Purpose || b.Version == 2 && b.Purpose == GitHubPurpose
 	development := profile && b.DevelopmentOnly && b.Channel == "development"
 	production := b.Version == 3 && b.Purpose == ProductionPurpose && !b.DevelopmentOnly && b.Channel == "stable"
 	production = production || b.Version == 4 && b.Purpose == AttestedPurpose && !b.DevelopmentOnly && b.Channel == "stable"
-	return (development || production) && b.Repository == "fased-ai/fased-app" && b.Target.OS == "linux" && (b.Target.Arch == "amd64" || b.Target.Arch == "arm64") && b.Target.Arch == runtime.GOARCH
+	return (development || production) && b.Repository == "fased-ai/fased-app" && b.Target.OS == "linux" && (arch == "amd64" || arch == "arm64") && b.Target.Arch == arch
 }
 
 type Seed struct {
@@ -132,8 +136,12 @@ func metadataShape(b []byte, kind string) error {
 }
 
 func parseSeed(b []byte, pin string, now time.Time) (Seed, error) {
+	return parseSeedForArch(b, pin, now, runtime.GOARCH)
+}
+
+func parseSeedForArch(b []byte, pin string, now time.Time, arch string) (Seed, error) {
 	var seed Seed
-	if !hashOK(pin) || digest(b) != pin || update.StrictJSON(b, &seed) != nil || !seed.Binding.valid() || seed.CreatedAt <= 0 || seed.CreatedAt > now.Unix() || seed.ExpiresAt <= now.Unix() || seed.ExpiresAt-seed.CreatedAt > 365*86400 || seed.MinimumSequence == 0 || len(seed.Root) > update.MaxDocument {
+	if !hashOK(pin) || digest(b) != pin || update.StrictJSON(b, &seed) != nil || !seed.Binding.validForArch(arch) || seed.CreatedAt <= 0 || seed.CreatedAt > now.Unix() || seed.ExpiresAt <= now.Unix() || seed.ExpiresAt-seed.CreatedAt > 365*86400 || seed.MinimumSequence == 0 || len(seed.Root) > update.MaxDocument {
 		return seed, errors.New("current independently pinned first-install seed required")
 	}
 	if seed.Version >= 3 {

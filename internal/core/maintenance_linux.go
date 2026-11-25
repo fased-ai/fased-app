@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"runtime"
 	"time"
 )
 
@@ -196,7 +197,7 @@ func (s *MetadataMaintenanceSession) Request(ctx context.Context, q update.Maint
 				engine = c.Artifact.SHA256
 			}
 		}
-		op := ApplicationUpdateOperation{ID: q.OperationID, Phase: "applying", Release: &ApplicationRelease{EngineSHA256: engine, Version: p.Version, Sequence: p.Sequence, ManifestSHA256: p.ReleaseSHA256, Target: update.Target{OS: "linux", Arch: "amd64"}}, PolicySHA256: update.SnapshotDigest("application-update-policy", view.Policy), BootID: s.s.bootID}
+		op := ApplicationUpdateOperation{ID: q.OperationID, Phase: "applying", Release: &ApplicationRelease{EngineSHA256: engine, Version: p.Version, Sequence: p.Sequence, ManifestSHA256: p.ReleaseSHA256, Target: update.Target{OS: "linux", Arch: runtime.GOARCH}}, PolicySHA256: update.SnapshotDigest("application-update-policy", view.Policy), BootID: s.s.bootID}
 		return r, s.s.publishApplicationUpdate(ctx, op, view.Revision)
 	case "pause":
 		approval, err := readMetadataApproval(s.a.Owner, s.location, s.instance, q.OperationID)

@@ -329,7 +329,7 @@ function persist(journal, target, data, limit = max) {
   if (
     !Number.isSafeInteger(limit) ||
     limit < 1 ||
-    limit > 128 * 1024 * 1024 ||
+    limit > 256 * 1024 * 1024 ||
     data.length > limit
   )
     throw Error("Release file exceeds bound");

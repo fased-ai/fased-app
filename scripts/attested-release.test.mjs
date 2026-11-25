@@ -599,3 +599,83 @@ test("format-4 public readback refuses altered --inspect-public-package output",
     /Public installer\/readback differs from release/,
   );
 });
+
+test("format-4 multi-arch publisher verifies both architectures, uploads 9 assets, and verifies arm64 anonymous readback", async (t) => {
+  const f = fixture(t, 4);
+  const armFiles = Object.fromEntries(
+    [
+      "fased-app-linux-arm64.tar.gz",
+      "fased-install-linux-arm64",
+      "fased-app-linux-arm64.provenance.sigstore.json",
+    ].map((name) => [name, Buffer.from("inert disposable " + name)]),
+  );
+  const armIdentity = (name) => ({
+    file: name,
+    size: armFiles[name].length,
+    sha256: sha(armFiles[name]),
+  });
+  const armPacket = {
+    ...f.packet,
+    archive: armIdentity("fased-app-linux-arm64.tar.gz"),
+    installer: armIdentity("fased-install-linux-arm64"),
+    release: {
+      ...f.packet.release,
+      installerSha256: sha(armFiles["fased-install-linux-arm64"]),
+      provenance: armIdentity("fased-app-linux-arm64.provenance.sigstore.json"),
+    },
+  };
+  armFiles["fased-release-linux-arm64.json"] = Buffer.from(
+    JSON.stringify(armPacket) + "\n",
+  );
+  for (const [name, raw] of Object.entries(armFiles)) {
+    f.files[name] = raw;
+    writeFileSync(path.join(f.directory, name), raw, { mode: 0o600 });
+  }
+  writeFileSync(
+    path.join(f.directory, "first-install-seed-arm64.json"),
+    readFileSync(f.c.arm64SeedFile),
+    { mode: 0o600 },
+  );
+
+  const expectedBundles = [];
+  const fetchedUrls = [];
+  const published = await publishAttested(f.c, f.directory, {
+    api: f.api,
+    execute: (program, args, options) => {
+      if (program === "go") {
+        const expected = JSON.parse(
+          readFileSync(args[args.indexOf("--expected-file") + 1]),
+        );
+        expectedBundles.push(expected.archiveName);
+        const match = [f.packet, armPacket].find(
+          (p) => p.archive.file === expected.archiveName,
+        );
+        assert.ok(match);
+        assert.equal(expected.installerSha256, match.installer.sha256);
+        return JSON.stringify({
+          BundleSHA256: match.release.provenance.sha256,
+        });
+      }
+      return f.execute(program, args, options);
+    },
+    verifyAcceptance: f.verifyAcceptance,
+    fetchResponse: async (url) => {
+      fetchedUrls.push(new URL(url).pathname.split("/").at(-1));
+      return f.fetchResponse(url);
+    },
+    stateRoot: path.join(f.parent, "publisher"),
+  });
+  assert.equal(published.verified, true);
+  assert.deepEqual(expectedBundles.sort(), [
+    "fased-app-linux-amd64.tar.gz",
+    "fased-app-linux-arm64.tar.gz",
+  ]);
+  assert.equal(f.release.assets.length, 9);
+  assert.equal(fetchedUrls.includes("fased-app-linux-arm64.tar.gz"), true);
+  assert.equal(fetchedUrls.includes("fased-install-linux-arm64"), true);
+  assert.equal(fetchedUrls.includes("fased-release-linux-arm64.json"), true);
+  assert.equal(
+    fetchedUrls.includes("fased-app-linux-arm64.provenance.sigstore.json"),
+    true,
+  );
+});

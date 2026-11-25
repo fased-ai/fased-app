@@ -544,8 +544,39 @@ func attestedFixture(t *testing.T, variant string, profile ...string) (*firstFix
 		if variant != "native-missing" {
 			names = append(names, packet.RPM.File)
 		}
+		if variant == "native-dual-arch" {
+			sibling := siblingArch(f.seed.Target.Arch)
+			for _, name := range []string{attestedArchiveFile(sibling), attestedInstallerFile(sibling), attestedProvenanceFile(sibling), AttestedPacketAsset(sibling)} {
+				payloads[name] = []byte("disposable sibling " + name)
+				names = append(names, name)
+			}
+			// Also strip deb/rpm from names and replace with sibling only? Wait: keep deb+rpm would make 11 assets; replace nothing and test 9 assets separately!
+		}
 	} else if variant == "legacy-extra" {
 		names = append(names, "fased-app-linux-amd64.deb", "fased-app-linux-amd64.rpm")
+	} else if strings.HasPrefix(variant, "paired-dual-arch") {
+		sibling := siblingArch(f.seed.Target.Arch)
+		siblings := []string{attestedArchiveFile(sibling), attestedInstallerFile(sibling), attestedProvenanceFile(sibling), AttestedPacketAsset(sibling)}
+		for _, name := range siblings {
+			payloads[name] = []byte("disposable sibling " + name)
+		}
+		switch variant {
+		case "paired-dual-arch":
+			names = append(names, siblings...)
+		case "paired-dual-arch-stray":
+			siblings[3] = "stray.bin"
+			payloads["stray.bin"] = []byte("unexpected extra asset")
+			names = append(names, siblings...)
+		case "paired-dual-arch-six":
+			payloads["stray.bin"] = []byte("unexpected extra asset")
+			names = append(names, "stray.bin")
+		case "paired-dual-arch-eight":
+			names = append(names, siblings[:3]...)
+		case "paired-dual-arch-ten":
+			payloads["extra.bin"] = []byte("tenth asset")
+			names = append(names, siblings...)
+			names = append(names, "extra.bin")
+		}
 	}
 	assets := []map[string]any{}
 	for i, name := range names {
@@ -743,4 +774,63 @@ func TestAttestedSeedCannotReinterpretSigningRoots(t *testing.T) {
 	if _, err := parseSeed(o.Seed, o.SeedSHA256, time.Now()); err == nil {
 		t.Fatal("mixed trust accepted")
 	}
+}
+
+func TestAttestedDualArchClosedSet(t *testing.T) {
+	if AttestedPacketAsset("amd64") != "fased-release.json" || AttestedPacketAsset("arm64") != "fased-release-linux-arm64.json" {
+		t.Fatal("unexpected packet asset names")
+	}
+	_, o, payloads := attestedFixture(t, "paired-dual-arch")
+	d, identity, err := Inspect(t.Context(), o)
+	if err != nil || identity == "" || !d.LinuxBundle || d.ProductVersion != "1.2.3" {
+		t.Fatalf("9-asset dual-arch release rejected on Inspect: %v %v", d, err)
+	}
+	p, err := PrepareNative(t.Context(), o)
+	if err != nil {
+		t.Fatalf("9-asset dual-arch release rejected on PrepareNative: %v", err)
+	}
+	defer p.Close()
+	if !p.Report().ProvenanceVerified || !p.Report().LinuxBundleVerified {
+		t.Fatalf("unexpected report: %+v", p.Report())
+	}
+
+	for _, bad := range []string{"paired-dual-arch-stray", "paired-dual-arch-six", "paired-dual-arch-eight", "paired-dual-arch-ten"} {
+		t.Run(bad, func(t *testing.T) {
+			_, badOpts, _ := attestedFixture(t, bad)
+			if _, _, err := Inspect(t.Context(), badOpts); err == nil {
+				t.Fatalf("%s was unexpectedly accepted", bad)
+			}
+			if p, err := PrepareNative(t.Context(), badOpts); err == nil {
+				p.Close()
+				t.Fatalf("%s was unexpectedly prepared", bad)
+			}
+		})
+	}
+
+	t.Run("v3-refuses-9-assets", func(t *testing.T) {
+		f, _, v3Payloads := attestedFixture(t, "native-staged")
+		var v3Packet AttestedPacket
+		if err := update.StrictJSON(v3Payloads[AttestedPacketFile], &v3Packet); err != nil {
+			t.Fatal(err)
+		}
+		v3Packet.Version = 3
+		v3Raw := jsonBytes(t, v3Packet)
+		sibling := siblingArch(f.seed.Target.Arch)
+		assets := map[string]releaseops.GitHubAsset{
+			AttestedPacketFile:           {RepositoryID: f.seed.GitHub.RepositoryID, ReleaseID: "11", AssetID: "1", Name: AttestedPacketFile, Size: int64(len(v3Raw)), SHA256: digest(v3Raw)},
+			archiveTarget:                {RepositoryID: f.seed.GitHub.RepositoryID, ReleaseID: "11", AssetID: "2", Name: archiveTarget, Size: v3Packet.Archive.Size, SHA256: v3Packet.Archive.SHA256},
+			"fased-install-linux-amd64":  {RepositoryID: f.seed.GitHub.RepositoryID, ReleaseID: "11", AssetID: "3", Name: "fased-install-linux-amd64", Size: v3Packet.Installer.Size, SHA256: v3Packet.Installer.SHA256},
+			"install.sh":                 {RepositoryID: f.seed.GitHub.RepositoryID, ReleaseID: "11", AssetID: "4", Name: "install.sh", Size: v3Packet.Entry.Size, SHA256: v3Packet.Entry.SHA256},
+			provenanceFile:               {RepositoryID: f.seed.GitHub.RepositoryID, ReleaseID: "11", AssetID: "5", Name: provenanceFile, Size: v3Packet.Release.Provenance.Size, SHA256: v3Packet.Release.Provenance.SHA256},
+			v3Packet.Deb.File:            {RepositoryID: f.seed.GitHub.RepositoryID, ReleaseID: "11", AssetID: "6", Name: v3Packet.Deb.File, Size: v3Packet.Deb.Size, SHA256: v3Packet.Deb.SHA256},
+			v3Packet.RPM.File:            {RepositoryID: f.seed.GitHub.RepositoryID, ReleaseID: "11", AssetID: "7", Name: v3Packet.RPM.File, Size: v3Packet.RPM.Size, SHA256: v3Packet.RPM.SHA256},
+			attestedArchiveFile(sibling): {RepositoryID: f.seed.GitHub.RepositoryID, ReleaseID: "11", AssetID: "8", Name: attestedArchiveFile(sibling), Size: 10, SHA256: strings.Repeat("a", 64)},
+			AttestedPacketAsset(sibling): {RepositoryID: f.seed.GitHub.RepositoryID, ReleaseID: "11", AssetID: "9", Name: AttestedPacketAsset(sibling), Size: 10, SHA256: strings.Repeat("b", 64)},
+		}
+		pub := releaseops.PublishedRelease{ID: "11", Tag: "v" + v3Packet.ProductVersion, Source: v3Packet.Source, Assets: assets}
+		if _, err := attestedDescriptor(f.seed, map[string][]byte{AttestedPacketFile: v3Raw, "github-release.json": jsonBytes(t, pub)}); err == nil {
+			t.Fatal("packet v3 accepted 9-asset release")
+		}
+	})
+	_ = payloads
 }

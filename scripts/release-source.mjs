@@ -12,6 +12,7 @@ import {
 import path from "node:path";
 import {
   attestedInventory,
+  attestedMultiArchInventory,
   verifyInstalledAcceptance,
 } from "./release-acceptance.mjs";
 import { persistLocalReleaseFile } from "./local-release-signing.mjs";
@@ -360,16 +361,20 @@ export async function prepareReleaseCandidate(
         "Original build did not complete verification; never rerun it",
       );
   }
-  const entries = JSON.parse(
+  const allArtifacts = JSON.parse(
     call("gh", [
       "api",
       `/repos/fased-ai/fased-app/actions/runs/${id}/artifacts`,
     ]),
-  ).artifacts.filter(
-    (a) =>
-      a.name === `ubuntu-amd64-release-candidate-${outcome.attempt}` &&
-      !a.expired,
+  ).artifacts.filter((a) => !a.expired);
+  const multiArchEntries = allArtifacts.filter(
+    (a) => a.name === `linux-multiarch-release-candidate-${outcome.attempt}`,
   );
+  const amd64Entries = allArtifacts.filter(
+    (a) => a.name === `ubuntu-amd64-release-candidate-${outcome.attempt}`,
+  );
+  const isMultiArch = multiArchEntries.length > 0;
+  const entries = isMultiArch ? multiArchEntries : amd64Entries;
   const root = path.resolve(
     workspace,
     `.evidence/ubuntu-${version}-candidate/run-${id}-attempt-${outcome.attempt}`,
@@ -393,16 +398,17 @@ export async function prepareReleaseCandidate(
   )
     throw Error("Authenticated candidate digest unavailable");
   const zip = path.join(root, "original-artifact.zip");
+  const zipLimit = isMultiArch ? 256 * 1024 * 1024 : 128 * 1024 * 1024;
   let raw;
   if (existsSync(zip)) {
     try {
-      raw = readPublisherFile(zip, 128 * 1024 * 1024);
+      raw = readPublisherFile(zip, zipLimit);
     } catch {}
   }
   raw ??= call(
     "gh",
     ["api", `/repos/fased-ai/fased-app/actions/artifacts/${entries[0].id}/zip`],
-    { encoding: "buffer", maxBuffer: 128 * 1024 * 1024 },
+    { encoding: "buffer", maxBuffer: zipLimit },
   );
 
   if (
@@ -416,15 +422,20 @@ export async function prepareReleaseCandidate(
   });
   let scratch;
   try {
-    persistLocalReleaseFile(journal, zip, raw, 128 * 1024 * 1024);
+    persistLocalReleaseFile(journal, zip, raw, zipLimit);
     const directory = path.join(root, "artifacts");
     mkdirSync(directory, { recursive: true, mode: 0o700 });
     scratch = mkdtempSync(path.join(root, "extract-"));
+    const expectedEntries = isMultiArch
+      ? "fased-app-linux-amd64.tar.gz fased-install-linux-amd64 fased-app-linux-amd64.provenance.sigstore.json fased-release.json fased-app-linux-arm64.tar.gz fased-install-linux-arm64 fased-app-linux-arm64.provenance.sigstore.json fased-release-linux-arm64.json install.sh first-install-seed.json first-install-seed-arm64.json signing-inputs.json multiarch-manifest.json"
+      : "fased-app-linux-amd64.tar.gz fased-app-linux-amd64.json fased-install-linux-amd64 fased-app-linux-amd64.provenance.sigstore.json verified-provenance.json expected-provenance.json provenance-policy.json first-install-seed.json install.sh build-inputs.json artifact-inventory.json signing-inputs.json fased-release.json";
+    const totalLimit = isMultiArch ? 512 * 1024 * 1024 : 256 * 1024 * 1024;
     call("python3", [
       "-c",
       `
 import zipfile,pathlib,sys,stat
-names=set('fased-app-linux-amd64.tar.gz fased-app-linux-amd64.json fased-install-linux-amd64 fased-app-linux-amd64.provenance.sigstore.json verified-provenance.json expected-provenance.json provenance-policy.json first-install-seed.json install.sh build-inputs.json artifact-inventory.json signing-inputs.json fased-release.json'.split())
+names=set(sys.argv[3].split())
+total_limit=int(sys.argv[4])
 out=pathlib.Path(sys.argv[2]);seen=set();total=0
 with zipfile.ZipFile(sys.argv[1]) as z:
  for f in z.infolist():
@@ -433,7 +444,7 @@ with zipfile.ZipFile(sys.argv[1]) as z:
   name=p.name
   assert name in names and name not in seen and '..' not in p.parts and not p.is_absolute()
   assert stat.S_IFMT(f.external_attr>>16) in (0,stat.S_IFREG)
-  total+=f.file_size;assert 0<f.file_size<=128*1024*1024 and total<=256*1024*1024
+  total+=f.file_size;assert 0<f.file_size<=128*1024*1024 and total<=total_limit
   seen.add(name);data=z.read(f);target=out/name
   if target.exists():assert target.read_bytes()==data
   else:
@@ -443,6 +454,8 @@ with zipfile.ZipFile(sys.argv[1]) as z:
 `,
       zip,
       scratch,
+      expectedEntries,
+      String(totalLimit),
     ]);
     for (const name of readdirSync(scratch))
       persistLocalReleaseFile(
@@ -461,14 +474,23 @@ with zipfile.ZipFile(sys.argv[1]) as z:
       packet.runAttempt !== String(outcome.attempt)
     )
       throw Error("Candidate differs from actual original build");
-    const releasePacket = JSON.parse(
-      readFileSync(path.join(directory, "fased-release.json"), "utf8"),
-    );
-    const inventory = attestedInventory(
-      config,
-      releasePacket,
-      readFileSync(path.join(directory, "fased-release.json")),
-    );
+    const releaseRaw = readFileSync(path.join(directory, "fased-release.json"));
+    const releasePacket = JSON.parse(releaseRaw.toString("utf8"));
+    let inventory;
+    if (isMultiArch) {
+      const arm64Raw = readFileSync(
+        path.join(directory, "fased-release-linux-arm64.json"),
+      );
+      inventory = attestedMultiArchInventory(
+        config,
+        releasePacket,
+        releaseRaw,
+        JSON.parse(arm64Raw.toString("utf8")),
+        arm64Raw,
+      );
+    } else {
+      inventory = attestedInventory(config, releasePacket, releaseRaw);
+    }
     const api = async (method, url) => {
       if (method !== "GET") throw Error("Acceptance verification is read-only");
       return JSON.parse(call("gh", ["api", url]));
@@ -507,13 +529,22 @@ export function recoverPublicCandidate({
   const release = JSON.parse(
     call("gh", ["api", `/repos/fased-ai/fased-app/releases/tags/v${version}`]),
   );
-  const names = [
+  const singleArchNames = [
     "fased-app-linux-amd64.tar.gz",
     "fased-install-linux-amd64",
     "fased-app-linux-amd64.provenance.sigstore.json",
     "install.sh",
     "fased-release.json",
   ];
+  const dualArchNames = [
+    ...singleArchNames,
+    "fased-app-linux-arm64.tar.gz",
+    "fased-install-linux-arm64",
+    "fased-app-linux-arm64.provenance.sigstore.json",
+    "fased-release-linux-arm64.json",
+  ];
+  const isDualArch = release.assets?.length === dualArchNames.length;
+  const names = isDualArch ? dualArchNames : singleArchNames;
   if (
     release.tag_name !== `v${version}` ||
     release.draft !== false ||
@@ -582,6 +613,20 @@ export function recoverPublicCandidate({
       packet.release.runAttempt !== runAttempt
     )
       throw Error("Original published source/run differs");
+    if (isDualArch) {
+      const armPacket = JSON.parse(
+        readPublisherFile(
+          path.join(directory, "fased-release-linux-arm64.json"),
+        ),
+      );
+      if (
+        armPacket.productVersion !== version ||
+        armPacket.source !== source ||
+        String(armPacket.release?.runId) !== runId ||
+        armPacket.release.runAttempt !== runAttempt
+      )
+        throw Error("Original published arm64 source/run differs");
+    }
     const c = JSON.parse(
       readFileSync(path.join(workspace, "release/ubuntu.json"), "utf8"),
     );
@@ -593,6 +638,18 @@ export function recoverPublicCandidate({
       path.join(directory, "first-install-seed.json"),
       seed,
     );
+    if (isDualArch) {
+      const armSeed = readFileSync(path.join(workspace, c.arm64SeedFile));
+      if (
+        createHash("sha256").update(armSeed).digest("hex") !== c.arm64SeedSha256
+      )
+        throw Error("Source arm64 public trust changed");
+      persistLocalReleaseFile(
+        journal,
+        path.join(directory, "first-install-seed-arm64.json"),
+        armSeed,
+      );
+    }
     journal.state.complete = true;
     journal.save();
     return directory;

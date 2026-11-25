@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"runtime"
 	"time"
 
 	"github.com/fased-ai/fased-app/internal/bootstrap"
@@ -42,14 +43,15 @@ func run(args []string, out io.Writer) error {
 	case "verify-seed":
 		path := flags.String("seed-file", "", "approved public production seed")
 		pin := flags.String("seed-sha256", "", "independently approved seed digest")
-		if err := flags.Parse(args[1:]); err != nil || flags.NArg() != 0 || *path == "" || *pin == "" {
-			return errors.New("exact public seed file and SHA256 required")
+		arch := flags.String("arch", runtime.GOARCH, "target Linux CPU architecture")
+		if err := flags.Parse(args[1:]); err != nil || flags.NArg() != 0 || *path == "" || *pin == "" || (*arch != "amd64" && *arch != "arm64") {
+			return errors.New("exact public seed file, SHA256 and Linux architecture required")
 		}
 		b, err := update.ReadDocument(*path)
 		if err != nil {
 			return err
 		}
-		seed, err := bootstrap.ValidateProductionSeed(b, *pin)
+		seed, err := bootstrap.ValidateProductionSeedForArch(b, *pin, *arch)
 		if err != nil {
 			return err
 		}

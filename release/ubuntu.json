@@ -12,6 +12,8 @@
   },
   "seedFile": "release/public/ubuntu-attested-seed.json",
   "seedSha256": "92a01bf0328df43819c7bbfa01b127d1227e7a1f9f9fccdf545edef97dd25643",
+  "arm64SeedFile": "release/public/linux-arm64-attested-seed.json",
+  "arm64SeedSha256": "3e477ccc3b1f7234dceb12d7660986a823312f20311e93e8df09c4854837f97a",
   "custodyApprovalSha256": null,
   "initialTrustApprovalSha256": null,
   "releaseAuthority": "github-attestation-v1"

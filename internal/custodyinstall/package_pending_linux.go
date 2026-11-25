@@ -77,6 +77,7 @@ func validPendingDistribution(i PackageProvisionInput) bool {
 		return i.Native.InstallerSHA256 == "" && (b.Archive.File == "fased-app-linux-amd64.tar.gz" || b.Archive.File == "fased-app-linux-arm64.tar.gz") &&
 			b.Archive.Size > 0 && b.Archive.Size <= 128<<20 && validHex(b.Archive.SHA256, 32) && validHex(b.ManifestSHA256, 32)
 	}
-	return (i.Native.Family == "apt" && i.Native.Artifact.File == "fased-app-linux-amd64.deb" || i.Native.Family == "dnf" && i.Native.Artifact.File == "fased-app-linux-amd64.rpm") &&
+	return (i.Native.Family == "apt" && (i.Native.Artifact.File == "fased-app-linux-amd64.deb" || i.Native.Artifact.File == "fased-app-linux-arm64.deb") ||
+		i.Native.Family == "dnf" && (i.Native.Artifact.File == "fased-app-linux-amd64.rpm" || i.Native.Artifact.File == "fased-app-linux-arm64.rpm")) &&
 		i.Native.Artifact.Size > 0 && validHex(i.Native.Artifact.SHA256, 32)
 }

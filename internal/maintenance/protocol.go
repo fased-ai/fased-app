@@ -156,7 +156,7 @@ func (o CandidateOperation) Validate() error {
 }
 
 func (r CandidateReceipt) Validate() error {
-	if r.Version != 1 || r.Owner <= 0 || !canonicalSHA256(r.PacketSHA256) || !canonicalSHA256(r.InstallerSHA256) || !canonicalSHA256(r.EngineSHA256) || !canonicalSHA256(r.ReleaseSHA256) || r.ProductVersion == "" || len(r.ProductVersion) > 64 || r.Sequence == 0 || r.Target != (update.Target{OS: "linux", Arch: "amd64"}) {
+	if r.Version != 1 || r.Owner <= 0 || !canonicalSHA256(r.PacketSHA256) || !canonicalSHA256(r.InstallerSHA256) || !canonicalSHA256(r.EngineSHA256) || !canonicalSHA256(r.ReleaseSHA256) || r.ProductVersion == "" || len(r.ProductVersion) > 64 || r.Sequence == 0 || (r.Target != (update.Target{OS: "linux", Arch: "amd64"}) && r.Target != (update.Target{OS: "linux", Arch: "arm64"})) {
 		return errors.New("invalid protected candidate identity")
 	}
 	switch r.Scope {

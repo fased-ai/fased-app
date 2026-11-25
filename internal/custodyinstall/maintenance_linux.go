@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"os/user"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -1281,7 +1282,7 @@ func prepareProtectedHold(ctx context.Context, a maintenance.Authority, r *updat
 		} else {
 			p := r.Package
 			now := time.Now().Unix()
-			approval := update.MaintenanceApproval{Version: 1, Owner: base.Owner, InstallationID: base.ID, OperationID: r.OperationID, HelperSHA256: a.ImageSHA256, Source: p.Source, ProductVersion: p.Version, ReleaseSHA256: p.ReleaseSHA256, ProvenanceSHA256: p.ProvenanceSHA256, DevelopmentOnly: p.DevelopmentOnly, PreviousCore: base.CoreHash, PreviousSigner: base.SignerHash, PreviousManifest: sum(mustJSON(base)), Core: *metadata.Snapshot, Plan: update.Manifest{Version: 1, Product: "fased-app-maintenance", Channel: "protected-installer", Sequence: p.Sequence, IssuedAt: now, ExpiresAt: now + 24*60*60, Target: update.Target{OS: "linux", Arch: "amd64"}, Components: p.Components}}
+			approval := update.MaintenanceApproval{Version: 1, Owner: base.Owner, InstallationID: base.ID, OperationID: r.OperationID, HelperSHA256: a.ImageSHA256, Source: p.Source, ProductVersion: p.Version, ReleaseSHA256: p.ReleaseSHA256, ProvenanceSHA256: p.ProvenanceSHA256, DevelopmentOnly: p.DevelopmentOnly, PreviousCore: base.CoreHash, PreviousSigner: base.SignerHash, PreviousManifest: sum(mustJSON(base)), Core: *metadata.Snapshot, Plan: update.Manifest{Version: 1, Product: "fased-app-maintenance", Channel: "protected-installer", Sequence: p.Sequence, IssuedAt: now, ExpiresAt: now + 24*60*60, Target: update.Target{OS: "linux", Arch: runtime.GOARCH}, Components: p.Components}}
 			if err = approval.Validate(); err != nil {
 				return err
 			}

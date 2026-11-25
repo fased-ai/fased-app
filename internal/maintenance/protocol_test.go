@@ -33,6 +33,16 @@ func TestCandidateReceiptBindsOneInstallationAndCannotExpandScope(t *testing.T) 
 	if !r.MatchesBase(1400, 11, r.BaseReleaseSHA256, r.BaseInstallation, r.BaseManifestSHA) {
 		t.Fatal("matching protected installation refused")
 	}
+	rArm64 := r
+	rArm64.Target = update.Target{OS: "linux", Arch: "arm64"}
+	if err := rArm64.Validate(); err != nil {
+		t.Fatalf("linux/arm64 candidate receipt refused: %v", err)
+	}
+	rBadArch := r
+	rBadArch.Target = update.Target{OS: "linux", Arch: "386"}
+	if err := rBadArch.Validate(); err == nil {
+		t.Fatal("unsupported linux/386 candidate receipt accepted")
+	}
 	for _, change := range []func(*CandidateReceipt){
 		func(v *CandidateReceipt) { v.Owner++ },
 		func(v *CandidateReceipt) { v.Scope = "fresh" },
