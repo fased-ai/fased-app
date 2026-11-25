@@ -706,6 +706,9 @@ func (h *HTTPHandler) api(w http.ResponseWriter, r *http.Request) {
 		if stage5RouteHook != nil && stage5RouteHook(h, w, r, token) {
 			return
 		}
+		if stage6RouteHook != nil && stage6RouteHook(h, w, r, token) {
+			return
+		}
 		switch r.URL.Path {
 		case "/api/v1/execution/status":
 			h.executionStatusAPI(w, r)
@@ -739,7 +742,10 @@ func (h *HTTPHandler) api(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-var stage5RouteHook func(*HTTPHandler, http.ResponseWriter, *http.Request, string) bool
+var (
+	stage5RouteHook func(*HTTPHandler, http.ResponseWriter, *http.Request, string) bool
+	stage6RouteHook func(*HTTPHandler, http.ResponseWriter, *http.Request, string) bool
+)
 
 func (h *HTTPHandler) ratePeerKey(r *http.Request) string {
 	if id, ok := r.Context().Value(remoteIdentityKey{}).(tailnet.Identity); ok && id.NodeID != "" {

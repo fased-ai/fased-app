@@ -880,6 +880,77 @@ func agentV2ToolRegistry() []agentToolEntry {
 			preview: previewDraftEquitiesOrder,
 			execute: executeDraftEquitiesOrder,
 		},
+		{
+			spec: AgentToolSpec{
+				Name:        "list_hub_packages",
+				Tier:        toolTierRead,
+				Description: "List Ed25519-signed Community Hub packages, verification state, and declarative WEN SAT hold metadata.",
+				Parameters: map[string]any{
+					"type":       "object",
+					"properties": map[string]any{},
+				},
+			},
+			execute: toolListHubPackages,
+		},
+		{
+			spec: AgentToolSpec{
+				Name:        "get_swarm_status",
+				Tier:        toolTierRead,
+				Description: "Inspect opt-in Fased Network Swarm status, shadow/paper copy locks, Ed25519 peers, and recent signals.",
+				Parameters: map[string]any{
+					"type":       "object",
+					"properties": map[string]any{},
+				},
+			},
+			execute: toolGetSwarmStatus,
+		},
+		{
+			spec: AgentToolSpec{
+				Name:        "list_swarm_signals",
+				Tier:        toolTierRead,
+				Description: "List verified Ed25519 Swarm A2A envelopes (permanently tagged untrusted=true).",
+				Parameters: map[string]any{
+					"type":       "object",
+					"properties": map[string]any{},
+				},
+			},
+			execute: toolListSwarmSignals,
+		},
+		{
+			spec: AgentToolSpec{
+				Name:        "draft_hub_install",
+				Tier:        toolTierAction,
+				Description: "Propose installing a verified Ed25519-signed Community Hub package. Requires owner approval.",
+				Parameters: map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"id": map[string]any{"type": "string", "description": "Community Hub package slug."},
+					},
+					"required": []string{"id"},
+				},
+			},
+			preview: previewDraftHubInstall,
+			execute: executeDraftHubInstall,
+		},
+		{
+			spec: AgentToolSpec{
+				Name:        "draft_swarm_signal",
+				Tier:        toolTierAction,
+				Description: "Propose broadcasting a signed advisory Swarm A2A signal (untrusted=true, shadow/paper only). Requires owner approval.",
+				Parameters: map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"symbol":     map[string]any{"type": "string", "description": "Asset ticker symbol."},
+						"direction":  map[string]any{"type": "string", "description": "LONG, SHORT, or NEUTRAL."},
+						"thesis":     map[string]any{"type": "string", "description": "Concise thesis."},
+						"confidence": map[string]any{"type": "number", "description": "Confidence in [0, 1]."},
+					},
+					"required": []string{"symbol", "direction", "thesis", "confidence"},
+				},
+			},
+			preview: previewDraftSwarmSignal,
+			execute: executeDraftSwarmSignal,
+		},
 	}
 }
 

@@ -459,7 +459,7 @@ func TestMCPSecurityToolsAndResources(t *testing.T) {
 	if err := json.NewDecoder(discResp.Body).Decode(&disc); err != nil {
 		t.Fatal(err)
 	}
-	if disc.Name != "fased-mcp" || disc.ProtocolVersion != mcpProtocolVersion || disc.ToolCount != 43 || disc.ResourceCount != 13 {
+	if disc.Name != "fased-mcp" || disc.ProtocolVersion != mcpProtocolVersion || disc.ToolCount != 48 || disc.ResourceCount != 15 {
 		t.Fatalf("unexpected MCP discovery payload: %+v", disc)
 	}
 
@@ -502,7 +502,7 @@ func TestMCPSecurityToolsAndResources(t *testing.T) {
 			t.Fatalf("disallowed tool %s exposed by MCP tools/list", disallowed)
 		}
 	}
-	for _, allowed := range []string{"workspace_status", "list_wallets", "draft_task", "draft_swap", "draft_strategy", "draft_lab_script", "draft_event_trigger", "run_desk_cycle", "save_desk_lesson", "sync_world_intel", "get_market_candles", "get_orderbook", "get_footprint", "get_macro_or_sec", "jev_evaluate", "call_external_mcp_tool", "get_world_intel", "get_prediction_markets", "list_event_triggers", "list_notifications", "list_lab_scripts", "run_fasedscript_backtest", "run_four_gate_validation", "get_desk_state", "list_desk_journal", "list_desk_lessons", "get_execution_status", "list_agent_vaults", "get_cex_status", "get_equities_status", "get_options_chain", "draft_cex_order", "draft_equities_order"} {
+	for _, allowed := range []string{"workspace_status", "list_wallets", "draft_task", "draft_swap", "draft_strategy", "draft_lab_script", "draft_event_trigger", "run_desk_cycle", "save_desk_lesson", "sync_world_intel", "get_market_candles", "get_orderbook", "get_footprint", "get_macro_or_sec", "jev_evaluate", "call_external_mcp_tool", "get_world_intel", "get_prediction_markets", "list_event_triggers", "list_notifications", "list_lab_scripts", "run_fasedscript_backtest", "run_four_gate_validation", "get_desk_state", "list_desk_journal", "list_desk_lessons", "get_execution_status", "list_agent_vaults", "get_cex_status", "get_equities_status", "get_options_chain", "draft_cex_order", "draft_equities_order", "list_hub_packages", "get_swarm_status", "list_swarm_signals", "draft_hub_install", "draft_swarm_signal"} {
 		if !toolNames[allowed] {
 			t.Fatalf("expected tool %s missing from MCP tools/list", allowed)
 		}

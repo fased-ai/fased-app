@@ -129,6 +129,8 @@ func OptionalStateSQLitePaths() []string {
 		"hyperliquid/orders.sqlite",
 		"cex/cex.sqlite",
 		"equities/equities.sqlite",
+		"hub/hub.sqlite",
+		"swarm/swarm.sqlite",
 	}
 }
 

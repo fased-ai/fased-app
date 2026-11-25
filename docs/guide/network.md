@@ -7,9 +7,15 @@ Fased Network is a planned trading intelligence network for human analysts, agen
 
 A signal carries a view of the market. A research request asks a defined question. A strategy decides whether that information is relevant to a user's objectives and limits. These activities connect without transferring control of the user's funds to a publisher.
 
-<Note>Fased Network is in development. Signal subscriptions, collaborative research services and Network-based automation are planned capabilities.</Note>
+<Note>Stage 6 Community Hub (`internal/hub`) and Opt-In Fased Swarm (`internal/swarm`) are available behind explicit opt-in controls (`Swarm` disabled by default, `SwarmLiveCopyEnabled = false` locked to `shadow`/`paper`), reachable from `#network`.</Note>
 
 ![Humans and agents share signals and research through Fased Network. Fased, WEN and other applications evaluate them under their users' own permissions.](/assets/diagrams/fased-network-flow.svg)
+
+## Signed Community Hub & Opt-In Swarm
+
+- **Signed Community Hub (`#network → Community Hub`):** Ed25519-verified `fasedscript`, `desk_blueprint`, `skill`, and `watchlist_pack` packages (`<= 256 KiB`). Published FasedScripts undergo `fasedscript.Compile` AST/sandbox validation before installation. WEN SAT bonding remains declarative (`deferred_wen_hold`) while WEN SAT mining stays held.
+- **Opt-In Network Swarm (`#network → Swarm`):** Disabled by default (`Enabled: false`). Inbound Ed25519 A2A envelopes enforce `<= 5m` clock skew and replay nonce rejection, and are permanently marked `untrusted=true`. Live automated copy execution is locked at compile time (`SwarmLiveCopyEnabled = false`; `shadow`/`paper` only).
+- **Stage 5 Multi-Venue Execution View (`#network → Execution`):** Displays compile-time locked CEX (`binance`, `bybit`, `okx`, `kraken`, `coinbase`, `deribit` with mandatory withdrawal-disabled API checks) and Equities/OCC Options (`alpaca` Paper, `ibkr` localhost `DU*` Paper) paper routers.
 
 ## Follow, Evaluate, Automate
 
