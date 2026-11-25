@@ -384,6 +384,11 @@ func enableAndStartServerService(ctx context.Context, manager, unitPath string) 
 		if err := serverSystemctl(ctx, "enable", "fased-server.service"); err != nil {
 			return err
 		}
+		if curUser, uErr := user.Current(); uErr == nil && curUser.Username != "" {
+			if loginctl, lErr := exec.LookPath("loginctl"); lErr == nil {
+				_ = exec.CommandContext(ctx, loginctl, "enable-linger", curUser.Username).Run()
+			}
+		}
 		return serverSystemctl(ctx, "restart", "fased-server.service")
 	case "launchd":
 		rotateLogIfOversized(launchdServerLogPath(), 5*1024*1024)

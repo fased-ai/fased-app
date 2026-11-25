@@ -329,7 +329,7 @@ if [[ $action == uninstall && $profile == server ]]; then
 fi
 if [[ $action == uninstall && $profile == local ]]; then
   installed_bin=''
-  for candidate in "$HOME/.local/share/fased-app/app/fased-app" "$HOME/.local/bin/fased"; do
+  for candidate in "$HOME/.local/share/fased-app/fased-app" "$HOME/.local/share/fased-app/app/fased-app" "$HOME/.local/bin/fased" /usr/local/bin/fased; do
     if [[ -x $candidate ]]; then installed_bin=$candidate; break; fi
   done
   [[ -n $installed_bin ]] || die 'No installed Fased Local binary was found; run fased uninstall.'

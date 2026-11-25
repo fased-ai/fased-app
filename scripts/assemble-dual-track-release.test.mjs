@@ -217,6 +217,10 @@ test("assembleDualTrackRelease marks signed=true only when macOS signed+notarize
       readFileSync(path.join(outDir, "desktop-release-manifest.json"), "utf8"),
     );
     assert.equal(manifest.signed, true);
+    assert.equal(manifest.signingByPlatform?.darwin?.signed, true);
+    assert.equal(manifest.signingByPlatform?.windows?.signed, true);
+    assert.equal(manifest.signingByPlatform?.linux?.signed, false);
+    assert.equal(manifest.signingByPlatform?.linux?.attested, true);
     assert.ok("fased-app-macos.dmg" in manifest.assets);
     assert.ok("fased-app-windows-setup.exe" in manifest.assets);
   } finally {

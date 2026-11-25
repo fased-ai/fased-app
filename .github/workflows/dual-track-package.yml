@@ -29,6 +29,7 @@ jobs:
     env:
       GOTOOLCHAIN: local
       GOFLAGS: -mod=readonly
+      FASED_REQUIRE_LINUX_DESKTOP_PACKAGES: "1"
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
@@ -65,6 +66,7 @@ jobs:
     env:
       GOTOOLCHAIN: local
       GOFLAGS: -mod=readonly
+      FASED_REQUIRE_LINUX_DESKTOP_PACKAGES: "1"
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
@@ -270,6 +272,10 @@ jobs:
     needs: [cli-archives, desktop-installers, installer-host-smoke]
     runs-on: ubuntu-24.04
     timeout-minutes: 10
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
@@ -298,6 +304,12 @@ jobs:
             --desktop-root .evidence/desktop-artifacts \
             --out-dir .evidence/dual-track-release
           (cd .evidence/dual-track-release && sha256sum --check SHA256SUMS.txt)
+      - name: Attest dual-track release manifest and checksums
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: |
+            .evidence/dual-track-release/SHA256SUMS.txt
+            .evidence/dual-track-release/desktop-release-manifest.json
       - uses: actions/upload-artifact@v7
         with:
           name: fased-dual-track-release

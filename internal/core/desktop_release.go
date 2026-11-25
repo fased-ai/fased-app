@@ -230,13 +230,17 @@ func fetchPublicDesktopRelease(
 		return DesktopReleaseCheckView{}, err
 	}
 	assets := selectDesktopReleaseAssets(manifest, targetOS, targetArch)
+	signedForPlatform := manifest.Signed
+	if ps, ok := manifest.SigningByPlatform[targetOS]; ok {
+		signedForPlatform = ps.Signed
+	}
 	return DesktopReleaseCheckView{
 		InstalledVersion: installedVersion,
 		LatestVersion:    manifest.Version,
 		ReleaseTag:       manifest.ReleaseTag,
 		ReleaseURL:       defaultDesktopReleaseTagURLBase + manifest.ReleaseTag,
 		UpdateAvailable:  updateAvailable,
-		Signed:           manifest.Signed,
+		Signed:           signedForPlatform,
 		Platform:         targetOS,
 		Arch:             targetArch,
 		Assets:           assets,

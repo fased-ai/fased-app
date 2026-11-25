@@ -85,7 +85,8 @@ func main() {
 		}
 		if allowSource {
 			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-			if _, loadErr := localinstall.Load(paths); errors.Is(loadErr, os.ErrNotExist) {
+			installed, loadErr := localinstall.Load(paths)
+			if errors.Is(loadErr, os.ErrNotExist) {
 				self, e := os.Executable()
 				if e == nil {
 					packageDir := filepath.Dir(self)
@@ -93,6 +94,39 @@ func main() {
 						firstPackage = packageDir
 						firstPackageUnsigned = m.UnsignedEngineering
 					}
+				}
+			} else if loadErr == nil {
+				startedUpgraded := false
+				if self, e := os.Executable(); e == nil {
+					packageDir := filepath.Dir(self)
+					if m, e := bundle.Verify(packageDir); e == nil && m.Desktop {
+						pkgEngine := m.Files[localinstall.EngineName()].SHA256
+						if pkgEngine != "" && installed.Files[localinstall.EngineName()] != pkgEngine {
+							signerPath := ""
+							signerSHA := m.Files["fased-signer"].SHA256
+							if signerSHA != "" {
+								signerPath = filepath.Join(packageDir, "fased-signer")
+							}
+							if _, upErr := localinstall.Install(ctx, paths, localinstall.Options{
+								Engine:       filepath.Join(packageDir, localinstall.EngineName()),
+								Desktop:      filepath.Join(packageDir, localinstall.DesktopName()),
+								Signer:       signerPath,
+								SignerSHA256: signerSHA,
+								Listen:       installed.Listen,
+								Autostart:    installed.Autostart,
+								Start:        true,
+								Upgrade:      true,
+								Location:     installed.Location,
+							}); upErr != nil {
+								fmt.Fprintln(os.Stderr, "Local desktop core upgrade failed:", upErr)
+							} else {
+								startedUpgraded = true
+							}
+						}
+					}
+				}
+				if !startedUpgraded {
+					_ = localinstall.Start(ctx, paths)
 				}
 			} else {
 				_ = localinstall.Start(ctx, paths)

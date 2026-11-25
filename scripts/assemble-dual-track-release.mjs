@@ -250,6 +250,19 @@ export function assembleDualTrackRelease({
     signed,
     assets: sortedAssets,
   });
+  unifiedManifest.signingByPlatform = {
+    darwin: {
+      signed: Boolean(darwinSign?.signed),
+      notarized: Boolean(darwinSign?.notarized),
+    },
+    windows: {
+      signed: Boolean(winSign?.signed),
+    },
+    linux: {
+      signed: false,
+      attested: true,
+    },
+  };
   writeFileSync(
     path.join(outDir, "desktop-release-manifest.json"),
     JSON.stringify(unifiedManifest, null, 2) + "\n",

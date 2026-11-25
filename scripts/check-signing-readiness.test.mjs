@@ -39,6 +39,9 @@ test("evaluateSigningSecrets accepts keychain profile or Apple ID notarization",
     macosReady: true,
     windowsReady: true,
     allSignedReady: true,
+    linuxDesktopSigned: false,
+    linuxSigningNote:
+      "Linux desktop/CLI uses GitHub Sigstore provenance attestation (no GPG/APT repo signing yet)",
     missingMacos: [],
     missingWindows: [],
   });

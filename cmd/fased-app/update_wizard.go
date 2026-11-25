@@ -64,8 +64,19 @@ func runUpdateWizard(call func(string, io.Writer) error, out, errOut io.Writer, 
 		if b.Len() > 64*1024 {
 			return errors.New("oversized update response")
 		}
+		var desk core.DesktopReleaseCheckView
 		if e := json.Unmarshal(b.Bytes(), &view); e != nil {
 			return e
+		}
+		if view.Operation.Phase == "" {
+			if e := json.Unmarshal(b.Bytes(), &desk); e == nil && (desk.InstalledVersion != "" || desk.LatestVersion != "") {
+				if desk.UpdateAvailable {
+					fmt.Fprintf(out, "Update available: %s -> %s (%s)\nDownload the latest installer or re-run install-cli.sh / install.ps1 to upgrade.\n", desk.InstalledVersion, desk.LatestVersion, desk.ReleaseURL)
+				} else {
+					fmt.Fprintf(out, "Already current (%s)\n", desk.InstalledVersion)
+				}
+				return nil
+			}
 		}
 		if approved != nil {
 			if view.Operation.Release == nil || *view.Operation.Release != *approved {
@@ -82,6 +93,9 @@ func runUpdateWizard(call func(string, io.Writer) error, out, errOut io.Writer, 
 	}
 	if e := read("check"); e != nil {
 		return e
+	}
+	if view.Operation.Phase == "" {
+		return nil
 	}
 	last := ""
 	applied := false

@@ -52,6 +52,9 @@ export function evaluateSigningSecrets(secretNames) {
     macosReady,
     windowsReady,
     allSignedReady: macosReady && windowsReady,
+    linuxDesktopSigned: false,
+    linuxSigningNote:
+      "Linux desktop/CLI uses GitHub Sigstore provenance attestation (no GPG/APT repo signing yet)",
     missingMacos,
     missingWindows,
   };
