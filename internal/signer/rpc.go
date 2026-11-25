@@ -66,6 +66,10 @@ type Request struct {
 	AgentVaultID        string                           `json:"agentVaultId,omitempty"`
 	AgentVaultSpend     *AgentVaultSpendRecord           `json:"agentVaultSpend,omitempty"`
 	SolanaDevnetSign    *SolanaDevnetSignIntent          `json:"solanaDevnetSign,omitempty"`
+	PolymarketOrder     *PolymarketOrderIntent           `json:"polymarketOrder,omitempty"`
+	KalshiSign          *KalshiSignIntent                `json:"kalshiSign,omitempty"`
+	KalshiKey           *KalshiKeyProvision              `json:"kalshiKey,omitempty"`
+	KalshiKeyID         string                           `json:"kalshiKeyId,omitempty"`
 	ProbeID             string                           `json:"probeId,omitempty"`
 	IntentID            string                           `json:"intentId,omitempty"`
 	Action              string                           `json:"action"`
@@ -86,6 +90,10 @@ type Response struct {
 	HyperliquidStatus  *HyperliquidStatus       `json:"hyperliquidStatus,omitempty"`
 	HyperliquidSigned  *HyperliquidSignedAction `json:"hyperliquidSigned,omitempty"`
 	SolanaDevnetSigned *SolanaDevnetSignedTx    `json:"solanaDevnetSigned,omitempty"`
+	PolymarketStatus   *PolymarketStatus        `json:"polymarketStatus,omitempty"`
+	PolymarketSigned   *PolymarketSignedOrder   `json:"polymarketSigned,omitempty"`
+	KalshiStatus       *KalshiStatus            `json:"kalshiStatus,omitempty"`
+	KalshiSigned       *KalshiSignedRequest     `json:"kalshiSigned,omitempty"`
 	AgentVaults        []AgentVaultUsage        `json:"agentVaults,omitempty"`
 	Status             Status                   `json:"status"`
 	Document           []byte                   `json:"document,omitempty"`
@@ -99,6 +107,9 @@ func execute(v *Vault, r Request, owner bool) Response {
 	defer wipe(r.VaultPassword)
 	defer wipe(r.Password)
 	defer wipe(r.NewPassword)
+	if r.KalshiKey != nil {
+		defer wipe(r.KalshiKey.PrivateKeyPEM)
+	}
 	if r.Action == "import-fixture-seed" || r.Action == "import-managed-seed" || r.Action == "import-ordinary-seed" {
 		defer wipe(r.Document)
 	}
@@ -154,12 +165,14 @@ func execute(v *Vault, r Request, owner bool) Response {
 			return Response{Error: "one typed swap action required"}
 		}
 	}
-	if r.HyperliquidPolicy != nil || r.HyperliquidOrder != nil || r.HyperliquidLeverage != nil || r.HyperliquidCancel != nil || r.AgentVault != nil || r.AgentVaultID != "" || r.AgentVaultSpend != nil || r.SolanaDevnetSign != nil ||
+	if r.HyperliquidPolicy != nil || r.HyperliquidOrder != nil || r.HyperliquidLeverage != nil || r.HyperliquidCancel != nil || r.AgentVault != nil || r.AgentVaultID != "" || r.AgentVaultSpend != nil || r.SolanaDevnetSign != nil || r.PolymarketOrder != nil || r.KalshiSign != nil || r.KalshiKey != nil || r.KalshiKeyID != "" ||
 		r.Action == "hyperliquid-status" || r.Action == "hyperliquid-policy" || r.Action == "hyperliquid-sign-leverage" || r.Action == "hyperliquid-sign-order" || r.Action == "hyperliquid-sign-cancel" ||
-		r.Action == "agent-vault-set" || r.Action == "agent-vault-revoke" || r.Action == "agent-vault-list" || r.Action == "agent-vault-record-loss" || r.Action == "solana-devnet-sign" {
+		r.Action == "agent-vault-set" || r.Action == "agent-vault-revoke" || r.Action == "agent-vault-list" || r.Action == "agent-vault-record-loss" || r.Action == "solana-devnet-sign" ||
+		r.Action == "polymarket-status" || r.Action == "polymarket-sign-order" ||
+		r.Action == "kalshi-status" || r.Action == "kalshi-generate-key" || r.Action == "kalshi-provision-key" || r.Action == "kalshi-sign-request" {
 		expected := Request{Action: r.Action}
 		switch r.Action {
-		case "hyperliquid-status", "agent-vault-list":
+		case "hyperliquid-status", "agent-vault-list", "polymarket-status", "kalshi-status":
 		case "hyperliquid-policy":
 			expected.HyperliquidPolicy = r.HyperliquidPolicy
 		case "hyperliquid-sign-leverage":
@@ -172,6 +185,16 @@ func execute(v *Vault, r Request, owner bool) Response {
 			expected.HyperliquidCancel = r.HyperliquidCancel
 		case "solana-devnet-sign":
 			expected.SolanaDevnetSign = r.SolanaDevnetSign
+			expected.AgentVaultID = r.AgentVaultID
+		case "polymarket-sign-order":
+			expected.PolymarketOrder = r.PolymarketOrder
+			expected.AgentVaultID = r.AgentVaultID
+		case "kalshi-generate-key":
+			expected.KalshiKeyID = r.KalshiKeyID
+		case "kalshi-provision-key":
+			expected.KalshiKey = r.KalshiKey
+		case "kalshi-sign-request":
+			expected.KalshiSign = r.KalshiSign
 			expected.AgentVaultID = r.AgentVaultID
 		case "agent-vault-set":
 			expected.AgentVault = r.AgentVault
@@ -488,6 +511,57 @@ func execute(v *Vault, r Request, owner bool) Response {
 			out.Error = e.Error()
 		}
 		return out
+	case "polymarket-status":
+		st, e := v.PolymarketStatus()
+		out := Response{PolymarketStatus: st, Status: v.Status()}
+		if e != nil {
+			out.Error = e.Error()
+		}
+		return out
+	case "polymarket-sign-order":
+		if r.PolymarketOrder == nil {
+			return Response{Error: "polymarket order intent required", Status: v.Status()}
+		}
+		signed, e := v.SignPolymarketOrderIPC(*r.PolymarketOrder, r.AgentVaultID)
+		out := Response{PolymarketSigned: signed, Status: v.Status()}
+		if e != nil {
+			out.Error = e.Error()
+		}
+		return out
+	case "kalshi-status":
+		st, e := v.KalshiStatus()
+		out := Response{KalshiStatus: st, Status: v.Status()}
+		if e != nil {
+			out.Error = e.Error()
+		}
+		return out
+	case "kalshi-generate-key":
+		st, e := v.GenerateKalshiDemoKey(r.KalshiKeyID)
+		out := Response{KalshiStatus: st, Status: v.Status()}
+		if e != nil {
+			out.Error = e.Error()
+		}
+		return out
+	case "kalshi-provision-key":
+		if r.KalshiKey == nil {
+			return Response{Error: "kalshi key provision document required", Status: v.Status()}
+		}
+		st, e := v.ProvisionKalshiDemoKey(*r.KalshiKey)
+		out := Response{KalshiStatus: st, Status: v.Status()}
+		if e != nil {
+			out.Error = e.Error()
+		}
+		return out
+	case "kalshi-sign-request":
+		if r.KalshiSign == nil {
+			return Response{Error: "kalshi sign intent required", Status: v.Status()}
+		}
+		signed, e := v.SignKalshiRequestIPC(*r.KalshiSign, r.AgentVaultID)
+		out := Response{KalshiSigned: signed, Status: v.Status()}
+		if e != nil {
+			out.Error = e.Error()
+		}
+		return out
 	default:
 		err = ErrUnavailable
 	}
@@ -502,7 +576,7 @@ func execute(v *Vault, r Request, owner bool) Response {
 // this allowlist after authenticating the actual kernel peer UID.
 func AppActionAllowed(action string) bool {
 	switch action {
-	case "status", "fixture-approvals", "fixture-state", "fixture-reserve", "fixture-execute", "fixture-reconcile", "fixture-operation", "swap-sign", "swap-receipt", "swap-reconcile", "swap-cancel", "hyperliquid-status", "hyperliquid-sign-leverage", "hyperliquid-sign-order", "hyperliquid-sign-cancel", "agent-vault-list", "solana-devnet-sign":
+	case "status", "fixture-approvals", "fixture-state", "fixture-reserve", "fixture-execute", "fixture-reconcile", "fixture-operation", "swap-sign", "swap-receipt", "swap-reconcile", "swap-cancel", "hyperliquid-status", "hyperliquid-sign-leverage", "hyperliquid-sign-order", "hyperliquid-sign-cancel", "agent-vault-list", "solana-devnet-sign", "polymarket-status", "polymarket-sign-order", "kalshi-status", "kalshi-sign-request":
 		return true
 	}
 	return false

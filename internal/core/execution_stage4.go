@@ -15,7 +15,9 @@ import (
 	"time"
 
 	"github.com/fased-ai/fased-app/internal/hyperliquid"
+	"github.com/fased-ai/fased-app/internal/kalshi"
 	"github.com/fased-ai/fased-app/internal/onchain"
+	"github.com/fased-ai/fased-app/internal/polymarket"
 	"github.com/fased-ai/fased-app/internal/signer"
 )
 
@@ -28,23 +30,30 @@ type TestnetExecutionConfig struct {
 	SolanaDevnetRPC    string
 	SolanaRoundTripper http.RoundTripper
 	HyperliquidClient  *hyperliquid.Client
+	PolymarketClient   *polymarket.Client
+	KalshiClient       *kalshi.Client
 }
 
 // ExecutionStatusView describes live Stage 4 testnet execution readiness without leaking credentials.
 type ExecutionStatusView struct {
-	Profile             string `json:"profile"`
-	Available           bool   `json:"available"`
-	WalletSigner        bool   `json:"walletSigner"`
-	FinancialExecution  bool   `json:"financialExecution"`
-	MainnetLocked       bool   `json:"mainnetLocked"`
-	WENHeld             bool   `json:"wenHeld"`
-	SolanaDevnetReady   bool   `json:"solanaDevnetReady"`
-	SolanaDevnetHost    string `json:"solanaDevnetHost,omitempty"`
-	HyperliquidTestnet  bool   `json:"hyperliquidTestnet"`
-	AgentVaultID        string `json:"agentVaultId,omitempty"`
-	SignerTestnetActive bool   `json:"signerTestnetActive"`
-	SignerPublicKey     string `json:"signerPublicKey,omitempty"`
-	SignerNetwork       string `json:"signerNetwork,omitempty"`
+	Profile                 string `json:"profile"`
+	Available               bool   `json:"available"`
+	WalletSigner            bool   `json:"walletSigner"`
+	FinancialExecution      bool   `json:"financialExecution"`
+	MainnetLocked           bool   `json:"mainnetLocked"`
+	WENHeld                 bool   `json:"wenHeld"`
+	SolanaDevnetReady       bool   `json:"solanaDevnetReady"`
+	SolanaDevnetHost        string `json:"solanaDevnetHost,omitempty"`
+	HyperliquidTestnet      bool   `json:"hyperliquidTestnet"`
+	PolymarketTestnetReady  bool   `json:"polymarketTestnetReady"`
+	PolymarketSignerAddress string `json:"polymarketSignerAddress,omitempty"`
+	KalshiDemoReady         bool   `json:"kalshiDemoReady"`
+	KalshiKeyConfigured     bool   `json:"kalshiKeyConfigured"`
+	KalshiKeyID             string `json:"kalshiKeyId,omitempty"`
+	AgentVaultID            string `json:"agentVaultId,omitempty"`
+	SignerTestnetActive     bool   `json:"signerTestnetActive"`
+	SignerPublicKey         string `json:"signerPublicKey,omitempty"`
+	SignerNetwork           string `json:"signerNetwork,omitempty"`
 }
 
 // SolanaDevnetRehearseRequest parameterizes an instruction-constrained SPL Memo +
@@ -79,12 +88,14 @@ type SolanaDevnetRehearseResult struct {
 }
 
 type stage4Runtime struct {
-	profile        string
-	signerCall     func(context.Context, signer.Request) (signer.Response, error)
-	agentVaultID   string
-	devnetExecutor *onchain.DevnetExecutor
-	devnetHost     string
-	hyperliquidOn  bool
+	profile          string
+	signerCall       func(context.Context, signer.Request) (signer.Response, error)
+	agentVaultID     string
+	devnetExecutor   *onchain.DevnetExecutor
+	devnetHost       string
+	hyperliquidOn    bool
+	polymarketClient *polymarket.Client
+	kalshiClient     *kalshi.Client
 }
 
 var (
@@ -192,14 +203,25 @@ func (s *Store) ConfigureTestnetExecution(ctx context.Context, cfg TestnetExecut
 		}
 	}
 
+	pmClient := cfg.PolymarketClient
+	if pmClient == nil {
+		pmClient = polymarket.NewTestnetExecutionClient()
+	}
+	kClient := cfg.KalshiClient
+	if kClient == nil {
+		kClient = kalshi.NewDemoClient()
+	}
+
 	stage4RuntimeMu.Lock()
 	stage4Runtimes[s] = &stage4Runtime{
-		profile:        signer.ExecutionProfileTestnet,
-		signerCall:     cfg.SignerCall,
-		agentVaultID:   strings.TrimSpace(cfg.AgentVaultID),
-		devnetExecutor: devnetExec,
-		devnetHost:     devnetHost,
-		hyperliquidOn:  hlOn,
+		profile:          signer.ExecutionProfileTestnet,
+		signerCall:       cfg.SignerCall,
+		agentVaultID:     strings.TrimSpace(cfg.AgentVaultID),
+		devnetExecutor:   devnetExec,
+		devnetHost:       devnetHost,
+		hyperliquidOn:    hlOn,
+		polymarketClient: pmClient,
+		kalshiClient:     kClient,
 	}
 	stage4RuntimeMu.Unlock()
 	return nil
@@ -216,7 +238,7 @@ func (server *Server) ConfigureTestnetExecution(ctx context.Context, cfg Testnet
 func (s *Store) executionStatus(ctx context.Context) ExecutionStatusView {
 	view := ExecutionStatusView{
 		Profile:       signer.ExecutionProfileOff,
-		MainnetLocked: !hyperliquidActivationEnabled && !signer.HyperliquidActivationEnabled,
+		MainnetLocked: !hyperliquidActivationEnabled && !signer.HyperliquidActivationEnabled && !signer.PolymarketActivationEnabled && !signer.KalshiActivationEnabled,
 		WENHeld:       !miningActivationEnabled,
 	}
 	rt := s.stage4Runtime()
@@ -234,7 +256,6 @@ func (s *Store) executionStatus(ctx context.Context) ExecutionStatusView {
 	if rt.signerCall != nil {
 		probeCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
 		stResp, err := rt.signerCall(probeCtx, signer.Request{Action: "status"})
-		cancel()
 		if err == nil {
 			view.SignerTestnetActive = stResp.Status.TestnetExecution
 			if stResp.Status.Account != nil {
@@ -242,6 +263,16 @@ func (s *Store) executionStatus(ctx context.Context) ExecutionStatusView {
 				view.SignerNetwork = stResp.Status.Account.Network
 			}
 		}
+		if pmResp, pmErr := rt.signerCall(probeCtx, signer.Request{Action: "polymarket-status"}); pmErr == nil && pmResp.PolymarketStatus != nil {
+			view.PolymarketTestnetReady = pmResp.PolymarketStatus.Enabled && rt.polymarketClient != nil
+			view.PolymarketSignerAddress = pmResp.PolymarketStatus.SignerAddress
+		}
+		if kResp, kErr := rt.signerCall(probeCtx, signer.Request{Action: "kalshi-status"}); kErr == nil && kResp.KalshiStatus != nil {
+			view.KalshiDemoReady = kResp.KalshiStatus.Enabled && rt.kalshiClient != nil
+			view.KalshiKeyConfigured = kResp.KalshiStatus.Configured
+			view.KalshiKeyID = kResp.KalshiStatus.KeyID
+		}
+		cancel()
 	}
 	return view
 }
@@ -407,13 +438,15 @@ func (h *HTTPHandler) signerStatusAPI(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, 200, map[string]any{
-		"available":          true,
-		"executionEnabled":   true,
-		"profile":            rt.profile,
-		"mainnetLocked":      !hyperliquidActivationEnabled && !signer.HyperliquidActivationEnabled,
-		"wenHeld":            !miningActivationEnabled,
-		"solanaDevnetReady":  rt.devnetExecutor != nil,
-		"hyperliquidTestnet": rt.hyperliquidOn || h.store.hyperliquidRuntime() != nil,
+		"available":              true,
+		"executionEnabled":       true,
+		"profile":                rt.profile,
+		"mainnetLocked":          !hyperliquidActivationEnabled && !signer.HyperliquidActivationEnabled && !signer.PolymarketActivationEnabled && !signer.KalshiActivationEnabled,
+		"wenHeld":                !miningActivationEnabled,
+		"solanaDevnetReady":      rt.devnetExecutor != nil,
+		"hyperliquidTestnet":     rt.hyperliquidOn || h.store.hyperliquidRuntime() != nil,
+		"polymarketTestnetReady": rt.polymarketClient != nil,
+		"kalshiDemoReady":        rt.kalshiClient != nil,
 	})
 }
 
