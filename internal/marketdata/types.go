@@ -12,9 +12,13 @@ const (
 	VenueHyperliquid = "hyperliquid"
 	VenueBinance     = "binance"
 	VenueBybit       = "bybit"
+	VenueOKX         = "okx"
 	VenueKraken      = "kraken"
+	VenueCoinbase    = "coinbase"
+	VenueDeribit     = "deribit"
 	VenueSolana      = "solana"
 	VenueLighter     = "lighter"
+	VenueAlpaca      = "alpaca"
 	VenueFRED        = "fred"
 	VenueSEC         = "sec"
 )
@@ -63,9 +67,13 @@ var (
 		VenueHyperliquid: true,
 		VenueBinance:     true,
 		VenueBybit:       true,
+		VenueOKX:         true,
 		VenueKraken:      true,
+		VenueCoinbase:    true,
+		VenueDeribit:     true,
 		VenueSolana:      true,
 		VenueLighter:     true,
+		VenueAlpaca:      true,
 		VenueFRED:        true,
 		VenueSEC:         true,
 	}

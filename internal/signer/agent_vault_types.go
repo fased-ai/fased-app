@@ -66,7 +66,9 @@ func isHex32ID(s string) bool {
 // AllowedAgentVaultVenue returns true only for supported non-WEN financial execution venues.
 func AllowedAgentVaultVenue(venue string) bool {
 	switch venue {
-	case "hyperliquid", "solana", "polymarket", "kalshi", "lighter":
+	case "hyperliquid", "solana", "polymarket", "kalshi", "lighter",
+		"binance", "bybit", "okx", "kraken", "coinbase", "deribit",
+		"alpaca", "ibkr":
 		return true
 	default:
 		return false

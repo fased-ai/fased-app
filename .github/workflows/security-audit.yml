@@ -71,7 +71,9 @@ jobs:
             "./internal/telegram:FuzzTelegramUpdateParser" \
             "./internal/fasedscript:FuzzFasedScriptCompileAndEval" \
             "./internal/quantlab:FuzzQuantLabInputs" \
-            "./internal/desk:FuzzDeskInputs"; do
+            "./internal/desk:FuzzDeskInputs" \
+            "./internal/cex:FuzzCEXOrderAndPermissionParsers" \
+            "./internal/equities:FuzzEquitiesAndOCCParsers"; do
             pkg="${target%%:*}"
             fn="${target##*:}"
             echo "=== Fuzzing ${pkg} :: ${fn} (${FUZZ_TIME}) ==="

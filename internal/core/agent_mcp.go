@@ -47,17 +47,22 @@ var mcpReadTools = map[string]bool{
 	"list_desk_lessons":        true,
 	"get_execution_status":     true,
 	"list_agent_vaults":        true,
+	"get_cex_status":           true,
+	"get_equities_status":      true,
+	"get_options_chain":        true,
 }
 
 var mcpDraftTools = map[string]bool{
-	"draft_task":          true,
-	"draft_swap":          true,
-	"draft_strategy":      true,
-	"draft_lab_script":    true,
-	"draft_event_trigger": true,
-	"run_desk_cycle":      true,
-	"save_desk_lesson":    true,
-	"sync_world_intel":    true,
+	"draft_task":           true,
+	"draft_swap":           true,
+	"draft_strategy":       true,
+	"draft_lab_script":     true,
+	"draft_event_trigger":  true,
+	"run_desk_cycle":       true,
+	"save_desk_lesson":     true,
+	"sync_world_intel":     true,
+	"draft_cex_order":      true,
+	"draft_equities_order": true,
 }
 
 type mcpResourceDescriptor struct {
@@ -132,6 +137,18 @@ var mcpResources = []mcpResourceDescriptor{
 		URI:         "fased://desk/state",
 		Name:        "Multi-Seat Desk state",
 		Description: "Multi-Seat Trading Desk policies, kill switches, isolated paper account equity, positions, bench, and decay report.",
+		MimeType:    "application/json",
+	},
+	{
+		URI:         "fased://cex/status",
+		Name:        "Stage 5 CEX router status",
+		Description: "Compile-time mainnet lock, supported CEX venues, non-secret trade-only credentials, and paper/sandbox orders.",
+		MimeType:    "application/json",
+	},
+	{
+		URI:         "fased://equities/status",
+		Name:        "Stage 5 Equities router status",
+		Description: "Compile-time live lock, Alpaca Paper / IBKR DU* Paper origins, and paper/OCC option order log.",
 		MimeType:    "application/json",
 	},
 }
@@ -454,6 +471,10 @@ func readMCPResource(ctx context.Context, s *Store, uri string) (any, error) {
 		return toolListLabScripts(ctx, s, "", []byte(`{}`))
 	case "fased://desk/state":
 		return toolGetDeskState(ctx, s, "", []byte(`{}`))
+	case "fased://cex/status":
+		return toolGetCEXStatus(ctx, s, "", []byte(`{}`))
+	case "fased://equities/status":
+		return toolGetEquitiesStatus(ctx, s, "", []byte(`{}`))
 	default:
 		return nil, errors.New("unknown MCP resource uri")
 	}

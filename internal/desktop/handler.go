@@ -512,6 +512,12 @@ func allowed(method, route string) bool {
 		return method == http.MethodGet
 	case "/api/v1/execution/solana-devnet/rehearse", "/api/v1/execution/polymarket/rehearse", "/api/v1/execution/kalshi/rehearse", "/api/v1/execution/lighter/rehearse":
 		return method == http.MethodPost
+	case "/api/v1/cex/status", "/api/v1/cex/venues", "/api/v1/equities/status", "/api/v1/equities/quotes", "/api/v1/equities/options":
+		return method == http.MethodGet
+	case "/api/v1/cex/credentials":
+		return method == http.MethodPost || method == http.MethodDelete
+	case "/api/v1/cex/orders", "/api/v1/equities/orders":
+		return method == http.MethodPost
 	}
 	return false
 }
@@ -559,7 +565,7 @@ func responseLimit(route string) int64 {
 	if strings.HasPrefix(route, "/api/v1/lab/") {
 		return 2 * 1024 * 1024
 	}
-	if route == "/api/v1/mcp" || strings.HasPrefix(route, "/api/v1/mcp/clients") || strings.HasPrefix(route, "/api/v1/decision/") || strings.HasPrefix(route, "/api/v1/market/") || strings.HasPrefix(route, "/api/v1/intel/") || strings.HasPrefix(route, "/api/v1/automation/") || strings.HasPrefix(route, "/api/v1/desk/") {
+	if route == "/api/v1/mcp" || strings.HasPrefix(route, "/api/v1/mcp/clients") || strings.HasPrefix(route, "/api/v1/decision/") || strings.HasPrefix(route, "/api/v1/market/") || strings.HasPrefix(route, "/api/v1/intel/") || strings.HasPrefix(route, "/api/v1/automation/") || strings.HasPrefix(route, "/api/v1/desk/") || strings.HasPrefix(route, "/api/v1/cex/") || strings.HasPrefix(route, "/api/v1/equities/") {
 		return 1 * 1024 * 1024
 	}
 	if route == "/api/v1/accounts/read" {
@@ -756,6 +762,20 @@ func allowedQuery(r *http.Request) bool {
 	case r.Method == http.MethodGet && r.URL.Path == "/api/v1/desk/journal":
 		for key := range q {
 			if key != "symbol" && key != "outcome" && key != "limit" {
+				return false
+			}
+		}
+		return true
+	case r.Method == http.MethodDelete && r.URL.Path == "/api/v1/cex/credentials":
+		for key := range q {
+			if key != "venue" {
+				return false
+			}
+		}
+		return true
+	case r.Method == http.MethodGet && (r.URL.Path == "/api/v1/equities/quotes" || r.URL.Path == "/api/v1/equities/options"):
+		for key := range q {
+			if key != "symbol" {
 				return false
 			}
 		}
