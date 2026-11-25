@@ -775,6 +775,11 @@ func TestNativeDeskRoutes(t *testing.T) {
 		{http.MethodDelete, "http://wails.localhost/api/v1/desk/lessons/lesson-1", true},
 		{http.MethodGet, "http://wails.localhost/api/v1/desk/report", true},
 		{http.MethodGet, "http://wails.localhost/api/v1/desk/stream", true},
+		{http.MethodGet, "http://wails.localhost/api/v1/execution/status", true},
+		{http.MethodPost, "http://wails.localhost/api/v1/execution/status", false},
+		{http.MethodGet, "http://wails.localhost/api/v1/vaults", true},
+		{http.MethodPost, "http://wails.localhost/api/v1/execution/solana-devnet/rehearse", true},
+		{http.MethodGet, "http://wails.localhost/api/v1/execution/solana-devnet/rehearse", false},
 	}
 	for _, tc := range cases {
 		req := httptest.NewRequest(tc.method, tc.url, nil)

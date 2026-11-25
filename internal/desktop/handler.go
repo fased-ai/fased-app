@@ -508,6 +508,10 @@ func allowed(method, route string) bool {
 		return method == http.MethodPost
 	case "/api/v1/desk/lessons":
 		return method == http.MethodGet || method == http.MethodPut
+	case "/api/v1/execution/status", "/api/v1/vaults":
+		return method == http.MethodGet
+	case "/api/v1/execution/solana-devnet/rehearse":
+		return method == http.MethodPost
 	}
 	return false
 }

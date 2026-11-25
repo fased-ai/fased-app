@@ -30,10 +30,11 @@ type ControlledTransport interface {
 
 // Client is a bounded Hyperliquid Exchange & Info REST adapter.
 type Client struct {
-	network    string
-	origin     string
-	http       *http.Client
-	controlled bool
+	network     string
+	origin      string
+	http        *http.Client
+	controlled  bool
+	testnetOnly bool
 }
 
 // ValidateOrigin requires an exact match to the pinned Hyperliquid mainnet or testnet origin.
@@ -167,6 +168,19 @@ func NewClient(network string) (*Client, error) {
 		},
 		controlled: false,
 	}, nil
+}
+
+// NewTestnetExecutionClient constructs an opt-in owner-authorized Hyperliquid
+// Testnet execution client pinned strictly to TestnetAPIOrigin. Mainnet intents
+// remain fail-closed with ErrExecutionDisabled.
+func NewTestnetExecutionClient() (*Client, error) {
+	c, err := NewClient("testnet")
+	if err != nil {
+		return nil, err
+	}
+	c.controlled = true
+	c.testnetOnly = true
+	return c, nil
 }
 
 // NewControlledClient attaches an isolated test transport for controlled Hyperliquid verification.
@@ -497,35 +511,44 @@ func BuildCancelWirePayload(intent signer.HyperliquidCancelIntent, signed *signe
 }
 
 func parseExchangeStatuses(raw []byte) (ExchangeSubmissionResult, error) {
-	var resp struct {
-		Status   string `json:"status"`
-		Response *struct {
-			Type string `json:"type"`
-			Data *struct {
-				Statuses []struct {
-					Resting *struct {
-						Oid uint64 `json:"oid"`
-					} `json:"resting"`
-					Filled *struct {
-						Oid     uint64 `json:"oid"`
-						TotalSz string `json:"totalSz"`
-						AvgPx   string `json:"avgPx"`
-					} `json:"filled"`
-					Error string `json:"error"`
-				} `json:"statuses"`
-			} `json:"data"`
-		} `json:"response"`
+	var envelope struct {
+		Status   string          `json:"status"`
+		Response json.RawMessage `json:"response"`
 	}
-	if err := json.Unmarshal(raw, &resp); err != nil {
+	if err := json.Unmarshal(raw, &envelope); err != nil {
 		return ExchangeSubmissionResult{State: "unknown", Message: "malformed exchange response"}, err
 	}
-	if resp.Status != "ok" {
-		return ExchangeSubmissionResult{State: "rejected", Message: fmt.Sprintf("exchange status %q", resp.Status)}, nil
+	if envelope.Status != "ok" {
+		msg := fmt.Sprintf("exchange status %q", envelope.Status)
+		var text string
+		if json.Unmarshal(envelope.Response, &text) == nil && text != "" {
+			msg = text
+		}
+		return ExchangeSubmissionResult{State: "rejected", Message: msg}, nil
 	}
-	if resp.Response == nil || resp.Response.Data == nil || len(resp.Response.Data.Statuses) == 0 {
+	var payload *struct {
+		Type string `json:"type"`
+		Data *struct {
+			Statuses []struct {
+				Resting *struct {
+					Oid uint64 `json:"oid"`
+				} `json:"resting"`
+				Filled *struct {
+					Oid     uint64 `json:"oid"`
+					TotalSz string `json:"totalSz"`
+					AvgPx   string `json:"avgPx"`
+				} `json:"filled"`
+				Error string `json:"error"`
+			} `json:"statuses"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(envelope.Response, &payload); err != nil {
+		return ExchangeSubmissionResult{State: "unknown", Message: "malformed exchange response"}, err
+	}
+	if payload == nil || payload.Data == nil || len(payload.Data.Statuses) == 0 {
 		return ExchangeSubmissionResult{State: "unknown", Message: "missing exchange status entry"}, nil
 	}
-	st := resp.Response.Data.Statuses[0]
+	st := payload.Data.Statuses[0]
 	if st.Error != "" {
 		return ExchangeSubmissionResult{State: "rejected", Message: st.Error}, nil
 	}
@@ -546,14 +569,24 @@ func parseExchangeStatuses(raw []byte) (ExchangeSubmissionResult, error) {
 	return ExchangeSubmissionResult{State: "cancelled"}, nil
 }
 
-// SubmitSignedOrder fails closed with ErrExecutionDisabled unless this Client
-// holds a ControlledFixture transport AND HyperliquidActivationEnabled is false on mainnet.
-func (c *Client) SubmitSignedOrder(ctx context.Context, intent signer.HyperliquidOrderIntent, signed *signer.HyperliquidSignedAction, vaultAddress string) (ExchangeSubmissionResult, error) {
+func (c *Client) canSubmit(network string) error {
 	if c == nil || !c.controlled {
-		return ExchangeSubmissionResult{}, ErrExecutionDisabled
+		return ErrExecutionDisabled
 	}
-	if intent.Network == "mainnet" && !signer.HyperliquidActivationEnabled {
-		return ExchangeSubmissionResult{}, ErrExecutionDisabled
+	if network != c.network || (c.testnetOnly && network != "testnet") {
+		return ErrExecutionDisabled
+	}
+	if network == "mainnet" && !signer.HyperliquidActivationEnabled {
+		return ErrExecutionDisabled
+	}
+	return nil
+}
+
+// SubmitSignedOrder fails closed with ErrExecutionDisabled unless this Client
+// holds a ControlledFixture transport (or opt-in testnet execution) AND HyperliquidActivationEnabled is false on mainnet.
+func (c *Client) SubmitSignedOrder(ctx context.Context, intent signer.HyperliquidOrderIntent, signed *signer.HyperliquidSignedAction, vaultAddress string) (ExchangeSubmissionResult, error) {
+	if err := c.canSubmit(intent.Network); err != nil {
+		return ExchangeSubmissionResult{}, err
 	}
 	body, err := BuildOrderWirePayload(intent, signed, vaultAddress)
 	if err != nil {
@@ -566,13 +599,10 @@ func (c *Client) SubmitSignedOrder(ctx context.Context, intent signer.Hyperliqui
 	return parseExchangeStatuses(raw)
 }
 
-// SubmitSignedCancel fails closed unless this Client holds a ControlledFixture transport.
+// SubmitSignedCancel fails closed unless this Client permits submission on intent.Network.
 func (c *Client) SubmitSignedCancel(ctx context.Context, intent signer.HyperliquidCancelIntent, signed *signer.HyperliquidSignedAction, vaultAddress string) (ExchangeSubmissionResult, error) {
-	if c == nil || !c.controlled {
-		return ExchangeSubmissionResult{}, ErrExecutionDisabled
-	}
-	if intent.Network == "mainnet" && !signer.HyperliquidActivationEnabled {
-		return ExchangeSubmissionResult{}, ErrExecutionDisabled
+	if err := c.canSubmit(intent.Network); err != nil {
+		return ExchangeSubmissionResult{}, err
 	}
 	body, err := BuildCancelWirePayload(intent, signed, vaultAddress)
 	if err != nil {
@@ -622,13 +652,10 @@ func parseUpdateLeverageResponse(raw []byte) (ExchangeSubmissionResult, error) {
 	return ExchangeSubmissionResult{State: "ok"}, nil
 }
 
-// SubmitSignedUpdateLeverage fails closed unless this Client holds a ControlledFixture transport.
+// SubmitSignedUpdateLeverage fails closed unless this Client permits submission on intent.Network.
 func (c *Client) SubmitSignedUpdateLeverage(ctx context.Context, intent signer.HyperliquidUpdateLeverageIntent, signed *signer.HyperliquidSignedAction, vaultAddress string) (ExchangeSubmissionResult, error) {
-	if c == nil || !c.controlled {
-		return ExchangeSubmissionResult{}, ErrExecutionDisabled
-	}
-	if intent.Network == "mainnet" && !signer.HyperliquidActivationEnabled {
-		return ExchangeSubmissionResult{}, ErrExecutionDisabled
+	if err := c.canSubmit(intent.Network); err != nil {
+		return ExchangeSubmissionResult{}, err
 	}
 	body, err := BuildUpdateLeverageWirePayload(intent, signed, vaultAddress)
 	if err != nil {

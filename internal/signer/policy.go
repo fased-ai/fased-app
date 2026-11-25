@@ -280,6 +280,33 @@ func (l *ledger) apply(r journalRecord) error {
 		case "update-install":
 			expected.ID = r.ID
 			expected.Installation = r.Installation
+		case "hyperliquid-policy":
+			if !l.allowStage4PolicyReplay() {
+				return ErrUnavailable
+			}
+			expected.HyperliquidPolicy = r.HyperliquidPolicy
+		case "hyperliquid-sign":
+			if !l.allowStage4PolicyReplay() {
+				return ErrUnavailable
+			}
+			expected.HyperliquidAction = r.HyperliquidAction
+			expected.HyperliquidNonce = r.HyperliquidNonce
+			expected.HyperliquidDigest = r.HyperliquidDigest
+		case "agent-vault-policy":
+			if !l.allowStage4PolicyReplay() {
+				return ErrUnavailable
+			}
+			expected.AgentVault = r.AgentVault
+		case "agent-vault-revoke":
+			if !l.allowStage4PolicyReplay() {
+				return ErrUnavailable
+			}
+			expected.ID = r.ID
+		case "agent-vault-spend":
+			if !l.allowStage4PolicyReplay() {
+				return ErrUnavailable
+			}
+			expected.AgentSpend = r.AgentSpend
 		case "journal-compact":
 			expected.OriginalHash = r.OriginalHash
 			expected.Outcome = r.Outcome
@@ -499,35 +526,35 @@ func (l *ledger) apply(r journalRecord) error {
 		l.ref = *r.Account
 		l.policy = nil // New owner policy/grants, lifetime spent remains.
 	case "hyperliquid-policy":
-		if l.ref.Version != 1 {
+		if !l.allowStage4PolicyReplay() {
 			return ErrUnavailable
 		}
 		if err := l.applyHyperliquidPolicy(r); err != nil {
 			return err
 		}
 	case "hyperliquid-sign":
-		if l.ref.Version != 1 {
+		if !l.allowStage4PolicyReplay() {
 			return ErrUnavailable
 		}
 		if err := l.applyHyperliquidSign(r); err != nil {
 			return err
 		}
 	case "agent-vault-policy":
-		if l.ref.Version != 1 {
+		if !l.allowStage4PolicyReplay() {
 			return ErrUnavailable
 		}
 		if err := l.applyAgentVaultPolicy(r); err != nil {
 			return err
 		}
 	case "agent-vault-revoke":
-		if l.ref.Version != 1 {
+		if !l.allowStage4PolicyReplay() {
 			return ErrUnavailable
 		}
 		if err := l.applyAgentVaultRevoke(r); err != nil {
 			return err
 		}
 	case "agent-vault-spend":
-		if l.ref.Version != 1 {
+		if !l.allowStage4PolicyReplay() {
 			return ErrUnavailable
 		}
 		if err := l.applyAgentVaultSpend(r); err != nil {
@@ -585,6 +612,10 @@ func (l *ledger) append(v *Vault, r journalRecord) error {
 	next.main = l.main
 	*l = next
 	return nil
+}
+
+func (l *ledger) allowStage4PolicyReplay() bool {
+	return l != nil && (l.ref.Version == 1 || (l.ref.Version == 3 && l.ref.Network == "devnet"))
 }
 
 func (v *Vault) openLedger() error {

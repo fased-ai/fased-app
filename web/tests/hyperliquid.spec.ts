@@ -130,7 +130,17 @@ test("Controlled Hyperliquid terminal enforces review-before-submit, EIP-712 sig
       "3200.0",
     );
 
-    // Fill bounded ETH order -> Review -> Submit
+    // Fill bounded ETH order -> toggle Cross & back to Isolated -> Review -> Submit
+    const isolatedBtn = page.getByRole("button", {
+      name: "Isolated",
+      exact: true,
+    });
+    const crossBtn = page.getByRole("button", { name: "Cross", exact: true });
+    await expect(isolatedBtn).toHaveAttribute("aria-pressed", "true");
+    await crossBtn.click();
+    await expect(crossBtn).toHaveAttribute("aria-pressed", "true");
+    await isolatedBtn.click();
+    await expect(isolatedBtn).toHaveAttribute("aria-pressed", "true");
     await page.getByLabel("Limit price", { exact: true }).fill("3200.5");
     await page.getByLabel("Size", { exact: true }).fill("0.5");
     await page.getByLabel("Leverage", { exact: true }).fill("5");

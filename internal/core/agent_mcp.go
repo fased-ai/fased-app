@@ -45,6 +45,8 @@ var mcpReadTools = map[string]bool{
 	"get_desk_state":           true,
 	"list_desk_journal":        true,
 	"list_desk_lessons":        true,
+	"get_execution_status":     true,
+	"list_agent_vaults":        true,
 }
 
 var mcpDraftTools = map[string]bool{

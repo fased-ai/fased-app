@@ -193,6 +193,24 @@ func TestValidateOriginAndSSRFGuards(t *testing.T) {
 	if _, err := liveClient.SubmitSignedCancel(t.Context(), signer.HyperliquidCancelIntent{Network: "testnet"}, &signer.HyperliquidSignedAction{}, ""); !errors.Is(err, ErrExecutionDisabled) {
 		t.Fatalf("ordinary client SubmitSignedCancel got %v, want ErrExecutionDisabled", err)
 	}
+
+	// Testnet execution client must pin strictly to testnet and fail closed on mainnet.
+	execClient, err := NewTestnetExecutionClient()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if execClient.Network() != "testnet" || execClient.Origin() != TestnetAPIOrigin || !execClient.Controlled() {
+		t.Fatalf("unexpected TestnetExecutionClient identity: network=%q origin=%q controlled=%v", execClient.Network(), execClient.Origin(), execClient.Controlled())
+	}
+	if _, err := execClient.SubmitSignedOrder(t.Context(), signer.HyperliquidOrderIntent{Network: "mainnet"}, &signer.HyperliquidSignedAction{}, ""); !errors.Is(err, ErrExecutionDisabled) {
+		t.Fatalf("testnet exec client must reject mainnet SubmitSignedOrder, got %v", err)
+	}
+	if _, err := execClient.SubmitSignedUpdateLeverage(t.Context(), signer.HyperliquidUpdateLeverageIntent{Network: "mainnet", Leverage: 5}, &signer.HyperliquidSignedAction{}, ""); !errors.Is(err, ErrExecutionDisabled) {
+		t.Fatalf("testnet exec client must reject mainnet SubmitSignedUpdateLeverage, got %v", err)
+	}
+	if _, err := execClient.SubmitSignedCancel(t.Context(), signer.HyperliquidCancelIntent{Network: "mainnet"}, &signer.HyperliquidSignedAction{}, ""); !errors.Is(err, ErrExecutionDisabled) {
+		t.Fatalf("testnet exec client must reject mainnet SubmitSignedCancel, got %v", err)
+	}
 }
 
 func TestControlledHyperliquidEndToEndFlow(t *testing.T) {
@@ -444,5 +462,16 @@ func TestOrderStorePersistenceAndMonotonicNonce(t *testing.T) {
 	}
 	if len(orders) != 1 || orders[0].ID != rec.ID || orders[0].ClientOrderID != strings.ToLower(rec.ClientOrderID) || !orders[0].IsCross || orders[0].OrderID != 7001 {
 		t.Fatalf("unexpected persisted orders after reopen: %+v", orders)
+	}
+}
+
+func TestParseExchangeStatusesTopLevelStringError(t *testing.T) {
+	t.Parallel()
+	res, err := parseExchangeStatuses([]byte(`{"status":"err","response":"User or API Wallet 0x123 does not exist."}`))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if res.State != "rejected" || res.Message != "User or API Wallet 0x123 does not exist." {
+		t.Fatalf("unexpected parsed result: %+v", res)
 	}
 }

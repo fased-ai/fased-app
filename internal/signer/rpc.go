@@ -65,6 +65,7 @@ type Request struct {
 	AgentVault          *AgentVaultPolicy                `json:"agentVault,omitempty"`
 	AgentVaultID        string                           `json:"agentVaultId,omitempty"`
 	AgentVaultSpend     *AgentVaultSpendRecord           `json:"agentVaultSpend,omitempty"`
+	SolanaDevnetSign    *SolanaDevnetSignIntent          `json:"solanaDevnetSign,omitempty"`
 	ProbeID             string                           `json:"probeId,omitempty"`
 	IntentID            string                           `json:"intentId,omitempty"`
 	Action              string                           `json:"action"`
@@ -75,21 +76,22 @@ type Request struct {
 	PublicInput
 }
 type Response struct {
-	Swap              *SwapReceipt             `json:"swap,omitempty"`
-	Installation      *update.Installation     `json:"installation,omitempty"`
-	Preflight         *update.Preflight        `json:"preflight,omitempty"`
-	Stage             *update.StageStatus      `json:"stage,omitempty"`
-	UpdateInventory   *update.SignerSnapshot   `json:"updateInventory,omitempty"`
-	UpdateIntent      *update.Intent           `json:"updateIntent,omitempty"`
-	Approvals         []ApprovalReceipt        `json:"approvals,omitempty"`
-	HyperliquidStatus *HyperliquidStatus       `json:"hyperliquidStatus,omitempty"`
-	HyperliquidSigned *HyperliquidSignedAction `json:"hyperliquidSigned,omitempty"`
-	AgentVaults       []AgentVaultUsage        `json:"agentVaults,omitempty"`
-	Status            Status                   `json:"status"`
-	Document          []byte                   `json:"document,omitempty"`
-	Error             string                   `json:"error,omitempty"`
-	Fixture           *FixtureSummary          `json:"fixture,omitempty"`
-	Operation         *FixtureOperation        `json:"operation,omitempty"`
+	Swap               *SwapReceipt             `json:"swap,omitempty"`
+	Installation       *update.Installation     `json:"installation,omitempty"`
+	Preflight          *update.Preflight        `json:"preflight,omitempty"`
+	Stage              *update.StageStatus      `json:"stage,omitempty"`
+	UpdateInventory    *update.SignerSnapshot   `json:"updateInventory,omitempty"`
+	UpdateIntent       *update.Intent           `json:"updateIntent,omitempty"`
+	Approvals          []ApprovalReceipt        `json:"approvals,omitempty"`
+	HyperliquidStatus  *HyperliquidStatus       `json:"hyperliquidStatus,omitempty"`
+	HyperliquidSigned  *HyperliquidSignedAction `json:"hyperliquidSigned,omitempty"`
+	SolanaDevnetSigned *SolanaDevnetSignedTx    `json:"solanaDevnetSigned,omitempty"`
+	AgentVaults        []AgentVaultUsage        `json:"agentVaults,omitempty"`
+	Status             Status                   `json:"status"`
+	Document           []byte                   `json:"document,omitempty"`
+	Error              string                   `json:"error,omitempty"`
+	Fixture            *FixtureSummary          `json:"fixture,omitempty"`
+	Operation          *FixtureOperation        `json:"operation,omitempty"`
 }
 
 func execute(v *Vault, r Request, owner bool) Response {
@@ -108,7 +110,9 @@ func execute(v *Vault, r Request, owner bool) Response {
 			}
 		case "status", "create", "import-ordinary-seed", "unlock", "lock", "backup", "backup-history", "verify-backup", "restore", "fixture-update-inventory", "fixture-update-status", "fixture-update-prepare", "fixture-update-abort", "fixture-update-stage-write", "fixture-update-stage-status", "fixture-update-stage-finish", "fixture-update-preflight", "fixture-install-controller":
 		default:
-			return Response{Error: ErrUnavailable.Error()}
+			if !(v.testnetExecutionAllowed() && isStage4TestnetAction(r.Action)) {
+				return Response{Error: ErrUnavailable.Error()}
+			}
 		}
 	}
 	if len(r.VaultPassword) > 0 && r.Action != "verify-backup" {
@@ -150,9 +154,9 @@ func execute(v *Vault, r Request, owner bool) Response {
 			return Response{Error: "one typed swap action required"}
 		}
 	}
-	if r.HyperliquidPolicy != nil || r.HyperliquidOrder != nil || r.HyperliquidLeverage != nil || r.HyperliquidCancel != nil || r.AgentVault != nil || r.AgentVaultID != "" || r.AgentVaultSpend != nil ||
+	if r.HyperliquidPolicy != nil || r.HyperliquidOrder != nil || r.HyperliquidLeverage != nil || r.HyperliquidCancel != nil || r.AgentVault != nil || r.AgentVaultID != "" || r.AgentVaultSpend != nil || r.SolanaDevnetSign != nil ||
 		r.Action == "hyperliquid-status" || r.Action == "hyperliquid-policy" || r.Action == "hyperliquid-sign-leverage" || r.Action == "hyperliquid-sign-order" || r.Action == "hyperliquid-sign-cancel" ||
-		r.Action == "agent-vault-set" || r.Action == "agent-vault-revoke" || r.Action == "agent-vault-list" || r.Action == "agent-vault-record-loss" {
+		r.Action == "agent-vault-set" || r.Action == "agent-vault-revoke" || r.Action == "agent-vault-list" || r.Action == "agent-vault-record-loss" || r.Action == "solana-devnet-sign" {
 		expected := Request{Action: r.Action}
 		switch r.Action {
 		case "hyperliquid-status", "agent-vault-list":
@@ -166,6 +170,9 @@ func execute(v *Vault, r Request, owner bool) Response {
 			expected.AgentVaultID = r.AgentVaultID
 		case "hyperliquid-sign-cancel":
 			expected.HyperliquidCancel = r.HyperliquidCancel
+		case "solana-devnet-sign":
+			expected.SolanaDevnetSign = r.SolanaDevnetSign
+			expected.AgentVaultID = r.AgentVaultID
 		case "agent-vault-set":
 			expected.AgentVault = r.AgentVault
 		case "agent-vault-revoke":
@@ -183,7 +190,9 @@ func execute(v *Vault, r Request, owner bool) Response {
 		switch r.Action {
 		case "receipt-rpc-save", "receipt-rpc-unlock", "swap-approve", "swap-sign", "swap-receipt", "swap-reconcile", "swap-cancel", "status", "create", "import-managed-seed", "import-ordinary-seed", "unlock", "lock", "backup", "backup-history", "verify-backup", "restore", "fixture-update-inventory", "fixture-update-status", "fixture-update-prepare", "fixture-update-abort", "fixture-update-stage-write", "fixture-update-stage-status", "fixture-update-stage-finish", "fixture-update-preflight", "fixture-install-controller":
 		default:
-			return Response{Error: ErrUnavailable.Error()}
+			if !(v.testnetExecutionAllowed() && isStage4TestnetAction(r.Action)) {
+				return Response{Error: ErrUnavailable.Error()}
+			}
 		}
 	}
 	switch r.Action {
@@ -469,6 +478,16 @@ func execute(v *Vault, r Request, owner bool) Response {
 			out.Error = e.Error()
 		}
 		return out
+	case "solana-devnet-sign":
+		if r.SolanaDevnetSign == nil {
+			return Response{Error: "solana devnet sign intent required", Status: v.Status()}
+		}
+		signed, e := v.SignSolanaDevnetIPC(*r.SolanaDevnetSign, r.AgentVaultID)
+		out := Response{SolanaDevnetSigned: signed, Status: v.Status()}
+		if e != nil {
+			out.Error = e.Error()
+		}
+		return out
 	default:
 		err = ErrUnavailable
 	}
@@ -483,7 +502,7 @@ func execute(v *Vault, r Request, owner bool) Response {
 // this allowlist after authenticating the actual kernel peer UID.
 func AppActionAllowed(action string) bool {
 	switch action {
-	case "status", "fixture-approvals", "fixture-state", "fixture-reserve", "fixture-execute", "fixture-reconcile", "fixture-operation", "swap-sign", "swap-receipt", "swap-reconcile", "swap-cancel", "hyperliquid-status", "hyperliquid-sign-leverage", "hyperliquid-sign-order", "hyperliquid-sign-cancel", "agent-vault-list":
+	case "status", "fixture-approvals", "fixture-state", "fixture-reserve", "fixture-execute", "fixture-reconcile", "fixture-operation", "swap-sign", "swap-receipt", "swap-reconcile", "swap-cancel", "hyperliquid-status", "hyperliquid-sign-leverage", "hyperliquid-sign-order", "hyperliquid-sign-cancel", "agent-vault-list", "solana-devnet-sign":
 		return true
 	}
 	return false

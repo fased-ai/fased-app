@@ -71,6 +71,7 @@ type Status struct {
 	UnlockUntil        time.Time         `json:"unlockUntil,omitempty"`
 	RecoveryRequired   bool              `json:"recoveryRequired"`
 	UnattendedUnlock   bool              `json:"unattendedUnlock"`
+	TestnetExecution   bool              `json:"testnetExecution,omitempty"`
 }
 
 type Vault struct {
@@ -78,6 +79,7 @@ type Vault struct {
 	ordinaryTradeGrants  map[string]string
 	ordinaryTradeEnabled bool
 	ordinary             bool
+	testnetExecEnabled   bool
 	receiptRPCFactory    func(onchain.CredentialAccess) (SwapObserver, error)
 	receiptRPCLease      *receiptRPCLease
 	swapObserver         SwapObserver
@@ -300,6 +302,7 @@ func (v *Vault) Close() error {
 		return nil
 	}
 	v.closed = true
+	v.testnetExecEnabled = false
 	v.lock()
 	v.clearHyperliquidState()
 	return v.store.close()
@@ -327,7 +330,7 @@ func (v *Vault) Status() Status {
 	v.mu.Lock()
 	defer v.mu.Unlock()
 	locked := !v.unlocked()
-	s := Status{ReceiptRPC: v.receiptRPCStatus(), SwapReady: v.managedSwapEligible() || v.ordinaryTradeEligible(), FixtureOnly: true, Locked: locked, UnlockUntil: v.until, UpdateHeld: v.store.failedState() || v.ledger != nil && v.ledger.activeUpdate != ""}
+	s := Status{ReceiptRPC: v.receiptRPCStatus(), SwapReady: v.managedSwapEligible() || v.ordinaryTradeEligible(), FixtureOnly: true, Locked: locked, UnlockUntil: v.until, UpdateHeld: v.store.failedState() || v.ledger != nil && v.ledger.activeUpdate != "", TestnetExecution: v.testnetExecEnabled}
 	if v.ordinary {
 		hint := v.admissionContext
 		s.Custody = &hint

@@ -60,6 +60,7 @@ export type OrderDraft = {
   limitPrice: string;
   size: string;
   leverage: number;
+  isCross?: boolean;
   reduceOnly: boolean;
   timeInForce: "Gtc" | "Ioc" | "Alo";
   clientOrderId?: string;
@@ -87,11 +88,13 @@ export type HyperliquidReview = {
 export type HyperliquidOrderRecord = {
   id: string;
   orderId: number;
+  clientOrderId?: string;
   asset: string;
   isBuy: boolean;
   limitPrice: string;
   size: string;
   leverage: number;
+  isCross?: boolean;
   reduceOnly: boolean;
   timeInForce: string;
   state: string;
@@ -123,6 +126,7 @@ export type HyperliquidView = {
 export type HyperliquidCommand = {
   digest?: string;
   orderId?: number;
+  clientOrderId?: string;
   request?: OrderDraft;
 };
 

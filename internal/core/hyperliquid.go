@@ -108,8 +108,10 @@ type hyperliquidRuntime struct {
 }
 
 var (
-	hyperliquidRuntimeMu sync.RWMutex
-	hyperliquidRuntimes  = map[*Store]*hyperliquidRuntime{}
+	hyperliquidRuntimeMu    sync.RWMutex
+	hyperliquidRuntimes     = map[*Store]*hyperliquidRuntime{}
+	stage4LiveExecutionHook func(*Store) bool
+	stage4ClearHook         func(*Store)
 )
 
 func (s *Store) hyperliquidRuntime() *hyperliquidRuntime {
@@ -124,6 +126,9 @@ func (s *Store) hyperliquidRuntime() *hyperliquidRuntime {
 func (s *Store) clearHyperliquidRuntime() error {
 	if s == nil {
 		return nil
+	}
+	if stage4ClearHook != nil {
+		stage4ClearHook(s)
 	}
 	hyperliquidRuntimeMu.Lock()
 	old := hyperliquidRuntimes[s]
@@ -275,7 +280,7 @@ func (s *Store) hyperliquidProjection(revision int64, review *HyperliquidReview)
 		Version:           hyperliquidVersion,
 		Available:         true,
 		ActivationEnabled: hyperliquidActivationEnabled,
-		LiveExecution:     false,
+		LiveExecution:     stage4LiveExecutionHook != nil && stage4LiveExecutionHook(s) && rt.policy.Network == "testnet",
 		Network:           rt.policy.Network,
 		SignerAddress:     rt.address,
 		Policy:            policyCopy,

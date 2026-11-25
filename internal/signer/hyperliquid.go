@@ -396,18 +396,22 @@ func (v *Vault) ConfigureHyperliquidControlled(enabled bool) error {
 	if v.closed && enabled {
 		return ErrUnavailable
 	}
+	v.setHyperliquidControlledLocked(enabled)
+	return nil
+}
+
+func (v *Vault) setHyperliquidControlledLocked(enabled bool) {
 	hyperliquidVaultMu.Lock()
 	defer hyperliquidVaultMu.Unlock()
 	if !enabled {
 		delete(hyperliquidVaultStates, v)
-		return nil
+		return
 	}
 	if existing, ok := hyperliquidVaultStates[v]; ok {
 		existing.enabled = true
-		return nil
+		return
 	}
 	hyperliquidVaultStates[v] = &hyperliquidVaultState{enabled: true}
-	return nil
 }
 
 // HyperliquidAddress derives and returns the domain-separated EIP-55 Ethereum
