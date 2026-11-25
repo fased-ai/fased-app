@@ -351,11 +351,11 @@ func archivedPackageCandidateMatches(a maintenance.Authority, location, instance
 	}
 	if receipt.InstallerSHA256 != a.ImageSHA256 {
 		t, err := readTransition(a.Owner, location, instance)
-		if err != nil || !t.Valid(a.Owner, instance) || t.NextHelper != a.ImageSHA256 || t.PreviousHelper != receipt.InstallerSHA256 ||
-			r.Package == nil || r.Package.InstallerDigest() != t.PreviousHelper {
+		if err != nil || !t.Valid(a.Owner, instance) || t.NextHelper != a.ImageSHA256 || !t.IncludesPredecessor(receipt.InstallerSHA256) ||
+			r.Package == nil || r.Package.InstallerDigest() != receipt.InstallerSHA256 {
 			return errors.New("archived package does not belong to the predecessor helper")
 		}
-		a.ImageSHA256 = t.PreviousHelper
+		a.ImageSHA256 = receipt.InstallerSHA256
 		if err = verifyImage(a); err != nil {
 			return err
 		}

@@ -64,17 +64,32 @@ func transitionPackageHelper(ctx context.Context, owner int, location, instance,
 	if err != nil {
 		return empty, err
 	}
-	wanted := update.PackageHelperTransition{
-		Version: 1, Owner: owner, Instance: instance, PreviousHelper: previousHelper,
-		NextHelper: next.ImageSHA256, JournalSHA256: update.SnapshotDigest("package-helper-journal:v1", journal),
-	}
-	if !wanted.Valid(owner, instance) || !wanted.Inherits(journal) {
-		return empty, errors.New("finish the original package recovery before changing its helper")
-	}
 	retained, err := update.ReadPackageHelperTransition(owner, location, instance)
 	existing := err == nil
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return empty, err
+	}
+	transitionPath := filepath.Join(state, update.PackageHelperTransitionFile)
+	retainedHash := ""
+	if existing {
+		retainedHash, _, err = maintenance.ProtectedDigest(transitionPath, 0644, 8192)
+		if err != nil {
+			return empty, err
+		}
+	}
+	var ancestors []string
+	if existing && retained.NextHelper == previousHelper {
+		ancestors = retained.ChainPredecessors()
+	} else if existing && retained.PreviousHelper == previousHelper && retained.NextHelper == next.ImageSHA256 {
+		ancestors = slices.Clone(retained.Ancestors)
+	}
+	wanted := update.PackageHelperTransition{
+		Version: 1, Owner: owner, Instance: instance, PreviousHelper: previousHelper,
+		NextHelper: next.ImageSHA256, Ancestors: ancestors,
+		JournalSHA256: update.SnapshotDigest("package-helper-journal:v1", journal),
+	}
+	if !wanted.Valid(owner, instance) || !wanted.Inherits(journal) {
+		return empty, errors.New("finish the original package recovery before changing its helper")
 	}
 	fenceBytes := mustJSON(wanted)
 	fenceHash, _, fenceErr := maintenance.ProtectedDigest(fence, 0644, 8192)
@@ -119,7 +134,7 @@ func transitionPackageHelper(ctx context.Context, owner int, location, instance,
 	if err = maintenance.PublishProtected(fence, fenceBytes, 0644); err != nil {
 		return empty, err
 	}
-	if err = maintenance.PublishProtected(filepath.Join(state, update.PackageHelperTransitionFile), fenceBytes, 0644); err != nil {
+	if err = maintenance.ReplaceProtected(transitionPath, fenceBytes, 0644, retainedHash); err != nil {
 		return empty, err
 	}
 	return m, finishPackageHelperTransition(ctx, previous, next, m, journal, fence, fenceBytes)
@@ -127,13 +142,19 @@ func transitionPackageHelper(ctx context.Context, owner int, location, instance,
 
 // The fence is durable before the receipt or any authority change. Every
 // interrupted prefix then either resumes the same target or fails closed.
+// Completed transitions chain forward while preserving prior helper lineage.
 func classifyPackageHelperTransition(wanted, retained update.PackageHelperTransition, hasReceipt bool, active, fenceHash, installedInstaller string) (string, error) {
-	if hasReceipt && retained != wanted {
+	chained := false
+	if hasReceipt && !retained.Equal(wanted) {
 		if active == wanted.NextHelper && retained.NextHelper == wanted.NextHelper &&
-			retained.PreviousHelper == wanted.PreviousHelper && fenceHash == "" {
+			retained.PreviousHelper == wanted.PreviousHelper && slices.Equal(retained.Ancestors, wanted.Ancestors) && fenceHash == "" {
 			return "superseded", nil
 		}
-		return "", errors.New("the original helper transition must be preserved")
+		if retained.NextHelper == wanted.PreviousHelper && slices.Equal(wanted.Ancestors, retained.ChainPredecessors()) {
+			chained = true
+		} else {
+			return "", errors.New("the original helper transition must be preserved")
+		}
 	}
 	// Older installed apps independently validate completed approvals at
 	// startup. The same attested bundle must supply the app and successor
@@ -142,15 +163,15 @@ func classifyPackageHelperTransition(wanted, retained update.PackageHelperTransi
 		return "", errors.New("complete the ordinary Update to the helper's attested package before changing its pin")
 	}
 	if fenceHash != "" {
-		if fenceHash == sum(mustJSON(wanted)) && (active == wanted.PreviousHelper || hasReceipt && active == wanted.NextHelper) {
+		if fenceHash == sum(mustJSON(wanted)) && (active == wanted.PreviousHelper || hasReceipt && !chained && active == wanted.NextHelper) {
 			return "resume", nil
 		}
 		return "", errors.New("an existing recovery fence must be preserved")
 	}
-	if hasReceipt && active == wanted.NextHelper {
+	if hasReceipt && !chained && active == wanted.NextHelper {
 		return "committed", nil
 	}
-	if !hasReceipt && active == wanted.PreviousHelper {
+	if (!hasReceipt || chained) && active == wanted.PreviousHelper {
 		return "start", nil
 	}
 	return "", errors.New("the original helper transition state is unavailable")

@@ -69,4 +69,67 @@ func TestPackageHelperTransitionRecovery(t *testing.T) {
 	if wanted.Inherits(r) {
 		t.Fatal("the previous approval must not be rewritten to name the successor")
 	}
+
+	// Multi-hop chained transitions retain all previous ancestors, resume cleanly,
+	// and fail closed on stale fences, missing/tampered ancestors, or rollbacks.
+	third := strings.Repeat("9", 64)
+	fourth := strings.Repeat("8", 64)
+	chained := update.PackageHelperTransition{
+		Version: 1, Owner: owner, Instance: instance,
+		PreviousHelper: next, NextHelper: third,
+		Ancestors:     wanted.ChainPredecessors(),
+		JournalSHA256: wanted.JournalSHA256,
+	}
+	chainedFence := sum(mustJSON(chained))
+	chainedSuperseded := chained
+	chainedSuperseded.JournalSHA256 = strings.Repeat("7", 64)
+	missingAncestors := chained
+	missingAncestors.Ancestors = nil
+	wrongAncestors := chained
+	wrongAncestors.Ancestors = []string{strings.Repeat("5", 64)}
+	thirdHop := update.PackageHelperTransition{
+		Version: 1, Owner: owner, Instance: instance,
+		PreviousHelper: third, NextHelper: fourth,
+		Ancestors:     chained.ChainPredecessors(),
+		JournalSHA256: wanted.JournalSHA256,
+	}
+	thirdFence := sum(mustJSON(thirdHop))
+
+	for _, tc := range []struct {
+		name               string
+		wanted, retained   update.PackageHelperTransition
+		receipt            bool
+		helper, fence, app string
+		phase              string
+	}{
+		{"chained start after H0->H1", chained, wanted, true, next, "", third, "start"},
+		{"chained resume before transition file replace", chained, wanted, true, next, chainedFence, third, "resume"},
+		{"chained resume after transition file replace pre-pin", chained, chained, true, next, chainedFence, third, "resume"},
+		{"chained resume after pin switch", chained, chained, true, third, chainedFence, third, "resume"},
+		{"chained committed before restart", chained, chained, true, third, "", third, "committed"},
+		{"chained superseded by later Update", chainedSuperseded, chained, true, third, "", third, "superseded"},
+		{"chained refused before paired app Update", chained, wanted, true, next, "", next, ""},
+		{"chained refused while H0->H1 fence active", chained, wanted, true, next, fence, third, ""},
+		{"chained refused with omitted ancestors", missingAncestors, wanted, true, next, "", third, ""},
+		{"chained refused with tampered ancestors", wrongAncestors, wanted, true, next, "", third, ""},
+		{"chained third hop carries [H0, H1]", thirdHop, chained, true, third, "", fourth, "start"},
+		{"chained third hop resume", thirdHop, thirdHop, true, fourth, thirdFence, fourth, "resume"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := classifyPackageHelperTransition(tc.wanted, tc.retained, tc.receipt, tc.helper, tc.fence, tc.app)
+			if got != tc.phase || (err != nil) != (tc.phase == "") {
+				t.Fatalf("got phase %q, error %v; want %q", got, err, tc.phase)
+			}
+		})
+	}
+
+	rollback := update.PackageHelperTransition{
+		Version: 1, Owner: owner, Instance: instance,
+		PreviousHelper: third, NextHelper: previous,
+		Ancestors:     chained.ChainPredecessors(),
+		JournalSHA256: wanted.JournalSHA256,
+	}
+	if rollback.Valid(owner, instance) {
+		t.Fatal("helper rollback to prior ancestor unexpectedly validated")
+	}
 }
