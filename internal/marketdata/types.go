@@ -14,6 +14,7 @@ const (
 	VenueBybit       = "bybit"
 	VenueKraken      = "kraken"
 	VenueSolana      = "solana"
+	VenueLighter     = "lighter"
 	VenueFRED        = "fred"
 	VenueSEC         = "sec"
 )
@@ -64,6 +65,7 @@ var (
 		VenueBybit:       true,
 		VenueKraken:      true,
 		VenueSolana:      true,
+		VenueLighter:     true,
 		VenueFRED:        true,
 		VenueSEC:         true,
 	}

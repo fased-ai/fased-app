@@ -69,7 +69,7 @@ func normalizeCoinBase(symbol string) string {
 func venueQuerySymbol(venue, symbol string) string {
 	s := strings.TrimSpace(symbol)
 	switch venue {
-	case VenueHyperliquid:
+	case VenueHyperliquid, VenueLighter:
 		return normalizeCoinBase(s)
 	case VenueBinance, VenueBybit:
 		up := strings.ToUpper(s)
@@ -735,6 +735,25 @@ func (c *upstreamClient) fetchCandles(ctx context.Context, venue, symbol, interv
 		}
 		return ParseGeckoTerminalOHLCV(raw)
 
+	case VenueLighter:
+		marketID, err := c.resolveLighterMarketID(ctx, qSym)
+		if err != nil {
+			return nil, err
+		}
+		if endSec <= 0 {
+			endSec = time.Now().Unix()
+		}
+		if startSec <= 0 || startSec >= endSec {
+			startSec = endSec - int64(limit)*validIntervals[interval]
+		}
+		u := fmt.Sprintf("https://mainnet.zklighter.elliot.ai/api/v1/candles?market_id=%d&resolution=%s&start_timestamp=%d&end_timestamp=%d&count_back=%d",
+			marketID, url.QueryEscape(interval), startSec*1000, endSec*1000, minInt(limit, 1000))
+		raw, err := c.get(ctx, u)
+		if err != nil {
+			return nil, err
+		}
+		return ParseLighterCandles(raw)
+
 	default:
 		return nil, fmt.Errorf("venue %q does not provide OHLCV candles", venue)
 	}
@@ -851,6 +870,17 @@ func (c *upstreamClient) fetchOrderBook(ctx context.Context, venue, symbol strin
 			return OrderBookSnapshot{}, err
 		}
 		return ParseBybitOrderBook(raw, venue, symbol)
+	case VenueLighter:
+		marketID, err := c.resolveLighterMarketID(ctx, qSym)
+		if err != nil {
+			return OrderBookSnapshot{}, err
+		}
+		u := fmt.Sprintf("https://mainnet.zklighter.elliot.ai/api/v1/orderBookOrders?market_id=%d&limit=%d", marketID, minInt(limit, 100))
+		raw, err := c.get(ctx, u)
+		if err != nil {
+			return OrderBookSnapshot{}, err
+		}
+		return ParseLighterOrderBook(raw, venue, symbol, nowMs)
 	default:
 		return OrderBookSnapshot{}, fmt.Errorf("orderbook not supported on venue %q", venue)
 	}
@@ -1033,6 +1063,17 @@ func (c *upstreamClient) fetchTrades(ctx context.Context, venue, symbol string, 
 			})
 		}
 		return out, nil
+	case VenueLighter:
+		marketID, err := c.resolveLighterMarketID(ctx, qSym)
+		if err != nil {
+			return nil, err
+		}
+		u := fmt.Sprintf("https://mainnet.zklighter.elliot.ai/api/v1/recentTrades?market_id=%d&limit=%d", marketID, minInt(limit, 100))
+		raw, err := c.get(ctx, u)
+		if err != nil {
+			return nil, err
+		}
+		return ParseLighterTrades(raw)
 	default:
 		return []TradeTick{}, nil
 	}

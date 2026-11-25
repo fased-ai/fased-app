@@ -22,17 +22,19 @@ const (
 )
 
 var allowedUpstreamHosts = map[string]bool{
-	"api.hyperliquid.xyz":        true,
-	"stats-data.hyperliquid.xyz": true,
-	"api.binance.com":            true,
-	"data-api.binance.vision":    true,
-	"api.bybit.com":              true,
-	"api.kraken.com":             true,
-	"api.geckoterminal.com":      true,
-	"api.dexscreener.com":        true,
-	"fred.stlouisfed.org":        true,
-	"data.sec.gov":               true,
-	"www.sec.gov":                true,
+	"api.hyperliquid.xyz":         true,
+	"stats-data.hyperliquid.xyz":  true,
+	"api.binance.com":             true,
+	"data-api.binance.vision":     true,
+	"api.bybit.com":               true,
+	"api.kraken.com":              true,
+	"api.geckoterminal.com":       true,
+	"api.dexscreener.com":         true,
+	"mainnet.zklighter.elliot.ai": true,
+	"api.testnet.lighter.xyz":     true,
+	"fred.stlouisfed.org":         true,
+	"data.sec.gov":                true,
+	"www.sec.gov":                 true,
 }
 
 var allowedUpstreamWSHosts = map[string]bool{

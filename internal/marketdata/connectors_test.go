@@ -454,3 +454,53 @@ func TestBybitNonZeroRetCodeRejectedAndLimitTrim(t *testing.T) {
 		t.Fatalf("expected 5 trimmed candles, got %d", len(series.Candles))
 	}
 }
+
+func TestLighterMarketDataConnector(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	var orderBooksHits atomic.Int32
+	svc, err := NewService(Config{
+		DataDir:     t.TempDir(),
+		FixtureMode: false,
+		Now:         func() time.Time { return time.Unix(1760003600, 0).UTC() },
+		HTTPTransport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+			if r.URL.Hostname() != "mainnet.zklighter.elliot.ai" {
+				return nil, errors.New("unexpected host: " + r.URL.Hostname())
+			}
+			switch r.URL.Path {
+			case "/api/v1/orderBooks":
+				orderBooksHits.Add(1)
+				return jsonResponse(200, `{"code":200,"order_books":[{"symbol":"ETH","market_id":0},{"symbol":"BTC","market_id":1}]}`), nil
+			case "/api/v1/candles":
+				return jsonResponse(200, `{"code":200,"r":"1h","c":[{"t":1760000000000,"o":2800.0,"h":2850.0,"l":2790.0,"c":2840.0,"v":125.5}]}`), nil
+			case "/api/v1/orderBookOrders":
+				return jsonResponse(200, `{"code":200,"bids":[{"price":"2839.0","remaining_base_amount":"1.5"},{"price":"2839.0","remaining_base_amount":"0.5"}],"asks":[{"price":"2841.0","remaining_base_amount":"2.0"}]}`), nil
+			case "/api/v1/recentTrades":
+				return jsonResponse(200, `{"code":200,"trades":[{"trade_id":99,"price":"2840.5","size":"0.25","timestamp":1760000005000,"is_maker_ask":true}]}`), nil
+			default:
+				return jsonResponse(404, "not found"), nil
+			}
+		}),
+	})
+	if err != nil {
+		t.Fatalf("NewService(lighter) failed: %v", err)
+	}
+	defer func() { _ = svc.Close() }()
+
+	cs, err := svc.GetCandles(ctx, VenueLighter, "ETH", "1h", TransformOptions{Style: StyleStandard}, 10)
+	if err != nil || len(cs.Candles) != 1 || cs.Candles[0].Close != 2840.0 {
+		t.Fatalf("Lighter GetCandles failed: %+v err=%v", cs, err)
+	}
+	book, err := svc.GetOrderBook(ctx, VenueLighter, "ETH", 10)
+	if err != nil || len(book.Bids) != 1 || book.Bids[0].Size != 2.0 || book.Spread != 2.0 {
+		t.Fatalf("Lighter GetOrderBook failed: %+v err=%v", book, err)
+	}
+	trades, err := svc.GetTrades(ctx, VenueLighter, "ETH", 10)
+	if err != nil || len(trades) != 1 || trades[0].Side != "buy" || trades[0].Price != 2840.5 {
+		t.Fatalf("Lighter GetTrades failed: %+v err=%v", trades, err)
+	}
+	if hits := orderBooksHits.Load(); hits != 1 {
+		t.Fatalf("expected cached market resolution (1 /orderBooks call), got %d", hits)
+	}
+}

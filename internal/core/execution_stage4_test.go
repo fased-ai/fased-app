@@ -89,6 +89,39 @@ func stage4TestSignerRelay(v *signer.Vault) func(context.Context, signer.Request
 				return signer.Response{}, err
 			}
 			return signer.Response{KalshiSigned: signed, Status: v.Status()}, nil
+		case "lighter-status":
+			st, err := v.LighterStatus()
+			if err != nil {
+				return signer.Response{}, err
+			}
+			return signer.Response{LighterStatus: st, Status: v.Status()}, nil
+		case "lighter-sign-order":
+			if r.LighterOrder == nil {
+				return signer.Response{}, errors.New("lighter order intent required")
+			}
+			signed, err := v.SignLighterOrderIPC(*r.LighterOrder, r.AgentVaultID)
+			if err != nil {
+				return signer.Response{}, err
+			}
+			return signer.Response{LighterSigned: signed, Status: v.Status()}, nil
+		case "lighter-sign-cancel":
+			if r.LighterCancel == nil {
+				return signer.Response{}, errors.New("lighter cancel intent required")
+			}
+			signed, err := v.SignLighterCancelIPC(*r.LighterCancel, r.AgentVaultID)
+			if err != nil {
+				return signer.Response{}, err
+			}
+			return signer.Response{LighterSigned: signed, Status: v.Status()}, nil
+		case "lighter-sign-leverage":
+			if r.LighterLeverage == nil {
+				return signer.Response{}, errors.New("lighter leverage intent required")
+			}
+			signed, err := v.SignLighterUpdateLeverageIPC(*r.LighterLeverage, r.AgentVaultID)
+			if err != nil {
+				return signer.Response{}, err
+			}
+			return signer.Response{LighterSigned: signed, Status: v.Status()}, nil
 		default:
 			return base(ctx, r)
 		}
