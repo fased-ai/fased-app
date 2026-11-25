@@ -7,6 +7,7 @@ import (
 	"github.com/fased-ai/fased-app/internal/custodyinstall"
 	"github.com/fased-ai/fased-app/internal/privateaccess"
 	"github.com/fased-ai/fased-app/internal/vpsinstall"
+	"github.com/fased-ai/fased-app/internal/vpsnetwork"
 	"io"
 	"os"
 	"runtime"
@@ -192,5 +193,17 @@ func TestRootEntryHandoffNeverSuggestsRunningGoAsRoot(t *testing.T) {
 	}
 	if e := remoteAccessPending(m, errors.New("fixture pending")); !strings.Contains(e.Error(), "same installer") || strings.Contains(e.Error(), m.Core) {
 		t.Fatal(e)
+	}
+}
+
+func TestPackageNetworkHandoffAndDispatch(t *testing.T) {
+	var out bytes.Buffer
+	packageNetworkHandoff(
+		&out,
+		vpsnetwork.Manifest{Phase: "package-remote", Core: "/pkg/fased-app", Data: "/pkg/app-state"},
+		vpsnetwork.Status{Phase: "pending", AttemptID: "attempt", Deadline: time.Date(2026, 10, 28, 12, 0, 0, 0, time.UTC)},
+	)
+	if !strings.Contains(out.String(), "'vps' 'confirm' '--data-dir' '/pkg/app-state' 'attempt'") {
+		t.Fatal("missing Format-4 vpsnetwork confirmation instruction", out.String())
 	}
 }

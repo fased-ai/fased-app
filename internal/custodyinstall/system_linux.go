@@ -146,6 +146,18 @@ var networkOutcomeInput = regexp.MustCompile(`^/var/lib/fased-app-vps-network-[1
 var networkSSHContext = regexp.MustCompile(`^user=[a-z_][a-z0-9_-]*\$?,addr=[0-9a-fA-F:.]+,laddr=[0-9a-fA-F:.]+,lport=22$`)
 var networkNftTable = regexp.MustCompile(`^fased_vps_[1-9][0-9]*_[0-9a-f]{12}_[0-9a-f]{32}$`)
 
+func allowedFindSSHConfigDir(args []string) bool {
+	return len(args) == 8 &&
+		args[0] == "/usr/bin/find" &&
+		args[1] == "/etc/ssh/sshd_config.d" &&
+		args[2] == "-mindepth" &&
+		args[3] == "1" &&
+		args[4] == "-maxdepth" &&
+		args[5] == "1" &&
+		args[6] == "-printf" &&
+		args[7] == "%U:%G:%m:%y:%s:%f\\0"
+}
+
 func refuseUnserializedScopedMutation(owner int, args []string, scope func(int) (bool, error)) error {
 	if owner <= 0 || len(args) < 2 {
 		return nil
@@ -295,7 +307,7 @@ func (s *System) Run(ctx context.Context, input []byte, args ...string) ([]byte,
 			setupLink = len(match) == 2 && args[7] == fmt.Sprintf("/etc/sudoers.d/.fased-custody-%d-setup-%s.source", os.Getuid(), match[1])
 		}
 		empty := len(args) == 9 && (args[1] == Root(os.Getuid())+"/signer-state" || args[1] == Root(os.Getuid())+"/app-state" || args[1] == Root(os.Getuid())+"/signer-ipc") && strings.Join(args[2:], " ") == "-mindepth 1 -maxdepth 1 -printf x -quit"
-		if !maintenance && !setupLink && !empty {
+		if !maintenance && !setupLink && !empty && !allowedFindSSHConfigDir(args) {
 			return nil, errors.New("only fixed empty target-state enrollment probes are allowed")
 		}
 	case "/usr/bin/stat":
