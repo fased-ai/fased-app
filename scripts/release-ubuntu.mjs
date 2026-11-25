@@ -15,13 +15,14 @@ import { pathToFileURL } from "node:url";
 import { prepareReleaseCandidate } from "./release-source.mjs";
 import {
   attestedInventory,
+  attestedMultiArchInventory,
   isMainBoundCandidate,
   verifyInstalledAcceptance,
   verifyLocalAcceptance,
   recordLocalAcceptance,
   recordRemoteAcceptance,
 } from "./release-acceptance.mjs";
-import { validateConfig } from "./prepare-ubuntu-release.mjs";
+import { seedForArch, validateConfig } from "./prepare-ubuntu-release.mjs";
 import {
   githubPublisher,
   runRecordedPublisher,
@@ -40,6 +41,10 @@ const names = [
   "fased-app-linux-amd64.provenance.sigstore.json",
   "install.sh",
   "fased-release.json",
+  "fased-app-linux-arm64.tar.gz",
+  "fased-install-linux-arm64",
+  "fased-app-linux-arm64.provenance.sigstore.json",
+  "fased-release-linux-arm64.json",
 ];
 
 export function releaseSequence(version) {
@@ -142,13 +147,42 @@ export async function verifyPublisherTag(api, packet, inventory) {
   return tagObject;
 }
 
+export function loadCandidateInventory(c, directory) {
+  const read = (name) =>
+    readPublisherFile(path.join(directory, name), 128 * 1024 * 1024);
+  const raw = read("fased-release.json");
+  const packet = JSON.parse(raw);
+  const arm64Path = path.join(directory, "fased-release-linux-arm64.json");
+  if (existsSync(arm64Path)) {
+    const arm64Raw = read("fased-release-linux-arm64.json");
+    const arm64Packet = JSON.parse(arm64Raw);
+    return {
+      packet,
+      raw,
+      arm64Packet,
+      arm64Raw,
+      inventory: attestedMultiArchInventory(
+        c,
+        packet,
+        raw,
+        arm64Packet,
+        arm64Raw,
+      ),
+    };
+  }
+  return { packet, raw, inventory: attestedInventory(c, packet, raw) };
+}
+
 function checkRelease(release, c, inventory, partial = false) {
+  const expectedCount = inventory.assets.length;
   if (
     String(release.id).match(/^[1-9][0-9]*$/) === null ||
     release.tag_name !== `v${c.version}` ||
     release.prerelease !== false ||
     !Array.isArray(release.assets) ||
-    (partial ? release.assets.length > 5 : release.assets.length !== 5) ||
+    (partial
+      ? release.assets.length > expectedCount
+      : release.assets.length !== expectedCount) ||
     new Set(release.assets.map((a) => String(a.id))).size !==
       release.assets.length ||
     release.assets.some(
@@ -192,9 +226,10 @@ export async function publishAttested(
   directory = path.resolve(directory);
   const read = (name) =>
     readPublisherFile(path.join(directory, name), 128 * 1024 * 1024);
-  const raw = read("fased-release.json"),
-    packet = JSON.parse(raw),
-    inventory = attestedInventory(c, packet, raw);
+  const { packet, raw, arm64Packet, inventory } = loadCandidateInventory(
+    c,
+    directory,
+  );
   for (const asset of inventory.assets) {
     const b = read(asset.name);
     if (b.length !== asset.size || sha(b) !== asset.sha256)
@@ -215,59 +250,77 @@ export async function publishAttested(
     packet.release.installerSha256 !== packet.installer.sha256
   )
     throw Error("Attested installer trust required");
-  const scratch = mkdtempSync(path.join(directory, ".trusted-preflight-"));
-  try {
-    const policy = path.join(scratch, "policy.json"),
-      expected = path.join(scratch, "expected.json");
-    writeFileSync(policy, JSON.stringify(trustedSeed.provenance), {
-      mode: 0o600,
-      flag: "wx",
-    });
-    writeFileSync(
-      expected,
-      JSON.stringify({
-        ...(packet.release.buildRef
-          ? { buildRef: packet.release.buildRef }
-          : {}),
-        installerSha256: packet.installer.sha256,
-        archiveName: packet.archive.file,
-        archiveSha256: packet.archive.sha256,
-        sourceCommit: packet.source,
-        workflowCommit: packet.release.workflowCommit,
-        tag: `v${packet.productVersion}`,
-        runId: packet.release.runId,
-        runAttempt: packet.release.runAttempt,
-      }),
-      { mode: 0o600, flag: "wx" },
-    );
-    const decision = JSON.parse(
-      execute(
-        "go",
-        [
-          "run",
-          "-buildvcs=false",
-          "./cmd/fased-release-candidate",
-          "verify-provenance",
-          "--policy-file",
-          policy,
-          "--expected-file",
-          expected,
-          "--bundle-file",
-          path.join(directory, packet.release.provenance.file),
-        ],
-        {
-          encoding: "utf8",
-          env: verifierEnvironment(),
-          timeout: 180000,
-          maxBuffer: 2 * 1024 * 1024,
-          stdio: ["ignore", "pipe", "pipe"],
-        },
-      ),
-    );
-    if (decision.BundleSHA256 !== packet.release.provenance.sha256)
-      throw Error("Independent installer/archive provenance failed");
-  } finally {
-    rmSync(scratch, { recursive: true });
+  const proofTargets = [{ trustedSeed, pkt: packet }];
+  if (inventory.multiArch) {
+    const arm64SeedCfg = seedForArch(c, "arm64");
+    const arm64SeedBytes = readFileSync(path.resolve(arm64SeedCfg.seedFile));
+    if (sha(arm64SeedBytes) !== arm64SeedCfg.seedSha256)
+      throw Error("Trusted arm64 public seed differs from config");
+    if (sha(read("first-install-seed-arm64.json")) !== arm64SeedCfg.seedSha256)
+      throw Error("Candidate arm64 trust changed");
+    const arm64TrustedSeed = JSON.parse(arm64SeedBytes);
+    if (
+      arm64TrustedSeed.version !== 4 ||
+      arm64TrustedSeed.signingProfile !== "github-attestation-v1" ||
+      arm64TrustedSeed.target?.arch !== "arm64" ||
+      arm64Packet.release.installerSha256 !== arm64Packet.installer.sha256
+    )
+      throw Error("Attested arm64 installer trust required");
+    proofTargets.push({ trustedSeed: arm64TrustedSeed, pkt: arm64Packet });
+  }
+  for (const { trustedSeed: seedDoc, pkt } of proofTargets) {
+    const scratch = mkdtempSync(path.join(directory, ".trusted-preflight-"));
+    try {
+      const policy = path.join(scratch, "policy.json"),
+        expected = path.join(scratch, "expected.json");
+      writeFileSync(policy, JSON.stringify(seedDoc.provenance), {
+        mode: 0o600,
+        flag: "wx",
+      });
+      writeFileSync(
+        expected,
+        JSON.stringify({
+          ...(pkt.release.buildRef ? { buildRef: pkt.release.buildRef } : {}),
+          installerSha256: pkt.installer.sha256,
+          archiveName: pkt.archive.file,
+          archiveSha256: pkt.archive.sha256,
+          sourceCommit: pkt.source,
+          workflowCommit: pkt.release.workflowCommit,
+          tag: `v${pkt.productVersion}`,
+          runId: pkt.release.runId,
+          runAttempt: pkt.release.runAttempt,
+        }),
+        { mode: 0o600, flag: "wx" },
+      );
+      const decision = JSON.parse(
+        execute(
+          "go",
+          [
+            "run",
+            "-buildvcs=false",
+            "./cmd/fased-release-candidate",
+            "verify-provenance",
+            "--policy-file",
+            policy,
+            "--expected-file",
+            expected,
+            "--bundle-file",
+            path.join(directory, pkt.release.provenance.file),
+          ],
+          {
+            encoding: "utf8",
+            env: verifierEnvironment(),
+            timeout: 180000,
+            maxBuffer: 2 * 1024 * 1024,
+            stdio: ["ignore", "pipe", "pipe"],
+          },
+        ),
+      );
+      if (decision.BundleSHA256 !== pkt.release.provenance.sha256)
+        throw Error("Independent installer/archive provenance failed");
+    } finally {
+      rmSync(scratch, { recursive: true });
+    }
   }
   const preflight = JSON.parse(
     execute(installer, ["--verify-candidate", directory], {
@@ -446,6 +499,20 @@ export async function publishAttested(
         inventory.assets.find((a) => a.name === "fased-install-linux-amd64"),
         fetchResponse,
       );
+      if (inventory.multiArch) {
+        for (const armName of [
+          "fased-release-linux-arm64.json",
+          "fased-app-linux-arm64.tar.gz",
+          "fased-install-linux-arm64",
+          "fased-app-linux-arm64.provenance.sigstore.json",
+        ])
+          await publicAsset(
+            c.version,
+            armName,
+            inventory.assets.find((a) => a.name === armName),
+            fetchResponse,
+          );
+      }
       const exe = path.join(scratch, "fased-install");
       writeFileSync(exe, binary, { mode: 0o500, flag: "wx" });
       if (packet.version === 4) {
@@ -551,9 +618,7 @@ export async function main(args = process.argv.slice(2)) {
       ? await prepareReleaseCandidate(c.version, args[1])
       : path.resolve(args[1] ?? ".evidence/ubuntu-release");
   if (evidenceOperation) {
-    const raw = readPublisherFile(path.join(directory, "fased-release.json"));
-    const packet = JSON.parse(raw);
-    const inventory = attestedInventory(c, packet, raw);
+    const { packet, inventory } = loadCandidateInventory(c, directory);
     const api = githubPublisher(token);
     if (operation === "verify-local")
       return verifyLocalAcceptance(packet, inventory, api);

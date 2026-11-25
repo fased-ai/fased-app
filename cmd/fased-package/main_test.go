@@ -36,8 +36,8 @@ func TestRenderMacOSInfoPlistMetadata(t *testing.T) {
 }
 
 func TestUbuntuReleaseFormatProducer(t *testing.T) {
-	if runtime.GOOS != "linux" || runtime.GOARCH != "amd64" {
-		t.Skip("headless Ubuntu release format")
+	if runtime.GOOS != "linux" || (runtime.GOARCH != "amd64" && runtime.GOARCH != "arm64") {
+		t.Skip("headless Linux release format")
 	}
 	t.Chdir("../..")
 	for _, variant := range []string{"engineering", "release", "desktop-refused", "source-refused"} {
@@ -81,7 +81,7 @@ func TestUbuntuReleaseFormatProducer(t *testing.T) {
 				Manifest         bundle.Manifest `json:"manifest"`
 				PublicRelease    bool            `json:"publicRelease"`
 			}
-			b, err := os.ReadFile(filepath.Join(out, "fased-app-linux-amd64.json"))
+			b, err := os.ReadFile(filepath.Join(out, "fased-app-linux-"+runtime.GOARCH+".json"))
 			if err != nil || json.Unmarshal(b, &receipt) != nil {
 				t.Fatal("producer receipt missing", err)
 			}
@@ -106,8 +106,8 @@ func TestUbuntuReleaseFormatProducer(t *testing.T) {
 }
 
 func TestLinuxBrowserBundleContainsTheMatchedSigner(t *testing.T) {
-	if runtime.GOOS != "linux" || runtime.GOARCH != "amd64" {
-		t.Skip("Linux amd64 bundle")
+	if runtime.GOOS != "linux" || (runtime.GOARCH != "amd64" && runtime.GOARCH != "arm64") {
+		t.Skip("Linux bundle")
 	}
 	t.Chdir("../..")
 	root := t.TempDir()
@@ -132,7 +132,7 @@ func TestLinuxBrowserBundleContainsTheMatchedSigner(t *testing.T) {
 		Manifest         bundle.Manifest `json:"manifest"`
 		PublicRelease    bool            `json:"publicRelease"`
 	}
-	b, err := os.ReadFile(filepath.Join(out, "fased-app-linux-amd64.json"))
+	b, err := os.ReadFile(filepath.Join(out, "fased-app-linux-"+runtime.GOARCH+".json"))
 	if err != nil || json.Unmarshal(b, &receipt) != nil || receipt.PublicRelease {
 		t.Fatal("bundle receipt invalid", err)
 	}

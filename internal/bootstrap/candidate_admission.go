@@ -104,7 +104,8 @@ func prepareAttestedCandidate(ctx context.Context, o Options, directory string, 
 	if err != nil {
 		return nil, err
 	}
-	raw, err := update.ReadDocument(filepath.Join(directory, AttestedPacketFile))
+	arch := seed.Target.Arch
+	raw, err := update.ReadDocument(filepath.Join(directory, AttestedPacketAsset(arch)))
 	if err != nil || digest(raw) != admission.PacketSHA256 {
 		return nil, errors.New("candidate differs from the reviewed packet")
 	}
@@ -120,7 +121,7 @@ func prepareAttestedCandidate(ctx context.Context, o Options, directory string, 
 		return nil, err
 	}
 	d := Descriptor{Binding: seed.Binding, Sequence: sequence, ProductVersion: packet.ProductVersion, Source: packet.Source, BundleSHA256: packet.BundleSHA256, Archive: packet.Archive, LinuxBundle: packet.Version == 4, Release: packet.Release}
-	proof, err := update.ReadDocument(filepath.Join(directory, provenanceFile))
+	proof, err := update.ReadDocument(filepath.Join(directory, attestedProvenanceFile(arch)))
 	if err != nil {
 		return nil, err
 	}

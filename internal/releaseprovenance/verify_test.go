@@ -467,3 +467,49 @@ func TestProductionProvenanceInputAdmission(t *testing.T) {
 	}
 	requireRefusal(t, p, raw, e, time.Time{})
 }
+
+func TestVerifyArm64SubjectsAndRejectArchMix(t *testing.T) {
+	p, e, now := inputs()
+	e.ArchiveName = "fased-app-linux-arm64.tar.gz"
+	e.InstallerSHA256 = strings.Repeat("d", 64)
+	if e.Validate() != nil {
+		t.Fatalf("valid arm64 expectation rejected: %v", e.Validate())
+	}
+	p, raw, err := fixture.New(p, e, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	d, err := releaseprovenance.Verify(p, raw, e, now)
+	if err != nil || d.BundleSHA256 == "" {
+		t.Fatalf("valid arm64 attestation rejected: %v", err)
+	}
+	// Replace installer subject name in the statement with amd64 while keeping arm64 archive: must fail closed.
+	amd64Stmt, err := json.Marshal(map[string]any{
+		"_type": "https://in-toto.io/Statement/v1",
+		"subject": []any{
+			map[string]any{"name": e.ArchiveName, "digest": map[string]string{"sha256": e.ArchiveSHA256}},
+			map[string]any{"name": "fased-install-linux-amd64", "digest": map[string]string{"sha256": e.InstallerSHA256}},
+		},
+		"predicateType": "https://slsa.dev/provenance/v1",
+		"predicate": map[string]any{
+			"buildDefinition": map[string]any{
+				"buildType":            releaseprovenance.BuildType,
+				"externalParameters":   map[string]any{"workflow": map[string]string{"ref": "refs/tags/" + e.Tag, "repository": "https://github.com/" + p.Repository, "path": p.Workflow}},
+				"internalParameters":   map[string]any{"github": map[string]string{"event_name": "push", "repository_id": p.RepositoryID, "repository_owner_id": p.OwnerID}},
+				"resolvedDependencies": []any{map[string]any{"uri": "git+https://github.com/" + p.Repository + "@refs/tags/" + e.Tag, "digest": map[string]string{"gitCommit": e.SourceCommit}}},
+			},
+			"runDetails": map[string]any{
+				"builder":  map[string]string{"id": "https://github.com/" + p.Repository + "/" + p.Workflow + "@refs/tags/" + e.Tag},
+				"metadata": map[string]string{"invocationId": "https://github.com/" + p.Repository + "/actions/runs/" + e.RunID + "/attempts/" + e.RunAttempt},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	pMixed, rawMixed, err := fixture.NewWithOptions(p, e, now, fixture.Options{Statement: amd64Stmt})
+	if err != nil {
+		t.Fatal(err)
+	}
+	requireRefusal(t, pMixed, rawMixed, e, now)
+}

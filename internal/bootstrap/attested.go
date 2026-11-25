@@ -17,6 +17,30 @@ import (
 
 const AttestedPacketFile = "fased-release.json"
 
+// AttestedPacketAsset returns the release asset name for the attested packet
+// matching arch ("fased-release-linux-arm64.json" for arm64, "fased-release.json"
+// for amd64 so single-arch 0.1.x paths remain exact).
+func AttestedPacketAsset(arch string) string {
+	if arch == "arm64" {
+		return "fased-release-linux-arm64.json"
+	}
+	return AttestedPacketFile
+}
+
+func attestedArchiveFile(arch string) string   { return "fased-app-linux-" + arch + ".tar.gz" }
+func attestedInstallerFile(arch string) string { return "fased-install-linux-" + arch }
+func attestedProvenanceFile(arch string) string {
+	return "fased-app-linux-" + arch + ".provenance.sigstore.json"
+}
+func attestedDebFile(arch string) string { return "fased-app-linux-" + arch + ".deb" }
+func attestedRPMFile(arch string) string { return "fased-app-linux-" + arch + ".rpm" }
+func siblingArch(arch string) string {
+	if arch == "arm64" {
+		return "amd64"
+	}
+	return "arm64"
+}
+
 // AttestedPacket is generated from the one tag-bound build. GitHub's immutable
 // release binds this inventory; the offline Sigstore proof authenticates the
 // archive's repository, workflow, tag, commit and exact bytes independently.
@@ -59,16 +83,25 @@ func attestedDescriptor(seed Seed, docs map[string][]byte) (Descriptor, error) {
 	if err != nil || sequence < seed.MinimumSequence || (packet.Version != 1 && packet.Version != 2 && packet.Version != 3 && packet.Version != 4) || release.Tag != "v"+packet.ProductVersion || packet.Source != release.Source || !attestedBuildIdentity(packet, release.TagObject) || !sourceHash(packet.Source) || !sourceHash(packet.Release.SourceTree) || !hashOK(packet.Release.PackageLockSHA256) || !hashOK(packet.Release.GoSumSHA256) || !hashOK(packet.BundleSHA256) {
 		return d, errors.New("attested source/tag/sequence mismatch")
 	}
-	expected := map[string]update.Artifact{archiveTarget: packet.Archive, "fased-install-linux-amd64": packet.Installer, "install.sh": packet.Entry, provenanceFile: packet.Release.Provenance}
+	arch := seed.Target.Arch
+	packetAsset := AttestedPacketAsset(arch)
+	archiveFile := attestedArchiveFile(arch)
+	installerFile := attestedInstallerFile(arch)
+	provFile := attestedProvenanceFile(arch)
+	expected := map[string]update.Artifact{archiveFile: packet.Archive, installerFile: packet.Installer, "install.sh": packet.Entry, provFile: packet.Release.Provenance}
 	if packet.Version == 3 {
-		if packet.Deb.File != "fased-app-linux-amd64.deb" || packet.RPM.File != "fased-app-linux-amd64.rpm" || !hashOK(packet.Deb.SHA256) || !hashOK(packet.RPM.SHA256) || packet.Deb.Size <= 0 || packet.Deb.Size > maxArchiveBytes || packet.RPM.Size <= 0 || packet.RPM.Size > maxArchiveBytes {
+		if packet.Deb.File != attestedDebFile(arch) || packet.RPM.File != attestedRPMFile(arch) || !hashOK(packet.Deb.SHA256) || !hashOK(packet.RPM.SHA256) || packet.Deb.Size <= 0 || packet.Deb.Size > maxArchiveBytes || packet.RPM.Size <= 0 || packet.RPM.Size > maxArchiveBytes {
 			return d, errors.New("both bounded native package identities are required")
 		}
 		expected[packet.Deb.File], expected[packet.RPM.File] = packet.Deb, packet.RPM
 	} else if packet.Deb != (update.Artifact{}) || packet.RPM != (update.Artifact{}) {
 		return d, errors.New("legacy release cannot authorize native packages")
 	}
-	if len(release.Assets) != len(expected)+1 {
+	singleArch := len(release.Assets) == len(expected)+1
+	sibling := siblingArch(arch)
+	dualArchAssets := []string{attestedArchiveFile(sibling), attestedInstallerFile(sibling), attestedProvenanceFile(sibling), AttestedPacketAsset(sibling)}
+	dualArch := packet.Version == 4 && len(release.Assets) == len(expected)+1+len(dualArchAssets)
+	if !singleArch && !dualArch {
 		return d, errors.New("attested release inventory incomplete")
 	}
 	for name, identity := range expected {
@@ -77,11 +110,19 @@ func attestedDescriptor(seed Seed, docs map[string][]byte) (Descriptor, error) {
 			return d, errors.New("attested inventory differs from immutable release")
 		}
 	}
-	p, ok := release.Assets[AttestedPacketFile]
-	if !ok || p.SHA256 != digest(docs[AttestedPacketFile]) || p.Size != int64(len(docs[AttestedPacketFile])) {
+	if dualArch {
+		for _, name := range dualArchAssets {
+			a, ok := release.Assets[name]
+			if !ok || a.Name != name || a.Size <= 0 || a.RepositoryID != seed.GitHub.RepositoryID || a.ReleaseID != release.ID {
+				return d, errors.New("attested dual-arch inventory incomplete")
+			}
+		}
+	}
+	p, ok := release.Assets[packetAsset]
+	if !ok || p.SHA256 != digest(docs[AttestedPacketFile]) || p.Size != int64(len(docs[AttestedPacketFile])) || p.RepositoryID != seed.GitHub.RepositoryID || p.ReleaseID != release.ID {
 		return d, errors.New("attested packet differs from immutable digest")
 	}
-	d = Descriptor{Binding: seed.Binding, Sequence: sequence, ProductVersion: packet.ProductVersion, Source: packet.Source, BundleSHA256: packet.BundleSHA256, Archive: packet.Archive, Deb: packet.Deb, RPM: packet.RPM, LinuxBundle: packet.Version == 4, GitHub: release.Assets[archiveTarget], Release: packet.Release}
+	d = Descriptor{Binding: seed.Binding, Sequence: sequence, ProductVersion: packet.ProductVersion, Source: packet.Source, BundleSHA256: packet.BundleSHA256, Archive: packet.Archive, Deb: packet.Deb, RPM: packet.RPM, LinuxBundle: packet.Version == 4, GitHub: release.Assets[archiveFile], Release: packet.Release}
 	if d.provenanceExpected().Validate() != nil {
 		return d, errors.New("attested build identity invalid")
 	}
@@ -105,16 +146,17 @@ func attestedInputs(ctx context.Context, g *releaseops.GitHubTransport, seed See
 	if err != nil {
 		return d, docs, err
 	}
-	for _, name := range []string{AttestedPacketFile, provenanceFile} {
-		asset, ok := head.Assets[name]
+	packetAsset := AttestedPacketAsset(seed.Target.Arch)
+	provFile := attestedProvenanceFile(seed.Target.Arch)
+	for _, item := range []struct{ asset, key string }{
+		{packetAsset, AttestedPacketFile},
+		{provFile, "provenance.sigstore.json"},
+	} {
+		asset, ok := head.Assets[item.asset]
 		if !ok || asset.Size > update.MaxDocument {
 			return d, docs, errors.New("bounded attested metadata asset required")
 		}
-		key := name
-		if name == provenanceFile {
-			key = "provenance.sigstore.json"
-		}
-		docs[key], err = g.PublishedAsset(ctx, asset)
+		docs[item.key], err = g.PublishedAsset(ctx, asset)
 		if err != nil {
 			return d, docs, err
 		}

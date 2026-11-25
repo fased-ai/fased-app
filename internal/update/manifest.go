@@ -80,7 +80,7 @@ func hashOK(s string) bool {
 }
 
 func targetOK(t Target) bool {
-	return t == (Target{"linux", "amd64"}) || t == (Target{"darwin", "arm64"}) || t == (Target{"windows", "amd64"})
+	return t == (Target{"linux", "amd64"}) || t == (Target{"linux", "arm64"}) || t == (Target{"darwin", "arm64"}) || t == (Target{"windows", "amd64"})
 }
 
 func tokenOK(s string) bool {

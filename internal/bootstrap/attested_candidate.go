@@ -27,7 +27,12 @@ func verifyAttestedCandidate(o Options, directory string) (Report, error) {
 	if err != nil || seed.Version != 4 {
 		return report, errors.New("compiled attested release trust required")
 	}
-	raw, err := update.ReadDocument(filepath.Join(directory, AttestedPacketFile))
+	arch := seed.Target.Arch
+	packetAsset := AttestedPacketAsset(arch)
+	archiveFile := attestedArchiveFile(arch)
+	installerFile := attestedInstallerFile(arch)
+	provFile := attestedProvenanceFile(arch)
+	raw, err := update.ReadDocument(filepath.Join(directory, packetAsset))
 	if err != nil {
 		return report, err
 	}
@@ -46,7 +51,7 @@ func verifyAttestedCandidate(o Options, directory string) (Report, error) {
 	artifacts := []update.Artifact{packet.Archive, packet.Installer, packet.Entry, packet.Release.Provenance}
 	expected := d.provenanceExpected()
 	if packet.Version == 3 {
-		if packet.Deb.File != "fased-app-linux-amd64.deb" || packet.RPM.File != "fased-app-linux-amd64.rpm" {
+		if packet.Deb.File != attestedDebFile(arch) || packet.RPM.File != attestedRPMFile(arch) {
 			return report, errors.New("both fixed Linux package targets are required")
 		}
 		artifacts = append(artifacts, packet.Deb, packet.RPM)
@@ -63,10 +68,10 @@ func verifyAttestedCandidate(o Options, directory string) (Report, error) {
 			return report, errors.New("candidate artifact changed")
 		}
 	}
-	if packet.Archive.File != archiveTarget || packet.Installer.File != "fased-install-linux-amd64" || packet.Entry.File != "install.sh" || packet.Release.Provenance.File != provenanceFile {
+	if packet.Archive.File != archiveFile || packet.Installer.File != installerFile || packet.Entry.File != "install.sh" || packet.Release.Provenance.File != provFile {
 		return report, errors.New("candidate target inventory invalid")
 	}
-	proof, err := update.ReadDocument(filepath.Join(directory, provenanceFile))
+	proof, err := update.ReadDocument(filepath.Join(directory, provFile))
 	if err != nil {
 		return report, err
 	}
@@ -79,7 +84,7 @@ func verifyAttestedCandidate(o Options, directory string) (Report, error) {
 		return report, err
 	}
 	defer os.RemoveAll(scratch)
-	m, err := bundle.ExtractVerifiedArchive(filepath.Join(directory, archiveTarget), filepath.Join(scratch, "bundle"), bundle.File{SHA256: packet.Archive.SHA256, Bytes: packet.Archive.Size}, packet.BundleSHA256)
+	m, err := bundle.ExtractVerifiedArchive(filepath.Join(directory, archiveFile), filepath.Join(scratch, "bundle"), bundle.File{SHA256: packet.Archive.SHA256, Bytes: packet.Archive.Size}, packet.BundleSHA256)
 	if err != nil {
 		return report, err
 	}

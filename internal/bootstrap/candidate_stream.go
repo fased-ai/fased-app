@@ -9,6 +9,7 @@ import (
 	"errors"
 	"io"
 	"os"
+	"runtime"
 
 	"github.com/fased-ai/fased-app/internal/update"
 )
@@ -45,10 +46,11 @@ func (p *Prepared) WriteCandidate(ctx context.Context, out io.Writer) error {
 		}
 		return nil
 	}
+	arch := p.seed.Target.Arch
 	for _, item := range []struct {
 		name string
 		data []byte
-	}{{AttestedPacketFile, p.metadata[AttestedPacketFile]}, {provenanceFile, p.metadata["provenance.sigstore.json"]}} {
+	}{{AttestedPacketAsset(arch), p.metadata[AttestedPacketFile]}, {attestedProvenanceFile(arch), p.metadata["provenance.sigstore.json"]}} {
 		if err := write(item.name, int64(len(item.data)), bytes.NewReader(item.data)); err != nil {
 			return err
 		}
@@ -114,9 +116,16 @@ func ReceiveCandidate(ctx context.Context, in io.Reader, directory, packetSHA256
 	}
 	// The archive, installer, entry and two native packages each have their own
 	// size limit. Leave room for their tar headers and bounded metadata too.
+	arch := runtime.GOARCH
+	packetAsset := AttestedPacketAsset(arch)
+	archiveFile := attestedArchiveFile(arch)
+	installerFile := attestedInstallerFile(arch)
+	provFile := attestedProvenanceFile(arch)
+	debFile := attestedDebFile(arch)
+	rpmFile := attestedRPMFile(arch)
 	tr := tar.NewReader(io.LimitReader(in, 5*maxArchiveBytes+2*int64(update.MaxDocument)+(2<<20)))
 	header, err := tr.Next()
-	if err != nil || header.Name != AttestedPacketFile || header.Typeflag != tar.TypeReg || header.Size <= 0 || header.Size > update.MaxDocument {
+	if err != nil || header.Name != packetAsset || header.Typeflag != tar.TypeReg || header.Size <= 0 || header.Size > update.MaxDocument {
 		return errors.New("candidate packet must be first and bounded")
 	}
 	raw, err := io.ReadAll(io.LimitReader(tr, int64(update.MaxDocument)+1))
@@ -124,12 +133,12 @@ func ReceiveCandidate(ctx context.Context, in io.Reader, directory, packetSHA256
 		return errors.New("candidate stream packet differs from the reviewed identity")
 	}
 	var packet AttestedPacket
-	if update.StrictJSON(raw, &packet) != nil || (packet.Version != 2 && packet.Version != 3 && packet.Version != 4) || !attestedBuildIdentity(packet, "") || packet.Archive.File != archiveTarget || packet.Installer.File != "fased-install-linux-amd64" || packet.Entry.File != "install.sh" || packet.Release.Provenance.File != provenanceFile ||
+	if update.StrictJSON(raw, &packet) != nil || (packet.Version != 2 && packet.Version != 3 && packet.Version != 4) || !attestedBuildIdentity(packet, "") || packet.Archive.File != archiveFile || packet.Installer.File != installerFile || packet.Entry.File != "install.sh" || packet.Release.Provenance.File != provFile ||
 		(packet.Version == 2 || packet.Version == 4) && (packet.Deb != (update.Artifact{}) || packet.RPM != (update.Artifact{})) ||
-		packet.Version == 3 && (packet.Deb.File != "fased-app-linux-amd64.deb" || packet.RPM.File != "fased-app-linux-amd64.rpm") {
+		packet.Version == 3 && (packet.Deb.File != debFile || packet.RPM.File != rpmFile) {
 		return errors.New("candidate stream inventory invalid")
 	}
-	if err = writeNew(root, AttestedPacketFile, raw); err != nil {
+	if err = writeNew(root, packetAsset, raw); err != nil {
 		return err
 	}
 	artifacts := []update.Artifact{packet.Release.Provenance, packet.Archive, packet.Installer, packet.Entry}
@@ -141,7 +150,7 @@ func ReceiveCandidate(ctx context.Context, in io.Reader, directory, packetSHA256
 			return err
 		}
 		limit := int64(maxArchiveBytes)
-		if artifact.File == provenanceFile {
+		if artifact.File == provFile {
 			limit = update.MaxDocument
 		}
 		if artifact.Size <= 0 || artifact.Size > limit || !hashOK(artifact.SHA256) {

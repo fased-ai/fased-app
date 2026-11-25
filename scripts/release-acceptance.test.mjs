@@ -13,6 +13,7 @@ import {
   recordRemoteAcceptance,
   stagedAcceptanceContract,
   attestedInventory,
+  attestedMultiArchInventory,
   verifyCandidateReplay,
 } from "./release-acceptance.mjs";
 const bundleManifest = JSON.stringify({
@@ -2148,5 +2149,107 @@ test("stagedAcceptanceContract freezes releasedPredecessor and matchesReleasedPr
   assert.throws(
     () => validateInstalledAcceptance(bad, packet, inventory),
     /released Local-first/,
+  );
+});
+
+test("attestedMultiArchInventory combines amd64 and arm64 format-4 packets and rejects mismatches", () => {
+  const c = {
+    repository: "fased-ai/fased-app",
+    repositoryId: "1426211857",
+    ownerId: "279582504",
+    version: "0.2.0",
+    releaseAuthority: "github-attestation-v1",
+  };
+  const h = (label) => createHash("sha256").update(label).digest("hex");
+  const entry = { file: "install.sh", size: 42, sha256: h("entry") };
+  const makePacket = (arch) => ({
+    version: 4,
+    productVersion: c.version,
+    source: "a".repeat(40),
+    bundleSha256: h(`bundle-${arch}`),
+    archive: {
+      file: `fased-app-linux-${arch}.tar.gz`,
+      size: 100,
+      sha256: h(`archive-${arch}`),
+    },
+    installer: {
+      file: `fased-install-linux-${arch}`,
+      size: 50,
+      sha256: h(`installer-${arch}`),
+    },
+    entry,
+    release: {
+      buildRef: "refs/heads/main",
+      installerSha256: h(`installer-${arch}`),
+      sourceTree: "b".repeat(40),
+      tagObject: "",
+      packageLockSha256: "c".repeat(64),
+      goSumSha256: "d".repeat(64),
+      workflowCommit: "a".repeat(40),
+      runId: "99",
+      runAttempt: "1",
+      provenance: {
+        file: `fased-app-linux-${arch}.provenance.sigstore.json`,
+        size: 25,
+        sha256: h(`proof-${arch}`),
+      },
+    },
+  });
+  const amdPkt = makePacket("amd64");
+  const armPkt = makePacket("arm64");
+  const amdRaw = Buffer.from(JSON.stringify(amdPkt));
+  const armRaw = Buffer.from(JSON.stringify(armPkt));
+
+  const combined = attestedMultiArchInventory(
+    c,
+    amdPkt,
+    amdRaw,
+    armPkt,
+    armRaw,
+  );
+  assert.equal(combined.multiArch, true);
+  assert.equal(combined.assets.length, 9);
+  assert.deepEqual(combined.assets.map((a) => a.name).sort(), [
+    "fased-app-linux-amd64.provenance.sigstore.json",
+    "fased-app-linux-amd64.tar.gz",
+    "fased-app-linux-arm64.provenance.sigstore.json",
+    "fased-app-linux-arm64.tar.gz",
+    "fased-install-linux-amd64",
+    "fased-install-linux-arm64",
+    "fased-release-linux-arm64.json",
+    "fased-release.json",
+    "install.sh",
+  ]);
+
+  const mismatchedEntryArm = makePacket("arm64");
+  mismatchedEntryArm.entry = {
+    file: "install.sh",
+    size: 42,
+    sha256: h("different"),
+  };
+  assert.throws(
+    () =>
+      attestedMultiArchInventory(
+        c,
+        amdPkt,
+        amdRaw,
+        mismatchedEntryArm,
+        Buffer.from(JSON.stringify(mismatchedEntryArm)),
+      ),
+    /lockstep identity or entry/,
+  );
+
+  const mismatchedSourceArm = makePacket("arm64");
+  mismatchedSourceArm.source = "f".repeat(40);
+  assert.throws(
+    () =>
+      attestedMultiArchInventory(
+        c,
+        amdPkt,
+        amdRaw,
+        mismatchedSourceArm,
+        Buffer.from(JSON.stringify(mismatchedSourceArm)),
+      ),
+    /lockstep identity or entry/,
   );
 });

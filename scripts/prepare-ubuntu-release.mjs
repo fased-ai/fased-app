@@ -144,12 +144,18 @@ const fields = [
   "initialTrustApprovalSha256",
   "releaseAuthority",
 ];
+const optionalArm64Fields = ["arm64SeedFile", "arm64SeedSha256"];
+const allowedFields = [...fields, ...optionalArm64Fields];
 export function validateConfig(c) {
+  const arm64Present = c ? optionalArm64Fields.filter((k) => k in c) : [];
   if (
     !c ||
-    Object.keys(c).some((k) => !fields.includes(k)) ||
+    (arm64Present.length !== 0 && arm64Present.length !== 2) ||
+    Object.keys(c).some((k) => !allowedFields.includes(k)) ||
     Object.keys(c).length !==
-      fields.length - (c.releaseAuthority === undefined ? 1 : 0) ||
+      fields.length -
+        (c.releaseAuthority === undefined ? 1 : 0) +
+        arm64Present.length ||
     c.schemaVersion !== 1 ||
     !/^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$/.test(c.version) ||
     c.repository !== "fased-ai/fased-app" ||
@@ -180,6 +186,18 @@ export function validateConfig(c) {
     !/^release\/public\/[A-Za-z0-9_-]+\.json$/.test(c.seedFile)
   )
     throw Error("Approved repository public seed path required");
+  if (arm64Present.length === 2) {
+    if ((c.arm64SeedFile === null) !== (c.arm64SeedSha256 === null))
+      throw Error("Paired arm64 seed file and digest required");
+    if (c.arm64SeedSha256 !== null && !hash.test(c.arm64SeedSha256))
+      throw Error("Invalid public approval digest");
+    if (
+      c.arm64SeedFile !== null &&
+      (!/^release\/public\/[A-Za-z0-9_-]+\.json$/.test(c.arm64SeedFile) ||
+        c.releaseAuthority !== "github-attestation-v1")
+    )
+      throw Error("Approved arm64 attested seed path required");
+  }
   return (
     c.releaseAuthority === "github-attestation-v1"
       ? ["seedFile", "seedSha256"]
@@ -191,11 +209,28 @@ export function validateConfig(c) {
         ]
   ).filter((k) => c[k] === null);
 }
-export function releaseContext(c, env, source) {
+export function seedForArch(c, arch = "amd64") {
+  if (arch === "amd64")
+    return { seedFile: c.seedFile, seedSha256: c.seedSha256 };
+  if (arch === "arm64") {
+    if (
+      c.releaseAuthority !== "github-attestation-v1" ||
+      !c.arm64SeedFile ||
+      !hash.test(c.arm64SeedSha256 ?? "")
+    )
+      throw Error("Approved Linux arm64 attested seed configuration required");
+    return { seedFile: c.arm64SeedFile, seedSha256: c.arm64SeedSha256 };
+  }
+  throw Error("Unsupported Linux release architecture");
+}
+export function releaseContext(c, env, source, arch = "amd64") {
+  if (arch !== "amd64" && arch !== "arm64")
+    throw Error("Unsupported Linux release architecture");
   validateConfig(c);
   const tag = `v${c.version}`;
   const staged = env.GITHUB_EVENT_NAME === "workflow_dispatch";
   const ref = staged ? "refs/heads/main" : `refs/tags/${tag}`;
+  const expectedRunnerArch = arch === "arm64" ? "ARM64" : "X64";
   if (
     (!staged && env.GITHUB_EVENT_NAME !== "push") ||
     env.GITHUB_REF !== ref ||
@@ -204,7 +239,7 @@ export function releaseContext(c, env, source) {
     env.GITHUB_REPOSITORY_OWNER_ID !== c.ownerId ||
     env.GITHUB_WORKFLOW_REF !== `${c.repository}/${c.workflow}@${ref}` ||
     env.RUNNER_OS !== "Linux" ||
-    env.RUNNER_ARCH !== "X64" ||
+    env.RUNNER_ARCH !== expectedRunnerArch ||
     !commit.test(env.GITHUB_SHA ?? "") ||
     !number.test(env.GITHUB_RUN_ID ?? "") ||
     !number.test(env.GITHUB_RUN_ATTEMPT ?? "") ||
@@ -221,6 +256,7 @@ export function releaseContext(c, env, source) {
   return {
     version: c.version,
     tag,
+    ...(arch === "arm64" ? { arch } : {}),
     sourceCommit: source.commit,
     sourceTree: source.tree,
     tagObject: source.tagObject,
@@ -234,18 +270,17 @@ export function releaseContext(c, env, source) {
 function git(...args) {
   return execFileSync("git", args, { encoding: "utf8" }).trim();
 }
-function write(name, value) {
-  writeFileSync(
-    path.join(evidence, name),
-    JSON.stringify(value, null, 2) + "\n",
-    { mode: 0o600, flag: "wx" },
-  );
+function writeAt(dir, name, value) {
+  writeFileSync(path.join(dir, name), JSON.stringify(value, null, 2) + "\n", {
+    mode: 0o600,
+    flag: "wx",
+  });
 }
-function read(name) {
-  return JSON.parse(readFileSync(path.join(evidence, name), "utf8"));
+function readAt(dir, name) {
+  return JSON.parse(readFileSync(path.join(dir, name), "utf8"));
 }
-function file(name, max) {
-  const p = path.join(evidence, name),
+function fileAt(dir, name, max) {
+  const p = path.join(dir, name),
     st = lstatSync(p);
   if (!st.isFile() || st.isSymbolicLink() || st.size <= 0 || st.size > max)
     throw Error("Exact bounded candidate file required");
@@ -254,6 +289,15 @@ function file(name, max) {
     bytes,
     identity: { file: name, size: bytes.length, sha256: sha(bytes) },
   };
+}
+function write(name, value) {
+  writeAt(evidence, name, value);
+}
+function read(name) {
+  return readAt(evidence, name);
+}
+function file(name, max) {
+  return fileAt(evidence, name, max);
 }
 export function bindingOverlay(seed, pin, root, automatic) {
   if (!hash.test(pin) || sha(seed) !== pin) throw Error("Seed binding changed");
@@ -307,10 +351,11 @@ func init() {
   }
   return bindings;
 }
-function prepare(c, automatic) {
+function prepare(c, automatic, arch = "amd64") {
   const missing = validateConfig(c);
   if (missing.length)
     throw Error("Production inputs missing: " + missing.join(", "));
+  const { seedFile, seedSha256 } = seedForArch(c, arch);
   if (!process.env.GITHUB_OUTPUT)
     throw Error("Workflow output channel required");
   const source = {
@@ -331,23 +376,21 @@ function prepare(c, automatic) {
     "refs/remotes/origin/main",
   ]);
   source.onMain = true;
-  const context = releaseContext(c, process.env, source);
+  const context = releaseContext(c, process.env, source, arch);
   const osRelease = readFileSync("/etc/os-release", "utf8");
   if (
     !/^ID=ubuntu$/m.test(osRelease) ||
     !/^VERSION_ID="24\.04"$/m.test(osRelease)
   )
     throw Error("Ubuntu24.04 build host required");
-  const seedStat = lstatSync(c.seedFile);
+  const seedStat = lstatSync(seedFile);
   if (!seedStat.isFile() || seedStat.isSymbolicLink())
     throw Error("Public seed must be a regular tracked file");
-  const seed = readFileSync(c.seedFile);
+  const seed = readFileSync(seedFile);
   if (
     seed.length > 65536 ||
-    sha(seed) !== c.seedSha256 ||
-    !execFileSync("git", ["show", `${source.commit}:${c.seedFile}`]).equals(
-      seed,
-    )
+    sha(seed) !== seedSha256 ||
+    !execFileSync("git", ["show", `${source.commit}:${seedFile}`]).equals(seed)
   )
     throw Error("Approved tracked public seed changed");
   const policy = JSON.parse(
@@ -358,9 +401,10 @@ function prepare(c, automatic) {
         "./cmd/fased-release-candidate",
         "verify-seed",
         "--seed-file",
-        c.seedFile,
+        seedFile,
         "--seed-sha256",
-        c.seedSha256,
+        seedSha256,
+        ...(arch === "arm64" ? ["--arch", arch] : []),
       ],
       { encoding: "utf8" },
     ),
@@ -375,12 +419,7 @@ function prepare(c, automatic) {
   mkdirSync(evidence, { mode: 0o700 });
   mkdirSync(path.join(evidence, "bindings"), { mode: 0o700 });
   const replacements = {};
-  for (const b of bindingOverlay(
-    seed,
-    c.seedSha256,
-    process.cwd(),
-    automatic,
-  )) {
+  for (const b of bindingOverlay(seed, seedSha256, process.cwd(), automatic)) {
     if (existsSync(b.target))
       throw Error("Preserve existing generated binding path");
     const output = path.resolve(evidence, "bindings", b.output);
@@ -398,7 +437,7 @@ function prepare(c, automatic) {
     releaseAuthority: c.releaseAuthority,
     ...(context.buildRef === "refs/heads/main" ? { linuxBundle: true } : {}),
     configSha256: sha(readFileSync("release/ubuntu.json")),
-    seedSha256: c.seedSha256,
+    seedSha256,
     custodyApprovalSha256: c.custodyApprovalSha256,
     initialTrustApprovalSha256: c.initialTrustApprovalSha256,
     packageLockSha256: sha(readFileSync("package-lock.json")),
@@ -431,9 +470,12 @@ export function expectedProvenance(input, archive, installer, packages) {
   };
 }
 export function candidateInventory(input, archive, installer, report, system) {
+  const arch = input.arch ?? "amd64";
+  if (arch !== "amd64" && arch !== "arm64")
+    throw Error("Unsupported Linux release architecture");
   for (const [identity, name] of [
-    [archive, "fased-app-linux-amd64.tar.gz"],
-    [installer, "fased-install-linux-amd64"],
+    [archive, `fased-app-linux-${arch}.tar.gz`],
+    [installer, `fased-install-linux-${arch}`],
   ])
     if (
       identity.file !== name ||
@@ -451,7 +493,7 @@ export function candidateInventory(input, archive, installer, report, system) {
     report.manifest.version !== input.version ||
     report.manifest.source !== input.sourceCommit ||
     report.manifest.platform !== "linux" ||
-    report.manifest.arch !== "amd64" ||
+    report.manifest.arch !== arch ||
     report.identity?.sha256 !== archive.sha256 ||
     report.identity?.bytes !== archive.size ||
     !hash.test(report.manifestIdentity?.sha256 ?? "")
@@ -491,8 +533,8 @@ export function candidateInventory(input, archive, installer, report, system) {
       throw Error("Native packages require an unpublished main candidate");
     const { deb, rpm, receipt } = system;
     const identities = [
-      [deb, "fased-app-linux-amd64.deb"],
-      [rpm, "fased-app-linux-amd64.rpm"],
+      [deb, `fased-app-linux-${arch}.deb`],
+      [rpm, `fased-app-linux-${arch}.rpm`],
     ];
     const equalFile = (a, b) =>
       a && b && a.sha256 === b.sha256 && a.bytes === b.bytes;
@@ -501,7 +543,7 @@ export function candidateInventory(input, archive, installer, report, system) {
       receipt.version !== 1 ||
       receipt.product !== input.version ||
       receipt.source !== input.sourceCommit ||
-      receipt.architecture !== "amd64" ||
+      receipt.architecture !== arch ||
       receipt.publicRelease !== false ||
       !receipt.inputs ||
       !receipt.packages ||
@@ -548,30 +590,31 @@ export function candidateInventory(input, archive, installer, report, system) {
   }
   return result;
 }
-function nativePackageInputs() {
+function nativePackageInputs(arch = "amd64") {
   return {
-    deb: file("fased-app-linux-amd64.deb", 128 * 1024 * 1024).identity,
-    rpm: file("fased-app-linux-amd64.rpm", 128 * 1024 * 1024).identity,
-    receipt: read("fased-linux-system-amd64/packages.json"),
+    deb: file(`fased-app-linux-${arch}.deb`, 128 * 1024 * 1024).identity,
+    rpm: file(`fased-app-linux-${arch}.rpm`, 128 * 1024 * 1024).identity,
+    receipt: read(`fased-linux-system-${arch}/packages.json`),
   };
 }
 function inventory() {
   const input = read("build-inputs.json");
+  const arch = input.arch ?? "amd64";
   const archive = file(
-    "fased-app-linux-amd64.tar.gz",
+    `fased-app-linux-${arch}.tar.gz`,
     128 * 1024 * 1024,
   ).identity;
   const installer = file(
-    "fased-install-linux-amd64",
+    `fased-install-linux-${arch}`,
     128 * 1024 * 1024,
   ).identity;
-  const report = read("fased-app-linux-amd64.json");
+  const report = read(`fased-app-linux-${arch}.json`);
   const objects = candidateInventory(
     input,
     archive,
     installer,
     report,
-    input.nativePackages === true ? nativePackageInputs() : undefined,
+    input.nativePackages === true ? nativePackageInputs(arch) : undefined,
   );
   write("artifact-inventory.json", objects);
   write(
@@ -580,11 +623,13 @@ function inventory() {
   );
 }
 export function verifiedCandidate(c, input, objects, decision, proof, policy) {
+  const arch = input.arch ?? "amd64";
+  const { seedSha256: expectedSeedSha256 } = seedForArch(c, arch);
   if (
     validateConfig(c).length ||
     input.version !== c.version ||
     input.tag !== `v${c.version}` ||
-    input.seedSha256 !== c.seedSha256 ||
+    input.seedSha256 !== expectedSeedSha256 ||
     input.custodyApprovalSha256 !== c.custodyApprovalSha256 ||
     input.initialTrustApprovalSha256 !== c.initialTrustApprovalSha256 ||
     !hash.test(objects.manifestSha256 ?? "")
@@ -665,8 +710,16 @@ export function attestedCandidatePacket(input, objects, entry, proof) {
 }
 function finish(c) {
   const input = read("build-inputs.json"),
+    arch = input.arch ?? "amd64",
     objects = read("artifact-inventory.json"),
     decision = read("verified-provenance.json");
+  const { seedSha256: expectedSeedSha256 } = seedForArch(c, arch);
+  const archiveName = `fased-app-linux-${arch}.tar.gz`;
+  const installerName = `fased-install-linux-${arch}`;
+  const reportName = `fased-app-linux-${arch}.json`;
+  const provName = `fased-app-linux-${arch}.provenance.sigstore.json`;
+  const packetName =
+    arch === "arm64" ? "fased-release-linux-arm64.json" : "fased-release.json";
   if (
     JSON.stringify(read("expected-provenance.json")) !==
     JSON.stringify(
@@ -676,9 +729,7 @@ function finish(c) {
     throw Error("Verified artifact/source expectations changed");
   for (const identity of [objects.archive, objects.installer])
     if (
-      !["fased-app-linux-amd64.tar.gz", "fased-install-linux-amd64"].includes(
-        identity.file,
-      ) ||
+      ![archiveName, installerName].includes(identity.file) ||
       JSON.stringify(file(identity.file, 128 * 1024 * 1024).identity) !==
         JSON.stringify(identity)
     )
@@ -688,18 +739,15 @@ function finish(c) {
       input,
       objects.archive,
       objects.installer,
-      read("fased-app-linux-amd64.json"),
-      input.nativePackages === true ? nativePackageInputs() : undefined,
+      read(reportName),
+      input.nativePackages === true ? nativePackageInputs(arch) : undefined,
     );
     if (JSON.stringify(current) !== JSON.stringify(objects))
       throw Error("Native packages changed after provenance verification");
   } else if (objects.deb !== undefined || objects.rpm !== undefined) {
     throw Error("Unexpected native package inventory");
   }
-  const proof = file(
-    "fased-app-linux-amd64.provenance.sigstore.json",
-    64 * 1024,
-  ).identity;
+  const proof = file(provName, 64 * 1024).identity;
   verifiedCandidate(
     c,
     input,
@@ -708,7 +756,10 @@ function finish(c) {
     proof,
     read("provenance-policy.json"),
   );
-  if (file("first-install-seed.json", 65536).identity.sha256 !== c.seedSha256)
+  if (
+    file("first-install-seed.json", 65536).identity.sha256 !==
+    expectedSeedSha256
+  )
     throw Error("Candidate public seed changed");
   const config = {
     version: input.version,
@@ -758,7 +809,7 @@ function finish(c) {
   });
   if (c.releaseAuthority === "github-attestation-v1")
     write(
-      "fased-release.json",
+      packetName,
       attestedCandidatePacket(
         input,
         objects,
@@ -766,6 +817,287 @@ function finish(c) {
         proof,
       ),
     );
+}
+export function combineMultiArch(
+  c,
+  {
+    amd64Dir = ".evidence/ubuntu-release-amd64",
+    arm64Dir = ".evidence/ubuntu-release-arm64",
+    outDir = ".evidence/linux-multiarch-release",
+    verifyProvenance = ({ policy, expected, bundleFile }) => {
+      const scratch = mkdtempSync(path.join(outDir, ".provenance-check-"));
+      try {
+        const policyFile = path.join(scratch, "policy.json");
+        const expectedFile = path.join(scratch, "expected.json");
+        writeFileSync(policyFile, JSON.stringify(policy), {
+          mode: 0o600,
+          flag: "wx",
+        });
+        writeFileSync(expectedFile, JSON.stringify(expected), {
+          mode: 0o600,
+          flag: "wx",
+        });
+        return JSON.parse(
+          execFileSync(
+            "go",
+            [
+              "run",
+              "./cmd/fased-release-candidate",
+              "verify-provenance",
+              "--policy-file",
+              policyFile,
+              "--expected-file",
+              expectedFile,
+              "--bundle-file",
+              bundleFile,
+            ],
+            { encoding: "utf8" },
+          ),
+        );
+      } finally {
+        rmSync(scratch, { recursive: true, force: true });
+      }
+    },
+    renderEntry = ({ version, targets, output }) => {
+      const scratch = mkdtempSync(path.join(outDir, ".entry-config-"));
+      try {
+        const configFile = path.join(scratch, "entry-config.json");
+        writeFileSync(
+          configFile,
+          JSON.stringify({ version, targets }, null, 2) + "\n",
+          { mode: 0o600, flag: "wx" },
+        );
+        execFileSync("node", [
+          "scripts/render-install-entry.mjs",
+          configFile,
+          output,
+        ]);
+      } finally {
+        rmSync(scratch, { recursive: true, force: true });
+      }
+    },
+  } = {},
+) {
+  const missing = validateConfig(c);
+  if (missing.length || c.releaseAuthority !== "github-attestation-v1")
+    throw Error("Reviewed dual-arch attested release configuration required");
+  const amd64SeedCfg = seedForArch(c, "amd64");
+  const arm64SeedCfg = seedForArch(c, "arm64");
+  const trackedSeeds = {
+    amd64: readFileSync(amd64SeedCfg.seedFile),
+    arm64: readFileSync(arm64SeedCfg.seedFile),
+  };
+  if (
+    sha(trackedSeeds.amd64) !== amd64SeedCfg.seedSha256 ||
+    sha(trackedSeeds.arm64) !== arm64SeedCfg.seedSha256 ||
+    JSON.parse(trackedSeeds.amd64).target?.arch !== "amd64" ||
+    JSON.parse(trackedSeeds.arm64).target?.arch !== "arm64"
+  )
+    throw Error("Tracked amd64/arm64 public trust seeds differ from config");
+
+  const loadSide = (arch, dir, expectedSeedSha256) => {
+    const input = readAt(dir, "build-inputs.json");
+    if (
+      (input.arch ?? "amd64") !== arch ||
+      input.linuxBundle !== true ||
+      input.nativePackages === true ||
+      input.buildRef !== "refs/heads/main" ||
+      input.tagObject !== "" ||
+      input.releaseAuthority !== "github-attestation-v1" ||
+      input.seedSha256 !== expectedSeedSha256
+    )
+      throw Error(`Invalid ${arch} attested main candidate inputs`);
+    const archive = fileAt(
+      dir,
+      `fased-app-linux-${arch}.tar.gz`,
+      128 * 1024 * 1024,
+    );
+    const installer = fileAt(
+      dir,
+      `fased-install-linux-${arch}`,
+      128 * 1024 * 1024,
+    );
+    const report = readAt(dir, `fased-app-linux-${arch}.json`);
+    const objects = candidateInventory(
+      input,
+      archive.identity,
+      installer.identity,
+      report,
+    );
+    if (
+      JSON.stringify(objects) !==
+      JSON.stringify(readAt(dir, "artifact-inventory.json"))
+    )
+      throw Error(`Candidate ${arch} artifact inventory changed`);
+    const expected = expectedProvenance(
+      input,
+      objects.archive,
+      objects.installer,
+      objects,
+    );
+    if (
+      JSON.stringify(expected) !==
+      JSON.stringify(readAt(dir, "expected-provenance.json"))
+    )
+      throw Error(`Candidate ${arch} expected provenance changed`);
+    const proof = fileAt(
+      dir,
+      `fased-app-linux-${arch}.provenance.sigstore.json`,
+      64 * 1024,
+    );
+    const policy = readAt(dir, "provenance-policy.json");
+    const decision = readAt(dir, "verified-provenance.json");
+    const seed = fileAt(dir, "first-install-seed.json", 65536);
+    if (seed.identity.sha256 !== expectedSeedSha256)
+      throw Error(`Candidate ${arch} public trust seed changed`);
+    verifiedCandidate(c, input, objects, decision, proof.identity, policy);
+    return {
+      arch,
+      dir,
+      input,
+      objects,
+      expected,
+      archive,
+      installer,
+      proof,
+      policy,
+      seed,
+    };
+  };
+
+  const amd = loadSide("amd64", amd64Dir, amd64SeedCfg.seedSha256);
+  const arm = loadSide("arm64", arm64Dir, arm64SeedCfg.seedSha256);
+  for (const key of [
+    "version",
+    "tag",
+    "sourceCommit",
+    "sourceTree",
+    "tagObject",
+    "workflowCommit",
+    "runId",
+    "runAttempt",
+    "packageLockSha256",
+    "goSumSha256",
+    "configSha256",
+    "releaseAuthority",
+  ])
+    if (amd.input[key] !== arm.input[key])
+      throw Error(`Dual-arch release ${key} differs between amd64 and arm64`);
+
+  rmSync(outDir, { recursive: true, force: true });
+  mkdirSync(outDir, { recursive: true, mode: 0o700 });
+  for (const side of [amd, arm]) {
+    for (const f of [side.archive, side.installer, side.proof])
+      writeFileSync(path.join(outDir, f.identity.file), f.bytes, {
+        mode: 0o600,
+        flag: "wx",
+      });
+    const seedOut =
+      side.arch === "arm64"
+        ? "first-install-seed-arm64.json"
+        : "first-install-seed.json";
+    writeFileSync(path.join(outDir, seedOut), side.seed.bytes, {
+      mode: 0o600,
+      flag: "wx",
+    });
+    const liveDecision = verifyProvenance({
+      policy: side.policy,
+      expected: side.expected,
+      bundleFile: path.join(outDir, side.proof.identity.file),
+    });
+    verifiedCandidate(
+      c,
+      side.input,
+      side.objects,
+      liveDecision,
+      side.proof.identity,
+      side.policy,
+    );
+  }
+  const entryOut = path.join(outDir, "install.sh");
+  renderEntry({
+    version: amd.input.version,
+    targets: [
+      {
+        installer: path.join(outDir, "fased-install-linux-amd64"),
+        seed: path.join(outDir, "first-install-seed.json"),
+      },
+      {
+        installer: path.join(outDir, "fased-install-linux-arm64"),
+        seed: path.join(outDir, "first-install-seed-arm64.json"),
+      },
+    ],
+    output: entryOut,
+  });
+  const entryIdentity = fileAt(outDir, "install.sh", 2 * 1024 * 1024).identity;
+  writeAt(
+    outDir,
+    "fased-release.json",
+    attestedCandidatePacket(
+      amd.input,
+      amd.objects,
+      entryIdentity,
+      amd.proof.identity,
+    ),
+  );
+  writeAt(
+    outDir,
+    "fased-release-linux-arm64.json",
+    attestedCandidatePacket(
+      arm.input,
+      arm.objects,
+      entryIdentity,
+      arm.proof.identity,
+    ),
+  );
+  writeAt(outDir, "signing-inputs.json", {
+    version: amd.input.version,
+    sourceCommit: amd.input.sourceCommit,
+    runId: amd.input.runId,
+    runAttempt: amd.input.runAttempt,
+    multiArch: true,
+    objects: amd.objects,
+    arm64Objects: arm.objects,
+    entry: entryIdentity,
+    publicRelease: false,
+    activation: false,
+  });
+  writeAt(outDir, "multiarch-manifest.json", {
+    schemaVersion: 1,
+    version: amd.input.version,
+    sourceCommit: amd.input.sourceCommit,
+    runId: amd.input.runId,
+    runAttempt: amd.input.runAttempt,
+    architectures: ["amd64", "arm64"],
+    assets: [
+      amd.archive.identity.file,
+      amd.installer.identity.file,
+      amd.proof.identity.file,
+      "fased-release.json",
+      arm.archive.identity.file,
+      arm.installer.identity.file,
+      arm.proof.identity.file,
+      "fased-release-linux-arm64.json",
+      "install.sh",
+    ],
+  });
+  return {
+    version: amd.input.version,
+    sourceCommit: amd.input.sourceCommit,
+    runId: amd.input.runId,
+    runAttempt: amd.input.runAttempt,
+    assets: [
+      amd.archive.identity.file,
+      amd.installer.identity.file,
+      amd.proof.identity.file,
+      "fased-release.json",
+      arm.archive.identity.file,
+      arm.installer.identity.file,
+      arm.proof.identity.file,
+      "fased-release-linux-arm64.json",
+      "install.sh",
+    ],
+  };
 }
 // Renewed metadata gets a new retained operation automatically. Identical
 // approved bytes always reopen the same journal; no journal is reset/deleted.
@@ -1238,8 +1570,21 @@ if (
     if (process.getuid?.() === 0) throw Error("Ordinary maintainer required");
     if (process.argv.length !== 3)
       throw Error("Exactly one staging command required");
+    const targetArch = process.env.FASED_TARGET_ARCH ?? "amd64";
+    if (targetArch !== "amd64" && targetArch !== "arm64")
+      throw Error("Unsupported FASED_TARGET_ARCH");
     let c = JSON.parse(readFileSync("release/ubuntu.json", "utf8"));
     let command = process.argv[2];
+    if (targetArch === "arm64") {
+      if (
+        command.startsWith("compatibility-") ||
+        process.env.FASED_FEDORA_PREDECESSOR === "true" ||
+        (process.env.FASED_AUTOMATIC_PREDECESSOR_PINS ?? "") !== "" ||
+        !["prepare", "inventory", "finish"].includes(command)
+      )
+        throw Error("arm64 staging supports only prepare, inventory, finish");
+      evidence = ".evidence/ubuntu-release-arm64";
+    }
     if (command.startsWith("compatibility-")) {
       command = command.slice("compatibility-".length);
       if (!["prepare", "inventory", "finish"].includes(command))
@@ -1247,8 +1592,12 @@ if (
       evidence = ".evidence/ubuntu-release-compatibility";
       c = compatibilityConfig(c);
     }
-    const automatic = automaticPredecessor(c, process.env, command);
-    c = automatic?.config ?? fedoraPredecessorConfig(c, process.env, command);
+    const automatic =
+      targetArch === "amd64"
+        ? automaticPredecessor(c, process.env, command)
+        : null;
+    if (targetArch === "amd64")
+      c = automatic?.config ?? fedoraPredecessorConfig(c, process.env, command);
     const missing = validateConfig(c);
     switch (command) {
       case "replay": {
@@ -1376,7 +1725,7 @@ if (
         );
         break;
       case "prepare":
-        prepare(c, automatic);
+        prepare(c, automatic, targetArch);
         break;
       case "inventory":
         inventory();
@@ -1384,9 +1733,14 @@ if (
       case "finish":
         finish(c);
         break;
+      case "combine":
+        if (targetArch !== "amd64")
+          throw Error("combine runs on the primary host only");
+        console.log(JSON.stringify(combineMultiArch(c), null, 2));
+        break;
       default:
         throw Error(
-          "plan, prepare, inventory, finish, publisher-inspect, publisher-refresh, signer-setup, signer-sign, signer-recover or explicit publisher request required",
+          "plan, prepare, inventory, finish, combine, publisher-inspect, publisher-refresh, signer-setup, signer-sign, signer-recover or explicit publisher request required",
         );
     }
   } catch (e) {
