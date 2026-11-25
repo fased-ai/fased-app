@@ -24,6 +24,10 @@ const (
 	// Mainnet or Testnet execution even if an operator supplies the wrong RPC endpoint.
 	SolanaDevnetGenesisHash = "EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG"
 
+	// SolanaMainnetGenesisHash identifies official Solana Mainnet-Beta, preventing accidental
+	// Devnet/Testnet cross-signing under --execution-profile=mainnet-capped.
+	SolanaMainnetGenesisHash = "5eykt4UsFv8P8NJdTREpY1vzqKqZKvdpKuc147dw2N9d"
+
 	// MemoProgram is SPL Memo v2, used for non-monetary Devnet execution proofs.
 	MemoProgram = "MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr"
 

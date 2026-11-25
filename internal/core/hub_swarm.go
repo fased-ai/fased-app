@@ -79,6 +79,14 @@ func (s *Store) swarmService() (*swarm.Service, error) {
 	return rt.swarm, nil
 }
 
+func (s *Store) configureStage6MainnetCapped(maxOrderMicroUSD uint64) error {
+	rt, err := s.ensureStage6Runtime()
+	if err != nil {
+		return err
+	}
+	return rt.swarm.ConfigureMainnetCapped(maxOrderMicroUSD)
+}
+
 func (s *Store) closeStage6Runtime() error {
 	if s == nil {
 		return nil

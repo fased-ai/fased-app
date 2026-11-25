@@ -403,6 +403,8 @@ test("static vet, fuzz seed regression, and release assembler tests stay wired i
     "utf8",
   );
   assert.match(checks, /scripts\/assemble-dual-track-release\.test\.mjs/);
+  assert.match(checks, /scripts\/check-release-tag\.test\.mjs/);
+  assert.match(checks, /scripts\/check-signing-readiness\.test\.mjs/);
   assert.match(checks, /scripts\/signing-helpers\.test\.mjs/);
   assert.match(checks, /scripts\/build-core\.test\.mjs/);
   assert.match(checks, /- run: go vet \.\/\.\.\./);

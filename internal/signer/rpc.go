@@ -50,36 +50,37 @@ func packageFixturePath(path string) bool {
 // Request is a closed set of owner and fixture operations. No real sign/submit.
 // Passwords are bytes so callers can clear their own buffers after use.
 type Request struct {
-	VaultPassword       []byte                           `json:"vaultPassword,omitempty"`
-	SnapshotSHA256      string                           `json:"snapshotSha256,omitempty"`
-	RPCOrigin           string                           `json:"rpcOrigin,omitempty"`
-	RPCKey              []byte                           `json:"rpcKey,omitempty"`
-	Install             *update.InstallRequest           `json:"install,omitempty"`
-	Preflight           *update.PreflightRequest         `json:"preflight,omitempty"`
-	Stage               *update.StageRequest             `json:"stage,omitempty"`
-	Update              *update.IntentRequest            `json:"update,omitempty"`
-	HyperliquidPolicy   *HyperliquidPolicy               `json:"hyperliquidPolicy,omitempty"`
-	HyperliquidOrder    *HyperliquidOrderIntent          `json:"hyperliquidOrder,omitempty"`
-	HyperliquidLeverage *HyperliquidUpdateLeverageIntent `json:"hyperliquidLeverage,omitempty"`
-	HyperliquidCancel   *HyperliquidCancelIntent         `json:"hyperliquidCancel,omitempty"`
-	AgentVault          *AgentVaultPolicy                `json:"agentVault,omitempty"`
-	AgentVaultID        string                           `json:"agentVaultId,omitempty"`
-	AgentVaultSpend     *AgentVaultSpendRecord           `json:"agentVaultSpend,omitempty"`
-	SolanaDevnetSign    *SolanaDevnetSignIntent          `json:"solanaDevnetSign,omitempty"`
-	PolymarketOrder     *PolymarketOrderIntent           `json:"polymarketOrder,omitempty"`
-	KalshiSign          *KalshiSignIntent                `json:"kalshiSign,omitempty"`
-	KalshiKey           *KalshiKeyProvision              `json:"kalshiKey,omitempty"`
-	KalshiKeyID         string                           `json:"kalshiKeyId,omitempty"`
-	LighterOrder        *LighterOrderIntent              `json:"lighterOrder,omitempty"`
-	LighterCancel       *LighterCancelIntent             `json:"lighterCancel,omitempty"`
-	LighterLeverage     *LighterUpdateLeverageIntent     `json:"lighterLeverage,omitempty"`
-	ProbeID             string                           `json:"probeId,omitempty"`
-	IntentID            string                           `json:"intentId,omitempty"`
-	Action              string                           `json:"action"`
-	Password            []byte                           `json:"password,omitempty"`
-	NewPassword         []byte                           `json:"newPassword,omitempty"`
-	Document            []byte                           `json:"document,omitempty"`
-	UnlockSeconds       int                              `json:"unlockSeconds,omitempty"`
+	VaultPassword           []byte                           `json:"vaultPassword,omitempty"`
+	SnapshotSHA256          string                           `json:"snapshotSha256,omitempty"`
+	RPCOrigin               string                           `json:"rpcOrigin,omitempty"`
+	RPCKey                  []byte                           `json:"rpcKey,omitempty"`
+	Install                 *update.InstallRequest           `json:"install,omitempty"`
+	Preflight               *update.PreflightRequest         `json:"preflight,omitempty"`
+	Stage                   *update.StageRequest             `json:"stage,omitempty"`
+	Update                  *update.IntentRequest            `json:"update,omitempty"`
+	HyperliquidPolicy       *HyperliquidPolicy               `json:"hyperliquidPolicy,omitempty"`
+	HyperliquidOrder        *HyperliquidOrderIntent          `json:"hyperliquidOrder,omitempty"`
+	HyperliquidLeverage     *HyperliquidUpdateLeverageIntent `json:"hyperliquidLeverage,omitempty"`
+	HyperliquidCancel       *HyperliquidCancelIntent         `json:"hyperliquidCancel,omitempty"`
+	AgentVault              *AgentVaultPolicy                `json:"agentVault,omitempty"`
+	AgentVaultID            string                           `json:"agentVaultId,omitempty"`
+	AgentVaultSpend         *AgentVaultSpendRecord           `json:"agentVaultSpend,omitempty"`
+	SolanaDevnetSign        *SolanaDevnetSignIntent          `json:"solanaDevnetSign,omitempty"`
+	SolanaMainnetCappedSign *SolanaMainnetCappedSignIntent   `json:"solanaMainnetCappedSign,omitempty"`
+	PolymarketOrder         *PolymarketOrderIntent           `json:"polymarketOrder,omitempty"`
+	KalshiSign              *KalshiSignIntent                `json:"kalshiSign,omitempty"`
+	KalshiKey               *KalshiKeyProvision              `json:"kalshiKey,omitempty"`
+	KalshiKeyID             string                           `json:"kalshiKeyId,omitempty"`
+	LighterOrder            *LighterOrderIntent              `json:"lighterOrder,omitempty"`
+	LighterCancel           *LighterCancelIntent             `json:"lighterCancel,omitempty"`
+	LighterLeverage         *LighterUpdateLeverageIntent     `json:"lighterLeverage,omitempty"`
+	ProbeID                 string                           `json:"probeId,omitempty"`
+	IntentID                string                           `json:"intentId,omitempty"`
+	Action                  string                           `json:"action"`
+	Password                []byte                           `json:"password,omitempty"`
+	NewPassword             []byte                           `json:"newPassword,omitempty"`
+	Document                []byte                           `json:"document,omitempty"`
+	UnlockSeconds           int                              `json:"unlockSeconds,omitempty"`
 	PublicInput
 }
 type Response struct {
@@ -126,7 +127,7 @@ func execute(v *Vault, r Request, owner bool) Response {
 			}
 		case "status", "create", "import-ordinary-seed", "unlock", "lock", "backup", "backup-history", "verify-backup", "restore", "fixture-update-inventory", "fixture-update-status", "fixture-update-prepare", "fixture-update-abort", "fixture-update-stage-write", "fixture-update-stage-status", "fixture-update-stage-finish", "fixture-update-preflight", "fixture-install-controller":
 		default:
-			if !(v.testnetExecutionAllowed() && isStage4TestnetAction(r.Action)) {
+			if !(v.stage4ExecutionAllowed() && isStage4TestnetAction(r.Action)) {
 				return Response{Error: ErrUnavailable.Error()}
 			}
 		}
@@ -170,9 +171,9 @@ func execute(v *Vault, r Request, owner bool) Response {
 			return Response{Error: "one typed swap action required"}
 		}
 	}
-	if r.HyperliquidPolicy != nil || r.HyperliquidOrder != nil || r.HyperliquidLeverage != nil || r.HyperliquidCancel != nil || r.AgentVault != nil || r.AgentVaultID != "" || r.AgentVaultSpend != nil || r.SolanaDevnetSign != nil || r.PolymarketOrder != nil || r.KalshiSign != nil || r.KalshiKey != nil || r.KalshiKeyID != "" || r.LighterOrder != nil || r.LighterCancel != nil || r.LighterLeverage != nil ||
+	if r.HyperliquidPolicy != nil || r.HyperliquidOrder != nil || r.HyperliquidLeverage != nil || r.HyperliquidCancel != nil || r.AgentVault != nil || r.AgentVaultID != "" || r.AgentVaultSpend != nil || r.SolanaDevnetSign != nil || r.SolanaMainnetCappedSign != nil || r.PolymarketOrder != nil || r.KalshiSign != nil || r.KalshiKey != nil || r.KalshiKeyID != "" || r.LighterOrder != nil || r.LighterCancel != nil || r.LighterLeverage != nil ||
 		r.Action == "hyperliquid-status" || r.Action == "hyperliquid-policy" || r.Action == "hyperliquid-sign-leverage" || r.Action == "hyperliquid-sign-order" || r.Action == "hyperliquid-sign-cancel" ||
-		r.Action == "agent-vault-set" || r.Action == "agent-vault-revoke" || r.Action == "agent-vault-list" || r.Action == "agent-vault-record-loss" || r.Action == "solana-devnet-sign" ||
+		r.Action == "agent-vault-set" || r.Action == "agent-vault-revoke" || r.Action == "agent-vault-list" || r.Action == "agent-vault-record-loss" || r.Action == "solana-devnet-sign" || r.Action == "solana-mainnet-capped-sign" ||
 		r.Action == "polymarket-status" || r.Action == "polymarket-sign-order" ||
 		r.Action == "kalshi-status" || r.Action == "kalshi-generate-key" || r.Action == "kalshi-provision-key" || r.Action == "kalshi-sign-request" ||
 		r.Action == "lighter-status" || r.Action == "lighter-sign-order" || r.Action == "lighter-sign-cancel" || r.Action == "lighter-sign-leverage" {
@@ -191,6 +192,9 @@ func execute(v *Vault, r Request, owner bool) Response {
 			expected.HyperliquidCancel = r.HyperliquidCancel
 		case "solana-devnet-sign":
 			expected.SolanaDevnetSign = r.SolanaDevnetSign
+			expected.AgentVaultID = r.AgentVaultID
+		case "solana-mainnet-capped-sign":
+			expected.SolanaMainnetCappedSign = r.SolanaMainnetCappedSign
 			expected.AgentVaultID = r.AgentVaultID
 		case "polymarket-sign-order":
 			expected.PolymarketOrder = r.PolymarketOrder
@@ -228,7 +232,7 @@ func execute(v *Vault, r Request, owner bool) Response {
 		switch r.Action {
 		case "receipt-rpc-save", "receipt-rpc-unlock", "swap-approve", "swap-sign", "swap-receipt", "swap-reconcile", "swap-cancel", "status", "create", "import-managed-seed", "import-ordinary-seed", "unlock", "lock", "backup", "backup-history", "verify-backup", "restore", "fixture-update-inventory", "fixture-update-status", "fixture-update-prepare", "fixture-update-abort", "fixture-update-stage-write", "fixture-update-stage-status", "fixture-update-stage-finish", "fixture-update-preflight", "fixture-install-controller":
 		default:
-			if !(v.testnetExecutionAllowed() && isStage4TestnetAction(r.Action)) {
+			if !(v.stage4ExecutionAllowed() && isStage4TestnetAction(r.Action)) {
 				return Response{Error: ErrUnavailable.Error()}
 			}
 		}
@@ -526,6 +530,16 @@ func execute(v *Vault, r Request, owner bool) Response {
 			out.Error = e.Error()
 		}
 		return out
+	case "solana-mainnet-capped-sign":
+		if r.SolanaMainnetCappedSign == nil {
+			return Response{Error: "solana mainnet-capped sign intent required", Status: v.Status()}
+		}
+		signed, e := v.SignSolanaMainnetCappedIPC(*r.SolanaMainnetCappedSign, r.AgentVaultID)
+		out := Response{SolanaDevnetSigned: signed, Status: v.Status()}
+		if e != nil {
+			out.Error = e.Error()
+		}
+		return out
 	case "polymarket-status":
 		st, e := v.PolymarketStatus()
 		out := Response{PolymarketStatus: st, Status: v.Status()}
@@ -628,7 +642,7 @@ func execute(v *Vault, r Request, owner bool) Response {
 // this allowlist after authenticating the actual kernel peer UID.
 func AppActionAllowed(action string) bool {
 	switch action {
-	case "status", "fixture-approvals", "fixture-state", "fixture-reserve", "fixture-execute", "fixture-reconcile", "fixture-operation", "swap-sign", "swap-receipt", "swap-reconcile", "swap-cancel", "hyperliquid-status", "hyperliquid-sign-leverage", "hyperliquid-sign-order", "hyperliquid-sign-cancel", "agent-vault-list", "solana-devnet-sign", "polymarket-status", "polymarket-sign-order", "kalshi-status", "kalshi-sign-request", "lighter-status", "lighter-sign-order", "lighter-sign-cancel", "lighter-sign-leverage":
+	case "status", "fixture-approvals", "fixture-state", "fixture-reserve", "fixture-execute", "fixture-reconcile", "fixture-operation", "swap-sign", "swap-receipt", "swap-reconcile", "swap-cancel", "hyperliquid-status", "hyperliquid-sign-leverage", "hyperliquid-sign-order", "hyperliquid-sign-cancel", "agent-vault-list", "solana-devnet-sign", "solana-mainnet-capped-sign", "polymarket-status", "polymarket-sign-order", "kalshi-status", "kalshi-sign-request", "lighter-status", "lighter-sign-order", "lighter-sign-cancel", "lighter-sign-leverage":
 		return true
 	}
 	return false

@@ -97,14 +97,16 @@ type Event struct {
 
 // StatusView summarizes Swarm opt-in state, locks, peers, and verified A2A signals.
 type StatusView struct {
-	Config         SwarmConfig `json:"config"`
-	LiveCopyLocked bool        `json:"liveCopyLocked"`
-	WENHeld        bool        `json:"wenHeld"`
-	PeerCount      int         `json:"peerCount"`
-	SignalCount    int         `json:"signalCount"`
-	Peers          []Peer      `json:"peers"`
-	RecentSignals  []Envelope  `json:"recentSignals"`
-	FixtureMode    bool        `json:"fixtureMode"`
+	Config           SwarmConfig `json:"config"`
+	LiveCopyLocked   bool        `json:"liveCopyLocked"`
+	CappedMode       bool        `json:"cappedMode,omitempty"`
+	MaxOrderMicroUSD uint64      `json:"maxOrderMicroUsd,omitempty"`
+	WENHeld          bool        `json:"wenHeld"`
+	PeerCount        int         `json:"peerCount"`
+	SignalCount      int         `json:"signalCount"`
+	Peers            []Peer      `json:"peers"`
+	RecentSignals    []Envelope  `json:"recentSignals"`
+	FixtureMode      bool        `json:"fixtureMode"`
 }
 
 // ValidateCopyMode enforces shadow/paper copy lock while SwarmLiveCopyEnabled is false.

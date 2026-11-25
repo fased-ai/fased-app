@@ -7,8 +7,11 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 )
+
+const hardMaxCappedOrderMicroUSD uint64 = 250_000_000
 
 // Config parameterizes the Stage 5 equities & OCC options router.
 type Config struct {
@@ -19,10 +22,34 @@ type Config struct {
 
 // Service manages locked Paper equities/options quotes, OCC chains, and paper order routing.
 type Service struct {
-	store       *store
-	client      *Client
-	fixtureMode bool
-	now         func() time.Time
+	store            *store
+	client           *Client
+	fixtureMode      bool
+	now              func() time.Time
+	mu               sync.RWMutex
+	cappedEnabled    bool
+	maxOrderMicroUSD uint64
+}
+
+// ConfigureMainnetCapped enables opt-in small-cap live equities routing within hard $250/order bounds.
+func (s *Service) ConfigureMainnetCapped(maxOrderMicroUSD uint64) error {
+	if s == nil {
+		return errors.New("equities service closed")
+	}
+	if maxOrderMicroUSD == 0 || maxOrderMicroUSD > hardMaxCappedOrderMicroUSD {
+		return errors.New("equities mainnet-capped max order must be between 1 and 250000000 micro-USD ($250)")
+	}
+	s.mu.Lock()
+	s.cappedEnabled = true
+	s.maxOrderMicroUSD = maxOrderMicroUSD
+	s.mu.Unlock()
+	return nil
+}
+
+func (s *Service) cappedPolicy() (bool, uint64) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.cappedEnabled, s.maxOrderMicroUSD
 }
 
 // NewService opens <dataDir>/equities/equities.sqlite and initializes Paper routing guards.
@@ -60,9 +87,12 @@ func (s *Service) Status(ctx context.Context) (StatusView, error) {
 	if err != nil {
 		return StatusView{}, err
 	}
+	capped, maxUSD := s.cappedPolicy()
 	return StatusView{
 		ActivationEnabled: EquitiesActivationEnabled,
-		LiveLocked:        !EquitiesActivationEnabled,
+		LiveLocked:        !EquitiesActivationEnabled && !capped,
+		CappedMode:        capped,
+		MaxOrderMicroUSD:  maxUSD,
 		AlpacaPaperOrigin: AlpacaPaperOrigin,
 		IBKRLocalOrigin:   IBKRLocalOrigin,
 		RecentOrders:      orders,
@@ -89,7 +119,8 @@ func (s *Service) SubmitOrder(ctx context.Context, req OrderRequest) (OrderRecei
 	if s == nil || s.store == nil {
 		return OrderReceipt{}, errors.New("equities service closed")
 	}
-	isOption, err := ValidateOrderRequest(&req)
+	capped, maxUSD := s.cappedPolicy()
+	isOption, err := validateOrderRequest(&req, maxUSD)
 	if err != nil {
 		return OrderReceipt{}, err
 	}
@@ -98,6 +129,10 @@ func (s *Service) SubmitOrder(ctx context.Context, req OrderRequest) (OrderRecei
 	nowUnix := s.now().UTC().Unix()
 	status := "paper_simulated"
 	msg := fmt.Sprintf("%s %s %.6g %s recorded in paper mode (live brokerage locked)", req.Venue, req.Side, req.Quantity, req.Symbol)
+	if capped && req.Environment == "live" {
+		status = "mainnet_capped_routed"
+		msg = fmt.Sprintf("%s %s %.6g %s routed under mainnet-capped ($%g cap)", req.Venue, req.Side, req.Quantity, req.Symbol, float64(maxUSD)/1_000_000)
+	}
 	rec := OrderReceipt{
 		ID:          "eq-" + hex.EncodeToString(idBytes),
 		Venue:       req.Venue,

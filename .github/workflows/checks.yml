@@ -42,7 +42,7 @@ jobs:
           node-version: "24"
       - run: |
           /bin/bash -n install.sh install-cli.sh
-          node --test scripts/ci-routing.test.mjs scripts/ci-core-coverage.test.mjs scripts/install-entry.test.mjs scripts/fixture-installed-trade-journey.test.mjs scripts/linux-desktop-package.test.mjs scripts/build-dual-track-cli.test.mjs scripts/assemble-dual-track-release.test.mjs scripts/check-contract-canary.test.mjs scripts/ci-ubuntu-mirror.test.mjs scripts/fixture-core-storage.test.mjs scripts/handoff-transport-evidence.test.mjs scripts/macos-dmg.test.mjs scripts/signing-helpers.test.mjs scripts/smoke-dual-track-installers.test.mjs scripts/soak-multi-os.test.mjs scripts/ubuntu-preparation.test.mjs
+          node --test scripts/ci-routing.test.mjs scripts/ci-core-coverage.test.mjs scripts/install-entry.test.mjs scripts/fixture-installed-trade-journey.test.mjs scripts/linux-desktop-package.test.mjs scripts/build-dual-track-cli.test.mjs scripts/assemble-dual-track-release.test.mjs scripts/check-contract-canary.test.mjs scripts/check-release-tag.test.mjs scripts/check-signing-readiness.test.mjs scripts/ci-ubuntu-mirror.test.mjs scripts/fixture-core-storage.test.mjs scripts/handoff-transport-evidence.test.mjs scripts/macos-dmg.test.mjs scripts/signing-helpers.test.mjs scripts/smoke-dual-track-installers.test.mjs scripts/soak-multi-os.test.mjs scripts/ubuntu-preparation.test.mjs
       - name: Verify installer and release acceptance contracts
         run: |
           node --test --test-isolation=none scripts/prepare-ubuntu-release.test.mjs scripts/release-acceptance.test.mjs scripts/attested-release.test.mjs

@@ -71,6 +71,17 @@ func (s *Store) ensureStage5Runtime() (*stage5Runtime, error) {
 	return rt, nil
 }
 
+func (s *Store) configureStage5MainnetCapped(maxOrderMicroUSD uint64) error {
+	rt, err := s.ensureStage5Runtime()
+	if err != nil {
+		return err
+	}
+	if err := rt.cex.ConfigureMainnetCapped(maxOrderMicroUSD); err != nil {
+		return err
+	}
+	return rt.equities.ConfigureMainnetCapped(maxOrderMicroUSD)
+}
+
 func (s *Store) closeStage5Runtime() error {
 	if s == nil {
 		return nil

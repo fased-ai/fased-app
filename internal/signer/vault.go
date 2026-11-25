@@ -58,20 +58,22 @@ type envelope struct {
 }
 
 type Status struct {
-	Custody            *CustodyAdmission `json:"custody,omitempty"`
-	AdmissionHeld      bool              `json:"admissionHeld,omitempty"`
-	ReceiptRPC         *ReceiptRPCStatus `json:"receiptRPC,omitempty"`
-	SwapReady          bool              `json:"swapReady,omitempty"`
-	UpdateHeld         bool              `json:"updateHeld"`
-	FixtureOnly        bool              `json:"fixtureOnly"`
-	WalletSigner       bool              `json:"walletSigner"`
-	FinancialExecution bool              `json:"financialExecution"`
-	Account            *AccountRef       `json:"account,omitempty"`
-	Locked             bool              `json:"locked"`
-	UnlockUntil        time.Time         `json:"unlockUntil,omitempty"`
-	RecoveryRequired   bool              `json:"recoveryRequired"`
-	UnattendedUnlock   bool              `json:"unattendedUnlock"`
-	TestnetExecution   bool              `json:"testnetExecution,omitempty"`
+	Custody                 *CustodyAdmission `json:"custody,omitempty"`
+	AdmissionHeld           bool              `json:"admissionHeld,omitempty"`
+	ReceiptRPC              *ReceiptRPCStatus `json:"receiptRPC,omitempty"`
+	SwapReady               bool              `json:"swapReady,omitempty"`
+	UpdateHeld              bool              `json:"updateHeld"`
+	FixtureOnly             bool              `json:"fixtureOnly"`
+	WalletSigner            bool              `json:"walletSigner"`
+	FinancialExecution      bool              `json:"financialExecution"`
+	Account                 *AccountRef       `json:"account,omitempty"`
+	Locked                  bool              `json:"locked"`
+	UnlockUntil             time.Time         `json:"unlockUntil,omitempty"`
+	RecoveryRequired        bool              `json:"recoveryRequired"`
+	UnattendedUnlock        bool              `json:"unattendedUnlock"`
+	TestnetExecution        bool              `json:"testnetExecution,omitempty"`
+	MainnetCapped           bool              `json:"mainnetCapped,omitempty"`
+	MainnetMaxOrderMicroUSD uint64            `json:"mainnetMaxOrderMicroUsd,omitempty"`
 }
 
 type Vault struct {
@@ -80,6 +82,8 @@ type Vault struct {
 	ordinaryTradeEnabled bool
 	ordinary             bool
 	testnetExecEnabled   bool
+	mainnetCappedEnabled bool
+	mainnetCappedPolicy  MainnetCappedPolicy
 	receiptRPCFactory    func(onchain.CredentialAccess) (SwapObserver, error)
 	receiptRPCLease      *receiptRPCLease
 	swapObserver         SwapObserver
@@ -303,6 +307,8 @@ func (v *Vault) Close() error {
 	}
 	v.closed = true
 	v.testnetExecEnabled = false
+	v.mainnetCappedEnabled = false
+	v.mainnetCappedPolicy = MainnetCappedPolicy{}
 	v.lock()
 	v.clearHyperliquidState()
 	return v.store.close()
@@ -330,7 +336,7 @@ func (v *Vault) Status() Status {
 	v.mu.Lock()
 	defer v.mu.Unlock()
 	locked := !v.unlocked()
-	s := Status{ReceiptRPC: v.receiptRPCStatus(), SwapReady: v.managedSwapEligible() || v.ordinaryTradeEligible(), FixtureOnly: true, Locked: locked, UnlockUntil: v.until, UpdateHeld: v.store.failedState() || v.ledger != nil && v.ledger.activeUpdate != "", TestnetExecution: v.testnetExecEnabled}
+	s := Status{ReceiptRPC: v.receiptRPCStatus(), SwapReady: v.managedSwapEligible() || v.ordinaryTradeEligible(), FixtureOnly: true, Locked: locked, UnlockUntil: v.until, UpdateHeld: v.store.failedState() || v.ledger != nil && v.ledger.activeUpdate != "", TestnetExecution: v.testnetExecEnabled, MainnetCapped: v.mainnetCappedEnabled, MainnetMaxOrderMicroUSD: v.mainnetCappedPolicy.MaxOrderMicroUSD}
 	if v.ordinary {
 		hint := v.admissionContext
 		s.Custody = &hint
