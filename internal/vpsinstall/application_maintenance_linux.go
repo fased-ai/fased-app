@@ -7,11 +7,9 @@ import (
 	"errors"
 	"fmt"
 	"github.com/fased-ai/fased-app/internal/core"
-	"github.com/fased-ai/fased-app/internal/hostplatform"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strconv"
 	"strings"
 
@@ -250,7 +248,7 @@ func installApplicationMaintenance(ctx context.Context, m Manifest, o hostOps, c
 	if e != nil {
 		return e
 	}
-	if _, e = hostplatform.LookupRemote(string(osInfo.Data), runtime.GOARCH); e != nil {
+	if e = lookupLegacyPlatform(osInfo.Data); e != nil {
 		return e
 	}
 

@@ -3,7 +3,13 @@ import assert from "node:assert/strict";
 import { renderEntry, renderWindowsEntry } from "./render-install-entry.mjs";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { readFileSync, writeFileSync, mkdtempSync, mkdirSync, rmSync } from "node:fs";
+import {
+  readFileSync,
+  writeFileSync,
+  mkdtempSync,
+  mkdirSync,
+  rmSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 const template = readFileSync(
@@ -1326,10 +1332,20 @@ test("remote refresh-helper auto-discovers instance and passes --location remote
     const inst = "a".repeat(32);
     const prev = "b".repeat(64);
     const pkgDir = join(root, "pkg", String(uid), "remote", inst);
-    const instDir = join(root, "maint", "instances", String(uid), "remote", inst);
+    const instDir = join(
+      root,
+      "maint",
+      "instances",
+      String(uid),
+      "remote",
+      inst,
+    );
     mkdirSync(pkgDir, { recursive: true });
     mkdirSync(instDir, { recursive: true });
-    writeFileSync(join(instDir, "authority.json"), JSON.stringify({ imageSha256: prev }));
+    writeFileSync(
+      join(instDir, "authority.json"),
+      JSON.stringify({ imageSha256: prev }),
+    );
 
     const rewritten = block
       .replaceAll("/var/lib/fased-app-package", join(root, "pkg"))
@@ -1347,18 +1363,29 @@ fn`,
     ]);
     assert.equal(r.status, 0, r.stderr.toString());
     const out = r.stdout.toString();
-    assert.match(out, new RegExp(`--location remote --instance ${inst} --previous-helper ${prev}`));
+    assert.match(
+      out,
+      new RegExp(
+        `--location remote --instance ${inst} --previous-helper ${prev}`,
+      ),
+    );
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
 
   // CLI validation accepts --remote --refresh-helper and rejects --server --refresh-helper.
   const detached = renderEntry(template, config);
-  const valStart = detached.indexOf("if [[ $action == refresh-helper ]]; then\n");
+  const valStart = detached.indexOf(
+    "if [[ $action == refresh-helper ]]; then\n",
+  );
   const valEnd = detached.indexOf("\n[[ -z $operator", valStart);
   assert.ok(valStart > 0 && valEnd > valStart);
   const valBlock = detached.slice(valStart, valEnd);
-  for (const [profile, ok] of [["remote", true], ["local", true], ["server", false]]) {
+  for (const [profile, ok] of [
+    ["remote", true],
+    ["local", true],
+    ["server", false],
+  ]) {
     const chk = spawnSync("bash", [
       "-c",
       `die() { exit 1; }; action=refresh-helper profile=${profile} operator='' development_only=0 refresh_instance='' previous_helper=''; ${valBlock}`,
@@ -1368,21 +1395,28 @@ fn`,
 });
 
 test("multi-key /root/.ssh/authorized_keys extraction passes unique candidates separated by newlines", () => {
-  const snippetStart = template.indexOf("if [[ $profile == remote && $action == install && $ssh_user == root");
+  const snippetStart = template.indexOf(
+    "if [[ $profile == remote && $action == install && $ssh_user == root",
+  );
   const snippetEnd = template.indexOf("\nbody=", snippetStart);
   assert.ok(snippetStart > 0 && snippetEnd > snippetStart);
   const snippet = template.slice(snippetStart, snippetEnd);
 
   const dir = mkdtempSync(join(tmpdir(), "fased-authkeys-"));
   try {
-    const key1 = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExampleKeyOne user1@host";
-    const key2 = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExampleKeyTwo user2@host";
+    const key1 =
+      "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExampleKeyOne user1@host";
+    const key2 =
+      "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExampleKeyTwo user2@host";
     const keysFile = join(dir, "authorized_keys");
     writeFileSync(
       keysFile,
       `# comment\n${key1}\n${key2}\n${key1}\ncommand="evil" ${key2}\nssh-dss invalidkey\n`,
     );
-    const rewritten = snippet.replaceAll("/root/.ssh/authorized_keys", keysFile);
+    const rewritten = snippet.replaceAll(
+      "/root/.ssh/authorized_keys",
+      keysFile,
+    );
     const r = spawnSync("bash", [
       "-c",
       `set -euo pipefail
