@@ -439,13 +439,18 @@ func (h *HTTPHandler) marketDataStreamSSE(w http.ResponseWriter, r *http.Request
 		initial = &series
 	}
 
-	busFilters := make([]marketdata.Filter, 0, len(filters))
+	busFilters := make([]marketdata.Filter, 0, len(filters)*2)
 	derivedStyles := make(map[string][]string)
 	wantStandard := make(map[string]bool)
 	styleKeyFor := func(v, s, iv string) string {
-		return strings.ToLower(strings.TrimSpace(v)) + "|" + strings.ToUpper(strings.TrimSpace(s)) + "|" + strings.ToLower(strings.TrimSpace(iv))
+		up := strings.ToUpper(strings.TrimSpace(s))
+		if strings.EqualFold(strings.TrimSpace(v), marketdata.VenueHyperliquid) && strings.HasSuffix(up, "-PERP") {
+			up = strings.TrimSuffix(up, "-PERP")
+		}
+		return strings.ToLower(strings.TrimSpace(v)) + "|" + up + "|" + strings.ToLower(strings.TrimSpace(iv))
 	}
 	for _, f := range filters {
+		busFilters = append(busFilters, f)
 		k := styleKeyFor(f.Venue, f.Symbol, f.Interval)
 		if f.Style != "" && f.Style != marketdata.StyleStandard && f.Style != marketdata.StyleTick && f.Style != marketdata.StyleVolume {
 			list := derivedStyles[k]
@@ -459,11 +464,12 @@ func (h *HTTPHandler) marketDataStreamSSE(w http.ResponseWriter, r *http.Request
 			if !exists {
 				derivedStyles[k] = append(list, f.Style)
 			}
-			f.Style = marketdata.StyleStandard
+			stdFilter := f
+			stdFilter.Style = marketdata.StyleStandard
+			busFilters = append(busFilters, stdFilter)
 		} else if f.Style == marketdata.StyleStandard || f.Style == "" {
 			wantStandard[k] = true
 		}
-		busFilters = append(busFilters, f)
 	}
 
 	subCh, unsubscribe := svc.SubscribeMulti(busFilters)
