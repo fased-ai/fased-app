@@ -92,15 +92,16 @@ type SolanaDevnetRehearseResult struct {
 }
 
 type stage4Runtime struct {
-	profile          string
-	signerCall       func(context.Context, signer.Request) (signer.Response, error)
-	agentVaultID     string
-	devnetExecutor   *onchain.DevnetExecutor
-	devnetHost       string
-	hyperliquidOn    bool
-	polymarketClient *polymarket.Client
-	kalshiClient     *kalshi.Client
-	lighterClient    *lighter.Client
+	mu                sync.Mutex
+	profile           string
+	signerCall        func(context.Context, signer.Request) (signer.Response, error)
+	agentVaultID      string
+	devnetExecutor    *onchain.DevnetExecutor
+	devnetHost        string
+	hyperliquidClient *hyperliquid.Client
+	polymarketClient  *polymarket.Client
+	kalshiClient      *kalshi.Client
+	lighterClient     *lighter.Client
 }
 
 var (
@@ -122,6 +123,9 @@ func init() {
 	}
 	stage4ClearHook = func(s *Store) {
 		s.clearStage4Runtime()
+	}
+	stage4EnsureHyperliquidIPCHook = func(ctx context.Context, s *Store) bool {
+		return s.ensureHyperliquidIPC(ctx)
 	}
 }
 
@@ -187,24 +191,22 @@ func (s *Store) ConfigureTestnetExecution(ctx context.Context, cfg TestnetExecut
 		devnetHost = devnetExec.SanitizedHost()
 	}
 
-	hlOn := false
+	hlClient := cfg.HyperliquidClient
+	if hlClient == nil {
+		hlClient, err = hyperliquid.NewTestnetExecutionClient()
+		if err != nil {
+			return err
+		}
+	}
 	hlResp, hlErr := cfg.SignerCall(checkCtx, signer.Request{Action: "hyperliquid-status"})
 	if hlErr == nil && hlResp.HyperliquidStatus != nil && hlResp.HyperliquidStatus.Policy != nil {
 		if hlResp.HyperliquidStatus.Policy.Network == "mainnet" {
 			return signer.ErrUnavailable
 		}
-		if hlResp.HyperliquidStatus.Policy.Network == "testnet" {
-			hlClient := cfg.HyperliquidClient
-			if hlClient == nil {
-				hlClient, err = hyperliquid.NewTestnetExecutionClient()
-				if err != nil {
-					return err
-				}
-			}
+		if hlResp.HyperliquidStatus.Enabled && hlResp.HyperliquidStatus.Policy.Network == "testnet" && hlResp.HyperliquidStatus.Address != "" {
 			if err := s.ConfigureHyperliquidIPC(hlClient, cfg.SignerCall, strings.TrimSpace(cfg.AgentVaultID)); err != nil {
 				return err
 			}
-			hlOn = true
 		}
 	}
 
@@ -223,18 +225,51 @@ func (s *Store) ConfigureTestnetExecution(ctx context.Context, cfg TestnetExecut
 
 	stage4RuntimeMu.Lock()
 	stage4Runtimes[s] = &stage4Runtime{
-		profile:          signer.ExecutionProfileTestnet,
-		signerCall:       cfg.SignerCall,
-		agentVaultID:     strings.TrimSpace(cfg.AgentVaultID),
-		devnetExecutor:   devnetExec,
-		devnetHost:       devnetHost,
-		hyperliquidOn:    hlOn,
-		polymarketClient: pmClient,
-		kalshiClient:     kClient,
-		lighterClient:    lClient,
+		profile:           signer.ExecutionProfileTestnet,
+		signerCall:        cfg.SignerCall,
+		agentVaultID:      strings.TrimSpace(cfg.AgentVaultID),
+		devnetExecutor:    devnetExec,
+		devnetHost:        devnetHost,
+		hyperliquidClient: hlClient,
+		polymarketClient:  pmClient,
+		kalshiClient:      kClient,
+		lighterClient:     lClient,
 	}
 	stage4RuntimeMu.Unlock()
 	return nil
+}
+
+// ensureHyperliquidIPC lazily binds Core's Hyperliquid runtime over signer IPC
+// once the signer vault has been unlocked and a testnet policy is active.
+func (s *Store) ensureHyperliquidIPC(ctx context.Context) bool {
+	if s.hyperliquidRuntime() != nil {
+		return true
+	}
+	rt := s.stage4Runtime()
+	if rt == nil || rt.profile != signer.ExecutionProfileTestnet || rt.signerCall == nil || rt.hyperliquidClient == nil {
+		return false
+	}
+	rt.mu.Lock()
+	defer rt.mu.Unlock()
+	if s.hyperliquidRuntime() != nil {
+		return true
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	probeCtx, cancel := context.WithTimeout(ctx, hyperliquidSignerTimeout)
+	defer cancel()
+	hlResp, err := rt.signerCall(probeCtx, signer.Request{Action: "hyperliquid-status"})
+	if err != nil || hlResp.HyperliquidStatus == nil || !hlResp.HyperliquidStatus.Enabled || hlResp.HyperliquidStatus.Policy == nil {
+		return false
+	}
+	if hlResp.HyperliquidStatus.Policy.Network != "testnet" || hlResp.HyperliquidStatus.Address == "" {
+		return false
+	}
+	if err := s.ConfigureHyperliquidIPC(rt.hyperliquidClient, rt.signerCall, rt.agentVaultID); err != nil {
+		return false
+	}
+	return s.hyperliquidRuntime() != nil
 }
 
 // ConfigureTestnetExecution enables opt-in Stage 4 non-WEN Devnet/Testnet execution on Server.
@@ -261,7 +296,7 @@ func (s *Store) executionStatus(ctx context.Context) ExecutionStatusView {
 	view.FinancialExecution = true
 	view.SolanaDevnetReady = rt.devnetExecutor != nil
 	view.SolanaDevnetHost = rt.devnetHost
-	view.HyperliquidTestnet = rt.hyperliquidOn || s.hyperliquidRuntime() != nil
+	view.HyperliquidTestnet = s.ensureHyperliquidIPC(ctx)
 	view.AgentVaultID = rt.agentVaultID
 	if rt.signerCall != nil {
 		probeCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
@@ -458,7 +493,7 @@ func (h *HTTPHandler) signerStatusAPI(w http.ResponseWriter, r *http.Request) {
 		"mainnetLocked":          !hyperliquidActivationEnabled && !signer.HyperliquidActivationEnabled && !signer.PolymarketActivationEnabled && !signer.KalshiActivationEnabled && !signer.LighterActivationEnabled,
 		"wenHeld":                !miningActivationEnabled,
 		"solanaDevnetReady":      rt.devnetExecutor != nil,
-		"hyperliquidTestnet":     rt.hyperliquidOn || h.store.hyperliquidRuntime() != nil,
+		"hyperliquidTestnet":     h.store.ensureHyperliquidIPC(r.Context()),
 		"polymarketTestnetReady": rt.polymarketClient != nil,
 		"kalshiDemoReady":        rt.kalshiClient != nil,
 		"lighterTestnetReady":    rt.lighterClient != nil,

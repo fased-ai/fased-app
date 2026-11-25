@@ -392,7 +392,7 @@ func run(args []string, input *os.File, out, errOut io.Writer) error {
 	case "fixture-update-inventory":
 		r.ProbeID = update.NewProbe()
 	case "status", "lock", "hyperliquid-status", "agent-vault-list", "polymarket-status", "kalshi-status", "lighter-status":
-	case "hyperliquid-policy", "agent-vault-set", "agent-vault-revoke", "agent-vault-record-loss", "kalshi-generate-key":
+	case "hyperliquid-policy", "agent-vault-set", "agent-vault-revoke", "agent-vault-record-loss", "kalshi-generate-key", "kalshi-provision-key":
 		if !owner || !*requestStdin {
 			return errors.New("typed owner JSON request via --request-stdin required")
 		}
@@ -451,7 +451,7 @@ func run(args []string, input *os.File, out, errOut io.Writer) error {
 
 func isTypedOwnerSignerAction(action string) bool {
 	switch action {
-	case "hyperliquid-policy", "agent-vault-set", "agent-vault-revoke", "agent-vault-record-loss", "kalshi-generate-key":
+	case "hyperliquid-policy", "agent-vault-set", "agent-vault-revoke", "agent-vault-record-loss", "kalshi-generate-key", "kalshi-provision-key":
 		return true
 	}
 	return false
@@ -512,6 +512,12 @@ func decodeTypedSignerStdin(action string, document []byte, dst *signer.Request)
 			return err
 		}
 		dst.KalshiKeyID = body.KeyID
+	case "kalshi-provision-key":
+		var body signer.KalshiKeyProvision
+		if err := decodeStrictJSON(document, &body); err != nil {
+			return err
+		}
+		dst.KalshiKey = &body
 	default:
 		return signer.ErrUnavailable
 	}

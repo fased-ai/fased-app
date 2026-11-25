@@ -437,6 +437,9 @@ func (s *Store) Agents(ctx context.Context, profile, query string) (AgentView, e
 	if s.wenMining != nil || len(miningProjection.Tasks) > 0 || len(miningProjection.Runs) > 0 {
 		v.WENMining = &miningProjection
 	}
+	if stage4EnsureHyperliquidIPCHook != nil {
+		stage4EnsureHyperliquidIPCHook(ctx, s)
+	}
 	if hl := s.hyperliquidProjection(r, nil); hl != nil {
 		v.Hyperliquid = hl
 	}

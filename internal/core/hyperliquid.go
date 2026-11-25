@@ -108,10 +108,11 @@ type hyperliquidRuntime struct {
 }
 
 var (
-	hyperliquidRuntimeMu    sync.RWMutex
-	hyperliquidRuntimes     = map[*Store]*hyperliquidRuntime{}
-	stage4LiveExecutionHook func(*Store) bool
-	stage4ClearHook         func(*Store)
+	hyperliquidRuntimeMu           sync.RWMutex
+	hyperliquidRuntimes            = map[*Store]*hyperliquidRuntime{}
+	stage4LiveExecutionHook        func(*Store) bool
+	stage4ClearHook                func(*Store)
+	stage4EnsureHyperliquidIPCHook func(context.Context, *Store) bool
 )
 
 func (s *Store) hyperliquidRuntime() *hyperliquidRuntime {
@@ -322,6 +323,9 @@ func (s *Store) refreshHyperliquidState(ctx context.Context, rt *hyperliquidRunt
 }
 
 func (s *Store) changeHyperliquid(ctx context.Context, c AgentCommand) (*HyperliquidView, string, error) {
+	if stage4EnsureHyperliquidIPCHook != nil {
+		stage4EnsureHyperliquidIPCHook(ctx, s)
+	}
 	rt := s.hyperliquidRuntime()
 	if rt == nil {
 		return nil, "", signer.ErrUnavailable
