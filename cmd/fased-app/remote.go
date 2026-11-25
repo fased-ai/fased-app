@@ -26,6 +26,7 @@ import (
 	"github.com/fased-ai/fased-app/internal/privateaccess"
 	"github.com/fased-ai/fased-app/internal/tailnet"
 	"github.com/fased-ai/fased-app/internal/vpsinstall"
+	"github.com/fased-ai/fased-app/internal/vpsnetwork"
 )
 
 const remoteOperationTimeout = 2 * time.Minute
@@ -416,16 +417,60 @@ func networkConsent(in io.Reader, out io.Writer) (vpsinstall.NetworkApproval, er
 	return approval, nil
 }
 
-func networkHandoff(out io.Writer, m vpsinstall.Manifest, status vpsinstall.NetworkStatus) {
-	if status.Phase == "pending" {
-		fmt.Fprintln(out, "Keep this connection open. Open a second SSH TCP connection through Tailscale (no ControlMaster reuse), verify private sign-in, then run before", status.Deadline.UTC().Format(time.RFC3339)+":")
-		if m.Phase == "package-remote" {
-			fmt.Fprintln(out, installationCommand(m.Core, "vps", "confirm", "--data-dir", m.Data, status.AttemptID))
+func networkHandoffParts(out io.Writer, corePath, dataDir, phase, attemptID, statusPhase string, deadline time.Time) {
+	if statusPhase == "pending" {
+		fmt.Fprintln(out, "Keep this connection open. Open a second SSH TCP connection through Tailscale (no ControlMaster reuse), verify private sign-in, then run before", deadline.UTC().Format(time.RFC3339)+":")
+		if phase == "package-remote" {
+			fmt.Fprintln(out, installationCommand(corePath, "vps", "confirm", "--data-dir", dataDir, attemptID))
 		} else {
-			fmt.Fprintln(out, installationCommand(m.Core, "vps", "confirm", status.AttemptID))
+			fmt.Fprintln(out, installationCommand(corePath, "vps", "confirm", attemptID))
 		}
 		fmt.Fprintln(out, "Without confirmation, rollback restores the previous SSH policy and removes only Fased's firewall table.")
 	}
+}
+
+func networkHandoff(out io.Writer, m vpsinstall.Manifest, status vpsinstall.NetworkStatus) {
+	networkHandoffParts(out, m.Core, m.Data, m.Phase, status.AttemptID, status.Phase, status.Deadline)
+}
+
+func packageNetworkHandoff(out io.Writer, m vpsnetwork.Manifest, status vpsnetwork.Status) {
+	networkHandoffParts(out, m.Core, m.Data, m.Phase, status.AttemptID, status.Phase, status.Deadline)
+}
+
+func runPackageNetworkCommand(ctx context.Context, action, attemptID string, m vpsnetwork.Manifest, in io.Reader, out, errOut io.Writer, system *custodyinstall.System) error {
+	var status vpsnetwork.Status
+	var err error
+	switch action {
+	case "harden":
+		approval, aErr := networkConsent(in, errOut)
+		if aErr != nil {
+			return aErr
+		}
+		status, err = vpsnetwork.Begin(ctx, m, system, vpsnetwork.Approval{
+			PrivateUI:       approval.PrivateUI,
+			ConsoleRecovery: approval.ConsoleRecovery,
+		})
+	case "confirm":
+		status, err = vpsnetwork.Confirm(ctx, m, system, attemptID)
+	case "finish":
+		status, err = vpsnetwork.Inspect(ctx, m, system)
+		if err == nil && status.Phase == "pending" {
+			status, err = vpsnetwork.Confirm(ctx, m, system, status.AttemptID)
+		} else if err == nil && status.Phase != "committed" {
+			err = errors.New("no pending private setup; existing access is preserved")
+		}
+	case "rollback":
+		status, err = vpsnetwork.Rollback(ctx, m, system)
+	case "network":
+		status, err = vpsnetwork.Inspect(ctx, m, system)
+	default:
+		return errors.New("unknown vps action")
+	}
+	if err != nil {
+		return err
+	}
+	packageNetworkHandoff(errOut, m, status)
+	return json.NewEncoder(out).Encode(status)
 }
 
 func isVPSNetworkAction(action string) bool {
@@ -469,19 +514,6 @@ func vpsCommand(args []string, in io.Reader, out, errOut io.Writer) error {
 	if runtime.GOOS != "linux" || os.Getuid() <= 0 || os.Geteuid() != os.Getuid() {
 		return errors.New("VPS management requires an ordinary Linux administrator")
 	}
-	var m vpsinstall.Manifest
-	var err error
-	if *dataDir != "" {
-		m, err = vpsinstall.LoadPackageNetwork(os.Getuid(), *dataDir)
-	} else {
-		m, err = vpsinstall.Load(os.Getuid())
-		if errors.Is(err, os.ErrNotExist) && isVPSNetworkAction(action) {
-			m, err = vpsinstall.LoadPackageNetwork(os.Getuid(), "")
-		}
-	}
-	if err != nil {
-		return err
-	}
 	system := remoteSystem(in, errOut)
 	ctx := context.Background()
 	cancel := func() {}
@@ -493,6 +525,28 @@ func vpsCommand(args []string, in io.Reader, out, errOut io.Writer) error {
 		ctx, cancel = context.WithTimeout(ctx, budget)
 	}
 	defer cancel()
+	attemptID := ""
+	if action == "confirm" {
+		attemptID = f.Arg(0)
+	}
+	if *dataDir != "" {
+		pm, err := vpsnetwork.Load(os.Getuid(), *dataDir)
+		if err != nil {
+			return err
+		}
+		return runPackageNetworkCommand(ctx, action, attemptID, pm, in, out, errOut, system)
+	}
+	m, err := vpsinstall.Load(os.Getuid())
+	if errors.Is(err, os.ErrNotExist) && isVPSNetworkAction(action) {
+		pm, pErr := vpsnetwork.Load(os.Getuid(), "")
+		if pErr != nil {
+			return pErr
+		}
+		return runPackageNetworkCommand(ctx, action, attemptID, pm, in, out, errOut, system)
+	}
+	if err != nil {
+		return err
+	}
 	if action == "login" {
 		if e := vpsinstall.ApplicationReaderSignIn(ctx, m, system); e != nil {
 			return e
