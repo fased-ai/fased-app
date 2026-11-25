@@ -13,10 +13,8 @@ import (
 
 	"github.com/fased-ai/fased-app/internal/bootstrap"
 	"github.com/fased-ai/fased-app/internal/core"
-	"github.com/fased-ai/fased-app/internal/custodyinstall"
 	"github.com/fased-ai/fased-app/internal/localinstall"
 	"github.com/fased-ai/fased-app/internal/update"
-	"github.com/fased-ai/fased-app/internal/vpsinstall"
 )
 
 // Maintainer composition only, never part of the shipped core/installer. No
@@ -84,44 +82,7 @@ func candidateAcceptanceCommand(args []string, out, errOut io.Writer) error {
 	}
 	defer p.Close()
 	if b.Remote {
-		m, err := vpsinstall.Load(os.Getuid())
-		if err != nil {
-			// A cut between generation swaps is intentionally rejected by Load.
-			// Admit only the same retained operation, exactly as normal recovery.
-			m, err = vpsinstall.LoadApplicationMaintenance(os.Getuid(), b.Admission.OperationID)
-			if err != nil {
-				return err
-			}
-		}
-		prior, stateErr := vpsinstall.ApplicationUpdateState(m.OwnerUID)
-		if stateErr != nil && !errors.Is(stateErr, os.ErrNotExist) {
-			return stateErr
-		}
-		if err = p.CheckCandidateInstallation(vpsinstall.ManifestSHA256(m), m.Root, m.Data, prior); err != nil {
-			return err
-		}
-		system := &custodyinstall.System{NonInteractive: true, Out: errOut}
-		if prior.ID == b.Admission.OperationID && prior.Phase != "completed" {
-			return maintainRemoteReaderUpdate(ctx, m, b.Admission.OperationID, false, source, out, system)
-		}
-		var request core.ApplicationReaderBootstrapRequest
-		_, callbacks := readerRemoteCallbacks(m, b.Admission.OperationID, &request, system)
-		driver, err := p.RemoteApplicationController(m, callbacks, system)
-		if err != nil {
-			return err
-		}
-		current, err := driver.Check(ctx)
-		if err != nil {
-			return err
-		}
-		if current == nil {
-			fmt.Fprintln(out, "Already current.")
-			return nil
-		}
-		if err = prepareRemoteSourceSession(ctx, m, system); err != nil {
-			return err
-		}
-		return maintainRemoteReaderUpdate(ctx, m, b.Admission.OperationID, false, source, out, system)
+		return errors.New("legacy app-only Remote candidate acceptance has been retired")
 	}
 	m, err := localinstall.Load(b.Local)
 	if err != nil {

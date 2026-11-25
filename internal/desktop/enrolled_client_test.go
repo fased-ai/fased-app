@@ -199,4 +199,14 @@ func TestOriginalLocalStartRefusesInvalidEnrollmentFence(t *testing.T) {
 	if allowed, err := OriginalLocalStartAllowed("/etc", os.Getuid()); err == nil || allowed {
 		t.Fatal("foreign root-owned directory was allowed as an unfenced source")
 	}
+	fenced := filepath.Join(t.TempDir(), "legacy-fenced")
+	if err := os.Mkdir(fenced, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(fenced, "enrollment.json"), []byte("{}"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if allowed, err := OriginalLocalStartAllowed(fenced, os.Getuid()); err == nil || allowed {
+		t.Fatal("directory containing legacy enrollment.json fence was allowed")
+	}
 }

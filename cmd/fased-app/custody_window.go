@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"github.com/fased-ai/fased-app/internal/custodyinstall"
-	"github.com/fased-ai/fased-app/internal/enrollment"
 	"github.com/fased-ai/fased-app/internal/signer"
 )
 
@@ -68,16 +67,7 @@ func custodyWindowCommand(args []string, in *os.File, out, errOut io.Writer) err
 	commit, commitErr := custodyinstall.ReadEnrollmentCommit(m)
 	committed := commitErr == nil && commit.InstanceID == *expected
 	if !committed {
-		// Only an absent commit with the exact private parent/child intent is
-		// resumable. Existing malformed/foreign commit bytes remain a hard refusal.
-		_, missing := os.Lstat(filepath.Join(m.Root, "enrollment-ready.json"))
-		if packaged || !*inspect || !errors.Is(missing, os.ErrNotExist) {
-			return errors.New("protected wallet enrollment does not match this instance/network")
-		}
-		resume, err := enrollment.CanResumeNative(*expected, m.Location, *network, m.CoreHash, m.SignerHash, m.NativeOwnerAccess)
-		if err != nil || !resume {
-			return errors.New("protected wallet enrollment needs owner recovery")
-		}
+		return errors.New("protected wallet enrollment does not match this instance/network")
 	}
 	if *inspect {
 		// Public readiness is returned even for exact retained StageOnly or

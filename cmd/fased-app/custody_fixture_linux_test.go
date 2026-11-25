@@ -4,21 +4,18 @@ package main
 
 import (
 	"bytes"
-	"errors"
 	"io"
 	"strings"
 	"testing"
 
 	"github.com/fased-ai/fased-app/internal/core"
 	"github.com/fased-ai/fased-app/internal/custodyinstall"
-	"github.com/fased-ai/fased-app/internal/enrollment"
 	"github.com/fased-ai/fased-app/internal/onchaintest"
 	"github.com/fased-ai/fased-app/internal/signer"
 	"github.com/fased-ai/fased-app/internal/walletfixture"
 )
 
-func configureOrdinaryEnrollmentFixture() {
-	compiledOrdinaryEnrollment = enrollment.RunControlledOwnerCustody
+func configureInstalledWalletReadFixture() {
 	compiledInstalledWalletRead = func(server *core.Server, path string) (func(), error) {
 		// Ordinary Local/Remote startup passes an empty optional identity.
 		// Match core.Start: no signer configuration means no fixture transport.
@@ -46,13 +43,10 @@ func configureOrdinaryEnrollmentFixture() {
 	}
 }
 
-func TestOrdinaryEnrollmentOwnerBoundary(t *testing.T) {
-	held := compiledOrdinaryEnrollment
-	compiledOrdinaryEnrollment = nil
-	defer func() { compiledOrdinaryEnrollment = held }()
+func TestCustodyOwnerFlagBoundary(t *testing.T) {
 	var out bytes.Buffer
-	if err := enrollmentCommand([]string{"--ordinary-custody"}, nil, &out, io.Discard); !errors.Is(err, signer.ErrUnavailable) || out.Len() != 0 {
-		t.Fatal("ordinary admission crossed source/credential boundary", err)
+	if err := enrollmentCommand([]string{"--ordinary-custody"}, nil, &out, io.Discard); err == nil || out.Len() != 0 {
+		t.Fatal("retired enrollment command succeeded", err)
 	}
 	m := custodyinstall.Manifest{Version: 3, Mode: signer.OrdinaryCustodyMode, Profile: signer.OwnerCustodyProfile, Provenance: signer.ControlledCustodyProfile}
 	for _, action := range []string{"setup", "import", "recover"} {

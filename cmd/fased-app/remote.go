@@ -2,400 +2,28 @@ package main
 
 import (
 	"bufio"
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
-	"github.com/fased-ai/fased-app/internal/hostprep"
 	"io"
-	neturl "net/url"
 	"os"
-	osuser "os/user"
-	"path/filepath"
 	"runtime"
-	"strconv"
-	"strings"
 	"time"
 
-	"github.com/fased-ai/fased-app/internal/connection"
-	"github.com/fased-ai/fased-app/internal/core"
 	"github.com/fased-ai/fased-app/internal/custodyinstall"
-	"github.com/fased-ai/fased-app/internal/maintenance"
-	"github.com/fased-ai/fased-app/internal/privateaccess"
-	"github.com/fased-ai/fased-app/internal/tailnet"
-	"github.com/fased-ai/fased-app/internal/vpsinstall"
 	"github.com/fased-ai/fased-app/internal/vpsnetwork"
 )
 
 const remoteOperationTimeout = 2 * time.Minute
 
-// Called only after CheckApplication binds the immutable Remote config/root.
-// Keep the public handoff numeric so the UI never accepts executable shell text.
-func managedRemoteOwner(root string) (int, error) {
-	uid, err := strconv.Atoi(strings.TrimPrefix(filepath.Base(root), "fased-app-vps-"))
-	if err != nil || uid <= 0 || int64(uid) > 4294967294 || root != vpsinstall.Root(uid) {
-		return 0, errors.New("invalid managed Remote owner directory")
-	}
-	return uid, nil
-}
-
-func installationManagedRemote(in *bufio.Reader, out io.Writer) (bool, error) {
-	for {
-		value, err := installationAnswer(in, out, "Use a dedicated app account with no login or sudo? [Y/n]: ")
-		if err != nil {
-			return false, err
-		}
-		switch strings.ToLower(value) {
-		case "", "y", "yes":
-			return true, nil
-		case "n", "no":
-			return false, errors.New("Remote setup requires an isolated app account")
-		}
-		fmt.Fprintln(out, "Choose yes or no.")
-	}
-}
-
-func validateManagedRemote(bundleDir string, desktop, autostart bool, explicitPaths bool) error {
-	if bundleDir == "" || desktop {
-		return errors.New("managed Remote requires a verified headless bundle")
-	}
-	if runtime.GOOS != "linux" {
-		return errors.New("managed Remote requires Ubuntu Linux")
-	}
-	if !autostart {
-		return errors.New("managed Remote requires explicit --autostart")
-	}
-	if explicitPaths {
-		return errors.New("managed Remote uses dedicated installation directories; omit --prefix and --data-dir")
-	}
-	return nil
-}
-
 func remoteSystem(in io.Reader, out io.Writer) *custodyinstall.System {
 	return &custodyinstall.System{In: in, Out: out}
 }
 
-func remoteAccessDirectory() (string, error) {
-	root, err := core.DefaultDataDir()
-	if err != nil {
-		return "", err
-	}
-	if err = core.EnsurePrivateDirectory(root); err != nil {
-		return "", err
-	}
-	dir := filepath.Join(root, "vps-access")
-	if err = core.EnsurePrivateDirectory(dir); err != nil {
-		return "", err
-	}
-	return dir, nil
-}
-
-func protectedPendingRemoteOrigin(ctx context.Context, diagnostics io.Writer) (string, error) {
-	if _, err := maintenance.ReadAuthority(os.Getuid()); errors.Is(err, os.ErrNotExist) {
-		return "", nil
-	} else if err != nil {
-		return "", err
-	}
-	b, err := maintenance.Call(ctx, maintenance.Request{Version: 1, Action: "remote-preflight-origin"}, diagnostics)
-	if err != nil {
-		return "", err
-	}
-	var response maintenance.Response
-	var origin string
-	if json.Unmarshal(b, &response) != nil || json.Unmarshal(response.Payload, &origin) != nil {
-		return "", errors.New("protected private setup origin is unavailable")
-	}
-	return origin, nil
-}
-
-func sameRemoteInstallerInput(m vpsinstall.Manifest, listen, origin string, sequence uint64, release, coreHash string) bool {
-	return m.Listen == listen && m.PublicOrigin == origin && m.ApplicationSequence == sequence && m.ApplicationReleaseSHA256 == release && m.CoreSHA256 == coreHash
-}
-
-func enableRemoteAccess(ctx context.Context, m vpsinstall.Manifest, system *custodyinstall.System, initial ...tailnet.Identity) (string, error) {
-	if len(initial) > 1 {
-		return "", errors.New("one initial Tailscale device required")
-	}
-	status, err := vpsinstall.Status(ctx, m, system)
-	if err != nil {
-		return "", err
-	}
-	if !status.Active || status.InstanceID == "" {
-		return "", errors.New("Remote instance is not ready; inspect vps status")
-	}
-	if m.PublicOrigin == "" {
-		return status.URL, nil
-	}
-	manager := remotePrivateAccess(system)
-	plan, err := manager.Plan(ctx, "tailscale", m.Listen)
-	if err != nil {
-		return "", err
-	}
-	plan, err = privateaccess.BindOrigin(plan, m.PublicOrigin)
-	if err != nil {
-		return "", err
-	}
-	ingressErr := vpsinstall.ProtectedIngressReady(ctx, m, status.InstanceID, system)
-	plan, err = remoteIngressPlan(plan, m, ingressErr == nil)
-	if err != nil {
-		return "", err
-	}
-	dir, err := remoteAccessDirectory()
-	if err != nil {
-		return "", err
-	}
-	manager.ProofOut = system.Out
-	if len(initial) == 1 {
-		manager.ExpectedPeer = &initial[0]
-	}
-	manager.Proof = func(ctx context.Context, request core.PrivateAccessProofRequest) (core.PrivateAccessProof, error) {
-		return vpsinstall.PrivateAccessProof(ctx, m, system, request)
-	}
-	manager.InitialPeer = func() (tailnet.Identity, bool, error) { return loadRemoteSetupOwner(dir, m, status.InstanceID) }
-	if err = manager.Enable(ctx, dir, plan, status.InstanceID); err != nil {
-		return "", errors.Join(err, ingressErr)
-	}
-	return plan.Origin, nil
-}
-
-// An unverified listener must never replace the established route. A ready
-// legacy route remains usable and removable until the protected helper proves
-// the same running instance through the root-owned socket.
-func remoteIngressPlan(plan privateaccess.Plan, m vpsinstall.Manifest, protected bool) (privateaccess.Plan, error) {
-	plan.Target = tailnet.Target(m.Data)
-	if protected {
-		path, err := tailnet.ProtectedSocket("vps", m.OwnerUID)
-		if err != nil {
-			return plan, err
-		}
-		plan.Target = "unix:" + path
-	}
-	return plan, nil
-}
-
-func remotePublicOrigin(plan privateaccess.Plan) string {
-	if plan.Mode == "tailscale" {
-		return plan.Origin
-	}
-	return ""
-}
-
-func managedRemoteInstall(ctx context.Context, corePath, hash, listen string, plan privateaccess.Plan, prepare, start bool, out, errOut io.Writer, wizard *bufio.Reader, admission ...installationAdmission) error {
-	system := remoteSystem(os.Stdin, errOut)
-	var admitted installationAdmission
-	if len(admission) > 1 {
-		return errors.New("one initial release admission required")
-	}
-	if len(admission) == 1 {
-		admitted = admission[0]
-	}
-	if plan.Mode != "tailscale" || plan.Origin == "" {
-		return errors.New("Remote requires verified Tailscale before deployment")
-	}
-	if err := hostprep.PrepareRecoveryKey(wizard, errOut); err != nil {
-		return err
-	}
-	accessDir, err := remoteAccessDirectory()
-	if err != nil {
-		return err
-	}
-	var owner tailnet.Identity
-	_, authorityErr := maintenance.ReadAuthority(os.Getuid())
-	protected := authorityErr == nil
-	if authorityErr != nil && !errors.Is(authorityErr, os.ErrNotExist) {
-		return authorityErr
-	}
-	if !protected {
-		gateCtx, cancel := context.WithTimeout(ctx, 5*time.Minute)
-		defer cancel()
-		owner, err = remotePrivateAccess(system).BeforeInstall(gateCtx, accessDir, plan, errOut)
-		if err != nil {
-			return err
-		}
-		if err = saveInitialRemoteOwner(accessDir, remoteSetupOwner{Version: 1, Origin: plan.Origin, Listen: listen, EngineSHA256: hash, Owner: owner}); err != nil {
-			return err
-		}
-	}
-	options := vpsinstall.Options{ApplicationSequence: admitted.sequence, ApplicationReleaseSHA256: admitted.release, Core: corePath, CoreSHA256: hash, Listen: listen, PublicOrigin: remotePublicOrigin(plan), PrepareHost: prepare, Start: start}
-	if protected {
-		options.InitialOwner = &owner
-	}
-	m, err := vpsinstall.Install(ctx, options, system)
-	if err != nil {
-		return err
-	}
-	if protected {
-		if err = saveInitialRemoteOwner(accessDir, remoteSetupOwner{Version: 1, Origin: plan.Origin, Listen: listen, EngineSHA256: hash, Owner: owner}); err != nil {
-			return err
-		}
-	}
-	if e := installCommand(m.Core, m.Root, m.Data, true, errOut); e != nil {
-		return e
-	}
-	if admitted.prepareUpdates {
-		// This durable, bounded grant is distinct from changing automatic policy.
-		updateSystem := remoteSystem(os.Stdin, errOut)
-		if e := prepareRemoteUpdateAuthority(ctx, m, updateSystem, io.Discard); e != nil {
-			return e
-		}
-	}
-	url := ""
-	if start {
-		url, err = enableRemoteAccess(ctx, m, system, owner)
-		if err != nil {
-			return remoteAccessPending(m, err)
-		}
-	}
-	setupURL := ""
-	if start {
-		var link bytes.Buffer
-		status, e := vpsinstall.Status(ctx, m, system)
-		if e != nil {
-			return e
-		}
-		bound, found, e := loadRemoteSetupOwner(accessDir, m, status.InstanceID)
-		if e != nil {
-			return e
-		}
-		if !found {
-			return errors.New("initial Remote owner handoff is missing")
-		}
-		owner = bound
-		if err = vpsinstall.SetupLink(ctx, m, system, &link, owner); err != nil {
-			return err
-		}
-		setupURL = strings.TrimSpace(link.String())
-	}
-	remoteHandoff(errOut, m, installationSSHPlan(plan, os.Getenv("SSH_CONNECTION")), start, setupURL)
-	if start {
-		user, err := osuser.Current()
-		if err != nil {
-			return err
-		}
-		address, e := neturl.Parse(plan.Origin)
-		if e != nil {
-			return e
-		}
-		host := address.Hostname()
-		first := installationCommand("ssh", "-t", "-o", "ControlMaster=no", "-o", "ControlPath=none", user.Username+"@"+host, installationCommand(m.Core, "vps", "harden"))
-		second := installationCommand("ssh", "-t", "-o", "ControlMaster=no", "-o", "ControlPath=none", user.Username+"@"+host, installationCommand(m.Core, "vps", "finish"))
-		fmt.Fprintln(errOut, "After opening Fased, finish private recovery from your computer:")
-		fmt.Fprintln(errOut, first+" && "+second)
-		fmt.Fprintln(errOut, "Public access closes only after private recovery and console checks. Then close this bootstrap SSH session.")
-	}
-
-	return json.NewEncoder(out).Encode(map[string]any{"installed": true, "location": "remote", "managed": true, "application": m.Core, "data": m.Data, "url": url, "autostart": start, "walletsConnected": false, "setupComplete": false, "next": "private-recovery-and-lockdown"})
-}
-
-func remoteOwnerLink(ctx context.Context, m vpsinstall.Manifest, system *custodyinstall.System, out io.Writer) error {
-	var link bytes.Buffer
-	status, e := vpsinstall.Status(ctx, m, system)
-	if e != nil {
-		return e
-	}
-	origin := m.PublicOrigin
-	if origin == "" {
-		origin = "http://" + m.Listen
-	}
-	address, claimed := "", status.RemoteReady && m.PublicOrigin != ""
-	if claimed {
-		address, e = connection.OwnerSetupURL(origin, status.InstanceID, "")
-	} else {
-		probe := origin
-		if m.PublicOrigin != "" {
-			probe = "http://" + m.Listen
-		}
-		address, claimed, e = connection.ClaimedOwnerURL(ctx, probe, status.InstanceID)
-		if e == nil && claimed && m.PublicOrigin != "" {
-			address, e = connection.OwnerSetupURL(origin, status.InstanceID, "")
-		}
-	}
-	if e != nil && m.PublicOrigin == "" {
-		return e
-	}
-	probeErr := e
-	if claimed {
-		if e != nil {
-			return e
-		}
-		fmt.Fprintln(&link, address)
-	} else {
-		dir, e := remoteAccessDirectory()
-		if e != nil {
-			return e
-		}
-		owner, found, e := loadRemoteSetupOwner(dir, m, status.InstanceID)
-		if e != nil {
-			return e
-		}
-		if probeErr != nil && !found {
-			return errors.New("initial private owner handoff is unavailable; preserve the installation")
-		}
-		if found {
-			e = vpsinstall.SetupLink(ctx, m, system, &link, owner)
-		} else {
-			e = vpsinstall.SetupLink(ctx, m, system, &link)
-		}
-		if e != nil {
-			return e
-		}
-	}
-	if os.Getenv("FASED_INSTALL_ROOT_ENTRY") != "1" {
-		_, e := out.Write(link.Bytes())
-		return e
-	}
-	mode := "ssh"
-	if m.PublicOrigin != "" {
-		mode = "tailscale"
-	}
-	plan, e := privateaccess.System().Plan(ctx, mode, m.Listen)
-	if e != nil {
-		return e
-	}
-	if mode == "tailscale" {
-		plan, e = privateaccess.BindOrigin(plan, m.PublicOrigin)
-		if e != nil {
-			return e
-		}
-	}
-	remoteHandoff(out, m, installationSSHPlan(plan, os.Getenv("SSH_CONNECTION")), true, strings.TrimSpace(link.String()))
-	return nil
-}
-
-func remoteHandoff(out io.Writer, m vpsinstall.Manifest, plan privateaccess.Plan, started bool, setupURL string) {
-	command := func(action string) string { return installationCommand(m.Core, "vps", action) }
-	fmt.Fprintln(out, "Fased Remote is installed with a separate application account.")
-	if !started {
-		fmt.Fprintln(out, "Start the instance and prepare private access:")
-		fmt.Fprintln(out, command("start"))
-	} else {
-		origin := strings.SplitN(setupURL, "/?instance=", 2)[0]
-		for _, line := range plan.Instructions {
-			if origin != "" {
-				line = strings.ReplaceAll(line, origin, "the setup link below")
-			}
-			fmt.Fprintln(out, line)
-		}
-		fmt.Fprintln(out, "Open Fased:")
-		fmt.Fprintln(out, setupURL)
-	}
-	if os.Getenv("FASED_INSTALL_ROOT_ENTRY") == "1" {
-		fmt.Fprintln(out, "From your administrator SSH shell, rerun the installer with --status, --stop, --start, --update or --recover. Fased itself runs as the ordinary installation owner.")
-	} else {
-		fmt.Fprintln(out, "Check the instance:")
-		fmt.Fprintln(out, command("status"))
-	}
-	fmt.Fprintln(out, "Keep administrative SSH or provider-console access. SSH and firewall policy have not been changed.")
-	if plan.Mode == "tailscale" && os.Getenv("FASED_INSTALL_ROOT_ENTRY") != "1" {
-		fmt.Fprintln(out, "After private sign-in and console recovery work, open SSH through Tailscale to review network lockdown:")
-		fmt.Fprintln(out, command("harden"))
-	}
-}
-
-func networkConsent(in io.Reader, out io.Writer) (vpsinstall.NetworkApproval, error) {
-	var approval vpsinstall.NetworkApproval
+func networkConsent(in io.Reader, out io.Writer) (vpsnetwork.Approval, error) {
+	var approval vpsnetwork.Approval
 	reader := bufio.NewReader(in)
 	fmt.Fprintln(out, "This closes public inbound connections, keeps private SSH/HTTPS, and disables root/password SSH login. Existing firewall rules are preserved. Rollback stays armed until a second private SSH session confirms.")
 	for _, question := range []struct {
@@ -407,10 +35,10 @@ func networkConsent(in io.Reader, out io.Writer) (vpsinstall.NetworkApproval, er
 	} {
 		answer, err := installationAnswer(reader, out, question.prompt)
 		if err != nil {
-			return vpsinstall.NetworkApproval{}, err
+			return vpsnetwork.Approval{}, err
 		}
 		if answer != "y" && answer != "yes" {
-			return vpsinstall.NetworkApproval{}, errors.New("network lockdown cancelled; existing access is preserved")
+			return vpsnetwork.Approval{}, errors.New("network lockdown cancelled; existing access is preserved")
 		}
 		*question.value = true
 	}
@@ -429,10 +57,6 @@ func networkHandoffParts(out io.Writer, corePath, dataDir, phase, attemptID, sta
 	}
 }
 
-func networkHandoff(out io.Writer, m vpsinstall.Manifest, status vpsinstall.NetworkStatus) {
-	networkHandoffParts(out, m.Core, m.Data, m.Phase, status.AttemptID, status.Phase, status.Deadline)
-}
-
 func packageNetworkHandoff(out io.Writer, m vpsnetwork.Manifest, status vpsnetwork.Status) {
 	networkHandoffParts(out, m.Core, m.Data, m.Phase, status.AttemptID, status.Phase, status.Deadline)
 }
@@ -446,10 +70,7 @@ func runPackageNetworkCommand(ctx context.Context, action, attemptID string, m v
 		if aErr != nil {
 			return aErr
 		}
-		status, err = vpsnetwork.Begin(ctx, m, system, vpsnetwork.Approval{
-			PrivateUI:       approval.PrivateUI,
-			ConsoleRecovery: approval.ConsoleRecovery,
-		})
+		status, err = vpsnetwork.Begin(ctx, m, system, approval)
 	case "confirm":
 		status, err = vpsnetwork.Confirm(ctx, m, system, attemptID)
 	case "finish":
@@ -483,30 +104,18 @@ func isVPSNetworkAction(action string) bool {
 }
 
 func vpsCommand(args []string, in io.Reader, out, errOut io.Writer) error {
-	if len(args) > 0 && args[0] == "updates" {
-		return vpsUpdatesCommand(args[1:], in, out, errOut)
-	}
 	if len(args) == 0 {
-		return errors.New("usage: fased-app vps status|start|stop|login|claim-code|recover|access|remove|harden|confirm|rollback|network")
+		return errors.New("usage: fased-app vps harden|confirm|finish|rollback|network [--data-dir <directory>]")
 	}
 	action := args[0]
-	switch action {
-	case "status", "start", "stop", "login", "claim-code", "recover", "access", "remove", "harden", "confirm", "finish", "rollback", "network":
-	default:
-		return errors.New("unknown vps action")
+	if !isVPSNetworkAction(action) {
+		return errors.New("unknown or retired vps action; use harden|confirm|finish|rollback|network")
 	}
 	f := flag.NewFlagSet("vps "+action, flag.ContinueOnError)
-	configure := f.Bool("configure", false, "guide private access change for the same workspace")
 	dataDir := f.String("data-dir", "", "Remote package data directory for network commands")
 	f.SetOutput(errOut)
 	if err := f.Parse(args[1:]); err != nil {
 		return err
-	}
-	if *configure && action != "access" {
-		return errors.New("configure is an access option")
-	}
-	if *dataDir != "" && !isVPSNetworkAction(action) {
-		return errors.New("data-dir is only supported for vps network commands")
 	}
 	if (action == "confirm" && f.NArg() != 1) || (action != "confirm" && f.NArg() != 0) {
 		return errors.New("unexpected vps arguments")
@@ -515,157 +124,17 @@ func vpsCommand(args []string, in io.Reader, out, errOut io.Writer) error {
 		return errors.New("VPS management requires an ordinary Linux administrator")
 	}
 	system := remoteSystem(in, errOut)
-	ctx := context.Background()
-	cancel := func() {}
-	if action != "recover" {
-		budget := remoteOperationTimeout
-		if *configure {
-			budget = 15 * time.Minute
-		}
-		ctx, cancel = context.WithTimeout(ctx, budget)
-	}
+	ctx, cancel := context.WithTimeout(context.Background(), remoteOperationTimeout)
 	defer cancel()
 	attemptID := ""
 	if action == "confirm" {
 		attemptID = f.Arg(0)
 	}
-	if *dataDir != "" {
-		pm, err := vpsnetwork.Load(os.Getuid(), *dataDir)
-		if err != nil {
-			return err
-		}
-		return runPackageNetworkCommand(ctx, action, attemptID, pm, in, out, errOut, system)
-	}
-	m, err := vpsinstall.Load(os.Getuid())
-	if errors.Is(err, os.ErrNotExist) && isVPSNetworkAction(action) {
-		pm, pErr := vpsnetwork.Load(os.Getuid(), "")
-		if pErr != nil {
-			return pErr
-		}
-		return runPackageNetworkCommand(ctx, action, attemptID, pm, in, out, errOut, system)
-	}
+	pm, err := vpsnetwork.Load(os.Getuid(), *dataDir)
 	if err != nil {
 		return err
 	}
-	if action == "login" {
-		if e := vpsinstall.ApplicationReaderSignIn(ctx, m, system); e != nil {
-			return e
-		}
-		fmt.Fprintln(out, "Signed in")
-		return nil
-	}
-	target, enrolled, e := vpsEnrollmentTarget(action, m.Data, enrolledTarget)
-	if e != nil {
-		return e
-	}
-	if enrolled {
-		if *configure {
-			if e = system.PreparePrivateAccessProof(ctx, target); e != nil {
-				return e
-			}
-		}
-		switch action {
-		case "status", "start", "stop", "claim-code", "recover", "access", "remove":
-			if action == "remove" {
-				dir, e := remoteAccessDirectory()
-				if e != nil {
-					return e
-				}
-				if e = remotePrivateAccess(system).Remove(ctx, dir); e != nil {
-					return e
-				}
-			}
-			if action == "start" || action == "access" {
-				// Preserve the original private HTTPS mapping and its exact instance ID.
-				var sink io.Writer = io.Discard
-				if e = enrolledLifecycle(ctx, target, action, true, true, sink, enrolledSystem(system)); e != nil {
-					return e
-				}
-				url, e := enableEnrolledRemoteAccess(ctx, m, target, system)
-				if e != nil {
-					return e
-				}
-				fmt.Fprintln(out, url)
-				return nil
-			}
-			return enrolledLifecycle(ctx, target, action, true, true, out, enrolledSystem(system))
-		}
-	}
-	if *configure {
-		return configureRemoteAccess(ctx, m, system, in, out, errOut)
-	}
-	switch action {
-	case "harden", "confirm", "finish", "rollback", "network":
-		var status vpsinstall.NetworkStatus
-		switch action {
-		case "harden":
-			approval, e := networkConsent(in, errOut)
-			if e != nil {
-				return e
-			}
-			status, err = vpsinstall.BeginNetwork(ctx, m, system, approval)
-		case "confirm":
-			status, err = vpsinstall.ConfirmNetwork(ctx, m, system, f.Arg(0))
-		case "finish":
-			status, err = vpsinstall.InspectNetwork(ctx, m, system)
-			if err == nil && status.Phase == "pending" {
-				status, err = vpsinstall.ConfirmNetwork(ctx, m, system, status.AttemptID)
-			} else if err == nil && status.Phase != "committed" {
-				err = errors.New("no pending private setup; existing access is preserved")
-			}
-		case "rollback":
-			status, err = vpsinstall.RollbackNetwork(ctx, m, system)
-		case "network":
-			status, err = vpsinstall.InspectNetwork(ctx, m, system)
-		}
-		if err != nil {
-			return err
-		}
-		networkHandoff(errOut, m, status)
-		return json.NewEncoder(out).Encode(status)
-	case "status":
-		status, err := vpsinstall.Status(ctx, m, system)
-		if err != nil {
-			return err
-		}
-		return json.NewEncoder(out).Encode(status)
-	case "start":
-		if err = vpsinstall.Start(ctx, m, system); err != nil {
-			return err
-		}
-		_, err := enableRemoteAccess(ctx, m, system)
-		if err != nil {
-			return err
-		}
-		return remoteOwnerLink(ctx, m, system, out)
-	case "stop":
-		return vpsinstall.Stop(ctx, m, system)
-	case "claim-code":
-		return vpsinstall.Claim(ctx, m, system, false, out)
-	case "recover":
-		return vpsinstall.Claim(ctx, m, system, true, out)
-	case "access":
-		_, err := enableRemoteAccess(ctx, m, system)
-		if err != nil {
-			return err
-		}
-		return remoteOwnerLink(ctx, m, system, out)
-
-	case "remove":
-		dir, err := remoteAccessDirectory()
-		if err != nil {
-			return err
-		}
-		if err = remotePrivateAccess(system).Remove(ctx, dir); err != nil {
-			return err
-		}
-		if err = vpsinstall.Remove(ctx, m, system); err != nil {
-			return err
-		}
-		fmt.Fprintln(out, "Remote service removed. Instance data, the recovery helper and locked application identity were preserved:", m.Data)
-		return nil
-	}
-	return errors.New("unknown vps action")
+	return runPackageNetworkCommand(ctx, action, attemptID, pm, in, out, errOut, system)
 }
 
 func validateRuntimeUID(uid, euid int) error {
@@ -673,159 +142,4 @@ func validateRuntimeUID(uid, euid int) error {
 		return errors.New("run Fased as an ordinary OS user; use the installer for privileged OS preparation")
 	}
 	return nil
-}
-
-func enableEnrolledRemoteAccess(ctx context.Context, source vpsinstall.Manifest, target custodyinstall.Manifest, system *custodyinstall.System) (string, error) {
-	if target.Location != "remote" || target.Listen != source.Listen || target.PublicOrigin != source.PublicOrigin || target.Owner != source.OwnerUID {
-		return "", errors.New("Remote enrollment binding changed")
-	}
-	commit, e := custodyinstall.ReadEnrollmentCommit(target)
-	if e != nil {
-		return "", e
-	}
-	if target.PublicOrigin == "" {
-		return enrolledURL(target), nil
-	}
-	manager := remotePrivateAccess(system)
-	plan, e := manager.Plan(ctx, "tailscale", target.Listen)
-	if e != nil {
-		return "", e
-	}
-	plan, e = privateaccess.BindOrigin(plan, target.PublicOrigin)
-	if e != nil {
-		return "", e
-	}
-	ingressErr := enrolledProtectedIngressReady(ctx, target, commit.InstanceID)
-	plan, e = enrolledVerifiedIngressPlan(plan, target, ingressErr == nil)
-	if e != nil {
-		return "", e
-	}
-	dir, e := remoteAccessDirectory()
-	if e != nil {
-		return "", e
-	}
-	manager.ProofOut = system.Out
-	manager.Proof = func(ctx context.Context, request core.PrivateAccessProofRequest) (core.PrivateAccessProof, error) {
-		return system.PrivateAccessProof(ctx, target, request)
-	}
-	manager.InitialPeer = func() (tailnet.Identity, bool, error) { return loadRemoteSetupOwner(dir, source, commit.InstanceID) }
-	if e = manager.Enable(ctx, dir, plan, commit.InstanceID); e != nil {
-		return "", errors.Join(e, ingressErr)
-	}
-	return plan.Origin, nil
-}
-
-func enrolledProtectedIngressReady(ctx context.Context, target custodyinstall.Manifest, instance string) error {
-	if target.Owner != os.Getuid() || target.Location != "remote" || instance == "" {
-		return errors.New("original Remote custody owner required")
-	}
-	b, err := maintenance.Call(ctx, maintenance.Request{Version: 1, Action: "custody-ingress-ready"}, io.Discard)
-	if err != nil {
-		return err
-	}
-	var response maintenance.Response
-	var actual string
-	if json.Unmarshal(b, &response) != nil || json.Unmarshal(response.Payload, &actual) != nil || actual != instance {
-		return errors.New("protected custody listener belongs to another instance")
-	}
-	return nil
-}
-
-func enrolledVerifiedIngressPlan(plan privateaccess.Plan, target custodyinstall.Manifest, protected bool) (privateaccess.Plan, error) {
-	plan, err := enrolledPrivateAccessPlan(plan, target)
-	if err != nil || !protected {
-		return plan, err
-	}
-	path, err := tailnet.ProtectedSocket("custody", target.Owner)
-	if err != nil {
-		return plan, err
-	}
-	plan.Target = "unix:" + path
-	return plan, nil
-}
-
-func enrolledPrivateAccessPlan(plan privateaccess.Plan, target custodyinstall.Manifest) (privateaccess.Plan, error) {
-	if plan.Origin != target.PublicOrigin {
-		return privateaccess.Plan{}, errors.New("Tailscale identity changed; original private origin is preserved")
-	}
-	plan.Target = tailnet.Target(target.Root + "/app-state")
-	return plan, nil
-}
-
-// Network recovery owns its pending-fence guard. A lifecycle redirect must not
-// prevent that recovery path from reaching its original policy controller.
-func vpsEnrollmentTarget(action, data string, lookup func(string) (custodyinstall.Manifest, bool, error)) (custodyinstall.Manifest, bool, error) {
-	switch action {
-	case "harden", "confirm", "finish", "rollback", "network":
-		return custodyinstall.Manifest{}, false, nil
-	}
-	return lookup(data)
-}
-
-func remoteAccessPending(m vpsinstall.Manifest, cause error) error {
-	if os.Getenv("FASED_INSTALL_ROOT_ENTRY") == "1" {
-		return fmt.Errorf("private access is pending; complete its setup and rerun the same installer. Installed data is preserved: %w", cause)
-	}
-	return fmt.Errorf("Remote is installed; private access is pending: %w; retry with %s", cause, installationCommand(m.Core, "vps", "access"))
-}
-
-func configureRemoteAccess(ctx context.Context, m vpsinstall.Manifest, system *custodyinstall.System, in io.Reader, out, errOut io.Writer) error {
-	reader := bufio.NewReader(in)
-	choice, e := installationPrivateAccessChoice(reader, errOut)
-	if e != nil {
-		return e
-	}
-	plan, e := installationPrivateAccess(ctx, reader, errOut, choice, m.Listen, privateaccess.System().Plan, hostprep.PrepareTailscale)
-	if e != nil {
-		return e
-	}
-	dir, e := remoteAccessDirectory()
-	if e != nil {
-		return e
-	}
-	if plan.Mode == "tailscale" {
-		if m.PublicOrigin != "" {
-			plan, e = privateaccess.BindOrigin(plan, m.PublicOrigin)
-		} else {
-			plan, e = remotePrivateAccess(system).SelectIsolated(ctx, dir, plan)
-		}
-		if e != nil {
-			return e
-		}
-	}
-	original, e := vpsinstall.Status(ctx, m, system)
-	if e != nil {
-		return e
-	}
-	confirm := func(ctx context.Context, target vpsinstall.Manifest) error {
-		manager := remotePrivateAccess(system)
-		if target.PublicOrigin == "" {
-			return manager.Remove(ctx, dir)
-		}
-		chosen, e := manager.Plan(ctx, "tailscale", target.Listen)
-		if e != nil {
-			return e
-		}
-		chosen, e = privateaccess.BindOrigin(chosen, target.PublicOrigin)
-		if e != nil {
-			return e
-		}
-		if chosen.Origin != target.PublicOrigin {
-			return errors.New("private origin differs from this Tailscale device")
-		}
-		chosen.Target = tailnet.Target(target.Data)
-		manager.ProofOut = system.Out
-		manager.Proof = func(ctx context.Context, request core.PrivateAccessProofRequest) (core.PrivateAccessProof, error) {
-			return vpsinstall.PrivateAccessProof(ctx, target, system, request)
-		}
-		manager.InitialPeer = func() (tailnet.Identity, bool, error) {
-			return loadRemoteSetupOwner(dir, target, original.InstanceID)
-		}
-		return manager.Enable(ctx, dir, chosen, original.InstanceID)
-	}
-	target, e := vpsinstall.ChangeAccess(ctx, m, remotePublicOrigin(plan), system, confirm)
-	if e != nil {
-		return e
-	}
-	return remoteOwnerLink(ctx, target, system, out)
 }

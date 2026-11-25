@@ -375,12 +375,12 @@ test("browser coverage runs once for every selected core path", async () => {
   const inspection = workflow
     .split("\n  inspection-installed:\n")[1]
     .split("\n  prototype:\n")[0];
-  assert.match(inspection, /leg: \[fixture, network, enrollment\]/);
+  assert.match(inspection, /leg: \[fixture, network\]/);
   assert.match(
     inspection,
     /if: matrix\.leg == 'fixture' \|\| matrix\.leg == 'network'\n\s+run: go test -c -o \.evidence\/bin\/wallet-core\.test \.\/internal\/core/,
   );
-  for (const leg of ["fixture", "network", "enrollment"]) {
+  for (const leg of ["fixture", "network"]) {
     assert.match(inspection, new RegExp(`if: matrix\\.leg == '${leg}'`));
   }
 });

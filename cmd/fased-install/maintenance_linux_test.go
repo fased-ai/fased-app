@@ -8,7 +8,6 @@ import (
 	"errors"
 	"io"
 	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -219,31 +218,6 @@ func TestExpiredUnboundCandidateDoesNotShadowPublicRelease(t *testing.T) {
 	}
 }
 
-func TestCompiledFixturePrepareRejectsOwnerKeysAndForeignSource(t *testing.T) {
-	original := compiledFixtureSourceAllowed
-	t.Cleanup(func() { compiledFixtureSourceAllowed = original })
-	compiledFixtureSourceAllowed = nil
-	if err := checkCompiledFixturePrepare(1000, false, "/owner-data"); err != nil {
-		t.Fatal("normal build changed owner enrollment", err)
-	}
-	compiledFixtureSourceAllowed = func(owner int, source string) bool { return owner == 1000 && source == "/fixed-fixture-data" }
-	for _, tc := range []struct {
-		owner      int
-		controlled bool
-		source     string
-		want       bool
-	}{
-		{1000, true, "/fixed-fixture-data", true},
-		{1000, false, "/fixed-fixture-data", false},
-		{1000, true, "/other-data", false},
-		{1001, true, "/fixed-fixture-data", false},
-	} {
-		if got := checkCompiledFixturePrepare(tc.owner, tc.controlled, tc.source) == nil; got != tc.want {
-			t.Fatalf("owner=%d controlled=%t admitted=%t", tc.owner, tc.controlled, got)
-		}
-	}
-}
-
 func TestFixtureSuccessorPayloadCannotCrossProductionBoundary(t *testing.T) {
 	initial := &bootstrap.WalletPayload{Version: "0.1.11", Source: "source-a"}
 	successor := &bootstrap.WalletPayload{Version: "0.1.12", Source: "source-b"}
@@ -310,42 +284,6 @@ func TestMaintenanceInputDeadlineIncludesCallerWithholdingEOF(t *testing.T) {
 	defer cancel()
 	if _, err := readMaintenanceInput(ctx, r); !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("unclosed caller pipe did not respect request deadline: %v", err)
-	}
-}
-
-func TestEnrollmentCoreAcceptsOnlyVerifiedBeforeOrAfterMode(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "fased-app")
-	if err := os.WriteFile(path, []byte("fixture"), 0700); err != nil {
-		t.Fatal(err)
-	}
-	opener := func(path string, size int64, mode os.FileMode) (*os.File, error) {
-		f, err := os.Open(path)
-		if err != nil {
-			return nil, err
-		}
-		info, err := f.Stat()
-		if err != nil || info.Mode().Perm() != mode || info.Size() != size {
-			f.Close()
-			return nil, errors.New("protected mode differs")
-		}
-		return f, nil
-	}
-	for _, mode := range []os.FileMode{0700, 0755} {
-		if err := os.Chmod(path, mode); err != nil {
-			t.Fatal(err)
-		}
-		f, err := openEnrollmentCore(path, 7, opener)
-		if err != nil {
-			t.Fatalf("mode %o: %v", mode, err)
-		}
-		f.Close()
-	}
-	if err := os.Chmod(path, 0777); err != nil {
-		t.Fatal(err)
-	}
-	if f, err := openEnrollmentCore(path, 7, opener); err == nil {
-		f.Close()
-		t.Fatal("foreign mode accepted")
 	}
 }
 

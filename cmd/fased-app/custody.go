@@ -20,9 +20,16 @@ import (
 	"github.com/fased-ai/fased-app/internal/signer"
 )
 
+func enrolledURL(m custodyinstall.Manifest) string {
+	if m.PublicOrigin != "" {
+		return m.PublicOrigin
+	}
+	return "http://" + m.Listen
+}
+
 func custodyCommand(args []string, in *os.File, out, errOut io.Writer) (result error) {
 	if len(args) > 0 && args[0] == "enrollment-resume" {
-		return nativeEnrollmentResume(args[1:], out)
+		return errors.New("legacy custody enrollment-resume has been retired")
 	}
 	if len(args) == 1 && args[0] == "enrollment-capability" {
 		return json.NewEncoder(out).Encode(struct {

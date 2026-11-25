@@ -12,7 +12,6 @@ import (
 
 	"github.com/fased-ai/fased-app/internal/custodyinstall"
 	"github.com/fased-ai/fased-app/internal/desktop"
-	"github.com/fased-ai/fased-app/internal/enrollment"
 	"github.com/fased-ai/fased-app/internal/maintenance"
 	"github.com/fased-ai/fased-app/internal/update"
 )
@@ -58,21 +57,5 @@ func recoverEnrolledOffline(ctx context.Context, dir string, out, _ io.Writer) e
 		_, err = fmt.Fprintln(out, "Recovery requested. Check Updates for the result.")
 		return err
 	}
-	q, err := enrollment.EnrolledRecoveryRequest(dir, owner)
-	if err != nil {
-		return err
-	}
-	a, err := maintenance.ReadAuthority(owner)
-	if err != nil || a.Profile != "local" {
-		return errors.New("original Local maintenance authority required")
-	}
-	if err = maintenance.VerifyImage(a); err != nil {
-		return err
-	}
-	c := custodyMaintenanceController{owner: owner}
-	if err = c.resumeWorker(ctx, q.OperationID); err != nil {
-		return err
-	}
-	_, err = fmt.Fprintln(out, "Recovery requested. Check Updates for the result.")
-	return err
+	return errors.New("legacy in-place custody recovery has been retired; Format-4 Local package data directory required")
 }

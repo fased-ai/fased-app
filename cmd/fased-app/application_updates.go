@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"github.com/fased-ai/fased-app/internal/core"
 	"github.com/fased-ai/fased-app/internal/desktop"
-	"github.com/fased-ai/fased-app/internal/enrollment"
 	"io"
 	"net/http"
 	"os"
@@ -40,7 +39,7 @@ func newApplicationUpdatesClient(ctx context.Context, dir string) (*core.Client,
 	if _, packaged, _ := desktop.PackageLocalDataRoot(real, os.Getuid()); packaged {
 		return nil, false, err
 	}
-	if _, fenceErr := enrollment.EnrolledTarget(real, os.Getuid()); !errors.Is(fenceErr, os.ErrNotExist) {
+	if fenceErr := desktop.CheckLegacyEnrollmentFence(real, os.Getuid()); !errors.Is(fenceErr, os.ErrNotExist) {
 		return nil, false, err
 	}
 	c, pathErr = core.NewClient(ctx, dir)
@@ -69,7 +68,7 @@ func ordinaryUpdateRecoveryData(dir string) bool {
 	if _, packaged, _ := desktop.PackageLocalDataRoot(real, os.Getuid()); packaged {
 		return false
 	}
-	_, err = enrollment.EnrolledTarget(real, os.Getuid())
+	err = desktop.CheckLegacyEnrollmentFence(real, os.Getuid())
 	return errors.Is(err, os.ErrNotExist)
 }
 

@@ -10,7 +10,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strconv"
-	"strings"
 	"syscall"
 	"time"
 
@@ -18,7 +17,6 @@ import (
 	"github.com/fased-ai/fased-app/internal/custodyinstall"
 	"github.com/fased-ai/fased-app/internal/maintenance"
 	"github.com/fased-ai/fased-app/internal/signer"
-	"github.com/fased-ai/fased-app/internal/vpsinstall"
 )
 
 // The protected helper chooses every image, role and path. The application
@@ -34,35 +32,18 @@ func maintenanceCustodyEnrollmentImage(ctx context.Context, a maintenance.Author
 		dir = m.Root + "/enrollment-" + m.ID + ".stage"
 	}
 	if q.Action == "export" {
-		if a.Profile != "remote" {
-			return errors.New("Local source export uses its ordinary owner")
-		}
-		source, err := vpsinstall.LoadProtected(a.Owner)
-		if err != nil || source.Listen != m.Listen || source.PublicOrigin != m.PublicOrigin || source.AppUID == m.App.UID || source.AppUID == m.Signer.UID {
-			return errors.New("original Remote source differs; preserving it")
-		}
-		if err := verifyEnrollmentOSTool("/usr/bin/systemctl"); err != nil {
-			return err
-		}
-		check := exec.CommandContext(ctx, "/usr/bin/systemctl", "show", "--property=ActiveState", "--value", "--", source.Unit)
-		check.Env = []string{"PATH=/usr/bin:/bin", "HOME=/nonexistent", "LANG=C"}
-		state, err := check.Output()
-		if err != nil || strings.TrimSpace(string(state)) != "inactive" {
-			return errors.New("original Remote service must be suspended before export")
-		}
-		uid, gid, dir = source.AppUID, source.AppGID, source.Data
-	} else {
-		if err := custodyinstall.CheckProtectedEnrollmentSigner(a.Owner, q.OperationID); err != nil {
-			return err
-		}
-		info, err := os.Lstat(dir)
-		if err != nil {
-			return err
-		}
-		st, ok := info.Sys().(*syscall.Stat_t)
-		if !ok || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 || info.Mode().Perm() != 0700 || int(st.Uid) != uid || int(st.Gid) != gid {
-			return errors.New("enrollment image directory differs; preserving it")
-		}
+		return errors.New("legacy Remote source export has been retired")
+	}
+	if err := custodyinstall.CheckProtectedEnrollmentSigner(a.Owner, q.OperationID); err != nil {
+		return err
+	}
+	info, err := os.Lstat(dir)
+	if err != nil {
+		return err
+	}
+	st, ok := info.Sys().(*syscall.Stat_t)
+	if !ok || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 || info.Mode().Perm() != 0700 || int(st.Uid) != uid || int(st.Gid) != gid {
+		return errors.New("enrollment image directory differs; preserving it")
 	}
 	if uid <= 0 || gid <= 0 || uid == m.Signer.UID {
 		return errors.New("non-root app identity required")

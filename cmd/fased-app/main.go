@@ -23,7 +23,6 @@ import (
 	"github.com/fased-ai/fased-app/internal/custodyinstall"
 	"github.com/fased-ai/fased-app/internal/localinstall"
 	"github.com/fased-ai/fased-app/internal/signer"
-	"github.com/fased-ai/fased-app/internal/vpsinstall"
 	"golang.org/x/term"
 )
 
@@ -76,17 +75,11 @@ func run(args []string, in *os.File, out, errOut io.Writer) error {
 	if len(args) > 0 && args[0] == "reader-session-client" {
 		return readerSessionClient(args[1:], out)
 	}
-	if len(args) > 0 && args[0] == "remote-setup-link" {
-		return remoteOwnerSetupLink(args[1:], in, out)
-	}
 	if len(args) > 0 && args[0] == "install-command" {
 		return installedCommandCommand(args[1:], out, errOut)
 	}
 	if len(args) > 0 && args[0] == "update" {
 		return ordinaryUpdateCommand(args[1:], in, out, errOut)
-	}
-	if len(args) > 0 && args[0] == "application-owner-client" {
-		return applicationOwnerClient(args[1:], in, out, errOut)
 	}
 	if len(args) > 0 && args[0] == "maintain-update" {
 		return maintainUpdateCommand(args[1:], out, errOut)
@@ -226,7 +219,6 @@ func run(args []string, in *os.File, out, errOut io.Writer) error {
 	requireSandbox := flags.Bool("require-sandbox", false, "require installed Linux mount isolation before starting")
 	requirePassword := flags.Bool("require-password", false, "require explicit owner password instead of instant Local browser entry")
 	installationRoot := flags.String("installation-root", "", "immutable installed application directory")
-	remoteConfig := flags.String("remote-config", "", "immutable managed Remote installation identity")
 	custodyConfig := flags.String("custody-config", "", "root-owned managed fixture identity; never enables real wallets")
 	passwordStdin := flags.Bool("password-stdin", false, "read password from stdin instead of a terminal")
 	privateProofStdin := flags.Bool("private-proof-stdin", false, "verify a private Tailscale connection through owner IPC")
@@ -263,15 +255,11 @@ func run(args []string, in *os.File, out, errOut io.Writer) error {
 		default:
 			return errors.New("--remote-transport must be tailscale, cloudflare, domain, proxy, or ssh")
 		}
-		if *remoteConfig != "" && *remoteTransport != "tailscale" {
-			return errors.New("managed Remote requires tailscale transport")
-		}
 	}
 	if *privateProofStdin && args[0] != "status" {
 		return errors.New("private access proof requires status")
 	}
-	installedProviderFixture := *aiFixture && *requireSandbox && *installationRoot != "" && *custodyConfig == "" && *researchOrigin == "" &&
-		(*instanceLocation == "local" && *remoteConfig == "" && *publicOrigin == "" || *instanceLocation == "remote" && *remoteConfig != "" && *publicOrigin != "")
+	installedProviderFixture := *aiFixture && *requireSandbox && *installationRoot != "" && *custodyConfig == "" && *researchOrigin == "" && *instanceLocation == "local" && *publicOrigin == ""
 	if (*aiFixture && !installedProviderFixture || *sessionFixture) && *instanceLocation != "local" {
 		return errors.New("development fixtures are local-only")
 	}
@@ -283,9 +271,6 @@ func run(args []string, in *os.File, out, errOut io.Writer) error {
 	}
 	if *aiFixture && args[0] != "serve" {
 		return errors.New("AI fixture is a serve-only development option")
-	}
-	if *remoteConfig != "" && (args[0] != "serve" || *custodyConfig != "" || !*requireSandbox || *instanceLocation != "remote" || *aiFixture && !installedProviderFixture || *sessionFixture || *researchOrigin != "") {
-		return errors.New("managed Remote requires its installed service, sandbox and remote identity")
 	}
 	if flags.NArg() != 0 {
 		return errors.New("unexpected positional arguments")
@@ -303,15 +288,6 @@ func run(args []string, in *os.File, out, errOut io.Writer) error {
 				return err
 			}
 		}
-		if *remoteConfig != "" {
-			if err = vpsinstall.CheckApplication(*remoteConfig, *installationRoot, *dir, *listen, *publicOrigin, installedProviderFixture); err != nil {
-				return err
-			}
-			ownerUID, err = managedRemoteOwner(*installationRoot)
-			if err != nil {
-				return err
-			}
-		}
 		if *custodyConfig != "" {
 			if !*requireSandbox {
 				return errors.New("managed custody core requires its installed sandbox")
@@ -326,7 +302,7 @@ func run(args []string, in *os.File, out, errOut io.Writer) error {
 			ownerUID = custodyRuntimeOwnerUID(config, *instanceLocation)
 		}
 		if *requireSandbox {
-			if *custodyConfig != "" || *remoteConfig != "" {
+			if *custodyConfig != "" {
 				err = localinstall.CheckManagedSandbox(*installationRoot, *dir)
 			} else {
 				err = localinstall.CheckSandbox(*installationRoot, *dir)
@@ -335,7 +311,7 @@ func run(args []string, in *os.File, out, errOut io.Writer) error {
 				return err
 			}
 		}
-		if *requireSandbox && *installationRoot != "" && *remoteConfig == "" && *custodyConfig == "" {
+		if *requireSandbox && *installationRoot != "" && *custodyConfig == "" {
 			if err = localinstall.CheckProviderFixture(localinstall.Paths{Root: *installationRoot, Data: *dir}, installedProviderFixture); err != nil {
 				return err
 			}
@@ -357,9 +333,6 @@ func run(args []string, in *os.File, out, errOut io.Writer) error {
 		source := ""
 		if *requireSandbox && *installationRoot != "" && *custodyConfig == "" {
 			source = "local"
-			if *remoteConfig != "" {
-				source = "remote"
-			}
 		}
 		return serveInstalledRuntimeWithStage4(*installationRoot, *dir, *listen, *publicOrigin, *researchOrigin, *instanceLocation, *remoteTransport, source, ownerUID, installedProviderFixture, *requirePassword, out, core.TestnetExecutionConfig{
 			Profile:         *executionProfile,
@@ -585,9 +558,7 @@ func serveInstalledRuntimeWithStage4(installationRoot, dir, listen, publicOrigin
 			var check func(context.Context) (*core.ApplicationRelease, error)
 			check, err = installedChannelCheck(source, installationRoot, dir, ownerUID)
 			if err == nil && check != nil {
-				if source == "remote" {
-					err = bindCompiledRemoteMaintenance(server.Store, ownerUID, check)
-				} else if source == "local" && installationRoot != "" {
+				if source == "local" && installationRoot != "" {
 					err = bindCompiledLocalMaintenance(server.Store, installationRoot, dir, check)
 				}
 			}

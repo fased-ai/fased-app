@@ -537,7 +537,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        leg: [fixture, network, enrollment]
+        leg: [fixture, network]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -553,11 +553,6 @@ jobs:
           name: ci-built-binaries
           path: .
       - run: chmod +x .evidence/bin/*
-      - name: Prepare signed Ubuntu sources for installed enrollment
-        if: matrix.leg == 'enrollment'
-        run: |
-          node scripts/ci-ubuntu-mirror.mjs
-          sudo install -m 0644 .evidence/ubuntu.sources /etc/apt/sources.list.d/ubuntu.sources
       - run: npm ci
       - if: matrix.leg == 'fixture' || matrix.leg == 'network'
         run: go test -c -o .evidence/bin/wallet-core.test ./internal/core
@@ -587,14 +582,6 @@ jobs:
           FASED_MANAGED_NETWORK: "devnet"
           FASED_MANAGED_EVIDENCE: .evidence/p3-network-managed
         run: node scripts/check-managed-custody.mjs
-      - name: Controlled enrollment and protected ordinary Local enrollment
-        if: matrix.leg == 'enrollment'
-        env:
-          FASED_ENROLLMENT_ACCEPTANCE: "1"
-        run: |
-          node --test scripts/fixture-enrollment-observer.test.mjs
-          node scripts/check-enrollment-install.mjs
-          node scripts/check-enrollment-install.mjs --ordinary-custody
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -610,12 +597,6 @@ jobs:
             .evidence/p3-network-managed/*.json
             .evidence/p3-network-managed/*.log
             .evidence/p4-network-complete/*.json
-            .evidence/b05-enrollment-installed/*.json
-            .evidence/b05-enrollment-installed/*.log
-            .evidence/b05-enrollment-installed/*.png
-            .evidence/b05-ordinary-installed/*.json
-            .evidence/b05-ordinary-installed/*.log
-            .evidence/b05-ordinary-installed/*.png
           retention-days: 7
   prototype:
     if: always()
