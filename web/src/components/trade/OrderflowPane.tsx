@@ -506,9 +506,14 @@ export function OrderflowPane({
             const bars = [...prev.bars];
             const idx = bars.findIndex((b) => b.time === bar.time);
             if (idx >= 0) {
-              bars[idx] = bar;
+              const prevCvd = idx > 0 ? bars[idx - 1].cvd : 0;
+              bars[idx] = { ...bar, cvd: prevCvd + bar.delta };
+              for (let k = idx + 1; k < bars.length; k++) {
+                bars[k] = { ...bars[k], cvd: bars[k - 1].cvd + bars[k].delta };
+              }
             } else {
-              bars.push(bar);
+              const prevCvd = bars.length > 0 ? bars[bars.length - 1].cvd : 0;
+              bars.push({ ...bar, cvd: prevCvd + bar.delta });
               if (bars.length > 48) bars.shift();
             }
             return { ...prev, bars };

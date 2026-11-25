@@ -394,3 +394,39 @@ func TestLiveTickAndVolumeStylesAndCohortWindowSorting(t *testing.T) {
 		t.Fatal("expected invalid cohort window rejection")
 	}
 }
+
+func TestFeedHubGenerationPreventsRunningClobberOnStopRestart(t *testing.T) {
+	wsSrv := startMockWSServer(t, func(ctx context.Context, conn *websocket.Conn) {
+		<-ctx.Done()
+	})
+	hub := newFeedHub(hubOptions{
+		cache:        newFeedCache(time.Now),
+		bus:          NewBus(),
+		wsEndpoints:  map[string]string{VenueHyperliquid: wsURLFromHTTP(wsSrv)},
+		idleGrace:    30 * time.Millisecond,
+		emitInterval: 10 * time.Millisecond,
+	})
+	defer hub.Close()
+
+	rel1 := hub.Acquire(VenueHyperliquid, "BTC")
+	if n := hub.ActiveConnections(); n != 1 {
+		t.Fatalf("expected 1 active connection after first Acquire, got %d", n)
+	}
+	rel1()
+	// Exercise rapid stop/re-acquire across idle grace window under -race.
+	for i := 0; i < 4; i++ {
+		time.Sleep(15 * time.Millisecond)
+		rel := hub.Acquire(VenueHyperliquid, "BTC")
+		if n := hub.ActiveConnections(); n != 1 {
+			t.Fatalf("iter %d: expected 1 active connection after re-acquire, got %d", i, n)
+		}
+		rel()
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) && hub.ActiveConnections() > 0 {
+		time.Sleep(15 * time.Millisecond)
+	}
+	if n := hub.ActiveConnections(); n != 0 {
+		t.Fatalf("expected 0 active connections after idle settle, got %d", n)
+	}
+}

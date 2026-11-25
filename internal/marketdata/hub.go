@@ -19,6 +19,7 @@ type venueRunner struct {
 	refs       map[string]int
 	subscribed map[string]bool
 	running    bool
+	runSeq     uint64
 	cancel     context.CancelFunc
 	pokeCh     chan struct{}
 	idleTimer  *time.Timer
@@ -152,11 +153,13 @@ func (h *FeedHub) Acquire(venue, symbol string) func() {
 		ctx, cancel := context.WithCancel(h.rootCtx)
 		vr.cancel = cancel
 		vr.running = true
+		vr.runSeq++
+		seq := vr.runSeq
 		h.wg.Add(1)
-		go func(runner *venueRunner, runCtx context.Context) {
+		go func(runner *venueRunner, runCtx context.Context, runSeq uint64) {
 			defer h.wg.Done()
-			h.runVenueLoop(runCtx, runner)
-		}(vr, ctx)
+			h.runVenueLoop(runCtx, runner, runSeq)
+		}(vr, ctx, seq)
 	} else if prevRefs == 0 {
 		vr.poke()
 	}
@@ -314,7 +317,7 @@ func (h *FeedHub) ingestTrade(venue, canonSym string, t TradeTick) {
 			Payload:   bar,
 		})
 	}
-	for _, iv := range []string{"1m", "5m", "15m", "1h"} {
+	for _, iv := range []string{"1m", "5m", "15m", "1h", "4h", "1d"} {
 		if bars, _, has := h.cache.GetCandles(venue, canonSym, iv, 8); has && len(bars) > 0 {
 			startMs := bars[0].Time * 1000
 			ticks := h.cache.TradesInRange(venue, canonSym, startMs, nowMs+1000)

@@ -300,8 +300,8 @@ export function QuantLabWorkspace() {
           symbol,
           interval,
           limit: 240,
-          permutations: 200,
-          wfPermutations: 50,
+          permutations: 1000,
+          wfPermutations: 200,
           seed: 42,
         },
       });

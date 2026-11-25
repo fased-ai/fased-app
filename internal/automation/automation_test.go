@@ -503,3 +503,70 @@ func TestFasedScriptTriggerDeskCycleAndPermanentDedup(t *testing.T) {
 		t.Fatalf("expected news-perm not to re-fire same news article after cooldown*2, got %+v err=%v", evNews, err)
 	}
 }
+
+func TestAutomationPersistsLastFiredAtBeforeAgentPromptCompletion(t *testing.T) {
+	dir := t.TempDir()
+	now := time.Date(2026, 11, 24, 14, 0, 0, 0, time.UTC)
+	candles := sampleRisingCandles(25, 90000)
+
+	var (
+		mu          sync.Mutex
+		promptCalls int
+		svc         *Service
+	)
+	var err error
+	svc, err = NewService(Config{
+		DataDir: dir,
+		Now:     func() time.Time { return now },
+		MarketReader: func(_ context.Context, _, _, _ string, _ int) ([]marketdata.Candle, error) {
+			return candles, nil
+		},
+		OnAgentPrompt: func(ctx context.Context, tr Trigger, _ string, _ bool) {
+			mu.Lock()
+			promptCalls++
+			mu.Unlock()
+			if ctx.Err() != nil {
+				t.Fatalf("expected promptHook to receive non-cancelled detached context, got %v", ctx.Err())
+			}
+			// Verify runtime state was already durably updated in SQLite before promptHook returned.
+			stored, err := svc.store.listTriggers(context.Background())
+			if err != nil || len(stored) != 1 || stored[0].LastFiredAt == 0 || stored[0].FireCount != 1 {
+				t.Fatalf("expected LastFiredAt & FireCount=1 persisted before promptHook, got %+v err=%v", stored, err)
+			}
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewService failed: %v", err)
+	}
+	defer svc.Close()
+
+	if _, err := svc.SaveTrigger(t.Context(), TriggerInput{
+		ID:              "btc-agent-slow",
+		Name:            "Slow Agent Prompt",
+		Kind:            KindPrice,
+		CooldownSeconds: 300,
+		Condition:       TriggerCondition{Venue: "hyperliquid", Symbol: "BTC", Interval: "1h", Comparator: CompAbove, Threshold: 100},
+		Action:          TriggerAction{Type: ActionAgentPrompt, Severity: SeverityInfo},
+	}); err != nil {
+		t.Fatalf("SaveTrigger failed: %v", err)
+	}
+
+	// Simulate an EvaluateNow call with a short deadline that expires slightly after firing.
+	sweepCtx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	sw1, err := svc.EvaluateNow(sweepCtx)
+	if err != nil || sw1.Fired != 1 {
+		t.Fatalf("expected 1 trigger fired, got %+v err=%v", sw1, err)
+	}
+	// Trigger must not re-fire 15s later within cooldown.
+	now = now.Add(15 * time.Second)
+	sw2, err := svc.EvaluateNow(t.Context())
+	if err != nil || sw2.Fired != 0 {
+		t.Fatalf("expected 0 triggers on 15s follow-up sweep, got %+v err=%v", sw2, err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if promptCalls != 1 {
+		t.Fatalf("expected exactly 1 promptHook invocation, got %d", promptCalls)
+	}
+}

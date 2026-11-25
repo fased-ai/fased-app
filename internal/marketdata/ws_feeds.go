@@ -51,14 +51,16 @@ func (h *FeedHub) endpointsForVenue(venue string) ([]string, bool) {
 	}
 }
 
-func (h *FeedHub) runVenueLoop(ctx context.Context, vr *venueRunner) {
+func (h *FeedHub) runVenueLoop(ctx context.Context, vr *venueRunner, seq uint64) {
 	defer func() {
 		h.mu.Lock()
-		if vr.idleTimer != nil {
-			vr.idleTimer.Stop()
-			vr.idleTimer = nil
+		if vr.runSeq == seq {
+			if vr.idleTimer != nil {
+				vr.idleTimer.Stop()
+				vr.idleTimer = nil
+			}
+			vr.running = false
 		}
-		vr.running = false
 		h.mu.Unlock()
 	}()
 

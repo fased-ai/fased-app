@@ -469,9 +469,18 @@ export class FasedStreamClient {
     return entries.join(",");
   }
 
+  private getActiveSSETopics(): string[] {
+    const out: string[] = [];
+    for (const topic of ["intel", "desk", "automation"]) {
+      if (this.topics.has(topic)) out.push(topic);
+    }
+    return out;
+  }
+
   private async startSSELoop(): Promise<void> {
     const subs = this.buildMarketSSESubs();
-    if (!subs) {
+    const auxTopics = this.getActiveSSETopics();
+    if (!subs && auxTopics.length === 0) {
       this.setStatus("idle");
       return;
     }
@@ -479,48 +488,95 @@ export class FasedStreamClient {
     const controller = new AbortController();
     this.sseAbort = controller;
     this.setStatus("sse");
-    const qs = new URLSearchParams({ noSnapshot: "1", subs });
+
+    const tasks: Promise<void>[] = [];
+    if (subs) {
+      const qs = new URLSearchParams({ noSnapshot: "1", subs });
+      tasks.push(
+        this.binding.streamGet(`market/stream?${qs.toString()}`, {
+          signal: controller.signal,
+          onEvent: (frame) => {
+            if (gen !== this.runGeneration || controller.signal.aborted) return;
+            if (
+              !frame.data ||
+              frame.event === "heartbeat" ||
+              frame.event === "ready"
+            ) {
+              return;
+            }
+            try {
+              const ev = JSON.parse(frame.data) as {
+                type?: string;
+                venue?: string;
+                symbol?: string;
+                interval?: string;
+                style?: string;
+                timestamp?: number;
+                payload?: unknown;
+              };
+              const evType = ev.type ?? frame.event;
+              if (!ev.venue || !ev.symbol || !evType) return;
+              for (const topic of this.topics.keys()) {
+                if (matchesTopicFromMarketSSE(topic, evType, ev)) {
+                  this.enqueueFrame(topic, {
+                    type: "event",
+                    topic,
+                    event: evType,
+                    ts: ev.timestamp,
+                    payload: ev.payload,
+                  });
+                }
+              }
+            } catch {
+              /* ignore malformed SSE payload */
+            }
+          },
+        }),
+      );
+    }
+
+    const auxRoutes: Record<string, string> = {
+      intel: "intel/stream",
+      desk: "desk/stream",
+      automation: "automation/stream",
+    };
+    for (const topic of auxTopics) {
+      const route = auxRoutes[topic];
+      if (!route) continue;
+      tasks.push(
+        this.binding.streamGet(route, {
+          signal: controller.signal,
+          onEvent: (frame) => {
+            if (gen !== this.runGeneration || controller.signal.aborted) return;
+            if (
+              !frame.data ||
+              frame.event === "heartbeat" ||
+              frame.event === "ready"
+            ) {
+              return;
+            }
+            try {
+              const ev = JSON.parse(frame.data) as {
+                type?: string;
+                timestamp?: number;
+              };
+              this.enqueueFrame(topic, {
+                type: "event",
+                topic,
+                event: frame.event || ev.type || topic,
+                ts: ev.timestamp,
+                payload: ev,
+              });
+            } catch {
+              /* ignore malformed SSE payload */
+            }
+          },
+        }),
+      );
+    }
 
     try {
-      await this.binding.streamGet(`market/stream?${qs.toString()}`, {
-        signal: controller.signal,
-        onEvent: (frame) => {
-          if (gen !== this.runGeneration || controller.signal.aborted) return;
-          if (
-            !frame.data ||
-            frame.event === "heartbeat" ||
-            frame.event === "ready"
-          ) {
-            return;
-          }
-          try {
-            const ev = JSON.parse(frame.data) as {
-              type?: string;
-              venue?: string;
-              symbol?: string;
-              interval?: string;
-              style?: string;
-              timestamp?: number;
-              payload?: unknown;
-            };
-            const evType = ev.type ?? frame.event;
-            if (!ev.venue || !ev.symbol || !evType) return;
-            for (const topic of this.topics.keys()) {
-              if (matchesTopicFromMarketSSE(topic, evType, ev)) {
-                this.enqueueFrame(topic, {
-                  type: "event",
-                  topic,
-                  event: evType,
-                  ts: ev.timestamp,
-                  payload: ev.payload,
-                });
-              }
-            }
-          } catch {
-            /* ignore malformed SSE payload */
-          }
-        },
-      });
+      await Promise.allSettled(tasks);
     } catch {
       /* reconnect below if not aborted */
     } finally {
@@ -619,6 +675,11 @@ export class FasedStreamClient {
   }
 }
 
+function normalizeSSESymbol(sym: string): string {
+  const up = sym.trim().toUpperCase();
+  return up.endsWith("-PERP") ? up.slice(0, -5) : up;
+}
+
 function matchesTopicFromMarketSSE(
   topic: string,
   evType: string,
@@ -627,7 +688,9 @@ function matchesTopicFromMarketSSE(
   const parts = topic.split(":");
   if (parts.length < 3 || parts[0] !== evType) return false;
   if (parts[1] !== ev.venue) return false;
-  if (parts[2].toUpperCase() !== (ev.symbol ?? "").toUpperCase()) return false;
+  if (normalizeSSESymbol(parts[2]) !== normalizeSSESymbol(ev.symbol ?? "")) {
+    return false;
+  }
   if (parts[0] === "candle") {
     if (parts[3] && ev.interval && parts[3] !== ev.interval) return false;
     if (parts[4] && ev.style && parts[4] !== ev.style) return false;

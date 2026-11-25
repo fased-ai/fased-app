@@ -1,6 +1,7 @@
 package core
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
@@ -213,5 +214,76 @@ func TestStreamWSTicketSecurityTopicsAndShutdown(t *testing.T) {
 	}
 	if err := <-serveDone; err != nil {
 		t.Fatalf("server.Serve returned error after Close: %v", err)
+	}
+}
+
+func TestMarketDataSSEDerivedHeikinAshiStyleTransform(t *testing.T) {
+	t.Parallel()
+	dir := fixtureDir(t)
+	server, err := StartAgentFixture(t.Context(), dir, "127.0.0.1:0", "", nil)
+	if err != nil {
+		t.Fatalf("StartAgentFixture failed: %v", err)
+	}
+	serveDone := make(chan error, 1)
+	go func() { serveDone <- server.Serve() }()
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		_ = server.Close(ctx)
+		<-serveDone
+	})
+
+	token := claimFixture(t, server.Store)
+	mdSvc, err := server.Store.marketDataService()
+	if err != nil {
+		t.Fatalf("marketDataService failed: %v", err)
+	}
+	if _, err := mdSvc.GetCandles(t.Context(), "hyperliquid", "BTC", "15m", marketdata.TransformOptions{Style: marketdata.StyleStandard}, 20); err != nil {
+		t.Fatalf("warm GetCandles failed: %v", err)
+	}
+
+	sseCtx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	req, _ := http.NewRequestWithContext(sseCtx, http.MethodGet, server.URL+"/api/v1/market/stream?noSnapshot=1&subs=hyperliquid:BTC:15m:heikin_ashi", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	client := &http.Client{}
+	httpResp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("SSE GET failed: %v", err)
+	}
+	defer httpResp.Body.Close()
+
+	sc := bufio.NewScanner(httpResp.Body)
+	sawReady := false
+	for sc.Scan() {
+		line := sc.Text()
+		if strings.HasPrefix(line, "event: ready") {
+			sawReady = true
+			break
+		}
+	}
+	if !sawReady {
+		t.Fatalf("expected SSE ready event")
+	}
+
+	mdSvc.Publish(marketdata.Event{
+		Type:     "candle",
+		Venue:    "hyperliquid",
+		Symbol:   "BTC",
+		Interval: "15m",
+		Style:    marketdata.StyleStandard,
+		Payload:  marketdata.Candle{Time: 1760003600, Open: 94000, High: 94200, Low: 93900, Close: 94150, Volume: 10},
+	})
+
+	sawHA := false
+	for sc.Scan() {
+		line := sc.Text()
+		if strings.HasPrefix(line, "data: ") && strings.Contains(line, `"style":"heikin_ashi"`) {
+			sawHA = true
+			break
+		}
+	}
+	if !sawHA {
+		t.Fatalf("expected SSE heikin_ashi transformed candle event")
 	}
 }
