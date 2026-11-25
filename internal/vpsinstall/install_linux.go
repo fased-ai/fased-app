@@ -376,6 +376,18 @@ func osRelease(o hostOps) (hostFile, error) {
 	}
 	return rootFile(o, "/usr/lib/os-release")
 }
+
+func lookupLegacyPlatform(release []byte) error {
+	p, e := hostplatform.LookupRemote(string(release), runtime.GOARCH)
+	if e != nil {
+		return e
+	}
+	if p.ID != "ubuntu" {
+		return errors.New("legacy Remote installer requires Ubuntu 24.04+; use the package-custody Remote installer for Debian or Fedora")
+	}
+	return nil
+}
+
 func known(f hostFile, b []byte, mode os.FileMode) bool {
 	return f.Regular && f.UID == 0 && f.GID == 0 && f.Mode.Perm() == mode && bytes.Equal(f.Data, b)
 }
@@ -775,7 +787,7 @@ func install(ctx context.Context, opt Options, o hostOps) (Manifest, error) {
 	if e != nil {
 		return m, e
 	}
-	if _, e := hostplatform.LookupRemote(string(release.Data), runtime.GOARCH); e != nil {
+	if e := lookupLegacyPlatform(release.Data); e != nil {
 		return m, e
 	}
 

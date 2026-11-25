@@ -69,6 +69,13 @@ func (f *preparationFixture) run(ctx context.Context, b []byte, args ...string) 
 			return nil, errors.New("unexpected package query")
 		}
 		return []byte("tailscale:\n  Candidate: 1.104.7\n"), nil
+	case "/usr/bin/dnf":
+		if len(args) > 1 && args[1] == "repoquery" {
+			return []byte("1.104.7\n"), nil
+		}
+		if len(args) > 1 && args[1] == "install" {
+			f.files["/usr/bin/tailscale"] = preparationFile{root: true, regular: true, mode: 0755}
+		}
 	case "/usr/bin/tailscale":
 		switch args[1] {
 		case "debug":
@@ -309,5 +316,73 @@ func TestGuidedTailscaleReleaseMapping(t *testing.T) {
 		if string(got.data) != p.TailscaleSource(tailscaleKeyPath) {
 			t.Fatal(version, string(got.data))
 		}
+	}
+	for _, tc := range []struct {
+		version, codename string
+	}{{"12", "bookworm"}, {"13", "trixie"}} {
+		p, e := hostplatform.Lookup("ID=debian\nVERSION_ID="+tc.version+"\n", "amd64")
+		if e != nil {
+			t.Fatal(e)
+		}
+		f := setupFixture()
+		if e = prepareTailscale(t.Context(), preparationDirectory(t), 1000, "owner", &bytes.Buffer{}, f.read, f.run, p); e != nil {
+			t.Fatal(tc.version, e)
+		}
+		got, _ := f.read(tailscaleSourcePath)
+		if !strings.Contains(string(got.data), "stable/debian "+tc.codename+" main") {
+			t.Fatal(tc.version, string(got.data))
+		}
+	}
+}
+
+func TestFedoraDnfTailscaleSetupAndRepoReuse(t *testing.T) {
+	fedora, err := hostplatform.LookupRemote("ID=fedora\nVERSION_ID=45\n", "amd64")
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := setupFixture()
+	if err := prepareTailscale(t.Context(), preparationDirectory(t), 1000, "owner", &bytes.Buffer{}, f.read, f.run, fedora); err != nil {
+		t.Fatalf("fedora prepareTailscale failed: %v", err)
+	}
+	for path, want := range map[string][]byte{
+		tailscaleRPMKeyPath:    tailscaleRPMKey,
+		tailscaleRPMSourcePath: []byte(fedora.TailscaleSource(tailscaleRPMKeyPath)),
+	} {
+		got, rErr := f.read(path)
+		if rErr != nil || !knownPreparationFile(got, want) {
+			t.Fatalf("wrong RPM repo artifact at %s: %v", path, rErr)
+		}
+	}
+	calls := strings.Join(f.calls, "\n")
+	for _, want := range []string{
+		"/usr/bin/dnf makecache --refresh --repo=fased-tailscale-stable",
+		"/usr/bin/dnf repoquery --available --latest-limit=1 --qf=%{version} --repo=fased-tailscale-stable tailscale",
+		"/usr/bin/dnf install --assumeyes --setopt=install_weak_deps=False --setopt=gpgcheck=1 --setopt=repo_gpgcheck=1 tailscale-1.104.7",
+	} {
+		if !strings.Contains(calls, want) {
+			t.Fatalf("missing dnf call %q in:\n%s", want, calls)
+		}
+	}
+
+	// Existing official tailscale.repo is reused cleanly; tampered repo fails closed.
+	for _, foreign := range []bool{false, true} {
+		t.Run(map[bool]string{false: "official-rpm", true: "foreign-rpm"}[foreign], func(t *testing.T) {
+			fx := setupFixture()
+			body := officialFedoraTailscaleRepo + "\n"
+			if foreign {
+				body = "[tailscale-stable]\nbaseurl=https://owner.invalid/fedora\n"
+			}
+			fx.files[standardTailscaleRPMSourcePath] = preparationFile{data: []byte("# comment\n" + body), root: true, regular: true, mode: 0644}
+			err := prepareTailscale(t.Context(), preparationDirectory(t), 1000, "owner", &bytes.Buffer{}, fx.read, fx.run, fedora)
+			if (err != nil) != foreign {
+				t.Fatalf("foreign=%v err=%v", foreign, err)
+			}
+			if !foreign && !strings.Contains(strings.Join(fx.calls, "\n"), "--repo=tailscale-stable") {
+				t.Fatalf("did not reuse tailscale-stable repo: %v", fx.calls)
+			}
+			if foreign && len(fx.calls) != 0 {
+				t.Fatalf("foreign repo triggered dnf calls: %v", fx.calls)
+			}
+		})
 	}
 }

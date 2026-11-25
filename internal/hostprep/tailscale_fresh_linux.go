@@ -106,7 +106,7 @@ func tailscaleGrantPath(owner int) string {
 
 func noPriorTailscaleState(stat func(string) (os.FileInfo, error)) error {
 	for _, path := range []string{
-		"/var/lib/tailscale", "/etc/tailscale", "/etc/default/tailscaled",
+		"/var/lib/tailscale", "/etc/tailscale", "/etc/default/tailscaled", "/etc/sysconfig/tailscaled",
 		"/run/tailscale/tailscaled.sock", "/var/run/tailscale/tailscaled.sock",
 		"/usr/sbin/tailscaled", "/usr/bin/tailscaled", "/usr/local/sbin/tailscaled", "/usr/local/bin/tailscaled",
 		"/etc/systemd/system/tailscaled.service", "/etc/systemd/system/tailscaled.service.d",
@@ -238,6 +238,27 @@ func tailscaleAptCandidate(b []byte) (string, error) {
 	return candidate, nil
 }
 
+func tailscaleDnfCandidate(b []byte) (string, error) {
+	if len(b) == 0 || len(b) > 1024 {
+		return "", errors.New("Tailscale RPM candidate unavailable")
+	}
+	var candidate string
+	for _, line := range strings.Split(strings.TrimSpace(string(b)), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		if candidate != "" {
+			return "", errors.New("ambiguous Tailscale RPM candidate")
+		}
+		candidate = line
+	}
+	if !supportedTailscaleRelease(candidate) {
+		return "", errors.New("Tailscale RPM version is not yet verified for automatic enrollment")
+	}
+	return candidate, nil
+}
+
 func freshTailscalePrefs(b, profiles []byte) (string, error) {
 	var p struct{ OperatorUser string }
 	var saved []json.RawMessage
@@ -250,7 +271,14 @@ func freshTailscalePrefs(b, profiles []byte) (string, error) {
 }
 
 func tailscaleDefaultHash() (string, error) {
-	f, err := readPreparationFile("/etc/default/tailscaled")
+	return tailscaleDefaultHashWith(readPreparationFile)
+}
+
+func tailscaleDefaultHashWith(read preparationRead) (string, error) {
+	f, err := read("/etc/default/tailscaled")
+	if errors.Is(err, os.ErrNotExist) {
+		f, err = read("/etc/sysconfig/tailscaled")
+	}
 	if err != nil || !f.root || !f.regular || len(f.data) == 0 {
 		return "", errors.New("Tailscale service configuration is unavailable; preserve it")
 	}

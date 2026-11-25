@@ -11,7 +11,7 @@ func TestLinuxPackageFamiliesUseSharedLocalPreparation(t *testing.T) {
 	for _, tc := range []struct {
 		name, release, query, install string
 	}{
-		{"Debian", "ID=debian\nVERSION_ID=12\n", "/usr/bin/dpkg-query", "/usr/bin/apt-get"},
+		{"Debian", "ID=debian\nVERSION_ID=11\n", "/usr/bin/dpkg-query", "/usr/bin/apt-get"},
 		{"Ubuntu derivative", "ID=linuxmint\nID_LIKE=\"ubuntu debian\"\nVERSION_ID=22\n", "/usr/bin/dpkg-query", "/usr/bin/apt-get"},
 		{"RHEL derivative", "ID=rocky\nID_LIKE=\"rhel fedora\"\nVERSION_ID=9.5\n", "/usr/bin/rpm", "/usr/bin/dnf"},
 		{"New Fedora", "ID=fedora\nVERSION_ID=46\n", "/usr/bin/rpm", "/usr/bin/dnf"},
@@ -42,26 +42,31 @@ func TestLinuxPackageFamiliesUseSharedLocalPreparation(t *testing.T) {
 }
 
 func TestFedora45LocalMapping(t *testing.T) {
-	release := "ID=fedora\nVERSION_ID=45\n"
-	p, err := Lookup(release, "amd64")
-	if err != nil {
-		t.Fatal(err)
+	for _, version := range []string{"41", "42", "43", "44", "45"} {
+		release := "ID=fedora\nVERSION_ID=" + version + "\n"
+		for _, arch := range []string{"amd64", "arm64"} {
+			p, err := LookupRemote(release, arch)
+			if err != nil {
+				t.Fatalf("fedora %s %s rejected: %v", version, arch, err)
+			}
+			if !p.Remote || p.RestrictedNamespaces {
+				t.Fatalf("Fedora %s %s wrong Remote/namespace settings: %+v", version, arch, p)
+			}
+			if got, want := p.Packages(true), []string{"gtk3", "webkit2gtk4.1", "xdg-utils"}; !reflect.DeepEqual(got, want) {
+				t.Fatalf("Fedora runtime packages = %v, want %v", got, want)
+			}
+			manager, err := p.PackageManager()
+			if err != nil || manager.PolicyKit != "polkit" || !reflect.DeepEqual(manager.Query, []string{"/usr/bin/rpm", "-q", "--quiet", "--"}) || !reflect.DeepEqual(manager.Install, []string{"/usr/bin/dnf", "install", "--assumeyes", "--setopt=install_weak_deps=False"}) || len(manager.Refresh) != 0 {
+				t.Fatalf("wrong Fedora package preparation: %+v (%v)", manager, err)
+			}
+			src := p.TailscaleSource("/etc/pki/rpm-gpg/RPM-GPG-KEY-fased-tailscale")
+			if !strings.Contains(src, "[fased-tailscale-stable]") || !strings.Contains(src, "gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-fased-tailscale") {
+				t.Fatalf("unexpected Fedora Tailscale source: %s", src)
+			}
+		}
 	}
-	if p.Remote || p.RestrictedNamespaces {
-		t.Fatal("Fedora must use the existing Local systemd sandbox and not be admitted as Remote", p)
-	}
-	if got, want := p.Packages(true), []string{"gtk3", "webkit2gtk4.1", "xdg-utils"}; !reflect.DeepEqual(got, want) {
-		t.Fatalf("Fedora runtime packages = %v, want %v", got, want)
-	}
-	manager, err := p.PackageManager()
-	if err != nil || manager.PolicyKit != "polkit" || !reflect.DeepEqual(manager.Query, []string{"/usr/bin/rpm", "-q", "--quiet", "--"}) || !reflect.DeepEqual(manager.Install, []string{"/usr/bin/dnf", "install", "--assumeyes", "--setopt=install_weak_deps=False"}) || len(manager.Refresh) != 0 {
-		t.Fatalf("wrong Fedora package preparation: %+v (%v)", manager, err)
-	}
-	if _, err = LookupRemote(release, "amd64"); err == nil {
-		t.Fatal("unverified Fedora Remote was admitted")
-	}
-	if _, err = Lookup(release, "arm64"); err == nil {
-		t.Fatal("unverified Fedora architecture was admitted")
+	if _, err := LookupRemote("ID=fedora\nVERSION_ID=40\n", "amd64"); err == nil {
+		t.Fatal("unverified older Fedora Remote was admitted")
 	}
 }
 
@@ -143,9 +148,31 @@ func TestRemoteMappingsKeepRequiredAuthorityBoundary(t *testing.T) {
 	if _, e := LookupRemote("ID=ubuntu\nVERSION_ID=22.04\n", "amd64"); e == nil {
 		t.Fatal("old sudo/sandbox profile advertised as Remote")
 	}
-	for _, v := range []string{"24.04", "26.04", "26.10"} {
-		if _, e := LookupRemote("ID=ubuntu\nVERSION_ID="+v+"\n", "arm64"); e != nil {
-			t.Fatal(v, e)
+	for _, arch := range []string{"amd64", "arm64"} {
+		for _, v := range []string{"24.04", "26.04", "26.10"} {
+			if _, e := LookupRemote("ID=ubuntu\nVERSION_ID="+v+"\n", arch); e != nil {
+				t.Fatal(arch, v, e)
+			}
+		}
+		for _, tc := range []struct {
+			version, codename string
+		}{
+			{"12", "bookworm"},
+			{"13", "trixie"},
+		} {
+			p, e := LookupRemote("ID=debian\nVERSION_ID="+tc.version+"\n", arch)
+			if e != nil {
+				t.Fatalf("debian %s %s rejected: %v", tc.version, arch, e)
+			}
+			src := p.TailscaleSource("/usr/share/keyrings/fased-tailscale.gpg")
+			if !strings.Contains(src, "stable/debian "+tc.codename+" main") {
+				t.Fatalf("unexpected Debian Tailscale source: %s", src)
+			}
+		}
+		for _, v := range []string{"41", "42", "43", "44", "45"} {
+			if _, e := LookupRemote("ID=fedora\nVERSION_ID="+v+"\n", arch); e != nil {
+				t.Fatalf("fedora %s %s rejected: %v", v, arch, e)
+			}
 		}
 	}
 }

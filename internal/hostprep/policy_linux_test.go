@@ -45,8 +45,26 @@ func TestProtectedPreparationUsesOnlyMissingDistributionPackages(t *testing.T) {
 		t.Fatal("installed Fedora packages should only be queried", calls, err)
 	}
 	calls = nil
-	if err = prepareProtectedPackages(fedora, "remote", run); err == nil || len(calls) != 0 {
-		t.Fatal("unverified Fedora Remote reached package operations", calls, err)
+	remoteRun := func(args ...string) ([]byte, error) {
+		calls = append(calls, strings.Join(args, " "))
+		if args[0] == "/usr/bin/rpm" {
+			return nil, errors.New("not installed")
+		}
+		return nil, nil
+	}
+	if err = prepareProtectedPackages(fedora, "remote", remoteRun); err != nil {
+		t.Fatalf("verified Fedora Remote rejected: %v", err)
+	}
+	if len(calls) == 0 || !strings.Contains(calls[len(calls)-1], "policycoreutils-python-utils") || !strings.Contains(calls[len(calls)-1], "nftables") || !strings.Contains(calls[len(calls)-1], "openssh-server") {
+		t.Fatalf("missing Fedora Remote packages (nftables, openssh-server, policycoreutils-python-utils): %v", calls)
+	}
+	rocky, err := hostplatform.Lookup("ID=rocky\nID_LIKE=\"rhel fedora\"\nVERSION_ID=9.5\n", "amd64")
+	if err != nil {
+		t.Fatal(err)
+	}
+	calls = nil
+	if err = prepareProtectedPackages(rocky, "remote", run); err == nil || len(calls) != 0 {
+		t.Fatal("unverified RHEL derivative Remote reached package operations", calls, err)
 	}
 	ubuntu, err := hostplatform.Lookup("ID=ubuntu\nVERSION_ID=24.04\n", "amd64")
 	if err != nil {
@@ -82,10 +100,25 @@ func TestFedoraDesktopPreparationRejectsUnscopedDNF(t *testing.T) {
 	if _, err := s.Run(t.Context(), nil, valid...); err != nil {
 		t.Fatal(err)
 	}
+	for _, allowed := range [][]string{
+		{"/usr/bin/dnf", "install", "--assumeyes", "--setopt=install_weak_deps=False", "polkit", "nftables", "openssh-server", "policycoreutils-python-utils"},
+		{"/usr/bin/dnf", "makecache", "--refresh", "--repo=fased-tailscale-stable"},
+		{"/usr/bin/dnf", "makecache", "--refresh", "--repo=tailscale-stable"},
+		{"/usr/bin/dnf", "repoquery", "--available", "--latest-limit=1", "--qf=%{version}", "--repo=fased-tailscale-stable", "tailscale"},
+		{"/usr/bin/dnf", "install", "--assumeyes", "--setopt=install_weak_deps=False", "--setopt=gpgcheck=1", "--setopt=repo_gpgcheck=1", "tailscale-1.104.7"},
+	} {
+		if _, err := s.Run(t.Context(), nil, allowed...); err != nil {
+			t.Fatalf("allowlisted dnf command rejected %v: %v", allowed, err)
+		}
+	}
 	before := len(calls)
 	for _, args := range [][]string{
 		{"/usr/bin/dnf", "install", "--assumeyes", "--nogpgcheck", "gtk3"},
 		{"/usr/bin/dnf", "install", "--assumeyes", "--setopt=install_weak_deps=False", "unrelated-package"},
+		{"/usr/bin/dnf", "makecache", "--refresh", "--repo=evil"},
+		{"/usr/bin/dnf", "repoquery", "--available", "--latest-limit=1", "--qf=%{version}", "--repo=evil", "tailscale"},
+		{"/usr/bin/dnf", "install", "--assumeyes", "--setopt=install_weak_deps=False", "--setopt=gpgcheck=1", "--setopt=repo_gpgcheck=1", "tailscale-1.104.4"},
+		{"/usr/bin/dnf", "install", "--assumeyes", "--setopt=install_weak_deps=False", "--setopt=gpgcheck=0", "--setopt=repo_gpgcheck=1", "tailscale-1.104.7"},
 	} {
 		if _, err := s.Run(t.Context(), nil, args...); err == nil {
 			t.Fatal("unscoped DNF request was accepted", args)

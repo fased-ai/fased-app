@@ -18,6 +18,8 @@ import (
 	"github.com/fased-ai/fased-app/internal/core"
 )
 
+const maxRecoveryKeyCandidates = 16
+
 // PrepareRecoveryKey prepares only the ordinary human operator's SSH key login.
 // It grants no app/signer privileges, never copies a key list, creates no password
 // and never closes access. A fresh private SSH login must still be proven.
@@ -31,6 +33,69 @@ func PrepareRecoveryKey(in *bufio.Reader, out io.Writer) error {
 	}
 	return prepareRecoveryKey(owner.HomeDir, in, out, os.Getenv("FASED_BOOTSTRAP_RECOVERY_KEY"))
 }
+
+func parseRecoveryCandidates(suggested string) []string {
+	seen := map[string]bool{}
+	var candidates []string
+	for _, raw := range strings.Split(suggested, "\n") {
+		k := strings.TrimSpace(raw)
+		if k == "" || !validRecoveryPublicKey(k) || seen[k] {
+			continue
+		}
+		seen[k] = true
+		candidates = append(candidates, k)
+		if len(candidates) >= maxRecoveryKeyCandidates {
+			break
+		}
+	}
+	return candidates
+}
+
+func stageAndVerifyRecoveryKey(home, key string) (tempPath, fingerprint string, cleanup func(), err error) {
+	if !validRecoveryPublicKey(key) {
+		return "", "", nil, errors.New("use a single SSH public key without options or private key material")
+	}
+	temp, err := os.CreateTemp(home, ".fased-public-key-")
+	if err != nil {
+		return "", "", nil, err
+	}
+	removeTemp := func() { _ = os.Remove(temp.Name()) }
+	if _, err = temp.WriteString(key + "\n"); err != nil {
+		_ = temp.Close()
+		removeTemp()
+		return "", "", nil, err
+	}
+	if err = temp.Sync(); err != nil {
+		_ = temp.Close()
+		removeTemp()
+		return "", "", nil, err
+	}
+	if err = temp.Close(); err != nil {
+		removeTemp()
+		return "", "", nil, err
+	}
+	// ssh-keygen is an ordinary OS tool; the key input is data, never shell text.
+	command := exec.Command("/usr/bin/ssh-keygen", "-lf", temp.Name())
+	fpBytes, err := command.Output()
+	if err != nil || len(fpBytes) > 4096 {
+		removeTemp()
+		return "", "", nil, errors.New("SSH rejected this public key")
+	}
+	if strings.HasPrefix(key, "ssh-rsa ") {
+		fields := strings.Fields(string(fpBytes))
+		if len(fields) == 0 {
+			removeTemp()
+			return "", "", nil, errors.New("invalid recovery key")
+		}
+		bits, e := strconv.Atoi(fields[0])
+		if e != nil || bits < 3072 {
+			removeTemp()
+			return "", "", nil, errors.New("use an Ed25519 key or an RSA key of at least 3072 bits")
+		}
+	}
+	return temp.Name(), string(fpBytes), removeTemp, nil
+}
+
 func prepareRecoveryKey(home string, in *bufio.Reader, out io.Writer, suggested string) error {
 	dir := filepath.Join(home, ".ssh")
 	path := filepath.Join(dir, "authorized_keys")
@@ -52,64 +117,82 @@ func prepareRecoveryKey(home string, in *bufio.Reader, out io.Writer, suggested 
 	if in == nil {
 		return errors.New("a recovery SSH public key is required before Remote deployment")
 	}
-	key := strings.TrimSpace(suggested)
-	if key != "" {
+	candidates := parseRecoveryCandidates(suggested)
+	var key string
+	switch len(candidates) {
+	case 0:
+		fmt.Fprintln(out, "Paste your SSH public key for private recovery (never a private key):")
+		value, err := in.ReadString('\n')
+		if err != nil {
+			return err
+		}
+		key = strings.TrimSpace(value)
+	case 1:
 		fmt.Fprintln(out, "Use the SSH public key from this bootstrap connection for private recovery? [Y/n]:")
-		answer, e := in.ReadString('\n')
-		if e != nil {
-			return e
+		answer, err := in.ReadString('\n')
+		if err != nil {
+			return err
 		}
 		if answer = strings.ToLower(strings.TrimSpace(answer)); answer != "" && answer != "y" && answer != "yes" {
 			return errors.New("Remote setup cancelled; a verified recovery key is required")
 		}
-	} else {
-		fmt.Fprintln(out, "Paste your SSH public key for private recovery (never a private key):")
-		value, e := in.ReadString('\n')
-		if e != nil {
-			return e
+		key = candidates[0]
+	default:
+		type verifiedCandidate struct {
+			key, fp string
 		}
-		key = strings.TrimSpace(value)
+		var verified []verifiedCandidate
+		for _, c := range candidates {
+			_, fp, cleanup, err := stageAndVerifyRecoveryKey(home, c)
+			if cleanup != nil {
+				cleanup()
+			}
+			if err != nil {
+				continue
+			}
+			verified = append(verified, verifiedCandidate{key: c, fp: strings.TrimSpace(fp)})
+		}
+		if len(verified) == 0 {
+			return errors.New("no valid recovery SSH public key found in bootstrap candidates")
+		}
+		fmt.Fprintln(out, "Multiple SSH public keys found in bootstrap authorized_keys:")
+		for i, c := range verified {
+			fmt.Fprintf(out, "  %d) %s\n", i+1, c.fp)
+		}
+		fmt.Fprintf(out, "Select one SSH public key for private recovery [1-%d, default 1], or paste a key:\n", len(verified))
+		answer, err := in.ReadString('\n')
+		if err != nil {
+			return err
+		}
+		answer = strings.TrimSpace(answer)
+		switch {
+		case answer == "":
+			key = verified[0].key
+		default:
+			if idx, idxErr := strconv.Atoi(answer); idxErr == nil {
+				if idx < 1 || idx > len(verified) {
+					return errors.New("invalid recovery SSH key selection")
+				}
+				key = verified[idx-1].key
+			} else {
+				if !validRecoveryPublicKey(answer) {
+					return errors.New("invalid recovery SSH key selection")
+				}
+				key = answer
+			}
+		}
 	}
-	if !validRecoveryPublicKey(key) {
-		return errors.New("use a single SSH public key without options or private key material")
-	}
-	temp, err := os.CreateTemp(home, ".fased-public-key-")
+	tempPath, fingerprint, cleanup, err := stageAndVerifyRecoveryKey(home, key)
 	if err != nil {
 		return err
 	}
-	defer os.Remove(temp.Name())
-	defer temp.Close()
-	if _, err = temp.WriteString(key + "\n"); err != nil {
-		return err
-	}
-	if err = temp.Sync(); err != nil {
-		return err
-	}
-	if err = temp.Close(); err != nil {
-		return err
-	}
-	// ssh-keygen is an ordinary OS tool; the key input is data, never shell text.
-	command := exec.Command("/usr/bin/ssh-keygen", "-lf", temp.Name())
-	fingerprint, err := command.Output()
-	if err != nil || len(fingerprint) > 4096 {
-		return errors.New("SSH rejected this public key")
-	}
-	if strings.HasPrefix(key, "ssh-rsa ") {
-		fields := strings.Fields(string(fingerprint))
-		if len(fields) == 0 {
-			return errors.New("invalid recovery key")
-		}
-		bits, e := strconv.Atoi(fields[0])
-		if e != nil || bits < 3072 {
-			return errors.New("use an Ed25519 key or an RSA key of at least 3072 bits")
-		}
-	}
+	defer cleanup()
 	fmt.Fprintf(out, "Recovery key: %s", fingerprint)
 	if err = core.EnsurePrivateDirectory(dir); err != nil {
 		return err
 	}
-	// Publish only a complete verified key, without replacing any existing file.
-	if err = os.Link(temp.Name(), path); err != nil {
+	// Publish only a complete verified single key, without replacing any existing file.
+	if err = os.Link(tempPath, path); err != nil {
 		return err
 	}
 	directory, err := os.Open(dir)
@@ -119,6 +202,7 @@ func prepareRecoveryKey(home string, in *bufio.Reader, out io.Writer, suggested 
 	defer directory.Close()
 	return directory.Sync()
 }
+
 func validRecoveryPublicKey(value string) bool {
 	if len(value) > 16384 || strings.ContainsAny(value, "\r\n\x00") {
 		return false

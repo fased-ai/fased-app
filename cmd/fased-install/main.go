@@ -106,6 +106,8 @@ func run(args []string, in io.Reader, out, errOut io.Writer) error {
 			return maintenanceLocalAdoptionImageCommand(args[1:], in, out)
 		case "maintenance-package-transition":
 			return maintenancePackageTransitionCommand(args[1:])
+		case "maintenance-package-migrate-units":
+			return maintenancePackageMigrateUnitsCommand(args[1:], out)
 		case "maintenance-successor":
 			return maintenanceSuccessorCommand(args[1:])
 		case "maintenance-transition-status":

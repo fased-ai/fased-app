@@ -548,7 +548,7 @@ func TestRemovalRetryPreservesAllStateAndIdentities(t *testing.T) {
 }
 func TestConsentSourceAndPlatformRefusedBeforeMutation(t *testing.T) {
 	t.Parallel()
-	for _, change := range []string{"consent", "root", "source", "platform", "listen", "origin"} {
+	for _, change := range []string{"consent", "root", "source", "platform", "debian", "listen", "origin"} {
 		t.Run(change, func(t *testing.T) {
 			h, o, opt := fixtureHost()
 			switch change {
@@ -562,6 +562,10 @@ func TestConsentSourceAndPlatformRefusedBeforeMutation(t *testing.T) {
 			case "platform":
 				f := h.files["/etc/os-release"]
 				f.Data = []byte("ID=fedora\nVERSION_ID=43\n")
+				h.files["/etc/os-release"] = f
+			case "debian":
+				f := h.files["/etc/os-release"]
+				f.Data = []byte("ID=debian\nVERSION_ID=\"12\"\nVERSION_CODENAME=bookworm\n")
 				h.files["/etc/os-release"] = f
 			case "listen":
 				opt.Listen = "0.0.0.0:7331"

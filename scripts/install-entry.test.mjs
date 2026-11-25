@@ -3,7 +3,13 @@ import assert from "node:assert/strict";
 import { renderEntry, renderWindowsEntry } from "./render-install-entry.mjs";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { readFileSync, writeFileSync, mkdtempSync, rmSync } from "node:fs";
+import {
+  readFileSync,
+  writeFileSync,
+  mkdtempSync,
+  mkdirSync,
+  rmSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 const template = readFileSync(
@@ -141,7 +147,7 @@ sys.stdout.buffer.write(r.stdout);sys.stderr.buffer.write(r.stderr);sys.exit(r.r
       [
         "ID=fedora\nVERSION_ID=45\n",
         "aarch64",
-        /No reviewed package for this OS and CPU/,
+        /No authenticated installer package for linux-arm64/,
       ],
       [
         "ID=fedora\nVERSION_ID=46\n",
@@ -424,6 +430,13 @@ test("one release selects authenticated amd64 and arm64 tuples with update/local
     "linux-arm64)",
     "ubuntu|debian) next_family=apt",
     "fedora|rhel|centos|rocky|almalinux) next_family=dnf",
+    "debian:12)",
+    "debian:13)",
+    "fedora:41)",
+    "fedora:42)",
+    "fedora:43)",
+    "fedora:44)",
+    "fedora:45)",
     "ubuntu:24.04)",
     "ubuntu:26.04)",
     "ubuntu:26.10)",
@@ -433,11 +446,7 @@ test("one release selects authenticated amd64 and arm64 tuples with update/local
   ]) {
     assert.ok(script.includes(value), value);
   }
-  assert.ok(
-    script.includes(
-      'fedora:45:linux-arm64) die "No reviewed package for this OS and CPU."',
-    ),
-  );
+  assert.doesNotMatch(script, /fedora:45:linux-arm64\) die/);
   assertShellSyntax(script);
   assert.throws(() =>
     renderEntry(template, { version: "1.0.0", targets: [config, config] }),
@@ -1308,4 +1317,119 @@ test("install.ps1 enforces fail-closed TLS, SHA-256 pre-extraction verification,
     `Unterminated string literal (${mode}) in install.ps1`,
   );
   assert.deepEqual(stack, [], "Unclosed delimiters in install.ps1");
+});
+
+test("remote refresh-helper auto-discovers instance and passes --location remote", () => {
+  const script = renderEntry(template, config);
+  const start = script.indexOf("  if [[ $action == refresh-helper ]]; then\n");
+  const end = script.indexOf("\n  if [[ -n $package_instance ]]; then", start);
+  assert.ok(start > 0 && end > start);
+  const block = script.slice(start, end);
+
+  const root = mkdtempSync(join(tmpdir(), "fased-refresh-"));
+  try {
+    const uid = process.getuid();
+    const inst = "a".repeat(32);
+    const prev = "b".repeat(64);
+    const pkgDir = join(root, "pkg", String(uid), "remote", inst);
+    const instDir = join(
+      root,
+      "maint",
+      "instances",
+      String(uid),
+      "remote",
+      inst,
+    );
+    mkdirSync(pkgDir, { recursive: true });
+    mkdirSync(instDir, { recursive: true });
+    writeFileSync(
+      join(instDir, "authority.json"),
+      JSON.stringify({ imageSha256: prev }),
+    );
+
+    const rewritten = block
+      .replaceAll("/var/lib/fased-app-package", join(root, "pkg"))
+      .replaceAll("/var/lib/fased-maintenance", join(root, "maint"))
+      .replaceAll("/usr/bin/sudo", "echo SUDO");
+    const r = spawnSync("bash", [
+      "-c",
+      `set -euo pipefail
+die() { printf 'ERR:%s\\n' "$*" >&2; exit 1; }
+fn() {
+  local action=refresh-helper profile=remote refresh_instance='' previous_helper='' protected=/var/lib/fased-maintenance/images/${"c".repeat(64)}/fased-install
+  ${rewritten}
+}
+fn`,
+    ]);
+    assert.equal(r.status, 0, r.stderr.toString());
+    const out = r.stdout.toString();
+    assert.match(
+      out,
+      new RegExp(
+        `--location remote --instance ${inst} --previous-helper ${prev}`,
+      ),
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+
+  // CLI validation accepts --remote --refresh-helper and rejects --server --refresh-helper.
+  const detached = renderEntry(template, config);
+  const valStart = detached.indexOf(
+    "if [[ $action == refresh-helper ]]; then\n",
+  );
+  const valEnd = detached.indexOf("\n[[ -z $operator", valStart);
+  assert.ok(valStart > 0 && valEnd > valStart);
+  const valBlock = detached.slice(valStart, valEnd);
+  for (const [profile, ok] of [
+    ["remote", true],
+    ["local", true],
+    ["server", false],
+  ]) {
+    const chk = spawnSync("bash", [
+      "-c",
+      `die() { exit 1; }; action=refresh-helper profile=${profile} operator='' development_only=0 refresh_instance='' previous_helper=''; ${valBlock}`,
+    ]);
+    assert.equal(chk.status === 0, ok, `profile=${profile}`);
+  }
+});
+
+test("multi-key /root/.ssh/authorized_keys extraction passes unique candidates separated by newlines", () => {
+  const snippetStart = template.indexOf(
+    "if [[ $profile == remote && $action == install && $ssh_user == root",
+  );
+  const snippetEnd = template.indexOf("\nbody=", snippetStart);
+  assert.ok(snippetStart > 0 && snippetEnd > snippetStart);
+  const snippet = template.slice(snippetStart, snippetEnd);
+
+  const dir = mkdtempSync(join(tmpdir(), "fased-authkeys-"));
+  try {
+    const key1 =
+      "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExampleKeyOne user1@host";
+    const key2 =
+      "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExampleKeyTwo user2@host";
+    const keysFile = join(dir, "authorized_keys");
+    writeFileSync(
+      keysFile,
+      `# comment\n${key1}\n${key2}\n${key1}\ncommand="evil" ${key2}\nssh-dss invalidkey\n`,
+    );
+    const rewritten = snippet.replaceAll(
+      "/root/.ssh/authorized_keys",
+      keysFile,
+    );
+    const r = spawnSync("bash", [
+      "-c",
+      `set -euo pipefail
+profile=remote action=install ssh_user=root recovery_key=''
+${rewritten}
+printf '%s' "$recovery_key"`,
+    ]);
+    assert.equal(r.status, 0, r.stderr.toString());
+    assert.equal(
+      r.stdout.toString(),
+      `ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExampleKeyOne\nssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExampleKeyTwo`,
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

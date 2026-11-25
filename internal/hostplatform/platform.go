@@ -227,6 +227,9 @@ func (p Platform) PackageManager() (PackageManager, error) {
 	}
 }
 func (p Platform) TailscaleSource(key string) string {
+	if p.Family == "dnf" {
+		return "[fased-tailscale-stable]\nname=Tailscale stable\nbaseurl=https://pkgs.tailscale.com/stable/fedora/$basearch\nenabled=1\ntype=rpm\nrepo_gpgcheck=1\ngpgcheck=1\ngpgkey=file://" + key + "\n"
+	}
 	return "deb [signed-by=" + key + "] https://pkgs.tailscale.com/stable/" + p.ID + " " + p.Codename + " main\n"
 }
 
@@ -236,7 +239,7 @@ func LookupRemote(release, arch string) (Platform, error) {
 		return p, e
 	}
 	if !p.Remote {
-		return p, errors.New("this release supports Local; isolated Remote updates require Ubuntu24.04 or newer and sudo >=1.9.10")
+		return p, errors.New("this release supports Local; isolated Remote updates require a reviewed Remote OS profile (Ubuntu 24.04+, Debian 12/13, or Fedora 41-45) and sudo >=1.9.10")
 	}
 	return p, nil
 }

@@ -192,8 +192,8 @@ func (s *System) Run(ctx context.Context, input []byte, args ...string) ([]byte,
 		}
 	case "/usr/bin/apt-get", "/usr/bin/cat", "/usr/bin/install", "/usr/bin/ln", "/usr/bin/rm", "/usr/bin/sync", "/usr/sbin/apparmor_parser":
 	case "/usr/bin/dnf":
-		if strings.Join(args[1:], " ") != "install --assumeyes --setopt=install_weak_deps=False gtk3 webkit2gtk4.1 xdg-utils" {
-			return nil, errors.New("only the declared Fedora desktop prerequisites may be installed")
+		if !allowedDnfCommand(args) {
+			return nil, errors.New("only declared Fedora prerequisite or Tailscale operations may run via dnf")
 		}
 	case "/usr/bin/systemctl":
 		if strings.Join(args[1:], " ") != "enable --now tailscaled.service" {
@@ -246,7 +246,7 @@ func (s *System) Run(ctx context.Context, input []byte, args ...string) ([]byte,
 	c := s.sudo(ctx, append([]string{"-n", "--"}, args...)...)
 	c.Stdin = bytes.NewReader(input)
 	c.Stderr = s.Out
-	if args[0] == "/usr/bin/apt-get" || args[0] == "/usr/bin/dnf" || args[0] == "/usr/bin/tailscale" && len(args) > 1 && args[1] == "login" {
+	if args[0] == "/usr/bin/apt-get" || (args[0] == "/usr/bin/dnf" && len(args) > 1 && args[1] != "repoquery") || args[0] == "/usr/bin/tailscale" && len(args) > 1 && args[1] == "login" {
 		c.Stdout = s.Out
 		return nil, c.Run()
 	}
@@ -434,4 +434,46 @@ func AllowedTailscalePreparation(username string, args []string) bool {
 	}
 	joined := strings.Join(args, " ")
 	return joined == "status --json" || joined == "debug prefs" || joined == "login --timeout=120s" || joined == "set --operator="+username
+}
+
+func allowedDnfCommand(args []string) bool {
+	if len(args) < 4 || args[0] != "/usr/bin/dnf" {
+		return false
+	}
+	if len(args) == 4 && args[1] == "makecache" && args[2] == "--refresh" &&
+		(args[3] == "--repo=fased-tailscale-stable" || args[3] == "--repo=tailscale-stable") {
+		return true
+	}
+	if len(args) == 7 && args[1] == "repoquery" && args[2] == "--available" &&
+		args[3] == "--latest-limit=1" && args[4] == "--qf=%{version}" &&
+		(args[5] == "--repo=fased-tailscale-stable" || args[5] == "--repo=tailscale-stable") &&
+		args[6] == "tailscale" {
+		return true
+	}
+	if len(args) == 7 && args[1] == "install" && args[2] == "--assumeyes" &&
+		args[3] == "--setopt=install_weak_deps=False" &&
+		args[4] == "--setopt=gpgcheck=1" && args[5] == "--setopt=repo_gpgcheck=1" &&
+		strings.HasPrefix(args[6], "tailscale-") {
+		return supportedTailscaleRelease(strings.TrimPrefix(args[6], "tailscale-"))
+	}
+	if len(args) < 5 || args[1] != "install" || args[2] != "--assumeyes" || args[3] != "--setopt=install_weak_deps=False" {
+		return false
+	}
+	pkgs := args[4:]
+	if strings.Join(pkgs, " ") == "gtk3 webkit2gtk4.1 xdg-utils" {
+		return true
+	}
+	seen := map[string]bool{}
+	for _, pkg := range pkgs {
+		switch pkg {
+		case "polkit", "nftables", "openssh-server", "policycoreutils-python-utils", "xdg-utils":
+			if seen[pkg] {
+				return false
+			}
+			seen[pkg] = true
+		default:
+			return false
+		}
+	}
+	return len(pkgs) > 0
 }
