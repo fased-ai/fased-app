@@ -223,6 +223,26 @@ test("Quant Lab IDE, 4-Gate validation, Multi-Seat Paper/Shadow Desk, Overview w
         overflow,
         `[${theme}] #lab (${tabTestId}) horizontal overflow on mobile=${isMobile}`,
       ).toBeLessThanOrEqual(1);
+      if (tabTestId === "lab-tab-scripts") {
+        await expect(page.locator(".lab-row-title").first()).toBeVisible();
+        const titles = await page.evaluate(() =>
+          Array.from(document.querySelectorAll(".lab-row-title")).map((el) => ({
+            text: (el.textContent || "").slice(0, 60),
+            whiteSpace: getComputedStyle(el).whiteSpace,
+            scrollWidth: el.scrollWidth,
+            clientWidth: el.clientWidth,
+          })),
+        );
+        for (const t of titles) {
+          expect(t.whiteSpace, `lab title wrap failed: ${t.text}`).toBe(
+            "normal",
+          );
+          expect(
+            t.scrollWidth,
+            `lab title overflow (${t.text}): ${t.scrollWidth} > ${t.clientWidth}`,
+          ).toBeLessThanOrEqual(t.clientWidth + 1);
+        }
+      }
     }
   }
 

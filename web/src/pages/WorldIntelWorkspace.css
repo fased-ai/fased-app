@@ -72,12 +72,14 @@
   gap: 4px;
 }
 
-.intel-rail-source {
+.wt button.intel-rail-source {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 6px;
   width: 100%;
+  height: auto;
+  min-height: 30px;
   padding: 5px 8px;
   font-size: 0.76rem;
   color: var(--wt-text);
@@ -145,11 +147,12 @@
   gap: 6px;
 }
 
-.intel-filter-pill,
-.intel-tab-btn {
+.wt button.intel-filter-pill,
+.wt button.intel-tab-btn {
   display: inline-flex;
   align-items: center;
   gap: 6px;
+  height: auto;
   min-height: 30px;
   padding: 4px 10px;
   font-size: 0.78rem;
@@ -161,8 +164,8 @@
   cursor: pointer;
 }
 
-.intel-filter-pill.is-selected,
-.intel-tab-btn.is-selected {
+.wt button.intel-filter-pill.is-selected,
+.wt button.intel-tab-btn.is-selected {
   background: var(--wt-raised);
   border-color: var(--wt-coral);
   color: var(--wt-text);
@@ -259,10 +262,12 @@
   gap: 6px;
 }
 
-.intel-cluster-chip {
+.wt button.intel-cluster-chip {
   display: inline-flex;
   align-items: center;
   gap: 6px;
+  height: auto;
+  min-height: 28px;
   padding: 4px 10px;
   font-size: 0.76rem;
   color: var(--wt-text);
@@ -285,6 +290,7 @@
   display: grid;
   gap: 8px;
   max-height: 540px;
+  overflow-x: hidden;
   overflow-y: auto;
 }
 
@@ -307,19 +313,37 @@
   min-width: 0;
 }
 
-.intel-card-title {
+.wt button.intel-card-title {
+  display: block;
+  width: 100%;
+  height: auto;
+  min-height: 0;
   margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--wt-text);
   font-size: 0.88rem;
   font-weight: 600;
-  color: var(--wt-text);
   text-align: left;
-  background: transparent;
-  border: 0;
-  padding: 0;
   cursor: pointer;
   min-width: 0;
   max-width: 100%;
   white-space: normal;
+  overflow-wrap: anywhere;
+  line-height: 1.35;
+}
+
+:root.wt button.intel-card-title:hover:not(:disabled) {
+  background: transparent;
+  border-color: transparent;
+  color: var(--wt-coral);
+}
+
+.intel-card-row > strong {
+  min-width: 0;
+  max-width: 100%;
   overflow-wrap: anywhere;
   line-height: 1.35;
 }
