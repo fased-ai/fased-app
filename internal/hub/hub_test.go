@@ -117,4 +117,55 @@ signal("long", close > m);`,
 	if err != nil || !inst.Installed || !inst.Verified {
 		t.Fatalf("Install failed: %+v err=%v", inst, err)
 	}
+
+	// Second author keypair cannot overwrite or hijack an existing package ID.
+	_, otherPriv, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hijackPkg := Package{
+		ID:      pkg.ID,
+		Name:    "Hijacked Script",
+		Kind:    KindFasedScript,
+		Version: "2.0.0",
+		Payload: `const m = ema(close, 5);
+signal("short", close < m);`,
+	}
+	if err := SignPackage(otherPriv, &hijackPkg); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.Publish(context.Background(), PublishRequest{
+		ID:              hijackPkg.ID,
+		Name:            hijackPkg.Name,
+		Kind:            hijackPkg.Kind,
+		Version:         hijackPkg.Version,
+		AuthorPubKeyHex: hijackPkg.AuthorPubKeyHex,
+		Payload:         hijackPkg.Payload,
+		SignatureHex:    hijackPkg.SignatureHex,
+	}); !errors.Is(err, ErrAuthorMismatch) {
+		t.Fatalf("expected ErrAuthorMismatch on package ID hijack, got %v", err)
+	}
+
+	// Original author keypair can publish an update cleanly.
+	updatePkg := Package{
+		ID:      pkg.ID,
+		Name:    "Custom Trend Script v1.0.1",
+		Kind:    KindFasedScript,
+		Version: "1.0.1",
+		Payload: pkg.Payload,
+	}
+	if err := SignPackage(priv, &updatePkg); err != nil {
+		t.Fatal(err)
+	}
+	if updated, err := svc.Publish(context.Background(), PublishRequest{
+		ID:              updatePkg.ID,
+		Name:            updatePkg.Name,
+		Kind:            updatePkg.Kind,
+		Version:         updatePkg.Version,
+		AuthorPubKeyHex: updatePkg.AuthorPubKeyHex,
+		Payload:         updatePkg.Payload,
+		SignatureHex:    updatePkg.SignatureHex,
+	}); err != nil || updated.Version != "1.0.1" {
+		t.Fatalf("expected original author update to succeed, got %+v err=%v", updated, err)
+	}
 }

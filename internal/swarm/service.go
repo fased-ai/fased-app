@@ -236,6 +236,16 @@ func (s *Service) IngestEnvelope(ctx context.Context, env Envelope) (Envelope, e
 	if err := VerifyEnvelope(&env, now); err != nil {
 		return Envelope{}, err
 	}
+	localPubHex := hex.EncodeToString(s.store.localKey().Public().(ed25519.PublicKey))
+	if !strings.EqualFold(env.SenderPubKeyHex, localPubHex) {
+		known, err := s.store.hasPeerPubKey(ctx, strings.ToLower(env.SenderPubKeyHex))
+		if err != nil {
+			return Envelope{}, err
+		}
+		if !known {
+			return Envelope{}, ErrUnknownPeer
+		}
+	}
 	if err := s.store.recordEnvelopeIfFreshNonce(ctx, env); err != nil {
 		return Envelope{}, err
 	}

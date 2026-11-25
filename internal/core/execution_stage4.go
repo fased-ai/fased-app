@@ -343,17 +343,19 @@ func (s *Store) executionStatus(ctx context.Context) ExecutionStatusView {
 	}
 	view.Profile = rt.profile
 	view.Available = true
-	view.WalletSigner = true
-	view.FinancialExecution = true
+	hlReady := s.ensureHyperliquidIPC(ctx)
+	hasLiveStage4Venue := rt.devnetExecutor != nil || hlReady || rt.polymarketClient != nil || rt.kalshiClient != nil || rt.lighterClient != nil
+	view.WalletSigner = hasLiveStage4Venue
+	view.FinancialExecution = hasLiveStage4Venue
 	if rt.profile == signer.ExecutionProfileMainnetCapped {
-		view.MainnetLocked = false
+		view.MainnetLocked = !hasLiveStage4Venue
 		view.MainnetCapped = true
 		view.MainnetMaxOrderMicroUSD = rt.mainnetPolicy.MaxOrderMicroUSD
 		view.MainnetMaxDailyMicroUSD = rt.mainnetPolicy.MaxDailyMicroUSD
 	}
 	view.SolanaDevnetReady = rt.devnetExecutor != nil
 	view.SolanaDevnetHost = rt.devnetHost
-	view.HyperliquidTestnet = s.ensureHyperliquidIPC(ctx)
+	view.HyperliquidTestnet = hlReady
 	view.AgentVaultID = rt.agentVaultID
 	if rt.signerCall != nil {
 		probeCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
@@ -543,15 +545,17 @@ func (h *HTTPHandler) signerStatusAPI(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
+	hlReady := h.store.ensureHyperliquidIPC(r.Context())
+	hasLiveStage4Venue := rt.devnetExecutor != nil || hlReady || rt.polymarketClient != nil || rt.kalshiClient != nil || rt.lighterClient != nil
 	writeJSON(w, 200, map[string]any{
 		"available":              true,
-		"executionEnabled":       true,
+		"executionEnabled":       hasLiveStage4Venue,
 		"profile":                rt.profile,
-		"mainnetLocked":          rt.profile != signer.ExecutionProfileMainnetCapped && !hyperliquidActivationEnabled && !signer.HyperliquidActivationEnabled && !signer.PolymarketActivationEnabled && !signer.KalshiActivationEnabled && !signer.LighterActivationEnabled,
+		"mainnetLocked":          !hasLiveStage4Venue || (rt.profile != signer.ExecutionProfileMainnetCapped && !hyperliquidActivationEnabled && !signer.HyperliquidActivationEnabled && !signer.PolymarketActivationEnabled && !signer.KalshiActivationEnabled && !signer.LighterActivationEnabled),
 		"mainnetCapped":          rt.profile == signer.ExecutionProfileMainnetCapped,
 		"wenHeld":                !miningActivationEnabled,
 		"solanaDevnetReady":      rt.devnetExecutor != nil,
-		"hyperliquidTestnet":     h.store.ensureHyperliquidIPC(r.Context()),
+		"hyperliquidTestnet":     hlReady,
 		"polymarketTestnetReady": rt.polymarketClient != nil,
 		"kalshiDemoReady":        rt.kalshiClient != nil,
 		"lighterTestnetReady":    rt.lighterClient != nil,

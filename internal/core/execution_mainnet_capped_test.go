@@ -80,7 +80,7 @@ func TestStage456MainnetCappedGateAndDefaultOffInvariants(t *testing.T) {
 	}
 	defer srv.Store.clearStage4Runtime()
 
-	// Execution status reflects mainnet-capped while wenHeld remains true.
+	// Execution status reflects mainnet-capped limits while keeping mainnetLocked and financialExecution honest when zero Stage 4 mainnet venues are wired.
 	execResp2 := stage4Req(h, http.MethodGet, srv.URL, "/api/v1/execution/status", "", token, "", "")
 	if execResp2.Code != 200 {
 		t.Fatalf("GET /api/v1/execution/status after enable status=%d", execResp2.Code)
@@ -89,7 +89,7 @@ func TestStage456MainnetCappedGateAndDefaultOffInvariants(t *testing.T) {
 	if err := json.Unmarshal(execResp2.Body.Bytes(), &ev2); err != nil {
 		t.Fatalf("decode execution status failed: %v", err)
 	}
-	if ev2.Profile != signer.ExecutionProfileMainnetCapped || ev2.MainnetLocked || !ev2.MainnetCapped || !ev2.WENHeld || ev2.MainnetMaxOrderMicroUSD != 50_000_000 {
+	if ev2.Profile != signer.ExecutionProfileMainnetCapped || !ev2.MainnetLocked || !ev2.MainnetCapped || !ev2.WENHeld || ev2.FinancialExecution || ev2.WalletSigner || ev2.MainnetMaxOrderMicroUSD != 50_000_000 {
 		t.Fatalf("unexpected mainnet-capped execution status: %+v", ev2)
 	}
 
@@ -113,14 +113,14 @@ func TestStage456MainnetCappedGateAndDefaultOffInvariants(t *testing.T) {
 		t.Fatalf("unexpected swarm status (%d): %s", swResp.Code, swResp.Body.String())
 	}
 
-	// Signer-status reports mainnetLocked:false & wenHeld:true.
+	// Signer-status keeps executionEnabled:false and mainnetLocked:true until Stage 4 mainnet venues are wired.
 	sigResp := stage4Req(h, http.MethodGet, srv.URL, "/api/v1/signer/status", "", token, "", "")
 	if sigResp.Code != 200 {
 		t.Fatalf("GET /api/v1/signer/status failed: %d", sigResp.Code)
 	}
 	var ss map[string]any
 	_ = json.Unmarshal(sigResp.Body.Bytes(), &ss)
-	if ss["mainnetCapped"] != true || ss["mainnetLocked"] != false || ss["wenHeld"] != true {
+	if ss["mainnetCapped"] != true || ss["mainnetLocked"] != true || ss["executionEnabled"] != false || ss["wenHeld"] != true {
 		t.Fatalf("unexpected signer-status: %+v", ss)
 	}
 }

@@ -89,6 +89,15 @@ func (s *store) close() error {
 func (s *store) savePackage(ctx context.Context, pkg Package) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	var existingAuthor string
+	err := s.db.QueryRowContext(ctx, `SELECT author_pubkey_hex FROM hub_packages WHERE id = ?`, pkg.ID).Scan(&existingAuthor)
+	if err == nil {
+		if !strings.EqualFold(strings.TrimSpace(existingAuthor), strings.TrimSpace(pkg.AuthorPubKeyHex)) {
+			return ErrAuthorMismatch
+		}
+	} else if !errors.Is(err, sql.ErrNoRows) {
+		return err
+	}
 	ver, inst := 0, 0
 	if pkg.Verified {
 		ver = 1
@@ -96,7 +105,7 @@ func (s *store) savePackage(ctx context.Context, pkg Package) error {
 	if pkg.Installed {
 		inst = 1
 	}
-	_, err := s.db.ExecContext(ctx, `
+	_, err = s.db.ExecContext(ctx, `
 INSERT INTO hub_packages(id, name, kind, version, author_pubkey_hex, payload, payload_sha256, signature_hex, sat_bond_amount, sat_bond_status, verified, installed, created_at)
 VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(id) DO UPDATE SET
