@@ -1,14 +1,14 @@
 <p align="center">
-  <img src="docs/assets/fased-mark-color.svg" alt="Fased" width="96">
+  <img src="https://docs.fased.ai/assets/fased-mark-color.svg" alt="Fased" width="96">
 </p>
 
 # Fased
 
 Self-hosted agents for trading research and automation. Run Fased on your computer or a private server, with one workspace for Chat, Tasks, News and Memory.
 
-**[Install](#install) · [User guide](docs/index.md) · [Providers](docs/guide/providers.md) · [Network](docs/guide/network.md) · [Status](docs/reference/status.md)**
+**[Install](#install) · [User guide](https://docs.fased.ai) · [Providers](https://docs.fased.ai/guide/providers) · [Network](https://docs.fased.ai/guide/network) · [Status](https://docs.fased.ai/reference/status)**
 
-> **Status:** Attested Ubuntu 24.04 x86-64 Local/Remote installation and shared UI/CLI updates, cross-platform CLI & unsigned desktop pre-release packages (Linux, macOS, Windows), live AI providers (OAuth, API key, local server, and Host CLI/ACP) with native OS-protected credentials, TypeSafe Jev System-1 decisions, Agent V2 with `/api/v1/mcp` server and external MCP client, watch-only Solana wallets with live read-only RPC, and connected Stages 1–3 research/charting/intelligence/automation/QuantLab/Paper-Desk workspaces (`Trade`, `Intel`, `Lab`, `Tasks` + Telegram) are available. Live wallet signing, real-money trading execution, and in-app auto-updates remain strictly disabled; **WEN `SAT` mining execution is NOT READY / DO NOT IMPLEMENT NOW**. See [Availability](docs/reference/status.md).
+> **Status:** Attested Ubuntu 24.04 x86-64 Local/Remote installation and shared UI/CLI updates, cross-platform CLI & unsigned desktop pre-release packages (Linux, macOS, Windows), live AI providers (OAuth, API key, local server, and Host CLI/ACP) with native OS-protected credentials, TypeSafe Jev System-1 decisions, Agent V2 with `/api/v1/mcp` server and external MCP client, watch-only Solana wallets with live read-only RPC, and connected Stages 1–3 research/charting/intelligence/automation/QuantLab/Paper-Desk workspaces (`Trade`, `Intel`, `Lab`, `Tasks` + Telegram) are available. Live wallet signing, real-money trading execution, and in-app auto-updates remain strictly disabled; **WEN `SAT` mining execution is NOT READY / DO NOT IMPLEMENT NOW**. See [Availability](https://docs.fased.ai/reference/status).
 
 ## What’s inside
 
@@ -24,11 +24,11 @@ Self-hosted agents for trading research and automation. Run Fased on your comput
 | **Wallets & RPC**        | Watch-only Solana accounts with live read-only RPC (keyless public RPC or OS-protected RPC keys) and portable backups; signing and live execution remain disabled.                                                                   |
 | **Ops & Backup**         | Run `fased-app doctor` diagnostics, hot SQLite `fased-app backup` / `restore` across core and Stage 1–3 databases, and unified **Settings** for appearance, devices, updates, notifications, and MCP access.                         |
 
-Onchain live execution, Hyperliquid live perps, and Fased Network have separate [roadmaps and availability](docs/reference/status.md). WEN `SAT` mining execution is marked **NOT READY / DO NOT IMPLEMENT NOW** (`miningActivationEnabled: false`). Real-money order placement is disabled in this build.
+Onchain live execution, Hyperliquid live perps, and Fased Network have separate [roadmaps and availability](https://docs.fased.ai/reference/status). WEN `SAT` mining execution is marked **NOT READY / DO NOT IMPLEMENT NOW** (`miningActivationEnabled: false`). Real-money order placement is disabled in this build.
 
 ## Install
 
-Attested Ubuntu 24.04 x86-64 is certified for Local and mandatory-Tailscale Remote installation with shared UI/CLI updates (`install.sh`). Cross-platform CLI installers (`install-cli.sh` on Linux/macOS, `install.ps1` on Windows) and unsigned native desktop packages (`.dmg`, Windows `.exe`, Linux `.deb`/`.AppImage`) are available via `-desktop` pre-releases; desktop code signing and in-app auto-updating remain disabled until signing certificates are enabled. Format-4 installations update in place; older format-2 evaluation builds require a fresh install. See [Install](docs/guide/install.md) and [Availability](docs/reference/status.md).
+Attested Ubuntu 24.04 x86-64 is certified for Local and mandatory-Tailscale Remote installation with shared UI/CLI updates (`install.sh`). Cross-platform CLI installers (`install-cli.sh` on Linux/macOS, `install.ps1` on Windows) and unsigned native desktop packages (`.dmg`, Windows `.exe`, Linux `.deb`/`.AppImage`) are available via `-desktop` pre-releases; desktop code signing and in-app auto-updating remain disabled until signing certificates are enabled. Format-4 installations update in place; older format-2 evaluation builds require a fresh install. See [Install](https://docs.fased.ai/guide/install) and [Availability](https://docs.fased.ai/reference/status).
 
 | Choose      | Setup and access                                                                                                                                                              |
 | ----------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -42,7 +42,7 @@ The installer supplies compiled Fased and required OS components; no Go, Node, n
 
 **Settings → Updates** and `fased update` share one updater, authorization boundary, progress view and recovery transaction on managed Linux installations. Routine updates reuse existing owner/device/OS authority without another password or SSH session, and a CLI client reaches Remote over Tailscale directly. Manual is the default; Automatic is explicit opt-in. Standalone desktop and cross-platform CLI installations check available releases read-only via **Settings → Updates** or `fased-app updates check`, and upgrade in place via `install-cli.sh --upgrade` / `install.ps1 -Upgrade`.
 
-Updates preserve data and wallet permissions; they never unlock signing or grant spending authority. [Details](docs/guide/install.md).
+Updates preserve data and wallet permissions; they never unlock signing or grant spending authority. [Details](https://docs.fased.ai/guide/install).
 
 ## Get started
 
@@ -55,6 +55,6 @@ Provider access is optional for reminders and other deterministic work. Enter cr
 
 ## Guides
 
-[Agents](docs/guide/agents.md) · [Chat](docs/guide/chat.md) · [Tasks](docs/guide/tasks.md) · [News](docs/guide/news.md) · [Memory](docs/guide/memory.md) · [Wallets](docs/guide/wallets.md) · [Settings & recovery](docs/guide/settings.md)
+[Agents](https://docs.fased.ai/guide/agents) · [Chat](https://docs.fased.ai/guide/chat) · [Tasks](https://docs.fased.ai/guide/tasks) · [News](https://docs.fased.ai/guide/news) · [Memory](https://docs.fased.ai/guide/memory) · [Wallets](https://docs.fased.ai/guide/wallets) · [Settings & recovery](https://docs.fased.ai/guide/settings)
 
 Original Fased App code is licensed under [PolyForm Perimeter 1.0.0](LICENSE). Third-party terms remain in [NOTICE](NOTICE).
