@@ -49,7 +49,7 @@ jobs:
         env:
           FASED_RELEASE_VERSION: ${{ inputs.release_version }}
         run: node scripts/build-dual-track-cli.mjs
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: fased-cli-archives
           path: .evidence/dual-track-cli/
@@ -211,7 +211,7 @@ jobs:
         run: |
           $pfx = Join-Path $env:RUNNER_TEMP 'fased-codesign.pfx'
           if (Test-Path -LiteralPath $pfx) { Remove-Item -LiteralPath $pfx -Force -ErrorAction SilentlyContinue }
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: fased-desktop-${{ matrix.os }}
           path: |
@@ -258,7 +258,7 @@ jobs:
           echo "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$(id -u)/bus" >> "$GITHUB_ENV"
       - name: Run real-host installer & package smoke verification
         run: node scripts/smoke-dual-track-installers.mjs
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: fased-host-smoke-${{ matrix.os }}
@@ -298,7 +298,7 @@ jobs:
             --desktop-root .evidence/desktop-artifacts \
             --out-dir .evidence/dual-track-release
           (cd .evidence/dual-track-release && sha256sum --check SHA256SUMS.txt)
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: fased-dual-track-release
           path: .evidence/dual-track-release/
