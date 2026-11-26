@@ -22,6 +22,7 @@ type SocketServer struct {
 	svc            *Service
 	sockPath       string
 	allowedPeerUID int
+	isOwnerSocket  bool
 	listener       net.Listener
 	httpSrv        *http.Server
 	mu             sync.Mutex
@@ -33,15 +34,33 @@ func StartSocketServer(svc *Service) (*SocketServer, error) {
 	return StartSocketServerAt(svc, "", os.Getuid(), 0o600)
 }
 
-// StartSocketServerAt starts the isolated Unix socket custody server at sockPath, enforcing
-// OS peer UID verification (SO_PEERCRED on Linux) and socket file permissions.
+// StartSocketServerAt starts the isolated app-facing Unix socket custody server at sockPath, enforcing
+// OS peer UID verification (SO_PEERCRED on Linux), socket file permissions, and in-signer owner proofs
+// for privileged operations.
 func StartSocketServerAt(svc *Service, sockPath string, allowedPeerUID int, mode os.FileMode) (*SocketServer, error) {
+	return startSocketServer(svc, sockPath, allowedPeerUID, mode, false)
+}
+
+// StartOwnerSocketServerAt starts a dedicated owner-only (0600) Unix socket for local/admin CLI operations
+// including raw keypair import/export without direct SQLite file access.
+func StartOwnerSocketServerAt(svc *Service, sockPath string, allowedPeerUID int, mode os.FileMode) (*SocketServer, error) {
+	if mode == 0 {
+		mode = 0o600
+	}
+	return startSocketServer(svc, sockPath, allowedPeerUID, mode, true)
+}
+
+func startSocketServer(svc *Service, sockPath string, allowedPeerUID int, mode os.FileMode, isOwnerSocket bool) (*SocketServer, error) {
 	if svc == nil {
 		return nil, errors.New("custody service required")
 	}
 	targetSock := strings.TrimSpace(sockPath)
 	if targetSock == "" {
-		targetSock = filepath.Join(svc.dir, "app.sock")
+		name := "app.sock"
+		if isOwnerSocket {
+			name = "owner.sock"
+		}
+		targetSock = filepath.Join(svc.dir, name)
 	}
 	if mode == 0 {
 		mode = 0o600
@@ -62,11 +81,19 @@ func StartSocketServerAt(svc *Service, sockPath string, allowedPeerUID int, mode
 		svc:            svc,
 		sockPath:       targetSock,
 		allowedPeerUID: allowedPeerUID,
+		isOwnerSocket:  isOwnerSocket,
 		listener:       ln,
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/v1/status", ss.handleStatus)
 	mux.HandleFunc("/v1/audit/verify", ss.handleVerifyAudit)
+	mux.HandleFunc("/v1/owner/status", ss.handleOwnerStatus)
+	mux.HandleFunc("/v1/owner/configure", ss.handleOwnerConfigure)
+	mux.HandleFunc("/v1/owner/authorize", ss.handleOwnerAuthorize)
+	if isOwnerSocket {
+		mux.HandleFunc("/v1/owner/import-raw", ss.handleOwnerImportRaw)
+		mux.HandleFunc("/v1/owner/export-raw", ss.handleOwnerExportRaw)
+	}
 	mux.HandleFunc("/v1/wallets", ss.handleWallets)
 	mux.HandleFunc("/v1/wallets/create", ss.handleCreateWallet)
 	mux.HandleFunc("/v1/wallets/attach", ss.handleAttachWallet)
@@ -159,6 +186,8 @@ func socketErrCodeAndStatus(err error) (string, int) {
 		return "ambiguous_state", http.StatusConflict
 	case errors.Is(err, ErrWrongPassword):
 		return "wrong_password", http.StatusForbidden
+	case errors.Is(err, ErrOwnerAuthRequired):
+		return "owner_auth_required", http.StatusForbidden
 	case errors.Is(err, ErrTxTampered):
 		return "tx_tampered", http.StatusForbidden
 	case errors.Is(err, ErrRoleDenied):
@@ -214,6 +243,130 @@ func (s *SocketServer) handleStatus(w http.ResponseWriter, r *http.Request) {
 		"auditChainCount":    auditCount,
 		"auditChainVerified": auditErr == nil,
 	})
+}
+
+func (s *SocketServer) requireOwnerProof(w http.ResponseWriter, r *http.Request, action, walletID string) bool {
+	if s.isOwnerSocket {
+		return true
+	}
+	enrolled, err := s.svc.HasOwnerAuth(r.Context())
+	if err != nil {
+		writeSockErr(w, err)
+		return false
+	}
+	if !enrolled && !s.svc.cfg.RequireOwnerAuth {
+		return true
+	}
+	proof := strings.TrimSpace(r.Header.Get(ownerProofHeader))
+	if err := s.svc.ConsumeOwnerProof(action, walletID, proof); err != nil {
+		writeSockErr(w, err)
+		return false
+	}
+	return true
+}
+
+func (s *SocketServer) handleOwnerStatus(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	has, err := s.svc.HasOwnerAuth(r.Context())
+	if err != nil {
+		writeSockErr(w, err)
+		return
+	}
+	writeSockJSON(w, http.StatusOK, map[string]bool{
+		"hasOwnerAuth": has,
+		"enforced":     has || s.svc.cfg.RequireOwnerAuth,
+	})
+}
+
+func (s *SocketServer) handleOwnerConfigure(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	var req struct {
+		Password string `json:"password"`
+	}
+	if err := decodeSockBody(r, &req); err != nil {
+		writeSockErr(w, err)
+		return
+	}
+	if err := s.svc.ConfigureOwnerAuth(r.Context(), req.Password); err != nil {
+		writeSockErr(w, err)
+		return
+	}
+	writeSockJSON(w, http.StatusOK, map[string]bool{"ok": true, "hasOwnerAuth": true})
+}
+
+func (s *SocketServer) handleOwnerAuthorize(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	var req struct {
+		Password string `json:"password"`
+		Action   string `json:"action"`
+		WalletID string `json:"walletId"`
+	}
+	if err := decodeSockBody(r, &req); err != nil {
+		writeSockErr(w, err)
+		return
+	}
+	proof, exp, err := s.svc.AuthorizeOwnerAction(r.Context(), req.Password, req.Action, req.WalletID)
+	if err != nil {
+		writeSockErr(w, err)
+		return
+	}
+	writeSockJSON(w, http.StatusOK, map[string]any{
+		"proof":     proof,
+		"expiresAt": exp.UTC().Unix(),
+	})
+}
+
+func (s *SocketServer) handleOwnerImportRaw(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	var req struct {
+		FilePath      string `json:"filePath"`
+		Name          string `json:"name"`
+		Role          string `json:"role"`
+		PrimaryRPCURL string `json:"primaryRpcUrl"`
+	}
+	if err := decodeSockBody(r, &req); err != nil {
+		writeSockErr(w, err)
+		return
+	}
+	wallet, err := s.svc.ImportSolanaKeypairFile(r.Context(), req.FilePath, req.Name, req.Role, req.PrimaryRPCURL)
+	if err != nil {
+		writeSockErr(w, err)
+		return
+	}
+	writeSockJSON(w, http.StatusOK, wallet)
+}
+
+func (s *SocketServer) handleOwnerExportRaw(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	var req struct {
+		WalletID                    string `json:"walletId"`
+		OutputPath                  string `json:"outputPath"`
+		AcknowledgeCustodyReduction bool   `json:"acknowledgeCustodyReduction"`
+	}
+	if err := decodeSockBody(r, &req); err != nil {
+		writeSockErr(w, err)
+		return
+	}
+	if err := s.svc.ExportRawKeypairFile(r.Context(), req.WalletID, req.OutputPath, req.AcknowledgeCustodyReduction); err != nil {
+		writeSockErr(w, err)
+		return
+	}
+	writeSockJSON(w, http.StatusOK, map[string]any{"output": req.OutputPath, "custodyReduced": true})
 }
 
 func (s *SocketServer) handleVerifyAudit(w http.ResponseWriter, r *http.Request) {
@@ -311,6 +464,9 @@ func (s *SocketServer) handleRestoreWallet(w http.ResponseWriter, r *http.Reques
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
+	if !s.requireOwnerProof(w, r, "restore", "*") {
+		return
+	}
 	var req struct {
 		Archive       json.RawMessage `json:"archive"`
 		Passphrase    string          `json:"passphrase"`
@@ -353,6 +509,9 @@ func (s *SocketServer) handleWalletSubroute(w http.ResponseWriter, r *http.Reque
 			}
 			writeSockJSON(w, http.StatusOK, wp)
 		case http.MethodDelete:
+			if !s.requireOwnerProof(w, r, "delete", walletID) {
+				return
+			}
 			deleted, err := s.svc.DeleteWallet(r.Context(), walletID)
 			if err != nil {
 				writeSockErr(w, err)
@@ -383,6 +542,16 @@ func (s *SocketServer) handleWalletSubroute(w http.ResponseWriter, r *http.Reque
 			return
 		}
 		loosen := req.ConfirmLoosen || req.PolicyAcknowledged
+		cur, gErr := s.svc.GetWallet(r.Context(), walletID)
+		if gErr != nil {
+			writeSockErr(w, gErr)
+			return
+		}
+		if !IsPolicyTighterOrEqual(cur.Policy, req.Policy) {
+			if !s.requireOwnerProof(w, r, "policy", walletID) {
+				return
+			}
+		}
 		wp, err := s.svc.UpdatePolicy(r.Context(), walletID, req.Policy, loosen, req.ExpectedPolicyHash, req.Actor)
 		if err != nil {
 			writeSockErr(w, err)
@@ -403,6 +572,11 @@ func (s *SocketServer) handleWalletSubroute(w http.ResponseWriter, r *http.Reque
 			writeSockErr(w, err)
 			return
 		}
+		if !req.Frozen {
+			if !s.requireOwnerProof(w, r, "unfreeze", walletID) {
+				return
+			}
+		}
 		wp, err := s.svc.SetFreeze(r.Context(), walletID, req.Frozen, req.Reason, req.Actor)
 		if err != nil {
 			writeSockErr(w, err)
@@ -420,6 +594,9 @@ func (s *SocketServer) handleWalletSubroute(w http.ResponseWriter, r *http.Reque
 		}
 		if err := decodeSockBody(r, &req); err != nil {
 			writeSockErr(w, err)
+			return
+		}
+		if !s.requireOwnerProof(w, r, "connections", walletID) {
 			return
 		}
 		wp, err := s.svc.UpdateConnections(r.Context(), walletID, req.Connections, req.Actor)
@@ -440,6 +617,9 @@ func (s *SocketServer) handleWalletSubroute(w http.ResponseWriter, r *http.Reque
 		}
 		if err := decodeSockBody(r, &req); err != nil {
 			writeSockErr(w, err)
+			return
+		}
+		if !s.requireOwnerProof(w, r, "rpc", walletID) {
 			return
 		}
 		wp, err := s.svc.SetWalletRPC(r.Context(), walletID, req.PrimaryURL, req.FallbackURL, req.Actor)
@@ -483,6 +663,9 @@ func (s *SocketServer) handleWalletSubroute(w http.ResponseWriter, r *http.Reque
 			writeSockErr(w, err)
 			return
 		}
+		if !s.requireOwnerProof(w, r, "backup", walletID) {
+			return
+		}
 		archive, fp, err := s.svc.ExportEncryptedRecovery(r.Context(), walletID, req.Passphrase, req.Actor)
 		if err != nil {
 			writeSockErr(w, err)
@@ -517,6 +700,21 @@ func (s *SocketServer) handleWalletSubroute(w http.ResponseWriter, r *http.Reque
 					Actor string `json:"actor"`
 				}
 				_ = decodeSockBody(r, &req)
+				// Manual reviews, vault wallets, and owner/manual-trade executions MUST carry
+				// an in-signer owner proof; only genuinely bounded-auto bot executions proceed on policy alone.
+				needOwnerProof := true
+				if wPub, wErr := s.svc.GetWallet(r.Context(), walletID); wErr == nil {
+					actorClean := strings.TrimSpace(req.Actor)
+					isAutoActor := actorClean == "trade-bot" || strings.HasPrefix(actorClean, "agent:")
+					if isAutoActor && wPub.Role != RoleVault && wPub.Role != RoleMining && wPub.Policy.ApprovalMode == ApprovalBoundedAuto && wPub.Connections.AllowTradeBots {
+						needOwnerProof = false
+					}
+				}
+				if needOwnerProof {
+					if !s.requireOwnerProof(w, r, "execute", walletID) {
+						return
+					}
+				}
 				entry, err := s.svc.ExecuteNativeReview(r.Context(), walletID, revID, req.Actor)
 				if err != nil {
 					writeSockErr(w, err)

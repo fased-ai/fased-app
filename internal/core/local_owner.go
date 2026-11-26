@@ -217,6 +217,10 @@ func (h *HTTPHandler) localOwnerAPI(w http.ResponseWriter, r *http.Request) {
 			writeError(w, 403, "Owner password required")
 			return
 		}
+		if h.store.hasNativeSigningWallet(r.Context()) {
+			writeError(w, 403, "Owner password required when native signing wallets exist")
+			return
+		}
 		if !h.allowRate(r, "auth-local", 20) {
 			writeError(w, 429, ErrRateLimited.Error())
 			return

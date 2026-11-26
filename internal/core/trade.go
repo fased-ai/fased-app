@@ -248,7 +248,17 @@ func (h *HTTPHandler) tradeAPI(w http.ResponseWriter, r *http.Request, token str
 		if !httpapi.DecodeStrictJSON(w, r, 64*1024, &req) {
 			return
 		}
-		plan, err := svc.SubmitOrder(ctx, req)
+		orderCtx := ctx
+		if (strings.HasPrefix(req.AccountID, "@wallet:") || strings.HasPrefix(req.AccountID, "wallet:")) &&
+			req.Mode != trade.ModeBot && req.Mode != trade.ModeAIAgent {
+			wid := strings.TrimPrefix(strings.TrimPrefix(strings.TrimSpace(req.AccountID), "@wallet:"), "wallet:")
+			var ok bool
+			orderCtx, ok = h.requireStepUpCtx(w, r, token, "execute", wid)
+			if !ok {
+				return
+			}
+		}
+		plan, err := svc.SubmitOrder(orderCtx, req)
 		if err != nil {
 			if errors.Is(err, trade.ErrKillSwitchActive) || errors.Is(err, trade.ErrRiskRejected) {
 				writeError(w, 403, err.Error())

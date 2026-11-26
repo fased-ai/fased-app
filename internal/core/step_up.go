@@ -1,6 +1,7 @@
 package core
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/base64"
 	"errors"
@@ -8,14 +9,27 @@ import (
 	"strings"
 	"time"
 
+	"github.com/fased-ai/fased-app/internal/custody"
 	"github.com/fased-ai/fased-app/internal/httpapi"
 )
 
-const stepUpTTL = 5 * time.Minute
+const stepUpTTL = 90 * time.Second
 
 type stepUpEntry struct {
 	sessionHash string
+	action      string
+	walletID    string
+	signerProof string
 	expiresAt   time.Time
+}
+
+func normalizeStepUpScope(action, walletID string) (string, string) {
+	act := strings.ToLower(strings.TrimSpace(action))
+	wid := strings.TrimPrefix(strings.TrimSpace(walletID), "@wallet:")
+	if wid == "" {
+		wid = "*"
+	}
+	return act, wid
 }
 
 func writeAuthCodeError(w http.ResponseWriter, status int, message, code string) {
@@ -56,7 +70,7 @@ func (h *HTTPHandler) clearStepUpForSession(sessionToken string) {
 	}
 }
 
-func (h *HTTPHandler) issueStepUpToken(sessionToken string) (string, time.Time, error) {
+func (h *HTTPHandler) issueStepUpToken(sessionToken, action, walletID, signerProof string) (string, time.Time, error) {
 	raw := make([]byte, 32)
 	if _, err := rand.Read(raw); err != nil {
 		return "", time.Time{}, err
@@ -68,6 +82,7 @@ func (h *HTTPHandler) issueStepUpToken(sessionToken string) (string, time.Time, 
 		now = h.store.now()
 	}
 	exp := now.Add(stepUpTTL)
+	act, wid := normalizeStepUpScope(action, walletID)
 	h.stepUpMu.Lock()
 	if h.stepUpTokens == nil {
 		h.stepUpTokens = make(map[string]stepUpEntry)
@@ -75,34 +90,40 @@ func (h *HTTPHandler) issueStepUpToken(sessionToken string) (string, time.Time, 
 	h.pruneStepUpLocked(now)
 	h.stepUpTokens[tokenHash(tok)] = stepUpEntry{
 		sessionHash: tokenHash(sessionToken),
+		action:      act,
+		walletID:    wid,
+		signerProof: strings.TrimSpace(signerProof),
 		expiresAt:   exp,
 	}
 	h.stepUpMu.Unlock()
 	return tok, exp, nil
 }
 
-func (h *HTTPHandler) requireStepUp(w http.ResponseWriter, r *http.Request, sessionToken, scope string) bool {
+// requireStepUpCtx validates and atomically consumes a single-use, action-and-wallet-scoped
+// step-up token, returning a context carrying the paired in-signer owner proof.
+func (h *HTTPHandler) requireStepUpCtx(w http.ResponseWriter, r *http.Request, sessionToken, action, walletID string) (context.Context, bool) {
 	if sessionToken == "" {
 		writeError(w, 401, "owner authentication required")
-		return false
+		return nil, false
 	}
-	if !h.allowRate(r, "wallets-sensitive:"+scope, 5) {
+	act, wid := normalizeStepUpScope(action, walletID)
+	if !h.allowRate(r, "wallets-sensitive:"+act+":"+wid, 5) || !h.allowRate(r, "wallets-sensitive-total", 20) {
 		writeError(w, 429, ErrRateLimited.Error())
-		return false
+		return nil, false
 	}
 	hasPW, err := h.store.hasPassword(r.Context())
 	if err != nil {
 		writeError(w, 500, "auth state unavailable")
-		return false
+		return nil, false
 	}
 	if !hasPW {
 		writeAuthCodeError(w, 403, "Set an owner password before authorizing sensitive wallet actions", "owner_password_required")
-		return false
+		return nil, false
 	}
 	presented := strings.TrimSpace(r.Header.Get("X-Fased-Step-Up"))
 	if presented == "" {
 		writeAuthCodeError(w, 403, "Owner password confirmation required", "step_up_required")
-		return false
+		return nil, false
 	}
 	now := time.Now()
 	if h.store != nil && h.store.now != nil {
@@ -113,12 +134,22 @@ func (h *HTTPHandler) requireStepUp(w http.ResponseWriter, r *http.Request, sess
 	h.stepUpMu.Lock()
 	h.pruneStepUpLocked(now)
 	entry, ok := h.stepUpTokens[key]
-	h.stepUpMu.Unlock()
-	if !ok || entry.sessionHash != sessHash || !now.Before(entry.expiresAt) {
-		writeAuthCodeError(w, 403, "Step-up confirmation expired or invalid; confirm owner password again", "step_up_required")
-		return false
+	valid := ok && entry.sessionHash == sessHash && now.Before(entry.expiresAt) &&
+		entry.action == act && (entry.walletID == wid || entry.walletID == "*")
+	if valid {
+		// Single-use: consume immediately upon matching scope.
+		delete(h.stepUpTokens, key)
 	}
-	return true
+	h.stepUpMu.Unlock()
+	if !valid {
+		writeAuthCodeError(w, 403, "Step-up confirmation expired, already used, or invalid for this action; confirm owner password again", "step_up_required")
+		return nil, false
+	}
+	ctx := r.Context()
+	if entry.signerProof != "" {
+		ctx = custody.WithOwnerProof(ctx, entry.signerProof)
+	}
+	return ctx, true
 }
 
 func (h *HTTPHandler) ownerPasswordAPI(w http.ResponseWriter, r *http.Request) {
@@ -151,6 +182,10 @@ func (h *HTTPHandler) ownerPasswordAPI(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, err.Error())
 		return
 	}
+	// Mirror independent Argon2id owner verifier into fased-signer whenever custody backend is reachable.
+	if cs, cErr := h.store.custodyBackend(); cErr == nil && cs != nil {
+		_ = cs.ConfigureOwnerAuth(r.Context(), req.Password)
+	}
 	writeJSON(w, 200, map[string]any{"ok": true, "hasPassword": true})
 }
 
@@ -166,7 +201,7 @@ func (h *HTTPHandler) stepUpAPI(w http.ResponseWriter, r *http.Request) {
 	if !h.mutation(w, r) || !h.csrf(w, r, token) {
 		return
 	}
-	if !h.allowRate(r, "auth-step-up", 5) {
+	if !h.allowRate(r, "auth-step-up", 10) {
 		writeError(w, 429, ErrRateLimited.Error())
 		return
 	}
@@ -181,8 +216,15 @@ func (h *HTTPHandler) stepUpAPI(w http.ResponseWriter, r *http.Request) {
 	}
 	var req struct {
 		Password string `json:"password"`
+		Action   string `json:"action"`
+		WalletID string `json:"walletId"`
 	}
 	if !httpapi.DecodeStrictJSON(w, r, 4*1024, &req) {
+		return
+	}
+	act, wid := normalizeStepUpScope(req.Action, req.WalletID)
+	if act == "" {
+		writeError(w, 400, "step-up action scope required")
 		return
 	}
 	select {
@@ -196,13 +238,28 @@ func (h *HTTPHandler) stepUpAPI(w http.ResponseWriter, r *http.Request) {
 		writeAuthCodeError(w, 403, "incorrect owner password", "wrong_password")
 		return
 	}
-	stepTok, exp, err := h.issueStepUpToken(token)
+	var signerProof string
+	if cs, cErr := h.store.custodyBackend(); cErr == nil && cs != nil {
+		proof, _, aErr := cs.AuthorizeOwnerAction(r.Context(), req.Password, act, wid)
+		if aErr != nil {
+			if errors.Is(aErr, custody.ErrWrongPassword) {
+				writeAuthCodeError(w, 403, "incorrect signer owner password", "wrong_password")
+				return
+			}
+			writeError(w, 500, "failed to obtain signer owner authorization")
+			return
+		}
+		signerProof = proof
+	}
+	stepTok, exp, err := h.issueStepUpToken(token, act, wid, signerProof)
 	if err != nil {
 		writeError(w, 500, "failed to issue step-up confirmation")
 		return
 	}
 	writeJSON(w, 200, map[string]any{
 		"stepUpToken": stepTok,
+		"action":      act,
+		"walletId":    wid,
 		"expiresAt":   exp.UTC().Unix(),
 	})
 }

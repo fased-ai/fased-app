@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/ed25519"
+	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
 	"database/sql"
@@ -39,14 +40,15 @@ const (
 
 // Config configures the isolated custody signer vault.
 type Config struct {
-	DataDir      string
-	FixtureMode  bool
-	FastKDF      bool
-	RequireOSKEK bool
-	KEKSource    providersecrets.Source // Optional override in tests
-	SocketPath   string                 // Optional explicit socket path reported in status
-	RPCTransport http.RoundTripper      // Tests only
-	Now          func() time.Time
+	DataDir          string
+	FixtureMode      bool
+	FastKDF          bool
+	RequireOSKEK     bool
+	RequireOwnerAuth bool
+	KEKSource        providersecrets.Source // Optional override in tests
+	SocketPath       string                 // Optional explicit socket path reported in status
+	RPCTransport     http.RoundTripper      // Tests only
+	Now              func() time.Time
 }
 
 // Service owns private wallet keys, encrypted execution RPCs, fail-closed policies,
@@ -55,10 +57,13 @@ type Service struct {
 	dir           string
 	db            *sql.DB
 	masterKey     []byte
+	auditHMACKey  []byte
 	kekProtection string
 	cfg           Config
 	now           func() time.Time
 	mu            sync.Mutex
+	proofMu       sync.Mutex
+	ownerProofs   map[string]ownerProofEntry
 	closed        bool
 	kdfTime       uint32
 	kdfMemory     uint32
@@ -171,6 +176,26 @@ CREATE TABLE IF NOT EXISTS daily_usage (
 	PRIMARY KEY (wallet_id, day_utc)
 );
 
+CREATE TABLE IF NOT EXISTS daily_asset_usage (
+	wallet_id TEXT NOT NULL REFERENCES wallets(id) ON DELETE CASCADE,
+	asset_key TEXT NOT NULL,
+	day_utc TEXT NOT NULL,
+	spent_raw INTEGER NOT NULL DEFAULT 0,
+	reserved_raw INTEGER NOT NULL DEFAULT 0,
+	PRIMARY KEY (wallet_id, asset_key, day_utc)
+);
+
+CREATE TABLE IF NOT EXISTS signer_meta (
+	id INTEGER PRIMARY KEY CHECK (id = 1),
+	owner_pw_salt BLOB,
+	owner_pw_hash BLOB,
+	owner_pw_time INTEGER NOT NULL DEFAULT 0,
+	owner_pw_memory INTEGER NOT NULL DEFAULT 0,
+	owner_pw_threads INTEGER NOT NULL DEFAULT 0,
+	audit_hmac_nonce BLOB,
+	audit_hmac_ciphertext BLOB
+);
+
 CREATE TABLE IF NOT EXISTS audit_log (
 	id TEXT PRIMARY KEY,
 	wallet_id TEXT NOT NULL,
@@ -194,26 +219,67 @@ CREATE INDEX IF NOT EXISTS idx_audit_wallet ON audit_log (wallet_id, timestamp D
 	if cfg.FastKDF {
 		kdfT, kdfM, kdfP = 1, 64, 1
 	}
-	return &Service{
+	svc := &Service{
 		dir:           dir,
 		db:            db,
 		masterKey:     masterKey,
 		kekProtection: kekProt,
 		cfg:           cfg,
 		now:           nowFn,
+		ownerProofs:   make(map[string]ownerProofEntry),
 		kdfTime:       kdfT,
 		kdfMemory:     kdfM,
 		kdfThreads:    kdfP,
-	}, nil
+	}
+	if err := svc.initSignerMetaLocked(ctx); err != nil {
+		_ = svc.Close()
+		return nil, err
+	}
+	return svc, nil
+}
+
+func (s *Service) initSignerMetaLocked(ctx context.Context) error {
+	if _, err := s.db.ExecContext(ctx, `INSERT OR IGNORE INTO signer_meta (id) VALUES (1)`); err != nil {
+		return err
+	}
+	var nonce, ct []byte
+	if err := s.db.QueryRowContext(ctx, `SELECT audit_hmac_nonce, audit_hmac_ciphertext FROM signer_meta WHERE id = 1`).Scan(&nonce, &ct); err != nil {
+		return err
+	}
+	if len(nonce) == 12 && len(ct) > 0 {
+		key, err := s.openBytes("fased-audit-hmac-key:v1", nonce, ct)
+		if err != nil || len(key) != 32 {
+			return errors.New("corrupt sealed audit HMAC key")
+		}
+		s.auditHMACKey = key
+		return nil
+	}
+	key, err := vault.RandomBytes(32)
+	if err != nil {
+		return err
+	}
+	n, c, err := s.sealBytes("fased-audit-hmac-key:v1", key)
+	if err != nil {
+		clear(key)
+		return err
+	}
+	if _, err := s.db.ExecContext(ctx, `UPDATE signer_meta SET audit_hmac_nonce = ?, audit_hmac_ciphertext = ? WHERE id = 1`, n, c); err != nil {
+		clear(key)
+		return err
+	}
+	s.auditHMACKey = key
+	return nil
 }
 
 // SecurityStatus reports KEK protection and signer process isolation posture.
-func (s *Service) SecurityStatus(_ context.Context) (SecurityStatus, error) {
+func (s *Service) SecurityStatus(ctx context.Context) (SecurityStatus, error) {
+	hasOwner, _ := s.HasOwnerAuth(ctx)
 	return SecurityStatus{
-		ProcessIsolated: false,
-		KEKProtection:   firstStr(s.kekProtection, KEKFileDevOnly),
-		SocketPath:      s.cfg.SocketPath,
-		AllowedPeerUID:  os.Getuid(),
+		ProcessIsolated:   false,
+		KEKProtection:     firstStr(s.kekProtection, KEKFileDevOnly),
+		OwnerAuthEnforced: hasOwner || s.cfg.RequireOwnerAuth,
+		SocketPath:        s.cfg.SocketPath,
+		AllowedPeerUID:    os.Getuid(),
 	}, nil
 }
 
@@ -240,6 +306,10 @@ func (s *Service) Close() error {
 	}
 	s.closed = true
 	clear(s.masterKey)
+	clear(s.auditHMACKey)
+	s.proofMu.Lock()
+	clear(s.ownerProofs)
+	s.proofMu.Unlock()
 	if s.db != nil {
 		err := s.db.Close()
 		s.db = nil
@@ -273,7 +343,12 @@ func (s *Service) dayUTC() string {
 	return s.now().UTC().Format("2006-01-02")
 }
 
-func computeAuditEntryHash(prevHash string, entry AuditEntry) string {
+type sqlExecQuerier interface {
+	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
+	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
+}
+
+func computeAuditEntryHashV1(prevHash string, entry AuditEntry) string {
 	canon := AuditEntry{
 		ID:         entry.ID,
 		WalletID:   entry.WalletID,
@@ -289,14 +364,32 @@ func computeAuditEntryHash(prevHash string, entry AuditEntry) string {
 	return hex.EncodeToString(sum[:])
 }
 
-func (s *Service) appendAuditLocked(ctx context.Context, walletID, action, actor, summary, policyHash string) {
+func computeAuditEntryHashV2(hmacKey []byte, prevHash string, entry AuditEntry) string {
+	canon := AuditEntry{
+		ID:         entry.ID,
+		WalletID:   entry.WalletID,
+		Action:     entry.Action,
+		Actor:      entry.Actor,
+		Summary:    entry.Summary,
+		PolicyHash: entry.PolicyHash,
+		Timestamp:  entry.Timestamp,
+		PrevHash:   prevHash,
+	}
+	raw, _ := json.Marshal(canon)
+	mac := hmac.New(sha256.New, hmacKey)
+	_, _ = mac.Write([]byte("fased-audit-chain:v2:" + prevHash + "\x00"))
+	_, _ = mac.Write(raw)
+	return "v2:" + hex.EncodeToString(mac.Sum(nil))
+}
+
+func (s *Service) appendAuditExecLocked(ctx context.Context, q sqlExecQuerier, walletID, action, actor, summary, policyHash string) error {
 	id, err := randomHexID("aud", 8)
 	if err != nil {
-		return
+		return err
 	}
 	var prevHash string
 	var prevRaw string
-	if err := s.db.QueryRowContext(ctx, `SELECT payload_json FROM audit_log ORDER BY rowid DESC LIMIT 1`).Scan(&prevRaw); err == nil && prevRaw != "" {
+	if err := q.QueryRowContext(ctx, `SELECT payload_json FROM audit_log ORDER BY rowid DESC LIMIT 1`).Scan(&prevRaw); err == nil && prevRaw != "" {
 		var prev AuditEntry
 		if json.Unmarshal([]byte(prevRaw), &prev) == nil && prev.EntryHash != "" {
 			prevHash = prev.EntryHash
@@ -312,15 +405,28 @@ func (s *Service) appendAuditLocked(ctx context.Context, walletID, action, actor
 		Timestamp:  s.now().UTC().Unix(),
 		PrevHash:   prevHash,
 	}
-	entry.EntryHash = computeAuditEntryHash(prevHash, entry)
-	raw, _ := json.Marshal(entry)
-	_, _ = s.db.ExecContext(ctx,
+	if len(s.auditHMACKey) == 32 {
+		entry.EntryHash = computeAuditEntryHashV2(s.auditHMACKey, prevHash, entry)
+	} else {
+		entry.EntryHash = computeAuditEntryHashV1(prevHash, entry)
+	}
+	raw, err := json.Marshal(entry)
+	if err != nil {
+		return err
+	}
+	_, err = q.ExecContext(ctx,
 		`INSERT INTO audit_log(id, wallet_id, payload_json, timestamp) VALUES (?, ?, ?, ?)`,
 		entry.ID, entry.WalletID, string(raw), entry.Timestamp,
 	)
+	return err
 }
 
-// VerifyAuditChain walks the tamper-evident audit log in insertion order and verifies every SHA-256 link.
+func (s *Service) appendAuditLocked(ctx context.Context, walletID, action, actor, summary, policyHash string) error {
+	return s.appendAuditExecLocked(ctx, s.db, walletID, action, actor, summary, policyHash)
+}
+
+// VerifyAuditChain walks the tamper-evident audit log in insertion order and verifies every link
+// (HMAC-SHA256 v2 keyed by signer-sealed audit key, plus legacy v1 SHA-256 compatibility).
 func (s *Service) VerifyAuditChain(ctx context.Context) (int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -343,8 +449,16 @@ func (s *Service) VerifyAuditChain(ctx context.Context) (int, error) {
 		if e.PrevHash != prevHash {
 			return count, fmt.Errorf("audit chain broken at %s: prevHash mismatch", e.ID)
 		}
-		expected := computeAuditEntryHash(prevHash, e)
-		if e.EntryHash != expected {
+		var expected string
+		if strings.HasPrefix(e.EntryHash, "v2:") {
+			if len(s.auditHMACKey) != 32 {
+				return count, fmt.Errorf("audit entry %s requires HMAC key", e.ID)
+			}
+			expected = computeAuditEntryHashV2(s.auditHMACKey, prevHash, e)
+		} else {
+			expected = computeAuditEntryHashV1(prevHash, e)
+		}
+		if !hmac.Equal([]byte(e.EntryHash), []byte(expected)) {
 			return count, fmt.Errorf("audit entry %s hash tampered", e.ID)
 		}
 		prevHash = e.EntryHash
@@ -384,6 +498,22 @@ FROM wallets WHERE id = ? OR handle = ?`, cleanID, clean).Scan(
 	w.DayUTC = day
 	_ = s.db.QueryRowContext(ctx, `SELECT spent_raw, reserved_raw FROM daily_usage WHERE wallet_id = ? AND day_utc = ?`, w.ID, day).
 		Scan(&w.DailySpentLamports, &w.DailyReservedLamports)
+	if tRows, tErr := s.db.QueryContext(ctx, `SELECT asset_key, spent_raw, reserved_raw FROM daily_asset_usage WHERE wallet_id = ? AND day_utc = ?`, w.ID, day); tErr == nil {
+		for tRows.Next() {
+			var aKey string
+			var sp, res uint64
+			if tRows.Scan(&aKey, &sp, &res) == nil && strings.HasPrefix(aKey, "spl:") {
+				if w.DailyTokenUsage == nil {
+					w.DailyTokenUsage = make(map[string]TokenDailyUsage)
+				}
+				w.DailyTokenUsage[strings.TrimPrefix(aKey, "spl:")] = TokenDailyUsage{
+					SpentRaw:    sp,
+					ReservedRaw: res,
+				}
+			}
+		}
+		_ = tRows.Close()
+	}
 	return w, nil
 }
 
@@ -592,10 +722,12 @@ VALUES (?, ?, ?, ?, ?)`,
 	); err != nil {
 		return WalletPublic{}, err
 	}
+	if err := s.appendAuditExecLocked(ctx, tx, id, "wallet_created", actor, fmt.Sprintf("Created %s %s wallet (%s) pinned to %s", role, custodyType, pubB58, rpcStatus.Cluster), pol.PolicyHash); err != nil {
+		return WalletPublic{}, err
+	}
 	if err := tx.Commit(); err != nil {
 		return WalletPublic{}, err
 	}
-	s.appendAuditLocked(ctx, id, "wallet_created", actor, fmt.Sprintf("Created %s %s wallet (%s) pinned to %s", role, custodyType, pubB58, rpcStatus.Cluster), pol.PolicyHash)
 	return s.getWalletLocked(ctx, id)
 }
 
@@ -644,7 +776,12 @@ func (s *Service) UpdatePolicy(ctx context.Context, walletID string, rawNext Wal
 	polBytes, _ := json.Marshal(next)
 	nowSec := s.now().UTC().Unix()
 
-	if _, err := s.db.ExecContext(ctx,
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return WalletPublic{}, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	if _, err := tx.ExecContext(ctx,
 		`UPDATE wallets SET policy_json = ?, policy_acknowledged = 1, updated_at = ? WHERE id = ?`,
 		string(polBytes), nowSec, cur.ID,
 	); err != nil {
@@ -654,7 +791,12 @@ func (s *Service) UpdatePolicy(ctx context.Context, walletID string, rawNext Wal
 	if !tightening {
 		kind = "policy_updated"
 	}
-	s.appendAuditLocked(ctx, cur.ID, kind, firstStr(actor, "owner"), fmt.Sprintf("Policy v%d applied (mode=%s frozen=%t)", next.Version, next.ApprovalMode, next.Frozen), next.PolicyHash)
+	if err := s.appendAuditExecLocked(ctx, tx, cur.ID, kind, firstStr(actor, "owner"), fmt.Sprintf("Policy v%d applied (mode=%s frozen=%t)", next.Version, next.ApprovalMode, next.Frozen), next.PolicyHash); err != nil {
+		return WalletPublic{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return WalletPublic{}, err
+	}
 	return s.getWalletLocked(ctx, cur.ID)
 }
 
@@ -681,7 +823,12 @@ func (s *Service) SetFreeze(ctx context.Context, walletID string, frozen bool, r
 	cur.Policy.PolicyHash = ComputePolicyHash(cur.Policy)
 	polBytes, _ := json.Marshal(cur.Policy)
 	nowSec := s.now().UTC().Unix()
-	if _, err := s.db.ExecContext(ctx,
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return WalletPublic{}, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	if _, err := tx.ExecContext(ctx,
 		`UPDATE wallets SET policy_json = ?, updated_at = ? WHERE id = ?`,
 		string(polBytes), nowSec, cur.ID,
 	); err != nil {
@@ -691,7 +838,12 @@ func (s *Service) SetFreeze(ctx context.Context, walletID string, frozen bool, r
 	if !frozen {
 		action = "wallet_unfrozen"
 	}
-	s.appendAuditLocked(ctx, cur.ID, action, firstStr(actor, "owner"), fmt.Sprintf("%s: %s", action, cur.Policy.FreezeReason), cur.Policy.PolicyHash)
+	if err := s.appendAuditExecLocked(ctx, tx, cur.ID, action, firstStr(actor, "owner"), fmt.Sprintf("%s: %s", action, cur.Policy.FreezeReason), cur.Policy.PolicyHash); err != nil {
+		return WalletPublic{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return WalletPublic{}, err
+	}
 	return s.getWalletLocked(ctx, cur.ID)
 }
 
@@ -740,13 +892,23 @@ func (s *Service) UpdateConnections(ctx context.Context, walletID string, rawCon
 		}
 	}
 	conBytes, _ := json.Marshal(conn)
-	if _, err := s.db.ExecContext(ctx,
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return WalletPublic{}, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	if _, err := tx.ExecContext(ctx,
 		`UPDATE wallets SET connections_json = ?, updated_at = ? WHERE id = ?`,
 		string(conBytes), nowSec, cur.ID,
 	); err != nil {
 		return WalletPublic{}, err
 	}
-	s.appendAuditLocked(ctx, cur.ID, "connections_updated", firstStr(actor, "owner"), fmt.Sprintf("agents=%v manual=%t bots=%t venues=%v", conn.AgentIDs, conn.AllowTradeManual, conn.AllowTradeBots, conn.AllowedVenues), cur.Policy.PolicyHash)
+	if err := s.appendAuditExecLocked(ctx, tx, cur.ID, "connections_updated", firstStr(actor, "owner"), fmt.Sprintf("agents=%v manual=%t bots=%t venues=%v", conn.AgentIDs, conn.AllowTradeManual, conn.AllowTradeBots, conn.AllowedVenues), cur.Policy.PolicyHash); err != nil {
+		return WalletPublic{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return WalletPublic{}, err
+	}
 	return s.getWalletLocked(ctx, cur.ID)
 }
 
@@ -790,10 +952,12 @@ func (s *Service) SetWalletRPC(ctx context.Context, walletID, primaryURL, fallba
 	if _, err := tx.ExecContext(ctx, `UPDATE wallet_keys SET rpc_nonce = ?, rpc_ciphertext = ? WHERE wallet_id = ?`, rpcNonce, rpcCT, cur2.ID); err != nil {
 		return WalletPublic{}, err
 	}
+	if err := s.appendAuditExecLocked(ctx, tx, cur2.ID, "rpc_updated", firstStr(actor, "owner"), fmt.Sprintf("RPC v%d -> %s (%s)", nextStatus.Version, nextStatus.Host, nextStatus.Cluster), cur2.Policy.PolicyHash); err != nil {
+		return WalletPublic{}, err
+	}
 	if err := tx.Commit(); err != nil {
 		return WalletPublic{}, err
 	}
-	s.appendAuditLocked(ctx, cur2.ID, "rpc_updated", firstStr(actor, "owner"), fmt.Sprintf("RPC v%d -> %s (%s)", nextStatus.Version, nextStatus.Host, nextStatus.Cluster), cur2.Policy.PolicyHash)
 	return s.getWalletLocked(ctx, cur2.ID)
 }
 
@@ -1000,6 +1164,20 @@ func reviewSOLDebit(rev WalletReview) (uint64, error) {
 	}
 }
 
+func reviewSPLDebit(rev WalletReview) (mint string, amountRaw uint64) {
+	switch rev.Operation {
+	case "solana.splTransferChecked":
+		if rev.Mint != "" && rev.AmountRaw > 0 {
+			return rev.Mint, rev.AmountRaw
+		}
+	case "jupiter.swap":
+		if rev.Mint != "" && rev.Mint != onchain.SOL && rev.AmountRaw > 0 {
+			return rev.Mint, rev.AmountRaw
+		}
+	}
+	return "", 0
+}
+
 func findTokenCap(caps []AssetCap, mint string) (AssetCap, bool) {
 	for _, tc := range caps {
 		if strings.TrimSpace(tc.Mint) == mint {
@@ -1143,6 +1321,13 @@ func (s *Service) PrepareReview(ctx context.Context, req PrepareReviewRequest) (
 			s.mu.Unlock()
 			return WalletReview{}, fmt.Errorf("%w: SPL amount exceeds token cap", ErrPolicyDenied)
 		}
+		tokUse := w.DailyTokenUsage[mintAddr]
+		if tokUse.SpentRaw > math.MaxUint64-tokUse.ReservedRaw ||
+			tokUse.SpentRaw+tokUse.ReservedRaw > math.MaxUint64-amountRaw ||
+			tokUse.SpentRaw+tokUse.ReservedRaw+amountRaw > tc.MaxDailyRaw {
+			s.mu.Unlock()
+			return WalletReview{}, fmt.Errorf("%w: SPL amount exceeds remaining daily token cap", ErrPolicyDenied)
+		}
 		var destHandleForm string
 		destAddr, destPK, destHandleForm, err = s.resolveDestinationAddressLocked(ctx, req.Destination)
 		if err != nil {
@@ -1217,6 +1402,13 @@ func (s *Service) PrepareReview(ctx context.Context, req PrepareReviewRequest) (
 			if !ok || tc.MaxPerTxRaw == 0 || tc.MaxDailyRaw == 0 || inRaw > tc.MaxPerTxRaw || inRaw > tc.MaxDailyRaw {
 				s.mu.Unlock()
 				return WalletReview{}, fmt.Errorf("%w: swap input mint %s exceeds or lacks token cap", ErrPolicyDenied, q.InputMint)
+			}
+			tokUse := w.DailyTokenUsage[q.InputMint]
+			if tokUse.SpentRaw > math.MaxUint64-tokUse.ReservedRaw ||
+				tokUse.SpentRaw+tokUse.ReservedRaw > math.MaxUint64-inRaw ||
+				tokUse.SpentRaw+tokUse.ReservedRaw+inRaw > tc.MaxDailyRaw {
+				s.mu.Unlock()
+				return WalletReview{}, fmt.Errorf("%w: swap input mint %s exceeds remaining daily token cap", ErrPolicyDenied, q.InputMint)
 			}
 			if w.Policy.SOLCap.MaxPerTxRaw < estFeeLamports ||
 				w.DailySpentLamports+w.DailyReservedLamports+estFeeLamports > w.Policy.SOLCap.MaxDailyRaw {
@@ -1496,6 +1688,37 @@ func (s *Service) executePreparedReview(ctx context.Context, walletID, reviewID,
 		s.mu.Unlock()
 		return LedgerEntry{}, err
 	}
+	splMint, splDebitRaw := reviewSPLDebit(review)
+	if splMint != "" && splDebitRaw > 0 {
+		tc, ok := findTokenCap(w.Policy.TokenCaps, splMint)
+		if !ok || tc.MaxDailyRaw == 0 {
+			_ = tx.Rollback()
+			s.mu.Unlock()
+			return LedgerEntry{}, fmt.Errorf("%w: SPL mint %s cap removed before execution", ErrPolicyDenied, splMint)
+		}
+		splAssetKey := "spl:" + splMint
+		if _, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO daily_asset_usage(wallet_id, asset_key, day_utc, spent_raw, reserved_raw) VALUES (?, ?, ?, 0, 0)`, w.ID, splAssetKey, day); err != nil {
+			_ = tx.Rollback()
+			s.mu.Unlock()
+			return LedgerEntry{}, err
+		}
+		var splSpent, splReserved uint64
+		if err := tx.QueryRowContext(ctx, `SELECT spent_raw, reserved_raw FROM daily_asset_usage WHERE wallet_id = ? AND asset_key = ? AND day_utc = ?`, w.ID, splAssetKey, day).Scan(&splSpent, &splReserved); err != nil {
+			_ = tx.Rollback()
+			s.mu.Unlock()
+			return LedgerEntry{}, err
+		}
+		if splSpent > math.MaxUint64-splReserved || splSpent+splReserved > math.MaxUint64-splDebitRaw || splSpent+splReserved+splDebitRaw > tc.MaxDailyRaw {
+			_ = tx.Rollback()
+			s.mu.Unlock()
+			return LedgerEntry{}, fmt.Errorf("%w: daily SPL token cap exhausted during atomic reservation", ErrPolicyDenied)
+		}
+		if _, err := tx.ExecContext(ctx, `UPDATE daily_asset_usage SET reserved_raw = reserved_raw + ? WHERE wallet_id = ? AND asset_key = ? AND day_utc = ?`, splDebitRaw, w.ID, splAssetKey, day); err != nil {
+			_ = tx.Rollback()
+			s.mu.Unlock()
+			return LedgerEntry{}, err
+		}
+	}
 	review.Status = ReviewStatusExecuted
 	revBytes, _ := json.Marshal(review)
 	if _, err := tx.ExecContext(ctx, `UPDATE reviews SET status = ?, payload_json = ? WHERE id = ?`, review.Status, string(revBytes), review.ID); err != nil {
@@ -1542,10 +1765,13 @@ func (s *Service) executePreparedReview(ctx context.Context, walletID, reviewID,
 	}
 	if nextState == LedgerConfirmed {
 		_, _ = s.db.ExecContext(ctx, `UPDATE daily_usage SET reserved_raw = MAX(0, reserved_raw - ?), spent_raw = spent_raw + ? WHERE wallet_id = ? AND day_utc = ?`, debitRaw, debitRaw, w.ID, day)
+		if splMint != "" && splDebitRaw > 0 {
+			_, _ = s.db.ExecContext(ctx, `UPDATE daily_asset_usage SET reserved_raw = MAX(0, reserved_raw - ?), spent_raw = spent_raw + ? WHERE wallet_id = ? AND asset_key = ? AND day_utc = ?`, splDebitRaw, splDebitRaw, w.ID, "spl:"+splMint, day)
+		}
 	}
 	updatedBytes, _ := json.Marshal(entry)
 	_, _ = s.db.ExecContext(ctx, `UPDATE ledger SET state = ?, payload_json = ?, updated_at = ? WHERE id = ?`, entry.State, string(updatedBytes), entry.UpdatedAt, entry.ID)
-	s.appendAuditLocked(ctx, w.ID, "tx_"+nextState, actor, fmt.Sprintf("%s %s SOL -> %s sig=%s", review.ID, review.AmountHuman, review.Destination, entry.TxSignature), review.PolicyHash)
+	_ = s.appendAuditLocked(ctx, w.ID, "tx_"+nextState, actor, fmt.Sprintf("%s %s %s -> %s sig=%s", review.ID, review.AmountHuman, review.Symbol, review.Destination, entry.TxSignature), review.PolicyHash)
 	return entry, sendErr
 }
 
@@ -1594,14 +1820,32 @@ func (s *Service) ReconcileLedgerEntry(ctx context.Context, walletID, entryID st
 		if checkErr != nil {
 			return entry, checkErr
 		}
-		if nextState == LedgerFailed && rpcCreds.FallbackURL != "" {
-			if fbState, _, fbErr := checkSignatureStatusRPC(ctx, s.cfg.RPCTransport, rpcCreds.FallbackURL, entry.TxSignature); fbErr != nil || fbState != LedgerFailed {
-				return entry, errors.New("fallback RPC did not corroborate transaction failure; keeping reservation")
+		if nextState == LedgerFailed {
+			witnessURL := strings.TrimSpace(rpcCreds.FallbackURL)
+			if witnessURL == "" {
+				if pubWitness := WitnessOriginForCluster(w.RPC.Cluster); pubWitness != "" && pubWitness != w.RPC.Host {
+					witnessURL = pubWitness
+				}
+			}
+			if witnessURL != "" {
+				wState, wStatusErr, wErr := checkSignatureStatusRPC(ctx, s.cfg.RPCTransport, witnessURL, entry.TxSignature)
+				if wErr != nil {
+					return entry, errors.New("independent witness RPC unreachable to corroborate failure; keeping cap reservation")
+				}
+				if wState == LedgerConfirmed {
+					// Witness confirms the tx actually landed on-chain; treat as confirmed & spent!
+					nextState = LedgerConfirmed
+					statusErr = wStatusErr
+				} else if wState != LedgerFailed {
+					return entry, errors.New("independent witness RPC did not corroborate transaction failure; keeping reservation")
+				}
 			}
 		}
 	}
 
 	reservedAmount := uint64(5_000)
+	var splMint string
+	var splReservedAmount uint64
 	var revPayloadRaw string
 	if s.db.QueryRowContext(ctx, `SELECT payload_json FROM reviews WHERE id = ? AND wallet_id = ?`, entry.ReviewID, w.ID).Scan(&revPayloadRaw) == nil {
 		var rev WalletReview
@@ -1609,6 +1853,7 @@ func (s *Service) ReconcileLedgerEntry(ctx context.Context, walletID, entryID st
 			if amt, err := reviewSOLDebit(rev); err == nil {
 				reservedAmount = amt
 			}
+			splMint, splReservedAmount = reviewSPLDebit(rev)
 		}
 	} else if entry.Operation == "solana.nativeTransfer" && entry.AmountRaw <= math.MaxUint64-5_000 {
 		reservedAmount = entry.AmountRaw + 5_000
@@ -1616,18 +1861,44 @@ func (s *Service) ReconcileLedgerEntry(ctx context.Context, walletID, entryID st
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	day := time.Unix(entry.CreatedAt, 0).UTC().Format("2006-01-02")
+	tx, txErr := s.db.BeginTx(ctx, nil)
+	if txErr != nil {
+		return entry, txErr
+	}
+	defer func() { _ = tx.Rollback() }()
 	switch nextState {
 	case LedgerConfirmed:
-		_, _ = s.db.ExecContext(ctx, `UPDATE daily_usage SET reserved_raw = MAX(0, reserved_raw - ?), spent_raw = spent_raw + ? WHERE wallet_id = ? AND day_utc = ?`, reservedAmount, reservedAmount, w.ID, day)
+		if _, err := tx.ExecContext(ctx, `UPDATE daily_usage SET reserved_raw = MAX(0, reserved_raw - ?), spent_raw = spent_raw + ? WHERE wallet_id = ? AND day_utc = ?`, reservedAmount, reservedAmount, w.ID, day); err != nil {
+			return entry, err
+		}
+		if splMint != "" && splReservedAmount > 0 {
+			if _, err := tx.ExecContext(ctx, `UPDATE daily_asset_usage SET reserved_raw = MAX(0, reserved_raw - ?), spent_raw = spent_raw + ? WHERE wallet_id = ? AND asset_key = ? AND day_utc = ?`, splReservedAmount, splReservedAmount, w.ID, "spl:"+splMint, day); err != nil {
+				return entry, err
+			}
+		}
 	case LedgerFailed:
-		_, _ = s.db.ExecContext(ctx, `UPDATE daily_usage SET reserved_raw = MAX(0, reserved_raw - ?) WHERE wallet_id = ? AND day_utc = ?`, reservedAmount, w.ID, day)
+		if _, err := tx.ExecContext(ctx, `UPDATE daily_usage SET reserved_raw = MAX(0, reserved_raw - ?) WHERE wallet_id = ? AND day_utc = ?`, reservedAmount, w.ID, day); err != nil {
+			return entry, err
+		}
+		if splMint != "" && splReservedAmount > 0 {
+			if _, err := tx.ExecContext(ctx, `UPDATE daily_asset_usage SET reserved_raw = MAX(0, reserved_raw - ?) WHERE wallet_id = ? AND asset_key = ? AND day_utc = ?`, splReservedAmount, w.ID, "spl:"+splMint, day); err != nil {
+				return entry, err
+			}
+		}
 	}
 	entry.State = nextState
 	entry.Error = statusErr
 	entry.UpdatedAt = s.now().UTC().Unix()
 	b, _ := json.Marshal(entry)
-	_, _ = s.db.ExecContext(ctx, `UPDATE ledger SET state = ?, payload_json = ?, updated_at = ? WHERE id = ?`, entry.State, string(b), entry.UpdatedAt, entry.ID)
-	s.appendAuditLocked(ctx, w.ID, "tx_reconciled", "owner", fmt.Sprintf("Reconciled %s -> %s", entry.ID, entry.State), entry.PolicyHash)
+	if _, err := tx.ExecContext(ctx, `UPDATE ledger SET state = ?, payload_json = ?, updated_at = ? WHERE id = ?`, entry.State, string(b), entry.UpdatedAt, entry.ID); err != nil {
+		return entry, err
+	}
+	if err := s.appendAuditExecLocked(ctx, tx, w.ID, "tx_reconciled", "owner", fmt.Sprintf("Reconciled %s -> %s", entry.ID, entry.State), entry.PolicyHash); err != nil {
+		return entry, err
+	}
+	if err := tx.Commit(); err != nil {
+		return entry, err
+	}
 	return entry, nil
 }
 
@@ -1903,13 +2174,23 @@ func (s *Service) DeleteWallet(ctx context.Context, walletID string) (bool, erro
 	if s.hasUnresolvedBroadcastLocked(ctx, w.ID) {
 		return false, ErrAmbiguousState
 	}
-	res, err := s.db.ExecContext(ctx, `DELETE FROM wallets WHERE id = ?`, w.ID)
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return false, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	res, err := tx.ExecContext(ctx, `DELETE FROM wallets WHERE id = ?`, w.ID)
 	if err != nil {
 		return false, err
 	}
 	n, _ := res.RowsAffected()
 	if n > 0 {
-		s.appendAuditLocked(ctx, w.ID, "wallet_deleted", "owner", "Removed wallet "+w.PublicKey, w.Policy.PolicyHash)
+		if err := s.appendAuditExecLocked(ctx, tx, w.ID, "wallet_deleted", "owner", "Removed wallet "+w.PublicKey, w.Policy.PolicyHash); err != nil {
+			return false, err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return false, err
 	}
 	return n > 0, nil
 }

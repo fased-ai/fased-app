@@ -136,11 +136,11 @@ export function SolanaWalletsPanel() {
     "" | "password_setup" | "step_up"
   >("");
   const [stepUpPassword, setStepUpPassword] = useState("");
-  const stepUpTokenRef = useRef<{ token: string; expiresAt: number }>({
-    token: "",
-    expiresAt: 0,
-  });
-  const pendingStepUpActionRef = useRef<(() => Promise<void>) | null>(null);
+  const pendingStepUpRef = useRef<{
+    action: string;
+    walletId: string;
+    fn: (stepUpToken?: string) => Promise<void>;
+  } | null>(null);
 
   // Policy draft state
   const [polDraft, setPolDraft] = useState<WalletPolicy | null>(null);
@@ -368,21 +368,20 @@ export function SolanaWalletsPanel() {
   }
 
   async function runWithStepUp(
+    action: string,
+    walletId: string,
     fn: (stepUpToken?: string) => Promise<void>,
+    initialToken?: string,
   ): Promise<void> {
-    const cached =
-      stepUpTokenRef.current.expiresAt * 1000 > Date.now() + 5_000
-        ? stepUpTokenRef.current.token
-        : "";
     try {
-      await fn(cached || undefined);
+      await fn(initialToken || undefined);
     } catch (err) {
       if (
         err instanceof CoreError &&
         (err.code === "owner_password_required" ||
           err.code === "step_up_required")
       ) {
-        pendingStepUpActionRef.current = () => runWithStepUp(fn);
+        pendingStepUpRef.current = { action, walletId, fn };
         setStepUpPassword("");
         setStepUpModalMode(
           err.code === "owner_password_required" ? "password_setup" : "step_up",
@@ -398,21 +397,31 @@ export function SolanaWalletsPanel() {
     setBusy(true);
     setError("");
     try {
+      const pending = pendingStepUpRef.current;
       if (stepUpModalMode === "password_setup") {
         await setLocalOwnerPassword(core, stepUpPassword);
         setOwnerPasswordSet(true);
       }
-      const res = await requestStepUpToken(core, stepUpPassword);
-      stepUpTokenRef.current = {
-        token: res.stepUpToken,
-        expiresAt: res.expiresAt,
-      };
-      const pending = pendingStepUpActionRef.current;
-      pendingStepUpActionRef.current = null;
+      let stepUpToken = "";
+      if (pending) {
+        const res = await requestStepUpToken(
+          core,
+          stepUpPassword,
+          pending.action,
+          pending.walletId,
+        );
+        stepUpToken = res.stepUpToken;
+      }
+      pendingStepUpRef.current = null;
       setStepUpPassword("");
       setStepUpModalMode("");
       if (pending) {
-        await pending();
+        await runWithStepUp(
+          pending.action,
+          pending.walletId,
+          pending.fn,
+          stepUpToken,
+        );
       } else {
         setNotice("Owner authorization configured");
         await loadWallets();
@@ -432,7 +441,7 @@ export function SolanaWalletsPanel() {
     setError("");
     setNotice("");
     try {
-      await runWithStepUp(async (stepUp) => {
+      await runWithStepUp("policy", selected.id, async (stepUp) => {
         await updateWalletPolicy(
           core,
           selected.id,
@@ -465,9 +474,11 @@ export function SolanaWalletsPanel() {
     setError("");
     setNotice("");
     try {
-      await updateWalletConnections(core, selected.id, connDraft);
-      setNotice("Wallet module connections saved");
-      await loadWallets();
+      await runWithStepUp("connections", selected.id, async (stepUp) => {
+        await updateWalletConnections(core, selected.id, connDraft, stepUp);
+        setNotice("Wallet module connections saved");
+        await loadWallets();
+      });
     } catch (err) {
       setError(err instanceof Error ? err.message : "Connections failed");
     } finally {
@@ -482,7 +493,7 @@ export function SolanaWalletsPanel() {
     setError("");
     setNotice("");
     try {
-      await runWithStepUp(async (stepUp) => {
+      await runWithStepUp("rpc", selected.id, async (stepUp) => {
         const res = await updateWalletRPC(
           core,
           selected.id,
@@ -557,7 +568,7 @@ export function SolanaWalletsPanel() {
         setActiveReview(null);
         await Promise.all([loadWallets(), loadActivity(selected.id)]);
       } else {
-        await runWithStepUp(async (stepUp) => {
+        await runWithStepUp("execute", selected.id, async (stepUp) => {
           const out = await executeNativeWalletReview(
             core,
             selected.id,
@@ -604,7 +615,7 @@ export function SolanaWalletsPanel() {
         await setWalletFreeze(core, selected.id, true, "Owner freeze");
         await loadWallets();
       } else {
-        await runWithStepUp(async (stepUp) => {
+        await runWithStepUp("unfreeze", selected.id, async (stepUp) => {
           await setWalletFreeze(core, selected.id, false, "", stepUp);
           await loadWallets();
         });
@@ -622,7 +633,7 @@ export function SolanaWalletsPanel() {
     setBusy(true);
     setError("");
     try {
-      await runWithStepUp(async (stepUp) => {
+      await runWithStepUp("backup", selected.id, async (stepUp) => {
         const res = await exportEncryptedBackupV2(
           core,
           selected.id,
@@ -658,7 +669,7 @@ export function SolanaWalletsPanel() {
     setError("");
     try {
       const parsed = JSON.parse(restoreArchiveText);
-      await runWithStepUp(async (stepUp) => {
+      await runWithStepUp("restore", "*", async (stepUp) => {
         const res = await restoreEncryptedBackupV2(
           core,
           {
@@ -739,7 +750,7 @@ export function SolanaWalletsPanel() {
                 type="button"
                 className="wt-btn-soft"
                 onClick={() => {
-                  pendingStepUpActionRef.current = null;
+                  pendingStepUpRef.current = null;
                   setStepUpPassword("");
                   setStepUpModalMode("password_setup");
                 }}
@@ -875,10 +886,14 @@ export function SolanaWalletsPanel() {
                   disabled={busy}
                   onClick={async () => {
                     try {
-                      await runWithStepUp(async (stepUp) => {
-                        await deleteWalletV2(core, selected.id, stepUp);
-                        await loadWallets();
-                      });
+                      await runWithStepUp(
+                        "delete",
+                        selected.id,
+                        async (stepUp) => {
+                          await deleteWalletV2(core, selected.id, stepUp);
+                          await loadWallets();
+                        },
+                      );
                     } catch (e) {
                       setError(
                         e instanceof Error ? e.message : "Delete failed",
@@ -1816,7 +1831,7 @@ export function SolanaWalletsPanel() {
               : "Authorization",
           )}
           onClose={() => {
-            pendingStepUpActionRef.current = null;
+            pendingStepUpRef.current = null;
             setStepUpPassword("");
             setStepUpModalMode("");
           }}

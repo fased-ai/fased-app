@@ -129,12 +129,39 @@ func decodeShortVec(b []byte) (val int, read int, err error) {
 	return 0, 0, errors.New("invalid shortvec encoding")
 }
 
-// BuildUnsignedTransferPacket creates an unsigned Solana legacy transaction wire packet
-// (1 zeroed 64-byte signature slot + serialized message) suitable for Wallet Standard signTransaction.
+func messageRequiredSignatures(msgBytes []byte) (int, error) {
+	if len(msgBytes) < 4 {
+		return 0, errors.New("message too short")
+	}
+	offset := 0
+	if msgBytes[0]&0x80 != 0 {
+		// Versioned message prefix (0x80 = v0).
+		if msgBytes[0] != 0x80 {
+			return 0, fmt.Errorf("unsupported Solana message version 0x%02x", msgBytes[0])
+		}
+		offset = 1
+	}
+	if len(msgBytes) <= offset {
+		return 0, errors.New("truncated Solana message header")
+	}
+	n := int(msgBytes[offset])
+	if n < 1 || n > 8 {
+		return 0, fmt.Errorf("unsupported required signature count %d", n)
+	}
+	return n, nil
+}
+
+// BuildUnsignedTransferPacket creates an unsigned Solana legacy or v0 transaction wire packet
+// (zeroed 64-byte signature slots matching numRequiredSignatures + serialized message)
+// suitable for Wallet Standard signTransaction.
 func BuildUnsignedTransferPacket(msgBytes []byte) []byte {
-	pkt := make([]byte, 0, 1+ed25519.SignatureSize+len(msgBytes))
-	pkt = append(pkt, 1) // 1 required signature
-	pkt = append(pkt, make([]byte, ed25519.SignatureSize)...)
+	numSigs, err := messageRequiredSignatures(msgBytes)
+	if err != nil {
+		numSigs = 1
+	}
+	pkt := make([]byte, 0, 1+numSigs*ed25519.SignatureSize+len(msgBytes))
+	pkt = append(pkt, encodeShortVec(numSigs)...)
+	pkt = append(pkt, make([]byte, numSigs*ed25519.SignatureSize)...)
 	pkt = append(pkt, msgBytes...)
 	return pkt
 }
@@ -150,31 +177,35 @@ func SignLegacyMessage(msgBytes []byte, priv ed25519.PrivateKey) (rawTx []byte, 
 }
 
 // VerifyHardwareSignedTransaction verifies that a hardware/Wallet-Standard signed transaction
-// has byte-for-byte identical message bytes to expectedMsgBytes and a valid Ed25519 signature
-// for expectedPubKey.
+// (legacy or versioned v0) has byte-for-byte identical message bytes to expectedMsgBytes,
+// matches the header's required signature count, and carries a valid Ed25519 signature from
+// expectedPubKey in slot 0 (fee payer).
 func VerifyHardwareSignedTransaction(expectedMsgBytes []byte, expectedPubKey [32]byte, signedTxBase64 string) (sigBase58 string, rawTx []byte, err error) {
+	expectedSigs, err := messageRequiredSignatures(expectedMsgBytes)
+	if err != nil {
+		return "", nil, fmt.Errorf("%w: invalid prepared message header", ErrTxTampered)
+	}
 	raw, err := base64.StdEncoding.DecodeString(strings.TrimSpace(signedTxBase64))
 	if err != nil || len(raw) < 67 {
 		return "", nil, fmt.Errorf("%w: invalid signed transaction encoding", ErrTxTampered)
 	}
 	numSigs, hdrLen, err := decodeShortVec(raw)
-	if err != nil || numSigs != 1 {
-		return "", nil, fmt.Errorf("%w: unexpected signature count %d", ErrTxTampered, numSigs)
+	if err != nil || numSigs != expectedSigs || numSigs < 1 || numSigs > 8 {
+		return "", nil, fmt.Errorf("%w: unexpected signature count %d (expected %d)", ErrTxTampered, numSigs, expectedSigs)
 	}
-	sigStart := hdrLen
-	sigEnd := sigStart + ed25519.SignatureSize
-	if len(raw) <= sigEnd {
+	sigsEnd := hdrLen + numSigs*ed25519.SignatureSize
+	if len(raw) <= sigsEnd {
 		return "", nil, fmt.Errorf("%w: truncated signed transaction", ErrTxTampered)
 	}
-	sig := raw[sigStart:sigEnd]
-	msg := raw[sigEnd:]
+	sig0 := raw[hdrLen : hdrLen+ed25519.SignatureSize]
+	msg := raw[sigsEnd:]
 	if !bytes.Equal(msg, expectedMsgBytes) {
 		return "", nil, ErrTxTampered
 	}
-	if !ed25519.Verify(expectedPubKey[:], msg, sig) {
+	if !ed25519.Verify(expectedPubKey[:], msg, sig0) {
 		return "", nil, fmt.Errorf("%w: ed25519 signature verification failed", ErrTxTampered)
 	}
-	return Base58Encode(sig), raw, nil
+	return Base58Encode(sig0), raw, nil
 }
 
 // ParseSolanaKeypair64 decodes either a Solana CLI 64-byte JSON integer array or a Base58 64-byte keypair.

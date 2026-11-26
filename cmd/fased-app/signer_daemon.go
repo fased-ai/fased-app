@@ -26,10 +26,13 @@ func signerDaemonCommand(args []string, out, errOut io.Writer) error {
 	}
 	dataDir := flags.String("data-dir", dirDefault, "private custody signer vault directory")
 	socketPath := flags.String("socket", "", "Unix socket path for typed custody IPC")
+	ownerSocketPath := flags.String("owner-socket", "", "optional 0600 owner-only Unix socket path for local/admin CLI")
 	allowedUID := flags.Int("allowed-app-uid", -1, "OS peer UID permitted to connect over SO_PEERCRED (default current UID)")
 	allowedUser := flags.String("allowed-app-user", "", "OS username permitted to connect over SO_PEERCRED (overrides -1)")
+	ownerUID := flags.Int("owner-uid", -1, "OS peer UID permitted on --owner-socket (default current UID)")
 	sockModeStr := flags.String("socket-mode", "0600", "octal Unix socket file permissions (0600 or 0660)")
 	requireOSKEK := flags.Bool("require-os-kek", false, "require systemd-creds or OS keychain KEK to unwrap signer master key")
+	requireOwnerAuth := flags.Bool("require-owner-auth", false, "require in-signer owner authorization proofs for all privileged IPC actions")
 	fixtureRPC := flags.Bool("fixture-rpc", false, "development-only fixture RPC mode for isolated local testing")
 	if err := flags.Parse(args); err != nil {
 		return err
@@ -37,6 +40,9 @@ func signerDaemonCommand(args []string, out, errOut io.Writer) error {
 	if strings.TrimSpace(*dataDir) == "" {
 		return errors.New("signer-daemon requires --data-dir")
 	}
+
+	// Suppress core dumps and same-UID ptrace attachment to protect in-memory keys.
+	_ = custody.HardenProcessMemory()
 
 	peerUID := *allowedUID
 	if strings.TrimSpace(*allowedUser) != "" && peerUID < 0 {
@@ -60,11 +66,12 @@ func signerDaemonCommand(args []string, out, errOut io.Writer) error {
 	}
 
 	svc, err := custody.NewService(custody.Config{
-		DataDir:      strings.TrimSpace(*dataDir),
-		RequireOSKEK: *requireOSKEK,
-		FixtureMode:  *fixtureRPC,
-		FastKDF:      *fixtureRPC,
-		SocketPath:   strings.TrimSpace(*socketPath),
+		DataDir:          strings.TrimSpace(*dataDir),
+		RequireOSKEK:     *requireOSKEK,
+		RequireOwnerAuth: *requireOwnerAuth,
+		FixtureMode:      *fixtureRPC,
+		FastKDF:          *fixtureRPC,
+		SocketPath:       strings.TrimSpace(*socketPath),
 	})
 	if err != nil {
 		return err
@@ -75,14 +82,28 @@ func signerDaemonCommand(args []string, out, errOut io.Writer) error {
 	if err != nil {
 		return err
 	}
+	var ownerSockSrv *custody.SocketServer
+	if strings.TrimSpace(*ownerSocketPath) != "" {
+		oUID := *ownerUID
+		if oUID < 0 {
+			oUID = os.Getuid()
+		}
+		ownerSockSrv, err = custody.StartOwnerSocketServerAt(svc, strings.TrimSpace(*ownerSocketPath), oUID, 0o600)
+		if err != nil {
+			_ = sockSrv.Close(context.Background())
+			return err
+		}
+	}
 
 	sec, _ := svc.SecurityStatus(context.Background())
 	_ = json.NewEncoder(out).Encode(map[string]any{
-		"status":         "listening",
-		"socket":         sockSrv.SocketPath(),
-		"allowedPeerUid": peerUID,
-		"kekProtection":  sec.KEKProtection,
-		"pid":            os.Getpid(),
+		"status":            "listening",
+		"socket":            sockSrv.SocketPath(),
+		"ownerSocket":       strings.TrimSpace(*ownerSocketPath),
+		"allowedPeerUid":    peerUID,
+		"kekProtection":     sec.KEKProtection,
+		"ownerAuthEnforced": sec.OwnerAuthEnforced,
+		"pid":               os.Getpid(),
 	})
 
 	sigCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -91,6 +112,9 @@ func signerDaemonCommand(args []string, out, errOut io.Writer) error {
 
 	shutCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
+	if ownerSockSrv != nil {
+		_ = ownerSockSrv.Close(shutCtx)
+	}
 	_ = sockSrv.Close(shutCtx)
 	return svc.Close()
 }

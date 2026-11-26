@@ -40,15 +40,16 @@ const (
 )
 
 var (
-	ErrWalletNotFound = errors.New("wallet not found")
-	ErrReviewNotFound = errors.New("review not found")
-	ErrLedgerNotFound = errors.New("ledger entry not found")
-	ErrPolicyDenied   = errors.New("signer policy denied operation")
-	ErrRoleDenied     = errors.New("wallet role prohibits operation")
-	ErrPolicyConflict = errors.New("wallet policy changed concurrently; refresh and retry")
-	ErrWrongPassword  = errors.New("incorrect recovery passphrase or corrupt backup")
-	ErrTxTampered     = errors.New("signed transaction payload does not match prepared review byte-for-byte")
-	ErrAmbiguousState = errors.New("unresolved broadcast state; reconcile existing entry before retrying")
+	ErrWalletNotFound    = errors.New("wallet not found")
+	ErrReviewNotFound    = errors.New("review not found")
+	ErrLedgerNotFound    = errors.New("ledger entry not found")
+	ErrPolicyDenied      = errors.New("signer policy denied operation")
+	ErrRoleDenied        = errors.New("wallet role prohibits operation")
+	ErrPolicyConflict    = errors.New("wallet policy changed concurrently; refresh and retry")
+	ErrWrongPassword     = errors.New("incorrect recovery passphrase or corrupt backup")
+	ErrTxTampered        = errors.New("signed transaction payload does not match prepared review byte-for-byte")
+	ErrAmbiguousState    = errors.New("unresolved broadcast state; reconcile existing entry before retrying")
+	ErrOwnerAuthRequired = errors.New("signer owner authorization required")
 )
 
 // AssetCap defines fail-closed per-transaction and daily raw-unit caps for SOL or one SPL mint.
@@ -115,23 +116,30 @@ type WalletRPCStatus struct {
 	Version       int    `json:"version"`
 }
 
+// TokenDailyUsage reports signer-enforced daily spent & reserved raw units for one SPL mint.
+type TokenDailyUsage struct {
+	SpentRaw    uint64 `json:"spentRaw,string"`
+	ReservedRaw uint64 `json:"reservedRaw,string"`
+}
+
 // WalletPublic is the ONLY wallet projection ever returned across IPC or HTTP.
 type WalletPublic struct {
-	ID                    string            `json:"id"`
-	Handle                string            `json:"handle"`
-	Name                  string            `json:"name"`
-	Custody               string            `json:"custody"`
-	Role                  string            `json:"role"`
-	PublicKey             string            `json:"publicKey"`
-	Policy                WalletPolicy      `json:"policy"`
-	PolicyAcknowledged    bool              `json:"policyAcknowledged"`
-	Connections           WalletConnections `json:"connections"`
-	RPC                   WalletRPCStatus   `json:"rpc"`
-	DailySpentLamports    uint64            `json:"dailySpentLamports,string"`
-	DailyReservedLamports uint64            `json:"dailyReservedLamports,string"`
-	DayUTC                string            `json:"dayUtc,omitempty"`
-	CreatedAt             int64             `json:"createdAt"`
-	UpdatedAt             int64             `json:"updatedAt"`
+	ID                    string                     `json:"id"`
+	Handle                string                     `json:"handle"`
+	Name                  string                     `json:"name"`
+	Custody               string                     `json:"custody"`
+	Role                  string                     `json:"role"`
+	PublicKey             string                     `json:"publicKey"`
+	Policy                WalletPolicy               `json:"policy"`
+	PolicyAcknowledged    bool                       `json:"policyAcknowledged"`
+	Connections           WalletConnections          `json:"connections"`
+	RPC                   WalletRPCStatus            `json:"rpc"`
+	DailySpentLamports    uint64                     `json:"dailySpentLamports,string"`
+	DailyReservedLamports uint64                     `json:"dailyReservedLamports,string"`
+	DailyTokenUsage       map[string]TokenDailyUsage `json:"dailyTokenUsage,omitempty"`
+	DayUTC                string                     `json:"dayUtc,omitempty"`
+	CreatedAt             int64                      `json:"createdAt"`
+	UpdatedAt             int64                      `json:"updatedAt"`
 }
 
 // WalletReview is an immutable prepared & simulated transaction authorization request.
@@ -192,10 +200,11 @@ type AuditEntry struct {
 
 // SecurityStatus reports the signer process isolation & master-key protection posture.
 type SecurityStatus struct {
-	ProcessIsolated bool   `json:"processIsolated"`
-	KEKProtection   string `json:"kekProtection"` // systemd-creds | os-keychain | file-dev-only
-	SocketPath      string `json:"socketPath,omitempty"`
-	AllowedPeerUID  int    `json:"allowedPeerUid,omitempty"`
+	ProcessIsolated   bool   `json:"processIsolated"`
+	KEKProtection     string `json:"kekProtection"` // systemd-creds | os-keychain | file-dev-only
+	OwnerAuthEnforced bool   `json:"ownerAuthEnforced"`
+	SocketPath        string `json:"socketPath,omitempty"`
+	AllowedPeerUID    int    `json:"allowedPeerUid,omitempty"`
 }
 
 // WalletSelector resolves a wallet deterministically according to the selection contract.

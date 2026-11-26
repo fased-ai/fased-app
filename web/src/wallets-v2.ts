@@ -146,6 +146,7 @@ export interface AuditEntry {
 export interface WalletSecurityPosture {
   processIsolated: boolean;
   kekProtection: string;
+  ownerAuthEnforced?: boolean;
   socketPath?: string;
   allowedPeerUid?: number;
 }
@@ -177,8 +178,10 @@ export async function setLocalOwnerPassword(
 export async function requestStepUpToken(
   core: CoreRequestOnly,
   password: string,
+  action: string,
+  walletId = "*",
 ): Promise<{ stepUpToken: string; expiresAt: number }> {
-  return core.request("auth/step-up", "POST", { password });
+  return core.request("auth/step-up", "POST", { password, action, walletId });
 }
 
 export async function listWalletsV2(
@@ -246,11 +249,14 @@ export async function updateWalletConnections(
   core: CoreRequestOnly,
   walletId: string,
   connections: WalletConnections,
+  stepUpToken?: string,
 ): Promise<{ wallet: WalletV2 }> {
   return core.request<{ wallet: WalletV2 }>(
     `wallets/${encodeURIComponent(walletId)}/connections`,
     "PUT",
     connections,
+    undefined,
+    stepUpHeaders(stepUpToken),
   );
 }
 
