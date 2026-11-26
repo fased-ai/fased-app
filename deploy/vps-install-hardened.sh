@@ -19,14 +19,18 @@ install -d -m 0700 -o fased-signer -g fased-ipc /var/lib/fased-signer
 install -d -m 0700 -o fased-app -g fased-ipc /var/lib/fased-app
 install -d -m 0750 -o root -g root /etc/credstore.encrypted /etc/fased
 
-if [[ ! -f /etc/credstore.encrypted/fased-signer-kek ]]; then
-  tmp_kek="$(mktemp)"
-  chmod 0400 "${tmp_kek}"
-  head -c 32 /dev/urandom > "${tmp_kek}"
-  systemd-creds encrypt --name=fased-signer-kek "${tmp_kek}" /etc/credstore.encrypted/fased-signer-kek
-  shred -u "${tmp_kek}" || rm -f "${tmp_kek}"
-  chmod 0400 /etc/credstore.encrypted/fased-signer-kek
-fi
+provision_sealed_cred() {
+  local name="$1"
+  local dest="/etc/credstore.encrypted/${name}"
+  if [[ ! -f "${dest}" ]]; then
+    umask 077
+    head -c 32 /dev/urandom | systemd-creds encrypt --with-key=host --name="${name}" - "${dest}"
+    chmod 0400 "${dest}"
+  fi
+}
+
+provision_sealed_cred fased-signer-kek
+provision_sealed_cred fased-provider-task-key
 
 install -m 0644 "${SCRIPT_DIR}/systemd/fased-signer.service" /etc/systemd/system/fased-signer.service
 install -m 0644 "${SCRIPT_DIR}/systemd/fased-app.service" /etc/systemd/system/fased-app.service

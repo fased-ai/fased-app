@@ -106,8 +106,8 @@ func (s *Store) automationService() (*automation.Service, error) {
 			}
 			return fmt.Sprintf("Desk cycle %s (%s): %s", res.ID, res.Mode, res.FinalStatus), nil
 		},
-		OnAgentPrompt: func(ctx context.Context, tr automation.Trigger, prompt string, _ bool) {
-			s.dispatchAutomationAgentPrompt(ctx, tr, prompt)
+		OnAgentPrompt: func(ctx context.Context, tr automation.Trigger, prompt string, untrusted bool) {
+			s.dispatchAutomationAgentPrompt(ctx, tr, prompt, untrusted)
 		},
 	})
 	if err != nil {
@@ -154,7 +154,7 @@ func (s *Store) telegramService() (*telegram.Service, error) {
 	return tg, nil
 }
 
-func (s *Store) dispatchAutomationAgentPrompt(ctx context.Context, tr automation.Trigger, prompt string) {
+func (s *Store) dispatchAutomationAgentPrompt(ctx context.Context, tr automation.Trigger, prompt string, untrusted bool) {
 	v2, err := s.ensureAgentV2(ctx)
 	if err != nil || v2 == nil {
 		return
@@ -181,11 +181,19 @@ func (s *Store) dispatchAutomationAgentPrompt(ctx context.Context, tr automation
 		profileID = created.ProfileID
 		_, _ = v2.db.ExecContext(ctx, `UPDATE threads SET source_kind='automation', source_ref=? WHERE id=?`, tr.ID, targetID)
 	}
+	// Background automation triggers (especially untrusted news/world-intel events) MUST run
+	// with tools disabled so an indirect prompt injection cannot exfiltrate workspace state or
+	// spam action approval cards autonomously.
+	toolsOff := false
+	framedPrompt := prompt
+	if untrusted {
+		framedPrompt = wrapUntrustedContextBlock("untrusted_trigger_event", prompt)
+	}
 	var fallbackMsg string
 	if _, pErr := resolveAgentV2Provider(ctx, s, "", "", "", "", profileID); pErr == nil {
 		turnCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 		defer cancel()
-		_, tErr := s.RunAgentV2Turn(turnCtx, targetID, AgentV2PromptInput{Content: prompt}, nil)
+		_, tErr := s.RunAgentV2Turn(turnCtx, targetID, AgentV2PromptInput{Content: framedPrompt, ToolsEnabled: &toolsOff}, nil)
 		if tErr == nil {
 			return
 		}

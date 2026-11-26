@@ -1387,9 +1387,17 @@ func previewSaveMemory(_ context.Context, _ *Store, _ string, rawArgs json.RawMe
 		return approvalDraft{}, err
 	}
 	payload, _ := json.Marshal(a)
+	preview := strings.TrimSpace(a.Content)
+	if len(preview) > 240 {
+		preview = preview[:240] + "…"
+	}
+	pinLabel := "unpinned"
+	if a.Pinned {
+		pinLabel = "PINNED (injected into future prompts)"
+	}
 	return approvalDraft{
 		Title:       "Save memory: " + sanitizeV2Title(a.Title, "Memory"),
-		Summary:     sanitizeV2Title(a.Content, "Save fact to persistent workspace memory"),
+		Summary:     fmt.Sprintf("[%s] %s", pinLabel, preview),
 		PayloadJSON: string(payload),
 	}, nil
 }
@@ -1777,9 +1785,13 @@ func previewDraftEventTrigger(_ context.Context, _ *Store, _ string, rawArgs jso
 		return approvalDraft{}, err
 	}
 	payload, _ := json.Marshal(in)
+	promptSnippet := strings.TrimSpace(tr.Action.PromptTemplate)
+	if len(promptSnippet) > 160 {
+		promptSnippet = promptSnippet[:160] + "…"
+	}
 	return approvalDraft{
 		Title:       fmt.Sprintf("Save trigger: %s (%s)", sanitizeV2Title(tr.Name, tr.ID), tr.Kind),
-		Summary:     fmt.Sprintf("kind=%s action=%s cooldown=%ds (paper/alert only)", tr.Kind, tr.Action.Type, tr.CooldownSeconds),
+		Summary:     fmt.Sprintf("kind=%s action=%s cooldown=%ds webhook=%t telegram=%t prompt=%q", tr.Kind, tr.Action.Type, tr.CooldownSeconds, tr.Action.SendWebhook, tr.Action.SendTelegram, promptSnippet),
 		PayloadJSON: string(payload),
 	}, nil
 }

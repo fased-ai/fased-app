@@ -200,38 +200,88 @@ func NormalizeServerInput(in ServerInput) (ServerInput, error) {
 	}, nil
 }
 
+func splitToolNameTokens(toolName string) []string {
+	var tokens []string
+	var cur []rune
+	flush := func() {
+		if len(cur) > 0 {
+			tokens = append(tokens, strings.ToLower(string(cur)))
+			cur = cur[:0]
+		}
+	}
+	runes := []rune(strings.TrimSpace(toolName))
+	for i, r := range runes {
+		if r == '_' || r == '-' || r == '.' || r == ':' || r == '/' || r == ' ' {
+			flush()
+			continue
+		}
+		// Split camelCase / PascalCase boundaries (e.g. sendTransaction -> send, transaction).
+		if i > 0 && r >= 'A' && r <= 'Z' {
+			prev := runes[i-1]
+			if prev >= 'a' && prev <= 'z' {
+				flush()
+			} else if prev >= 'A' && prev <= 'Z' && i+1 < len(runes) && runes[i+1] >= 'a' && runes[i+1] <= 'z' {
+				flush()
+			}
+		}
+		cur = append(cur, r)
+	}
+	flush()
+	return tokens
+}
+
+var mcpHardMutatingTokens = map[string]bool{
+	"delete": true, "remove": true, "rm": true, "drop": true, "purge": true, "destroy": true, "clear": true,
+	"execute": true, "exec": true, "run": true, "eval": true, "shell": true, "bash": true, "cmd": true, "command": true,
+	"sign": true, "transfer": true, "withdraw": true, "deposit": true, "pay": true, "mint": true, "burn": true, "stake": true, "unstake": true,
+	"place": true, "submit": true, "cancel": true, "close": true,
+	"send": true, "broadcast": true, "publish": true, "post": true, "put": true, "patch": true, "push": true, "commit": true,
+	"write": true, "create": true, "update": true, "modify": true, "mutate": true, "edit": true, "set": true, "add": true, "insert": true,
+	"approve": true, "revoke": true, "grant": true, "deploy": true, "install": true, "uninstall": true, "start": true, "stop": true, "kill": true,
+	"webhook": true, "email": true, "sql": true,
+}
+
+var mcpTradeActionTokens = map[string]bool{
+	"swap": true, "buy": true, "sell": true, "order": true, "trade": true,
+}
+
+var mcpReadOnlyLeadingTokens = map[string]bool{
+	"get": true, "list": true, "read": true, "fetch": true, "quote": true, "search": true,
+	"inspect": true, "describe": true, "show": true, "status": true, "check": true,
+	"find": true, "query": true, "lookup": true, "ping": true, "health": true,
+	"count": true, "stats": true, "view": true, "info": true, "resolve": true,
+}
+
+// isMutatingToolName implements a default-deny read-only guard over camelCase, PascalCase,
+// snake_case, and kebab-case MCP tool names: any hard mutating verb blocks immediately,
+// trade-action verbs block unless framed by a leading read-only verb (e.g. get_swap_quote),
+// and unrecognized leading verbs fail closed under ReadOnly policy.
 func isMutatingToolName(toolName string) bool {
-	low := strings.ToLower(strings.TrimSpace(toolName))
-	for _, prefix := range []string{
-		"delete_", "execute_", "sign_", "transfer_", "withdraw_",
-		"submit_order", "place_order", "create_order", "cancel_order",
-		"close_position", "send_tx", "broadcast_", "write_", "mutate_",
-		"run_sql", "exec_sql",
-	} {
-		if strings.HasPrefix(low, prefix) || strings.Contains(low, prefix) {
+	tokens := splitToolNameTokens(toolName)
+	if len(tokens) == 0 {
+		return true
+	}
+	for _, tok := range tokens {
+		if mcpHardMutatingTokens[tok] {
 			return true
 		}
 	}
-	hasReadPrefix := false
-	for _, prefix := range []string{
-		"get_", "list_", "read_", "fetch_", "quote_", "search_", "inspect_", "describe_",
-		"get-", "list-", "read-", "fetch-", "quote-", "search-", "inspect-", "describe-",
-	} {
-		if strings.HasPrefix(low, prefix) {
-			hasReadPrefix = true
-			break
-		}
-	}
-	if hasReadPrefix {
+	if mcpReadOnlyLeadingTokens[tokens[0]] {
 		return false
 	}
-	for _, tok := range strings.FieldsFunc(low, func(r rune) bool {
-		return r == '_' || r == '-' || r == '.' || r == ':'
-	}) {
-		switch tok {
-		case "swap", "buy", "sell", "order", "trade":
+	// Fixture test helpers prefixed with "fixture_" are allowed only when explicitly read-scoped.
+	if tokens[0] == "fixture" && len(tokens) >= 2 && mcpReadOnlyLeadingTokens[tokens[1]] {
+		for _, tok := range tokens[1:] {
+			if mcpTradeActionTokens[tok] {
+				return true
+			}
+		}
+		return false
+	}
+	for _, tok := range tokens {
+		if mcpTradeActionTokens[tok] {
 			return true
 		}
 	}
-	return false
+	return true
 }

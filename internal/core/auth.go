@@ -140,6 +140,7 @@ func (s *Store) Login(ctx context.Context, password string) (string, error) {
 		return "", ErrUnauthorized
 	}
 	derived := passwordHash(password, salt)
+	defer clear(derived)
 	if subtle.ConstantTimeCompare(derived, expected) != 1 {
 		return "", ErrUnauthorized
 	}
@@ -167,8 +168,12 @@ func (s *Store) VerifyOwnerPassword(ctx context.Context, password string) error 
 }
 
 // SetLocalOwnerPassword upgrades a passwordless Local instance to an Argon2id owner password,
-// disabling future passwordless local browser auto-entry.
+// disabling future passwordless local browser auto-entry and revoking prior sessions.
 func (s *Store) SetLocalOwnerPassword(ctx context.Context, password string) error {
+	return s.setLocalOwnerPasswordKeeping(ctx, password, "")
+}
+
+func (s *Store) setLocalOwnerPasswordKeeping(ctx context.Context, password, keepTokenHash string) error {
 	if !validPassword(password) {
 		return errors.New("use a password of at least 12 characters and at most 1024 bytes")
 	}
@@ -187,11 +192,25 @@ func (s *Store) SetLocalOwnerPassword(ctx context.Context, password string) erro
 	}
 	derived := passwordHash(password, newSalt)
 	defer clear(derived)
-	_, err := s.db.ExecContext(ctx, "UPDATE instance SET password_salt=?,password_hash=?,claim_hash=NULL,claim_expires=NULL WHERE id=1", newSalt, derived)
+	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	if _, err := tx.ExecContext(ctx, "UPDATE instance SET password_salt=?,password_hash=?,claim_hash=NULL,claim_expires=NULL WHERE id=1", newSalt, derived); err != nil {
 		return metadataWriteError(err)
 	}
-	return nil
+	// Revoke all other pre-existing passwordless sessions immediately upon setting owner password.
+	if strings.TrimSpace(keepTokenHash) != "" {
+		if _, err := tx.ExecContext(ctx, "DELETE FROM sessions WHERE token_hash != ?", keepTokenHash); err != nil {
+			return err
+		}
+	} else {
+		if _, err := tx.ExecContext(ctx, "DELETE FROM sessions"); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
 }
 func pruneSessionsLocked(ctx context.Context, tx *sql.Tx, now int64, nodeID string) error {
 	if _, err := tx.ExecContext(ctx, "DELETE FROM sessions WHERE expires<=?", now); err != nil {
