@@ -86,8 +86,8 @@
   --wt-text-2: #3a4352;
   --wt-muted: #5a6375;
   --wt-dim: #687182;
-  --wt-coral: #b82548;
-  --wt-cyan: #186d7c;
+  --wt-coral: #a81f40;
+  --wt-cyan: #14606e;
   --wt-violet: #5d42a6;
   --shell-header: #f3f4f7;
   --shell-input: #ffffff;
@@ -97,18 +97,18 @@
   --shell-primary-hover: #b52447;
   --shell-active: rgba(184, 37, 72, 0.1);
   --shell-shadow: rgba(16, 24, 40, 0.1);
-  --wt-ok: #147a56;
+  --wt-ok: #0e6847;
   --wt-ok-fill: #1f9e76;
   --wt-ok-bg: rgba(31, 158, 118, 0.1);
   --wt-ok-border: rgba(31, 158, 118, 0.28);
-  --wt-warn: #855d18;
+  --wt-warn: #6b470c;
   --wt-warn-bg: rgba(183, 131, 43, 0.12);
   --wt-warn-border: rgba(183, 131, 43, 0.3);
-  --wt-danger: #b9344e;
+  --wt-danger: #a1253f;
   --wt-danger-fill: #d44a63;
   --wt-danger-bg: rgba(212, 74, 99, 0.1);
   --wt-danger-border: rgba(212, 74, 99, 0.28);
-  --wt-info: #186d7c;
+  --wt-info: #14606e;
   --wt-info-bg: rgba(35, 137, 154, 0.1);
   --wt-info-border: rgba(35, 137, 154, 0.28);
   --wt-accent-soft: rgba(184, 37, 72, 0.1);
@@ -552,13 +552,14 @@
   border-color: var(--shell-primary-hover);
 }
 .wt .secondary:hover:not(:disabled) {
-  background: var(--shell-hover);
-  border-color: var(--wt-muted);
+  background: var(--wt-raised-2);
+  border-color: transparent;
 }
 .wt :is(input, select, textarea) {
   color-scheme: inherit;
 }
 .wt .panel {
+  border: 0;
   border-radius: var(--radius);
   overflow: clip;
 }
@@ -570,7 +571,7 @@
 .wt .agent-chat > :is(.conversation-rail, .chat-workspace) {
   background: var(--wt-surface);
   border-radius: var(--radius);
-  border: 1px solid var(--line);
+  border: 0;
 }
 .wt .context-panel {
   background: var(--wt-surface);

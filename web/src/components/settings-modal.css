@@ -86,9 +86,9 @@
   min-width: 0;
 }
 .wt .settings-modal-card {
-  border: 1px solid var(--wt-border);
-  border-radius: 10px;
-  background: var(--wt-bg);
+  border: 0;
+  border-radius: var(--radius-md);
+  background: var(--wt-raised);
   padding: 12px 14px;
   display: grid;
   gap: 10px;
@@ -113,9 +113,9 @@
   display: grid;
   gap: 8px;
   padding: 10px;
-  border: 1px solid var(--wt-border);
-  border-radius: 10px;
-  background: var(--wt-bg);
+  border: 0;
+  border-radius: var(--radius-md);
+  background: var(--wt-raised);
 }
 .wt .settings-providers-head {
   display: flex;
@@ -261,9 +261,9 @@
   min-width: 0;
 }
 .wt .settings-providers-detail {
-  border: 1px solid var(--wt-border);
-  border-radius: 10px;
-  background: var(--wt-bg);
+  border: 0;
+  border-radius: var(--radius-md);
+  background: var(--wt-raised);
   padding: 14px;
   display: grid;
   gap: 12px;

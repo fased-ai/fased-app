@@ -143,7 +143,7 @@
 
 .wt .providers-layout > .provider-editor {
   background: var(--wt-surface);
-  border: 1px solid var(--wt-border);
+  border: 0;
   border-radius: var(--radius);
 }
 
@@ -293,8 +293,8 @@
   gap: 6px;
   padding: 10px 12px;
   border-radius: var(--radius-sm);
-  background: var(--wt-bg);
-  border: 1px solid var(--wt-border);
+  background: var(--wt-raised);
+  border: 0;
 }
 .wt .cli-status-head {
   display: flex;

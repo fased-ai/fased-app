@@ -217,7 +217,7 @@ export function NetworkWorkspace() {
           ))}
           <button
             type="button"
-            className="btn secondary"
+            className="secondary"
             aria-label={t("Refresh")}
             onClick={() => void refresh()}
             disabled={loading}
@@ -259,7 +259,7 @@ export function NetworkWorkspace() {
                     </Badge>
                     <button
                       type="button"
-                      className="btn"
+                      className="primary"
                       disabled={core.mode !== "ready" || pkg.installed}
                       onClick={() => void handleInstallPackage(pkg.id)}
                     >
@@ -267,7 +267,10 @@ export function NetworkWorkspace() {
                     </button>
                   </div>
                 </div>
-                <pre className="network-code">{pkg.payload}</pre>
+                <details className="network-payload-details">
+                  <summary>{t("Details")}</summary>
+                  <pre className="network-code">{pkg.payload}</pre>
+                </details>
               </article>
             ))}
           </div>
@@ -289,7 +292,7 @@ export function NetworkWorkspace() {
             <div className="network-actions-row">
               <button
                 type="button"
-                className="btn"
+                className="primary"
                 disabled={core.mode !== "ready"}
                 onClick={() => void handleToggleSwarm(!swarm.config.enabled)}
               >
@@ -297,7 +300,7 @@ export function NetworkWorkspace() {
               </button>
               <button
                 type="button"
-                className="btn secondary"
+                className="secondary"
                 disabled={core.mode !== "ready"}
                 onClick={() => void handleCopyModeChange("shadow")}
               >
@@ -305,7 +308,7 @@ export function NetworkWorkspace() {
               </button>
               <button
                 type="button"
-                className="btn secondary"
+                className="secondary"
                 disabled={core.mode !== "ready"}
                 onClick={() => void handleCopyModeChange("paper")}
               >
@@ -357,7 +360,7 @@ export function NetworkWorkspace() {
             <div className="network-actions-row">
               <button
                 type="button"
-                className="btn"
+                className="primary"
                 disabled={core.mode !== "ready" || !swarm.config.enabled}
                 onClick={() => void handleBroadcastSignal()}
               >
@@ -476,7 +479,7 @@ export function NetworkWorkspace() {
             <div className="network-actions-row">
               <button
                 type="button"
-                className="btn"
+                className="primary"
                 disabled={core.mode !== "ready"}
                 onClick={() => void handleSubmitCEXPaper()}
               >
@@ -562,7 +565,7 @@ export function NetworkWorkspace() {
             <div className="network-actions-row">
               <button
                 type="button"
-                className="btn"
+                className="primary"
                 disabled={core.mode !== "ready"}
                 onClick={() => void handleSubmitEquitiesPaper()}
               >

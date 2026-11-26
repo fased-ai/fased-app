@@ -1177,13 +1177,13 @@ test("Dashboard drag and resize autosave without a duplicate home rail shortcut"
       navFontSize: style(".shell-top-nav > a").fontSize,
       gridGap: style(".dashboard-grid").gap,
       surface: style(".dashboard-widget").backgroundColor,
-      border: style(".dashboard-widget").borderTopColor,
+      borderWidth: style(".dashboard-widget").borderTopWidth,
       font: style(".shell-header").fontFamily,
     };
   });
   expect(geometry.gridGap).toBe("12px");
   expect(geometry.surface).toBe("rgb(15, 18, 24)");
-  expect(geometry.border).toBe("rgba(255, 255, 255, 0.06)");
+  expect(geometry.borderWidth).toBe("0px");
   if (!isMobile) {
     expect(geometry.headerHeight).toBe(50);
     expect(geometry.navFontSize).toBe("14px");

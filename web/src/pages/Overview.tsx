@@ -689,6 +689,39 @@ export function Overview() {
       {storageError && (
         <p role="status">{t("Layout cannot be saved in this browser.")}</p>
       )}
+      <div className="dashboard-kpi-strip" aria-label={t("Status")}>
+        <div className="dashboard-kpi">
+          <span>{t("Agents")}</span>
+          <strong>
+            {core.mode === "ready" && view
+              ? view.profiles.length
+              : state.profiles.length}
+          </strong>
+        </div>
+        <div className="dashboard-kpi">
+          <span>{t("Tasks")}</span>
+          <strong>
+            {view
+              ? view.tasks.filter((x) => !x.wen && x.state !== "cancelled")
+                  .length
+              : 0}
+          </strong>
+        </div>
+        <div className="dashboard-kpi">
+          <span>{t("Alerts")}</span>
+          <strong>
+            {hasAlertsWidget
+              ? alertUnread
+              : view
+                ? view.notices.filter((n) => !n.read).length
+                : state.notices.filter((n) => !n.read).length}
+          </strong>
+        </div>
+        <div className="dashboard-kpi">
+          <span>{t("Wallets")}</span>
+          <strong>{wallets.view?.record.accounts.length ?? 0}</strong>
+        </div>
+      </div>
       <div className="dashboard-grid" aria-label={t("Dashboard widgets")}>
         {layout.widgets.map((widget, index) => {
           const Icon = icons[widget.id];
