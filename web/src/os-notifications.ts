@@ -1,4 +1,5 @@
 const OS_NOTIFY_PREF_KEY = "fased.os-notifications.enabled.v1";
+export const OS_NOTIFY_PREF_EVENT = "fased:os-notify-pref";
 const deliveredIds = new Set<string>();
 const MAX_DELIVERED_TRACKED = 200;
 
@@ -26,6 +27,9 @@ export function getOSNotificationsEnabled(): boolean {
 export function setOSNotificationsEnabled(enabled: boolean): void {
   try {
     localStorage.setItem(OS_NOTIFY_PREF_KEY, enabled ? "true" : "false");
+    if (typeof window !== "undefined") {
+      window.dispatchEvent(new CustomEvent(OS_NOTIFY_PREF_EVENT));
+    }
   } catch {}
 }
 
