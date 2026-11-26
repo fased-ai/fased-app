@@ -140,7 +140,14 @@ func fetchSourceBytes(ctx context.Context, client *http.Client, override http.Ro
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("User-Agent", "fased-worldintel/1.0")
+	ua := "fased-worldintel/1.0"
+	if parsed, pErr := url.Parse(src.Endpoint); pErr == nil {
+		h := strings.ToLower(parsed.Hostname())
+		if h == "www.sec.gov" || h == "data.sec.gov" {
+			ua = "FasedWorldIntel/1.0 (desktop@fased.local)"
+		}
+	}
+	req.Header.Set("User-Agent", ua)
 	req.Header.Set("Accept", "application/json, application/xml, application/rss+xml, application/atom+xml, text/xml;q=0.9")
 
 	if client == nil {

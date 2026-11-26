@@ -50,8 +50,10 @@ test("World Intel map, prediction arbitrage, chart event pins, Overview widgets,
     exact: true,
   });
   await regionGroup.getByRole("button", { name: /^MENA/ }).click();
+  await regionGroup.getByRole("button", { name: "1.5×", exact: true }).click();
   await page.getByTestId("map-pin-fix-mena-oil").click();
   await expect(page.getByTestId("intel-inspector")).toContainText("Hormuz");
+  await regionGroup.getByRole("button", { name: "1×", exact: true }).click();
   await regionGroup.getByRole("button", { name: /^All/ }).click();
 
   // 2. Switch to Predictions tab and verify Polymarket/Kalshi arbitrage spread renders.
@@ -61,8 +63,9 @@ test("World Intel map, prediction arbitrage, chart event pins, Overview widgets,
   await expect(predList).toContainText("Polymarket 62%");
   await expect(predList).toContainText("Kalshi 48%");
 
-  // 3. Switch to Sources tab, add custom .invalid RSS source -> Sync -> Remove.
+  // 3. Switch to Sources tab, check Fresh SLO pill, add custom .invalid RSS source -> Sync -> Remove.
   await page.getByRole("tab", { name: /^Sources/ }).click();
+  await expect(page.getByTestId("intel-sources-slo")).toContainText("Fresh");
   const srcForm = page.getByRole("form", {
     name: "Custom source",
     exact: true,

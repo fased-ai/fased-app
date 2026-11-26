@@ -36,6 +36,9 @@ const (
 	KindUSGS       = "usgs"
 	KindPolymarket = "polymarket"
 	KindKalshi     = "kalshi"
+	KindWorldBank  = "worldbank"
+	KindConflict   = "conflict"
+	KindSECForm4   = "sec_form4"
 	KindSidecar    = "worldmonitor_sidecar"
 
 	VenuePolymarket = "polymarket"
@@ -78,23 +81,28 @@ var (
 		KindUSGS:       true,
 		KindPolymarket: true,
 		KindKalshi:     true,
+		KindWorldBank:  true,
+		KindConflict:   true,
+		KindSECForm4:   true,
 		KindSidecar:    true,
 	}
 )
 
 // SourceConfig describes a persistent clean-room intelligence or prediction feed source.
 type SourceConfig struct {
-	ID             string `json:"id"`
-	Name           string `json:"name"`
-	Kind           string `json:"kind"`
-	Endpoint       string `json:"endpoint"`
-	Category       string `json:"category"`
-	Region         string `json:"region"`
-	Enabled        bool   `json:"enabled"`
-	AllowLocalhost bool   `json:"allowLocalhost"`
-	BuiltIn        bool   `json:"builtIn"`
-	LastSyncAt     int64  `json:"lastSyncAt,omitempty"`
-	LastError      string `json:"lastError,omitempty"`
+	ID              string `json:"id"`
+	Name            string `json:"name"`
+	Kind            string `json:"kind"`
+	Endpoint        string `json:"endpoint"`
+	Category        string `json:"category"`
+	Region          string `json:"region"`
+	Enabled         bool   `json:"enabled"`
+	AllowLocalhost  bool   `json:"allowLocalhost"`
+	BuiltIn         bool   `json:"builtIn"`
+	LastSyncAt      int64  `json:"lastSyncAt,omitempty"`
+	LastError       string `json:"lastError,omitempty"`
+	FreshnessStatus string `json:"freshnessStatus,omitempty"`
+	AgeSeconds      int64  `json:"ageSeconds,omitempty"`
 }
 
 // SourceInput creates or updates a SourceConfig cleanly.
