@@ -9,7 +9,7 @@
   gap: 4px;
   text-align: left;
   padding: 10px 12px;
-  border: 1px solid var(--line);
+  border: 0;
   border-radius: var(--radius);
   background: var(--wt-surface);
   color: var(--wt-text);
@@ -18,12 +18,12 @@
 
 .wt .hyperliquid-market-btn:hover:not(:disabled) {
   background: var(--wt-raised);
-  border-color: var(--wt-violet);
+  border-color: transparent;
 }
 
 .wt .hyperliquid-market-btn[aria-pressed="true"] {
   background: var(--wt-raised);
-  border-color: var(--wt-cyan);
+  box-shadow: inset 0 0 0 1px var(--wt-accent-border);
 }
 
 .wt .hyperliquid-market-top {

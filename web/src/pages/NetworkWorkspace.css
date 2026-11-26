@@ -12,10 +12,10 @@
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  padding: 8px 12px;
+  padding: 10px 14px;
   background: var(--wt-surface);
-  border: 1px solid var(--wt-border);
-  border-radius: 8px;
+  border: 0;
+  border-radius: var(--radius);
 }
 
 .network-title-group {
@@ -35,7 +35,8 @@
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 6px;
+  gap: 12px;
+  border-bottom: 1px solid var(--wt-border);
 }
 
 .wt button.network-tab-btn {
@@ -44,19 +45,20 @@
   gap: 6px;
   height: auto;
   min-height: 32px;
-  padding: 5px 12px;
+  padding: 6px 2px;
   font-size: 0.8rem;
   font-weight: 600;
-  color: var(--wt-text);
-  background: var(--wt-bg);
-  border: 1px solid var(--wt-border);
-  border-radius: 999px;
+  color: var(--wt-muted);
+  background: transparent;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  border-radius: 0;
   cursor: pointer;
 }
 
 .wt button.network-tab-btn.is-selected {
-  background: var(--wt-raised);
-  border-color: var(--wt-coral);
+  background: transparent;
+  border-bottom-color: var(--wt-coral);
   color: var(--wt-text);
 }
 
@@ -70,11 +72,11 @@
 
 .network-card {
   display: grid;
-  gap: 8px;
-  padding: 10px 12px;
+  gap: 10px;
+  padding: 12px 14px;
   background: var(--wt-surface);
-  border: 1px solid var(--wt-border);
-  border-radius: 8px;
+  border: 0;
+  border-radius: var(--radius);
   min-width: 0;
 }
 
@@ -101,10 +103,10 @@
 .network-row {
   display: grid;
   gap: 6px;
-  padding: 8px 10px;
-  background: var(--wt-bg);
-  border: 1px solid var(--wt-border);
-  border-radius: 6px;
+  padding: 10px 12px;
+  background: var(--wt-raised);
+  border: 0;
+  border-radius: var(--radius-sm);
 }
 
 .network-row-top {
@@ -172,12 +174,19 @@
   font-weight: 600;
 }
 
+.network-payload-details summary {
+  cursor: pointer;
+  font-size: 0.76rem;
+  color: var(--wt-muted);
+  user-select: none;
+}
+
 .network-code {
-  margin: 0;
-  padding: 8px;
-  border-radius: 6px;
-  background: var(--wt-raised);
-  border: 1px solid var(--wt-border);
+  margin: 6px 0 0;
+  padding: 8px 10px;
+  border-radius: var(--radius-xs);
+  background: var(--wt-surface);
+  border: 0;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 0.75rem;
   overflow-x: auto;

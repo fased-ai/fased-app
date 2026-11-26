@@ -12,10 +12,10 @@
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  padding: 8px 12px;
+  padding: 10px 14px;
   background: var(--wt-surface);
-  border: 1px solid var(--wt-border);
-  border-radius: 8px;
+  border: 0;
+  border-radius: var(--radius);
 }
 
 .intel-title-group {
@@ -54,10 +54,10 @@
 .intel-sources-rail {
   display: grid;
   gap: 8px;
-  padding: 10px;
+  padding: 12px;
   background: var(--wt-surface);
-  border: 1px solid var(--wt-border);
-  border-radius: 8px;
+  border: 0;
+  border-radius: var(--radius);
   min-width: 0;
 }
 
@@ -83,9 +83,9 @@
   padding: 5px 8px;
   font-size: 0.76rem;
   color: var(--wt-text);
-  background: var(--wt-bg);
-  border: 1px solid var(--wt-border);
-  border-radius: 6px;
+  background: var(--wt-raised);
+  border: 0;
+  border-radius: var(--radius-xs);
   cursor: pointer;
   text-align: left;
 }
@@ -132,42 +132,70 @@
 .intel-panel {
   display: grid;
   gap: 10px;
-  padding: 12px;
+  padding: 12px 14px;
   background: var(--wt-surface);
-  border: 1px solid var(--wt-border);
-  border-radius: 12px;
+  border: 0;
+  border-radius: var(--radius);
   min-width: 0;
 }
 
-.intel-region-bar,
-.intel-tabs {
+.intel-region-bar {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 6px;
 }
 
-.wt button.intel-filter-pill,
+.intel-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  border-bottom: 1px solid var(--wt-border);
+}
+
+.wt button.intel-filter-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: auto;
+  min-height: 28px;
+  padding: 4px 10px;
+  font-size: 0.76rem;
+  font-weight: 600;
+  color: var(--wt-muted);
+  background: var(--wt-raised);
+  border: 0;
+  border-radius: 999px;
+  cursor: pointer;
+}
+
 .wt button.intel-tab-btn {
   display: inline-flex;
   align-items: center;
   gap: 6px;
   height: auto;
-  min-height: 30px;
-  padding: 4px 10px;
-  font-size: 0.78rem;
+  min-height: 32px;
+  padding: 6px 2px;
+  font-size: 0.8rem;
   font-weight: 600;
-  color: var(--wt-text);
-  background: var(--wt-bg);
-  border: 1px solid var(--wt-border);
-  border-radius: 999px;
+  color: var(--wt-muted);
+  background: transparent;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  border-radius: 0;
   cursor: pointer;
 }
 
-.wt button.intel-filter-pill.is-selected,
+.wt button.intel-filter-pill.is-selected {
+  background: var(--wt-accent-soft);
+  border-color: transparent;
+  color: var(--wt-coral);
+}
+
 .wt button.intel-tab-btn.is-selected {
-  background: var(--wt-raised);
-  border-color: var(--wt-coral);
+  background: transparent;
+  border-bottom-color: var(--wt-coral);
   color: var(--wt-text);
 }
 
@@ -272,18 +300,18 @@
   font-size: 0.76rem;
   color: var(--wt-text);
   background: var(--wt-raised);
-  border: 1px solid var(--wt-border);
-  border-radius: 8px;
+  border: 0;
+  border-radius: var(--radius-sm);
   cursor: pointer;
 }
 
 .intel-inspector {
   display: grid;
   gap: 8px;
-  padding: 10px 12px;
+  padding: 12px 14px;
   background: var(--wt-surface);
-  border: 1px solid var(--wt-border);
-  border-radius: 10px;
+  border: 0;
+  border-radius: var(--radius);
 }
 
 .intel-list {
@@ -298,9 +326,9 @@
   display: grid;
   gap: 6px;
   padding: 10px 12px;
-  background: var(--wt-bg);
-  border: 1px solid var(--wt-border);
-  border-radius: 10px;
+  background: var(--wt-raised);
+  border: 0;
+  border-radius: var(--radius-md);
   min-width: 0;
 }
 
@@ -382,9 +410,9 @@
   min-height: 28px;
   padding: 4px 10px;
   font-size: 0.76rem;
-  border: 1px solid var(--wt-border);
-  border-radius: 8px;
-  background: var(--wt-surface);
+  border: 0;
+  border-radius: var(--radius-xs);
+  background: var(--wt-raised-2);
   color: var(--wt-text);
   text-decoration: none;
 }
@@ -394,8 +422,9 @@
   gap: 6px;
   padding: 10px 12px;
   background: var(--wt-raised);
-  border: 1px solid var(--wt-coral);
-  border-radius: 8px;
+  border: 0;
+  box-shadow: inset 0 0 0 1px var(--wt-accent-border);
+  border-radius: var(--radius-md);
   min-width: 0;
 }
 
@@ -429,9 +458,9 @@
   display: grid;
   gap: 8px;
   padding: 10px;
-  background: var(--wt-bg);
-  border: 1px solid var(--wt-border);
-  border-radius: 10px;
+  background: var(--wt-raised);
+  border: 0;
+  border-radius: var(--radius-md);
 }
 
 .intel-source-inputs {

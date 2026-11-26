@@ -28,24 +28,23 @@
 }
 
 .wt .wen-toggle-pill {
-  border: 1px solid var(--line);
-  background: var(--wt-bg);
-  color: var(--wt-text);
-  border-radius: 8px;
+  border: 0;
+  background: var(--wt-raised);
+  color: var(--wt-muted);
+  border-radius: var(--radius-sm);
   min-height: 30px;
   padding: 5px 10px;
   transition: none;
 }
 
 .wt .wen-toggle-pill:hover:not(:disabled) {
-  background: var(--wt-raised);
-  border-color: var(--wt-muted);
+  background: var(--wt-raised-2);
+  color: var(--wt-text);
 }
 
 .wt .wen-toggle-pill.is-active {
-  border-color: var(--wt-cyan);
-  background: var(--wt-raised);
-  color: var(--wt-text);
+  background: var(--wt-accent-soft);
+  color: var(--wt-coral);
 }
 
 .wt .wen-chart-panel {
@@ -75,9 +74,9 @@
 .wt .wen-bar-track {
   width: 100%;
   height: 112px;
-  border-radius: 6px;
-  background: var(--wt-bg);
-  border: 1px solid var(--line);
+  border-radius: var(--radius-xs);
+  background: var(--wt-raised);
+  border: 0;
   display: flex;
   align-items: flex-end;
   padding: 3px;
@@ -115,15 +114,14 @@
 
 .wt .wen-phase-pill {
   padding: 3px 8px;
-  border-radius: 6px;
+  border-radius: var(--radius-xs);
   font-size: 11px;
-  border: 1px solid var(--line);
-  background: var(--wt-bg);
+  border: 0;
+  background: var(--wt-raised);
   color: var(--wt-muted);
 }
 
 .wt .wen-phase-pill.is-active {
-  border-color: var(--wt-cyan);
-  background: var(--wt-raised);
-  color: var(--wt-text);
+  background: var(--wt-accent-soft);
+  color: var(--wt-coral);
 }

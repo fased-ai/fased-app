@@ -63,16 +63,16 @@
   background: var(--shell-primary-hover);
 }
 .wt .secondary {
-  border: 1px solid var(--line);
+  border: 1px solid transparent;
   background: var(--wt-raised);
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
   color: var(--wt-text);
   min-height: 30px;
   padding: 5px 10px;
 }
 .wt .secondary:hover {
-  border-color: var(--wt-btn-hover-border);
-  background: var(--wt-btn-hover);
+  border-color: transparent;
+  background: var(--wt-raised-2);
 }
 .wt .icon-button {
   border-radius: 8px;
@@ -91,12 +91,15 @@
 .wt :is(input, select, textarea) {
   min-width: 0;
   max-width: 100%;
-  border: 1px solid var(--line);
-  background: var(--wt-bg);
+  border: 1px solid transparent;
+  background: var(--wt-raised);
   color: var(--wt-text);
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
   padding: 7px 9px;
   box-shadow: none;
+}
+.wt :is(input, select, textarea):focus {
+  border-color: var(--wt-border-strong);
 }
 .wt label {
   font-size: 12px;
@@ -237,11 +240,12 @@
   min-width: 0;
 }
 .wt .panel {
-  border: 1px solid var(--line);
-  border-radius: 8px;
+  border: 0;
+  border-radius: var(--radius);
   background: var(--panel);
   box-shadow: none;
   min-width: 0;
+  overflow: clip;
 }
 /* Instance/setup rows share one aligned layout. */
 .wt .workspace-metrics {
@@ -320,14 +324,14 @@
 }
 .wt .info-banner {
   background: var(--wt-surface);
-  border-color: var(--line);
-  border-radius: 8px;
+  border: 0;
+  border-radius: var(--radius-md);
   color: var(--wt-text);
   padding: 10px 12px;
 }
 .wt .panel-heading {
   min-height: 40px;
-  padding: 8px 12px;
+  padding: 8px 14px;
   border-bottom: 1px solid var(--line);
   gap: 10px;
 }
@@ -335,13 +339,35 @@
   margin-right: auto;
 }
 .wt .badge {
-  border: 1px solid var(--line);
-  background: transparent;
-  color: var(--wt-muted);
-  border-radius: 3px;
-  padding: 2px 5px;
-  font-size: 9px;
-  letter-spacing: 0.35px;
+  border: 0;
+  background: var(--wt-raised);
+  color: var(--wt-text-2);
+  border-radius: 999px;
+  padding: 3px 8px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+}
+.wt .badge.ok {
+  background: var(--wt-ok-bg);
+  color: var(--wt-ok);
+}
+.wt .badge.warn {
+  background: var(--wt-warn-bg);
+  color: var(--wt-warn);
+}
+.wt .badge.danger {
+  background: var(--wt-danger-bg);
+  color: var(--wt-danger);
+}
+.wt .badge.info {
+  background: var(--wt-info-bg);
+  color: var(--wt-info);
+}
+.wt .badge.lime,
+.wt .badge.coral {
+  background: var(--wt-accent-soft);
+  color: var(--wt-coral);
 }
 .wt .agent-record-body {
   padding: 12px;
@@ -1494,9 +1520,9 @@
   gap: 8px;
   min-height: 36px;
   padding: 7px 10px;
-  border: 1px solid var(--wt-border);
+  border: 1px solid transparent;
   border-radius: var(--radius-sm);
-  background: var(--wt-bg);
+  background: var(--wt-raised);
   color: var(--wt-text);
   font-size: 13px;
   font-weight: 500;
@@ -1506,8 +1532,8 @@
     border-color 140ms ease;
 }
 .wt .wt-disclosure-btn:hover:not(:disabled) {
-  background: var(--shell-hover);
-  border-color: var(--wt-muted);
+  background: var(--wt-raised-2);
+  border-color: transparent;
 }
 .wt .wt-disclosure-label,
 .wt .wt-disclosure-meta {

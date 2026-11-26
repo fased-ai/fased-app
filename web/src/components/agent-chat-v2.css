@@ -155,9 +155,9 @@
   gap: 6px;
 }
 .v2-tool-call {
-  border: 1px solid var(--wt-border);
-  border-radius: 10px;
-  background: var(--wt-bg);
+  border: 0;
+  border-radius: var(--radius-md);
+  background: var(--wt-raised);
   overflow: hidden;
 }
 .v2-tool-call summary {
@@ -255,9 +255,9 @@
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
 }
 .v2-code-block {
-  border: 1px solid var(--wt-border);
-  border-radius: 10px;
-  background: var(--wt-bg);
+  border: 0;
+  border-radius: var(--radius-md);
+  background: var(--wt-raised);
   overflow: hidden;
 }
 .v2-code-bar {
@@ -282,18 +282,19 @@
   gap: 10px;
 }
 .local-messages article.v2-approval-card {
-  border: 1px solid var(--wt-accent-border);
-  border-radius: 12px;
-  background: var(--wt-bg);
+  border: 0;
+  box-shadow: inset 0 0 0 1px var(--wt-accent-border);
+  border-radius: var(--radius);
+  background: var(--wt-raised);
   padding: 12px 14px;
   display: grid;
   gap: 10px;
 }
 .local-messages article.v2-approval-card.v2-approval-approved {
-  border-color: var(--wt-ok-border);
+  box-shadow: inset 0 0 0 1px var(--wt-ok-border);
 }
 .local-messages article.v2-approval-card.v2-approval-rejected {
-  border-color: var(--wt-border);
+  box-shadow: none;
 }
 .v2-approval-head {
   display: flex;
@@ -395,11 +396,11 @@
   gap: 4px;
   width: fit-content;
   font-size: 11px;
-  padding: 2px 8px;
+  padding: 3px 9px;
   border-radius: 999px;
-  border: 1px solid var(--wt-border);
+  border: 0;
   color: var(--wt-muted);
-  background: var(--wt-surface);
+  background: var(--wt-raised);
 }
 .v2-undo-toast {
   display: flex;
@@ -408,9 +409,10 @@
   gap: 12px;
   margin: 8px 16px 0;
   padding: 8px 12px;
-  border: 1px solid var(--wt-accent-border);
-  border-radius: 10px;
-  background: var(--wt-surface);
+  border: 0;
+  box-shadow: inset 0 0 0 1px var(--wt-accent-border);
+  border-radius: var(--radius-md);
+  background: var(--wt-raised);
   font-size: 12px;
 }
 .v2-undo-actions {
@@ -430,18 +432,19 @@
   gap: 10px;
   margin: 8px 16px 0;
   padding: 6px 12px;
-  border: 1px solid var(--wt-accent-border);
-  border-radius: 10px;
-  background: var(--wt-surface);
+  border: 0;
+  box-shadow: inset 0 0 0 1px var(--wt-accent-border);
+  border-radius: var(--radius-md);
+  background: var(--wt-raised);
   color: var(--wt-text);
   font-size: 12px;
 }
 .wt .v2-summary-banner {
   margin: 8px 16px 0;
   padding: 8px 12px;
-  border: 1px solid var(--wt-border);
-  border-radius: 10px;
-  background: var(--wt-surface);
+  border: 0;
+  border-radius: var(--radius-md);
+  background: var(--wt-raised);
   font-size: 12px;
 }
 .wt .v2-summary-banner summary {
