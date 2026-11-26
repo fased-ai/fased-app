@@ -518,3 +518,18 @@
 .intel-slo-pill[data-slo="error"] {
   color: var(--wt-coral);
 }
+
+.intel-widget-stack {
+  display: grid;
+  gap: 10px;
+}
+
+.intel-empty-cta {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 220px;
+  border-radius: var(--radius);
+  background: var(--wt-surface);
+  border: 1px dashed var(--wt-border);
+}
