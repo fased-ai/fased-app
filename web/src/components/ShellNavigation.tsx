@@ -38,7 +38,7 @@ export const shellPages = [
   { name: "Tasks", path: "agents/tasks", icon: Clock3 },
   { name: "Agents", path: "agents/settings", icon: Bot },
   { name: "Trade", path: "trade", icon: CandlestickChart },
-  { name: "Intel", path: "intel", icon: Globe2 },
+  { name: "News & Intel", path: "intel", icon: Globe2 },
   { name: "Lab", path: "lab", icon: FlaskConical },
   { name: "Memory", path: "agents/memory", icon: BookOpen },
   { name: "News", path: "agents/news", icon: Newspaper },
@@ -132,7 +132,7 @@ export function ShellNavigation() {
           !rail
             ? p.name === "Tasks" || p.name === "Agents"
               ? "shell-overflow-route"
-              : ["Trade", "Intel", "Lab"].includes(p.name)
+              : ["Trade", "News & Intel", "Lab"].includes(p.name)
                 ? "shell-wide-overflow-route"
                 : undefined
             : undefined
@@ -180,7 +180,7 @@ export function ShellNavigation() {
               className={
                 p.name === "Tasks" || p.name === "Agents"
                   ? "shell-top-extra"
-                  : ["Trade", "Intel", "Lab"].includes(p.name)
+                  : ["Trade", "News & Intel", "Lab"].includes(p.name)
                     ? "shell-top-extra shell-top-wide"
                     : undefined
               }

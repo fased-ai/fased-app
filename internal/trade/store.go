@@ -85,6 +85,16 @@ CREATE TABLE IF NOT EXISTS trade_kill(
 	updated_by TEXT NOT NULL DEFAULT 'system',
 	updated_at INTEGER NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS trade_bots(
+	id TEXT PRIMARY KEY,
+	kind TEXT NOT NULL,
+	status TEXT NOT NULL,
+	payload_json TEXT NOT NULL,
+	created_at INTEGER NOT NULL,
+	updated_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_trade_bots_status ON trade_bots (status, updated_at DESC);
 `
 	if _, err := db.ExecContext(ctx, schemaSQL); err != nil {
 		_ = db.Close()

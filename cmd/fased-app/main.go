@@ -173,6 +173,12 @@ func run(args []string, in *os.File, out, errOut io.Writer) error {
 	if len(args) > 0 && args[0] == "agents" {
 		return agentsCommand(args[1:], in, out, errOut)
 	}
+	if len(args) > 0 && args[0] == "wallet" {
+		return walletCommand(args[1:], in, out, errOut)
+	}
+	if len(args) > 0 && args[0] == "signer-daemon" {
+		return signerDaemonCommand(args[1:], out, errOut)
+	}
 	if len(args) > 0 && args[0] == "accounts" {
 		return accountsCommand(args[1:], in, out, errOut)
 	}
@@ -220,6 +226,7 @@ func run(args []string, in *os.File, out, errOut io.Writer) error {
 	requirePassword := flags.Bool("require-password", false, "require explicit owner password instead of instant Local browser entry")
 	installationRoot := flags.String("installation-root", "", "immutable installed application directory")
 	custodyConfig := flags.String("custody-config", "", "root-owned managed fixture identity; never enables real wallets")
+	custodySocket := flags.String("custody-socket", "", "Unix socket path of isolated out-of-process fased-signer daemon")
 	passwordStdin := flags.Bool("password-stdin", false, "read password from stdin instead of a terminal")
 	privateProofStdin := flags.Bool("private-proof-stdin", false, "verify a private Tailscale connection through owner IPC")
 	aiFixture := flags.Bool("ai-fixture", false, "development-only in-process provider fixtures; test credentials only, no live API")
@@ -358,13 +365,13 @@ func run(args []string, in *os.File, out, errOut io.Writer) error {
 			if *custodyConfig != "" || *requireSandbox || *publicOrigin != "" {
 				return errors.New("AI fixture requires a standalone local development core")
 			}
-			return serveAgentFixture(*dir, *listen, *requirePassword, out)
+			return serveAgentFixture(*dir, *listen, *requirePassword, *custodySocket, out)
 		}
 		source := ""
 		if *requireSandbox && *installationRoot != "" && *custodyConfig == "" {
 			source = "local"
 		}
-		return serveInstalledRuntimeWithStage4(*installationRoot, *dir, *listen, *publicOrigin, *researchOrigin, *instanceLocation, *remoteTransport, source, ownerUID, installedProviderFixture, *requirePassword, out, core.TestnetExecutionConfig{
+		return serveInstalledRuntimeWithStage4(*installationRoot, *dir, *listen, *publicOrigin, *researchOrigin, *instanceLocation, *remoteTransport, source, ownerUID, installedProviderFixture, *requirePassword, *custodySocket, out, core.TestnetExecutionConfig{
 			Profile:          *executionProfile,
 			MainnetPolicy:    mainnetPolicy,
 			AgentVaultID:     *agentVaultID,
@@ -554,10 +561,10 @@ func serveInstalledRuntimeWithOptions(installationRoot, dir, listen, publicOrigi
 	return serveInstalledRuntimeWithTransport(installationRoot, dir, listen, publicOrigin, researchOrigin, location, "", source, ownerUID, fixture, requirePassword, out, custodyConfig...)
 }
 func serveInstalledRuntimeWithTransport(installationRoot, dir, listen, publicOrigin, researchOrigin, location, remoteTransport, source string, ownerUID int, fixture, requirePassword bool, out io.Writer, custodyConfig ...string) error {
-	return serveInstalledRuntimeWithStage4(installationRoot, dir, listen, publicOrigin, researchOrigin, location, remoteTransport, source, ownerUID, fixture, requirePassword, out, core.TestnetExecutionConfig{}, custodyConfig...)
+	return serveInstalledRuntimeWithStage4(installationRoot, dir, listen, publicOrigin, researchOrigin, location, remoteTransport, source, ownerUID, fixture, requirePassword, "", out, core.TestnetExecutionConfig{}, custodyConfig...)
 }
 
-func serveInstalledRuntimeWithStage4(installationRoot, dir, listen, publicOrigin, researchOrigin, location, remoteTransport, source string, ownerUID int, fixture, requirePassword bool, out io.Writer, stage4Cfg core.TestnetExecutionConfig, custodyConfig ...string) error {
+func serveInstalledRuntimeWithStage4(installationRoot, dir, listen, publicOrigin, researchOrigin, location, remoteTransport, source string, ownerUID int, fixture, requirePassword bool, custodySocket string, out io.Writer, stage4Cfg core.TestnetExecutionConfig, custodyConfig ...string) error {
 	start := core.Start
 	if fixture {
 		if installationRoot == "" || source != location || (source != "local" && source != "remote") || researchOrigin != "" || len(custodyConfig) > 1 || len(custodyConfig) == 1 && custodyConfig[0] != "" {
@@ -569,6 +576,9 @@ func serveInstalledRuntimeWithStage4(installationRoot, dir, listen, publicOrigin
 	server, err := start(context.Background(), dir, listen, publicOrigin, fasedapp.UI(), custodyConfig...)
 	if err != nil {
 		return err
+	}
+	if strings.TrimSpace(custodySocket) != "" {
+		server.ConfigureCustodySocket(custodySocket)
 	}
 	if err = server.ConfigureConnectionWithTransport(location, remoteTransport, ownerUID); err == nil {
 		server.ConfigureRequirePassword(requirePassword)
@@ -668,10 +678,13 @@ func custodySourceProjection(m custodyinstall.Manifest, c signer.Config, root, d
 	}
 	return m.Location, nil
 }
-func serveAgentFixture(dir, listen string, requirePassword bool, out io.Writer) error {
+func serveAgentFixture(dir, listen string, requirePassword bool, custodySocket string, out io.Writer) error {
 	server, err := core.StartAgentFixture(context.Background(), dir, listen, "", fasedapp.UI())
 	if err != nil {
 		return err
+	}
+	if strings.TrimSpace(custodySocket) != "" {
+		server.ConfigureCustodySocket(custodySocket)
 	}
 	server.ConfigureRequirePassword(requirePassword)
 	return serveStarted(server, out)

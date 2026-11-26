@@ -31,6 +31,7 @@ export {
   Clock3,
   Copy,
   Crosshair,
+  Database,
   Download,
   ExternalLink,
   Eye,

@@ -32,6 +32,7 @@ type Config struct {
 	ExternalKillActive func(ctx context.Context) bool
 	OnAlert            func(ctx context.Context, severity, title, body string)
 	OnApprovalTicket   func(ctx context.Context, ticket OrderTicket)
+	OnPositionOpened   func(ctx context.Context, pos PaperPosition)
 }
 
 // Service coordinates the Multi-Seat Trading Desk, isolated Paper/Shadow engine,
@@ -183,6 +184,7 @@ func (s *Service) UpdateLimits(ctx context.Context, limits RiskLimits) (RiskLimi
 	if err := limits.Validate(); err != nil {
 		return RiskLimits{}, err
 	}
+
 	s.opMu.Lock()
 	defer s.opMu.Unlock()
 	openPos, err := s.store.listPositions(ctx, "OPEN", 10)
@@ -884,6 +886,9 @@ func (s *Service) RunCycle(ctx context.Context, req CycleRequest) (CycleResult, 
 	if ticketStatus == "PENDING_PM" && s.cfg.OnApprovalTicket != nil {
 		s.cfg.OnApprovalTicket(ctx, ticket)
 	}
+	if result.Position != nil && s.cfg.OnPositionOpened != nil {
+		s.cfg.OnPositionOpened(ctx, *result.Position)
+	}
 
 	// Seat 8: Journal (Log every outcome, including kills & shadows)
 	if err := AssertSeatToolAllowed(SeatJournal, "record_journal_entry"); err != nil {
@@ -960,6 +965,13 @@ func (s *Service) ApproveTicket(ctx context.Context, ticketID, actor string) (Pa
 			labRuns = r
 		}
 	}
+
+	var openedPos *PaperPosition
+	defer func() {
+		if openedPos != nil && s.cfg.OnPositionOpened != nil {
+			s.cfg.OnPositionOpened(ctx, *openedPos)
+		}
+	}()
 
 	s.opMu.Lock()
 	defer s.opMu.Unlock()
@@ -1114,6 +1126,7 @@ func (s *Service) ApproveTicket(ctx context.Context, ticketID, actor string) (Pa
 	}
 	_ = s.store.updateJournalOutcomeByTicket(ctx, ticket.ID, "FILLED", 0, 0, 0, ticket.Reason, "", now)
 	s.publish("ticket_approved", fmt.Sprintf("Opened paper position %s (%s %s @ %s)", pos.Symbol, pos.Side, strconv.FormatFloat(pos.Quantity, 'f', -1, 64), formatPriceStr(pos.EntryPrice)), pos)
+	openedPos = &pos
 	return pos, nil
 }
 

@@ -42,10 +42,11 @@ type Health = {
 type Mode =
   "loading" | "prototype" | "unclaimed" | "locked" | "ready" | "error";
 const sessionKey = "fased.core.session.v1";
-class CoreError extends Error {
+export class CoreError extends Error {
   constructor(
     message: string,
     readonly status: number,
+    readonly code?: string,
   ) {
     super(message);
   }
@@ -161,6 +162,7 @@ function useCoreState() {
             ? result.error
             : "Core request failed",
           response.status,
+          typeof result.code === "string" ? result.code : undefined,
         );
       return result as T;
     },

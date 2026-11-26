@@ -341,7 +341,7 @@ func RequestBodyLimit(route string) int64 {
 		return 512 * 1024
 	case strings.HasPrefix(route, "/api/v1/agents/v2/"):
 		return 256 * 1024
-	case route == "/api/v1/mcp" || strings.HasPrefix(route, "/api/v1/mcp/clients") || strings.HasPrefix(route, "/api/v1/decision/") || strings.HasPrefix(route, "/api/v1/market/") || strings.HasPrefix(route, "/api/v1/intel/") || strings.HasPrefix(route, "/api/v1/automation/") || strings.HasPrefix(route, "/api/v1/lab/") || strings.HasPrefix(route, "/api/v1/desk/") || strings.HasPrefix(route, "/api/v1/trade/"):
+	case route == "/api/v1/mcp" || strings.HasPrefix(route, "/api/v1/mcp/clients") || strings.HasPrefix(route, "/api/v1/decision/") || strings.HasPrefix(route, "/api/v1/market/") || strings.HasPrefix(route, "/api/v1/intel/") || strings.HasPrefix(route, "/api/v1/automation/") || strings.HasPrefix(route, "/api/v1/lab/") || strings.HasPrefix(route, "/api/v1/desk/") || strings.HasPrefix(route, "/api/v1/trade/") || strings.HasPrefix(route, "/api/v1/data-plugins") || strings.HasPrefix(route, "/api/v1/wallets"):
 		return 64 * 1024
 	default:
 		return 16 * 1024
@@ -455,6 +455,80 @@ func allowed(method, route string) bool {
 		}
 		return false
 	}
+	if route == "/api/v1/wallets" {
+		return method == http.MethodGet
+	}
+	if route == "/api/v1/wallets/create" || route == "/api/v1/wallets/import" {
+		return method == http.MethodPost
+	}
+	if strings.HasPrefix(route, "/api/v1/trade/bots/") {
+		rel := strings.TrimPrefix(route, "/api/v1/trade/bots/")
+		if strings.Contains(rel, "/") {
+			parts := strings.SplitN(rel, "/", 2)
+			if len(parts) == 2 && validPathSegment(parts[0]) && (parts[1] == "start" || parts[1] == "pause" || parts[1] == "stop") {
+				return method == http.MethodPost
+			}
+			return false
+		}
+		return method == http.MethodDelete && validPathSegment(rel)
+	}
+	if strings.HasPrefix(route, "/api/v1/wallets/") {
+		rel := strings.TrimPrefix(route, "/api/v1/wallets/")
+		switch rel {
+		case "create", "attach", "restore":
+			return method == http.MethodPost
+		}
+		parts := strings.Split(rel, "/")
+		switch len(parts) {
+		case 1:
+			return method == http.MethodDelete && validPathSegment(parts[0])
+		case 2:
+			if !validPathSegment(parts[0]) {
+				return false
+			}
+			switch parts[1] {
+			case "policy":
+				return method == http.MethodGet || method == http.MethodPut
+			case "connections", "rpc":
+				return method == http.MethodPut
+			case "activity":
+				return method == http.MethodGet
+			case "freeze", "balance", "backup", "reviews":
+				return method == http.MethodPost
+			default:
+				return false
+			}
+		case 4:
+			if !validPathSegment(parts[0]) || !validPathSegment(parts[2]) {
+				return false
+			}
+			if parts[1] == "reviews" && (parts[3] == "execute" || parts[3] == "submit-signed") {
+				return method == http.MethodPost
+			}
+			if parts[1] == "ledger" && parts[3] == "reconcile" {
+				return method == http.MethodPost
+			}
+			return false
+		default:
+			return false
+		}
+	}
+	if route == "/api/v1/data-plugins" {
+		return method == http.MethodGet
+	}
+	if route == "/api/v1/data-plugins/custom" {
+		return method == http.MethodPost
+	}
+	if strings.HasPrefix(route, "/api/v1/data-plugins/custom/") {
+		return method == http.MethodDelete && validPathSegment(strings.TrimPrefix(route, "/api/v1/data-plugins/custom/"))
+	}
+	if strings.HasPrefix(route, "/api/v1/data-plugins/") {
+		rel := strings.TrimPrefix(route, "/api/v1/data-plugins/")
+		if strings.HasSuffix(rel, "/test") {
+			return method == http.MethodPost && validPathSegment(strings.TrimSuffix(rel, "/test"))
+		}
+		return method == http.MethodPut && validPathSegment(rel)
+	}
 	switch route {
 	case "/api/v1/health", "/api/v1/auth/state", "/api/v1/signer/status", "/api/v1/installation/claim-code":
 		return method == "GET"
@@ -478,7 +552,7 @@ func allowed(method, route string) bool {
 		return method == "GET"
 	case "/api/v1/setup":
 		return method == "GET" || method == "PUT"
-	case "/api/v1/auth/claim", "/api/v1/auth/login", "/api/v1/auth/logout", "/api/v1/auth/pair":
+	case "/api/v1/auth/claim", "/api/v1/auth/login", "/api/v1/auth/logout", "/api/v1/auth/pair", "/api/v1/auth/password", "/api/v1/auth/step-up":
 		return method == "POST"
 	case "/api/v1/auth/devices", "/api/v1/auth/pair/devices":
 		return method == "GET" || method == "POST"
@@ -540,8 +614,10 @@ func allowed(method, route string) bool {
 		return method == http.MethodPut
 	case "/api/v1/swarm/peers", "/api/v1/swarm/signals":
 		return method == http.MethodGet || method == http.MethodPost
-	case "/api/v1/trade/state":
+	case "/api/v1/trade/state", "/api/v1/trade/accounts":
 		return method == http.MethodGet
+	case "/api/v1/trade/bots":
+		return method == http.MethodGet || method == http.MethodPost
 	case "/api/v1/trade/orders", "/api/v1/trade/evaluate", "/api/v1/trade/kill":
 		return method == http.MethodPost
 	case "/api/v1/trade/policy":

@@ -1,0 +1,34 @@
+[Unit]
+Description=Fased Unified Trading OS Core Application (No Signer Key Access)
+After=network-online.target fased-signer.service
+Requires=fased-signer.service
+
+[Service]
+Type=simple
+User=fased-app
+Group=fased-ipc
+UMask=0077
+StateDirectory=fased-app
+StateDirectoryMode=0700
+EnvironmentFile=-/etc/fased/app.env
+ExecStart=/usr/local/bin/fased-app serve --data-dir /var/lib/fased-app --listen 127.0.0.1:7331 --instance-location remote --require-password --custody-socket /run/fased-signer/app.sock
+Restart=on-failure
+RestartSec=3
+
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+CapabilityBoundingSet=
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+ReadWritePaths=/var/lib/fased-app
+
+[Install]
+WantedBy=multi-user.target

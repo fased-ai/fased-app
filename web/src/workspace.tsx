@@ -30,6 +30,7 @@ export type ProvidersPreset = {
 export type SettingsTab =
   | "general"
   | "providers"
+  | "data"
   | "instance"
   | "notifications"
   | "updates"
@@ -524,7 +525,7 @@ function useWorkspaceState() {
           ["Tasks", "agents/tasks"],
           ["Agents", "agents/settings"],
           ["Trade", "trade"],
-          ["Intel", "intel"],
+          ["News & Intel", "intel"],
           ["Lab", "lab"],
           ["Trading Desk", "lab/desk"],
           ["News", "agents/news"],

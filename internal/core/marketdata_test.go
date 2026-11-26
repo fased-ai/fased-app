@@ -208,6 +208,10 @@ func TestMarketDataHTTPAndAgentMCPIntegration(t *testing.T) {
 		}
 	}
 
+	// Default boot starts with 0 auto-seeded watchlists; SeedDefaultWatchlists works when invoked explicitly.
+	if err := s.marketData.SeedDefaultWatchlists(t.Context()); err != nil {
+		t.Fatalf("SeedDefaultWatchlists: %v", err)
+	}
 	resResp := doV2JSONRequest(t, http.MethodPost, ts.URL+"/api/v1/mcp", ts.URL, token, csrf, `{"jsonrpc":"2.0","id":11,"method":"resources/read","params":{"uri":"fased://market/watchlists"}}`, "application/json")
 	var resOut map[string]any
 	_ = json.NewDecoder(resResp.Body).Decode(&resOut)

@@ -77,7 +77,7 @@ function WorkspaceShell() {
     const labels: Record<string, string> = {
       overview: t("Dashboard"),
       trade: t("Trade"),
-      intel: t("World Intel"),
+      intel: t("News & Intel"),
       lab: t("Quant Lab"),
       network: t("Network"),
       agents: t("Agents"),

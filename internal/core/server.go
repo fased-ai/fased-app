@@ -409,6 +409,9 @@ func (s *Server) startAgentTasks() {
 						if tErr != nil && !errors.Is(tErr, context.Canceled) {
 							coreLogger.Warn("trade evaluator sweep held", "err", sanitizeDiagValue(tErr.Error(), 200))
 						}
+						botCtx, stopBots := context.WithTimeout(ctx, 15*time.Second)
+						s.Store.evaluateTradeBots(botCtx, ts)
+						stopBots()
 					}
 				}
 			}
@@ -538,6 +541,9 @@ func (s *Server) startAgentTasks() {
 				}
 			}
 			runSync := func() {
+				if s.Store.enabledWorldIntelPluginCount() == 0 {
+					return
+				}
 				svc, err := s.Store.worldIntelService()
 				if err != nil {
 					coreLogger.Warn("worldintel background service held", "err", sanitizeDiagValue(err.Error(), 200))
@@ -822,4 +828,13 @@ func (s *Server) ConfigureInstallationSource(source string) error {
 // auto-entry back to explicit launch links or owner passwords.
 func (s *Server) ConfigureRequirePassword(v bool) {
 	s.HTTP.Handler.(*HTTPHandler).SetRequirePassword(v)
+}
+
+// ConfigureCustodySocket routes all custody operations through an external isolated
+// fased-signer daemon over Unix socket so core never holds or opens signer-vault/.
+func (s *Server) ConfigureCustodySocket(sockPath string) {
+	if s == nil || s.Store == nil {
+		return
+	}
+	s.Store.ConfigureCustodySocket(sockPath)
 }

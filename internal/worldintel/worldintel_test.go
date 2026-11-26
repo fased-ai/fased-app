@@ -189,6 +189,14 @@ func TestServiceFixtureModeAndMockSyncAndBus(t *testing.T) {
 	ch, unsub := liveSvc.Subscribe(StreamFilter{Region: RegionAPAC})
 	defer unsub()
 
+	enabled := true
+	gdeltSrc := DefaultSources()[0]
+	if _, err := liveSvc.SaveSource(context.Background(), SourceInput{
+		ID: gdeltSrc.ID, Name: gdeltSrc.Name, Kind: gdeltSrc.Kind, Endpoint: gdeltSrc.Endpoint, Category: gdeltSrc.Category, Region: gdeltSrc.Region, Enabled: &enabled,
+	}); err != nil {
+		t.Fatalf("enable gdelt-global: %v", err)
+	}
+
 	liveSync, err := liveSvc.Sync(context.Background(), "gdelt-global")
 	if err != nil || liveSync.EventCount != 1 {
 		t.Fatalf("live mock gdelt sync failed: %+v err=%v", liveSync, err)
@@ -274,6 +282,12 @@ func TestWorldBankConflictAndSECForm4ParsersAndFreshnessSLO(t *testing.T) {
 	}
 	defer svc.Close()
 
+	wbEnabled := true
+	if _, err := svc.SaveSource(context.Background(), SourceInput{
+		ID: wbSrc.ID, Name: wbSrc.Name, Kind: wbSrc.Kind, Endpoint: wbSrc.Endpoint, Category: wbSrc.Category, Region: wbSrc.Region, Enabled: &wbEnabled,
+	}); err != nil {
+		t.Fatalf("enable worldbank-gdp: %v", err)
+	}
 	if _, err := svc.Sync(context.Background(), "worldbank-gdp"); err != nil {
 		t.Fatalf("Sync worldbank-gdp: %v", err)
 	}

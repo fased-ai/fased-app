@@ -17,6 +17,21 @@ const (
 	ModeBot      = "bot"
 	ModeAIAgent  = "ai_agent"
 
+	ExecutionModePaper = "paper"
+	ExecutionModeLive  = "live"
+
+	SourceTrade   = "trade"
+	SourceDesk    = "desk"
+	SourceBot     = "bot"
+	SourceAIAgent = "ai_agent"
+
+	BotKindFasedScript = "fasedscript"
+	BotKindAIAgent     = "ai_agent"
+
+	BotStatusRunning = "running"
+	BotStatusPaused  = "paused"
+	BotStatusStopped = "stopped"
+
 	StrategyMarket      = "market"
 	StrategyLimit       = "limit"
 	StrategyBracket     = "bracket"
@@ -59,7 +74,7 @@ var (
 	}
 )
 
-// OrderRequest defines a unified paper/simulated multi-strategy order request.
+// OrderRequest defines a unified multi-strategy order request across paper and gated live accounts.
 type OrderRequest struct {
 	Venue           string  `json:"venue"`
 	Symbol          string  `json:"symbol"`
@@ -68,6 +83,11 @@ type OrderRequest struct {
 	Strategy        string  `json:"strategy,omitempty"`
 	Side            string  `json:"side"`
 	Quantity        float64 `json:"quantity"`
+	AccountID       string  `json:"accountId,omitempty"`
+	ExecutionMode   string  `json:"executionMode,omitempty"`
+	Source          string  `json:"source,omitempty"`
+	BotID           string  `json:"botId,omitempty"`
+	AgentID         string  `json:"agentId,omitempty"`
 	EntryPrice      float64 `json:"entryPrice,omitempty"`
 	StopPrice       float64 `json:"stopPrice,omitempty"`
 	TargetPrice     float64 `json:"targetPrice,omitempty"`
@@ -91,6 +111,13 @@ type OrderPlan struct {
 	Side              string  `json:"side"`
 	Status            string  `json:"status"`
 	Simulated         bool    `json:"simulated"`
+	AccountID         string  `json:"accountId,omitempty"`
+	ExecutionMode     string  `json:"executionMode,omitempty"`
+	Source            string  `json:"source,omitempty"`
+	BotID             string  `json:"botId,omitempty"`
+	AgentID           string  `json:"agentId,omitempty"`
+	VenueOrderID      string  `json:"venueOrderId,omitempty"`
+	TxSignature       string  `json:"txSignature,omitempty"`
 	Quantity          float64 `json:"quantity"`
 	FilledQty         float64 `json:"filledQty"`
 	AvgFillPrice      float64 `json:"avgFillPrice,omitempty"`
@@ -229,18 +256,43 @@ func NormalizeOrderRequest(req OrderRequest) (OrderRequest, error) {
 		return OrderRequest{}, errors.New("targetPrice must be positive and finite")
 	}
 
+	accountID := strings.TrimSpace(req.AccountID)
+	if accountID == "" {
+		accountID = ExecutionModePaper
+	}
+	execMode := strings.ToLower(strings.TrimSpace(req.ExecutionMode))
+	if execMode == "" {
+		if accountID == ExecutionModePaper {
+			execMode = ExecutionModePaper
+		} else {
+			execMode = ExecutionModeLive
+		}
+	}
+	if execMode != ExecutionModePaper && execMode != ExecutionModeLive {
+		return OrderRequest{}, fmt.Errorf("unsupported executionMode %q", req.ExecutionMode)
+	}
+	source := strings.ToLower(strings.TrimSpace(req.Source))
+	if source == "" {
+		source = SourceTrade
+	}
+
 	out := OrderRequest{
-		Venue:       venue,
-		Symbol:      symbol,
-		Interval:    iv,
-		Mode:        mode,
-		Strategy:    strategy,
-		Side:        side,
-		Quantity:    req.Quantity,
-		EntryPrice:  req.EntryPrice,
-		StopPrice:   req.StopPrice,
-		TargetPrice: req.TargetPrice,
-		AgentNote:   strings.TrimSpace(req.AgentNote),
+		Venue:         venue,
+		Symbol:        symbol,
+		Interval:      iv,
+		Mode:          mode,
+		Strategy:      strategy,
+		Side:          side,
+		Quantity:      req.Quantity,
+		AccountID:     accountID,
+		ExecutionMode: execMode,
+		Source:        source,
+		BotID:         strings.TrimSpace(req.BotID),
+		AgentID:       strings.TrimSpace(req.AgentID),
+		EntryPrice:    req.EntryPrice,
+		StopPrice:     req.StopPrice,
+		TargetPrice:   req.TargetPrice,
+		AgentNote:     strings.TrimSpace(req.AgentNote),
 	}
 	if len(out.AgentNote) > 240 {
 		out.AgentNote = out.AgentNote[:240]

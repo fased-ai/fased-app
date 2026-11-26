@@ -16,7 +16,7 @@ import (
 )
 
 // DefaultSources returns Fased's built-in clean-room intelligence and prediction market feeds.
-// The optional local WorldMonitor sidecar starts disabled until opted in.
+// Every built-in source starts disabled (0-by-default) until explicitly enabled by the user.
 func DefaultSources() []SourceConfig {
 	return []SourceConfig{
 		{
@@ -26,7 +26,7 @@ func DefaultSources() []SourceConfig {
 			Endpoint: "https://api.gdeltproject.org/api/v2/doc/doc?query=crypto%20OR%20central%20bank%20OR%20oil%20OR%20tariff&mode=ArtList&maxrecords=30&format=json",
 			Category: CategoryGeopolitics,
 			Region:   RegionGlobal,
-			Enabled:  true,
+			Enabled:  false,
 			BuiltIn:  true,
 		},
 		{
@@ -36,7 +36,7 @@ func DefaultSources() []SourceConfig {
 			Endpoint: "https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/4.5_day.geojson",
 			Category: CategorySeismic,
 			Region:   RegionGlobal,
-			Enabled:  true,
+			Enabled:  false,
 			BuiltIn:  true,
 		},
 		{
@@ -46,7 +46,7 @@ func DefaultSources() []SourceConfig {
 			Endpoint: "https://gamma-api.polymarket.com/markets?active=true&closed=false&order=volume24hr&ascending=false&limit=40",
 			Category: CategoryPrediction,
 			Region:   RegionGlobal,
-			Enabled:  true,
+			Enabled:  false,
 			BuiltIn:  true,
 		},
 		{
@@ -56,7 +56,7 @@ func DefaultSources() []SourceConfig {
 			Endpoint: "https://api.elections.kalshi.com/trade-api/v2/markets?status=open&limit=40",
 			Category: CategoryPrediction,
 			Region:   RegionNA,
-			Enabled:  true,
+			Enabled:  false,
 			BuiltIn:  true,
 		},
 		{
@@ -66,7 +66,7 @@ func DefaultSources() []SourceConfig {
 			Endpoint: "https://www.federalreserve.gov/feeds/press_all.xml",
 			Category: CategoryMacro,
 			Region:   RegionNA,
-			Enabled:  true,
+			Enabled:  false,
 			BuiltIn:  true,
 		},
 		{
@@ -76,7 +76,7 @@ func DefaultSources() []SourceConfig {
 			Endpoint: "https://www.ecb.europa.eu/rss/press.html",
 			Category: CategoryMacro,
 			Region:   RegionEU,
-			Enabled:  true,
+			Enabled:  false,
 			BuiltIn:  true,
 		},
 		{
@@ -97,7 +97,7 @@ func DefaultSources() []SourceConfig {
 			Endpoint: "https://api.worldbank.org/v2/country/USA;CHN;EMU/indicator/FP.CPI.TOTL.ZG?format=json&per_page=15",
 			Category: CategoryMacro,
 			Region:   RegionGlobal,
-			Enabled:  true,
+			Enabled:  false,
 			BuiltIn:  true,
 		},
 		{
@@ -107,7 +107,7 @@ func DefaultSources() []SourceConfig {
 			Endpoint: "https://ucdpapi.pcr.uu.se/api/gedevents/24.1?pagesize=25",
 			Category: CategoryConflict,
 			Region:   RegionGlobal,
-			Enabled:  true,
+			Enabled:  false,
 			BuiltIn:  true,
 		},
 		{

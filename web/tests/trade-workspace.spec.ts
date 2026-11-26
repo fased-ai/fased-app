@@ -10,7 +10,7 @@ import {
 
 installCoreFixture();
 
-test("Trade workspace renders 1x1..4x4 Lightweight Charts, Orderflow tabs, persistent Watchlist, Dark/Light AA contrast, and zero external calls", async ({
+test("Trade workspace renders 1x1..2x2 Lightweight Charts, DOM & Tape dock, Unified Ticket, persistent Watchlist, Dark/Light AA contrast, and zero external calls", async ({
   page,
   isMobile,
 }) => {
@@ -40,7 +40,7 @@ test("Trade workspace renders 1x1..4x4 Lightweight Charts, Orderflow tabs, persi
   await expect(
     page.getByRole("heading", { name: "Trade", exact: true, level: 1 }),
   ).toBeVisible();
-  await expect(page.getByText("Paper", { exact: true })).toBeVisible();
+  await expect(page.getByText("Paper", { exact: true }).first()).toBeVisible();
 
   const grid = page.getByTestId("trade-chart-grid");
   await expect(grid.locator("article.trade-tile")).toHaveCount(4);
@@ -50,19 +50,23 @@ test("Trade workspace renders 1x1..4x4 Lightweight Charts, Orderflow tabs, persi
     page.getByTestId("chart-tile-tile-1").locator("canvas").first(),
   ).toBeVisible();
 
-  // Switch grid 2x2 -> 4x4 (16 tiles) -> 1x1 (1 tile).
-  await page.getByRole("button", { name: "4×4", exact: true }).click();
-  await expect(grid.locator("article.trade-tile")).toHaveCount(16);
+  // Switch grid 2x2 -> 1x2 (2 tiles) -> 1x1 (1 tile).
+  await page.getByRole("button", { name: "1×2", exact: true }).click();
+  await expect(grid.locator("article.trade-tile")).toHaveCount(2);
   await page.getByRole("button", { name: "1×1", exact: true }).click();
   await expect(grid.locator("article.trade-tile")).toHaveCount(1);
 
-  // Switch chart style to Renko on tile-1.
+  // Switch chart style to Renko on tile-1 via Style popover.
   const tile1 = page.getByTestId("chart-tile-tile-1");
-  await tile1.getByLabel("Style", { exact: true }).selectOption("renko");
+  await tile1.getByRole("button", { name: "Style", exact: true }).click();
+  await tile1.getByRole("button", { name: "Renko", exact: true }).click();
   await expect(tile1.locator(".trade-ohlc-strip")).toContainText("fixture");
 
-  // Place a horizontal line & clear drawings.
-  await tile1.getByLabel("Drawing tool", { exact: true }).selectOption("hline");
+  // Place a horizontal line & clear drawings via Drawing tool popover.
+  await tile1
+    .getByRole("button", { name: "Drawing tool", exact: true })
+    .click();
+  await tile1.getByRole("button", { name: "H-Line", exact: true }).click();
   const chartHost = tile1.locator(".trade-chart-host");
   await chartHost.scrollIntoViewIfNeeded();
   await chartHost.click({ position: { x: 90, y: 70 } });
@@ -74,70 +78,54 @@ test("Trade workspace renders 1x1..4x4 Lightweight Charts, Orderflow tabs, persi
     "overlays",
   );
 
-  // Switch Orderflow tabs (Footprint canvas -> DOM -> Tape -> Intel).
-  const orderflow = page.getByRole("complementary", {
+  // Select FasedScript overlay on tile-1 via Indicator script popover.
+  await tile1
+    .getByRole("button", { name: "Indicator script", exact: true })
+    .click();
+  await tile1
+    .locator(".trade-tile-popover button")
+    .filter({ hasText: /EMA/i })
+    .first()
+    .click();
+  await expect(
+    tile1.getByRole("button", { name: "Indicator script", exact: true }),
+  ).toHaveAttribute("data-script-id", "ema-rsi-trend");
+
+  // Bottom dock tabs: DOM & Tape (Footprint -> DOM -> Tape -> Intel).
+  const bottomDock = page.getByTestId("trade-bottom-dock");
+  await bottomDock.getByRole("tab", { name: "DOM & Tape" }).click();
+  const orderflow = bottomDock.getByRole("complementary", {
     name: "Orderflow",
     exact: true,
   });
-  await expect(
-    orderflow.getByRole("img", {
-      name: "Orderflow footprint canvas",
-      exact: true,
-    }),
-  ).toBeVisible();
-  await expect(orderflow).toContainText("VPOC");
-
+  await expect(orderflow).toBeVisible();
   await orderflow.getByRole("tab", { name: "DOM", exact: true }).click();
   await expect(orderflow).toContainText("Spread:");
-
   await orderflow.getByRole("tab", { name: "Tape", exact: true }).click();
   await expect(orderflow.locator(".trade-tape-row").first()).toBeVisible();
 
-  await orderflow.getByRole("tab", { name: "Intel", exact: true }).click();
-  await expect(orderflow).toContainText("CPIAUCSL");
-  await expect(orderflow).toContainText("10-Q");
-
-  // Select FasedScript overlay on tile-1 and verify unified Desk dock tab in OrderflowPane.
-  await tile1
-    .getByLabel("Indicator script", { exact: true })
-    .selectOption("ema-rsi-trend");
-  await orderflow.getByRole("tab", { name: "Desk", exact: true }).click();
-  const deskDock = orderflow.getByTestId("trade-desk-dock");
-  await expect(deskDock).toBeVisible();
-  await expect(deskDock).toContainText("Active");
-  await deskDock
-    .getByRole("button", { name: "Run 8-Seat Cycle", exact: true })
-    .click();
-  await expect(deskDock).toContainText("$100,000.00");
-
-  // Unified Execution Ticket: submit paper Bracket order and exercise Kill Switch.
-  await orderflow.getByRole("tab", { name: "Ticket", exact: true }).click();
-  const ticketPane = orderflow.getByTestId("trade-ticket-pane");
+  // Unified Execution Ticket (right panel): submit paper Bracket order and verify Open Orders.
+  const ticketPane = page.getByTestId("trade-ticket-pane");
   await expect(ticketPane).toBeVisible();
-  await ticketPane
-    .getByLabel("Strategy", { exact: true })
-    .selectOption("bracket");
+  await ticketPane.getByRole("button", { name: "Bracket" }).click();
   await ticketPane.getByLabel("Entry price", { exact: true }).fill("100");
   await ticketPane.getByLabel("Stop price", { exact: true }).fill("95");
   await ticketPane.getByLabel("Target price", { exact: true }).fill("115");
-  await ticketPane
-    .getByRole("button", { name: "Submit paper order", exact: true })
-    .click();
-  const bottomDock = page.getByTestId("trade-bottom-dock");
-  await expect(bottomDock).toContainText("BRACKET BUY");
-  await expect(bottomDock).toContainText("Open plans: 1");
+  await ticketPane.locator('button[type="submit"]').click();
 
-  await ticketPane
-    .getByRole("button", { name: "Kill switch", exact: true })
-    .click();
+  await bottomDock.getByRole("tab", { name: /Open Orders/ }).click();
+  await expect(bottomDock).toContainText("BRACKET");
+
+  // Exercise Kill switch from toolbar.
+  await page.getByRole("button", { name: "Kill switch", exact: true }).click();
   await expect(
-    ticketPane.getByRole("button", { name: "Clear kill switch", exact: true }),
+    page.getByRole("button", { name: "Clear kill switch", exact: true }),
   ).toBeVisible();
-  await ticketPane
+  await page
     .getByRole("button", { name: "Clear kill switch", exact: true })
     .click();
   await expect(
-    ticketPane.getByRole("button", { name: "Kill switch", exact: true }),
+    page.getByRole("button", { name: "Kill switch", exact: true }),
   ).toBeVisible();
 
   // Persistent Watchlist add -> reload -> click picks symbol into active tile.
@@ -159,7 +147,10 @@ test("Trade workspace renders 1x1..4x4 Lightweight Charts, Orderflow tabs, persi
     .getByRole("complementary", { name: "Watchlist", exact: true })
     .locator("button.trade-watchlist-pick", { hasText: "DOGE" })
     .click();
-  await expect(tile1.getByLabel("Symbol", { exact: true })).toHaveValue("DOGE");
+  await expect(tile1.locator("button.trade-symbol-pill")).toHaveAttribute(
+    "data-symbol",
+    "DOGE",
+  );
 
   // Dark + Light WCAG AA contrast & zero horizontal overflow.
   for (const theme of ["dark", "light"] as const) {

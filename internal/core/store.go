@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/fased-ai/fased-app/internal/automation"
+	"github.com/fased-ai/fased-app/internal/custody"
 	"github.com/fased-ai/fased-app/internal/decision"
 	"github.com/fased-ai/fased-app/internal/desk"
 	"github.com/fased-ai/fased-app/internal/marketdata"
@@ -83,6 +84,14 @@ type Store struct {
 	deskSvc                       *desk.Service
 	tradeMu                       sync.Mutex
 	tradeSvc                      *trade.Service
+	pluginsMu                     sync.Mutex
+	dataPlugins                   *dataPluginsDoc
+	enforceDataPlugins            bool
+	custodyMu                     sync.Mutex
+	custodySvc                    *custody.Service
+	custodySock                   *custody.SocketServer
+	custodySocketPath             string
+	custodyClient                 *custody.SocketClient
 	dir                           string
 	instanceID                    string
 	pauseFault                    func(string) error // Test-only interruption injection, never configuration or IPC.
@@ -499,8 +508,26 @@ func (s *Store) Close() error {
 	if tr != nil {
 		trErr = tr.Close()
 	}
+	s.custodyMu.Lock()
+	cSvc := s.custodySvc
+	cSock := s.custodySock
+	cClient := s.custodyClient
+	s.custodySvc = nil
+	s.custodySock = nil
+	s.custodyClient = nil
+	s.custodyMu.Unlock()
+	var cErr error
+	if cClient != nil {
+		_ = cClient.Close()
+	}
+	if cSock != nil {
+		_ = cSock.Close(context.Background())
+	}
+	if cSvc != nil {
+		cErr = cSvc.Close()
+	}
 	hlErr := s.clearHyperliquidRuntime()
-	return errors.Join(v2Err, mdErr, decErr, mcpCErr, wiErr, autoErr, qlErr, dkErr, trErr, hlErr, s.db.Close())
+	return errors.Join(v2Err, mdErr, decErr, mcpCErr, wiErr, autoErr, qlErr, dkErr, trErr, cErr, hlErr, s.db.Close())
 }
 func randomToken() (string, error) {
 	b := make([]byte, 32)

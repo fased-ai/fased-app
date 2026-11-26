@@ -17,6 +17,7 @@ import (
 	"github.com/fased-ai/fased-app/internal/httpapi"
 	"github.com/fased-ai/fased-app/internal/marketdata"
 	"github.com/fased-ai/fased-app/internal/quantlab"
+	"github.com/fased-ai/fased-app/internal/trade"
 	"github.com/fased-ai/fased-app/internal/worldintel"
 )
 
@@ -94,6 +95,44 @@ func (s *Store) deskService() (*desk.Service, error) {
 			}
 			st, sErr := autoSvc.GetState(ctx)
 			return sErr == nil && st.KillSwitchActive
+		},
+		OnPositionOpened: func(ctx context.Context, pos desk.PaperPosition) {
+			ts, tErr := s.tradeService()
+			if tErr != nil || ts == nil {
+				return
+			}
+			side := trade.SideBuy
+			if strings.EqualFold(pos.Side, "short") || strings.EqualFold(pos.Side, "sell") {
+				side = trade.SideSell
+			}
+			strategy := trade.StrategyMarket
+			if pos.StopPrice > 0 && pos.TargetPrice > 0 {
+				strategy = trade.StrategyBracket
+			}
+			_, _ = ts.RecordExternalPlan(ctx, trade.OrderPlan{
+				ID:            "desk-" + pos.ID,
+				Venue:         pos.Venue,
+				Symbol:        pos.Symbol,
+				Interval:      "1h",
+				Mode:          trade.ModeAIAgent,
+				Strategy:      strategy,
+				Side:          side,
+				Status:        trade.StatusActive,
+				Simulated:     true,
+				AccountID:     trade.ExecutionModePaper,
+				ExecutionMode: trade.ExecutionModePaper,
+				Source:        trade.SourceDesk,
+				Quantity:      pos.Quantity,
+				FilledQty:     pos.Quantity,
+				AvgFillPrice:  pos.EntryPrice,
+				EntryPrice:    pos.EntryPrice,
+				StopPrice:     pos.StopPrice,
+				TargetPrice:   pos.TargetPrice,
+				MarkPrice:     pos.MarkPrice,
+				AgentNote:     "Desk position " + pos.ID,
+				CreatedAt:     pos.OpenedAt / 1000,
+				UpdatedAt:     pos.OpenedAt / 1000,
+			})
 		},
 		OnAlert: func(ctx context.Context, severity, title, body string) {
 			autoSvc, aErr := s.automationService()

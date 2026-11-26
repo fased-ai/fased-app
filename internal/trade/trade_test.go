@@ -225,3 +225,111 @@ func TestGlobalKillSwitchHaltsActivePlansAndBlocksOrders(t *testing.T) {
 		t.Fatalf("expected ErrKillSwitchActive, got %v", err)
 	}
 }
+
+func TestLiveExecutionRoutingAndPersistentBots(t *testing.T) {
+	candles := makeTestCandles(100, []float64{100, 102, 105, 108})
+	// 1. Live order without LiveExecutor refuses explicitly (no fake fill).
+	noLiveSvc, err := NewService(Config{
+		DataDir: t.TempDir(),
+		MarketReader: func(_ context.Context, _, _, _ string, _ int) ([]marketdata.Candle, error) {
+			return candles, nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewService(noLive): %v", err)
+	}
+	t.Cleanup(func() { _ = noLiveSvc.Close() })
+	if _, err := noLiveSvc.SubmitOrder(t.Context(), OrderRequest{
+		Venue:         marketdata.VenueHyperliquid,
+		Symbol:        "BTC",
+		Side:          SideBuy,
+		Quantity:      0.5,
+		AccountID:     "plugin:hyperliquid",
+		ExecutionMode: ExecutionModeLive,
+	}); err == nil {
+		t.Fatalf("expected error when live router is unconfigured")
+	}
+
+	// 2. Live order with LiveExecutor + FasedScript bot evaluation & kill pause.
+	evalCalls := 0
+	svc, err := NewService(Config{
+		DataDir: t.TempDir(),
+		MarketReader: func(_ context.Context, _, _, _ string, _ int) ([]marketdata.Candle, error) {
+			return candles, nil
+		},
+		LiveExecutor: func(_ context.Context, req OrderRequest, refPrice float64) (LiveExecReceipt, error) {
+			return LiveExecReceipt{
+				VenueOrderID: "hl-ord-42",
+				FilledPrice:  refPrice,
+				Immediate:    true,
+			}, nil
+		},
+		ScriptEvaluator: func(_ context.Context, bot TradeBot, _ []marketdata.Candle) (string, string, string, error) {
+			evalCalls++
+			return "enter_long", SideBuy, "fasedscript trigger " + bot.ScriptID, nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewService(live): %v", err)
+	}
+	t.Cleanup(func() { _ = svc.Close() })
+
+	livePlan, err := svc.SubmitOrder(t.Context(), OrderRequest{
+		Venue:         marketdata.VenueHyperliquid,
+		Symbol:        "BTC",
+		Side:          SideBuy,
+		Quantity:      0.25,
+		AccountID:     "plugin:hyperliquid",
+		ExecutionMode: ExecutionModeLive,
+	})
+	if err != nil || livePlan.Simulated || livePlan.VenueOrderID != "hl-ord-42" || livePlan.ExecutionMode != ExecutionModeLive {
+		t.Fatalf("unexpected live plan: %+v err=%v", livePlan, err)
+	}
+
+	bot, err := svc.CreateBot(t.Context(), CreateBotRequest{
+		Name:           "Trend Runner",
+		Kind:           BotKindFasedScript,
+		AccountID:      "paper",
+		Venue:          marketdata.VenueHyperliquid,
+		Symbol:         "SOL",
+		Interval:       "1h",
+		ScriptID:       "ema-cross",
+		MaxNotionalUSD: 200,
+	})
+	if err != nil || bot.Status != BotStatusPaused {
+		t.Fatalf("CreateBot failed: %+v err=%v", bot, err)
+	}
+	started, err := svc.SetBotStatus(t.Context(), bot.ID, "start")
+	if err != nil || started.Status != BotStatusRunning {
+		t.Fatalf("SetBotStatus(start) failed: %+v err=%v", started, err)
+	}
+	sum1, err := svc.EvaluateBots(t.Context())
+	if err != nil || sum1.Evaluated != 1 || sum1.Submitted != 1 {
+		t.Fatalf("EvaluateBots first bar failed: %+v err=%v", sum1, err)
+	}
+	// Re-evaluating the same bar must not duplicate the order.
+	sum2, err := svc.EvaluateBots(t.Context())
+	if err != nil || sum2.Submitted != 0 {
+		t.Fatalf("EvaluateBots same-bar dedupe failed: %+v err=%v", sum2, err)
+	}
+	if evalCalls != 1 {
+		t.Fatalf("expected 1 eval call after bar dedupe, got %d", evalCalls)
+	}
+	snap, _ := svc.GetSnapshot(t.Context())
+	foundBotOrder := false
+	for _, p := range snap.Plans {
+		if p.BotID == bot.ID && p.Source == SourceBot && p.Mode == ModeBot {
+			foundBotOrder = true
+		}
+	}
+	if !foundBotOrder {
+		t.Fatalf("expected bot order plan in trade snapshot, got %+v", snap.Plans)
+	}
+
+	// Kill switch must pause running bots cleanly.
+	_, _ = svc.SetKillSwitch(t.Context(), true, "risk stop", "owner")
+	sumKill, err := svc.EvaluateBots(t.Context())
+	if err != nil || !sumKill.Halted || sumKill.Paused != 1 {
+		t.Fatalf("expected kill switch to pause running bot, got %+v err=%v", sumKill, err)
+	}
+}

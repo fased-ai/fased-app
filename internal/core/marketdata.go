@@ -92,16 +92,34 @@ func (h *HTTPHandler) marketDataAPI(w http.ResponseWriter, r *http.Request, toke
 			writeError(w, 405, "method not allowed")
 			return
 		}
-		items, err := svc.ListInstruments(ctx, q.Get("venue"))
+		venueFilter := q.Get("venue")
+		if venueFilter != "" && !h.store.isMarketVenueEnabled(venueFilter) {
+			writeJSON(w, 200, map[string]any{"instruments": []marketdata.Instrument{}, "count": 0, "disabled": true})
+			return
+		}
+		items, err := svc.ListInstruments(ctx, venueFilter)
 		if err != nil {
 			writeError(w, 400, err.Error())
 			return
+		}
+		if venueFilter == "" && (!h.store.providerFixture || h.store.enforceDataPlugins) {
+			filtered := make([]marketdata.Instrument, 0, len(items))
+			for _, inst := range items {
+				if h.store.isMarketVenueEnabled(inst.Venue) {
+					filtered = append(filtered, inst)
+				}
+			}
+			items = filtered
 		}
 		writeJSON(w, 200, map[string]any{"instruments": items, "count": len(items)})
 
 	case rel == "candles":
 		if r.Method != http.MethodGet {
 			writeError(w, 405, "method not allowed")
+			return
+		}
+		if !h.store.isMarketVenueEnabled(q.Get("venue")) {
+			writeError(w, http.StatusPreconditionFailed, "data source disabled; enable in Settings -> Data & Feeds")
 			return
 		}
 		limit, err := queryPositiveInt(q.Get("limit"), 200, 2000)
@@ -165,6 +183,10 @@ func (h *HTTPHandler) marketDataAPI(w http.ResponseWriter, r *http.Request, toke
 			writeError(w, 405, "method not allowed")
 			return
 		}
+		if !h.store.isMarketVenueEnabled(q.Get("venue")) {
+			writeError(w, http.StatusPreconditionFailed, "data source disabled; enable in Settings -> Data & Feeds")
+			return
+		}
 		limit, err := queryPositiveInt(q.Get("limit"), 20, 100)
 		if err != nil {
 			writeError(w, 400, err.Error())
@@ -180,6 +202,10 @@ func (h *HTTPHandler) marketDataAPI(w http.ResponseWriter, r *http.Request, toke
 	case rel == "trades":
 		if r.Method != http.MethodGet {
 			writeError(w, 405, "method not allowed")
+			return
+		}
+		if !h.store.isMarketVenueEnabled(q.Get("venue")) {
+			writeError(w, http.StatusPreconditionFailed, "data source disabled; enable in Settings -> Data & Feeds")
 			return
 		}
 		limit, err := queryPositiveInt(q.Get("limit"), 60, 200)
@@ -204,6 +230,10 @@ func (h *HTTPHandler) marketDataAPI(w http.ResponseWriter, r *http.Request, toke
 			writeError(w, 405, "method not allowed")
 			return
 		}
+		if !h.store.isMarketVenueEnabled(q.Get("venue")) {
+			writeError(w, http.StatusPreconditionFailed, "data source disabled; enable in Settings -> Data & Feeds")
+			return
+		}
 		limit, err := queryPositiveInt(q.Get("limit"), 48, 200)
 		if err != nil {
 			writeError(w, 400, err.Error())
@@ -226,6 +256,10 @@ func (h *HTTPHandler) marketDataAPI(w http.ResponseWriter, r *http.Request, toke
 			writeError(w, 405, "method not allowed")
 			return
 		}
+		if !h.store.isMarketVenueEnabled(marketdata.VenueFRED) {
+			writeError(w, http.StatusPreconditionFailed, "FRED data source disabled; enable in Settings -> Data & Feeds")
+			return
+		}
 		limit, err := queryPositiveInt(q.Get("limit"), 120, 500)
 		if err != nil {
 			writeError(w, 400, err.Error())
@@ -241,6 +275,10 @@ func (h *HTTPHandler) marketDataAPI(w http.ResponseWriter, r *http.Request, toke
 	case rel == "sec":
 		if r.Method != http.MethodGet {
 			writeError(w, 405, "method not allowed")
+			return
+		}
+		if !h.store.isMarketVenueEnabled(marketdata.VenueSEC) {
+			writeError(w, http.StatusPreconditionFailed, "SEC EDGAR data source disabled; enable in Settings -> Data & Feeds")
 			return
 		}
 		limit, err := queryPositiveInt(q.Get("limit"), 20, 100)
@@ -510,6 +548,10 @@ func (h *HTTPHandler) marketDataStreamSSE(w http.ResponseWriter, r *http.Request
 
 	var initial *marketdata.CandleSeries
 	if len(filters) == 1 && subsParam == "" && !noSnapshot && venue != "" && symbol != "" {
+		if !h.store.isMarketVenueEnabled(venue) {
+			writeError(w, http.StatusPreconditionFailed, "data source disabled; enable in Settings -> Data & Feeds")
+			return
+		}
 		snapCtx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 		series, err := svc.GetCandles(snapCtx, venue, symbol, interval, marketdata.TransformOptions{Style: style}, 100)
 		cancel()
@@ -531,6 +573,9 @@ func (h *HTTPHandler) marketDataStreamSSE(w http.ResponseWriter, r *http.Request
 		return strings.ToLower(strings.TrimSpace(v)) + "|" + up + "|" + strings.ToLower(strings.TrimSpace(iv))
 	}
 	for _, f := range filters {
+		if f.Venue != "" && !h.store.isMarketVenueEnabled(f.Venue) {
+			continue
+		}
 		busFilters = append(busFilters, f)
 		k := styleKeyFor(f.Venue, f.Symbol, f.Interval)
 		if f.Style != "" && f.Style != marketdata.StyleStandard && f.Style != marketdata.StyleTick && f.Style != marketdata.StyleVolume {
@@ -559,7 +604,7 @@ func (h *HTTPHandler) marketDataStreamSSE(w http.ResponseWriter, r *http.Request
 	var releaseFeeds []func()
 	acquired := make(map[string]bool, len(filters))
 	for _, f := range filters {
-		if f.Venue == "" || f.Symbol == "" {
+		if f.Venue == "" || f.Symbol == "" || !h.store.isMarketVenueEnabled(f.Venue) {
 			continue
 		}
 		key := f.Venue + ":" + strings.ToUpper(f.Symbol)
