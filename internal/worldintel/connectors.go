@@ -90,6 +90,36 @@ func DefaultSources() []SourceConfig {
 			AllowLocalhost: true,
 			BuiltIn:        true,
 		},
+		{
+			ID:       "worldbank-gdp",
+			Name:     "World Bank Global Macro (CPI)",
+			Kind:     KindWorldBank,
+			Endpoint: "https://api.worldbank.org/v2/country/USA;CHN;EMU/indicator/FP.CPI.TOTL.ZG?format=json&per_page=15",
+			Category: CategoryMacro,
+			Region:   RegionGlobal,
+			Enabled:  true,
+			BuiltIn:  true,
+		},
+		{
+			ID:       "ucdp-conflict",
+			Name:     "UCDP Georeferenced Conflict Feed",
+			Kind:     KindConflict,
+			Endpoint: "https://ucdpapi.pcr.uu.se/api/gedevents/24.1?pagesize=25",
+			Category: CategoryConflict,
+			Region:   RegionGlobal,
+			Enabled:  true,
+			BuiltIn:  true,
+		},
+		{
+			ID:       "sec-form4-insiders",
+			Name:     "SEC EDGAR Form 4 Insiders",
+			Kind:     KindSECForm4,
+			Endpoint: "https://www.sec.gov/cgi-bin/browse-edgar?action=getcurrent&type=4&count=20&output=atom",
+			Category: CategoryPolicy,
+			Region:   RegionNA,
+			Enabled:  false,
+			BuiltIn:  true,
+		},
 	}
 }
 
@@ -719,4 +749,280 @@ func ParseWorldMonitorSidecarJSON(raw []byte, src SourceConfig, now int64) ([]In
 		})
 	}
 	return out, nil
+}
+
+// ParseWorldBankJSON parses World Bank v2 indicator JSON arrays into normalized macro events.
+func ParseWorldBankJSON(raw []byte, src SourceConfig, now int64) ([]IntelEvent, error) {
+	if len(bytes.TrimSpace(raw)) == 0 {
+		return nil, errors.New("empty world bank payload")
+	}
+	var outer []json.RawMessage
+	if err := json.Unmarshal(raw, &outer); err != nil || len(outer) < 2 {
+		return nil, errors.New("expected world bank v2 array payload")
+	}
+	var rows []struct {
+		Indicator struct {
+			ID    string `json:"id"`
+			Value string `json:"value"`
+		} `json:"indicator"`
+		Country struct {
+			ID    string `json:"id"`
+			Value string `json:"value"`
+		} `json:"country"`
+		CountryISO3 string   `json:"countryiso3code"`
+		Date        string   `json:"date"`
+		Value       *float64 `json:"value"`
+	}
+	if err := json.Unmarshal(outer[1], &rows); err != nil {
+		return nil, err
+	}
+
+	out := make([]IntelEvent, 0, len(rows))
+	for _, r := range rows {
+		if r.Value == nil || math.IsNaN(*r.Value) || math.IsInf(*r.Value, 0) {
+			continue
+		}
+		if len(out) >= 30 {
+			break
+		}
+		countryName := trimText(r.Country.Value, 64)
+		indName := trimText(r.Indicator.Value, 96)
+		if countryName == "" || indName == "" {
+			continue
+		}
+		title := trimText(fmt.Sprintf("%s %s: %.2f%% (%s)", countryName, indName, *r.Value, trimText(r.Date, 16)), 280)
+		reg, cc, lat, lon := InferLocation(countryName+" "+r.CountryISO3, src.Region)
+		out = append(out, IntelEvent{
+			ID:          makeEventID(src.ID, r.CountryISO3+":"+r.Indicator.ID+":"+r.Date, title),
+			SourceID:    src.ID,
+			SourceName:  src.Name,
+			Category:    CategoryMacro,
+			Title:       title,
+			Summary:     trimText(fmt.Sprintf("World Bank %s reading for %s (%s)", r.Indicator.ID, countryName, r.Date), 280),
+			URL:         ValidateEventURL(src.Endpoint),
+			Region:      reg,
+			CountryCode: cc,
+			Lat:         lat,
+			Lon:         lon,
+			Tickers:     ExtractTickers(title),
+			PublishedAt: now,
+			IngestedAt:  now,
+			Untrusted:   true,
+		})
+	}
+	return out, nil
+}
+
+// ParseConflictJSON parses UCDP GED (`Result`) and ACLED (`data`) conflict feeds cleanly.
+func ParseConflictJSON(raw []byte, src SourceConfig, now int64) ([]IntelEvent, error) {
+	if len(bytes.TrimSpace(raw)) == 0 {
+		return nil, errors.New("empty conflict payload")
+	}
+	var envelope struct {
+		Result []struct {
+			ID        any     `json:"id"`
+			Country   string  `json:"country"`
+			Region    string  `json:"region"`
+			SideA     string  `json:"side_a"`
+			SideB     string  `json:"side_b"`
+			DateStart string  `json:"date_start"`
+			Best      float64 `json:"best"`
+			Latitude  any     `json:"latitude"`
+			Longitude any     `json:"longitude"`
+			WhereDesc string  `json:"where_description"`
+		} `json:"Result"`
+		Data []struct {
+			EventID    string `json:"event_id_cnty"`
+			EventDate  string `json:"event_date"`
+			EventType  string `json:"event_type"`
+			Country    string `json:"country"`
+			Region     string `json:"region"`
+			Location   string `json:"location"`
+			Notes      string `json:"notes"`
+			Fatalities any    `json:"fatalities"`
+			Latitude   any    `json:"latitude"`
+			Longitude  any    `json:"longitude"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(raw, &envelope); err != nil {
+		return nil, err
+	}
+
+	out := make([]IntelEvent, 0, len(envelope.Result)+len(envelope.Data))
+	for _, item := range envelope.Result {
+		if len(out) >= 40 {
+			break
+		}
+		place := trimText(strings.TrimSpace(item.WhereDesc+" "+item.Country), 120)
+		title := trimText(fmt.Sprintf("Conflict: %s vs %s in %s", trimText(item.SideA, 48), trimText(item.SideB, 48), place), 280)
+		if title == "" {
+			continue
+		}
+		reg, cc, infLat, infLon := InferLocation(place+" "+item.Region, src.Region)
+		latF := parseFlexibleFloat(item.Latitude)
+		lonF := parseFlexibleFloat(item.Longitude)
+		lat, lon := sanitizeCoord(latF, lonF, reg)
+		if latF == 0 && lonF == 0 {
+			lat, lon = infLat, infLon
+		}
+		urgency := 0.55
+		if item.Best >= 10 {
+			urgency = 0.90
+		} else if item.Best >= 1 {
+			urgency = 0.72
+		}
+		out = append(out, IntelEvent{
+			ID:          makeEventID(src.ID, fmt.Sprint(item.ID), title),
+			SourceID:    src.ID,
+			SourceName:  src.Name,
+			Category:    CategoryConflict,
+			Title:       title,
+			Summary:     trimText(fmt.Sprintf("UCDP recorded incident (%s, %.0f reported fatalities)", item.DateStart, math.Max(0, item.Best)), 280),
+			URL:         ValidateEventURL(src.Endpoint),
+			Region:      reg,
+			CountryCode: cc,
+			Lat:         lat,
+			Lon:         lon,
+			Tickers:     ExtractTickers(title),
+			PublishedAt: parseFlexibleTimestamp(item.DateStart, now),
+			IngestedAt:  now,
+			Urgency:     urgency,
+			Untrusted:   true,
+		})
+	}
+	for _, item := range envelope.Data {
+		if len(out) >= 40 {
+			break
+		}
+		place := trimText(strings.TrimSpace(item.Location+" "+item.Country), 120)
+		title := trimText(fmt.Sprintf("%s in %s", trimText(item.EventType, 64), place), 280)
+		if title == "" {
+			continue
+		}
+		reg, cc, infLat, infLon := InferLocation(place+" "+item.Region+" "+item.Notes, src.Region)
+		latF := parseFlexibleFloat(item.Latitude)
+		lonF := parseFlexibleFloat(item.Longitude)
+		lat, lon := sanitizeCoord(latF, lonF, reg)
+		if latF == 0 && lonF == 0 {
+			lat, lon = infLat, infLon
+		}
+		fat := parseFlexibleFloat(item.Fatalities)
+		urgency := 0.52
+		if fat >= 10 {
+			urgency = 0.88
+		} else if fat >= 1 {
+			urgency = 0.70
+		}
+		out = append(out, IntelEvent{
+			ID:          makeEventID(src.ID, item.EventID, title),
+			SourceID:    src.ID,
+			SourceName:  src.Name,
+			Category:    CategoryConflict,
+			Title:       title,
+			Summary:     trimText(item.Notes, 280),
+			URL:         ValidateEventURL(src.Endpoint),
+			Region:      reg,
+			CountryCode: cc,
+			Lat:         lat,
+			Lon:         lon,
+			Tickers:     ExtractTickers(title + " " + item.Notes),
+			PublishedAt: parseFlexibleTimestamp(item.EventDate, now),
+			IngestedAt:  now,
+			Urgency:     urgency,
+			Untrusted:   true,
+		})
+	}
+	return out, nil
+}
+
+// ParseSECForm4Feed parses either an SEC EDGAR Form 4 <ownershipDocument> XML or Atom feed cleanly.
+func ParseSECForm4Feed(raw []byte, src SourceConfig, now int64) ([]IntelEvent, error) {
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 {
+		return nil, errors.New("empty SEC Form 4 payload")
+	}
+	if err := checkSafeXMLTokens(trimmed); err != nil {
+		return nil, err
+	}
+	if !bytes.Contains(trimmed, []byte("ownershipDocument")) {
+		return ParseRSSOrAtom(trimmed, src, now)
+	}
+	var doc struct {
+		XMLName xml.Name `xml:"ownershipDocument"`
+		Issuer  struct {
+			Name   string `xml:"issuerName"`
+			Ticker string `xml:"issuerTradingSymbol"`
+		} `xml:"issuer"`
+		Owners []struct {
+			ID struct {
+				Name string `xml:"rptOwnerName"`
+			} `xml:"reportingOwnerId"`
+		} `xml:"reportingOwner"`
+		NonDerivative struct {
+			Txs []struct {
+				Date struct {
+					Value string `xml:"value"`
+				} `xml:"transactionDate"`
+				Coding struct {
+					Code string `xml:"transactionCode"`
+				} `xml:"transactionCoding"`
+				Amounts struct {
+					Shares struct {
+						Value string `xml:"value"`
+					} `xml:"transactionShares"`
+					Price struct {
+						Value string `xml:"value"`
+					} `xml:"transactionPricePerShare"`
+				} `xml:"transactionAmounts"`
+			} `xml:"nonDerivativeTransaction"`
+		} `xml:"nonDerivativeTable"`
+	}
+	if err := xml.Unmarshal(trimmed, &doc); err != nil {
+		return nil, err
+	}
+	ticker := strings.ToUpper(trimText(doc.Issuer.Ticker, 16))
+	issuer := trimText(doc.Issuer.Name, 80)
+	owner := ""
+	if len(doc.Owners) > 0 {
+		owner = trimText(doc.Owners[0].ID.Name, 64)
+	}
+	events := make([]IntelEvent, 0, len(doc.NonDerivative.Txs))
+	for _, tx := range doc.NonDerivative.Txs {
+		if len(events) >= 20 {
+			break
+		}
+		code := strings.ToUpper(strings.TrimSpace(tx.Coding.Code))
+		action := "transfer"
+		if code == "P" {
+			action = "buy"
+		} else if code == "S" {
+			action = "sell"
+		}
+		shares := parseFlexibleFloat(tx.Amounts.Shares.Value)
+		price := parseFlexibleFloat(tx.Amounts.Price.Value)
+		title := trimText(fmt.Sprintf("Form 4 %s: %s (%s) insider %s %.0f @ $%.2f", ticker, owner, issuer, action, shares, price), 280)
+		reg, cc, lat, lon := InferLocation("SEC "+issuer, src.Region)
+		var tickers []string
+		if tk := NormalizeTicker(ticker); tk != "" {
+			tickers = []string{tk}
+		}
+		events = append(events, IntelEvent{
+			ID:          makeEventID(src.ID, ticker+":"+owner+":"+tx.Date.Value+":"+code, title),
+			SourceID:    src.ID,
+			SourceName:  src.Name,
+			Category:    CategoryPolicy,
+			Title:       title,
+			Summary:     trimText(fmt.Sprintf("SEC Form 4 filing (%s): %.0f shares @ $%.2f on %s", code, shares, price, tx.Date.Value), 280),
+			URL:         ValidateEventURL(src.Endpoint),
+			Region:      reg,
+			CountryCode: cc,
+			Lat:         lat,
+			Lon:         lon,
+			Tickers:     tickers,
+			PublishedAt: parseFlexibleTimestamp(tx.Date.Value, now),
+			IngestedAt:  now,
+			Untrusted:   true,
+		})
+	}
+	return events, nil
 }

@@ -36,6 +36,9 @@ func FuzzWorldIntelParsers(f *testing.F) {
 		}
 		_, _ = ParseKalshiJSON(data, now)
 		_, _ = ParseRSSOrAtom(data, src, now)
+		_, _ = ParseWorldBankJSON(data, src, now)
+		_, _ = ParseConflictJSON(data, src, now)
+		_, _ = ParseSECForm4Feed(data, src, now)
 		_, _ = ParseWorldMonitorSidecarJSON(data, src, now)
 
 		if len(data) <= 1024 {

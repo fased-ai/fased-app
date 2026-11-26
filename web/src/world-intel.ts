@@ -19,7 +19,15 @@ export type IntelSource = {
   id: string;
   name: string;
   kind:
-    "rss" | "gdelt" | "usgs" | "polymarket" | "kalshi" | "worldmonitor_sidecar";
+    | "rss"
+    | "gdelt"
+    | "usgs"
+    | "polymarket"
+    | "kalshi"
+    | "worldbank"
+    | "conflict"
+    | "sec_form4"
+    | "worldmonitor_sidecar";
   endpoint: string;
   category: IntelCategory;
   region: IntelRegion;
@@ -28,6 +36,8 @@ export type IntelSource = {
   builtIn: boolean;
   lastSyncAt?: number;
   lastError?: string;
+  freshnessStatus?: "fresh" | "aging" | "stale" | "error" | "disabled";
+  ageSeconds?: number;
 };
 
 export type IntelSourceInput = {
@@ -258,6 +268,43 @@ export function formatCompactUSD(v: number): string {
   if (val >= 1e6) return `$${(val / 1e6).toFixed(2)}M`;
   if (val >= 1e3) return `$${(val / 1e3).toFixed(1)}K`;
   return `$${val.toFixed(0)}`;
+}
+
+export type InfraNode = {
+  id: string;
+  label: string;
+  kind: "chokepoint" | "hub";
+  lat: number;
+  lon: number;
+};
+
+export const INFRA_OVERLAY_NODES: InfraNode[] = [
+  { id: "hormuz", label: "Hormuz", kind: "chokepoint", lat: 26.56, lon: 56.25 },
+  { id: "suez", label: "Suez", kind: "chokepoint", lat: 30.0, lon: 32.55 },
+  { id: "malacca", label: "Malacca", kind: "chokepoint", lat: 2.5, lon: 101.2 },
+  { id: "panama", label: "Panama", kind: "chokepoint", lat: 9.08, lon: -79.68 },
+  { id: "nyse", label: "NYSE", kind: "hub", lat: 40.71, lon: -74.01 },
+  { id: "cme", label: "CME", kind: "hub", lat: 41.88, lon: -87.63 },
+  { id: "ecb", label: "Frankfurt", kind: "hub", lat: 50.11, lon: 8.68 },
+  { id: "tse", label: "Tokyo", kind: "hub", lat: 35.68, lon: 139.77 },
+  { id: "sgx", label: "Singapore", kind: "hub", lat: 1.28, lon: 103.85 },
+];
+
+export const INFRA_CORRIDORS: [string, string][] = [
+  ["nyse", "ecb"],
+  ["ecb", "suez"],
+  ["suez", "hormuz"],
+  ["hormuz", "sgx"],
+  ["sgx", "malacca"],
+  ["sgx", "tse"],
+  ["nyse", "panama"],
+];
+
+export function formatAgeSeconds(sec?: number): string {
+  if (sec === undefined || sec <= 0) return "";
+  if (sec < 60) return `${sec}s`;
+  if (sec < 3600) return `${Math.floor(sec / 60)}m`;
+  return `${Math.floor(sec / 3600)}h`;
 }
 
 export function buildIntelChatPrompt(ev: IntelEvent): string {

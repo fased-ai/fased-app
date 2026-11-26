@@ -6847,4 +6847,9 @@ export const pageCopy = {
   Polymarket: ["Polymarket", "Polymarket", "Polymarket", "Polymarket"],
   Kalshi: ["Kalshi", "Kalshi", "Kalshi", "Kalshi"],
   "WEN SAT": ["WEN SAT", "WEN SAT", "WEN SAT", "WEN SAT"],
+  Infra: ["Инфра", "Infra", "基础设施", "인프라"],
+  "World Bank": ["Всемирный банк", "Banco Mundial", "世界银行", "세계은행"],
+  Conflict: ["Конфликт", "Conflicto", "冲突动态", "분쟁"],
+  "SEC Form 4": ["SEC Form 4", "SEC Form 4", "SEC Form 4", "SEC Form 4"],
+  Aging: ["Устаревает", "Envejeciendo", "趋于陈旧", "지연 중"],
 } satisfies Record<string, [string, string, string, string]>;

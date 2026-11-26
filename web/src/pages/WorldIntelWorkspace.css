@@ -483,3 +483,38 @@
     grid-template-columns: minmax(0, 1fr);
   }
 }
+
+.intel-map-tools {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: auto;
+}
+
+.intel-infra-arc {
+  stroke: var(--wt-muted);
+  stroke-width: 1;
+  stroke-dasharray: 3 4;
+  opacity: 0.35;
+}
+
+.intel-infra-node {
+  fill: var(--wt-cyan);
+  opacity: 0.72;
+}
+
+.intel-infra-node.is-hub {
+  fill: var(--wt-muted);
+}
+
+.intel-slo-pill[data-slo="fresh"] {
+  color: var(--wt-ok);
+}
+
+.intel-slo-pill[data-slo="aging"] {
+  color: var(--wt-warn);
+}
+
+.intel-slo-pill[data-slo="error"] {
+  color: var(--wt-coral);
+}

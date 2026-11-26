@@ -235,9 +235,37 @@ func (s *Service) ensureFixtureSeed(ctx context.Context) error {
 	return s.store.upsertPredictions(ctx, preds)
 }
 
-// ListSources returns built-in and custom WorldIntel sources.
+func computeFreshnessSLO(src SourceConfig, nowSec int64) (string, int64) {
+	if !src.Enabled {
+		return "disabled", 0
+	}
+	var age int64
+	if src.LastSyncAt > 0 && nowSec > src.LastSyncAt {
+		age = nowSec - src.LastSyncAt
+	}
+	if strings.TrimSpace(src.LastError) != "" {
+		return "error", age
+	}
+	if src.LastSyncAt <= 0 || age > 3600 {
+		return "stale", age
+	}
+	if age > 900 {
+		return "aging", age
+	}
+	return "fresh", age
+}
+
+// ListSources returns built-in and custom WorldIntel sources with live freshness SLO telemetry.
 func (s *Service) ListSources(ctx context.Context) ([]SourceConfig, error) {
-	return s.store.listSources(ctx)
+	sources, err := s.store.listSources(ctx)
+	if err != nil {
+		return nil, err
+	}
+	nowSec := s.now().UTC().Unix()
+	for i := range sources {
+		sources[i].FreshnessStatus, sources[i].AgeSeconds = computeFreshnessSLO(sources[i], nowSec)
+	}
+	return sources, nil
 }
 
 // SaveSource validates and persists a WorldIntel feed or local sidecar configuration.
@@ -505,6 +533,27 @@ func (s *Service) ingestPayload(ctx context.Context, src SourceConfig, raw []byt
 
 	case KindRSS:
 		events, err := ParseRSSOrAtom(raw, src, nowSec)
+		if err != nil {
+			return 0, 0, err
+		}
+		return s.scoreAndStoreEvents(ctx, events, src.BuiltIn, nowSec)
+
+	case KindWorldBank:
+		events, err := ParseWorldBankJSON(raw, src, nowSec)
+		if err != nil {
+			return 0, 0, err
+		}
+		return s.scoreAndStoreEvents(ctx, events, src.BuiltIn, nowSec)
+
+	case KindConflict:
+		events, err := ParseConflictJSON(raw, src, nowSec)
+		if err != nil {
+			return 0, 0, err
+		}
+		return s.scoreAndStoreEvents(ctx, events, src.BuiltIn, nowSec)
+
+	case KindSECForm4:
+		events, err := ParseSECForm4Feed(raw, src, nowSec)
 		if err != nil {
 			return 0, 0, err
 		}

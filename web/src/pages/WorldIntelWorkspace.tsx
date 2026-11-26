@@ -18,6 +18,7 @@ import {
   fetchIntelMap,
   fetchIntelSources,
   fetchPredictions,
+  formatAgeSeconds,
   formatCompactUSD,
   formatProbPct,
   INTEL_CATEGORIES,
@@ -53,7 +54,7 @@ export function WorldIntelWorkspace() {
 
   const [srcId, setSrcId] = useState("");
   const [srcName, setSrcName] = useState("");
-  const [srcKind, setSrcKind] = useState<"rss" | "worldmonitor_sidecar">("rss");
+  const [srcKind, setSrcKind] = useState<IntelSource["kind"]>("rss");
   const [srcEndpoint, setSrcEndpoint] = useState("");
   const [srcCategory, setSrcCategory] = useState<IntelCategory>("macro");
   const [srcAllowLocal, setSrcAllowLocal] = useState(false);
@@ -589,6 +590,9 @@ export function WorldIntelWorkspace() {
             {tab === "sources" && (
               <div className="intel-list" data-testid="intel-sources-list">
                 <div className="intel-card-actions">
+                  <span className="pill mono" data-testid="intel-sources-slo">
+                    {`${sources.filter((s) => s.freshnessStatus === "fresh").length}/${sources.filter((s) => s.enabled).length} ${t("Fresh")}`}
+                  </span>
                   <a className="secondary" href="#agents/news">
                     {t("Agent RSS inputs")}
                   </a>
@@ -623,12 +627,13 @@ export function WorldIntelWorkspace() {
                       value={srcKind}
                       disabled={busy}
                       onChange={(e) =>
-                        setSrcKind(
-                          e.target.value as "rss" | "worldmonitor_sidecar",
-                        )
+                        setSrcKind(e.target.value as IntelSource["kind"])
                       }
                     >
                       <option value="rss">RSS / Atom</option>
+                      <option value="worldbank">{t("World Bank")}</option>
+                      <option value="conflict">{t("Conflict")}</option>
+                      <option value="sec_form4">{t("SEC Form 4")}</option>
                       <option value="worldmonitor_sidecar">
                         WorldMonitor Sidecar
                       </option>
@@ -693,6 +698,27 @@ export function WorldIntelWorkspace() {
                       <strong>{src.name}</strong>
                       <div className="intel-meta-pills">
                         <span className="pill mono">{src.kind}</span>
+                        {src.freshnessStatus && (
+                          <span
+                            className="pill intel-slo-pill"
+                            data-slo={src.freshnessStatus}
+                          >
+                            {t(
+                              src.freshnessStatus === "fresh"
+                                ? "Fresh"
+                                : src.freshnessStatus === "aging"
+                                  ? "Aging"
+                                  : src.freshnessStatus === "error"
+                                    ? "Error"
+                                    : src.freshnessStatus === "disabled"
+                                      ? "Disabled"
+                                      : "Stale",
+                            )}
+                            {src.ageSeconds
+                              ? ` · ${formatAgeSeconds(src.ageSeconds)}`
+                              : ""}
+                          </span>
+                        )}
                         <span className="pill">
                           {src.enabled ? t("Enabled") : t("Disabled")}
                         </span>

@@ -236,3 +236,68 @@ func TestServiceFixtureModeAndMockSyncAndBus(t *testing.T) {
 		}
 	}
 }
+
+func TestWorldBankConflictAndSECForm4ParsersAndFreshnessSLO(t *testing.T) {
+	t.Parallel()
+	now := int64(1760000000)
+
+	wbRaw := []byte(`[{"page":1},[{"indicator":{"id":"FP.CPI.TOTL.ZG","value":"Inflation CPI"},"country":{"id":"US","value":"United States"},"countryiso3code":"USA","date":"2026","value":2.75}]]`)
+	wbSrc := DefaultSources()[7]
+	wbEvents, err := ParseWorldBankJSON(wbRaw, wbSrc, now)
+	if err != nil || len(wbEvents) != 1 || wbEvents[0].Category != CategoryMacro || !wbEvents[0].Untrusted {
+		t.Fatalf("ParseWorldBankJSON failed: %+v err=%v", wbEvents, err)
+	}
+
+	ucdpRaw := []byte(`{"Result":[{"id":1,"country":"Ukraine","region":"Europe","side_a":"SideA","side_b":"SideB","date_start":"2026-11-20","best":12,"latitude":48.5,"longitude":37.5,"where_description":"Donetsk"}]}`)
+	acledRaw := []byte(`{"data":[{"event_id_cnty":"SYR1","event_date":"2026-11-21","event_type":"Armed clash","country":"Syria","region":"Middle East","location":"Aleppo","notes":"Shelling near highway","fatalities":"3","latitude":"36.2","longitude":"37.16"}]}`)
+	confSrc := DefaultSources()[8]
+	ucdpEvents, err := ParseConflictJSON(ucdpRaw, confSrc, now)
+	if err != nil || len(ucdpEvents) != 1 || ucdpEvents[0].Urgency < 0.85 {
+		t.Fatalf("ParseConflictJSON(UCDP) failed: %+v err=%v", ucdpEvents, err)
+	}
+	acledEvents, err := ParseConflictJSON(acledRaw, confSrc, now)
+	if err != nil || len(acledEvents) != 1 || acledEvents[0].Category != CategoryConflict {
+		t.Fatalf("ParseConflictJSON(ACLED) failed: %+v err=%v", acledEvents, err)
+	}
+
+	form4Raw := []byte(`<?xml version="1.0"?><ownershipDocument><issuer><issuerName>Coinbase Global</issuerName><issuerTradingSymbol>COIN</issuerTradingSymbol></issuer><reportingOwner><reportingOwnerId><rptOwnerName>Armstrong Brian</rptOwnerName></reportingOwnerId></reportingOwner><nonDerivativeTable><nonDerivativeTransaction><transactionDate><value>2026-11-20</value></transactionDate><transactionCoding><transactionCode>S</transactionCode></transactionCoding><transactionAmounts><transactionShares><value>2500</value></transactionShares><transactionPricePerShare><value>310</value></transactionPricePerShare></transactionAmounts></nonDerivativeTransaction></nonDerivativeTable></ownershipDocument>`)
+	f4Src := DefaultSources()[9]
+	f4Events, err := ParseSECForm4Feed(form4Raw, f4Src, now)
+	if err != nil || len(f4Events) != 1 || len(f4Events[0].Tickers) == 0 || f4Events[0].Tickers[0] != "COIN" {
+		t.Fatalf("ParseSECForm4Feed failed: %+v err=%v", f4Events, err)
+	}
+
+	cur := time.Unix(now, 0)
+	svc, err := NewService(Config{DataDir: t.TempDir(), FixtureMode: true, Now: func() time.Time { return cur }})
+	if err != nil {
+		t.Fatalf("NewService: %v", err)
+	}
+	defer svc.Close()
+
+	if _, err := svc.Sync(context.Background(), "worldbank-gdp"); err != nil {
+		t.Fatalf("Sync worldbank-gdp: %v", err)
+	}
+	list1, err := svc.ListSources(context.Background())
+	if err != nil {
+		t.Fatalf("ListSources: %v", err)
+	}
+	var gotFresh, gotDisabled bool
+	for _, item := range list1 {
+		if item.ID == "worldbank-gdp" && item.FreshnessStatus == "fresh" {
+			gotFresh = true
+		}
+		if item.ID == "sec-form4-insiders" && item.FreshnessStatus == "disabled" {
+			gotDisabled = true
+		}
+	}
+	if !gotFresh || !gotDisabled {
+		t.Fatalf("expected fresh worldbank-gdp and disabled sec-form4-insiders, got %+v", list1)
+	}
+	cur = cur.Add(2 * time.Hour)
+	list2, _ := svc.ListSources(context.Background())
+	for _, item := range list2 {
+		if item.ID == "worldbank-gdp" && item.FreshnessStatus != "stale" {
+			t.Fatalf("expected stale SLO after 2h, got %q", item.FreshnessStatus)
+		}
+	}
+}
