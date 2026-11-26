@@ -41,6 +41,7 @@ func (s *Store) marketDataService() (*marketdata.Service, error) {
 		return nil, err
 	}
 	s.marketData = svc
+	s.notifyReactiveBus()
 	return svc, nil
 }
 
@@ -312,6 +313,54 @@ func (h *HTTPHandler) marketDataAPI(w http.ResponseWriter, r *http.Request, toke
 			return
 		}
 		writeJSON(w, 200, map[string]any{"deleted": true, "id": id})
+
+	case rel == "drawings":
+		if r.Method == http.MethodGet {
+			items, err := svc.ListDrawings(ctx, q.Get("venue"), q.Get("symbol"), q.Get("interval"))
+			if err != nil {
+				writeError(w, 400, err.Error())
+				return
+			}
+			writeJSON(w, 200, map[string]any{"drawings": items, "count": len(items)})
+			return
+		}
+		if r.Method != http.MethodPut {
+			writeError(w, 405, "method not allowed")
+			return
+		}
+		if !h.v2Mutation(w, r, token, true) {
+			return
+		}
+		var drawing marketdata.ChartDrawing
+		if !decodeJSON(w, r, &drawing) {
+			return
+		}
+		saved, err := svc.SaveDrawing(ctx, drawing)
+		if err != nil {
+			writeError(w, 400, err.Error())
+			return
+		}
+		writeJSON(w, 200, saved)
+
+	case strings.HasPrefix(rel, "drawings/"):
+		if r.Method != http.MethodDelete {
+			writeError(w, 405, "method not allowed")
+			return
+		}
+		if !h.v2Mutation(w, r, token, false) {
+			return
+		}
+		id := strings.TrimPrefix(rel, "drawings/")
+		deleted, err := svc.DeleteDrawing(ctx, id)
+		if err != nil {
+			writeError(w, 400, err.Error())
+			return
+		}
+		if !deleted {
+			writeError(w, 404, "drawing not found")
+			return
+		}
+		writeJSON(w, 200, map[string]any{"deleted": true, "id": strings.TrimSpace(id)})
 
 	case rel == "stream":
 		if r.Method != http.MethodGet {

@@ -3,8 +3,11 @@ package core
 import (
 	"context"
 	"errors"
+	"github.com/fased-ai/fased-app/internal/automation"
+	"github.com/fased-ai/fased-app/internal/marketdata"
 	"github.com/fased-ai/fased-app/internal/providersecrets"
 	"github.com/fased-ai/fased-app/internal/tailnet"
+	"github.com/fased-ai/fased-app/internal/worldintel"
 	"io/fs"
 	"net"
 	"net/http"
@@ -308,29 +311,138 @@ func (s *Server) startAgentTasks() {
 			defer recoverBackgroundPanic("automation-evaluator")
 			ticker := time.NewTicker(15 * time.Second)
 			defer ticker.Stop()
+
+			var (
+				mdCh       <-chan marketdata.Event
+				mdUnsub    func()
+				wiCh       <-chan worldintel.StreamEvent
+				wiUnsub    func()
+				mdDebounce *time.Timer
+				mdDebCh    <-chan time.Time
+				wiDebounce *time.Timer
+				wiDebCh    <-chan time.Time
+			)
+			defer func() {
+				if mdDebounce != nil {
+					mdDebounce.Stop()
+				}
+				if wiDebounce != nil {
+					wiDebounce.Stop()
+				}
+				if mdUnsub != nil {
+					mdUnsub()
+				}
+				if wiUnsub != nil {
+					wiUnsub()
+				}
+			}()
+
+			activeService := func() *automation.Service {
+				autoDB := filepath.Join(s.Store.dir, "automation", "automation.sqlite")
+				s.Store.automationMu.Lock()
+				initialized := s.Store.automationSvc != nil
+				s.Store.automationMu.Unlock()
+				if !initialized {
+					if _, statErr := os.Stat(autoDB); statErr != nil {
+						return nil
+					}
+				}
+				svc, err := s.Store.automationService()
+				if err != nil {
+					return nil
+				}
+				return svc
+			}
+
+			attachBuses := func() {
+				if activeService() == nil {
+					return
+				}
+				if mdUnsub == nil {
+					if md := s.Store.loadedMarketDataService(); md != nil {
+						mdCh, mdUnsub = md.Subscribe(marketdata.Filter{})
+					}
+				}
+				if wiUnsub == nil {
+					if wi := s.Store.loadedWorldIntelService(); wi != nil {
+						wiCh, wiUnsub = wi.Subscribe(worldintel.StreamFilter{})
+					}
+				}
+			}
+
+			scheduleDebounce := func(timer **time.Timer, ch *<-chan time.Time) {
+				if *timer == nil {
+					t := time.NewTimer(500 * time.Millisecond)
+					*timer = t
+					*ch = t.C
+					return
+				}
+				if !(*timer).Stop() {
+					select {
+					case <-(*timer).C:
+					default:
+					}
+				}
+				(*timer).Reset(500 * time.Millisecond)
+				*ch = (*timer).C
+			}
+
+			runSweep := func(kinds ...string) {
+				svc := activeService()
+				if svc == nil {
+					return
+				}
+				evalCtx, stop := context.WithTimeout(ctx, 30*time.Second)
+				defer stop()
+				var eErr error
+				if len(kinds) == 0 {
+					_, eErr = svc.EvaluateNow(evalCtx)
+				} else {
+					_, eErr = svc.EvaluateMatching(evalCtx, kinds...)
+				}
+				if eErr != nil && !errors.Is(eErr, context.Canceled) {
+					coreLogger.Warn("automation evaluator sweep held", "err", sanitizeDiagValue(eErr.Error(), 200))
+				}
+			}
+
+			attachBuses()
+			notifyCh := s.Store.busNotifyCh
+
 			for {
 				select {
 				case <-ctx.Done():
 					return
-				case <-ticker.C:
-					autoDB := filepath.Join(s.Store.dir, "automation", "automation.sqlite")
-					s.Store.automationMu.Lock()
-					initialized := s.Store.automationSvc != nil
-					s.Store.automationMu.Unlock()
-					if !initialized {
-						if _, statErr := os.Stat(autoDB); statErr != nil {
-							continue
-						}
-					}
-					svc, err := s.Store.automationService()
-					if err != nil {
+				case _, ok := <-notifyCh:
+					if !ok {
+						notifyCh = nil
 						continue
 					}
-					evalCtx, stop := context.WithTimeout(ctx, 30*time.Second)
-					if _, eErr := svc.EvaluateNow(evalCtx); eErr != nil && !errors.Is(eErr, context.Canceled) {
-						coreLogger.Warn("automation evaluator sweep held", "err", sanitizeDiagValue(eErr.Error(), 200))
+					attachBuses()
+				case ev, ok := <-mdCh:
+					if !ok {
+						mdCh = nil
+						continue
 					}
-					stop()
+					if ev.Type == "candle" || ev.Type == "drawing" {
+						scheduleDebounce(&mdDebounce, &mdDebCh)
+					}
+				case <-mdDebCh:
+					mdDebCh = nil
+					runSweep(automation.KindPrice, automation.KindIndicator, automation.KindDrawingBreach, automation.KindFasedScript)
+				case ev, ok := <-wiCh:
+					if !ok {
+						wiCh = nil
+						continue
+					}
+					if ev.Type == "event" || ev.Type == "prediction" {
+						scheduleDebounce(&wiDebounce, &wiDebCh)
+					}
+				case <-wiDebCh:
+					wiDebCh = nil
+					runSweep(automation.KindNews, automation.KindPrediction)
+				case <-ticker.C:
+					attachBuses()
+					runSweep()
 				}
 			}
 		}()

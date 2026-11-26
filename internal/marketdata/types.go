@@ -36,9 +36,15 @@ const (
 )
 
 const (
-	maxCandlesLimit    = 2000
-	maxTransformedBars = 10000
-	maxWatchlistItems  = 64
+	maxCandlesLimit      = 2000
+	maxTransformedBars   = 10000
+	maxWatchlistItems    = 64
+	maxDrawingsPerSymbol = 64
+	maxDrawingsTotal     = 512
+
+	DrawingKindHLine     = "hline"
+	DrawingKindTrendline = "trendline"
+	DrawingKindFib       = "fib"
 )
 
 var (
@@ -438,4 +444,132 @@ func isFinitePositive(v float64) bool {
 
 func isFiniteNonNeg(v float64) bool {
 	return !math.IsNaN(v) && !math.IsInf(v, 0) && v >= 0
+}
+
+// DrawingPoint represents an anchor coordinate on a chart series.
+type DrawingPoint struct {
+	Time  int64   `json:"time"`
+	Price float64 `json:"price"`
+}
+
+// ChartDrawing persists a user-drawn horizontal level, trendline, or fib retracement.
+type ChartDrawing struct {
+	ID        string        `json:"id"`
+	Venue     string        `json:"venue"`
+	Symbol    string        `json:"symbol"`
+	Interval  string        `json:"interval,omitempty"`
+	Kind      string        `json:"kind"`
+	P1        DrawingPoint  `json:"p1"`
+	P2        *DrawingPoint `json:"p2,omitempty"`
+	Label     string        `json:"label,omitempty"`
+	CreatedAt int64         `json:"createdAt"`
+	UpdatedAt int64         `json:"updatedAt"`
+}
+
+// ValidateChartDrawing canonicalizes and bounds-checks a ChartDrawing payload.
+func ValidateChartDrawing(d ChartDrawing) (ChartDrawing, error) {
+	id := strings.TrimSpace(d.ID)
+	if !idPattern.MatchString(id) {
+		return ChartDrawing{}, errors.New("drawing id must match [A-Za-z0-9._-] (1-64 chars)")
+	}
+	venue, err := NormalizeVenue(d.Venue)
+	if err != nil {
+		return ChartDrawing{}, err
+	}
+	symbol, err := NormalizeSymbol(d.Symbol)
+	if err != nil {
+		return ChartDrawing{}, err
+	}
+	interval := ""
+	if rawIv := strings.TrimSpace(d.Interval); rawIv != "" {
+		iv, ivErr := NormalizeInterval(rawIv)
+		if ivErr != nil {
+			return ChartDrawing{}, ivErr
+		}
+		interval = iv
+	}
+	kind := strings.ToLower(strings.TrimSpace(d.Kind))
+	switch kind {
+	case DrawingKindHLine, DrawingKindTrendline, DrawingKindFib:
+	default:
+		return ChartDrawing{}, fmt.Errorf("unsupported drawing kind %q", d.Kind)
+	}
+	if d.P1.Time < 0 || !isFinitePositive(d.P1.Price) {
+		return ChartDrawing{}, errors.New("drawing p1 must have non-negative time and positive finite price")
+	}
+	var p2Copy *DrawingPoint
+	if kind == DrawingKindTrendline || kind == DrawingKindFib {
+		if d.P2 == nil || d.P2.Time < 0 || !isFinitePositive(d.P2.Price) {
+			return ChartDrawing{}, fmt.Errorf("drawing kind %q requires p2 with non-negative time and positive finite price", kind)
+		}
+		pt := *d.P2
+		p2Copy = &pt
+	} else if d.P2 != nil {
+		if d.P2.Time < 0 || !isFinitePositive(d.P2.Price) {
+			return ChartDrawing{}, errors.New("drawing p2 must have non-negative time and positive finite price")
+		}
+		pt := *d.P2
+		p2Copy = &pt
+	}
+	label := strings.TrimSpace(d.Label)
+	if len(label) > 80 {
+		label = label[:80]
+	}
+	return ChartDrawing{
+		ID:        id,
+		Venue:     venue,
+		Symbol:    symbol,
+		Interval:  interval,
+		Kind:      kind,
+		P1:        d.P1,
+		P2:        p2Copy,
+		Label:     label,
+		CreatedAt: d.CreatedAt,
+		UpdatedAt: d.UpdatedAt,
+	}, nil
+}
+
+// EvaluateDrawingPrice resolves the reference price of a drawing at the given unix timestamp.
+// For horizontal lines it returns p1.price; for trendlines it linearly projects p1->p2;
+// for fib drawings it returns the golden 61.8% retracement level matching computeFibLevels.
+func EvaluateDrawingPrice(d ChartDrawing, atTime int64) (float64, bool) {
+	switch strings.ToLower(strings.TrimSpace(d.Kind)) {
+	case DrawingKindHLine:
+		if !isFinitePositive(d.P1.Price) {
+			return 0, false
+		}
+		return d.P1.Price, true
+	case DrawingKindTrendline:
+		if !isFinitePositive(d.P1.Price) {
+			return 0, false
+		}
+		if d.P2 == nil || !isFinitePositive(d.P2.Price) {
+			return d.P1.Price, true
+		}
+		if d.P2.Time == d.P1.Time {
+			return d.P2.Price, true
+		}
+		slope := (d.P2.Price - d.P1.Price) / float64(d.P2.Time-d.P1.Time)
+		level := d.P1.Price + slope*float64(atTime-d.P1.Time)
+		if !isFinitePositive(level) {
+			return 0, false
+		}
+		return level, true
+	case DrawingKindFib:
+		if !isFinitePositive(d.P1.Price) {
+			return 0, false
+		}
+		if d.P2 == nil || !isFinitePositive(d.P2.Price) {
+			return d.P1.Price, true
+		}
+		high := math.Max(d.P1.Price, d.P2.Price)
+		low := math.Min(d.P1.Price, d.P2.Price)
+		level := high - (high-low)*0.618
+		if !isFinitePositive(level) {
+			return 0, false
+		}
+		return level, true
+	default:
+		return 0, false
+	}
 }

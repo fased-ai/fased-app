@@ -46,6 +46,13 @@ func (s *Store) automationService() (*automation.Service, error) {
 			}
 			return series.Candles, nil
 		},
+		DrawingReader: func(ctx context.Context, id string) (marketdata.ChartDrawing, bool, error) {
+			md, mErr := s.marketDataService()
+			if mErr != nil {
+				return marketdata.ChartDrawing{}, false, mErr
+			}
+			return md.GetDrawing(ctx, id)
+		},
 		IntelEvents: func(ctx context.Context, filter worldintel.EventFilter) ([]worldintel.IntelEvent, error) {
 			wi, wErr := s.worldIntelService()
 			if wErr != nil {
@@ -116,6 +123,7 @@ func (s *Store) automationService() (*automation.Service, error) {
 	})
 	s.automationSvc = svc
 	s.automationMu.Unlock()
+	s.notifyReactiveBus()
 	return svc, nil
 }
 

@@ -15,12 +15,13 @@ import (
 )
 
 const (
-	KindPrice       = "price"
-	KindIndicator   = "indicator"
-	KindNews        = "news"
-	KindPrediction  = "prediction"
-	KindCron        = "cron"
-	KindFasedScript = "fasedscript"
+	KindPrice         = "price"
+	KindIndicator     = "indicator"
+	KindNews          = "news"
+	KindPrediction    = "prediction"
+	KindCron          = "cron"
+	KindFasedScript   = "fasedscript"
+	KindDrawingBreach = "drawing_breach"
 
 	CompAbove        = "above"
 	CompBelow        = "below"
@@ -61,12 +62,13 @@ var (
 	safeIDPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`)
 
 	validKinds = map[string]bool{
-		KindPrice:       true,
-		KindIndicator:   true,
-		KindNews:        true,
-		KindPrediction:  true,
-		KindCron:        true,
-		KindFasedScript: true,
+		KindPrice:         true,
+		KindIndicator:     true,
+		KindNews:          true,
+		KindPrediction:    true,
+		KindCron:          true,
+		KindFasedScript:   true,
+		KindDrawingBreach: true,
 	}
 
 	validComparators = map[string]bool{
@@ -117,6 +119,7 @@ type TriggerCondition struct {
 	Interval     string  `json:"interval,omitempty"`
 	Indicator    string  `json:"indicator,omitempty"`
 	ScriptID     string  `json:"scriptId,omitempty"`
+	DrawingID    string  `json:"drawingId,omitempty"`
 	Comparator   string  `json:"comparator,omitempty"`
 	Threshold    float64 `json:"threshold,omitempty"`
 	Category     string  `json:"category,omitempty"`
@@ -312,7 +315,7 @@ func NormalizeTriggerInput(in TriggerInput) (Trigger, error) {
 	cond.Query = strings.TrimSpace(cond.Query)
 
 	switch kind {
-	case KindPrice, KindIndicator:
+	case KindPrice, KindIndicator, KindDrawingBreach:
 		v, vErr := marketdata.NormalizeVenue(cond.Venue)
 		if vErr != nil {
 			return Trigger{}, vErr
@@ -329,24 +332,42 @@ func NormalizeTriggerInput(in TriggerInput) (Trigger, error) {
 		if ivErr != nil {
 			return Trigger{}, ivErr
 		}
+		defaultComp := CompAbove
+		if kind == KindDrawingBreach {
+			defaultComp = CompCrossAbove
+		}
 		comp := strings.ToLower(strings.TrimSpace(cond.Comparator))
 		if comp == "" {
-			comp = CompAbove
+			comp = defaultComp
 		}
 		if !validComparators[comp] {
 			return Trigger{}, fmt.Errorf("unsupported comparator %q", cond.Comparator)
 		}
-		if kind == KindPrice && cond.Threshold <= 0 {
-			return Trigger{}, errors.New("price threshold must be positive")
-		}
-		if kind == KindIndicator {
+		switch kind {
+		case KindPrice:
+			if cond.Threshold <= 0 {
+				return Trigger{}, errors.New("price threshold must be positive")
+			}
+			cond.Indicator = ""
+			cond.DrawingID = ""
+		case KindIndicator:
 			ind := strings.ToLower(strings.TrimSpace(cond.Indicator))
 			if !validIndicators[ind] {
 				return Trigger{}, fmt.Errorf("unsupported indicator %q", cond.Indicator)
 			}
 			cond.Indicator = ind
-		} else {
+			cond.DrawingID = ""
+		case KindDrawingBreach:
+			if comp == CompPctChangeGTE {
+				return Trigger{}, errors.New("drawing_breach does not support pct_change_gte comparator")
+			}
+			drawingID, dErr := ValidateSafeID(cond.DrawingID)
+			if dErr != nil {
+				return Trigger{}, errors.New("drawingId is required and must be a valid identifier")
+			}
+			cond.DrawingID = drawingID
 			cond.Indicator = ""
+			cond.Threshold = 0
 		}
 		cond.Venue = v
 		cond.Symbol = sym

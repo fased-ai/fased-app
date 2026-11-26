@@ -21,9 +21,12 @@ import {
 } from "../quantlab-desk";
 import {
   defaultTradeWorkspaceConfig,
+  deleteDrawing,
   ensureTilesForLayout,
+  fetchDrawings,
   layoutTileCount,
   parseTradeWorkspaceConfig,
+  saveDrawing,
   symbolOverlayKey,
   TRADE_STORAGE_KEY,
   type ChartDrawing,
@@ -93,6 +96,33 @@ export function TradeWorkspace() {
     void getDeskState(core)
       .then((snap) => {
         if (!cancelled) setDesk(snap);
+      })
+      .catch(() => {});
+    void fetchDrawings(core)
+      .then((serverDrawings) => {
+        if (cancelled) return;
+        setConfig((prev) => {
+          const grouped: Record<string, ChartDrawing[]> = {};
+          const serverIds = new Set<string>();
+          for (const d of serverDrawings) {
+            serverIds.add(d.id);
+            const ovKey = symbolOverlayKey(
+              d.venue || "hyperliquid",
+              d.symbol || "BTC",
+            );
+            grouped[ovKey] = [...(grouped[ovKey] ?? []), d].slice(-32);
+          }
+          const merged: Record<string, ChartDrawing[]> = { ...grouped };
+          for (const [k, list] of Object.entries(prev.drawingsBySymbol ?? {})) {
+            const localOnly = list.filter(
+              (d) => !serverIds.has(d.id) && d.venue === undefined,
+            );
+            if (localOnly.length > 0) {
+              merged[k] = [...localOnly, ...(merged[k] ?? [])].slice(-32);
+            }
+          }
+          return { ...prev, drawingsBySymbol: merged };
+        });
       })
       .catch(() => {});
     return () => {
@@ -174,14 +204,23 @@ export function TradeWorkspace() {
 
   function addDrawing(tile: ChartTileConfig, d: ChartDrawing) {
     const ovKey = symbolOverlayKey(tile.venue, tile.symbol);
+    const enriched: ChartDrawing = {
+      ...d,
+      venue: tile.venue,
+      symbol: tile.symbol,
+      interval: tile.interval,
+    };
     setConfig((prev) => {
       const curMap = prev.drawingsBySymbol ?? {};
-      const nextList = [...(curMap[ovKey] ?? []), d].slice(-32);
+      const nextList = [...(curMap[ovKey] ?? []), enriched].slice(-32);
       return {
         ...prev,
         drawingsBySymbol: { ...curMap, [ovKey]: nextList },
       };
     });
+    if (core.mode === "ready") {
+      void saveDrawing(core, enriched).catch(() => {});
+    }
   }
 
   function addPaperOrder(tile: ChartTileConfig, ord: PaperOrderPreview) {
@@ -198,6 +237,7 @@ export function TradeWorkspace() {
 
   function clearOverlays(tile: ChartTileConfig) {
     const ovKey = symbolOverlayKey(tile.venue, tile.symbol);
+    const existing = config.drawingsBySymbol?.[ovKey] ?? tile.drawings;
     setConfig((prev) => {
       const nextDrawings = { ...(prev.drawingsBySymbol ?? {}) };
       delete nextDrawings[ovKey];
@@ -214,6 +254,9 @@ export function TradeWorkspace() {
         ),
       };
     });
+    if (core.mode === "ready" && existing.length > 0) {
+      void Promise.allSettled(existing.map((d) => deleteDrawing(core, d.id)));
+    }
   }
 
   function loadWatchlistItem(item: WatchlistItem) {

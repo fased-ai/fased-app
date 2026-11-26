@@ -28,6 +28,7 @@ type Config struct {
 	Now              func() time.Time
 	HTTPTransport    http.RoundTripper // Tests only.
 	MarketReader     func(ctx context.Context, venue, symbol, interval string, limit int) ([]marketdata.Candle, error)
+	DrawingReader    func(ctx context.Context, id string) (marketdata.ChartDrawing, bool, error)
 	IntelEvents      func(ctx context.Context, filter worldintel.EventFilter) ([]worldintel.IntelEvent, error)
 	IntelPredictions func(ctx context.Context, filter worldintel.PredictionFilter) (worldintel.PredictionList, error)
 	Scorer           func(ctx context.Context, req decision.EvaluateRequest) (decision.EvaluateResponse, error)
@@ -306,6 +307,24 @@ func (s *Service) EvaluateTrigger(ctx context.Context, id string, dryRun, ignore
 
 // EvaluateNow sweeps all enabled triggers unless paused or kill-switched.
 func (s *Service) EvaluateNow(ctx context.Context) (SweepResult, error) {
+	return s.evaluateFiltered(ctx, nil)
+}
+
+// EvaluateMatching sweeps enabled triggers matching any of kinds unless paused or kill-switched.
+func (s *Service) EvaluateMatching(ctx context.Context, kinds ...string) (SweepResult, error) {
+	if len(kinds) == 0 {
+		return s.evaluateFiltered(ctx, nil)
+	}
+	allowed := make(map[string]bool, len(kinds))
+	for _, k := range kinds {
+		if norm := strings.ToLower(strings.TrimSpace(k)); norm != "" {
+			allowed[norm] = true
+		}
+	}
+	return s.evaluateFiltered(ctx, allowed)
+}
+
+func (s *Service) evaluateFiltered(ctx context.Context, kinds map[string]bool) (SweepResult, error) {
 	state, err := s.store.getState(ctx)
 	if err != nil {
 		return SweepResult{}, err
@@ -324,6 +343,9 @@ func (s *Service) EvaluateNow(ctx context.Context) (SweepResult, error) {
 	sweep := SweepResult{Results: make([]EvalResult, 0, len(triggers))}
 	for _, tr := range triggers {
 		if !tr.Enabled {
+			continue
+		}
+		if len(kinds) > 0 && !kinds[tr.Kind] {
 			continue
 		}
 		res, eErr := s.evaluateTrigger(ctx, tr, false, false)
@@ -659,6 +681,70 @@ func (s *Service) evaluateCondition(ctx context.Context, tr Trigger, dryRun, ign
 				"current":    curVal,
 				"previous":   prevVal,
 				"candleTime": latest.Time,
+			},
+		}, nil
+
+	case KindDrawingBreach:
+		if s.cfg.DrawingReader == nil {
+			return conditionEval{}, errors.New("drawing reader unavailable")
+		}
+		if s.cfg.MarketReader == nil {
+			return conditionEval{}, errors.New("market reader unavailable")
+		}
+		drawing, found, err := s.cfg.DrawingReader(ctx, cond.DrawingID)
+		if err != nil {
+			return conditionEval{}, err
+		}
+		if !found {
+			return conditionEval{}, fmt.Errorf("chart drawing %q not found", cond.DrawingID)
+		}
+		if !strings.EqualFold(drawing.Venue, cond.Venue) || !strings.EqualFold(drawing.Symbol, cond.Symbol) {
+			return conditionEval{}, errors.New("drawing venue/symbol mismatch")
+		}
+		candles, err := s.cfg.MarketReader(ctx, cond.Venue, cond.Symbol, cond.Interval, 64)
+		if err != nil {
+			return conditionEval{}, err
+		}
+		if len(candles) < 2 {
+			return conditionEval{}, errors.New("insufficient candle history")
+		}
+		latest := candles[len(candles)-1]
+		prev := candles[len(candles)-2]
+		levelCur, ok1 := marketdata.EvaluateDrawingPrice(drawing, latest.Time)
+		if !ok1 {
+			return conditionEval{}, errors.New("drawing price unavailable at current bar")
+		}
+		levelPrev, ok2 := marketdata.EvaluateDrawingPrice(drawing, prev.Time)
+		if !ok2 {
+			levelPrev = levelCur
+		}
+		matched := CompareMetric(cond.Comparator, latest.Close-levelCur, prev.Close-levelPrev, 0)
+		fp := hashFingerprint(fmt.Sprintf("%s:%s:%s:%s:%s:%d", tr.Kind, cond.Venue, cond.Symbol, cond.DrawingID, cond.Comparator, latest.Time))
+		label := drawing.Label
+		if label == "" {
+			label = drawing.ID
+		}
+		return conditionEval{
+			matched:     matched,
+			metric:      latest.Close,
+			fingerprint: fp,
+			title:       fmt.Sprintf("%s: %s %s breached %s", tr.Name, cond.Venue, cond.Symbol, label),
+			body:        fmt.Sprintf("Price %.4f %s %s level %.4f (prev %.4f vs %.4f)", latest.Close, cond.Comparator, drawing.Kind, levelCur, prev.Close, levelPrev),
+			ticker:      cond.Symbol,
+			venue:       cond.Venue,
+			urgency:     severityUrgency(tr.Action.Severity),
+			untrusted:   false,
+			meta: map[string]any{
+				"venue":       cond.Venue,
+				"symbol":      cond.Symbol,
+				"interval":    cond.Interval,
+				"drawingId":   cond.DrawingID,
+				"drawingKind": drawing.Kind,
+				"comparator":  cond.Comparator,
+				"level":       levelCur,
+				"current":     latest.Close,
+				"previous":    prev.Close,
+				"candleTime":  latest.Time,
 			},
 		}, nil
 

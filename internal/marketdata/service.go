@@ -662,6 +662,71 @@ func (s *Service) DeleteWatchlist(ctx context.Context, id string) (bool, error) 
 	return deleted, nil
 }
 
+// ListDrawings lists saved chart drawings with optional venue, symbol, and interval filters.
+func (s *Service) ListDrawings(ctx context.Context, venue, symbol, interval string) ([]ChartDrawing, error) {
+	var cleanVenue, cleanSymbol, cleanInterval string
+	if strings.TrimSpace(venue) != "" {
+		v, err := NormalizeVenue(venue)
+		if err != nil {
+			return nil, err
+		}
+		cleanVenue = v
+	}
+	if strings.TrimSpace(symbol) != "" {
+		sym, err := NormalizeSymbol(symbol)
+		if err != nil {
+			return nil, err
+		}
+		cleanSymbol = sym
+	}
+	if strings.TrimSpace(interval) != "" {
+		iv, err := NormalizeInterval(interval)
+		if err != nil {
+			return nil, err
+		}
+		cleanInterval = iv
+	}
+	return s.store.ListDrawings(ctx, cleanVenue, cleanSymbol, cleanInterval)
+}
+
+// GetDrawing returns a saved chart drawing by ID.
+func (s *Service) GetDrawing(ctx context.Context, id string) (ChartDrawing, bool, error) {
+	return s.store.GetDrawing(ctx, id)
+}
+
+// SaveDrawing validates and persists a chart drawing, then publishes a drawing event.
+func (s *Service) SaveDrawing(ctx context.Context, d ChartDrawing) (ChartDrawing, error) {
+	saved, err := s.store.SaveDrawing(ctx, d)
+	if err != nil {
+		return ChartDrawing{}, err
+	}
+	s.Publish(Event{
+		Type:      "drawing",
+		Venue:     saved.Venue,
+		Symbol:    saved.Symbol,
+		Interval:  saved.Interval,
+		Timestamp: saved.UpdatedAt,
+		Payload:   saved,
+	})
+	return saved, nil
+}
+
+// DeleteDrawing deletes a saved chart drawing by ID and notifies bus listeners.
+func (s *Service) DeleteDrawing(ctx context.Context, id string) (bool, error) {
+	deleted, err := s.store.DeleteDrawing(ctx, id)
+	if err != nil {
+		return false, err
+	}
+	if deleted {
+		s.Publish(Event{
+			Type:      "drawing",
+			Timestamp: s.now().UTC().Unix(),
+			Payload:   map[string]any{"deletedId": strings.TrimSpace(id)},
+		})
+	}
+	return deleted, nil
+}
+
 func defaultInstrumentsCatalog(nowSec int64) []Instrument {
 	return []Instrument{
 		{Venue: VenueHyperliquid, Symbol: "BTC", Base: "BTC", Quote: "USDC", AssetClass: "crypto_perp", TickSize: 1.0, LotSize: 0.001, MaxLeverage: 40, UpdatedAt: nowSec},

@@ -77,6 +77,44 @@ func TestMarketDataHTTPAndAgentMCPIntegration(t *testing.T) {
 	}
 	delResp.Body.Close()
 
+	// Drawing PUT requires CSRF, persists across GET filter, and DELETE removes it.
+	badDrawingCSRF := doV2JSONRequest(t, http.MethodPut, ts.URL+"/api/v1/market/drawings", ts.URL, token, "", `{"id":"draw-1","venue":"hyperliquid","symbol":"BTC","kind":"hline","p1":{"time":1764000000,"price":95000}}`, "application/json")
+	badDrawingCSRF.Body.Close()
+	if badDrawingCSRF.StatusCode != http.StatusForbidden {
+		t.Fatalf("expected 403 without CSRF on PUT drawing, got %d", badDrawingCSRF.StatusCode)
+	}
+	putDrawResp := doV2JSONRequest(t, http.MethodPut, ts.URL+"/api/v1/market/drawings", ts.URL, token, csrf, `{"id":"draw-1","venue":"hyperliquid","symbol":"BTC","kind":"hline","p1":{"time":1764000000,"price":95000},"label":"Pivot"}`, "application/json")
+	if putDrawResp.StatusCode != http.StatusOK {
+		putDrawResp.Body.Close()
+		t.Fatalf("PUT drawing expected 200, got %d", putDrawResp.StatusCode)
+	}
+	putDrawResp.Body.Close()
+
+	getDrawResp := doV2JSONRequest(t, http.MethodGet, ts.URL+"/api/v1/market/drawings?venue=hyperliquid&symbol=BTC&interval=1h", "", token, "", "", "application/json")
+	if getDrawResp.StatusCode != http.StatusOK {
+		getDrawResp.Body.Close()
+		t.Fatalf("GET drawings expected 200, got %d", getDrawResp.StatusCode)
+	}
+	var listedDrawings struct {
+		Count    int                       `json:"count"`
+		Drawings []marketdata.ChartDrawing `json:"drawings"`
+	}
+	if err := json.NewDecoder(getDrawResp.Body).Decode(&listedDrawings); err != nil {
+		getDrawResp.Body.Close()
+		t.Fatalf("decode GET drawings: %v", err)
+	}
+	getDrawResp.Body.Close()
+	if listedDrawings.Count != 1 || listedDrawings.Drawings[0].ID != "draw-1" {
+		t.Fatalf("unexpected listed drawings: %+v", listedDrawings)
+	}
+
+	delDrawResp := doV2JSONRequest(t, http.MethodDelete, ts.URL+"/api/v1/market/drawings/draw-1", ts.URL, token, csrf, "", "application/json")
+	if delDrawResp.StatusCode != http.StatusOK {
+		delDrawResp.Body.Close()
+		t.Fatalf("DELETE drawing expected 200, got %d", delDrawResp.StatusCode)
+	}
+	delDrawResp.Body.Close()
+
 	// SSE /api/v1/market/stream emits initial snapshot event cleanly and terminates on client cancel.
 	sseCtx, cancelSSE := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancelSSE()

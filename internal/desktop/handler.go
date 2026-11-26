@@ -393,6 +393,9 @@ func allowed(method, route string) bool {
 	if strings.HasPrefix(route, "/api/v1/market/watchlists/") {
 		return method == http.MethodDelete && validPathSegment(strings.TrimPrefix(route, "/api/v1/market/watchlists/"))
 	}
+	if strings.HasPrefix(route, "/api/v1/market/drawings/") {
+		return method == http.MethodDelete && validPathSegment(strings.TrimPrefix(route, "/api/v1/market/drawings/"))
+	}
 	if strings.HasPrefix(route, "/api/v1/mcp/clients/") {
 		rel := strings.TrimPrefix(route, "/api/v1/mcp/clients/")
 		switch {
@@ -472,7 +475,7 @@ func allowed(method, route string) bool {
 		return method == "GET" || method == "POST"
 	case "/api/v1/market/instruments", "/api/v1/market/candles", "/api/v1/market/orderbook", "/api/v1/market/trades", "/api/v1/market/footprint", "/api/v1/market/macro", "/api/v1/market/sec", "/api/v1/market/cohorts", "/api/v1/market/stream":
 		return method == http.MethodGet
-	case "/api/v1/market/watchlists":
+	case "/api/v1/market/watchlists", "/api/v1/market/drawings":
 		return method == http.MethodGet || method == http.MethodPut
 	case "/api/v1/decision/config":
 		return method == http.MethodGet || method == http.MethodPut
@@ -698,6 +701,13 @@ func allowedQuery(r *http.Request) bool {
 	case r.Method == http.MethodGet && r.URL.Path == "/api/v1/market/cohorts":
 		for key := range q {
 			if key != "window" {
+				return false
+			}
+		}
+		return true
+	case r.Method == http.MethodGet && r.URL.Path == "/api/v1/market/drawings":
+		for key := range q {
+			if key != "venue" && key != "symbol" && key != "interval" {
 				return false
 			}
 		}

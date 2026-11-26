@@ -100,6 +100,17 @@ type Store struct {
 	custodyPackageID              string                                                             // Public package identifier for owner SSH.
 	custodyNetwork                string                                                             // Public immutable v2 configuration; no key material.
 	researchRead                  func(context.Context, researchFactResult) (json.RawMessage, error) // Test-only local projection fault; never configuration/IPC.
+	busNotifyCh                   chan struct{}
+}
+
+func (s *Store) notifyReactiveBus() {
+	if s == nil || s.busNotifyCh == nil {
+		return
+	}
+	select {
+	case s.busNotifyCh <- struct{}{}:
+	default:
+	}
 }
 
 func sqliteDSN(dbPath string) string {
@@ -380,7 +391,7 @@ PRAGMA user_version=1;`)
 	if _, _, err = readAgents(ctx, db); err != nil {
 		return nil, err
 	}
-	store := &Store{db: db, dir: dir, now: time.Now, bootID: update.NewProbe(), rpcAdmission: rpcActivationEnabled, provider: providerState{apiCredentials: providerActivationEnabled}, taskSecrets: secrets}
+	store := &Store{db: db, dir: dir, now: time.Now, bootID: update.NewProbe(), rpcAdmission: rpcActivationEnabled, provider: providerState{apiCredentials: providerActivationEnabled}, taskSecrets: secrets, busNotifyCh: make(chan struct{}, 1)}
 	if err = store.recoverOnchain(ctx); err != nil {
 		return nil, err
 	}

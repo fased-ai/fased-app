@@ -180,6 +180,11 @@ export type ChartDrawing = {
   p1: { time: number; price: number };
   p2?: { time: number; price: number };
   label?: string;
+  venue?: string;
+  symbol?: string;
+  interval?: string;
+  createdAt?: number;
+  updatedAt?: number;
 };
 
 export type PaperOrderPreview = {
@@ -806,6 +811,44 @@ export async function deleteWatchlist(
 ): Promise<void> {
   if (client.mode !== "ready") return;
   await client.request(`market/watchlists/${encodeURIComponent(id)}`, "DELETE");
+}
+
+export async function fetchDrawings(
+  client: MarketRequestClient,
+  opts?: { venue?: string; symbol?: string; interval?: string },
+  signal?: AbortSignal,
+): Promise<ChartDrawing[]> {
+  if (client.mode !== "ready") {
+    return [];
+  }
+  const params = new URLSearchParams();
+  if (opts?.venue) params.set("venue", opts.venue);
+  if (opts?.symbol) params.set("symbol", opts.symbol);
+  if (opts?.interval) params.set("interval", opts.interval);
+  const qs = params.toString();
+  const res = await client.request<{ drawings?: ChartDrawing[] }>(
+    qs ? `market/drawings?${qs}` : "market/drawings",
+    "GET",
+    undefined,
+    signal,
+  );
+  return res.drawings ?? [];
+}
+
+export async function saveDrawing(
+  client: MarketRequestClient,
+  drawing: ChartDrawing,
+): Promise<ChartDrawing> {
+  if (client.mode !== "ready") return drawing;
+  return client.request<ChartDrawing>("market/drawings", "PUT", drawing);
+}
+
+export async function deleteDrawing(
+  client: MarketRequestClient,
+  id: string,
+): Promise<void> {
+  if (client.mode !== "ready") return;
+  await client.request(`market/drawings/${encodeURIComponent(id)}`, "DELETE");
 }
 
 export async function fetchCohorts(
