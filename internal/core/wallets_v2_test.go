@@ -1,14 +1,19 @@
 package core
 
 import (
+	"crypto/ed25519"
+	"crypto/rand"
+	"encoding/base64"
 	"encoding/json"
 	"io"
 	"net/http"
 	"strings"
 	"testing"
+
+	"github.com/fased-ai/fased-app/internal/custody"
 )
 
-func TestWalletsV2HTTPRoundTripAndRPCBalance(t *testing.T) {
+func TestWalletsV2HardenedCustodyPoliciesRPCHardwareAndRecovery(t *testing.T) {
 	t.Parallel()
 	s := fixtureStore(t)
 	s.providerFixture = true
@@ -22,77 +27,172 @@ func TestWalletsV2HTTPRoundTripAndRPCBalance(t *testing.T) {
 		t.Fatalf("expected 401 on GET /api/v1/wallets, got %d", unauth.StatusCode)
 	}
 
-	// 2. Create Solana wallet -> returns 12-word mnemonic once + Cache-Control: no-store.
-	createResp := doV2JSONRequest(t, http.MethodPost, ts.URL+"/api/v1/wallets/create", ts.URL, token, csrf, `{"name":"Phantom 1","role":"personal","words":12,"passphrase":"secret-pass-123"}`, "application/json")
+	// 2. Create native agent wallet with inline Solana RPC -> NEVER returns mnemonic/private key over HTTP!
+	createResp := doV2JSONRequest(t, http.MethodPost, ts.URL+"/api/v1/wallets/create", ts.URL, token, csrf,
+		`{"name":"Agent Desk","role":"agent","rpcUrl":"https://mainnet.helius-rpc.com/?api-key=secret-token"}`,
+		"application/json",
+	)
 	rawCreate, _ := io.ReadAll(createResp.Body)
 	createResp.Body.Close()
-	if createResp.StatusCode != http.StatusOK || createResp.Header.Get("Cache-Control") != "no-store" {
-		t.Fatalf("POST /api/v1/wallets/create failed: code=%d cc=%q body=%s", createResp.StatusCode, createResp.Header.Get("Cache-Control"), rawCreate)
+	if createResp.StatusCode != http.StatusOK {
+		t.Fatalf("POST /api/v1/wallets/create failed: code=%d body=%s", createResp.StatusCode, rawCreate)
+	}
+	createBody := string(rawCreate)
+	if strings.Contains(createBody, "mnemonic") || strings.Contains(createBody, "privateKey") || strings.Contains(createBody, "secret-token") {
+		t.Fatalf("SECURITY FAILURE: raw secret or RPC key leaked in HTTP response: %s", createBody)
 	}
 	var created struct {
-		Wallet struct {
-			ID        string `json:"id"`
-			PublicKey string `json:"publicKey"`
-		} `json:"wallet"`
-		Mnemonic  string `json:"mnemonic"`
-		PublicKey string `json:"publicKey"`
+		Wallet custody.WalletPublic `json:"wallet"`
 	}
 	if err := json.Unmarshal(rawCreate, &created); err != nil {
 		t.Fatalf("decode create response: %v", err)
 	}
-	if len(strings.Fields(created.Mnemonic)) != 12 || created.PublicKey == "" {
-		t.Fatalf("unexpected created payload: %+v", created)
+	if created.Wallet.PublicKey == "" || created.Wallet.RPC.Cluster != "mainnet-beta" || created.Wallet.RPC.Host != "https://mainnet.helius-rpc.com" {
+		t.Fatalf("unexpected wallet metadata: %+v", created.Wallet)
 	}
 
-	// 3. List wallets NEVER leaks mnemonic or secret.
-	listResp := doV2JSONRequest(t, http.MethodGet, ts.URL+"/api/v1/wallets", "", token, "", "", "application/json")
-	rawList, _ := io.ReadAll(listResp.Body)
-	listResp.Body.Close()
-	if listResp.StatusCode != http.StatusOK || strings.Contains(string(rawList), created.Mnemonic) || !strings.Contains(string(rawList), created.PublicKey) {
-		t.Fatalf("GET /api/v1/wallets leaked or missed wallet: %s", rawList)
+	// 3. Old /export raw-secret endpoint MUST NOT EXIST (returns 404).
+	legacyExport := doV2JSONRequest(t, http.MethodPost, ts.URL+"/api/v1/wallets/"+created.Wallet.ID+"/export", ts.URL, token, csrf, `{"passphrase":"secret-pass-123"}`, "application/json")
+	legacyExport.Body.Close()
+	if legacyExport.StatusCode != http.StatusNotFound {
+		t.Fatalf("expected legacy raw /export endpoint removed (404), got %d", legacyExport.StatusCode)
 	}
 
-	// 4. Balance check without configured RPC returns rpcRequired=true cleanly.
-	balMissing := doV2JSONRequest(t, http.MethodPost, ts.URL+"/api/v1/wallets/"+created.Wallet.ID+"/balance", ts.URL, token, csrf, `{"cluster":"mainnet-beta"}`, "application/json")
-	rawBalMissing, _ := io.ReadAll(balMissing.Body)
-	balMissing.Body.Close()
-	if balMissing.StatusCode != http.StatusOK || !strings.Contains(string(rawBalMissing), `"rpcRequired":true`) {
-		t.Fatalf("expected rpcRequired=true before RPC setup, got: %s", rawBalMissing)
+	// 4. Create Vault wallet and confirm autonomous connection binding is hard-blocked (403).
+	vaultResp := doV2JSONRequest(t, http.MethodPost, ts.URL+"/api/v1/wallets/create", ts.URL, token, csrf,
+		`{"name":"Reserve Vault","role":"vault","rpcUrl":"https://api.mainnet-beta.solana.com"}`,
+		"application/json",
+	)
+	rawVault, _ := io.ReadAll(vaultResp.Body)
+	vaultResp.Body.Close()
+	var createdVault struct {
+		Wallet custody.WalletPublic `json:"wallet"`
+	}
+	_ = json.Unmarshal(rawVault, &createdVault)
+
+	badConn := doV2JSONRequest(t, http.MethodPut, ts.URL+"/api/v1/wallets/"+createdVault.Wallet.ID+"/connections", ts.URL, token, csrf,
+		`{"agentIds":["wen-operator"],"allowTradeBots":true}`, "application/json")
+	badConn.Body.Close()
+	if badConn.StatusCode != http.StatusForbidden {
+		t.Fatalf("expected 403 binding vault to autonomous bots/agents, got %d", badConn.StatusCode)
 	}
 
-	// Enable Solana Mainnet RPC -> balance returns SOL cleanly.
-	rpcEnable := doV2JSONRequest(t, http.MethodPut, ts.URL+"/api/v1/data-plugins/solana-mainnet", ts.URL, token, csrf, `{"enabled":true}`, "application/json")
-	rpcEnable.Body.Close()
-	balOK := doV2JSONRequest(t, http.MethodPost, ts.URL+"/api/v1/wallets/"+created.Wallet.ID+"/balance", ts.URL, token, csrf, `{"cluster":"mainnet-beta"}`, "application/json")
-	rawBalOK, _ := io.ReadAll(balOK.Body)
-	balOK.Body.Close()
-	if balOK.StatusCode != http.StatusOK || !strings.Contains(string(rawBalOK), `"rpcRequired":false`) {
-		t.Fatalf("expected balance result after RPC enable, got: %s", rawBalOK)
+	// 5. Fail-closed policy denies transfer before policy loosened; confirmLoosen unlocks bounded execution.
+	badRev := doV2JSONRequest(t, http.MethodPost, ts.URL+"/api/v1/wallets/"+created.Wallet.ID+"/reviews", ts.URL, token, csrf,
+		`{"operation":"solana.nativeTransfer","destination":"`+createdVault.Wallet.Handle+`","amountHuman":"0.1"}`,
+		"application/json",
+	)
+	badRev.Body.Close()
+	if badRev.StatusCode != http.StatusForbidden {
+		t.Fatalf("expected 403 fail-closed before policy grant, got %d", badRev.StatusCode)
 	}
 
-	// 5. Export wrong passphrase -> 403; correct passphrase -> returns mnemonic & keypairJson.
-	expWrong := doV2JSONRequest(t, http.MethodPost, ts.URL+"/api/v1/wallets/"+created.Wallet.ID+"/export", ts.URL, token, csrf, `{"passphrase":"bad"}`, "application/json")
-	expWrong.Body.Close()
-	if expWrong.StatusCode != http.StatusForbidden {
-		t.Fatalf("expected 403 wrong passphrase export, got %d", expWrong.StatusCode)
-	}
-	expOK := doV2JSONRequest(t, http.MethodPost, ts.URL+"/api/v1/wallets/"+created.Wallet.ID+"/export", ts.URL, token, csrf, `{"passphrase":"secret-pass-123"}`, "application/json")
-	rawExp, _ := io.ReadAll(expOK.Body)
-	expOK.Body.Close()
-	if expOK.StatusCode != http.StatusOK || !strings.Contains(string(rawExp), created.Mnemonic) || !strings.Contains(string(rawExp), `"keypairJson"`) {
-		t.Fatalf("export failed: %d %s", expOK.StatusCode, rawExp)
+	pol := created.Wallet.Policy
+	pol.ApprovalMode = custody.ApprovalBoundedAuto
+	pol.Operations = []string{"solana.nativeTransfer"}
+	pol.Programs = []string{custody.SolanaSystemProgram, custody.SolanaComputeBudget}
+	pol.Destinations = []string{createdVault.Wallet.Handle}
+	pol.SOLCap.MaxPerTxRaw = 500_000_000
+	pol.SOLCap.MaxDailyRaw = 1_000_000_000
+	polPayload, _ := json.Marshal(map[string]any{
+		"policy":             pol,
+		"confirmLoosen":      true,
+		"expectedPolicyHash": created.Wallet.Policy.PolicyHash,
+	})
+	polResp := doV2JSONRequest(t, http.MethodPut, ts.URL+"/api/v1/wallets/"+created.Wallet.ID+"/policy", ts.URL, token, csrf, string(polPayload), "application/json")
+	rawPol, _ := io.ReadAll(polResp.Body)
+	polResp.Body.Close()
+	if polResp.StatusCode != http.StatusOK {
+		t.Fatalf("PUT /policy failed: code=%d body=%s", polResp.StatusCode, rawPol)
 	}
 
-	// 6. Import watch-only + delete works cleanly.
-	impWatch := doV2JSONRequest(t, http.MethodPost, ts.URL+"/api/v1/wallets/import", ts.URL, token, csrf, `{"name":"Watch 1","watchAddress":"`+created.PublicKey+`"}`, "application/json")
-	impWatch.Body.Close()
-	if impWatch.StatusCode != http.StatusOK {
-		t.Fatalf("watch import expected 200, got %d", impWatch.StatusCode)
+	// Prepare & execute via native signer -> updates balance/ledger cleanly.
+	revResp := doV2JSONRequest(t, http.MethodPost, ts.URL+"/api/v1/wallets/"+created.Wallet.ID+"/reviews", ts.URL, token, csrf,
+		`{"operation":"solana.nativeTransfer","destination":"`+createdVault.Wallet.Handle+`","amountHuman":"0.2"}`,
+		"application/json",
+	)
+	rawRev, _ := io.ReadAll(revResp.Body)
+	revResp.Body.Close()
+	if revResp.StatusCode != http.StatusOK {
+		t.Fatalf("POST /reviews failed: code=%d body=%s", revResp.StatusCode, rawRev)
+	}
+	var revOut struct {
+		Review custody.WalletReview `json:"review"`
+	}
+	_ = json.Unmarshal(rawRev, &revOut)
+
+	execResp := doV2JSONRequest(t, http.MethodPost, ts.URL+"/api/v1/wallets/"+created.Wallet.ID+"/reviews/"+revOut.Review.ID+"/execute", ts.URL, token, csrf, `{}`, "application/json")
+	execResp.Body.Close()
+	if execResp.StatusCode != http.StatusOK {
+		t.Fatalf("POST /execute failed: %d", execResp.StatusCode)
 	}
 
-	delResp := doV2JSONRequest(t, http.MethodDelete, ts.URL+"/api/v1/wallets/"+created.Wallet.ID, ts.URL, token, csrf, "", "application/json")
-	delResp.Body.Close()
-	if delResp.StatusCode != http.StatusOK {
-		t.Fatalf("DELETE wallet failed: %d", delResp.StatusCode)
+	// 6. Attach Hardware Wallet & verify tampered signed tx is rejected cleanly (403).
+	hwPub, hwPriv, _ := ed25519.GenerateKey(rand.Reader)
+	hwPubB58 := custody.Base58Encode(hwPub)
+	attResp := doV2JSONRequest(t, http.MethodPost, ts.URL+"/api/v1/wallets/attach", ts.URL, token, csrf,
+		`{"custody":"hardware_standard","name":"Ledger Reserve","role":"vault","publicKey":"`+hwPubB58+`","rpcUrl":"https://api.mainnet-beta.solana.com"}`,
+		"application/json",
+	)
+	rawAtt, _ := io.ReadAll(attResp.Body)
+	attResp.Body.Close()
+	if attResp.StatusCode != http.StatusOK {
+		t.Fatalf("POST /attach failed: code=%d body=%s", attResp.StatusCode, rawAtt)
+	}
+	var hwOut struct {
+		Wallet custody.WalletPublic `json:"wallet"`
+	}
+	_ = json.Unmarshal(rawAtt, &hwOut)
+	hwPol := hwOut.Wallet.Policy
+	hwPol.Operations = []string{"solana.nativeTransfer"}
+	hwPol.Programs = []string{custody.SolanaSystemProgram, custody.SolanaComputeBudget}
+	hwPol.Destinations = []string{created.Wallet.PublicKey}
+	hwPol.SOLCap.MaxPerTxRaw = 500_000_000
+	hwPol.SOLCap.MaxDailyRaw = 1_000_000_000
+	hwPolPayload, _ := json.Marshal(map[string]any{
+		"policy":             hwPol,
+		"confirmLoosen":      true,
+		"expectedPolicyHash": hwOut.Wallet.Policy.PolicyHash,
+	})
+	hwPolResp := doV2JSONRequest(t, http.MethodPut, ts.URL+"/api/v1/wallets/"+hwOut.Wallet.ID+"/policy", ts.URL, token, csrf, string(hwPolPayload), "application/json")
+	hwPolResp.Body.Close()
+
+	hwRevResp := doV2JSONRequest(t, http.MethodPost, ts.URL+"/api/v1/wallets/"+hwOut.Wallet.ID+"/reviews", ts.URL, token, csrf,
+		`{"operation":"solana.nativeTransfer","destination":"`+created.Wallet.PublicKey+`","amountHuman":"0.1"}`,
+		"application/json",
+	)
+	rawHWRev, _ := io.ReadAll(hwRevResp.Body)
+	hwRevResp.Body.Close()
+	var hwRevOut struct {
+		Review custody.WalletReview `json:"review"`
+	}
+	_ = json.Unmarshal(rawHWRev, &hwRevOut)
+	msgBytes, _ := base64.StdEncoding.DecodeString(hwRevOut.Review.UnsignedMsgBase64)
+	validSignedTx, _ := custody.SignLegacyMessage(msgBytes, hwPriv)
+
+	tamperedMsg := append([]byte(nil), msgBytes...)
+	tamperedMsg[0] ^= 0x01
+	badSignedTx, _ := custody.SignLegacyMessage(tamperedMsg, hwPriv)
+
+	badSub := doV2JSONRequest(t, http.MethodPost, ts.URL+"/api/v1/wallets/"+hwOut.Wallet.ID+"/reviews/"+hwRevOut.Review.ID+"/submit-signed", ts.URL, token, csrf,
+		`{"signedTxBase64":"`+base64.StdEncoding.EncodeToString(badSignedTx)+`"}`, "application/json")
+	badSub.Body.Close()
+	if badSub.StatusCode != http.StatusForbidden {
+		t.Fatalf("expected 403 on tampered hardware signed tx, got %d", badSub.StatusCode)
+	}
+
+	okSub := doV2JSONRequest(t, http.MethodPost, ts.URL+"/api/v1/wallets/"+hwOut.Wallet.ID+"/reviews/"+hwRevOut.Review.ID+"/submit-signed", ts.URL, token, csrf,
+		`{"signedTxBase64":"`+base64.StdEncoding.EncodeToString(validSignedTx)+`"}`, "application/json")
+	okSub.Body.Close()
+	if okSub.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 on valid hardware signed tx, got %d", okSub.StatusCode)
+	}
+
+	// 7. Encrypted Argon2id Backup returns encrypted archive ONLY (no plaintext key).
+	bakResp := doV2JSONRequest(t, http.MethodPost, ts.URL+"/api/v1/wallets/"+created.Wallet.ID+"/backup", ts.URL, token, csrf, `{"passphrase":"secret-pass-123"}`, "application/json")
+	rawBak, _ := io.ReadAll(bakResp.Body)
+	bakResp.Body.Close()
+	if bakResp.StatusCode != http.StatusOK || !strings.Contains(string(rawBak), `"fased-recovery/1"`) {
+		t.Fatalf("POST /backup failed: code=%d body=%s", bakResp.StatusCode, rawBak)
 	}
 }

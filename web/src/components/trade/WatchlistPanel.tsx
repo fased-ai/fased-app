@@ -152,38 +152,41 @@ export function WatchlistPanel({
   }
 
   return (
-    <aside className="panel trade-watchlist" aria-label={t("Watchlist")}>
+    <aside className="wt-wpanel trade-watchlist" aria-label={t("Watchlist")}>
       <div className="trade-pane-head">
         <h2>{t("Watchlist")}</h2>
-        <span className="trade-source-pill">{current.items.length}</span>
+        <span className="trade-source-pill mono">{current.items.length}</span>
       </div>
 
       <form className="trade-watchlist-form" onSubmit={(e) => void addItem(e)}>
-        <select
-          aria-label={t("Watchlist venue")}
-          value={venue}
-          onChange={(e) => setVenue(e.target.value as Venue)}
-        >
+        <div className="trade-venue-filter-row" role="group" aria-label={t("Watchlist venue")}>
           {venueOptions.map((v) => (
-            <option key={v} value={v}>
-              {v}
-            </option>
+            <button
+              key={v}
+              type="button"
+              className={`trade-venue-filter-btn ${venue === v ? "is-selected" : ""}`}
+              onClick={() => setVenue(v as Venue)}
+            >
+              {v === "hyperliquid" ? "HL" : v}
+            </button>
           ))}
-        </select>
-        <input
-          aria-label={t("Add ticker")}
-          placeholder={t("Ticker")}
-          value={symbol}
-          onChange={(e) => setSymbol(e.target.value)}
-        />
-        <button
-          type="submit"
-          className="trade-mini-btn"
-          disabled={saving}
-          aria-label={t("Add to watchlist")}
-        >
-          <Plus size={14} />
-        </button>
+        </div>
+        <div className="trade-watchlist-addrow">
+          <input
+            aria-label={t("Add ticker")}
+            placeholder={t("Ticker")}
+            value={symbol}
+            onChange={(e) => setSymbol(e.target.value)}
+          />
+          <button
+            type="submit"
+            className="trade-mini-btn"
+            disabled={saving}
+            aria-label={t("Add to watchlist")}
+          >
+            <Plus size={14} />
+          </button>
+        </div>
       </form>
 
       <div className="trade-watchlist-filter">
@@ -266,18 +269,18 @@ export function WatchlistPanel({
               value={csvSymbol}
               onChange={(e) => setCsvSymbol(e.target.value)}
             />
-            <select
-              aria-label={t("Interval")}
-              value={csvInterval}
-              onChange={(e) => setCsvInterval(e.target.value)}
-            >
-              <option value="1m">1m</option>
-              <option value="5m">5m</option>
-              <option value="15m">15m</option>
-              <option value="1h">1h</option>
-              <option value="4h">4h</option>
-              <option value="1d">1d</option>
-            </select>
+            <div className="trade-venue-filter-row" role="group" aria-label={t("Interval")}>
+              {["1m", "5m", "15m", "1h", "4h", "1d"].map((iv) => (
+                <button
+                  key={iv}
+                  type="button"
+                  className={`trade-venue-filter-btn ${csvInterval === iv ? "is-selected" : ""}`}
+                  onClick={() => setCsvInterval(iv)}
+                >
+                  {iv}
+                </button>
+              ))}
+            </div>
           </div>
           <textarea
             aria-label={t("CSV data")}

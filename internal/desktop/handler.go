@@ -474,11 +474,44 @@ func allowed(method, route string) bool {
 	}
 	if strings.HasPrefix(route, "/api/v1/wallets/") {
 		rel := strings.TrimPrefix(route, "/api/v1/wallets/")
-		if strings.HasSuffix(rel, "/export") || strings.HasSuffix(rel, "/balance") {
-			id := strings.TrimSuffix(strings.TrimSuffix(rel, "/export"), "/balance")
-			return method == http.MethodPost && validPathSegment(id)
+		switch rel {
+		case "create", "attach", "restore":
+			return method == http.MethodPost
 		}
-		return method == http.MethodDelete && validPathSegment(rel)
+		parts := strings.Split(rel, "/")
+		switch len(parts) {
+		case 1:
+			return method == http.MethodDelete && validPathSegment(parts[0])
+		case 2:
+			if !validPathSegment(parts[0]) {
+				return false
+			}
+			switch parts[1] {
+			case "policy":
+				return method == http.MethodGet || method == http.MethodPut
+			case "connections", "rpc":
+				return method == http.MethodPut
+			case "activity":
+				return method == http.MethodGet
+			case "freeze", "balance", "backup", "reviews":
+				return method == http.MethodPost
+			default:
+				return false
+			}
+		case 4:
+			if !validPathSegment(parts[0]) || !validPathSegment(parts[2]) {
+				return false
+			}
+			if parts[1] == "reviews" && (parts[3] == "execute" || parts[3] == "submit-signed") {
+				return method == http.MethodPost
+			}
+			if parts[1] == "ledger" && parts[3] == "reconcile" {
+				return method == http.MethodPost
+			}
+			return false
+		default:
+			return false
+		}
 	}
 	if route == "/api/v1/data-plugins" {
 		return method == http.MethodGet

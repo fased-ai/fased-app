@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/fased-ai/fased-app/internal/custody"
 	"github.com/fased-ai/fased-app/internal/decision"
 	"github.com/fased-ai/fased-app/internal/fasedscript"
 	"github.com/fased-ai/fased-app/internal/hyperliquid"
@@ -23,13 +24,16 @@ import (
 type TradeAccountOption struct {
 	ID            string `json:"id"`
 	Label         string `json:"label"`
-	Kind          string `json:"kind"` // paper | solana | exchange
+	Kind          string `json:"kind"` // paper | solana | hardware | exchange
+	Role          string `json:"role,omitempty"`
+	Custody       string `json:"custody,omitempty"`
+	Cluster       string `json:"cluster,omitempty"`
 	ExecutionMode string `json:"executionMode"`
 	Address       string `json:"address,omitempty"`
 	Venue         string `json:"venue,omitempty"`
 }
 
-func (s *Store) tradeAccountsView(_ context.Context) []TradeAccountOption {
+func (s *Store) tradeAccountsView(ctx context.Context) []TradeAccountOption {
 	out := []TradeAccountOption{
 		{
 			ID:            trade.ExecutionModePaper,
@@ -41,13 +45,23 @@ func (s *Store) tradeAccountsView(_ context.Context) []TradeAccountOption {
 	if s == nil {
 		return out
 	}
-	if wv, err := s.walletVaultService(); err == nil && wv != nil {
-		if wallets, wErr := wv.ListWallets(); wErr == nil {
+	if cs, err := s.custodyService(); err == nil && cs != nil {
+		if wallets, wErr := cs.ListWallets(ctx); wErr == nil {
 			for _, w := range wallets {
+				if w.Custody == custody.CustodyWatch || w.Role == custody.RoleWatch || w.Role == custody.RoleMining || w.Policy.Frozen {
+					continue
+				}
+				kind := "solana"
+				if w.Custody == custody.CustodyHardware {
+					kind = "hardware"
+				}
 				out = append(out, TradeAccountOption{
-					ID:            "wallet:" + w.ID,
+					ID:            w.Handle,
 					Label:         w.Name,
-					Kind:          "solana",
+					Kind:          kind,
+					Role:          w.Role,
+					Custody:       w.Custody,
+					Cluster:       w.RPC.Cluster,
 					ExecutionMode: trade.ExecutionModeLive,
 					Address:       w.PublicKey,
 					Venue:         marketdata.VenueSolana,
@@ -85,6 +99,11 @@ func (s *Store) isTradingVenueEnabled(venue string) bool {
 	}
 	cleanVenue := strings.ToLower(strings.TrimSpace(venue))
 	if cleanVenue == marketdata.VenueSolana || cleanVenue == "onchain" {
+		if cs := s.loadedCustodyService(); cs != nil {
+			if wallets, err := cs.ListWallets(context.Background()); err == nil && len(wallets) > 0 {
+				return true
+			}
+		}
 		if _, _, ok := s.resolveSolanaRPC("mainnet-beta"); ok {
 			return true
 		}
@@ -116,6 +135,28 @@ func (s *Store) isTradingVenueEnabled(venue string) bool {
 func (s *Store) executeLiveTradeRoute(ctx context.Context, req trade.OrderRequest, refPrice float64) (trade.LiveExecReceipt, error) {
 	if s.isExternalKillActiveForTrade(ctx) {
 		return trade.LiveExecReceipt{}, errGlobalKillSwitchActive
+	}
+	isBotOrAuto := req.Mode == trade.ModeBot || req.Mode == trade.ModeAIAgent
+	if strings.HasPrefix(req.AccountID, "@wallet:") || strings.HasPrefix(req.AccountID, "wallet:") {
+		cs, cErr := s.custodyService()
+		if cErr != nil || cs == nil {
+			return trade.LiveExecReceipt{}, errors.New("custody signer unavailable")
+		}
+		resolved, rErr := cs.ResolveWallet(ctx, custody.WalletSelector{
+			WalletHandle: strings.TrimSpace(req.AccountID),
+			AgentID:      req.AgentID,
+			IsAutonomous: isBotOrAuto,
+			Venue:        req.Venue,
+		})
+		if rErr != nil {
+			return trade.LiveExecReceipt{}, rErr
+		}
+		if !isBotOrAuto && !resolved.Connections.AllowTradeManual {
+			return trade.LiveExecReceipt{}, fmt.Errorf("%w: manual #trade execution is disabled on %s", custody.ErrPolicyDenied, resolved.Handle)
+		}
+		if resolved.Custody == custody.CustodyHardware {
+			return trade.LiveExecReceipt{}, fmt.Errorf("hardware wallet %s requires 2-step manual review & on-device signing in Wallets", resolved.Handle)
+		}
 	}
 	if !s.isTradingVenueEnabled(req.Venue) {
 		return trade.LiveExecReceipt{}, fmt.Errorf("trading is disabled for venue %q; enable Trading in Settings -> Data & Feeds", req.Venue)

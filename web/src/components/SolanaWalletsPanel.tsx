@@ -2,145 +2,253 @@ import { useCallback, useEffect, useState } from "react";
 import { useCore } from "../core";
 import { useUI } from "../ui-preferences";
 import { useWorkspace } from "../workspace";
-import { DATA_PLUGINS_CHANGED_EVENT } from "../data-plugins";
 import {
   Check,
   Copy,
   Download,
-  Eye,
-  KeyRound,
-  Plus,
+  LockKeyhole,
   RefreshCw,
-  Settings,
+  Shield,
+  ShieldCheck,
   Trash2,
   Wallet,
 } from "../icons";
 import {
+  connectWalletStandardAccount,
+  discoverSolanaWalletProviders,
+  signWalletStandardTransaction,
+} from "../wallet-standard";
+import {
+  attachExternalWallet,
   checkWalletBalanceV2,
-  createWalletV2,
+  createNativeWallet,
   deleteWalletV2,
-  exportWalletV2,
-  importWalletV2,
+  executeNativeWalletReview,
+  exportEncryptedBackupV2,
+  listWalletActivity,
   listWalletsV2,
-  type ExportWalletV2Result,
-  type SolanaRPCStatus,
+  prepareWalletReview,
+  reconcileWalletLedger,
+  restoreEncryptedBackupV2,
+  setWalletFreeze,
+  submitHardwareSignedReview,
+  updateWalletConnections,
+  updateWalletPolicy,
+  updateWalletRPC,
+  type ApprovalMode,
+  type AuditEntry,
+  type LedgerEntry,
+  type WalletBalanceResult,
+  type WalletConnections,
+  type WalletPolicy,
+  type WalletReview,
+  type WalletRole,
   type WalletV2,
-  type WalletV2BalanceResult,
 } from "../wallets-v2";
-import { Badge, Dialog, SectionHead } from "./shared";
+import { Dialog } from "./shared";
 
-type ImportTab = "mnemonic" | "privateKey" | "watch";
+type CenterTopTab = "policy" | "connections" | "rpc";
+type CenterBottomTab = "reviews" | "ledger" | "audit";
+type RightTab = "create" | "hardware" | "send";
+
+const RPC_PRESETS = [
+  { label: "Mainnet", url: "https://api.mainnet-beta.solana.com" },
+  { label: "Devnet", url: "https://api.devnet.solana.com" },
+  { label: "Helius", url: "https://mainnet.helius-rpc.com/?api-key=" },
+  { label: "QuickNode", url: "https://example.solana-mainnet.quiknode.pro/" },
+] as const;
+
+const SYSTEM_PROG = "11111111111111111111111111111111";
+const COMPUTE_PROG = "ComputeBudget111111111111111111111111111111";
+const TOKEN_PROG = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA";
+const ATA_PROG = "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL";
+
+function formatSolFromLamports(raw: string): string {
+  const n = Number(raw || "0");
+  if (!Number.isFinite(n) || n <= 0) return "0";
+  return (n / 1e9).toFixed(4).replace(/\.?0+$/, "");
+}
+
+function shortAddr(pk: string): string {
+  if (!pk || pk.length < 14) return pk;
+  return `${pk.slice(0, 6)}...${pk.slice(-6)}`;
+}
 
 export function SolanaWalletsPanel() {
   const { t } = useUI();
   const core = useCore();
-  const { openSettingsModal } = useWorkspace();
+  const { agents } = useWorkspace();
 
   const [wallets, setWallets] = useState<WalletV2[]>([]);
-  const [rpcStatus, setRpcStatus] = useState<SolanaRPCStatus | null>(null);
-  const [cluster, setCluster] = useState<"mainnet-beta" | "devnet">(
-    "mainnet-beta",
+  const [selectedId, setSelectedId] = useState("");
+  const [balances, setBalances] = useState<Record<string, WalletBalanceResult>>(
+    {},
   );
-  const [balances, setBalances] = useState<
-    Record<string, WalletV2BalanceResult>
-  >({});
+  const [centerTopTab, setCenterTopTab] = useState<CenterTopTab>("policy");
+  const [centerBottomTab, setCenterBottomTab] =
+    useState<CenterBottomTab>("reviews");
+  const [rightTab, setRightTab] = useState<RightTab>("create");
+
+  const [reviews, setReviews] = useState<WalletReview[]>([]);
+  const [ledger, setLedger] = useState<LedgerEntry[]>([]);
+  const [audit, setAudit] = useState<AuditEntry[]>([]);
+
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
-  const [copiedKey, setCopiedKey] = useState("");
+  const [copiedId, setCopiedId] = useState("");
 
-  // Create Wallet Wizard state
-  const [createOpen, setCreateOpen] = useState(false);
+  // Create form state (Native Signer)
+  const [createRole, setCreateRole] = useState<WalletRole>("agent");
   const [createName, setCreateName] = useState("");
-  const [createRole, setCreateRole] = useState<"personal" | "agent_vault">(
-    "personal",
+  const [createRpc, setCreateRpc] = useState(
+    "https://api.mainnet-beta.solana.com",
   );
-  const [createWords, setCreateWords] = useState<12 | 24>(12);
-  const [createPass, setCreatePass] = useState("");
-  const [createConfirm, setCreateConfirm] = useState("");
-  const [backupMnemonic, setBackupMnemonic] = useState("");
-  const [backupAddress, setBackupAddress] = useState("");
-  const [backupAck, setBackupAck] = useState(false);
 
-  // Import / Watch Modal state
-  const [importOpen, setImportOpen] = useState(false);
-  const [importTab, setImportTab] = useState<ImportTab>("mnemonic");
-  const [importName, setImportName] = useState("");
-  const [importRole, setImportRole] = useState<"personal" | "agent_vault">(
-    "personal",
+  // Hardware / Watch attach state
+  const [hwCustody, setHwCustody] = useState<"hardware_standard" | "watch_only">(
+    "hardware_standard",
   );
-  const [importSecret, setImportSecret] = useState("");
-  const [importPass, setImportPass] = useState("");
+  const [hwRole, setHwRole] = useState<WalletRole>("vault");
+  const [hwName, setHwName] = useState("");
+  const [hwPubKey, setHwPubKey] = useState("");
+  const [hwRpc, setHwRpc] = useState("https://api.mainnet-beta.solana.com");
+  const [detectedProvider, setDetectedProvider] = useState("");
 
-  // Export Secret Modal state
-  const [exportWallet, setExportWallet] = useState<WalletV2 | null>(null);
-  const [exportPass, setExportPass] = useState("");
-  const [exported, setExported] = useState<ExportWalletV2Result | null>(null);
+  // Send / Review state
+  const [sendDest, setSendDest] = useState("");
+  const [sendAmount, setSendAmount] = useState("0.1");
+  const [activeReview, setActiveReview] = useState<WalletReview | null>(null);
 
-  const load = useCallback(async () => {
+  // Policy draft state
+  const [polDraft, setPolDraft] = useState<WalletPolicy | null>(null);
+  const [solMaxPerTx, setSolMaxPerTx] = useState("0");
+  const [solMaxDaily, setSolMaxDaily] = useState("0");
+  const [destText, setDestText] = useState("");
+  const [progText, setProgText] = useState("");
+  const [confirmLoosenModal, setConfirmLoosenModal] = useState(false);
+
+  // Connections draft state
+  const [connDraft, setConnDraft] = useState<WalletConnections | null>(null);
+
+  // RPC edit state
+  const [editPrimaryRpc, setEditPrimaryRpc] = useState("");
+  const [editFallbackRpc, setEditFallbackRpc] = useState("");
+
+  // Encrypted Backup / Restore modal state
+  const [backupOpen, setBackupOpen] = useState(false);
+  const [restoreOpen, setRestoreOpen] = useState(false);
+  const [passphrase, setPassphrase] = useState("");
+  const [backupResult, setBackupResult] = useState<{
+    fingerprint: string;
+    filename: string;
+  } | null>(null);
+  const [restoreArchiveText, setRestoreArchiveText] = useState("");
+  const [restoreName, setRestoreName] = useState("");
+  const [restoreRpc, setRestoreRpc] = useState(
+    "https://api.mainnet-beta.solana.com",
+  );
+
+  const selected =
+    wallets.find((w) => w.id === selectedId) ?? wallets[0] ?? null;
+
+  const loadWallets = useCallback(async () => {
     if (core.mode !== "ready") return;
-    setError("");
     try {
       const res = await listWalletsV2(core);
-      setWallets(res.wallets ?? []);
-      setRpcStatus(res.rpc ?? null);
+      const list = res.wallets ?? [];
+      setWallets(list);
+      if (list.length > 0) {
+        setSelectedId((prev) =>
+          list.some((w) => w.id === prev) ? prev : list[0].id,
+        );
+      } else {
+        setSelectedId("");
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to load wallets");
     }
   }, [core.mode, core.request]);
 
-  useEffect(() => {
-    void load();
-    const onPluginsChanged = () => void load();
-    window.addEventListener(DATA_PLUGINS_CHANGED_EVENT, onPluginsChanged);
-    return () =>
-      window.removeEventListener(DATA_PLUGINS_CHANGED_EVENT, onPluginsChanged);
-  }, [load]);
+  const loadActivity = useCallback(
+    async (walletId: string) => {
+      if (!walletId || core.mode !== "ready") return;
+      try {
+        const res = await listWalletActivity(core, walletId);
+        setReviews(res.reviews ?? []);
+        setLedger(res.ledger ?? []);
+        setAudit(res.audit ?? []);
+      } catch {
+        setReviews([]);
+        setLedger([]);
+        setAudit([]);
+      }
+    },
+    [core.mode, core.request],
+  );
 
-  async function copyText(id: string, value: string) {
+  useEffect(() => {
+    void loadWallets();
+  }, [loadWallets]);
+
+  useEffect(() => {
+    if (!selected) {
+      setPolDraft(null);
+      setConnDraft(null);
+      return;
+    }
+    setPolDraft(selected.policy);
+    setSolMaxPerTx(formatSolFromLamports(selected.policy.solCap.maxPerTxRaw));
+    setSolMaxDaily(formatSolFromLamports(selected.policy.solCap.maxDailyRaw));
+    setDestText((selected.policy.destinations ?? []).join("\n"));
+    setProgText((selected.policy.programs ?? []).join("\n"));
+    setConnDraft(selected.connections);
+    setEditPrimaryRpc("");
+    setEditFallbackRpc("");
+    setActiveReview(null);
+    void loadActivity(selected.id);
+  }, [selected?.id, selected?.policy.policyHash, selected?.updatedAt, loadActivity]);
+
+  async function refreshBalance(w: WalletV2) {
+    setBusy(true);
+    setError("");
     try {
-      await navigator.clipboard.writeText(value);
-      setCopiedKey(id);
-      window.setTimeout(() => setCopiedKey(""), 1600);
+      const bal = await checkWalletBalanceV2(core, w.id);
+      setBalances((prev) => ({ ...prev, [w.id]: bal }));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Balance query failed");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function copyText(id: string, val: string) {
+    try {
+      await navigator.clipboard.writeText(val);
+      setCopiedId(id);
+      window.setTimeout(() => setCopiedId(""), 1400);
     } catch {
       setError(t("Copy failed"));
     }
   }
 
-  function downloadBackupFile(name: string, address: string, content: string) {
-    const blob = new Blob(
-      [JSON.stringify({ name, address, mnemonic: content }, null, 2)],
-      { type: "application/json" },
-    );
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `${name.toLowerCase().replace(/[^a-z0-9_-]+/g, "-") || "solana-wallet"}-backup.json`;
-    a.click();
-    URL.revokeObjectURL(url);
-  }
-
-  async function handleCreateSubmit(e: React.FormEvent) {
+  async function onCreateNative(e: React.FormEvent) {
     e.preventDefault();
-    if (createPass !== createConfirm) {
-      setError(t("Passphrases do not match"));
-      return;
-    }
     setBusy(true);
     setError("");
+    setNotice("");
     try {
-      const res = await createWalletV2(core, {
-        name: createName.trim(),
+      const res = await createNativeWallet(core, {
+        name: createName.trim() || `${createRole} wallet`,
         role: createRole,
-        words: createWords,
-        passphrase: createPass,
+        rpcUrl: createRpc.trim(),
       });
-      setBackupMnemonic(res.mnemonic);
-      setBackupAddress(res.publicKey);
-      setBackupAck(false);
-      setCreatePass("");
-      setCreateConfirm("");
-      await load();
+      setCreateName("");
+      setSelectedId(res.wallet.id);
+      setNotice(
+        `${res.wallet.handle} (${res.wallet.rpc.cluster}) created inside signer`,
+      );
+      await loadWallets();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Create failed");
     } finally {
@@ -148,616 +256,1305 @@ export function SolanaWalletsPanel() {
     }
   }
 
-  async function handleImportSubmit(e: React.FormEvent) {
-    e.preventDefault();
-    setBusy(true);
+  async function onConnectWalletStandard() {
     setError("");
     try {
-      if (importTab === "watch") {
-        await importWalletV2(core, {
-          name: importName.trim(),
-          watchAddress: importSecret.trim(),
-        });
-      } else if (importTab === "mnemonic") {
-        await importWalletV2(core, {
-          name: importName.trim(),
-          role: importRole,
-          mnemonic: importSecret.trim(),
-          passphrase: importPass,
-        });
-      } else {
-        await importWalletV2(core, {
-          name: importName.trim(),
-          role: importRole,
-          privateKey: importSecret.trim(),
-          passphrase: importPass,
-        });
+      const available = discoverSolanaWalletProviders();
+      const { provider, account } = await connectWalletStandardAccount(
+        available[0]?.name,
+      );
+      setDetectedProvider(provider.name);
+      setHwPubKey(account.address);
+      if (!hwName.trim()) {
+        setHwName(`${provider.name} Vault`);
       }
-      setImportOpen(false);
-      setImportName("");
-      setImportSecret("");
-      setImportPass("");
-      await load();
+      setNotice(`Connected ${provider.name} (${shortAddr(account.address)})`);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Import failed");
-    } finally {
-      setBusy(false);
+      setError(
+        err instanceof Error ? err.message : "Wallet Standard connection failed",
+      );
     }
   }
 
-  async function handleCheckBalance(w: WalletV2) {
+  async function onAttachExternal(e: React.FormEvent) {
+    e.preventDefault();
     setBusy(true);
     setError("");
     setNotice("");
     try {
-      const res = await checkWalletBalanceV2(core, w.id, cluster);
-      setBalances((cur) => ({ ...cur, [w.id]: res }));
+      const res = await attachExternalWallet(core, {
+        custody: hwCustody,
+        name:
+          hwName.trim() ||
+          (hwCustody === "watch_only" ? "Watch Wallet" : "Hardware Vault"),
+        role: hwCustody === "watch_only" ? "watch" : hwRole,
+        publicKey: hwPubKey.trim(),
+        rpcUrl: hwRpc.trim(),
+      });
+      setHwName("");
+      setHwPubKey("");
+      setSelectedId(res.wallet.id);
+      setNotice(`${res.wallet.handle} attached`);
+      await loadWallets();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Balance check failed");
+      setError(err instanceof Error ? err.message : "Attach failed");
     } finally {
       setBusy(false);
     }
   }
 
-  async function handleExportSubmit(e: React.FormEvent) {
+  function buildEditedPolicy(): WalletPolicy | null {
+    if (!polDraft) return null;
+    const perTxLamports = Math.max(
+      0,
+      Math.round((Number(solMaxPerTx) || 0) * 1e9),
+    );
+    const dailyLamports = Math.max(
+      0,
+      Math.round((Number(solMaxDaily) || 0) * 1e9),
+    );
+    return {
+      ...polDraft,
+      solCap: {
+        ...polDraft.solCap,
+        maxPerTxRaw: String(perTxLamports),
+        maxDailyRaw: String(dailyLamports),
+      },
+      destinations: destText
+        .split(/[\n,]+/)
+        .map((s) => s.trim())
+        .filter(Boolean),
+      programs: progText
+        .split(/[\n,]+/)
+        .map((s) => s.trim())
+        .filter(Boolean),
+    };
+  }
+
+  async function submitPolicySave(confirmLoosen: boolean) {
+    if (!selected) return;
+    const nextPol = buildEditedPolicy();
+    if (!nextPol) return;
+    setBusy(true);
+    setError("");
+    setNotice("");
+    try {
+      await updateWalletPolicy(core, selected.id, {
+        policy: nextPol,
+        confirmLoosen,
+        expectedPolicyHash: selected.policy.policyHash,
+      });
+      setConfirmLoosenModal(false);
+      setNotice("Signer policy updated");
+      await loadWallets();
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Policy update failed";
+      if (!confirmLoosen && msg.toLowerCase().includes("confirmation")) {
+        setConfirmLoosenModal(true);
+      } else {
+        setError(msg);
+      }
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function onSaveConnections() {
+    if (!selected || !connDraft) return;
+    setBusy(true);
+    setError("");
+    setNotice("");
+    try {
+      await updateWalletConnections(core, selected.id, connDraft);
+      setNotice("Wallet module connections saved");
+      await loadWallets();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Connections failed");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function onSaveRPC(e: React.FormEvent) {
     e.preventDefault();
-    if (!exportWallet) return;
+    if (!selected) return;
     setBusy(true);
     setError("");
+    setNotice("");
     try {
-      const res = await exportWalletV2(core, exportWallet.id, exportPass);
-      setExported(res);
-      setExportPass("");
+      const res = await updateWalletRPC(
+        core,
+        selected.id,
+        editPrimaryRpc.trim(),
+        editFallbackRpc.trim(),
+      );
+      setEditPrimaryRpc("");
+      setEditFallbackRpc("");
+      setNotice(
+        `RPC verified (${res.wallet.rpc.cluster} · ${res.wallet.rpc.host})`,
+      );
+      await loadWallets();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Export failed");
+      setError(err instanceof Error ? err.message : "RPC verification failed");
     } finally {
       setBusy(false);
     }
   }
 
-  async function handleDelete(w: WalletV2) {
+  async function onPrepareSend(e: React.FormEvent) {
+    e.preventDefault();
+    if (!selected) return;
     setBusy(true);
     setError("");
+    setNotice("");
     try {
-      await deleteWalletV2(core, w.id);
-      await load();
+      const res = await prepareWalletReview(core, selected.id, {
+        operation: "solana.nativeTransfer",
+        destination: sendDest.trim(),
+        amountHuman: sendAmount.trim(),
+      });
+      setActiveReview(res.review);
+      await loadActivity(selected.id);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Delete failed");
+      setError(err instanceof Error ? err.message : "Review failed");
     } finally {
       setBusy(false);
     }
   }
 
-  const activeRpcConfigured =
-    cluster === "mainnet-beta"
-      ? rpcStatus?.mainnetConfigured
-      : rpcStatus?.devnetConfigured;
-  const activeRpcHost =
-    cluster === "mainnet-beta" ? rpcStatus?.mainnetHost : rpcStatus?.devnetHost;
+  async function onExecuteReview(rev: WalletReview) {
+    if (!selected) return;
+    setBusy(true);
+    setError("");
+    setNotice("");
+    try {
+      if (rev.custody === "hardware_standard") {
+        const signedB64 = await signWalletStandardTransaction({
+          unsignedTxBase64: rev.unsignedTxBase64,
+          expectedAddress: selected.publicKey,
+          cluster: selected.rpc.cluster,
+          preferredWalletName: detectedProvider || undefined,
+        });
+        const out = await submitHardwareSignedReview(
+          core,
+          selected.id,
+          rev.id,
+          signedB64,
+        );
+        setNotice(
+          `Broadcast ${out.entry.state} · sig=${out.entry.txSignature ?? ""}`,
+        );
+      } else {
+        const out = await executeNativeWalletReview(core, selected.id, rev.id);
+        setNotice(
+          `Signer executed (${out.entry.state}) · sig=${out.entry.txSignature ?? ""}`,
+        );
+      }
+      setActiveReview(null);
+      await Promise.all([loadWallets(), loadActivity(selected.id)]);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Execution failed");
+      await loadActivity(selected.id);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function onReconcile(entry: LedgerEntry) {
+    if (!selected) return;
+    setBusy(true);
+    setError("");
+    try {
+      const out = await reconcileWalletLedger(core, selected.id, entry.id);
+      setNotice(`Reconciled ${out.entry.id} -> ${out.entry.state}`);
+      await Promise.all([loadWallets(), loadActivity(selected.id)]);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Reconcile failed");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function onToggleFreeze() {
+    if (!selected) return;
+    setBusy(true);
+    setError("");
+    try {
+      await setWalletFreeze(
+        core,
+        selected.id,
+        !selected.policy.frozen,
+        selected.policy.frozen ? "" : "Owner freeze",
+      );
+      await loadWallets();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Freeze update failed");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function onExportBackup(e: React.FormEvent) {
+    e.preventDefault();
+    if (!selected) return;
+    setBusy(true);
+    setError("");
+    try {
+      const res = await exportEncryptedBackupV2(core, selected.id, passphrase);
+      const blob = new Blob([JSON.stringify(res.archive, null, 2)], {
+        type: "application/json",
+      });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = res.filename;
+      a.click();
+      URL.revokeObjectURL(url);
+      setBackupResult({
+        fingerprint: res.fingerprint,
+        filename: res.filename,
+      });
+      setPassphrase("");
+      await loadActivity(selected.id);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Backup failed");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function onRestoreBackup(e: React.FormEvent) {
+    e.preventDefault();
+    setBusy(true);
+    setError("");
+    try {
+      const parsed = JSON.parse(restoreArchiveText);
+      const res = await restoreEncryptedBackupV2(core, {
+        archive: parsed,
+        passphrase,
+        name: restoreName.trim(),
+        rpcUrl: restoreRpc.trim(),
+      });
+      setRestoreOpen(false);
+      setPassphrase("");
+      setRestoreArchiveText("");
+      setSelectedId(res.wallet.id);
+      setNotice(`Restored ${res.wallet.handle}`);
+      await loadWallets();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Restore failed");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const selBalance = selected ? balances[selected.id] : undefined;
+  const vaultLocked = selected?.role === "vault" || selected?.role === "watch";
 
   return (
-    <div className="solana-wallets-v2">
-      <SectionHead
-        title={t("Wallets")}
-        action={
-          <div className="account-actions">
-            <div className="appearance-segmented" role="group">
-              <button
-                type="button"
-                className={cluster === "mainnet-beta" ? "active" : undefined}
-                onClick={() => setCluster("mainnet-beta")}
-              >
-                {t("Mainnet")}
-              </button>
-              <button
-                type="button"
-                className={cluster === "devnet" ? "active" : undefined}
-                onClick={() => setCluster("devnet")}
-              >
-                {t("Devnet")}
-              </button>
-            </div>
+    <div className="wt-wallets-shell">
+      {error && <div className="wt-notice-err">{error}</div>}
+      {notice && <div className="wt-notice-ok">{notice}</div>}
+
+      <div className="wt-wallets-grid">
+        {/* LEFT RAIL (232px) — Switcher, Identity, 2x2 KPIs, Backup/Freeze */}
+        <aside className="wt-wpanel" aria-label={t("Wallets")}>
+          <div className="wt-whead">
+            <h2>{t("Wallets")}</h2>
             <button
               type="button"
-              className="secondary"
-              onClick={() => openSettingsModal("data")}
-              title={activeRpcHost || t("Chain RPCs")}
-            >
-              <Settings size={14} aria-hidden="true" />
-              <span>
-                {activeRpcConfigured
-                  ? activeRpcHost?.replace(/^https?:\/\//, "") || "RPC"
-                  : t("Chain RPCs")}
-              </span>
-            </button>
-            <button
-              type="button"
-              className="secondary"
+              className="wt-btn-soft"
               onClick={() => {
+                setRestoreOpen(true);
                 setError("");
-                setImportTab("mnemonic");
-                setImportOpen(true);
               }}
             >
-              <span>{t("Import")}</span>
-            </button>
-            <button
-              type="button"
-              className="primary"
-              onClick={() => {
-                setError("");
-                setCreateName("");
-                setCreatePass("");
-                setCreateConfirm("");
-                setBackupMnemonic("");
-                setBackupAddress("");
-                setBackupAck(false);
-                setCreateOpen(true);
-              }}
-            >
-              <Plus size={15} aria-hidden="true" />
-              <span>{t("Create wallet")}</span>
+              {t("Restore Backup")}
             </button>
           </div>
-        }
-      />
 
-      {error && !createOpen && !importOpen && !exportWallet && (
-        <p role="alert">{error}</p>
-      )}
-      {notice && <p role="status">{notice}</p>}
-
-      {wallets.length === 0 ? (
-        <section className="panel account-panel">
-          <div className="wallet-empty-state">
-            <Wallet size={24} aria-hidden="true" />
-            <strong>{t("No wallets")}</strong>
-            <div className="account-actions">
-              <button
-                type="button"
-                className="primary"
-                onClick={() => {
-                  setError("");
-                  setBackupMnemonic("");
-                  setCreateOpen(true);
-                }}
-              >
-                <Plus size={14} aria-hidden="true" />
-                <span>{t("Create wallet")}</span>
-              </button>
-              <button
-                type="button"
-                className="secondary"
-                onClick={() => {
-                  setError("");
-                  setImportTab("watch");
-                  setImportOpen(true);
-                }}
-              >
-                <Eye size={14} aria-hidden="true" />
-                <span>{t("Watch Only")}</span>
-              </button>
-            </div>
-          </div>
-        </section>
-      ) : (
-        <div className="wallet-v2-grid">
-          {wallets.map((w) => {
-            const bal = balances[w.id];
-            return (
-              <article className="panel wallet-v2-card" key={w.id}>
-                <div className="panel-heading">
-                  <div className="wallet-v2-title">
-                    <Wallet size={16} aria-hidden="true" />
-                    <strong>{w.name}</strong>
-                  </div>
-                  <Badge>
-                    {w.kind === "watch"
-                      ? t("Watch Only")
-                      : w.role === "agent_vault"
-                        ? "Agent Vault"
-                        : "Solana"}
-                  </Badge>
-                </div>
-
-                <div className="wallet-v2-address-row">
-                  <code className="account-key">{w.publicKey}</code>
-                  <button
-                    type="button"
-                    className="icon-button"
-                    aria-label={t("Copy")}
-                    onClick={() => void copyText(w.id, w.publicKey)}
+          <div className="wt-wallet-list">
+            {wallets.length === 0 ? (
+              <div className="wt-cluster-line">
+                <span className="wt-dot is-off" />
+                <span>{t("No wallets")}</span>
+              </div>
+            ) : (
+              wallets.map((w) => (
+                <button
+                  key={w.id}
+                  type="button"
+                  className={`wt-wallet-item${selected?.id === w.id ? " is-selected" : ""}`}
+                  onClick={() => setSelectedId(w.id)}
+                >
+                  <span className="wt-wallet-item-name">
+                    <Wallet size={14} aria-hidden="true" />
+                    <span>{w.name}</span>
+                  </span>
+                  <span
+                    className={`wt-role-pill${w.policy.frozen ? " is-frozen" : w.role === "vault" ? " is-vault" : w.role === "agent" ? " is-agent" : ""}`}
                   >
-                    {copiedKey === w.id ? (
-                      <Check size={14} />
-                    ) : (
-                      <Copy size={14} />
-                    )}
-                  </button>
-                </div>
+                    {w.policy.frozen ? "FROZEN" : w.role}
+                  </span>
+                </button>
+              ))
+            )}
+          </div>
 
-                <div className="wallet-v2-balance-row">
-                  {bal?.rpcRequired ? (
-                    <button
-                      type="button"
-                      className="text-button"
-                      onClick={() => openSettingsModal("data")}
-                    >
-                      {t("Enable RPC in Settings")}
-                    </button>
-                  ) : bal && !bal.rpcRequired ? (
-                    <span className="mono">
-                      {`${(bal.sol ?? 0).toFixed(4)} SOL · ${bal.cluster}`}
-                    </span>
+          {selected && (
+            <>
+              <div className="wt-cluster-line">
+                <span
+                  className={`wt-dot${selected.policy.frozen ? " is-danger" : ""}`}
+                />
+                <span>
+                  {selected.rpc.cluster || "unverified"} ·{" "}
+                  {selected.custody === "hardware_standard"
+                    ? "Hardware"
+                    : selected.custody === "watch_only"
+                      ? "Watch"
+                      : "Signer"}
+                </span>
+              </div>
+
+              <div className="wt-addr-row">
+                <code title={selected.publicKey}>
+                  {shortAddr(selected.publicKey)}
+                </code>
+                <button
+                  type="button"
+                  className="wt-btn-soft"
+                  aria-label={t("Copy")}
+                  onClick={() => copyText(selected.id, selected.publicKey)}
+                >
+                  {copiedId === selected.id ? (
+                    <Check size={12} aria-hidden="true" />
                   ) : (
-                    <span className="subtle">{cluster}</span>
+                    <Copy size={12} aria-hidden="true" />
                   )}
-                </div>
-
-                <div className="account-actions">
-                  <button
-                    type="button"
-                    className="secondary"
-                    disabled={busy}
-                    onClick={() => void handleCheckBalance(w)}
-                  >
-                    <RefreshCw size={13} aria-hidden="true" />
-                    <span>{t("Balance")}</span>
-                  </button>
-                  {w.kind !== "watch" && (
-                    <button
-                      type="button"
-                      className="secondary"
-                      disabled={busy}
-                      onClick={() => {
-                        setError("");
-                        setExportPass("");
-                        setExported(null);
-                        setExportWallet(w);
-                      }}
-                    >
-                      <KeyRound size={13} aria-hidden="true" />
-                      <span>{t("Export")}</span>
-                    </button>
-                  )}
-                  <button
-                    type="button"
-                    className="icon-button"
-                    aria-label={t("Remove")}
-                    disabled={busy}
-                    onClick={() => void handleDelete(w)}
-                  >
-                    <Trash2 size={14} aria-hidden="true" />
-                  </button>
-                </div>
-              </article>
-            );
-          })}
-        </div>
-      )}
-
-      {createOpen && (
-        <Dialog
-          title={t(backupMnemonic ? "Recovery Phrase" : "Create wallet")}
-          onClose={() => {
-            if (!busy && (!backupMnemonic || backupAck)) {
-              setCreateOpen(false);
-              setBackupMnemonic("");
-            }
-          }}
-        >
-          {backupMnemonic ? (
-            <div className="account-form">
-              <code className="account-key">{backupAddress}</code>
-              <div className="mnemonic-grid" data-testid="mnemonic-grid">
-                {backupMnemonic.split(" ").map((word, idx) => (
-                  <div className="mnemonic-cell" key={`${idx}-${word}`}>
-                    <span>{idx + 1}</span>
-                    <strong>{word}</strong>
-                  </div>
-                ))}
+                </button>
               </div>
-              <div className="account-actions">
+
+              <div className="wt-kpi-grid">
+                <div className="wt-kpi-box">
+                  <span>SOL</span>
+                  <strong>{selBalance ? selBalance.sol : "—"}</strong>
+                </div>
+                <div className="wt-kpi-box">
+                  <span>Daily Used</span>
+                  <strong>
+                    {formatSolFromLamports(selected.dailySpentLamports)}
+                  </strong>
+                </div>
+                <div className="wt-kpi-box">
+                  <span>Daily Cap</span>
+                  <strong>
+                    {formatSolFromLamports(selected.policy.solCap.maxDailyRaw)}
+                  </strong>
+                </div>
+                <div className="wt-kpi-box">
+                  <span>Policy</span>
+                  <strong>{`v${selected.policy.version}`}</strong>
+                </div>
+              </div>
+
+              <div className="wt-rail-btns">
                 <button
                   type="button"
-                  className="secondary"
-                  onClick={() => void copyText("mnemonic", backupMnemonic)}
+                  className="wt-btn-soft"
+                  disabled={busy}
+                  onClick={() => refreshBalance(selected)}
                 >
-                  <Copy size={14} aria-hidden="true" />
-                  <span>{copiedKey === "mnemonic" ? t("Copied") : t("Copy")}</span>
+                  <RefreshCw size={12} aria-hidden="true" />
+                  <span>{t("Balance")}</span>
                 </button>
                 <button
                   type="button"
-                  className="secondary"
-                  onClick={() =>
-                    downloadBackupFile(createName, backupAddress, backupMnemonic)
-                  }
+                  className={`wt-btn-soft${selected.policy.frozen ? "" : " is-danger"}`}
+                  disabled={busy}
+                  onClick={onToggleFreeze}
                 >
-                  <Download size={14} aria-hidden="true" />
-                  <span>{t("Backup")}</span>
+                  <LockKeyhole size={12} aria-hidden="true" />
+                  <span>
+                    {t(selected.policy.frozen ? "Unfreeze" : "Freeze")}
+                  </span>
                 </button>
-              </div>
-              <label className="settings-checkbox-label">
-                <input
-                  type="checkbox"
-                  checked={backupAck}
-                  onChange={(e) => setBackupAck(e.target.checked)}
-                />
-                <span>{t("I saved my recovery phrase")}</span>
-              </label>
-              <button
-                type="button"
-                className="primary"
-                disabled={!backupAck}
-                onClick={() => {
-                  setCreateOpen(false);
-                  setBackupMnemonic("");
-                }}
-              >
-                {t("Done")}
-              </button>
-            </div>
-          ) : (
-            <form
-              className="account-form"
-              onSubmit={(e) => void handleCreateSubmit(e)}
-            >
-              <label>
-                {t("Name")}
-                <input
-                  value={createName}
-                  onChange={(e) => setCreateName(e.target.value)}
-                  required
-                  placeholder="Solana Main"
-                />
-              </label>
-              <div className="trade-ticket-pair">
-                <label>
-                  {t("Role")}
-                  <select
-                    value={createRole}
-                    onChange={(e) =>
-                      setCreateRole(
-                        e.target.value as "personal" | "agent_vault",
-                      )
-                    }
-                  >
-                    <option value="personal">{t("Personal")}</option>
-                    <option value="agent_vault">Agent Vault</option>
-                  </select>
-                </label>
-                <label>
-                  {t("Recovery Phrase")}
-                  <select
-                    value={createWords}
-                    onChange={(e) =>
-                      setCreateWords(Number(e.target.value) === 24 ? 24 : 12)
-                    }
-                  >
-                    <option value={12}>12 words</option>
-                    <option value={24}>24 words</option>
-                  </select>
-                </label>
-              </div>
-              <label>
-                {t("Passphrase")}
-                <input
-                  type="password"
-                  autoComplete="new-password"
-                  minLength={8}
-                  required
-                  value={createPass}
-                  onChange={(e) => setCreatePass(e.target.value)}
-                />
-              </label>
-              <label>
-                {t("Confirm passphrase")}
-                <input
-                  type="password"
-                  autoComplete="new-password"
-                  minLength={8}
-                  required
-                  value={createConfirm}
-                  onChange={(e) => setCreateConfirm(e.target.value)}
-                />
-              </label>
-              {error && <p role="alert">{error}</p>}
-              <button type="submit" className="primary" disabled={busy}>
-                {t("Create")}
-              </button>
-            </form>
-          )}
-        </Dialog>
-      )}
-
-      {importOpen && (
-        <Dialog
-          title={t("Import")}
-          onClose={() => {
-            if (!busy) setImportOpen(false);
-          }}
-        >
-          <form
-            className="account-form"
-            onSubmit={(e) => void handleImportSubmit(e)}
-          >
-            <div className="appearance-segmented" role="tablist">
-              <button
-                type="button"
-                role="tab"
-                className={importTab === "mnemonic" ? "active" : undefined}
-                onClick={() => setImportTab("mnemonic")}
-              >
-                {t("Recovery Phrase")}
-              </button>
-              <button
-                type="button"
-                role="tab"
-                className={importTab === "privateKey" ? "active" : undefined}
-                onClick={() => setImportTab("privateKey")}
-              >
-                {t("Private Key")}
-              </button>
-              <button
-                type="button"
-                role="tab"
-                className={importTab === "watch" ? "active" : undefined}
-                onClick={() => setImportTab("watch")}
-              >
-                {t("Watch Only")}
-              </button>
-            </div>
-            <label>
-              {t("Name")}
-              <input
-                value={importName}
-                onChange={(e) => setImportName(e.target.value)}
-                required
-              />
-            </label>
-            {importTab !== "watch" && (
-              <label>
-                {t("Role")}
-                <select
-                  value={importRole}
-                  onChange={(e) =>
-                    setImportRole(e.target.value as "personal" | "agent_vault")
-                  }
-                >
-                  <option value="personal">{t("Personal")}</option>
-                  <option value="agent_vault">Agent Vault</option>
-                </select>
-              </label>
-            )}
-            <label>
-              {importTab === "mnemonic"
-                ? t("Recovery Phrase")
-                : importTab === "privateKey"
-                  ? t("Private Key")
-                  : t("Public address")}
-              <textarea
-                rows={3}
-                value={importSecret}
-                onChange={(e) => setImportSecret(e.target.value)}
-                required
-                placeholder={
-                  importTab === "mnemonic"
-                    ? "12 or 24 words"
-                    : importTab === "privateKey"
-                      ? "Base58 or [b0, ...]"
-                      : "Solana Base58 public address"
-                }
-              />
-            </label>
-            {importTab !== "watch" && (
-              <label>
-                {t("Passphrase")}
-                <input
-                  type="password"
-                  autoComplete="new-password"
-                  minLength={8}
-                  required
-                  value={importPass}
-                  onChange={(e) => setImportPass(e.target.value)}
-                />
-              </label>
-            )}
-            {error && <p role="alert">{error}</p>}
-            <button type="submit" className="primary" disabled={busy}>
-              {t("Import")}
-            </button>
-          </form>
-        </Dialog>
-      )}
-
-      {exportWallet && (
-        <Dialog
-          title={`${t("Export")} · ${exportWallet.name}`}
-          onClose={() => {
-            if (!busy) {
-              setExportWallet(null);
-              setExported(null);
-              setExportPass("");
-            }
-          }}
-        >
-          {exported ? (
-            <div className="account-form">
-              {exported.mnemonic && (
-                <div>
-                  <span className="subtle">{t("Recovery Phrase")}</span>
-                  <div className="mnemonic-grid">
-                    {exported.mnemonic.split(" ").map((w, i) => (
-                      <div className="mnemonic-cell" key={`${i}-${w}`}>
-                        <span>{i + 1}</span>
-                        <strong>{w}</strong>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-              <label>
-                {t("Private Key")} (Base58)
-                <input readOnly value={exported.privateKeyBase58} />
-              </label>
-              <label>
-                Solana CLI JSON
-                <input readOnly value={exported.keypairJson} />
-              </label>
-              <div className="account-actions">
-                {exported.mnemonic && (
+                {selected.custody === "native_signer" && (
                   <button
                     type="button"
-                    className="secondary"
-                    onClick={() =>
-                      void copyText("exp-seed", exported.mnemonic!)
-                    }
+                    className="wt-btn-soft is-span2"
+                    disabled={busy}
+                    onClick={() => {
+                      setBackupResult(null);
+                      setBackupOpen(true);
+                    }}
                   >
-                    <Copy size={14} /> {t("Recovery Phrase")}
+                    <Download size={12} aria-hidden="true" />
+                    <span>{t("Encrypted Backup")}</span>
                   </button>
                 )}
                 <button
                   type="button"
-                  className="secondary"
-                  onClick={() =>
-                    void copyText("exp-pk", exported.privateKeyBase58)
-                  }
+                  className="wt-btn-soft is-danger is-span2"
+                  disabled={busy}
+                  onClick={async () => {
+                    try {
+                      await deleteWalletV2(core, selected.id);
+                      await loadWallets();
+                    } catch (e) {
+                      setError(e instanceof Error ? e.message : "Delete failed");
+                    }
+                  }}
                 >
-                  <Copy size={14} /> {t("Private Key")}
+                  <Trash2 size={12} aria-hidden="true" />
+                  <span>{t("Remove")}</span>
+                </button>
+              </div>
+            </>
+          )}
+        </aside>
+
+        {/* CENTER COLUMN (1fr) — Top Policy/Connections/RPC + Bottom Reviews/Ledger/Audit */}
+        <section className="wt-wcenter">
+          <div className="wt-wpanel">
+            <div className="wt-wtabs" role="tablist">
+              {(
+                [
+                  { id: "policy", label: "Policy & Caps" },
+                  { id: "connections", label: "Connections" },
+                  { id: "rpc", label: "RPC & Network" },
+                ] as const
+              ).map((tb) => (
+                <button
+                  key={tb.id}
+                  type="button"
+                  role="tab"
+                  aria-selected={centerTopTab === tb.id}
+                  onClick={() => setCenterTopTab(tb.id)}
+                >
+                  {t(tb.label)}
+                </button>
+              ))}
+            </div>
+
+            {!selected || !polDraft || !connDraft ? (
+              <div className="wt-cluster-line">
+                {t("Create a wallet in the right panel to configure policy & RPC.")}
+              </div>
+            ) : centerTopTab === "policy" ? (
+              <div className="wt-form-stack">
+                <div className="wt-preset-chips">
+                  {[
+                    "solana.nativeTransfer",
+                    "solana.splTransferChecked",
+                    "jupiter.swap",
+                    "jupiter.trigger",
+                    "trade.order",
+                  ].map((op) => {
+                    const on = polDraft.operations.includes(op);
+                    return (
+                      <button
+                        key={op}
+                        type="button"
+                        aria-pressed={on}
+                        disabled={vaultLocked && op === "trade.order"}
+                        onClick={() =>
+                          setPolDraft({
+                            ...polDraft,
+                            operations: on
+                              ? polDraft.operations.filter((x) => x !== op)
+                              : [...polDraft.operations, op],
+                          })
+                        }
+                      >
+                        {op}
+                      </button>
+                    );
+                  })}
+                </div>
+
+                <div className="wt-tile-grid">
+                  {(
+                    [
+                      { id: "manual_review", label: "Manual Review" },
+                      { id: "semi_auto", label: "Semi-Auto" },
+                      { id: "bounded_auto", label: "Bounded Auto" },
+                    ] as const
+                  ).map((m) => (
+                    <button
+                      key={m.id}
+                      type="button"
+                      aria-pressed={polDraft.approvalMode === m.id}
+                      disabled={vaultLocked && m.id !== "manual_review"}
+                      onClick={() =>
+                        setPolDraft({
+                          ...polDraft,
+                          approvalMode: m.id as ApprovalMode,
+                        })
+                      }
+                    >
+                      {t(m.label)}
+                    </button>
+                  ))}
+                </div>
+
+                <div className="wt-policy-grid">
+                  <label className="wt-field">
+                    <span>SOL Max / Tx</span>
+                    <input
+                      value={solMaxPerTx}
+                      onChange={(e) => setSolMaxPerTx(e.target.value)}
+                    />
+                  </label>
+                  <label className="wt-field">
+                    <span>SOL Daily Cap</span>
+                    <input
+                      value={solMaxDaily}
+                      onChange={(e) => setSolMaxDaily(e.target.value)}
+                    />
+                  </label>
+                </div>
+
+                <div className="wt-policy-grid">
+                  <label className="wt-field">
+                    <span>Allowed Destinations (@wallet:id or Base58)</span>
+                    <textarea
+                      rows={2}
+                      value={destText}
+                      onChange={(e) => setDestText(e.target.value)}
+                      placeholder="@wallet:vault or Base58"
+                    />
+                  </label>
+                  <label className="wt-field">
+                    <span>Allowed Program IDs</span>
+                    <textarea
+                      rows={2}
+                      value={progText}
+                      onChange={(e) => setProgText(e.target.value)}
+                      placeholder={`${SYSTEM_PROG}`}
+                    />
+                  </label>
+                </div>
+
+                <div className="wt-preset-chips">
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setProgText(
+                        [SYSTEM_PROG, COMPUTE_PROG, TOKEN_PROG, ATA_PROG].join(
+                          "\n",
+                        ),
+                      )
+                    }
+                  >
+                    + Core Solana Programs
+                  </button>
+                  {wallets
+                    .filter((w) => w.id !== selected.id)
+                    .map((w) => (
+                      <button
+                        key={w.id}
+                        type="button"
+                        onClick={() =>
+                          setDestText((prev) =>
+                            prev ? `${prev}\n${w.handle}` : w.handle,
+                          )
+                        }
+                      >
+                        + {w.handle}
+                      </button>
+                    ))}
+                </div>
+
+                <button
+                  type="button"
+                  className="wt-btn-soft"
+                  disabled={busy}
+                  onClick={() => submitPolicySave(false)}
+                >
+                  <ShieldCheck size={14} aria-hidden="true" />
+                  <span>{`Apply Policy (hash ${selected.policy.policyHash.slice(0, 8)})`}</span>
+                </button>
+              </div>
+            ) : centerTopTab === "connections" ? (
+              <div className="wt-form-stack">
+                <div className="wt-toggle-list">
+                  <label className="wt-toggle-row">
+                    <span>#trade Manual Orders</span>
+                    <input
+                      type="checkbox"
+                      checked={connDraft.allowTradeManual}
+                      disabled={selected.role === "watch"}
+                      onChange={(e) =>
+                        setConnDraft({
+                          ...connDraft,
+                          allowTradeManual: e.target.checked,
+                        })
+                      }
+                    />
+                  </label>
+                  <label className="wt-toggle-row">
+                    <span>Automated Bots & Tasks (Agentic Auto)</span>
+                    <input
+                      type="checkbox"
+                      checked={connDraft.allowTradeBots}
+                      disabled={vaultLocked}
+                      onChange={(e) =>
+                        setConnDraft({
+                          ...connDraft,
+                          allowTradeBots: e.target.checked,
+                        })
+                      }
+                    />
+                  </label>
+                  <label className="wt-toggle-row">
+                    <span>Default Agent Wallet</span>
+                    <input
+                      type="checkbox"
+                      checked={connDraft.defaultAgentWallet}
+                      disabled={vaultLocked}
+                      onChange={(e) =>
+                        setConnDraft({
+                          ...connDraft,
+                          defaultAgentWallet: e.target.checked,
+                        })
+                      }
+                    />
+                  </label>
+                </div>
+
+                <div className="wt-field">
+                  <span>Assigned Agents</span>
+                  <div className="wt-preset-chips">
+                    {(agents.view?.profiles ?? []).map((ag) => {
+                      const on = connDraft.agentIds.includes(ag.id);
+                      return (
+                        <button
+                          key={ag.id}
+                          type="button"
+                          aria-pressed={on}
+                          disabled={vaultLocked}
+                          onClick={() =>
+                            setConnDraft({
+                              ...connDraft,
+                              agentIds: on
+                                ? connDraft.agentIds.filter((x) => x !== ag.id)
+                                : [...connDraft.agentIds, ag.id],
+                            })
+                          }
+                        >
+                          {ag.name}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                <div className="wt-field">
+                  <span>Allowed Trading Venues</span>
+                  <div className="wt-preset-chips">
+                    {["solana", "hyperliquid", "lighter", "polymarket", "kalshi"].map(
+                      (v) => {
+                        const on = connDraft.allowedVenues.includes(v);
+                        return (
+                          <button
+                            key={v}
+                            type="button"
+                            aria-pressed={on}
+                            disabled={selected.role === "watch"}
+                            onClick={() =>
+                              setConnDraft({
+                                ...connDraft,
+                                allowedVenues: on
+                                  ? connDraft.allowedVenues.filter(
+                                      (x) => x !== v,
+                                    )
+                                  : [...connDraft.allowedVenues, v],
+                              })
+                            }
+                          >
+                            {v}
+                          </button>
+                        );
+                      },
+                    )}
+                  </div>
+                </div>
+
+                <button
+                  type="button"
+                  className="wt-btn-soft"
+                  disabled={busy}
+                  onClick={onSaveConnections}
+                >
+                  {t("Save")}
+                </button>
+              </div>
+            ) : (
+              <form className="wt-form-stack" onSubmit={onSaveRPC}>
+                <div className="wt-kpi-grid">
+                  <div className="wt-kpi-box">
+                    <span>Active Execution Host</span>
+                    <strong>{selected.rpc.host || "—"}</strong>
+                  </div>
+                  <div className="wt-kpi-box">
+                    <span>Pinned Genesis / Witness</span>
+                    <strong>{`${selected.rpc.cluster} (${selected.rpc.witnessStatus})`}</strong>
+                  </div>
+                </div>
+
+                <label className="wt-field">
+                  <span>Primary Execution Solana RPC</span>
+                  <input
+                    value={editPrimaryRpc}
+                    onChange={(e) => setEditPrimaryRpc(e.target.value)}
+                    placeholder="https://mainnet.helius-rpc.com/?api-key=..."
+                    required
+                  />
+                </label>
+
+                <div className="wt-preset-chips">
+                  {RPC_PRESETS.map((p) => (
+                    <button
+                      key={p.label}
+                      type="button"
+                      onClick={() => setEditPrimaryRpc(p.url)}
+                    >
+                      {p.label}
+                    </button>
+                  ))}
+                </div>
+
+                <label className="wt-field">
+                  <span>Optional Distinct Fallback RPC</span>
+                  <input
+                    value={editFallbackRpc}
+                    onChange={(e) => setEditFallbackRpc(e.target.value)}
+                    placeholder="https://..."
+                  />
+                </label>
+
+                <button type="submit" className="wt-btn-soft" disabled={busy}>
+                  {t("Verify Genesis & Save")}
+                </button>
+              </form>
+            )}
+          </div>
+
+          <div className="wt-wpanel">
+            <div className="wt-wtabs" role="tablist">
+              {(
+                [
+                  { id: "reviews", label: "Pending Reviews" },
+                  { id: "ledger", label: "Transactions" },
+                  { id: "audit", label: "Audit Log" },
+                ] as const
+              ).map((tb) => (
+                <button
+                  key={tb.id}
+                  type="button"
+                  role="tab"
+                  aria-selected={centerBottomTab === tb.id}
+                  onClick={() => setCenterBottomTab(tb.id)}
+                >
+                  {t(tb.label)}
+                </button>
+              ))}
+            </div>
+
+            <div className="wt-table-scroll">
+              {centerBottomTab === "reviews" ? (
+                <table className="wt-table">
+                  <thead>
+                    <tr>
+                      <th>Time</th>
+                      <th>Destination</th>
+                      <th>Amount</th>
+                      <th>Status</th>
+                      <th>Action</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {reviews.length === 0 ? (
+                      <tr>
+                        <td colSpan={5}>{t("None")}</td>
+                      </tr>
+                    ) : (
+                      reviews.map((rv) => (
+                        <tr key={rv.id}>
+                          <td>
+                            {new Date(rv.createdAt * 1000).toLocaleTimeString()}
+                          </td>
+                          <td>{shortAddr(rv.destination)}</td>
+                          <td>{`${rv.amountHuman} SOL`}</td>
+                          <td>{rv.status}</td>
+                          <td>
+                            {rv.status === "prepared" && (
+                              <button
+                                type="button"
+                                className="wt-btn-soft"
+                                disabled={busy}
+                                onClick={() => onExecuteReview(rv)}
+                              >
+                                {t(
+                                  rv.custody === "hardware_standard"
+                                    ? "Sign on Hardware"
+                                    : "Approve & Execute",
+                                )}
+                              </button>
+                            )}
+                          </td>
+                        </tr>
+                      ))
+                    )}
+                  </tbody>
+                </table>
+              ) : centerBottomTab === "ledger" ? (
+                <table className="wt-table">
+                  <thead>
+                    <tr>
+                      <th>Time</th>
+                      <th>Destination</th>
+                      <th>State</th>
+                      <th>Signature / Action</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {ledger.length === 0 ? (
+                      <tr>
+                        <td colSpan={4}>{t("None")}</td>
+                      </tr>
+                    ) : (
+                      ledger.map((le) => (
+                        <tr key={le.id}>
+                          <td>
+                            {new Date(le.createdAt * 1000).toLocaleTimeString()}
+                          </td>
+                          <td>{shortAddr(le.destination)}</td>
+                          <td>{le.state}</td>
+                          <td>
+                            {le.state === "broadcast" ||
+                            le.state === "unknown" ? (
+                              <button
+                                type="button"
+                                className="wt-btn-soft"
+                                disabled={busy}
+                                onClick={() => onReconcile(le)}
+                              >
+                                {t("Reconcile")}
+                              </button>
+                            ) : (
+                              shortAddr(le.txSignature || le.id)
+                            )}
+                          </td>
+                        </tr>
+                      ))
+                    )}
+                  </tbody>
+                </table>
+              ) : (
+                <table className="wt-table">
+                  <thead>
+                    <tr>
+                      <th>Time</th>
+                      <th>Action</th>
+                      <th>Summary</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {audit.length === 0 ? (
+                      <tr>
+                        <td colSpan={3}>{t("None")}</td>
+                      </tr>
+                    ) : (
+                      audit.map((a) => (
+                        <tr key={a.id}>
+                          <td>
+                            {new Date(a.timestamp * 1000).toLocaleTimeString()}
+                          </td>
+                          <td>{a.action}</td>
+                          <td>{a.summary}</td>
+                        </tr>
+                      ))
+                    )}
+                  </tbody>
+                </table>
+              )}
+            </div>
+          </div>
+        </section>
+
+        {/* RIGHT RAIL (334px) — WEN Action Composer (Create / Hardware / Send & Review) */}
+        <aside className="wt-wpanel">
+          <div className="wt-wtabs" role="tablist">
+            {(
+              [
+                { id: "create", label: "Create" },
+                { id: "hardware", label: "Hardware" },
+                { id: "send", label: "Send" },
+              ] as const
+            ).map((tb) => (
+              <button
+                key={tb.id}
+                type="button"
+                role="tab"
+                aria-selected={rightTab === tb.id}
+                onClick={() => setRightTab(tb.id)}
+              >
+                {t(tb.label)}
+              </button>
+            ))}
+          </div>
+
+          {rightTab === "create" ? (
+            <form className="wt-form-stack" onSubmit={onCreateNative}>
+              <div className="wt-tile-grid">
+                {(
+                  [
+                    { id: "agent", label: "Agentic Auto" },
+                    { id: "trading", label: "Trading" },
+                    { id: "vault", label: "Vault" },
+                  ] as const
+                ).map((r) => (
+                  <button
+                    key={r.id}
+                    type="button"
+                    aria-pressed={createRole === r.id}
+                    onClick={() => setCreateRole(r.id)}
+                  >
+                    {t(r.label)}
+                  </button>
+                ))}
+              </div>
+
+              <label className="wt-field">
+                <span>{t("Name")}</span>
+                <input
+                  value={createName}
+                  onChange={(e) => setCreateName(e.target.value)}
+                  placeholder="Solana Bot 1"
+                />
+              </label>
+
+              <label className="wt-field">
+                <span>Solana RPC URL</span>
+                <input
+                  value={createRpc}
+                  onChange={(e) => setCreateRpc(e.target.value)}
+                  placeholder="https://api.mainnet-beta.solana.com"
+                  required
+                />
+              </label>
+
+              <div className="wt-preset-chips">
+                {RPC_PRESETS.map((p) => (
+                  <button
+                    key={p.label}
+                    type="button"
+                    aria-pressed={createRpc === p.url}
+                    onClick={() => setCreateRpc(p.url)}
+                  >
+                    {p.label}
+                  </button>
+                ))}
+              </div>
+
+              <button type="submit" className="wt-btn-rose" disabled={busy}>
+                <Shield size={15} aria-hidden="true" />
+                <span>{`${t("Create in Signer")} →`}</span>
+              </button>
+            </form>
+          ) : rightTab === "hardware" ? (
+            <form className="wt-form-stack" onSubmit={onAttachExternal}>
+              <div className="wt-tile-grid">
+                <button
+                  type="button"
+                  aria-pressed={hwCustody === "hardware_standard"}
+                  onClick={() => setHwCustody("hardware_standard")}
+                >
+                  {t("Hardware")}
                 </button>
                 <button
                   type="button"
-                  className="primary"
-                  onClick={() => {
-                    setExportWallet(null);
-                    setExported(null);
-                  }}
+                  aria-pressed={hwCustody === "watch_only"}
+                  onClick={() => setHwCustody("watch_only")}
                 >
-                  {t("Done")}
+                  {t("Watch Only")}
+                </button>
+                <button
+                  type="button"
+                  onClick={onConnectWalletStandard}
+                >
+                  Detect
                 </button>
               </div>
-            </div>
-          ) : (
-            <form
-              className="account-form"
-              onSubmit={(e) => void handleExportSubmit(e)}
-            >
-              <label>
-                {t("Passphrase")}
+
+              {hwCustody === "hardware_standard" && (
+                <div className="wt-tile-grid">
+                  {(
+                    [
+                      { id: "vault", label: "Vault" },
+                      { id: "trading", label: "Trading" },
+                    ] as const
+                  ).map((r) => (
+                    <button
+                      key={r.id}
+                      type="button"
+                      aria-pressed={hwRole === r.id}
+                      onClick={() => setHwRole(r.id)}
+                    >
+                      {t(r.label)}
+                    </button>
+                  ))}
+                </div>
+              )}
+
+              <label className="wt-field">
+                <span>{t("Name")}</span>
                 <input
-                  type="password"
-                  autoComplete="current-password"
-                  required
-                  value={exportPass}
-                  onChange={(e) => setExportPass(e.target.value)}
+                  value={hwName}
+                  onChange={(e) => setHwName(e.target.value)}
+                  placeholder="Ledger Vault"
                 />
               </label>
-              {error && <p role="alert">{error}</p>}
-              <button type="submit" className="primary" disabled={busy}>
-                {t("Unlock")}
+
+              <label className="wt-field">
+                <span>Solana Public Address</span>
+                <input
+                  value={hwPubKey}
+                  onChange={(e) => setHwPubKey(e.target.value)}
+                  placeholder="Base58 address..."
+                  required
+                />
+              </label>
+
+              <label className="wt-field">
+                <span>Solana RPC URL</span>
+                <input
+                  value={hwRpc}
+                  onChange={(e) => setHwRpc(e.target.value)}
+                  required
+                />
+              </label>
+
+              <button type="submit" className="wt-btn-rose" disabled={busy}>
+                <span>{`${t("Attach Wallet")} →`}</span>
               </button>
             </form>
+          ) : (
+            <div className="wt-form-stack">
+              <form className="wt-form-stack" onSubmit={onPrepareSend}>
+                <label className="wt-field">
+                  <span>{t("Amount")}</span>
+                  <div className="wt-amount-wrap">
+                    <input
+                      value={sendAmount}
+                      onChange={(e) => setSendAmount(e.target.value)}
+                      required
+                    />
+                    <span className="wt-amount-suffix">SOL</span>
+                  </div>
+                </label>
+
+                <label className="wt-field">
+                  <span>Destination (@wallet:id or Base58)</span>
+                  <input
+                    value={sendDest}
+                    onChange={(e) => setSendDest(e.target.value)}
+                    placeholder="@wallet:vault"
+                    required
+                  />
+                </label>
+
+                <div className="wt-preset-chips">
+                  {wallets
+                    .filter((w) => !selected || w.id !== selected.id)
+                    .map((w) => (
+                      <button
+                        key={w.id}
+                        type="button"
+                        onClick={() => setSendDest(w.handle)}
+                      >
+                        {w.handle}
+                      </button>
+                    ))}
+                </div>
+
+                <button
+                  type="submit"
+                  className="wt-btn-rose"
+                  disabled={busy || !selected}
+                >
+                  <span>{`${t("Prepare Review")} →`}</span>
+                </button>
+              </form>
+
+              {activeReview && (
+                <div className="wt-review-box">
+                  <div className="wt-review-kv">
+                    <span>Policy Hash</span>
+                    <code>{activeReview.policyHash.slice(0, 12)}</code>
+                  </div>
+                  <div className="wt-review-kv">
+                    <span>Simulation</span>
+                    <strong>
+                      {activeReview.simulationOk
+                        ? "PASS"
+                        : activeReview.simulationError || "FAIL"}
+                    </strong>
+                  </div>
+                  <div className="wt-review-kv">
+                    <span>Destination</span>
+                    <code>{shortAddr(activeReview.destination)}</code>
+                  </div>
+                  <button
+                    type="button"
+                    className="wt-btn-rose"
+                    disabled={busy}
+                    onClick={() => onExecuteReview(activeReview)}
+                  >
+                    <span>
+                      {`${t(
+                        activeReview.custody === "hardware_standard"
+                          ? "Sign on Hardware"
+                          : "Approve & Execute",
+                      )} →`}
+                    </span>
+                  </button>
+                </div>
+              )}
+            </div>
           )}
+        </aside>
+      </div>
+
+      {/* Confirm Policy Expansion Modal */}
+      {confirmLoosenModal && selected && (
+        <Dialog
+          title="Confirm Policy Expansion"
+          onClose={() => setConfirmLoosenModal(false)}
+        >
+          <div className="wt-form-stack">
+            <div className="wt-review-box">
+              <div className="wt-review-kv">
+                <span>Wallet</span>
+                <strong>{selected.handle}</strong>
+              </div>
+              <div className="wt-review-kv">
+                <span>Current Policy Hash</span>
+                <code>{selected.policy.policyHash.slice(0, 16)}</code>
+              </div>
+              <div className="wt-review-kv">
+                <span>New SOL Cap / Daily</span>
+                <strong>{`${solMaxPerTx} / ${solMaxDaily} SOL`}</strong>
+              </div>
+            </div>
+            <button
+              type="button"
+              className="wt-btn-rose"
+              disabled={busy}
+              onClick={() => submitPolicySave(true)}
+            >
+              Confirm Authority Expansion →
+            </button>
+          </div>
+        </Dialog>
+      )}
+
+      {/* Encrypted Backup Dialog */}
+      {backupOpen && selected && (
+        <Dialog
+          title={t("Encrypted Backup")}
+          onClose={() => setBackupOpen(false)}
+        >
+          <form className="wt-form-stack" onSubmit={onExportBackup}>
+            <label className="wt-field">
+              <span>{t("Passphrase")}</span>
+              <input
+                type="password"
+                minLength={8}
+                value={passphrase}
+                onChange={(e) => setPassphrase(e.target.value)}
+                required
+              />
+            </label>
+            <button type="submit" className="wt-btn-rose" disabled={busy}>
+              Download Argon2id Backup (.fased-recovery.json) →
+            </button>
+            {backupResult && (
+              <div className="wt-review-box">
+                <div className="wt-review-kv">
+                  <span>File</span>
+                  <code>{backupResult.filename}</code>
+                </div>
+                <div className="wt-review-kv">
+                  <span>SHA-256</span>
+                  <code>{backupResult.fingerprint.slice(0, 20)}...</code>
+                </div>
+              </div>
+            )}
+            <div className="wt-cluster-line">
+              <code>
+                {`fased-app wallet recovery export-raw --wallet-id ${selected.id} --output /abs/key.json --acknowledge-custody-reduction`}
+              </code>
+            </div>
+          </form>
+        </Dialog>
+      )}
+
+      {/* Restore Encrypted Backup Dialog */}
+      {restoreOpen && (
+        <Dialog
+          title={t("Restore Backup")}
+          onClose={() => setRestoreOpen(false)}
+        >
+          <form className="wt-form-stack" onSubmit={onRestoreBackup}>
+            <label className="wt-field">
+              <span>Encrypted Backup File (.fased-recovery.json)</span>
+              <input
+                type="file"
+                accept=".json,application/json"
+                onChange={async (e) => {
+                  const file = e.target.files?.[0];
+                  if (!file) return;
+                  setRestoreArchiveText(await file.text());
+                }}
+              />
+            </label>
+            <label className="wt-field">
+              <span>{t("Name")}</span>
+              <input
+                value={restoreName}
+                onChange={(e) => setRestoreName(e.target.value)}
+                placeholder="Restored Wallet"
+              />
+            </label>
+            <label className="wt-field">
+              <span>Solana RPC URL</span>
+              <input
+                value={restoreRpc}
+                onChange={(e) => setRestoreRpc(e.target.value)}
+                required
+              />
+            </label>
+            <label className="wt-field">
+              <span>{t("Passphrase")}</span>
+              <input
+                type="password"
+                minLength={8}
+                value={passphrase}
+                onChange={(e) => setPassphrase(e.target.value)}
+                required
+              />
+            </label>
+            <button
+              type="submit"
+              className="wt-btn-rose"
+              disabled={busy || !restoreArchiveText}
+            >
+              {`${t("Restore Backup")} →`}
+            </button>
+          </form>
         </Dialog>
       )}
     </div>

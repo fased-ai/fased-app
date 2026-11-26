@@ -1,72 +1,82 @@
 package core
 
 import (
-	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"io"
 	"net/http"
-	"os"
 	"strings"
-	"time"
 
+	"github.com/fased-ai/fased-app/internal/custody"
 	"github.com/fased-ai/fased-app/internal/httpapi"
-	"github.com/fased-ai/fased-app/internal/walletvault"
 )
 
-func (s *Store) walletVaultService() (*walletvault.Service, error) {
+func (s *Store) custodyService() (*custody.Service, error) {
 	if s == nil || s.dir == "" {
 		return nil, errors.New("workspace store unavailable")
 	}
-	s.walletVaultMu.Lock()
-	defer s.walletVaultMu.Unlock()
-	if svc, ok := s.walletVaultPtr.(*walletvault.Service); ok && svc != nil {
-		return svc, nil
+	s.custodyMu.Lock()
+	defer s.custodyMu.Unlock()
+	if s.custodySvc != nil {
+		return s.custodySvc, nil
 	}
-	svc, err := walletvault.NewService(s.dir, s.now)
+	svc, err := custody.NewService(custody.Config{
+		DataDir:      s.dir,
+		FixtureMode:  s.providerFixture,
+		FastKDF:      s.providerFixture,
+		RPCTransport: s.marketDataTransport,
+		Now:          s.now,
+	})
 	if err != nil {
 		return nil, err
 	}
-	if s.providerFixture {
-		svc.SetFastKDFForTests()
+	if !s.providerFixture {
+		if sock, sErr := custody.StartSocketServer(svc); sErr == nil {
+			s.custodySock = sock
+		}
 	}
-	s.walletVaultPtr = svc
+	s.custodySvc = svc
 	return svc, nil
 }
 
-type solanaRPCStatus struct {
-	MainnetConfigured bool   `json:"mainnetConfigured"`
-	MainnetHost       string `json:"mainnetHost,omitempty"`
-	DevnetConfigured  bool   `json:"devnetConfigured"`
-	DevnetHost        string `json:"devnetHost,omitempty"`
+func (s *Store) loadedCustodyService() *custody.Service {
+	if s == nil {
+		return nil
+	}
+	s.custodyMu.Lock()
+	defer s.custodyMu.Unlock()
+	return s.custodySvc
 }
 
-func (s *Store) solanaRPCStatusView() solanaRPCStatus {
-	var out solanaRPCStatus
-	if _, host, ok := s.resolveSolanaRPC("mainnet-beta"); ok {
-		out.MainnetConfigured = true
-		out.MainnetHost = host
+func writeCustodyError(w http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, custody.ErrWalletNotFound), errors.Is(err, custody.ErrReviewNotFound), errors.Is(err, custody.ErrLedgerNotFound):
+		writeError(w, 404, err.Error())
+	case errors.Is(err, custody.ErrWrongPassword), errors.Is(err, custody.ErrPolicyDenied), errors.Is(err, custody.ErrRoleDenied), errors.Is(err, custody.ErrTxTampered):
+		writeError(w, 403, err.Error())
+	case errors.Is(err, custody.ErrPolicyConflict), errors.Is(err, custody.ErrAmbiguousState):
+		writeError(w, 409, err.Error())
+	default:
+		writeError(w, 400, err.Error())
 	}
-	if _, host, ok := s.resolveSolanaRPC("devnet"); ok {
-		out.DevnetConfigured = true
-		out.DevnetHost = host
-	}
-	return out
 }
 
+// walletsV2API exposes hardened custody lifecycle, fail-closed policy management, per-wallet
+// genesis-pinned RPC, hardware/Wallet-Standard verification, and Argon2id encrypted backup.
+// Plaintext private keys and mnemonics NEVER cross HTTP JSON in either direction.
 func (h *HTTPHandler) walletsV2API(w http.ResponseWriter, r *http.Request, token string) {
 	if !h.allowRate(r, "wallets-v2", 120) {
 		writeError(w, 429, ErrRateLimited.Error())
 		return
 	}
-	svc, err := h.store.walletVaultService()
+	svc, err := h.store.custodyService()
 	if err != nil {
-		writeError(w, 500, "wallet vault unavailable")
+		writeError(w, 500, "custody signer unavailable")
 		return
 	}
 	rel := strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/v1/wallets"), "/")
-	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
-	defer cancel()
+	ctx := r.Context()
 
 	switch {
 	case rel == "":
@@ -74,15 +84,17 @@ func (h *HTTPHandler) walletsV2API(w http.ResponseWriter, r *http.Request, token
 			writeError(w, 405, "method not allowed")
 			return
 		}
-		list, err := svc.ListWallets()
+		list, err := svc.ListWallets(ctx)
 		if err != nil {
 			writeError(w, 500, "wallets unavailable")
 			return
 		}
+		sockReady := custody.ProbeSocket(ctx, h.store.dir)
 		writeJSON(w, 200, map[string]any{
-			"wallets": list,
-			"count":   len(list),
-			"rpc":     h.store.solanaRPCStatusView(),
+			"wallets":       list,
+			"count":         len(list),
+			"socketReady":   sockReady,
+			"signerPresent": true,
 		})
 
 	case rel == "create":
@@ -94,27 +106,21 @@ func (h *HTTPHandler) walletsV2API(w http.ResponseWriter, r *http.Request, token
 			return
 		}
 		var in struct {
-			Name       string `json:"name"`
-			Role       string `json:"role"`
-			Words      int    `json:"words"`
-			Passphrase string `json:"passphrase"`
+			Name   string `json:"name"`
+			Role   string `json:"role"`
+			RPCURL string `json:"rpcUrl"`
 		}
 		if !httpapi.DecodeStrictJSON(w, r, 16*1024, &in) {
 			return
 		}
-		rec, mnemonic, err := svc.CreateSolanaWallet(in.Name, in.Role, in.Words, in.Passphrase)
+		rec, err := svc.CreateNativeWallet(ctx, in.Name, in.Role, in.RPCURL)
 		if err != nil {
-			writeError(w, 400, err.Error())
+			writeCustodyError(w, err)
 			return
 		}
-		w.Header().Set("Cache-Control", "no-store")
-		writeJSON(w, 200, map[string]any{
-			"wallet":    rec,
-			"mnemonic":  mnemonic,
-			"publicKey": rec.PublicKey,
-		})
+		writeJSON(w, 200, map[string]any{"wallet": rec})
 
-	case rel == "import":
+	case rel == "attach":
 		if r.Method != http.MethodPost {
 			writeError(w, 405, "method not allowed")
 			return
@@ -122,49 +128,145 @@ func (h *HTTPHandler) walletsV2API(w http.ResponseWriter, r *http.Request, token
 		if !h.v2Mutation(w, r, token, true) {
 			return
 		}
-		var in walletvault.ImportInput
-		if !httpapi.DecodeStrictJSON(w, r, 16*1024, &in) {
-			return
-		}
-		rec, err := svc.ImportWallet(in)
-		if err != nil {
-			writeError(w, 400, err.Error())
-			return
-		}
-		writeJSON(w, 200, map[string]any{
-			"wallet": rec,
-		})
-
-	case strings.HasSuffix(rel, "/export"):
-		if r.Method != http.MethodPost {
-			writeError(w, 405, "method not allowed")
-			return
-		}
-		if !h.v2Mutation(w, r, token, true) {
-			return
-		}
-		id := strings.TrimSuffix(rel, "/export")
 		var in struct {
-			Passphrase string `json:"passphrase"`
+			Custody   string `json:"custody"` // hardware_standard | watch_only
+			Name      string `json:"name"`
+			Role      string `json:"role"`
+			PublicKey string `json:"publicKey"`
+			RPCURL    string `json:"rpcUrl"`
+		}
+		if !httpapi.DecodeStrictJSON(w, r, 16*1024, &in) {
+			return
+		}
+		rec, err := svc.AttachExternalWallet(ctx, in.Custody, in.Name, in.Role, in.PublicKey, in.RPCURL)
+		if err != nil {
+			writeCustodyError(w, err)
+			return
+		}
+		writeJSON(w, 200, map[string]any{"wallet": rec})
+
+	case rel == "restore":
+		if r.Method != http.MethodPost {
+			writeError(w, 405, "method not allowed")
+			return
+		}
+		if !h.v2Mutation(w, r, token, true) {
+			return
+		}
+		var in struct {
+			Archive    json.RawMessage `json:"archive"`
+			Passphrase string          `json:"passphrase"`
+			Name       string          `json:"name"`
+			Role       string          `json:"role"`
+			RPCURL     string          `json:"rpcUrl"`
+		}
+		if !httpapi.DecodeStrictJSON(w, r, 64*1024, &in) {
+			return
+		}
+		rec, err := svc.ImportEncryptedRecovery(ctx, in.Archive, in.Passphrase, in.Name, in.Role, in.RPCURL)
+		if err != nil {
+			writeCustodyError(w, err)
+			return
+		}
+		writeJSON(w, 200, map[string]any{"wallet": rec})
+
+	case strings.HasSuffix(rel, "/policy"):
+		id := strings.TrimSuffix(rel, "/policy")
+		switch r.Method {
+		case http.MethodGet:
+			rec, err := svc.GetWallet(ctx, id)
+			if err != nil {
+				writeCustodyError(w, err)
+				return
+			}
+			writeJSON(w, 200, map[string]any{"policy": rec.Policy, "wallet": rec})
+		case http.MethodPut:
+			if !h.v2Mutation(w, r, token, true) {
+				return
+			}
+			var in struct {
+				Policy             custody.WalletPolicy `json:"policy"`
+				ConfirmLoosen      bool                 `json:"confirmLoosen"`
+				ExpectedPolicyHash string               `json:"expectedPolicyHash"`
+			}
+			if !httpapi.DecodeStrictJSON(w, r, 32*1024, &in) {
+				return
+			}
+			rec, err := svc.UpdatePolicy(ctx, id, in.Policy, in.ConfirmLoosen, in.ExpectedPolicyHash, "owner")
+			if err != nil {
+				writeCustodyError(w, err)
+				return
+			}
+			writeJSON(w, 200, map[string]any{"wallet": rec})
+		default:
+			writeError(w, 405, "method not allowed")
+		}
+
+	case strings.HasSuffix(rel, "/freeze"):
+		if r.Method != http.MethodPost {
+			writeError(w, 405, "method not allowed")
+			return
+		}
+		if !h.v2Mutation(w, r, token, false) {
+			return
+		}
+		id := strings.TrimSuffix(rel, "/freeze")
+		var in struct {
+			Frozen bool   `json:"frozen"`
+			Reason string `json:"reason"`
 		}
 		if !httpapi.DecodeStrictJSON(w, r, 8*1024, &in) {
 			return
 		}
-		exp, err := svc.ExportSecret(id, in.Passphrase)
+		rec, err := svc.SetFreeze(ctx, id, in.Frozen, in.Reason, "owner")
 		if err != nil {
-			if errors.Is(err, os.ErrNotExist) {
-				writeError(w, 404, "wallet not found")
-				return
-			}
-			if errors.Is(err, walletvault.ErrWrongPassphrase) {
-				writeError(w, 403, err.Error())
-				return
-			}
-			writeError(w, 400, err.Error())
+			writeCustodyError(w, err)
 			return
 		}
-		w.Header().Set("Cache-Control", "no-store")
-		writeJSON(w, 200, exp)
+		writeJSON(w, 200, map[string]any{"wallet": rec})
+
+	case strings.HasSuffix(rel, "/connections"):
+		if r.Method != http.MethodPut {
+			writeError(w, 405, "method not allowed")
+			return
+		}
+		if !h.v2Mutation(w, r, token, true) {
+			return
+		}
+		id := strings.TrimSuffix(rel, "/connections")
+		var in custody.WalletConnections
+		if !httpapi.DecodeStrictJSON(w, r, 32*1024, &in) {
+			return
+		}
+		rec, err := svc.UpdateConnections(ctx, id, in, "owner")
+		if err != nil {
+			writeCustodyError(w, err)
+			return
+		}
+		writeJSON(w, 200, map[string]any{"wallet": rec})
+
+	case strings.HasSuffix(rel, "/rpc"):
+		if r.Method != http.MethodPut {
+			writeError(w, 405, "method not allowed")
+			return
+		}
+		if !h.v2Mutation(w, r, token, true) {
+			return
+		}
+		id := strings.TrimSuffix(rel, "/rpc")
+		var in struct {
+			PrimaryRPCURL  string `json:"primaryRpcUrl"`
+			FallbackRPCURL string `json:"fallbackRpcUrl"`
+		}
+		if !httpapi.DecodeStrictJSON(w, r, 16*1024, &in) {
+			return
+		}
+		rec, err := svc.SetWalletRPC(ctx, id, in.PrimaryRPCURL, in.FallbackRPCURL, "owner")
+		if err != nil {
+			writeCustodyError(w, err)
+			return
+		}
+		writeJSON(w, 200, map[string]any{"wallet": rec})
 
 	case strings.HasSuffix(rel, "/balance"):
 		if r.Method != http.MethodPost {
@@ -175,112 +277,161 @@ func (h *HTTPHandler) walletsV2API(w http.ResponseWriter, r *http.Request, token
 			return
 		}
 		id := strings.TrimSuffix(rel, "/balance")
-		walletRec, found, err := svc.GetWallet(id)
+		bal, err := svc.FetchBalance(ctx, id)
 		if err != nil {
-			writeError(w, 500, "wallet lookup failed")
+			writeCustodyError(w, err)
 			return
 		}
-		if !found {
-			writeError(w, 404, "wallet not found")
+		writeJSON(w, 200, bal)
+
+	case strings.HasSuffix(rel, "/backup"):
+		if r.Method != http.MethodPost {
+			writeError(w, 405, "method not allowed")
 			return
 		}
+		if !h.v2Mutation(w, r, token, true) {
+			return
+		}
+		id := strings.TrimSuffix(rel, "/backup")
 		var in struct {
-			Cluster string `json:"cluster"`
+			Passphrase string `json:"passphrase"`
 		}
-		if r.ContentLength != 0 && strings.Contains(strings.ToLower(r.Header.Get("Content-Type")), "application/json") {
-			if !httpapi.DecodeStrictJSON(w, r, 8*1024, &in) {
-				return
-			}
-		}
-		cluster := strings.TrimSpace(in.Cluster)
-		if cluster == "" {
-			cluster = "mainnet-beta"
-		}
-		rawRPC, hostOnly, ok := h.store.resolveSolanaRPC(cluster)
-		if !ok {
-			writeJSON(w, 200, map[string]any{
-				"rpcRequired": true,
-				"cluster":     cluster,
-				"publicKey":   walletRec.PublicKey,
-			})
+		if !httpapi.DecodeStrictJSON(w, r, 8*1024, &in) {
 			return
 		}
-		if h.store.providerFixture && h.store.marketDataTransport == nil {
-			writeJSON(w, 200, map[string]any{
-				"rpcRequired": false,
-				"cluster":     cluster,
-				"rpcHost":     hostOnly,
-				"publicKey":   walletRec.PublicKey,
-				"lamports":    uint64(1500000000),
-				"sol":         1.5,
-				"latencyMs":   3,
-			})
+		archiveBytes, fp, err := svc.ExportEncryptedRecovery(ctx, id, in.Passphrase, "owner")
+		if err != nil {
+			writeCustodyError(w, err)
 			return
 		}
-		start := time.Now()
-		body := `{"jsonrpc":"2.0","id":1,"method":"getBalance","params":["` + walletRec.PublicKey + `"]}`
-		transport := http.DefaultTransport
-		if h.store.marketDataTransport != nil {
-			transport = h.store.marketDataTransport
-		}
-		client := &http.Client{
-			Transport: transport,
-			Timeout:   8 * time.Second,
-			CheckRedirect: func(*http.Request, []*http.Request) error {
-				return errors.New("redirects blocked")
-			},
-		}
-		req, reqErr := http.NewRequestWithContext(ctx, http.MethodPost, rawRPC, strings.NewReader(body))
-		if reqErr != nil {
-			writeError(w, 400, "invalid configured RPC endpoint")
-			return
-		}
-		req.Header.Set("Content-Type", "application/json")
-		resp, doErr := client.Do(req)
-		if doErr != nil {
-			writeError(w, 502, "RPC request failed")
-			return
-		}
-		rawResp, _ := io.ReadAll(io.LimitReader(resp.Body, 32*1024))
-		_ = resp.Body.Close()
-		var rpcOut struct {
-			Result *struct {
-				Value uint64 `json:"value"`
-			} `json:"result"`
-			Error *struct {
-				Message string `json:"message"`
-			} `json:"error"`
-		}
-		if err := json.Unmarshal(rawResp, &rpcOut); err != nil || rpcOut.Result == nil {
-			errMsg := "unexpected RPC response"
-			if rpcOut.Error != nil && rpcOut.Error.Message != "" {
-				errMsg = rpcOut.Error.Message
-			}
-			writeError(w, 502, errMsg)
-			return
-		}
-		lamports := rpcOut.Result.Value
+		sum := sha256.Sum256(archiveBytes)
+		_ = hex.EncodeToString(sum[:])
+		w.Header().Set("Cache-Control", "no-store")
 		writeJSON(w, 200, map[string]any{
-			"rpcRequired": false,
-			"cluster":     cluster,
-			"rpcHost":     hostOnly,
-			"publicKey":   walletRec.PublicKey,
-			"lamports":    lamports,
-			"sol":         float64(lamports) / 1e9,
-			"latencyMs":   time.Since(start).Milliseconds(),
+			"archive":     json.RawMessage(archiveBytes),
+			"fingerprint": fp,
+			"filename":    id + ".fased-recovery.json",
 		})
 
-	case !strings.Contains(rel, "/"):
-		if r.Method != http.MethodDelete {
+	case strings.HasSuffix(rel, "/activity"):
+		if r.Method != http.MethodGet {
+			writeError(w, 405, "method not allowed")
+			return
+		}
+		id := strings.TrimSuffix(rel, "/activity")
+		reviews, ledger, audit, err := svc.ListActivity(ctx, id)
+		if err != nil {
+			writeCustodyError(w, err)
+			return
+		}
+		writeJSON(w, 200, map[string]any{
+			"reviews": reviews,
+			"ledger":  ledger,
+			"audit":   audit,
+		})
+
+	case strings.HasSuffix(rel, "/reviews"):
+		if r.Method != http.MethodPost {
 			writeError(w, 405, "method not allowed")
 			return
 		}
 		if !h.v2Mutation(w, r, token, false) {
 			return
 		}
-		deleted, err := svc.DeleteWallet(rel)
+		id := strings.TrimSuffix(rel, "/reviews")
+		var in custody.PrepareReviewRequest
+		if !httpapi.DecodeStrictJSON(w, r, 16*1024, &in) {
+			return
+		}
+		in.WalletID = id
+		rev, err := svc.PrepareReview(ctx, in)
 		if err != nil {
-			writeError(w, 500, "delete failed")
+			writeCustodyError(w, err)
+			return
+		}
+		writeJSON(w, 200, map[string]any{"review": rev})
+
+	case strings.Contains(rel, "/reviews/"):
+		if r.Method != http.MethodPost {
+			writeError(w, 405, "method not allowed")
+			return
+		}
+		parts := strings.Split(rel, "/")
+		if len(parts) != 4 || parts[1] != "reviews" {
+			writeError(w, 404, "unknown review route")
+			return
+		}
+		walletID, reviewID, action := parts[0], parts[2], parts[3]
+		switch action {
+		case "execute":
+			if !h.v2Mutation(w, r, token, true) {
+				return
+			}
+			entry, err := svc.ExecuteNativeReview(ctx, walletID, reviewID, "owner")
+			if err != nil {
+				if entry.ID != "" {
+					writeJSON(w, 202, map[string]any{"entry": entry, "error": err.Error()})
+					return
+				}
+				writeCustodyError(w, err)
+				return
+			}
+			writeJSON(w, 200, map[string]any{"entry": entry})
+		case "submit-signed":
+			if !h.v2Mutation(w, r, token, true) {
+				return
+			}
+			var in struct {
+				SignedTxBase64 string `json:"signedTxBase64"`
+			}
+			if !httpapi.DecodeStrictJSON(w, r, 32*1024, &in) {
+				return
+			}
+			entry, err := svc.SubmitHardwareSignedReview(ctx, walletID, reviewID, in.SignedTxBase64, "hardware-device")
+			if err != nil {
+				if entry.ID != "" {
+					writeJSON(w, 202, map[string]any{"entry": entry, "error": err.Error()})
+					return
+				}
+				writeCustodyError(w, err)
+				return
+			}
+			writeJSON(w, 200, map[string]any{"entry": entry})
+		default:
+			writeError(w, 404, "unknown review action")
+		}
+
+	case strings.Contains(rel, "/ledger/") && strings.HasSuffix(rel, "/reconcile"):
+		if r.Method != http.MethodPost {
+			writeError(w, 405, "method not allowed")
+			return
+		}
+		if !h.v2Mutation(w, r, token, false) {
+			return
+		}
+		parts := strings.Split(rel, "/")
+		if len(parts) != 4 || parts[1] != "ledger" || parts[3] != "reconcile" {
+			writeError(w, 404, "unknown ledger route")
+			return
+		}
+		entry, err := svc.ReconcileLedgerEntry(ctx, parts[0], parts[2])
+		if err != nil {
+			writeCustodyError(w, err)
+			return
+		}
+		writeJSON(w, 200, map[string]any{"entry": entry})
+
+	case !strings.Contains(rel, "/"):
+		if r.Method != http.MethodDelete {
+			writeError(w, 405, "method not allowed")
+			return
+		}
+		if !h.v2Mutation(w, r, token, true) {
+			return
+		}
+		deleted, err := svc.DeleteWallet(ctx, rel)
+		if err != nil {
+			writeCustodyError(w, err)
 			return
 		}
 		if !deleted {

@@ -2,21 +2,12 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useCore } from "../core";
 import { useUI } from "../ui-preferences";
 import { useWorkspace } from "../workspace";
-import { Badge } from "../components/shared";
-import { WidgetGrid, type WidgetCatalogItem } from "../components/WidgetGrid";
 import {
-  Activity,
-  Bot,
-  CandlestickChart,
+  ChevronDown,
   Crosshair,
-  Grid2x2,
-  Layers,
-  List,
   Pin,
-  Plus,
   Settings,
   Shield,
-  TrendingUp,
 } from "../icons";
 import { CrosshairBus } from "../stream-store";
 import { fetchIntelEvents, type IntelEvent } from "../world-intel";
@@ -27,6 +18,7 @@ import {
 import {
   approveDeskTicket,
   closeDeskPosition,
+  formatCurrencyUSD,
   getDeskState,
   listLabScripts,
   rejectDeskTicket,
@@ -68,67 +60,19 @@ import {
   type TradeSnapshot,
 } from "../trade-engine";
 import { ChartTile } from "../components/trade/ChartTile";
-import { OrderflowPane } from "../components/trade/OrderflowPane";
 import { WatchlistPanel } from "../components/trade/WatchlistPanel";
 import { OrderExecutionWidget } from "../components/trade/OrderExecutionWidget";
 import { PositionsWidget } from "../components/trade/PositionsWidget";
 import { BotAgentWidget } from "../components/trade/BotAgentWidget";
-import type { GridLayout } from "../widget-layout";
 import "./TradeWorkspace.css";
-
-type TradeWidgetID =
-  | "chart"
-  | "execution"
-  | "watchlist"
-  | "microstructure"
-  | "positions"
-  | "bots";
-
-const TRADE_WIDGET_LAYOUT_KEY = "fased.trade.layout.v1";
-
-const TRADE_CATALOG: readonly WidgetCatalogItem<TradeWidgetID>[] = [
-  { id: "chart", title: "Chart", icon: CandlestickChart, defaultSize: "wide" },
-  {
-    id: "execution",
-    title: "Order Execution",
-    icon: TrendingUp,
-    defaultSize: "small",
-  },
-  { id: "watchlist", title: "Watchlist", icon: List, defaultSize: "small" },
-  {
-    id: "microstructure",
-    title: "DOM & Tape",
-    icon: Layers,
-    defaultSize: "small",
-  },
-  {
-    id: "positions",
-    title: "Positions & Orders",
-    icon: Activity,
-    defaultSize: "wide",
-  },
-  { id: "bots", title: "Bots & AI Trader", icon: Bot, defaultSize: "small" },
-];
-
-const DEFAULT_TRADE_WIDGET_LAYOUT: GridLayout<TradeWidgetID> = {
-  version: 1,
-  widgets: [
-    { id: "chart", size: "wide" },
-    { id: "execution", size: "small" },
-    { id: "positions", size: "wide" },
-    { id: "watchlist", size: "small" },
-    { id: "microstructure", size: "small" },
-    { id: "bots", size: "small" },
-  ],
-};
 
 const LAYOUTS: { id: TradeLayoutMode; label: string }[] = [
   { id: "1x1", label: "1×1" },
   { id: "1x2", label: "1×2" },
   { id: "2x2", label: "2×2" },
-  { id: "3x3", label: "3×3" },
-  { id: "4x4", label: "4×4" },
 ];
+
+type ComposerTab = "manual" | "semi_auto" | "bot";
 
 export function TradeWorkspace() {
   const { t } = useUI();
@@ -142,7 +86,9 @@ export function TradeWorkspace() {
     }
   });
   const [showEvents, setShowEvents] = useState(true);
-  const [addingWidgets, setAddingWidgets] = useState(false);
+  const [composerTab, setComposerTab] = useState<ComposerTab>("manual");
+  const [marketPickerOpen, setMarketPickerOpen] = useState(false);
+  const [symbolDraft, setSymbolDraft] = useState("");
   const [enabledExchanges, setEnabledExchanges] = useState<string[] | null>(
     null,
   );
@@ -553,266 +499,366 @@ export function TradeWorkspace() {
     }
   }
 
-  function renderWidgetHeaderExtra(id: TradeWidgetID) {
-    if (id !== "chart") return null;
-    return (
-      <div className="trade-layout-group" role="group" aria-label={t("Chart layout")}>
-        <Grid2x2 size={13} aria-hidden="true" />
-        {LAYOUTS.map((l) => (
-          <button
-            key={l.id}
-            type="button"
-            aria-pressed={config.layout === l.id}
-            className={config.layout === l.id ? "is-selected" : ""}
-            onClick={() => setLayout(l.id)}
-          >
-            {l.label}
-          </button>
-        ))}
-      </div>
-    );
-  }
-
-  function renderWidgetBody(id: TradeWidgetID) {
-    if (id === "chart") {
-      return (
-        <div
-          className={`trade-grid layout-${config.layout}`}
-          data-testid="trade-chart-grid"
-        >
-          {visibleTiles.map((tile) => {
-            const ovKey = symbolOverlayKey(tile.venue, tile.symbol);
-            const drawings = config.drawingsBySymbol?.[ovKey] ?? tile.drawings;
-            const paperOrders =
-              config.paperOrdersBySymbol?.[ovKey] ?? tile.paperOrders;
-            const matchingPositions = openDeskPositions.filter(
-              (p) =>
-                (!p.venue || p.venue === tile.venue) &&
-                p.symbol.toUpperCase() === tile.symbol.toUpperCase(),
-            );
-            const matchingPlans = (trade?.plans ?? []).filter(
-              (pl) =>
-                (pl.status === "active" || pl.status === "filled") &&
-                pl.venue === tile.venue &&
-                pl.symbol.toUpperCase() === tile.symbol.toUpperCase(),
-            );
-            return (
-              <ChartTile
-                key={tile.id}
-                tile={tile}
-                active={tile.id === activeTile?.id}
-                enabledVenues={enabledExchanges ?? undefined}
-                drawings={drawings}
-                paperOrders={paperOrders}
-                streamClient={streamClient}
-                crosshairBus={crosshairBusRef.current ?? undefined}
-                syncCrosshair={config.syncCrosshair}
-                labScripts={labScripts}
-                deskPositions={matchingPositions}
-                tradePlans={matchingPlans}
-                intelEvents={intelEvents}
-                showEvents={showEvents}
-                onSelect={() =>
-                  setConfig((prev) =>
-                    prev.activeTileId === tile.id
-                      ? prev
-                      : { ...prev, activeTileId: tile.id },
-                  )
-                }
-                onChangeTile={updateTile}
-                onAddDrawing={(d) => addDrawing(tile, d)}
-                onAddPaperOrder={(o) => addPaperOrder(tile, o)}
-                onClearOverlays={() => clearOverlays(tile)}
-              />
-            );
-          })}
-        </div>
-      );
-    }
-
-    if (id === "execution" && activeTile) {
-      return (
-        <OrderExecutionWidget
-          venue={activeTile.venue}
-          symbol={activeTile.symbol}
-          interval={activeTile.interval}
-          trade={trade}
-          accounts={accounts}
-          busy={tradeBusy}
-          error={tradeError}
-          onSubmitTrade={(req) => void handleSubmitTrade(req)}
-        />
-      );
-    }
-
-    if (id === "watchlist" && activeTile) {
-      return (
-        <WatchlistPanel
-          activeVenue={activeTile.venue}
-          activeSymbol={activeTile.symbol}
-          enabledVenues={enabledExchanges ?? undefined}
-          onSelectItem={loadWatchlistItem}
-        />
-      );
-    }
-
-    if (id === "microstructure" && activeTile) {
-      return (
-        <OrderflowPane
-          venue={activeTile.venue}
-          symbol={activeTile.symbol}
-          interval={activeTile.interval}
-          tab={config.orderflowTab}
-          streamClient={streamClient}
-          crosshairBus={crosshairBusRef.current ?? undefined}
-          syncCrosshair={config.syncCrosshair}
-          onChangeTab={(nextTab: OrderflowTab) =>
-            setConfig((prev) => ({ ...prev, orderflowTab: nextTab }))
-          }
-        />
-      );
-    }
-
-    if (id === "positions") {
-      return (
-        <PositionsWidget
-          trade={trade}
-          desk={desk}
-          tradeBusy={tradeBusy}
-          deskBusy={deskBusy}
-          onEvaluateTrades={() => void handleEvaluateTrades()}
-          onCancelTrade={(plId) => void handleCancelTrade(plId)}
-          onApproveTicket={(tkId) => void handleApproveTicket(tkId)}
-          onRejectTicket={(tkId) => void handleRejectTicket(tkId)}
-          onClosePosition={(posId) => void handleClosePosition(posId)}
-          onOpenLab={() => navigate("lab/desk")}
-        />
-      );
-    }
-
-    if (id === "bots" && activeTile) {
-      return (
-        <BotAgentWidget
-          venue={activeTile.venue}
-          symbol={activeTile.symbol}
-          interval={activeTile.interval}
-          scripts={labScripts}
-          bots={bots}
-          accounts={accounts}
-          agentProfiles={(agents.view?.profiles ?? []).map((p) => ({
-            id: p.id,
-            name: p.name,
-          }))}
-          busy={tradeBusy}
-          onCreateBot={(req) => void handleCreateBot(req)}
-          onBotAction={(bId, act) => void handleBotAction(bId, act)}
-          onDeleteBot={(bId) => void handleDeleteBot(bId)}
-        />
-      );
-    }
-
-    return null;
-  }
-
   const isZeroState = core.mode === "ready" && enabledExchanges?.length === 0;
+  const venueChoices =
+    enabledExchanges && enabledExchanges.length > 0
+      ? enabledExchanges
+      : ["hyperliquid", "binance", "kraken", "solana"];
+  const hasLiveAccount = accounts.some((a) => a.executionMode === "live");
 
-  return (
-    <section className="trade-workspace" aria-label={t("Trade")}>
-      <header className="trade-toolbar">
-        <div className="trade-title-group">
-          <h1>{t("Trade")}</h1>
-          <Badge tone={trade?.killSwitchActive ? "danger" : undefined}>
-            {t(trade?.killSwitchActive ? "Kill switch" : "Paper")}
-          </Badge>
-        </div>
-
-        <div className="trade-controls">
-          <button
-            type="button"
-            className={`icon-button ${config.syncCrosshair ? "is-selected" : ""}`}
-            aria-pressed={config.syncCrosshair}
-            aria-label={t("Sync crosshairs")}
-            title={t("Sync crosshairs")}
-            onClick={() =>
-              setConfig((prev) => ({
-                ...prev,
-                syncCrosshair: !prev.syncCrosshair,
-              }))
-            }
-          >
-            <Crosshair size={15} aria-hidden="true" />
-          </button>
-
-          <button
-            type="button"
-            className={`icon-button ${showEvents ? "is-selected" : ""}`}
-            aria-pressed={showEvents}
-            aria-label={t("Events")}
-            title={t("Events")}
-            onClick={() => setShowEvents((prev) => !prev)}
-          >
-            <Pin size={15} aria-hidden="true" />
-          </button>
-
-          <button
-            type="button"
-            className={`icon-button ${trade?.killSwitchActive ? "trade-danger-btn" : ""}`}
-            aria-label={t(
-              trade?.killSwitchActive ? "Clear kill switch" : "Kill switch",
-            )}
-            title={t(
-              trade?.killSwitchActive ? "Clear kill switch" : "Kill switch",
-            )}
-            disabled={tradeBusy || core.mode !== "ready"}
-            onClick={() => void handleToggleKill(!trade?.killSwitchActive)}
-          >
-            <Shield size={15} aria-hidden="true" />
-          </button>
-
-          <button
-            type="button"
-            className="icon-button"
-            aria-label={t("Data & Feeds")}
-            title={t("Data & Feeds")}
-            onClick={() => openSettingsModal("data")}
-          >
-            <Settings size={15} aria-hidden="true" />
-          </button>
-
-          <button
-            type="button"
-            className="icon-button"
-            aria-label={t("Widgets")}
-            title={t("Widgets")}
-            onClick={() => setAddingWidgets(true)}
-          >
-            <Plus size={15} aria-hidden="true" />
-          </button>
-        </div>
-      </header>
-
-      {isZeroState ? (
+  if (isZeroState) {
+    return (
+      <section className="trade-workspace wt-trade-shell" aria-label={t("Trade")}>
         <div className="trade-empty-cta">
           <button
             type="button"
-            className="primary"
+            className="wt-btn-rose-sm"
             onClick={() => openSettingsModal("data")}
           >
             <Settings size={15} aria-hidden="true" />
             <span>{t("Enable exchanges in Settings")}</span>
           </button>
         </div>
-      ) : (
-        <WidgetGrid
-          storageKey={TRADE_WIDGET_LAYOUT_KEY}
-          catalog={TRADE_CATALOG}
-          defaultLayout={DEFAULT_TRADE_WIDGET_LAYOUT}
-          renderWidgetHeaderExtra={renderWidgetHeaderExtra}
-          renderBody={renderWidgetBody}
-          addDialogOpen={addingWidgets}
-          onAddDialogOpenChange={setAddingWidgets}
-        />
-      )}
+      </section>
+    );
+  }
+
+  return (
+    <section className="trade-workspace wt-trade-shell" aria-label={t("Trade")}>
+      <div className="wt-trade-grid">
+        <aside className="wt-trade-left">
+          {activeTile && (
+            <div className="wt-wpanel">
+              <div className="trade-tile-menu-anchor">
+                <button
+                  type="button"
+                  className="wt-market-trigger"
+                  onClick={() => {
+                    setSymbolDraft(activeTile.symbol);
+                    setMarketPickerOpen((o) => !o);
+                  }}
+                >
+                  <span className="wt-dot-ok" aria-hidden="true" />
+                  <strong>{activeTile.symbol}</strong>
+                  <span className="wt-muted-mini mono">
+                    {activeTile.venue.toUpperCase()}
+                  </span>
+                  <ChevronDown size={13} aria-hidden="true" />
+                </button>
+                {marketPickerOpen && (
+                  <form
+                    className="trade-tile-popover wt-market-popover"
+                    onSubmit={(e) => {
+                      e.preventDefault();
+                      if (symbolDraft.trim()) {
+                        updateTile({
+                          ...activeTile,
+                          symbol: symbolDraft.trim().toUpperCase(),
+                        });
+                      }
+                      setMarketPickerOpen(false);
+                    }}
+                  >
+                    <div className="wt-venue-chips">
+                      {venueChoices.map((v) => (
+                        <button
+                          key={v}
+                          type="button"
+                          className={`trade-mini-btn ${activeTile.venue === v ? "is-selected" : ""}`}
+                          onClick={() => updateTile({ ...activeTile, venue: v })}
+                        >
+                          {v}
+                        </button>
+                      ))}
+                    </div>
+                    <input
+                      aria-label={t("Symbol")}
+                      value={symbolDraft}
+                      onChange={(e) => setSymbolDraft(e.target.value)}
+                    />
+                    <button type="submit" className="wt-btn-rose-sm">
+                      {t("Open")}
+                    </button>
+                  </form>
+                )}
+              </div>
+
+              <div className="wt-status-line">
+                <span
+                  className={
+                    trade?.killSwitchActive ? "wt-dot-danger" : "wt-dot-ok"
+                  }
+                  aria-hidden="true"
+                />
+                <span className={trade?.killSwitchActive ? "wt-neg" : "wt-pos"}>
+                  {t(
+                    trade?.killSwitchActive
+                      ? "Kill switch"
+                      : hasLiveAccount
+                        ? "Live"
+                        : "Paper",
+                  )}
+                </span>
+                <span className="wt-muted-mini mono">
+                  {activeTile.interval}
+                </span>
+              </div>
+
+              <div className="wt-kpi-box">
+                <div>
+                  <span>{t("Equity")}</span>
+                  <strong className="mono">
+                    {formatCurrencyUSD(desk?.account.equityUsd ?? 100000)}
+                  </strong>
+                </div>
+                <div>
+                  <span>{t("Open positions")}</span>
+                  <strong className="mono">{openDeskPositions.length}</strong>
+                </div>
+                <div>
+                  <span>{t("Open plans")}</span>
+                  <strong className="mono">{trade?.activeCount ?? 0}</strong>
+                </div>
+                <div>
+                  <span>{t("Bots")}</span>
+                  <strong className="mono">{bots.length}</strong>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {activeTile && (
+            <WatchlistPanel
+              activeVenue={activeTile.venue}
+              activeSymbol={activeTile.symbol}
+              enabledVenues={enabledExchanges ?? undefined}
+              onSelectItem={loadWatchlistItem}
+            />
+          )}
+        </aside>
+
+        <div className="wt-trade-center">
+          <div className="wt-chart-controls">
+            <div
+              className="trade-layout-group"
+              role="group"
+              aria-label={t("Chart layout")}
+            >
+              {LAYOUTS.map((l) => (
+                <button
+                  key={l.id}
+                  type="button"
+                  aria-pressed={config.layout === l.id}
+                  className={config.layout === l.id ? "is-selected" : ""}
+                  onClick={() => setLayout(l.id)}
+                >
+                  {l.label}
+                </button>
+              ))}
+            </div>
+
+            <div className="trade-controls">
+              <button
+                type="button"
+                className={`icon-button ${config.syncCrosshair ? "is-selected" : ""}`}
+                aria-pressed={config.syncCrosshair}
+                aria-label={t("Sync crosshairs")}
+                title={t("Sync crosshairs")}
+                onClick={() =>
+                  setConfig((prev) => ({
+                    ...prev,
+                    syncCrosshair: !prev.syncCrosshair,
+                  }))
+                }
+              >
+                <Crosshair size={14} aria-hidden="true" />
+              </button>
+
+              <button
+                type="button"
+                className={`icon-button ${showEvents ? "is-selected" : ""}`}
+                aria-pressed={showEvents}
+                aria-label={t("Events")}
+                title={t("Events")}
+                onClick={() => setShowEvents((prev) => !prev)}
+              >
+                <Pin size={14} aria-hidden="true" />
+              </button>
+
+              <button
+                type="button"
+                className={`trade-mini-btn ${trade?.killSwitchActive ? "trade-danger-btn" : ""}`}
+                aria-label={t(
+                  trade?.killSwitchActive ? "Clear kill switch" : "Kill switch",
+                )}
+                disabled={tradeBusy || core.mode !== "ready"}
+                onClick={() => void handleToggleKill(!trade?.killSwitchActive)}
+              >
+                <Shield size={13} aria-hidden="true" />
+                <span>
+                  {t(
+                    trade?.killSwitchActive ? "Clear kill switch" : "Kill switch",
+                  )}
+                </span>
+              </button>
+
+              <button
+                type="button"
+                className="icon-button"
+                aria-label={t("Data & Feeds")}
+                title={t("Data & Feeds")}
+                onClick={() => openSettingsModal("data")}
+              >
+                <Settings size={14} aria-hidden="true" />
+              </button>
+            </div>
+          </div>
+
+          <div
+            className={`trade-grid layout-${config.layout}`}
+            data-testid="trade-chart-grid"
+          >
+            {visibleTiles.map((tile) => {
+              const ovKey = symbolOverlayKey(tile.venue, tile.symbol);
+              const drawings = config.drawingsBySymbol?.[ovKey] ?? tile.drawings;
+              const paperOrders =
+                config.paperOrdersBySymbol?.[ovKey] ?? tile.paperOrders;
+              const matchingPositions = openDeskPositions.filter(
+                (p) =>
+                  (!p.venue || p.venue === tile.venue) &&
+                  p.symbol.toUpperCase() === tile.symbol.toUpperCase(),
+              );
+              const matchingPlans = (trade?.plans ?? []).filter(
+                (pl) =>
+                  (pl.status === "active" || pl.status === "filled") &&
+                  pl.venue === tile.venue &&
+                  pl.symbol.toUpperCase() === tile.symbol.toUpperCase(),
+              );
+              return (
+                <ChartTile
+                  key={tile.id}
+                  tile={tile}
+                  active={tile.id === activeTile?.id}
+                  enabledVenues={enabledExchanges ?? undefined}
+                  drawings={drawings}
+                  paperOrders={paperOrders}
+                  streamClient={streamClient}
+                  crosshairBus={crosshairBusRef.current ?? undefined}
+                  syncCrosshair={config.syncCrosshair}
+                  labScripts={labScripts}
+                  deskPositions={matchingPositions}
+                  tradePlans={matchingPlans}
+                  intelEvents={intelEvents}
+                  showEvents={showEvents}
+                  onSelect={() =>
+                    setConfig((prev) =>
+                      prev.activeTileId === tile.id
+                        ? prev
+                        : { ...prev, activeTileId: tile.id },
+                    )
+                  }
+                  onChangeTile={updateTile}
+                  onAddDrawing={(d) => addDrawing(tile, d)}
+                  onAddPaperOrder={(o) => addPaperOrder(tile, o)}
+                  onClearOverlays={() => clearOverlays(tile)}
+                />
+              );
+            })}
+          </div>
+
+          <div className="wt-wpanel">
+            <PositionsWidget
+              venue={activeTile?.venue}
+              symbol={activeTile?.symbol}
+              interval={activeTile?.interval}
+              trade={trade}
+              desk={desk}
+              bots={bots}
+              scripts={labScripts}
+              accounts={accounts}
+              agentProfiles={(agents.view?.profiles ?? []).map((p) => ({
+                id: p.id,
+                name: p.name,
+              }))}
+              orderflowTab={config.orderflowTab}
+              streamClient={streamClient}
+              crosshairBus={crosshairBusRef.current ?? undefined}
+              syncCrosshair={config.syncCrosshair}
+              tradeBusy={tradeBusy}
+              deskBusy={deskBusy}
+              onChangeOrderflowTab={(nextTab: OrderflowTab) =>
+                setConfig((prev) => ({ ...prev, orderflowTab: nextTab }))
+              }
+              onEvaluateTrades={() => void handleEvaluateTrades()}
+              onCancelTrade={(plId) => void handleCancelTrade(plId)}
+              onApproveTicket={(tkId) => void handleApproveTicket(tkId)}
+              onRejectTicket={(tkId) => void handleRejectTicket(tkId)}
+              onClosePosition={(posId) => void handleClosePosition(posId)}
+              onCreateBot={(req) => void handleCreateBot(req)}
+              onBotAction={(bId, act) => void handleBotAction(bId, act)}
+              onDeleteBot={(bId) => void handleDeleteBot(bId)}
+              onOpenLab={() => navigate("lab/desk")}
+            />
+          </div>
+        </div>
+
+        <aside className="wt-trade-right">
+          {activeTile && (
+            <div className="wt-wpanel wt-composer-pane">
+              <div className="wt-tabs-underline" role="tablist">
+                {(
+                  [
+                    { id: "manual", label: "Manual" },
+                    { id: "semi_auto", label: "Semi-Auto" },
+                    { id: "bot", label: "Bot" },
+                  ] as const
+                ).map((tab) => (
+                  <button
+                    key={tab.id}
+                    type="button"
+                    role="tab"
+                    aria-selected={composerTab === tab.id}
+                    className={composerTab === tab.id ? "is-selected" : ""}
+                    onClick={() => setComposerTab(tab.id)}
+                  >
+                    {t(tab.label)}
+                  </button>
+                ))}
+              </div>
+
+              {composerTab === "bot" ? (
+                <BotAgentWidget
+                  venue={activeTile.venue}
+                  symbol={activeTile.symbol}
+                  interval={activeTile.interval}
+                  scripts={labScripts}
+                  bots={bots}
+                  accounts={accounts}
+                  agentProfiles={(agents.view?.profiles ?? []).map((p) => ({
+                    id: p.id,
+                    name: p.name,
+                  }))}
+                  busy={tradeBusy}
+                  compactComposer={true}
+                  onCreateBot={(req) => void handleCreateBot(req)}
+                />
+              ) : (
+                <OrderExecutionWidget
+                  venue={activeTile.venue}
+                  symbol={activeTile.symbol}
+                  interval={activeTile.interval}
+                  trade={trade}
+                  accounts={accounts}
+                  busy={tradeBusy}
+                  error={tradeError}
+                  initialMode={composerTab}
+                  onSubmitTrade={(req) => void handleSubmitTrade(req)}
+                />
+              )}
+            </div>
+          )}
+        </aside>
+      </div>
     </section>
   );
 }

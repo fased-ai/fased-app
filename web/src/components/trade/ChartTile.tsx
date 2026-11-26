@@ -342,24 +342,25 @@ export function ChartTile({
           </button>
           {openMenu === "symbol" && (
             <form className="trade-tile-popover" onSubmit={applySymbolForm}>
-              <select
-                aria-label={t("Venue")}
-                value={venueDraft}
-                onChange={(e) => setVenueDraft(e.target.value)}
-              >
+              <div className="wt-venue-chips" role="group" aria-label={t("Venue")}>
                 {venueList.map((v) => (
-                  <option key={v} value={v}>
+                  <button
+                    key={v}
+                    type="button"
+                    className={`trade-mini-btn ${venueDraft === v ? "is-selected" : ""}`}
+                    onClick={() => setVenueDraft(v)}
+                  >
                     {v}
-                  </option>
+                  </button>
                 ))}
-              </select>
+              </div>
               <input
                 aria-label={t("Symbol")}
                 value={symbolDraft}
                 onChange={(e) => setSymbolDraft(e.target.value)}
                 autoFocus
               />
-              <button type="submit" className="primary">
+              <button type="submit" className="wt-btn-rose-sm">
                 {t("Open")}
               </button>
             </form>

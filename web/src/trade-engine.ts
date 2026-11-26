@@ -162,6 +162,9 @@ export interface TradeAccountOption {
   executionMode: "paper" | "live";
   address?: string;
   venue?: string;
+  role?: string;
+  custody?: string;
+  cluster?: string;
 }
 
 export interface TradeBot {

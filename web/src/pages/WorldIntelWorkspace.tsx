@@ -1,17 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { WorldMapView } from "../components/intel/WorldMapView";
-import { WidgetGrid, type WidgetCatalogItem } from "../components/WidgetGrid";
 import {
   CandlestickChart,
   ExternalLink,
-  FlaskConical,
-  Globe2,
   MessageSquare,
-  Newspaper,
-  Plus,
   RefreshCw,
   Settings,
-  TrendingUp,
   Zap,
 } from "../icons";
 import {
@@ -34,39 +28,9 @@ import {
   type IntelMapSummary,
   type PredictionList,
 } from "../world-intel";
-import type { GridLayout } from "../widget-layout";
 import "./WorldIntelWorkspace.css";
 
-type IntelWidgetID = "map" | "wire" | "predictions" | "macro";
-
-const INTEL_LAYOUT_KEY = "fased.intel.layout.v1";
-
-const INTEL_CATALOG: readonly WidgetCatalogItem<IntelWidgetID>[] = [
-  { id: "map", title: "World Map", icon: Globe2, defaultSize: "wide" },
-  { id: "wire", title: "News Wire", icon: Newspaper, defaultSize: "tall" },
-  {
-    id: "predictions",
-    title: "Prediction Markets",
-    icon: TrendingUp,
-    defaultSize: "small",
-  },
-  {
-    id: "macro",
-    title: "Macro & Filings",
-    icon: FlaskConical,
-    defaultSize: "small",
-  },
-];
-
-const DEFAULT_INTEL_LAYOUT: GridLayout<IntelWidgetID> = {
-  version: 1,
-  widgets: [
-    { id: "map", size: "wide" },
-    { id: "wire", size: "tall" },
-    { id: "predictions", size: "small" },
-    { id: "macro", size: "small" },
-  ],
-};
+type WireTab = "wire" | "macro";
 
 export function WorldIntelWorkspace() {
   const { t } = useUI();
@@ -83,9 +47,9 @@ export function WorldIntelWorkspace() {
   const [region, setRegion] = useState("");
   const [query, setQuery] = useState("");
   const [debouncedQuery, setDebouncedQuery] = useState("");
+  const [wireTab, setWireTab] = useState<WireTab>("wire");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  const [addingWidgets, setAddingWidgets] = useState(false);
   const [activeFeedCount, setActiveFeedCount] = useState<number | null>(null);
 
   const [mapSummary, setMapSummary] = useState<IntelMapSummary | null>(null);
@@ -239,21 +203,233 @@ export function WorldIntelWorkspace() {
     }
   }
 
-  function renderWidgetBody(id: IntelWidgetID) {
-    if (id === "map") {
-      return (
-        <div className="intel-widget-stack">
-          <WorldMapView
-            events={filteredEvents}
-            clusters={mapSummary?.clusters ?? []}
-            regionCounts={mapSummary?.regionCounts ?? {}}
-            selectedRegion={region}
-            selectedEventId={selectedEvent?.id ?? ""}
-            onSelectRegion={setRegion}
-            onSelectEvent={setSelectedEvent}
-          />
+  const isZeroState =
+    activeFeedCount === 0 &&
+    filteredEvents.length === 0 &&
+    (predictions?.markets?.length ?? 0) === 0;
+
+  if (isZeroState) {
+    return (
+      <section className="intel-workspace wt-intel-shell" aria-label={t("News & Intel")}>
+        <div className="intel-empty-cta">
+          <button
+            type="button"
+            className="wt-btn-rose-sm"
+            onClick={() => openSettingsModal("data")}
+          >
+            <Settings size={15} aria-hidden="true" />
+            <span>{t("Enable feeds in Settings")}</span>
+          </button>
+        </div>
+      </section>
+    );
+  }
+
+  const shownRows = wireTab === "wire" ? filteredEvents : macroAndFilings;
+  const regionEntries = Object.entries(mapSummary?.regionCounts ?? {});
+
+  return (
+    <section className="intel-workspace wt-intel-shell" aria-label={t("News & Intel")}>
+      {error && <p role="alert">{error}</p>}
+
+      <div className="wt-intel-grid">
+        <aside className="wt-intel-left">
+          <div className="wt-wpanel">
+            <div className="wt-intel-head">
+              <h2>{t("News & Intel")}</h2>
+              <div className="wt-intel-head-actions">
+                <button
+                  type="button"
+                  className="icon-button"
+                  title={t("Sync")}
+                  aria-label={t("Sync")}
+                  disabled={busy || core.mode !== "ready"}
+                  onClick={() => void handleSync()}
+                >
+                  <RefreshCw
+                    size={14}
+                    className={busy ? "spin" : ""}
+                    aria-hidden="true"
+                  />
+                </button>
+                <button
+                  type="button"
+                  className="icon-button"
+                  title={t("Data & Feeds")}
+                  aria-label={t("Data & Feeds")}
+                  onClick={() => openSettingsModal("data")}
+                >
+                  <Settings size={14} aria-hidden="true" />
+                </button>
+              </div>
+            </div>
+
+            <div className="wt-kpi-box">
+              <div>
+                <span>{t("Events")}</span>
+                <strong className="mono">{filteredEvents.length}</strong>
+              </div>
+              <div>
+                <span>{t("Predictions")}</span>
+                <strong className="mono">
+                  {predictions?.markets?.length ?? 0}
+                </strong>
+              </div>
+              <div>
+                <span>{t("Sources")}</span>
+                <strong className="mono">{activeFeedCount ?? 0}</strong>
+              </div>
+              <div>
+                <span>{t("Regions")}</span>
+                <strong className="mono">{regionEntries.length}</strong>
+              </div>
+            </div>
+
+            <input
+              type="search"
+              className="wt-intel-search"
+              aria-label={t("Search")}
+              placeholder={t("Search")}
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+            />
+
+            <div className="wt-chip-group" role="group" aria-label={t("Category")}>
+              {INTEL_CATEGORIES.map((c) => (
+                <button
+                  key={c.id || "all"}
+                  type="button"
+                  className={`intel-filter-pill ${category === c.id ? "is-selected" : ""}`}
+                  onClick={() => setCategory(c.id)}
+                >
+                  {t(c.label)}
+                </button>
+              ))}
+            </div>
+          </div>
+        </aside>
+
+        <div className="wt-intel-center">
+          <div className="wt-wpanel">
+            <WorldMapView
+              events={filteredEvents}
+              clusters={mapSummary?.clusters ?? []}
+              regionCounts={mapSummary?.regionCounts ?? {}}
+              selectedRegion={region}
+              selectedEventId={selectedEvent?.id ?? ""}
+              onSelectRegion={setRegion}
+              onSelectEvent={setSelectedEvent}
+            />
+          </div>
+
+          <div className="wt-wpanel">
+            <div className="wt-tabs-underline" role="tablist">
+              <button
+                type="button"
+                role="tab"
+                aria-selected={wireTab === "wire"}
+                className={wireTab === "wire" ? "is-selected" : ""}
+                onClick={() => setWireTab("wire")}
+              >
+                <span>{t("News Wire")}</span>
+                {filteredEvents.length > 0 && (
+                  <span className="wt-tab-count mono">{filteredEvents.length}</span>
+                )}
+              </button>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={wireTab === "macro"}
+                className={wireTab === "macro" ? "is-selected" : ""}
+                onClick={() => setWireTab("macro")}
+              >
+                <span>{t("Macro & Filings")}</span>
+                {macroAndFilings.length > 0 && (
+                  <span className="wt-tab-count mono">{macroAndFilings.length}</span>
+                )}
+              </button>
+            </div>
+
+            <div className="wt-hairline-table" data-testid="intel-events-list">
+              {shownRows.slice(0, 40).map((ev) => (
+                <div
+                  className={`wt-hairline-row wt-intel-row ${selectedEvent?.id === ev.id ? "is-selected" : ""}`}
+                  key={ev.id}
+                >
+                  <div className="wt-intel-row-main">
+                    <button
+                      type="button"
+                      className="intel-card-title"
+                      onClick={() => setSelectedEvent(ev)}
+                    >
+                      {ev.title}
+                    </button>
+                    <div className="intel-meta-pills">
+                      <span
+                        className={`pill ${ev.urgency >= 0.7 ? "intel-pill-high" : ""}`}
+                      >
+                        {`${Math.round(ev.urgency * 100)}%`}
+                      </span>
+                      <span className="pill">{ev.sourceName}</span>
+                      {ev.tickers?.map((tk) => (
+                        <span key={tk} className="pill mono">
+                          {tk}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                  <div className="intel-card-actions">
+                    <button
+                      type="button"
+                      className="icon-button"
+                      title={t("Ask in Chat")}
+                      onClick={() => askAgent(ev)}
+                    >
+                      <MessageSquare size={13} aria-hidden="true" />
+                    </button>
+                    <button
+                      type="button"
+                      className="icon-button"
+                      title={t("Create trigger")}
+                      onClick={() => createTriggerFromEvent(ev)}
+                    >
+                      <Zap size={13} aria-hidden="true" />
+                    </button>
+                    {ev.tickers?.[0] && (
+                      <button
+                        type="button"
+                        className="icon-button"
+                        title={t("Open chart")}
+                        onClick={() => openTickerChart(ev.tickers![0])}
+                      >
+                        <CandlestickChart size={13} aria-hidden="true" />
+                      </button>
+                    )}
+                    {ev.url?.startsWith("https://") && (
+                      <a
+                        href={ev.url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="icon-button"
+                        title={t("Open")}
+                      >
+                        <ExternalLink size={13} aria-hidden="true" />
+                      </a>
+                    )}
+                  </div>
+                </div>
+              ))}
+              {shownRows.length === 0 && <p className="subtle">{t("None")}</p>}
+            </div>
+          </div>
+        </div>
+
+        <aside className="wt-intel-right">
           {selectedEvent && (
-            <article className="intel-inspector" data-testid="intel-inspector">
+            <article
+              className="wt-wpanel intel-inspector"
+              data-testid="intel-inspector"
+            >
               <div className="intel-card-row">
                 <strong>{selectedEvent.title}</strong>
                 <div className="intel-meta-pills">
@@ -265,255 +441,85 @@ export function WorldIntelWorkspace() {
                   </span>
                 </div>
               </div>
-              <div className="intel-card-actions">
+              <div className="wt-inspector-actions">
                 <button
                   type="button"
-                  className="primary"
+                  className="wt-btn-rose"
                   onClick={() => askAgent(selectedEvent)}
                 >
-                  <MessageSquare size={13} aria-hidden="true" />
+                  <MessageSquare size={14} aria-hidden="true" />
                   <span>{t("Ask in Chat")}</span>
                 </button>
-                {selectedEvent.tickers?.[0] && (
+                <div className="wt-chip-group">
+                  {selectedEvent.tickers?.[0] && (
+                    <button
+                      type="button"
+                      className="trade-mini-btn"
+                      onClick={() => openTickerChart(selectedEvent.tickers![0])}
+                    >
+                      <CandlestickChart size={13} aria-hidden="true" />
+                      <span>{selectedEvent.tickers[0]}</span>
+                    </button>
+                  )}
                   <button
                     type="button"
-                    className="secondary"
-                    onClick={() => openTickerChart(selectedEvent.tickers![0])}
+                    className="trade-mini-btn"
+                    onClick={() => createTriggerFromEvent(selectedEvent)}
                   >
-                    <CandlestickChart size={13} aria-hidden="true" />
-                    <span>{selectedEvent.tickers[0]}</span>
+                    <Zap size={13} aria-hidden="true" />
+                    <span>{t("Create trigger")}</span>
                   </button>
-                )}
-                <button
-                  type="button"
-                  className="secondary"
-                  onClick={() => createTriggerFromEvent(selectedEvent)}
-                >
-                  <Zap size={13} aria-hidden="true" />
-                  <span>{t("Create trigger")}</span>
-                </button>
+                </div>
               </div>
             </article>
           )}
-        </div>
-      );
-    }
 
-    if (id === "wire") {
-      return (
-        <div className="intel-list" data-testid="intel-events-list">
-          {filteredEvents.map((ev) => (
-            <article className="intel-card" key={ev.id}>
-              <div className="intel-card-row">
-                <button
-                  type="button"
-                  className="intel-card-title"
-                  onClick={() => setSelectedEvent(ev)}
-                >
-                  {ev.title}
-                </button>
-              </div>
-              <div className="intel-meta-pills">
-                <span
-                  className={`pill ${ev.urgency >= 0.7 ? "intel-pill-high" : ""}`}
-                >
-                  {`${Math.round(ev.urgency * 100)}%`}
-                </span>
-                <span className="pill">{ev.sourceName}</span>
-                {ev.tickers?.map((tk) => (
-                  <span key={tk} className="pill mono">
-                    {tk}
-                  </span>
-                ))}
-              </div>
-              <div className="intel-card-actions">
-                <button
-                  type="button"
-                  className="icon-button"
-                  title={t("Ask in Chat")}
-                  onClick={() => askAgent(ev)}
-                >
-                  <MessageSquare size={13} aria-hidden="true" />
-                </button>
-                <button
-                  type="button"
-                  className="icon-button"
-                  title={t("Create trigger")}
-                  onClick={() => createTriggerFromEvent(ev)}
-                >
-                  <Zap size={13} aria-hidden="true" />
-                </button>
-                {ev.tickers?.[0] && (
-                  <button
-                    type="button"
-                    className="icon-button"
-                    title={t("Open chart")}
-                    onClick={() => openTickerChart(ev.tickers![0])}
-                  >
-                    <CandlestickChart size={13} aria-hidden="true" />
-                  </button>
-                )}
-                {ev.url?.startsWith("https://") && (
-                  <a
-                    href={ev.url}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="icon-button"
-                    title={t("Open")}
-                  >
-                    <ExternalLink size={13} aria-hidden="true" />
-                  </a>
-                )}
-              </div>
-            </article>
-          ))}
-          {filteredEvents.length === 0 && (
-            <p className="subtle">{t("None")}</p>
-          )}
-        </div>
-      );
-    }
-
-    if (id === "predictions") {
-      return (
-        <div className="intel-list" data-testid="intel-predictions-list">
-          {(predictions?.arbitrage ?? []).map((arb) => (
-            <article className="intel-arb-card" key={arb.id}>
-              <div className="intel-card-row">
-                <strong>{arb.topic}</strong>
-                <span className="pill mono">{`Δ ${arb.spreadPct.toFixed(1)}%`}</span>
-              </div>
-              <div className="intel-meta-pills mono">
-                <span className="pill">{`Polymarket ${formatProbPct(arb.polymarketProb)}`}</span>
-                <span className="pill">{`Kalshi ${formatProbPct(arb.kalshiProb)}`}</span>
-              </div>
-            </article>
-          ))}
-          {(predictions?.markets ?? []).map((mkt) => (
-            <article className="intel-card" key={mkt.id}>
-              <div className="intel-card-row">
-                <strong>{mkt.question}</strong>
-                <span className="pill mono">{formatProbPct(mkt.yesProb)}</span>
-              </div>
-              <div className="intel-meta-pills">
-                <span className="pill">{mkt.venue}</span>
-                <span className="pill mono">{formatCompactUSD(mkt.volume24h)}</span>
-              </div>
-            </article>
-          ))}
-          {(predictions?.markets?.length ?? 0) === 0 && (
-            <p className="subtle">{t("None")}</p>
-          )}
-        </div>
-      );
-    }
-
-    return (
-      <div className="intel-list">
-        {macroAndFilings.map((ev) => (
-          <article className="intel-card" key={ev.id}>
-            <div className="intel-card-row">
-              <strong>{ev.title}</strong>
-            </div>
-            <div className="intel-meta-pills">
-              <span className="pill">{ev.sourceName}</span>
-              {ev.tickers?.map((tk) => (
-                <span key={tk} className="pill mono">
-                  {tk}
-                </span>
+          <div className="wt-wpanel">
+            <h2 className="wt-rail-title">{t("Prediction Markets")}</h2>
+            <div className="intel-list" data-testid="intel-predictions-list">
+              {(predictions?.arbitrage ?? []).map((arb) => (
+                <article className="intel-arb-card" key={arb.id}>
+                  <div className="intel-card-row">
+                    <strong>{arb.topic}</strong>
+                    <span className="pill mono">{`Δ ${arb.spreadPct.toFixed(1)}%`}</span>
+                  </div>
+                  <div className="intel-meta-pills mono">
+                    <span className="pill">{`Polymarket ${formatProbPct(arb.polymarketProb)}`}</span>
+                    <span className="pill">{`Kalshi ${formatProbPct(arb.kalshiProb)}`}</span>
+                  </div>
+                </article>
               ))}
+              {(predictions?.markets ?? []).map((mkt) => (
+                <article className="intel-card" key={mkt.id}>
+                  <div className="intel-card-row">
+                    <strong>{mkt.question}</strong>
+                    <span className="pill mono">
+                      {formatProbPct(mkt.yesProb)}
+                    </span>
+                  </div>
+                  <div className="intel-prob-bar">
+                    <div
+                      className={`intel-prob-fill ${mkt.venue === "kalshi" ? "is-kalshi" : "is-poly"}`}
+                      style={{
+                        width: `${Math.max(4, Math.min(100, mkt.yesProb * 100))}%`,
+                      }}
+                    />
+                  </div>
+                  <div className="intel-meta-pills">
+                    <span className="pill">{mkt.venue}</span>
+                    <span className="pill mono">
+                      {formatCompactUSD(mkt.volume24h)}
+                    </span>
+                  </div>
+                </article>
+              ))}
+              {(predictions?.markets?.length ?? 0) === 0 && (
+                <p className="subtle">{t("None")}</p>
+              )}
             </div>
-          </article>
-        ))}
-        {macroAndFilings.length === 0 && <p className="subtle">{t("None")}</p>}
+          </div>
+        </aside>
       </div>
-    );
-  }
-
-  const isZeroState =
-    activeFeedCount === 0 &&
-    filteredEvents.length === 0 &&
-    (predictions?.markets?.length ?? 0) === 0;
-
-  return (
-    <section className="intel-workspace" aria-label={t("News & Intel")}>
-      <header className="intel-toolbar">
-        <div className="intel-title-group">
-          <h1>{t("News & Intel")}</h1>
-        </div>
-        <div className="intel-controls">
-          <select
-            aria-label={t("Category")}
-            value={category}
-            onChange={(e) => setCategory(e.target.value)}
-          >
-            {INTEL_CATEGORIES.map((c) => (
-              <option key={c.id || "all"} value={c.id}>
-                {t(c.label)}
-              </option>
-            ))}
-          </select>
-          <input
-            type="search"
-            aria-label={t("Search")}
-            placeholder={t("Search")}
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-          />
-          <button
-            type="button"
-            className="icon-button"
-            title={t("Sync")}
-            aria-label={t("Sync")}
-            disabled={busy || core.mode !== "ready"}
-            onClick={() => void handleSync()}
-          >
-            <RefreshCw size={15} className={busy ? "spin" : ""} aria-hidden="true" />
-          </button>
-          <button
-            type="button"
-            className="icon-button"
-            title={t("Data & Feeds")}
-            aria-label={t("Data & Feeds")}
-            onClick={() => openSettingsModal("data")}
-          >
-            <Settings size={15} aria-hidden="true" />
-          </button>
-          <button
-            type="button"
-            className="icon-button"
-            title={t("Widgets")}
-            aria-label={t("Widgets")}
-            onClick={() => setAddingWidgets(true)}
-          >
-            <Plus size={15} aria-hidden="true" />
-          </button>
-        </div>
-      </header>
-
-      {error && <p role="alert">{error}</p>}
-
-      {isZeroState ? (
-        <div className="intel-empty-cta">
-          <button
-            type="button"
-            className="primary"
-            onClick={() => openSettingsModal("data")}
-          >
-            <Settings size={15} aria-hidden="true" />
-            <span>{t("Enable feeds in Settings")}</span>
-          </button>
-        </div>
-      ) : (
-        <WidgetGrid
-          storageKey={INTEL_LAYOUT_KEY}
-          catalog={INTEL_CATALOG}
-          defaultLayout={DEFAULT_INTEL_LAYOUT}
-          renderBody={renderWidgetBody}
-          addDialogOpen={addingWidgets}
-          onAddDialogOpenChange={setAddingWidgets}
-        />
-      )}
     </section>
   );
 }

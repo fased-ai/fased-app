@@ -26,8 +26,8 @@ func TestTradeRouterAccountsBotsDeskUnificationAndKillSwitch(t *testing.T) {
 		t.Fatalf("GET /api/v1/trade/accounts failed: code=%d body=%s", accResp.StatusCode, rawAcc)
 	}
 
-	// 2. Create Solana wallet + enable Hyperliquid Feed & Trading -> appear in trade/accounts.
-	wResp := doV2JSONRequest(t, http.MethodPost, ts.URL+"/api/v1/wallets/create", ts.URL, token, csrf, `{"name":"Desk Hot SOL","role":"personal","words":12,"passphrase":"secret-pass-123"}`, "application/json")
+	// 2. Create Solana trading wallet (via custody) + enable Hyperliquid Feed & Trading -> appear in trade/accounts.
+	wResp := doV2JSONRequest(t, http.MethodPost, ts.URL+"/api/v1/wallets/create", ts.URL, token, csrf, `{"name":"Desk Hot SOL","role":"trading","rpcUrl":"https://api.mainnet-beta.solana.com"}`, "application/json")
 	wResp.Body.Close()
 	if wResp.StatusCode != http.StatusOK {
 		t.Fatalf("create wallet failed: %d", wResp.StatusCode)

@@ -755,16 +755,18 @@ export function OrderflowPane({
           <section>
             <div className="trade-intel-rowhead">
               <h3>{t("Macro")}</h3>
-              <select
-                aria-label={t("FRED series")}
-                value={seriesId}
-                onChange={(e) => setSeriesId(e.target.value)}
-              >
-                <option value="CPIAUCSL">CPIAUCSL</option>
-                <option value="UNRATE">UNRATE</option>
-                <option value="DFF">DFF</option>
-                <option value="DGS10">DGS10</option>
-              </select>
+              <div className="trade-venue-filter-row" role="group" aria-label={t("FRED series")}>
+                {["CPIAUCSL", "UNRATE", "DFF", "DGS10"].map((sid) => (
+                  <button
+                    key={sid}
+                    type="button"
+                    className={`trade-venue-filter-btn ${seriesId === sid ? "is-selected" : ""}`}
+                    onClick={() => setSeriesId(sid)}
+                  >
+                    {sid}
+                  </button>
+                ))}
+              </div>
             </div>
             <ul className="trade-intel-list">
               {macro
