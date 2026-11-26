@@ -720,8 +720,8 @@ func TestAgentV2SSEToolLoopAndApprovals(t *testing.T) {
 		t.Fatal(err)
 	}
 	toolsResp.Body.Close()
-	if len(toolsBody.Tools) != 51 {
-		t.Fatalf("expected 51 registered tools, got %d", len(toolsBody.Tools))
+	if len(toolsBody.Tools) != 55 {
+		t.Fatalf("expected 55 registered tools, got %d", len(toolsBody.Tools))
 	}
 
 	// Create thread -> 201.
