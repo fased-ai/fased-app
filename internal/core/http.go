@@ -171,6 +171,11 @@ func (h *HTTPHandler) api(w http.ResponseWriter, r *http.Request) {
 	case "/api/v1/auth/pair":
 		h.pairExchangeAPI(w, r)
 		return
+	case "/api/v1/swarm/relay":
+		if swarmRelayHook != nil {
+			swarmRelayHook(h, w, r)
+			return
+		}
 	case "/api/v1/auth/remote-setup":
 		h.remotePackageSetupAPI(w, r)
 		return
@@ -752,6 +757,7 @@ func (h *HTTPHandler) api(w http.ResponseWriter, r *http.Request) {
 var (
 	stage5RouteHook func(*HTTPHandler, http.ResponseWriter, *http.Request, string) bool
 	stage6RouteHook func(*HTTPHandler, http.ResponseWriter, *http.Request, string) bool
+	swarmRelayHook  func(*HTTPHandler, http.ResponseWriter, *http.Request)
 )
 
 func (h *HTTPHandler) ratePeerKey(r *http.Request) string {

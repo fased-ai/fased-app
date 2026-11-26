@@ -6,7 +6,11 @@ import (
 	"crypto/ed25519"
 	"database/sql"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -285,5 +289,217 @@ func TestSwarmSeedOSVaultSealingAndMigration(t *testing.T) {
 	stMig, _ := svcMig.Status(context.Background())
 	if stMig.KeyStorage != "os_vault" || stMig.Config.LocalPeerID != stLeg.Config.LocalPeerID || stMig.Config.LocalPubKeyHex != stLeg.Config.LocalPubKeyHex {
 		t.Fatalf("migration altered identity or storage: %+v vs %+v", stMig, stLeg)
+	}
+}
+
+func TestSwarmPeerEndpointValidation(t *testing.T) {
+	t.Parallel()
+	valid := []struct {
+		raw  string
+		want string
+	}{
+		{"", ""},
+		{"  ", ""},
+		{"https://desk-alpha.tail1234.ts.net/", "https://desk-alpha.tail1234.ts.net"},
+		{"https://100.100.1.2:8443/prefix/", "https://100.100.1.2:8443/prefix"},
+		{"https://[fd7a:115c:a1e0::1]:8443", "https://[fd7a:115c:a1e0::1]:8443"},
+		{"https://203.0.113.10:8443", "https://203.0.113.10:8443"},
+	}
+	for _, tc := range valid {
+		got, err := ValidatePeerEndpoint(tc.raw)
+		if err != nil || got != tc.want {
+			t.Fatalf("ValidatePeerEndpoint(%q) = (%q, %v), want (%q, nil)", tc.raw, got, err, tc.want)
+		}
+	}
+
+	invalid := []string{
+		"http://desk-alpha.tail1234.ts.net",
+		"https://localhost:8443",
+		"https://node.localhost",
+		"https://127.0.0.1:8443",
+		"https://169.254.169.254/latest/meta-data",
+		"https://10.0.0.5:8443",
+		"https://192.168.1.10:8443",
+		"https://user:pass@desk.ts.net",
+		"https://desk.ts.net?foo=bar",
+	}
+	for _, raw := range invalid {
+		if got, err := ValidatePeerEndpoint(raw); err == nil {
+			t.Fatalf("expected error for invalid endpoint %q, got %q", raw, got)
+		}
+	}
+}
+
+type relayRoundTripFunc func(*http.Request) (*http.Response, error)
+
+func (fn relayRoundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) {
+	return fn(r)
+}
+
+func TestSwarmPeerRelayAndChatTwoNode(t *testing.T) {
+	t.Parallel()
+	curNow := time.Unix(1795600000, 0).UTC()
+
+	nodeB, err := NewService(Config{
+		DataDir: t.TempDir(),
+		Now:     func() time.Time { return curNow },
+	})
+	if err != nil {
+		t.Fatalf("NewService(nodeB) failed: %v", err)
+	}
+	defer nodeB.Close()
+
+	en := true
+	if _, err := nodeB.SetConfig(context.Background(), ConfigPatch{Enabled: &en}); err != nil {
+		t.Fatalf("enable nodeB failed: %v", err)
+	}
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/swarm/relay" {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+		var env Envelope
+		if err := json.NewDecoder(io.LimitReader(r.Body, 16*1024)).Decode(&env); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		ing, err := nodeB.IngestEnvelope(r.Context(), env)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusForbidden)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{"accepted": true, "envelopeId": ing.EnvelopeID, "untrusted": ing.Untrusted})
+	}))
+	defer srv.Close()
+
+	nodeA, err := NewService(Config{
+		DataDir:     t.TempDir(),
+		FixtureMode: false,
+		Now:         func() time.Time { return curNow },
+		RelayTransport: relayRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+			if r.URL.Host != "node-b.tail1234.ts.net" {
+				t.Fatalf("unexpected relay target host %q", r.URL.Host)
+			}
+			forwarded, err := http.NewRequestWithContext(r.Context(), r.Method, srv.URL+r.URL.Path, r.Body)
+			if err != nil {
+				return nil, err
+			}
+			forwarded.Header = r.Header.Clone()
+			return srv.Client().Do(forwarded)
+		}),
+	})
+	if err != nil {
+		t.Fatalf("NewService(nodeA) failed: %v", err)
+	}
+	defer nodeA.Close()
+
+	if _, err := nodeA.SetConfig(context.Background(), ConfigPatch{Enabled: &en}); err != nil {
+		t.Fatalf("enable nodeA failed: %v", err)
+	}
+	stA, _ := nodeA.Status(context.Background())
+	stB, _ := nodeB.Status(context.Background())
+
+	// Mutual peer registration with Tailscale HTTPS endpoint on nodeA -> nodeB.
+	if _, err := nodeB.AddPeer(context.Background(), PeerInput{
+		PeerID:    stA.Config.LocalPeerID,
+		Alias:     "Node A",
+		PubKeyHex: stA.Config.LocalPubKeyHex,
+	}); err != nil {
+		t.Fatalf("nodeB.AddPeer failed: %v", err)
+	}
+	if _, err := nodeA.AddPeer(context.Background(), PeerInput{
+		PeerID:    stB.Config.LocalPeerID,
+		Alias:     "Node B",
+		PubKeyHex: stB.Config.LocalPubKeyHex,
+		Endpoint:  "https://node-b.tail1234.ts.net",
+	}); err != nil {
+		t.Fatalf("nodeA.AddPeer failed: %v", err)
+	}
+
+	// Broadcast both a structured signal and a chat message.
+	sigEnv, err := nodeA.BroadcastSignal(context.Background(), SignalInput{
+		Kind:       "signal",
+		Symbol:     "SOL",
+		Direction:  "LONG",
+		Thesis:     "Breakout backed by spot delta",
+		Confidence: 0.85,
+	})
+	if err != nil {
+		t.Fatalf("BroadcastSignal(signal) failed: %v", err)
+	}
+	if len(sigEnv.RelayResults) != 1 || !sigEnv.RelayResults[0].Delivered {
+		t.Fatalf("expected relay delivery to nodeB, got %+v", sigEnv.RelayResults)
+	}
+
+	chatEnv, err := nodeA.BroadcastSignal(context.Background(), SignalInput{
+		Kind:   "chat",
+		Thesis: "Desk sync: holding paper risk flat into CPI",
+	})
+	if err != nil {
+		t.Fatalf("BroadcastSignal(chat) failed: %v", err)
+	}
+	if chatEnv.Kind != "chat" || chatEnv.Symbol != "GENERAL" || chatEnv.Direction != "NEUTRAL" || len(chatEnv.RelayResults) != 1 || !chatEnv.RelayResults[0].Delivered {
+		t.Fatalf("unexpected relayed chat envelope: %+v", chatEnv)
+	}
+
+	received, err := nodeB.ListSignals(context.Background(), 10)
+	if err != nil || len(received) != 2 {
+		t.Fatalf("expected 2 envelopes on nodeB, got len=%d err=%v", len(received), err)
+	}
+	for _, env := range received {
+		if !env.Untrusted {
+			t.Fatalf("expected Untrusted=true on relayed envelope: %+v", env)
+		}
+	}
+
+	// Replaying an already-delivered envelope onto nodeB fails closed.
+	if _, err := nodeB.IngestEnvelope(context.Background(), chatEnv); !errors.Is(err, ErrReplayDetected) {
+		t.Fatalf("expected ErrReplayDetected on replayed chat envelope, got %v", err)
+	}
+}
+
+func TestSwarmPeersEndpointMigration(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	swarmDir := filepath.Join(dir, swarmDirName)
+	if err := os.MkdirAll(swarmDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	db, err := sql.Open("sqlite", filepath.Join(swarmDir, swarmDBName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Simulate pre-R4B schema missing endpoint column.
+	if _, err := db.Exec(`
+		CREATE TABLE swarm_peers(
+			peer_id TEXT PRIMARY KEY,
+			alias TEXT NOT NULL,
+			pubkey_hex TEXT NOT NULL,
+			status TEXT NOT NULL,
+			added_at INTEGER NOT NULL
+		);
+	`); err != nil {
+		_ = db.Close()
+		t.Fatal(err)
+	}
+	_ = db.Close()
+
+	svc, err := NewService(Config{DataDir: dir})
+	if err != nil {
+		t.Fatalf("NewService on legacy swarm_peers failed: %v", err)
+	}
+	defer svc.Close()
+
+	pub, _, _ := ed25519.GenerateKey(nil)
+	peer, err := svc.AddPeer(context.Background(), PeerInput{
+		PeerID:    "peer-migrated",
+		Alias:     "Migrated Peer",
+		PubKeyHex: hex.EncodeToString(pub),
+		Endpoint:  "https://migrated.tailnet.ts.net",
+	})
+	if err != nil || peer.Endpoint != "https://migrated.tailnet.ts.net" {
+		t.Fatalf("AddPeer after migration failed: %+v err=%v", peer, err)
 	}
 }

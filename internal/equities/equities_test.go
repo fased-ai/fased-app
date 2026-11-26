@@ -1,11 +1,20 @@
 package equities
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"io"
+	"net/http"
 	"testing"
 	"time"
 )
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (fn roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) {
+	return fn(r)
+}
 
 func TestEquitiesCompileTimeLockAndOCCParser(t *testing.T) {
 	t.Parallel()
@@ -150,5 +159,51 @@ func TestEquitiesMainnetCappedPolicyAndCeiling(t *testing.T) {
 	})
 	if err != nil || rec.Status != "mainnet_capped_routed" {
 		t.Fatalf("expected mainnet_capped_routed, got %+v err=%v", rec, err)
+	}
+}
+
+func TestEquitiesLiveAlpacaSnapshotQuoteAndParser(t *testing.T) {
+	t.Parallel()
+	now := time.Unix(1795600000, 0).UTC()
+	rt := roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		if r.URL.String() != "https://data.alpaca.markets/v2/stocks/NVDA/snapshot?feed=iex" {
+			t.Fatalf("unexpected URL: %s", r.URL.String())
+		}
+		if r.Header.Get("APCA-API-KEY-ID") != "key-1" || r.Header.Get("APCA-API-SECRET-KEY") != "sec-1" {
+			t.Fatalf("missing alpaca auth headers: %v", r.Header)
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Status:     "200 OK",
+			Body: io.NopCloser(bytes.NewBufferString(`{
+				"latestTrade":{"p":143.25,"t":"2026-11-25T15:30:00Z"},
+				"latestQuote":{"bp":143.20,"ap":143.30,"t":"2026-11-25T15:30:00Z"},
+				"dailyBar":{"v":2450000}
+			}`)),
+			Request: r,
+		}, nil
+	})
+	svc, err := NewService(Config{
+		DataDir:         t.TempDir(),
+		FixtureMode:     false,
+		Now:             func() time.Time { return now },
+		HTTPTransport:   rt,
+		AlpacaKeyID:     "key-1",
+		AlpacaSecretKey: "sec-1",
+	})
+	if err != nil {
+		t.Fatalf("NewService failed: %v", err)
+	}
+	defer svc.Close()
+
+	q, err := svc.GetQuote(context.Background(), "nvda")
+	if err != nil {
+		t.Fatalf("GetQuote failed: %v", err)
+	}
+	if q.Symbol != "NVDA" || q.Source != "alpaca-iex" || q.Bid != 143.20 || q.Ask != 143.30 || q.Last != 143.25 || q.Volume != 2450000 {
+		t.Fatalf("unexpected live Alpaca snapshot quote: %+v", q)
+	}
+	if _, err := ParseAlpacaSnapshotQuote("NVDA", []byte(`{"latestTrade":{"p":0}}`), now.Unix()); err == nil {
+		t.Fatal("expected error for zero/missing snapshot price")
 	}
 }

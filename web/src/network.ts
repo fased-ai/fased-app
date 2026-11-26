@@ -42,8 +42,17 @@ export type SwarmPeer = {
   peerId: string;
   alias: string;
   pubKeyHex: string;
+  endpoint?: string;
   status: string;
   addedAt: number;
+};
+
+export type SwarmRelayResult = {
+  peerId: string;
+  endpoint: string;
+  delivered: boolean;
+  statusCode?: number;
+  error?: string;
 };
 
 export type SwarmEnvelope = {
@@ -59,6 +68,7 @@ export type SwarmEnvelope = {
   signatureHex: string;
   untrusted: boolean;
   verifiedAt?: number;
+  relayResults?: SwarmRelayResult[];
 };
 
 export type SwarmStatusView = {
@@ -309,6 +319,7 @@ export async function updateSwarmConfig(
 export async function broadcastSwarmSignal(
   core: AgentV2CoreClient,
   signal: {
+    kind?: "signal" | "chat";
     symbol: string;
     direction: "LONG" | "SHORT" | "NEUTRAL";
     thesis: string;
@@ -316,6 +327,18 @@ export async function broadcastSwarmSignal(
   },
 ): Promise<SwarmEnvelope> {
   return core.request<SwarmEnvelope>("swarm/signals", "POST", signal);
+}
+
+export async function addSwarmPeer(
+  core: AgentV2CoreClient,
+  peer: {
+    peerId: string;
+    alias: string;
+    pubKeyHex: string;
+    endpoint?: string;
+  },
+): Promise<SwarmPeer> {
+  return core.request<SwarmPeer>("swarm/peers", "POST", peer);
 }
 
 export async function getCEXStatus(

@@ -45,13 +45,34 @@ test("Network workspace Stage 5 CEX/Equities & Stage 6 Hub/Swarm with WEN hold",
   await page.getByRole("button", { name: "Install package" }).first().click();
   await expect(page.getByText("Installed", { exact: true })).toBeVisible();
 
-  // Switch to Swarm tab, enable opt-in Swarm, switch to Paper, broadcast signal.
+  // Switch to Swarm tab, enable opt-in Swarm, switch to Paper, add Tailscale peer & broadcast signal + chat.
   await page.getByRole("tab", { name: "Swarm", exact: true }).click();
   await expect(page.getByText("Opt-in Off", { exact: true })).toBeVisible();
   await page.getByRole("button", { name: "Enable Swarm" }).click();
   await expect(page.getByText("Enabled", { exact: true })).toBeVisible();
   await page.getByRole("button", { name: "Broadcast signal" }).click();
-  await expect(page.getByText("untrusted=true")).toBeVisible();
+  await expect(page.getByText("untrusted=true").first()).toBeVisible();
+
+  await page.getByLabel("Kind", { exact: true }).selectOption("chat");
+  await page
+    .getByLabel("Thesis", { exact: true })
+    .fill("Desk chat relay check");
+  await page.getByRole("button", { name: "Broadcast signal" }).click();
+  await expect(page.getByText("Desk chat relay check")).toBeVisible();
+
+  await page.getByText("Add peer", { exact: true }).first().click();
+  await page.getByLabel("Peer ID", { exact: true }).fill("peer-tailnet-b");
+  await page.getByLabel("Alias", { exact: true }).fill("Desk Beta");
+  await page
+    .getByLabel("Public key", { exact: true })
+    .fill("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef");
+  await page
+    .getByLabel("Endpoint", { exact: true })
+    .fill("https://desk-beta.tailnet.ts.net");
+  await page.getByRole("button", { name: "Add peer" }).click();
+  await expect(
+    page.getByText("https://desk-beta.tailnet.ts.net"),
+  ).toBeVisible();
 
   // Switch to Execution tab, verify Stage 5 CEX & Equities + OCC chain & submit paper orders.
   await page.getByRole("tab", { name: "Execution", exact: true }).click();

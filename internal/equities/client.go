@@ -3,14 +3,20 @@ package equities
 import (
 	"context"
 	"crypto/tls"
+	"encoding/json"
 	"errors"
+	"fmt"
+	"io"
 	"math"
 	"net"
 	"net/http"
 	"net/netip"
+	"net/url"
 	"strings"
 	"time"
 )
+
+const maxQuoteResponseBytes = 256 * 1024
 
 var cgnatPrefix = netip.MustParsePrefix("100.64.0.0/10")
 
@@ -53,10 +59,18 @@ func dialPublicAddress(ctx context.Context, network, address string) (net.Conn, 
 
 // NewClient initializes locked Paper clients for Alpaca (SSRF-filtered) and IBKR (loopback only).
 func NewClient() *Client {
-	publicTransport := &http.Transport{
+	return NewClientWithTransport(nil)
+}
+
+// NewClientWithTransport initializes Paper clients with an optional custom HTTP RoundTripper for Alpaca transport testing.
+func NewClientWithTransport(override http.RoundTripper) *Client {
+	var publicTransport http.RoundTripper = &http.Transport{
 		TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12},
 		Proxy:           nil,
 		DialContext:     dialPublicAddress,
+	}
+	if override != nil {
+		publicTransport = override
 	}
 	loopbackTransport := &http.Transport{
 		TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12},
@@ -78,6 +92,119 @@ func NewClient() *Client {
 			},
 		},
 	}
+}
+
+// ParseAlpacaSnapshotQuote parses Alpaca Data v2 /v2/stocks/{symbol}/snapshot payloads.
+func ParseAlpacaSnapshotQuote(symbol string, raw []byte, nowUnix int64) (Quote, error) {
+	clean := strings.ToUpper(strings.TrimSpace(symbol))
+	if !tickerPattern.MatchString(clean) {
+		return Quote{}, errors.New("invalid equity ticker symbol")
+	}
+	var snap struct {
+		LatestTrade *struct {
+			P float64 `json:"p"`
+			T string  `json:"t"`
+		} `json:"latestTrade"`
+		LatestQuote *struct {
+			BP float64 `json:"bp"`
+			AP float64 `json:"ap"`
+			T  string  `json:"t"`
+		} `json:"latestQuote"`
+		DailyBar *struct {
+			V float64 `json:"v"`
+		} `json:"dailyBar"`
+	}
+	if err := json.Unmarshal(raw, &snap); err != nil {
+		return Quote{}, fmt.Errorf("decode alpaca snapshot: %w", err)
+	}
+	var bid, ask, last float64
+	if snap.LatestQuote != nil {
+		if !math.IsNaN(snap.LatestQuote.BP) && !math.IsInf(snap.LatestQuote.BP, 0) && snap.LatestQuote.BP > 0 {
+			bid = snap.LatestQuote.BP
+		}
+		if !math.IsNaN(snap.LatestQuote.AP) && !math.IsInf(snap.LatestQuote.AP, 0) && snap.LatestQuote.AP > 0 {
+			ask = snap.LatestQuote.AP
+		}
+	}
+	if snap.LatestTrade != nil && !math.IsNaN(snap.LatestTrade.P) && !math.IsInf(snap.LatestTrade.P, 0) && snap.LatestTrade.P > 0 {
+		last = snap.LatestTrade.P
+	}
+	if last == 0 && bid > 0 && ask > 0 {
+		last = (bid + ask) / 2
+	}
+	if last <= 0 {
+		return Quote{}, errors.New("alpaca snapshot missing valid trade or quote price")
+	}
+	if bid == 0 {
+		bid = last
+	}
+	if ask == 0 {
+		ask = last
+	}
+	var vol int64
+	if snap.DailyBar != nil && !math.IsNaN(snap.DailyBar.V) && !math.IsInf(snap.DailyBar.V, 0) && snap.DailyBar.V >= 0 {
+		vol = int64(snap.DailyBar.V)
+	}
+	ts := nowUnix
+	if snap.LatestTrade != nil && snap.LatestTrade.T != "" {
+		if parsed, err := time.Parse(time.RFC3339Nano, strings.TrimSpace(snap.LatestTrade.T)); err == nil {
+			ts = parsed.UTC().Unix()
+		}
+	} else if snap.LatestQuote != nil && snap.LatestQuote.T != "" {
+		if parsed, err := time.Parse(time.RFC3339Nano, strings.TrimSpace(snap.LatestQuote.T)); err == nil {
+			ts = parsed.UTC().Unix()
+		}
+	}
+	return Quote{
+		Symbol:    clean,
+		Bid:       bid,
+		Ask:       ask,
+		Last:      last,
+		Volume:    vol,
+		Session:   "regular",
+		Source:    "alpaca-iex",
+		UpdatedAt: ts,
+	}, nil
+}
+
+// FetchAlpacaSnapshotQuote fetches an SSRF-safe IEX snapshot quote from Alpaca Data API v2.
+func (c *Client) FetchAlpacaSnapshotQuote(ctx context.Context, symbol, keyID, secret string, nowUnix int64) (Quote, error) {
+	if c == nil || c.alpacaHTTP == nil {
+		return Quote{}, errors.New("alpaca http client unavailable")
+	}
+	clean := strings.ToUpper(strings.TrimSpace(symbol))
+	if !tickerPattern.MatchString(clean) {
+		return Quote{}, errors.New("invalid equity ticker symbol")
+	}
+	endpoint := AlpacaDataOrigin + "/v2/stocks/" + url.PathEscape(clean) + "/snapshot?feed=iex"
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return Quote{}, err
+	}
+	req.Header.Set("APCA-API-KEY-ID", keyID)
+	req.Header.Set("APCA-API-SECRET-KEY", secret)
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("User-Agent", "fased-equities/1.0")
+
+	resp, err := c.alpacaHTTP.Do(req)
+	if err != nil {
+		return Quote{}, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 && resp.StatusCode < 400 {
+		return Quote{}, errors.New("alpaca snapshot redirect blocked by security policy")
+	}
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxQuoteResponseBytes+1))
+	if err != nil {
+		return Quote{}, err
+	}
+	if len(body) > maxQuoteResponseBytes {
+		return Quote{}, errors.New("alpaca snapshot response exceeded limit")
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return Quote{}, fmt.Errorf("alpaca data returned HTTP %d", resp.StatusCode)
+	}
+	return ParseAlpacaSnapshotQuote(clean, body, nowUnix)
 }
 
 func fixtureSpotForSymbol(sym string) float64 {

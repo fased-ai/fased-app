@@ -112,6 +112,7 @@ CREATE TABLE IF NOT EXISTS swarm_peers(
 	peer_id TEXT PRIMARY KEY,
 	alias TEXT NOT NULL,
 	pubkey_hex TEXT NOT NULL,
+	endpoint TEXT NOT NULL DEFAULT '',
 	status TEXT NOT NULL,
 	added_at INTEGER NOT NULL
 );
@@ -138,6 +139,10 @@ CREATE TABLE IF NOT EXISTS swarm_signals(
 CREATE INDEX IF NOT EXISTS idx_swarm_signals_ts ON swarm_signals(verified_at DESC);
 `
 	if _, err := db.ExecContext(ctx, schemaSQL); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	if err := ensurePeersEndpointColumn(ctx, db); err != nil {
 		_ = db.Close()
 		return nil, err
 	}
@@ -379,21 +384,46 @@ UPDATE swarm_config SET enabled = ?, copy_mode = ?, updated_at = ? WHERE id = 1
 	}, nil
 }
 
+func ensurePeersEndpointColumn(ctx context.Context, db *sql.DB) error {
+	rows, err := db.QueryContext(ctx, `PRAGMA table_info(swarm_peers)`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var cid int
+		var name, ctype string
+		var notnull, pk int
+		var dflt sql.NullString
+		if err := rows.Scan(&cid, &name, &ctype, &notnull, &dflt, &pk); err != nil {
+			return err
+		}
+		if strings.EqualFold(name, "endpoint") {
+			return rows.Err()
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	_, err = db.ExecContext(ctx, `ALTER TABLE swarm_peers ADD COLUMN endpoint TEXT NOT NULL DEFAULT ''`)
+	return err
+}
+
 func (s *store) savePeer(ctx context.Context, peer Peer) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	_, err := s.db.ExecContext(ctx, `
-INSERT INTO swarm_peers(peer_id, alias, pubkey_hex, status, added_at)
-VALUES(?, ?, ?, ?, ?)
-ON CONFLICT(peer_id) DO UPDATE SET alias = excluded.alias, pubkey_hex = excluded.pubkey_hex, status = excluded.status
-`, peer.PeerID, peer.Alias, peer.PubKeyHex, peer.Status, peer.AddedAt)
+INSERT INTO swarm_peers(peer_id, alias, pubkey_hex, endpoint, status, added_at)
+VALUES(?, ?, ?, ?, ?, ?)
+ON CONFLICT(peer_id) DO UPDATE SET alias = excluded.alias, pubkey_hex = excluded.pubkey_hex, endpoint = excluded.endpoint, status = excluded.status
+`, peer.PeerID, peer.Alias, peer.PubKeyHex, peer.Endpoint, peer.Status, peer.AddedAt)
 	return err
 }
 
 func (s *store) listPeers(ctx context.Context) ([]Peer, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	rows, err := s.db.QueryContext(ctx, `SELECT peer_id, alias, pubkey_hex, status, added_at FROM swarm_peers ORDER BY added_at DESC, peer_id ASC`)
+	rows, err := s.db.QueryContext(ctx, `SELECT peer_id, alias, pubkey_hex, endpoint, status, added_at FROM swarm_peers ORDER BY added_at DESC, peer_id ASC`)
 	if err != nil {
 		return nil, err
 	}
@@ -401,7 +431,7 @@ func (s *store) listPeers(ctx context.Context) ([]Peer, error) {
 	out := []Peer{}
 	for rows.Next() {
 		var p Peer
-		if err := rows.Scan(&p.PeerID, &p.Alias, &p.PubKeyHex, &p.Status, &p.AddedAt); err != nil {
+		if err := rows.Scan(&p.PeerID, &p.Alias, &p.PubKeyHex, &p.Endpoint, &p.Status, &p.AddedAt); err != nil {
 			return nil, err
 		}
 		out = append(out, p)
