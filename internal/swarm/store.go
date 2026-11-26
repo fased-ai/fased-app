@@ -1,12 +1,14 @@
 package swarm
 
 import (
+	"bytes"
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
 	"database/sql"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -15,22 +17,57 @@ import (
 	"sync"
 	"time"
 
+	"github.com/fased-ai/fased-app/internal/providersecrets"
 	_ "modernc.org/sqlite"
 )
 
 const (
-	swarmDirName = "swarm"
-	swarmDBName  = "swarm.sqlite"
-	swarmKeyName = "swarm.key"
-	maxSignals   = 200
+	swarmDirName        = "swarm"
+	swarmDBName         = "swarm.sqlite"
+	swarmKeyName        = "swarm.key"
+	maxSignals          = 200
+	sealedSwarmKeyMagic = "FASED-SEALED-V1:"
+	swarmVaultCredName  = "fased-swarm-seed-key"
+	swarmSealNonceSize  = 12
 )
 
+var swarmSeedAAD = []byte("fased-swarm-seed-v1")
+
 type store struct {
-	dir  string
-	db   *sql.DB
-	seed [32]byte
-	now  func() time.Time
-	mu   sync.Mutex
+	dir        string
+	db         *sql.DB
+	seed       [32]byte
+	keyStorage string
+	now        func() time.Time
+	mu         sync.Mutex
+}
+
+func resolveVaultKey(src providersecrets.Source, name string) []byte {
+	if src == nil {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	k, err := src.Key(ctx, name, true)
+	if err != nil || len(k) != 32 {
+		if k != nil {
+			clear(k)
+		}
+		return nil
+	}
+	return k
+}
+
+func sealSwarmSeedBytes(osKey, seed []byte) ([]byte, error) {
+	nonce, ct, err := providersecrets.Seal(osKey, seed, swarmSeedAAD)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]byte, 0, len(sealedSwarmKeyMagic)+len(nonce)+len(ct))
+	out = append(out, sealedSwarmKeyMagic...)
+	out = append(out, nonce...)
+	out = append(out, ct...)
+	return out, nil
 }
 
 func sqliteFileURI(path string) string {
@@ -43,7 +80,7 @@ func sqliteFileURI(path string) string {
 	return "file://" + escaped
 }
 
-func openStore(dataDir string, nowFn func() time.Time) (*store, error) {
+func openStore(dataDir string, nowFn func() time.Time, src providersecrets.Source) (*store, error) {
 	if strings.TrimSpace(dataDir) == "" {
 		return nil, errors.New("swarm DataDir required")
 	}
@@ -106,16 +143,16 @@ CREATE INDEX IF NOT EXISTS idx_swarm_signals_ts ON swarm_signals(verified_at DES
 	}
 
 	st := &store{dir: dir, db: db, now: nowFn}
-	if err := st.ensureConfigRow(ctx); err != nil {
+	if err := st.ensureConfigRow(ctx, src); err != nil {
 		_ = db.Close()
 		return nil, err
 	}
 	return st, nil
 }
 
-func writeSwarmKeyFile(path string, seed []byte) error {
-	if len(seed) != ed25519.SeedSize {
-		return errors.New("swarm key seed must be 32 bytes")
+func writeSwarmKeyFile(path string, data []byte) error {
+	if len(data) != ed25519.SeedSize && !bytes.HasPrefix(data, []byte(sealedSwarmKeyMagic)) {
+		return errors.New("swarm key seed must be 32 bytes or sealed envelope")
 	}
 	dir := filepath.Dir(path)
 	tmp, err := os.CreateTemp(dir, ".swarm.key.*")
@@ -129,7 +166,7 @@ func writeSwarmKeyFile(path string, seed []byte) error {
 			_ = os.Remove(tmpName)
 		}
 	}()
-	if _, err := tmp.Write(seed); err != nil {
+	if _, err := tmp.Write(data); err != nil {
 		_ = tmp.Close()
 		return err
 	}
@@ -148,12 +185,68 @@ func writeSwarmKeyFile(path string, seed []byte) error {
 	return nil
 }
 
-func (s *store) ensureConfigRow(ctx context.Context) error {
+func (s *store) persistSwarmSeed(keyPath string, seed, osKey []byte) error {
+	if osKey != nil {
+		sealed, err := sealSwarmSeedBytes(osKey, seed)
+		if err != nil {
+			return err
+		}
+		if err := writeSwarmKeyFile(keyPath, sealed); err != nil {
+			return err
+		}
+		s.keyStorage = "os_vault"
+		return nil
+	}
+	if err := writeSwarmKeyFile(keyPath, seed); err != nil {
+		return err
+	}
+	s.keyStorage = "file_0600"
+	return nil
+}
+
+func (s *store) ensureConfigRow(ctx context.Context, src providersecrets.Source) error {
+	osKey := resolveVaultKey(src, swarmVaultCredName)
+	defer func() {
+		if osKey != nil {
+			clear(osKey)
+		}
+	}()
+
 	keyPath := filepath.Join(s.dir, swarmKeyName)
 	keyBytes, keyErr := os.ReadFile(keyPath)
-	if keyErr == nil && len(keyBytes) == ed25519.SeedSize {
-		copy(s.seed[:], keyBytes)
-		clear(keyBytes)
+	if keyErr == nil {
+		defer clear(keyBytes)
+		if bytes.HasPrefix(keyBytes, []byte(sealedSwarmKeyMagic)) {
+			if osKey == nil {
+				return errors.New("sealed swarm seed requires OS credential store")
+			}
+			body := keyBytes[len(sealedSwarmKeyMagic):]
+			if len(body) <= swarmSealNonceSize {
+				return errors.New("corrupted sealed swarm seed")
+			}
+			plain, openErr := providersecrets.Open(osKey, body[:swarmSealNonceSize], body[swarmSealNonceSize:], swarmSeedAAD)
+			if openErr != nil {
+				return fmt.Errorf("open sealed swarm seed: %w", openErr)
+			}
+			defer clear(plain)
+			if len(plain) != ed25519.SeedSize {
+				return errors.New("invalid sealed swarm seed length")
+			}
+			copy(s.seed[:], plain)
+			s.keyStorage = "os_vault"
+		} else if len(keyBytes) == ed25519.SeedSize {
+			copy(s.seed[:], keyBytes)
+			if osKey != nil {
+				if err := s.persistSwarmSeed(keyPath, s.seed[:], osKey); err != nil {
+					return err
+				}
+			} else {
+				s.keyStorage = "file_0600"
+			}
+		} else {
+			return errors.New("invalid swarm key format")
+		}
+
 		var existingSeed []byte
 		rowErr := s.db.QueryRowContext(ctx, `SELECT local_seed FROM swarm_config WHERE id = 1`).Scan(&existingSeed)
 		if rowErr == nil {
@@ -176,22 +269,18 @@ VALUES(1, 0, 'shadow', ?, X'', ?)
 `, localPeerID, nowUnix)
 		return err
 	}
-	if keyBytes != nil {
-		clear(keyBytes)
-	}
-	if keyErr != nil && !errors.Is(keyErr, os.ErrNotExist) {
+	if !errors.Is(keyErr, os.ErrNotExist) {
 		return keyErr
 	}
 
 	var seedBytes []byte
 	err := s.db.QueryRowContext(ctx, `SELECT local_seed FROM swarm_config WHERE id = 1`).Scan(&seedBytes)
 	if err == nil && len(seedBytes) == ed25519.SeedSize {
-		if wErr := writeSwarmKeyFile(keyPath, seedBytes); wErr != nil {
-			clear(seedBytes)
+		defer clear(seedBytes)
+		if wErr := s.persistSwarmSeed(keyPath, seedBytes, osKey); wErr != nil {
 			return wErr
 		}
 		copy(s.seed[:], seedBytes)
-		clear(seedBytes)
 		_, err = s.db.ExecContext(ctx, `UPDATE swarm_config SET local_seed = X'' WHERE id = 1`)
 		return err
 	}
@@ -206,7 +295,7 @@ VALUES(1, 0, 'shadow', ?, X'', ?)
 	if _, rErr := io.ReadFull(rand.Reader, seed[:]); rErr != nil {
 		return rErr
 	}
-	if wErr := writeSwarmKeyFile(keyPath, seed[:]); wErr != nil {
+	if wErr := s.persistSwarmSeed(keyPath, seed[:], osKey); wErr != nil {
 		clear(seed[:])
 		return wErr
 	}

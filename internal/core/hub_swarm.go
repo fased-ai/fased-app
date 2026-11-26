@@ -61,9 +61,10 @@ func (s *Store) ensureStage6Runtime() (*stage6Runtime, error) {
 		return nil, err
 	}
 	swarmSvc, err := swarm.NewService(swarm.Config{
-		DataDir:     s.dir,
-		FixtureMode: s.providerFixture || s.dir == "",
-		Now:         s.now,
+		DataDir:      s.dir,
+		FixtureMode:  s.providerFixture || s.dir == "",
+		Now:          s.now,
+		SecretSource: s.taskSecrets,
 	})
 	if err != nil {
 		_ = hubSvc.Close()

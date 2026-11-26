@@ -1,6 +1,7 @@
 package cex
 
 import (
+	"bytes"
 	"context"
 	"crypto/aes"
 	"crypto/cipher"
@@ -17,15 +18,21 @@ import (
 	"sync"
 	"time"
 
+	"github.com/fased-ai/fased-app/internal/providersecrets"
 	_ "modernc.org/sqlite"
 )
 
 const (
-	cexDirName = "cex"
-	cexDBName  = "cex.sqlite"
-	cexKeyName = "cex.key"
-	maxOrders  = 200
+	cexDirName       = "cex"
+	cexDBName        = "cex.sqlite"
+	cexKeyName       = "cex.key"
+	maxOrders        = 200
+	sealedKeyMagic   = "FASED-SEALED-V1:"
+	cexVaultCredName = "fased-cex-master-key"
+	sealNonceSize    = 12
 )
+
+var cexMasterAAD = []byte("fased-cex-master-v1")
 
 type sealedCredentialPayload struct {
 	APIKey     string `json:"apiKey"`
@@ -34,11 +41,12 @@ type sealedCredentialPayload struct {
 }
 
 type store struct {
-	dir    string
-	db     *sql.DB
-	master [32]byte
-	now    func() time.Time
-	mu     sync.Mutex
+	dir        string
+	db         *sql.DB
+	master     [32]byte
+	keyStorage string
+	now        func() time.Time
+	mu         sync.Mutex
 }
 
 func sqliteFileURI(path string) string {
@@ -51,32 +59,119 @@ func sqliteFileURI(path string) string {
 	return "file://" + escaped
 }
 
-func loadOrCreateMasterKey(dir string) ([32]byte, error) {
-	var key [32]byte
-	keyPath := filepath.Join(dir, cexKeyName)
-	raw, err := os.ReadFile(keyPath)
-	if err == nil && len(raw) == 32 {
-		copy(key[:], raw)
-		return key, nil
+func resolveVaultKey(src providersecrets.Source, name string) []byte {
+	if src == nil {
+		return nil
 	}
-	if err != nil && !errors.Is(err, os.ErrNotExist) {
-		return key, err
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	k, err := src.Key(ctx, name, true)
+	if err != nil || len(k) != 32 {
+		if k != nil {
+			clear(k)
+		}
+		return nil
 	}
-	if _, err := io.ReadFull(rand.Reader, key[:]); err != nil {
-		return key, err
-	}
+	return k
+}
+
+func writeKeyFileAtomic(keyPath string, data []byte) error {
 	tmpPath := fmt.Sprintf("%s.tmp.%d", keyPath, time.Now().UnixNano())
-	if err := os.WriteFile(tmpPath, key[:], 0o600); err != nil {
-		return key, err
+	if err := os.WriteFile(tmpPath, data, 0o600); err != nil {
+		return err
 	}
 	if err := os.Rename(tmpPath, keyPath); err != nil {
 		_ = os.Remove(tmpPath)
-		return key, err
+		return err
 	}
-	return key, nil
+	_ = os.Chmod(keyPath, 0o600)
+	return nil
 }
 
-func openStore(dataDir string, nowFn func() time.Time) (*store, error) {
+func sealMasterBytes(osKey, rawKey []byte) ([]byte, error) {
+	nonce, ct, err := providersecrets.Seal(osKey, rawKey, cexMasterAAD)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]byte, 0, len(sealedKeyMagic)+len(nonce)+len(ct))
+	out = append(out, sealedKeyMagic...)
+	out = append(out, nonce...)
+	out = append(out, ct...)
+	return out, nil
+}
+
+func loadOrCreateMasterKey(dir string, src providersecrets.Source) ([32]byte, string, error) {
+	var key [32]byte
+	osKey := resolveVaultKey(src, cexVaultCredName)
+	defer func() {
+		if osKey != nil {
+			clear(osKey)
+		}
+	}()
+
+	keyPath := filepath.Join(dir, cexKeyName)
+	raw, err := os.ReadFile(keyPath)
+	if err == nil {
+		defer clear(raw)
+		if bytes.HasPrefix(raw, []byte(sealedKeyMagic)) {
+			if osKey == nil {
+				return key, "", errors.New("sealed cex master key requires OS credential store")
+			}
+			body := raw[len(sealedKeyMagic):]
+			if len(body) <= sealNonceSize {
+				return key, "", errors.New("corrupted sealed cex master key")
+			}
+			plain, openErr := providersecrets.Open(osKey, body[:sealNonceSize], body[sealNonceSize:], cexMasterAAD)
+			if openErr != nil {
+				return key, "", fmt.Errorf("open sealed cex master key: %w", openErr)
+			}
+			defer clear(plain)
+			if len(plain) != 32 {
+				return key, "", errors.New("invalid sealed cex master key length")
+			}
+			copy(key[:], plain)
+			return key, "os_vault", nil
+		}
+		if len(raw) == 32 {
+			copy(key[:], raw)
+			if osKey != nil {
+				sealed, sealErr := sealMasterBytes(osKey, key[:])
+				if sealErr != nil {
+					return key, "", sealErr
+				}
+				if wErr := writeKeyFileAtomic(keyPath, sealed); wErr != nil {
+					return key, "", wErr
+				}
+				return key, "os_vault", nil
+			}
+			return key, "file_0600", nil
+		}
+		return key, "", errors.New("invalid cex master key format")
+	}
+	if !errors.Is(err, os.ErrNotExist) {
+		return key, "", err
+	}
+
+	if _, err := io.ReadFull(rand.Reader, key[:]); err != nil {
+		return key, "", err
+	}
+	if osKey != nil {
+		sealed, sealErr := sealMasterBytes(osKey, key[:])
+		if sealErr != nil {
+			return key, "", sealErr
+		}
+		if wErr := writeKeyFileAtomic(keyPath, sealed); wErr != nil {
+			return key, "", wErr
+		}
+		return key, "os_vault", nil
+	}
+	if wErr := writeKeyFileAtomic(keyPath, key[:]); wErr != nil {
+		return key, "", wErr
+	}
+	return key, "file_0600", nil
+}
+
+func openStore(dataDir string, nowFn func() time.Time, src providersecrets.Source) (*store, error) {
 	if strings.TrimSpace(dataDir) == "" {
 		return nil, errors.New("cex DataDir required")
 	}
@@ -84,7 +179,7 @@ func openStore(dataDir string, nowFn func() time.Time) (*store, error) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, err
 	}
-	master, err := loadOrCreateMasterKey(dir)
+	master, keyStorage, err := loadOrCreateMasterKey(dir, src)
 	if err != nil {
 		return nil, err
 	}
@@ -92,6 +187,7 @@ func openStore(dataDir string, nowFn func() time.Time) (*store, error) {
 	dsn := sqliteFileURI(dbPath) + "?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=foreign_keys(1)&_pragma=synchronous(FULL)"
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
+		clear(master[:])
 		return nil, err
 	}
 	db.SetMaxOpenConns(1)
@@ -132,7 +228,7 @@ CREATE INDEX IF NOT EXISTS idx_cex_orders_created ON cex_orders(created_at DESC)
 		_ = db.Close()
 		return nil, err
 	}
-	return &store{dir: dir, db: db, master: master, now: nowFn}, nil
+	return &store{dir: dir, db: db, master: master, keyStorage: keyStorage, now: nowFn}, nil
 }
 
 func (s *store) close() error {

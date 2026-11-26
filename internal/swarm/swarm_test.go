@@ -1,6 +1,7 @@
 package swarm
 
 import (
+	"bytes"
 	"context"
 	"crypto/ed25519"
 	"database/sql"
@@ -11,6 +12,8 @@ import (
 	"runtime"
 	"testing"
 	"time"
+
+	"github.com/fased-ai/fased-app/internal/providersecrets"
 )
 
 func TestSwarmOptInReplaySkewAndLiveLock(t *testing.T) {
@@ -220,5 +223,67 @@ func TestSwarmSeedMovedOutOfSQLiteAndPersistsAcrossReopen(t *testing.T) {
 	}
 	if st2.Config.LocalPeerID != st1.Config.LocalPeerID || st2.Config.LocalPubKeyHex != st1.Config.LocalPubKeyHex {
 		t.Fatalf("identity drifted across reopen: %+v vs %+v", st1.Config, st2.Config)
+	}
+}
+
+type memSwarmSecretSource struct {
+	key []byte
+	err error
+}
+
+func (m *memSwarmSecretSource) Key(_ context.Context, _ string, _ bool) ([]byte, error) {
+	if m.err != nil {
+		return nil, m.err
+	}
+	out := make([]byte, len(m.key))
+	copy(out, m.key)
+	return out, nil
+}
+
+func TestSwarmSeedOSVaultSealingAndMigration(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	src := &memSwarmSecretSource{key: bytes.Repeat([]byte{0x5A}, 32)}
+
+	svc, err := NewService(Config{DataDir: dir, SecretSource: src})
+	if err != nil {
+		t.Fatalf("NewService(os_vault) failed: %v", err)
+	}
+	st, err := svc.Status(context.Background())
+	if err != nil || st.KeyStorage != "os_vault" {
+		t.Fatalf("expected keyStorage=os_vault, got %+v err=%v", st, err)
+	}
+	_ = svc.Close()
+
+	keyFile, err := os.ReadFile(filepath.Join(dir, "swarm", "swarm.key"))
+	if err != nil || !bytes.HasPrefix(keyFile, []byte(sealedSwarmKeyMagic)) {
+		t.Fatalf("expected sealed swarm.key prefix, got len=%d err=%v", len(keyFile), err)
+	}
+
+	// Unavailable secret source refuses to open sealed swarm seed cleanly.
+	if _, err := NewService(Config{DataDir: dir, SecretSource: &memSwarmSecretSource{err: providersecrets.ErrUnavailable}}); err == nil {
+		t.Fatal("expected sealed swarm.key without OS vault key to return error")
+	}
+
+	// Legacy raw 32-byte swarm.key migrates seamlessly preserving LocalPeerID and LocalPubKeyHex.
+	legDir := t.TempDir()
+	svcLeg, err := NewService(Config{DataDir: legDir})
+	if err != nil {
+		t.Fatalf("NewService(file_0600) failed: %v", err)
+	}
+	stLeg, _ := svcLeg.Status(context.Background())
+	_ = svcLeg.Close()
+	if stLeg.KeyStorage != "file_0600" {
+		t.Fatalf("expected file_0600 on unsealed store, got %+v", stLeg)
+	}
+
+	svcMig, err := NewService(Config{DataDir: legDir, SecretSource: src})
+	if err != nil {
+		t.Fatalf("migrate swarm.key failed: %v", err)
+	}
+	defer svcMig.Close()
+	stMig, _ := svcMig.Status(context.Background())
+	if stMig.KeyStorage != "os_vault" || stMig.Config.LocalPeerID != stLeg.Config.LocalPeerID || stMig.Config.LocalPubKeyHex != stLeg.Config.LocalPubKeyHex {
+		t.Fatalf("migration altered identity or storage: %+v vs %+v", stMig, stLeg)
 	}
 }

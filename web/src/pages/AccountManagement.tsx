@@ -27,6 +27,12 @@ import {
   type AccountsRecord,
   type AccountsView,
 } from "../accounts";
+import {
+  getAgentVaults,
+  getExecutionStatus,
+  type AgentVaultsResponse,
+  type ExecutionStatus,
+} from "../execution";
 import "../accounts.css";
 
 const FixtureAccountAdvanced = lazy(() =>
@@ -38,7 +44,7 @@ const FixtureAccountAdvanced = lazy(() =>
 export function AccountManagement() {
   const { t: uiText } = useUI();
   const core = useCore();
-  const { agents } = useWorkspace();
+  const { agents, navigate } = useWorkspace();
   const instance = useRef(core.instanceId);
   instance.current = core.instanceId;
   const [loaded, setLoaded] = useState<{
@@ -84,6 +90,8 @@ export function AccountManagement() {
     "setup" | "import" | "recover"
   >();
   const [remoteWalletOwner, setRemoteWalletOwner] = useState("");
+  const [execStatus, setExecStatus] = useState<ExecutionStatus | null>(null);
+  const [vaults, setVaults] = useState<AgentVaultsResponse | null>(null);
   const request = core.request;
   useEffect(() => {
     let active = true;
@@ -95,6 +103,8 @@ export function AccountManagement() {
     setPortableBundle(undefined);
     setRemoteWalletAction(undefined);
     setRemoteWalletOwner("");
+    setExecStatus(null);
+    setVaults(null);
     setBusy(false);
     setError("");
     setNotice("");
@@ -105,6 +115,15 @@ export function AccountManagement() {
       .catch((e) => {
         if (active) setError(String(e.message));
       });
+    void Promise.all([
+      getExecutionStatus(core).catch(() => null),
+      getAgentVaults(core).catch(() => null),
+    ]).then(([es, vs]) => {
+      if (active) {
+        setExecStatus(es);
+        setVaults(vs);
+      }
+    });
     return () => {
       active = false;
     };
@@ -114,7 +133,16 @@ export function AccountManagement() {
     setBusy(true);
     setError("");
     try {
-      acceptView(await request<AccountsView>("accounts"), owner);
+      const [v, es, vs] = await Promise.all([
+        request<AccountsView>("accounts"),
+        getExecutionStatus(core).catch(() => null),
+        getAgentVaults(core).catch(() => null),
+      ]);
+      acceptView(v, owner);
+      if (instance.current === owner) {
+        setExecStatus(es);
+        setVaults(vs);
+      }
     } catch (e) {
       if (instance.current !== owner) return false;
       setError(e instanceof Error ? e.message : "Accounts unavailable");
@@ -418,6 +446,30 @@ export function AccountManagement() {
         <p role="status">{uiText("Loading…")}</p>
       ) : (
         <>
+          <div className="wallet-kpi-strip" data-testid="wallets-kpi-strip">
+            <div className="wallet-kpi-tile">
+              <span>{uiText("Typed wallets")}</span>
+              <strong>{view.record.accounts.length}</strong>
+            </div>
+            <div className="wallet-kpi-tile">
+              <span>{uiText("Watch / Manual")}</span>
+              <strong>
+                {
+                  view.record.accounts.filter(
+                    (a) => a.mode === "watch" || a.mode === "external",
+                  ).length
+                }
+              </strong>
+            </div>
+            <div className="wallet-kpi-tile">
+              <span>{uiText("Agent vaults")}</span>
+              <strong>{vaults?.vaults?.length ?? 0}</strong>
+            </div>
+            <div className="wallet-kpi-tile">
+              <span>{uiText("Execution profile")}</span>
+              <strong className="mono">{execStatus?.profile || "off"}</strong>
+            </div>
+          </div>
           <section className="panel account-panel">
             <div className="panel-heading">
               <h2>{uiText("Accounts")}</h2>
@@ -585,6 +637,89 @@ export function AccountManagement() {
                 </details>
               </article>
             ))}
+          </section>
+          <section
+            className="panel account-panel"
+            data-testid="wallets-execution-panel"
+          >
+            <div className="panel-heading">
+              <h2>{uiText("Execution & Agent Vaults")}</h2>
+              <div className="account-status">
+                <Badge>
+                  {uiText(
+                    execStatus?.mainnetLocked === false
+                      ? "Mainnet capped"
+                      : "Paper / Off",
+                  )}
+                </Badge>
+                <button
+                  type="button"
+                  className="secondary"
+                  onClick={() => navigate("trade")}
+                >
+                  {uiText("Trade")}
+                </button>
+              </div>
+            </div>
+            <div className="wallet-venue-grid">
+              {[
+                {
+                  name: "Solana",
+                  state: execStatus?.solanaMainnetReady
+                    ? "Mainnet-Capped"
+                    : execStatus?.solanaDevnetReady
+                      ? "Devnet"
+                      : "Paper / Off",
+                },
+                {
+                  name: "Hyperliquid",
+                  state: execStatus?.hyperliquidMainnet
+                    ? "Mainnet-Capped"
+                    : execStatus?.hyperliquidTestnet
+                      ? "Testnet"
+                      : "Paper / Off",
+                },
+                {
+                  name: "Lighter",
+                  state: execStatus?.lighterTestnetReady
+                    ? "Testnet"
+                    : "Paper / Off",
+                },
+                {
+                  name: "Polymarket",
+                  state: execStatus?.polymarketTestnetReady
+                    ? "Testnet"
+                    : "Paper / Off",
+                },
+                {
+                  name: "Kalshi",
+                  state: execStatus?.kalshiDemoReady ? "Demo" : "Paper / Off",
+                },
+                {
+                  name: "WEN SAT",
+                  state: "Held",
+                },
+              ].map((venue) => (
+                <div className="wallet-venue-chip" key={venue.name}>
+                  <span>{uiText(venue.name)}</span>
+                  <Badge>{uiText(venue.state)}</Badge>
+                </div>
+              ))}
+            </div>
+            <div className="wallet-vault-list">
+              {(vaults?.vaults?.length ?? 0) === 0 ? (
+                <p className="subtle">{uiText("No agent vaults")}</p>
+              ) : (
+                vaults!.vaults.map((v) => (
+                  <div className="wallet-venue-chip" key={v.id}>
+                    <strong>{v.label || v.id}</strong>
+                    <span className="subtle mono">
+                      {`${v.network || "paper"} · ${(v.allowedVenues ?? []).join(", ") || "paper"}`}
+                    </span>
+                  </div>
+                ))
+              )}
+            </div>
           </section>
           {adding && (
             <Dialog
