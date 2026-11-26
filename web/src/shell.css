@@ -8,94 +8,123 @@
   font-display: swap;
 }
 :root.wt {
-  --wt-bg: #0d0d12;
-  --wt-surface: #161621;
-  --wt-raised: #1f1f2d;
-  --wt-border: #252536;
-  --wt-text: #f5f5fa;
-  --wt-muted: #8f8fa6;
-  --wt-coral: #ff4f7c;
-  --wt-cyan: #27c5da;
-  --wt-violet: #8b6fff;
-  --shell-header: #111017;
-  --shell-input: #101018;
-  --shell-hover: #28283a;
-  --shell-primary-text: #160a10;
-  --shell-primary-hover: #ff7a8e;
-  --shell-active: #ff4f7c1f;
-  --shell-shadow: #00000080;
-  --wt-ok: #5be0a5;
-  --wt-ok-bg: #11241d;
-  --wt-ok-border: #1e4b3b;
-  --wt-warn: #f3c677;
-  --wt-warn-bg: #261e12;
-  --wt-warn-border: #564222;
-  --wt-danger: #ff7e92;
-  --wt-danger-bg: #2d141b;
-  --wt-danger-border: #682838;
-  --wt-info: #7cd8e6;
-  --wt-info-bg: #112128;
-  --wt-info-border: #224754;
-  --wt-accent-soft: #ff4f7c22;
-  --wt-accent-border: #ff4f7c4d;
-  --wt-violet-soft: #7c5cff24;
-  --wt-violet-border: #7c5cff55;
-  --wt-btn-hover: #28283a;
-  --wt-btn-hover-border: #3c3c54;
-  --wt-backdrop: #050508cc;
-  --swatch-coral: #ff4f7c;
-  --swatch-cyan: #27c5da;
-  --swatch-violet: #8b6fff;
-  --swatch-ok: #5be0a5;
-  --swatch-warn: #f3c677;
+  --wt-bg: #0a0c10;
+  --wt-surface: #0f1218;
+  --wt-raised: #161a22;
+  --wt-raised-2: #1d222c;
+  --wt-surface-2: #161a22;
+  --wt-border: rgba(255, 255, 255, 0.06);
+  --wt-border-strong: rgba(255, 255, 255, 0.1);
+  --wt-text: #e6e9f0;
+  --wt-ink: #e6e9f0;
+  --wt-text-2: #bec5d2;
+  --wt-muted: #8d96a8;
+  --wt-dim: #778094;
+  --wt-coral: #f06484;
+  --wt-cyan: #62c0cc;
+  --wt-violet: #9b8ae0;
+  --shell-header: #0a0c10;
+  --shell-input: #161a22;
+  --shell-hover: #1d222c;
+  --shell-primary: #d4365a;
+  --shell-primary-text: #ffffff;
+  --shell-primary-hover: #c22b4e;
+  --shell-active: rgba(229, 71, 106, 0.14);
+  --shell-shadow: rgba(0, 0, 0, 0.48);
+  --wt-ok: #5fcfa6;
+  --wt-ok-fill: #2fb88c;
+  --wt-ok-bg: rgba(47, 184, 140, 0.12);
+  --wt-ok-border: rgba(47, 184, 140, 0.28);
+  --wt-warn: #e2bd74;
+  --wt-warn-bg: rgba(212, 162, 76, 0.12);
+  --wt-warn-border: rgba(212, 162, 76, 0.28);
+  --wt-danger: #ec8396;
+  --wt-danger-fill: #e0566f;
+  --wt-danger-bg: rgba(224, 86, 111, 0.12);
+  --wt-danger-border: rgba(224, 86, 111, 0.28);
+  --wt-info: #62c0cc;
+  --wt-info-bg: rgba(51, 169, 184, 0.12);
+  --wt-info-border: rgba(51, 169, 184, 0.28);
+  --wt-accent-soft: rgba(229, 71, 106, 0.14);
+  --wt-accent-border: rgba(229, 71, 106, 0.34);
+  --wt-violet-soft: rgba(155, 138, 224, 0.12);
+  --wt-violet-border: rgba(155, 138, 224, 0.28);
+  --wt-chart-grid: rgba(148, 163, 184, 0.05);
+  --wt-chart-cross: rgba(134, 143, 162, 0.45);
+  --wt-btn-hover: #1d222c;
+  --wt-btn-hover-border: rgba(255, 255, 255, 0.12);
+  --wt-backdrop: rgba(5, 7, 11, 0.78);
+  --swatch-coral: #e5476a;
+  --swatch-cyan: #33a9b8;
+  --swatch-violet: #9b8ae0;
+  --swatch-ok: #2fb88c;
+  --swatch-warn: #d4a24c;
   --swatch-blue: #3b82f6;
   color-scheme: dark;
   font-family: "Fased Inter", Inter, ui-sans-serif, system-ui, sans-serif;
+  font-feature-settings: "cv11", "ss03";
+  font-variant-numeric: tabular-nums;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
   font-size: 14px;
   --radius: 12px;
+  --radius-md: 10px;
+  --radius-sm: 8px;
+  --radius-xs: 6px;
   scroll-padding-top: 58px;
 }
 :root.wt[data-theme="light"] {
-  --wt-bg: #f3f3f8;
-  --wt-surface: #fff;
-  --wt-raised: #ececf4;
-  --wt-border: #d7d7e4;
-  --wt-text: #242231;
-  --wt-muted: #626177;
-  --wt-coral: #b51e43;
-  --wt-cyan: #087786;
-  --wt-violet: #6640bd;
-  --shell-header: #faf9fc;
-  --shell-input: #f7f7fb;
-  --shell-hover: #e4e2ef;
-  --shell-primary-text: #fff;
-  --shell-primary-hover: #9d1637;
-  --shell-active: #b51e4310;
-  --shell-shadow: #24223120;
-  --wt-ok: #0f6b47;
-  --wt-ok-bg: #e8f6ef;
-  --wt-ok-border: #9fd5ba;
-  --wt-warn: #8a5306;
-  --wt-warn-bg: #fdf3e3;
-  --wt-warn-border: #e5c285;
-  --wt-danger: #a81c36;
-  --wt-danger-bg: #fcebef;
-  --wt-danger-border: #eab3bf;
-  --wt-info: #086875;
-  --wt-info-bg: #e7f6f8;
-  --wt-info-border: #9cd4dd;
-  --wt-accent-soft: #b51e4314;
-  --wt-accent-border: #b51e4344;
-  --wt-violet-soft: #6640bd18;
-  --wt-violet-border: #6640bd55;
-  --wt-btn-hover: #e4e2ef;
-  --wt-btn-hover-border: #9e9cb4;
-  --wt-backdrop: #1d1b2966;
-  --swatch-coral: #b51e43;
-  --swatch-cyan: #087786;
-  --swatch-violet: #6640bd;
-  --swatch-ok: #0f6b47;
-  --swatch-warn: #8a5306;
+  --wt-bg: #f3f4f7;
+  --wt-surface: #ffffff;
+  --wt-raised: #f1f3f6;
+  --wt-raised-2: #e6e9ee;
+  --wt-surface-2: #f1f3f6;
+  --wt-border: rgba(16, 24, 40, 0.07);
+  --wt-border-strong: rgba(16, 24, 40, 0.13);
+  --wt-text: #121722;
+  --wt-ink: #121722;
+  --wt-text-2: #3a4352;
+  --wt-muted: #5a6375;
+  --wt-dim: #687182;
+  --wt-coral: #b82548;
+  --wt-cyan: #186d7c;
+  --wt-violet: #5d42a6;
+  --shell-header: #f3f4f7;
+  --shell-input: #ffffff;
+  --shell-hover: #e6e9ee;
+  --shell-primary: #c92e52;
+  --shell-primary-text: #ffffff;
+  --shell-primary-hover: #b52447;
+  --shell-active: rgba(184, 37, 72, 0.1);
+  --shell-shadow: rgba(16, 24, 40, 0.1);
+  --wt-ok: #147a56;
+  --wt-ok-fill: #1f9e76;
+  --wt-ok-bg: rgba(31, 158, 118, 0.1);
+  --wt-ok-border: rgba(31, 158, 118, 0.28);
+  --wt-warn: #855d18;
+  --wt-warn-bg: rgba(183, 131, 43, 0.12);
+  --wt-warn-border: rgba(183, 131, 43, 0.3);
+  --wt-danger: #b9344e;
+  --wt-danger-fill: #d44a63;
+  --wt-danger-bg: rgba(212, 74, 99, 0.1);
+  --wt-danger-border: rgba(212, 74, 99, 0.28);
+  --wt-info: #186d7c;
+  --wt-info-bg: rgba(35, 137, 154, 0.1);
+  --wt-info-border: rgba(35, 137, 154, 0.28);
+  --wt-accent-soft: rgba(184, 37, 72, 0.1);
+  --wt-accent-border: rgba(184, 37, 72, 0.3);
+  --wt-violet-soft: rgba(93, 66, 166, 0.1);
+  --wt-violet-border: rgba(93, 66, 166, 0.28);
+  --wt-chart-grid: rgba(16, 24, 40, 0.05);
+  --wt-chart-cross: rgba(90, 99, 117, 0.45);
+  --wt-btn-hover: #e6e9ee;
+  --wt-btn-hover-border: rgba(16, 24, 40, 0.16);
+  --wt-backdrop: rgba(18, 23, 34, 0.42);
+  --swatch-coral: #c92e52;
+  --swatch-cyan: #186d7c;
+  --swatch-violet: #5d42a6;
+  --swatch-ok: #147a56;
+  --swatch-warn: #855d18;
   --swatch-blue: #2563eb;
   color-scheme: light;
 }
@@ -125,7 +154,7 @@
   gap: 8px;
   padding: 0 12px;
   background: var(--shell-header);
-  border-bottom: 1px solid var(--wt-border);
+  border-bottom: 0;
   min-width: 0;
 }
 .wt .shell-header button,
@@ -232,16 +261,20 @@
   flex: 1;
   max-width: 450px;
   min-width: 90px;
-  height: 36px;
+  height: 34px;
   display: flex;
   gap: 9px;
   align-items: center;
   justify-content: flex-start;
   padding: 0 14px;
-  border: 1px solid var(--wt-border);
+  border: 1px solid transparent;
   border-radius: 999px;
   background: var(--shell-input);
   color: var(--wt-muted);
+}
+.wt .shell-search:is(:hover, :focus-visible) {
+  border-color: var(--wt-border-strong);
+  color: var(--wt-text);
 }
 .wt .shell-tools {
   display: flex;
@@ -284,16 +317,30 @@
   display: flex;
   align-items: center;
   gap: 6px;
-  color: var(--wt-coral);
-  background: var(--shell-active);
-  border-radius: 8px;
+  color: var(--wt-text-2);
+  background: var(--wt-raised);
+  border: 0;
+  border-radius: var(--radius-sm);
   padding: 6px 10px;
-  font-size: 13px;
+  font-size: 12px;
+  font-weight: 500;
+}
+.wt .shell-status-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--wt-muted);
+  flex-shrink: 0;
+}
+.wt .shell-status-dot[data-ready="true"] {
+  background: var(--wt-ok);
 }
 .wt .shell-body {
   grid-column: 2;
   grid-row: 2;
   min-width: 0;
+  display: flex;
+  flex-direction: column;
   font-variant-numeric: tabular-nums;
 }
 .wt .shell-body .main-content {
@@ -301,6 +348,7 @@
   margin: 0;
   width: 100%;
   max-width: none;
+  flex: 1 0 auto;
 }
 .wt .shell-rail {
   grid-column: 1;
@@ -314,7 +362,7 @@
   gap: 6px;
   padding: 10px 4px;
   background: var(--shell-header);
-  border-right: 1px solid var(--wt-border);
+  border-right: 0;
   z-index: 30;
 }
 .wt .shell-rail > a,
@@ -480,7 +528,10 @@
   left: 0;
   transform: none;
 }
-.wt .primary {
+.wt .primary,
+.wt button.primary {
+  background: var(--shell-primary);
+  border-color: var(--shell-primary);
   color: var(--shell-primary-text);
 }
 :root.wt button:hover:not(:disabled) {
@@ -495,9 +546,10 @@
 :root.wt td {
   border-bottom-color: var(--wt-border);
 }
-.wt button.primary:hover:not(:disabled) {
+.wt button.primary:hover:not(:disabled),
+.wt .primary:hover:not(:disabled) {
   background: var(--shell-primary-hover);
-  border-color: transparent;
+  border-color: var(--shell-primary-hover);
 }
 .wt .secondary:hover:not(:disabled) {
   background: var(--shell-hover);
@@ -662,10 +714,12 @@
 /* Connected agent controls share the compact Meteora toolbar. */
 .wt .shell-demo {
   color: var(--wt-muted);
+  background: var(--wt-raised);
   font-size: 11px;
-  padding: 3px 6px;
-  border: 1px solid var(--wt-border);
-  border-radius: 4px;
+  font-weight: 500;
+  padding: 4px 8px;
+  border: 0;
+  border-radius: var(--radius-xs);
 }
 .wt .chat-workspace .chat-composer {
   position: relative;
@@ -1122,4 +1176,44 @@
   .wt .tasks-toolbar :is(button, select) {
     min-height: 44px;
   }
+}
+.wt .shell-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 6px 14px 10px;
+  font-size: 11px;
+  color: var(--wt-muted);
+  background: transparent;
+  flex-shrink: 0;
+}
+.wt .shell-footer-meta {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.wt .workspace-shell:has(.agent-page:not([hidden]) .agent-chat) .shell-footer {
+  display: none;
+}
+.wt * {
+  scrollbar-width: thin;
+  scrollbar-color: transparent transparent;
+}
+.wt *:hover {
+  scrollbar-color: var(--wt-border-strong) transparent;
+}
+.wt ::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+.wt ::-webkit-scrollbar-track {
+  background: transparent;
+}
+.wt ::-webkit-scrollbar-thumb {
+  background: transparent;
+  border-radius: 999px;
+}
+.wt *:hover::-webkit-scrollbar-thumb {
+  background: var(--wt-border-strong);
 }

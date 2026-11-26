@@ -89,6 +89,9 @@ type ChartPalette = {
   border: string;
   text: string;
   muted: string;
+  ok: string;
+  danger: string;
+  chartCross: string;
   cyan: string;
   coral: string;
   violet: string;
@@ -99,14 +102,20 @@ function resolveThemePalette(): ChartPalette {
   const read = (name: string, fallback: string) =>
     s.getPropertyValue(name).trim() || fallback;
   return {
-    surface: read("--wt-surface", "#161621"),
-    bg: read("--wt-bg", "#0d0d12"),
-    border: read("--wt-border", "#252536"),
-    text: read("--wt-text", "#f5f5fa"),
-    muted: read("--wt-muted", "#8f8fa6"),
-    cyan: read("--wt-cyan", "#27c5da"),
-    coral: read("--wt-coral", "#ff4f7c"),
-    violet: read("--wt-violet", "#8b6fff"),
+    surface: read("--wt-surface", "#0F1218"),
+    bg: read("--wt-bg", "#0A0C10"),
+    border: read(
+      "--wt-chart-grid",
+      read("--wt-border", "rgba(148, 163, 184, 0.05)"),
+    ),
+    text: read("--wt-text", "#E6E9F0"),
+    muted: read("--wt-muted", "#8D96A8"),
+    ok: read("--wt-ok-fill", read("--wt-ok", "#2FB88C")),
+    danger: read("--wt-danger-fill", read("--wt-danger", "#E0566F")),
+    chartCross: read("--wt-chart-cross", "rgba(134, 143, 162, 0.45)"),
+    cyan: read("--wt-ok-fill", read("--wt-cyan", "#2FB88C")),
+    coral: read("--wt-danger-fill", read("--wt-coral", "#E0566F")),
+    violet: read("--wt-violet", "#9B8AE0"),
   };
 }
 
@@ -230,18 +239,18 @@ export function FasedChartAdapter({
         secondsVisible: false,
       },
       crosshair: {
-        vertLine: { color: p.violet, style: LineStyle.Dashed },
-        horzLine: { color: p.violet, style: LineStyle.Dashed },
+        vertLine: { color: p.chartCross, style: LineStyle.Dashed },
+        horzLine: { color: p.chartCross, style: LineStyle.Dashed },
       },
     });
 
     const cSeries = chart.addSeries(CandlestickSeries, {
-      upColor: p.cyan,
-      downColor: p.coral,
-      borderUpColor: p.cyan,
-      borderDownColor: p.coral,
-      wickUpColor: p.cyan,
-      wickDownColor: p.coral,
+      upColor: p.ok,
+      downColor: p.danger,
+      borderUpColor: p.ok,
+      borderDownColor: p.danger,
+      wickUpColor: p.ok,
+      wickDownColor: p.danger,
     });
 
     const vSeries = chart.addSeries(HistogramSeries, {
@@ -271,14 +280,18 @@ export function FasedChartAdapter({
         },
         rightPriceScale: { borderColor: next.border },
         timeScale: { borderColor: next.border },
+        crosshair: {
+          vertLine: { color: next.chartCross, style: LineStyle.Dashed },
+          horzLine: { color: next.chartCross, style: LineStyle.Dashed },
+        },
       });
       cSeries.applyOptions({
-        upColor: next.cyan,
-        downColor: next.coral,
-        borderUpColor: next.cyan,
-        borderDownColor: next.coral,
-        wickUpColor: next.cyan,
-        wickDownColor: next.coral,
+        upColor: next.ok,
+        downColor: next.danger,
+        borderUpColor: next.ok,
+        borderDownColor: next.danger,
+        wickUpColor: next.ok,
+        wickDownColor: next.danger,
       });
     };
 

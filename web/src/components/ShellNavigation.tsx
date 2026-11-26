@@ -13,6 +13,7 @@ import {
   LogOut,
   MessageSquare,
   Monitor,
+  Moon,
   Newspaper,
   PanelLeftClose,
   PanelLeftOpen,
@@ -23,6 +24,7 @@ import {
   Server,
   Settings,
   Settings2,
+  Sun,
   TrendingUp,
   Wallet,
 } from "../icons";
@@ -78,7 +80,7 @@ export function ShellNavigation() {
     setProvidersOpen,
     openSettingsModal,
   } = useWorkspace();
-  const { preferences, update, t } = useUI();
+  const { preferences, resolvedTheme, update, t } = useUI();
   const [more, setMore] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
   const moreButton = useRef<HTMLButtonElement>(null),
@@ -292,6 +294,12 @@ export function ShellNavigation() {
               />
             )}
           </span>
+          {utility(
+            resolvedTheme === "dark" ? "Light" : "Dark",
+            resolvedTheme === "dark" ? Sun : Moon,
+            () =>
+              update({ theme: resolvedTheme === "dark" ? "light" : "dark" }),
+          )}
           {utility("Preferences", Settings2, () =>
             openSettingsModal("general"),
           )}
@@ -300,6 +308,11 @@ export function ShellNavigation() {
             aria-label={t("Instance location")}
             onClick={() => openSettingsModal("instance")}
           >
+            <span
+              className="shell-status-dot"
+              data-ready={core.mode === "ready" ? "true" : "false"}
+              aria-hidden="true"
+            />
             {core.connection?.location === "remote" ? (
               <Server size={14} />
             ) : (

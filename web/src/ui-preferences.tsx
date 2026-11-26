@@ -58,6 +58,14 @@ function usePreferenceState() {
   const [storageError, setStorageError] = useState(false);
   const [catalogTick, setCatalogTick] = useState(0);
   const language = resolveLanguage(preferences.language, navigator.languages);
+  const [resolvedTheme, setResolvedTheme] = useState<"light" | "dark">(() =>
+    preferences.theme === "light" || preferences.theme === "dark"
+      ? preferences.theme
+      : typeof matchMedia === "function" &&
+          matchMedia("(prefers-color-scheme: light)").matches
+        ? "light"
+        : "dark",
+  );
   useLayoutEffect(() => {
     const media = matchMedia("(prefers-color-scheme: dark)");
     const apply = () => {
@@ -67,12 +75,13 @@ function usePreferenceState() {
             ? "dark"
             : "light"
           : preferences.theme;
+      setResolvedTheme(resolved);
       document.documentElement.dataset.theme = resolved;
       const meta = document.querySelector<HTMLMetaElement>(
         'meta[name="theme-color"]',
       );
       if (meta) {
-        meta.content = resolved === "light" ? "#f5f4f8" : "#0d0d12";
+        meta.content = resolved === "light" ? "#F3F4F7" : "#0A0C10";
       }
     };
     apply();
@@ -120,6 +129,7 @@ function usePreferenceState() {
   }
   return {
     preferences,
+    resolvedTheme,
     update,
     language,
     catalogTick,

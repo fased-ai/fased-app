@@ -58,8 +58,8 @@
 .wt .remote-connect form button.primary,
 .instance-facts ~ button.primary,
 .wt .core-auth button.primary {
-  background: var(--wt-coral);
-  color: var(--wt-bg);
+  background: var(--shell-primary);
+  color: var(--shell-primary-text);
   border: 0;
   min-height: 44px;
   border-radius: 7px;
