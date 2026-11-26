@@ -48,14 +48,14 @@ function getCanvasPalette(): CanvasPalette {
   const s = getComputedStyle(document.documentElement);
   const g = (k: string, fb: string) => s.getPropertyValue(k).trim() || fb;
   return {
-    surface: g("--wt-surface", "#161621"),
-    raised: g("--wt-raised", "#1f1f2d"),
-    border: g("--wt-border", "#252536"),
-    text: g("--wt-text", "#f5f5fa"),
-    muted: g("--wt-muted", "#8f8fa6"),
-    cyan: g("--wt-cyan", "#27c5da"),
-    coral: g("--wt-coral", "#ff4f7c"),
-    violet: g("--wt-violet", "#8b6fff"),
+    surface: g("--wt-surface", "#0F1218"),
+    raised: g("--wt-raised", "#161A22"),
+    border: g("--wt-border", "rgba(255, 255, 255, 0.06)"),
+    text: g("--wt-text", "#E6E9F0"),
+    muted: g("--wt-muted", "#8D96A8"),
+    cyan: g("--wt-ok-fill", g("--wt-cyan", "#2FB88C")),
+    coral: g("--wt-danger-fill", g("--wt-coral", "#E0566F")),
+    violet: g("--wt-violet", "#9B8AE0"),
   };
 }
 

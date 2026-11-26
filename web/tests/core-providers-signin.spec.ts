@@ -2129,7 +2129,7 @@ test("Providers page preserves agent drafts and shares account models without ge
   await page.unroute(providerReads);
   await expect(providers.locator(".provider-editor")).toHaveCSS(
     "background-color",
-    "rgb(22, 22, 33)",
+    "rgb(15, 18, 24)",
   );
   await expect(providers.locator(".provider-editor")).toHaveCSS(
     "border-radius",

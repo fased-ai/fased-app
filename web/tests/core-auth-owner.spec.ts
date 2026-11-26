@@ -646,9 +646,9 @@ test("installation connection rejects Remote tunnels without changing Local data
   await page.goto(url + "/#settings");
   await page.getByText("Connect to Remote", { exact: true }).click();
   const connect = page.getByRole("button", { name: "Connect", exact: true });
-  await expect(connect).toHaveCSS("background-color", "rgb(255, 79, 124)");
+  await expect(connect).toHaveCSS("background-color", "rgb(212, 54, 90)");
   await connect.hover();
-  await expect(connect).toHaveCSS("background-color", "rgb(255, 122, 142)");
+  await expect(connect).toHaveCSS("background-color", "rgb(194, 43, 78)");
   await page.getByLabel("Instance URL").fill("http://untrusted.example");
   await page.getByRole("button", { name: "Connect", exact: true }).click();
   await expect(page.getByRole("alert")).toContainText("HTTPS");

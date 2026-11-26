@@ -553,7 +553,7 @@ test("shared WEN Activity distinguishes browser demo notices", async ({
   await expect(
     page.getByRole("button", { name: "Sign out", exact: true }),
   ).toHaveCount(0);
-  await expect(activity).toHaveCSS("background-color", "rgb(22, 22, 33)");
+  await expect(activity).toHaveCSS("background-color", "rgb(15, 18, 24)");
   expect(
     await page.evaluate(
       (key) => JSON.parse(localStorage.getItem(key)!).notices,

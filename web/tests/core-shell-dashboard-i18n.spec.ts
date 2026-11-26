@@ -243,7 +243,7 @@ test("Meteora shell preserves drafts and records through navigation theme langua
     await more.getByRole("link", { name: "Tasks", exact: true }).click();
     await expect(page.locator(".shell-more-toggle")).toHaveCSS(
       "color",
-      "rgb(255, 79, 124)",
+      "rgb(240, 100, 132)",
     );
     await page.getByRole("button", { name: "More", exact: true }).click();
   }
@@ -599,7 +599,7 @@ test("shared WEN Overview Wallets and Settings preserve fixture authority and re
     await expect(layout).toBeVisible();
     await expect(page.locator("html")).toHaveCSS(
       "background-color",
-      "rgb(13, 13, 18)",
+      "rgb(10, 12, 16)",
     );
     await expect(
       layout
@@ -607,7 +607,7 @@ test("shared WEN Overview Wallets and Settings preserve fixture authority and re
           selector === ".dashboard-grid" ? ".dashboard-widget" : ".panel",
         )
         .first(),
-    ).toHaveCSS("background-color", "rgb(22, 22, 33)");
+    ).toHaveCSS("background-color", "rgb(15, 18, 24)");
     expect(
       await page.evaluate(
         () => document.documentElement.scrollWidth <= innerWidth,
@@ -806,7 +806,7 @@ test("shared WEN remaining agent pages preserve news provenance paper budgets an
     ).toBe(isMobile || name === "strategies" ? 1 : 2);
     await expect(page.locator("html")).toHaveCSS(
       "background-color",
-      "rgb(13, 13, 18)",
+      "rgb(10, 12, 16)",
     );
     expect(
       await page.evaluate(
@@ -1182,8 +1182,8 @@ test("Dashboard drag and resize autosave without a duplicate home rail shortcut"
     };
   });
   expect(geometry.gridGap).toBe("12px");
-  expect(geometry.surface).toBe("rgb(22, 22, 33)");
-  expect(geometry.border).toBe("rgb(37, 37, 54)");
+  expect(geometry.surface).toBe("rgb(15, 18, 24)");
+  expect(geometry.border).toBe("rgba(255, 255, 255, 0.06)");
   if (!isMobile) {
     expect(geometry.headerHeight).toBe(50);
     expect(geometry.navFontSize).toBe("14px");
@@ -1985,7 +1985,7 @@ test("unified bottom-left Settings modal switches tabs cleanly without overflow"
 
   await expect(page.locator("html")).toHaveCSS(
     "background-color",
-    "rgb(13, 13, 18)",
+    "rgb(10, 12, 16)",
   );
 
   if (isMobile) {

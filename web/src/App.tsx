@@ -215,6 +215,28 @@ function WorkspaceShell() {
               </>
             )}
           </main>
+          <footer className="shell-footer" aria-label={uiText("Status")}>
+            <span className="shell-footer-meta">
+              <span
+                className="shell-status-dot"
+                data-ready={core.mode === "ready" ? "true" : "false"}
+                aria-hidden="true"
+              />
+              <span>
+                {uiText(
+                  core.connection
+                    ? core.connection.location === "local"
+                      ? "Local"
+                      : "Remote"
+                    : "Preview",
+                )}
+              </span>
+              {core.connection?.transport && (
+                <span>· {core.connection.transport}</span>
+              )}
+            </span>
+            {core.version && <span>v{core.version}</span>}
+          </footer>
         </div>
         {contextOpen && (
           <aside className="context-panel">

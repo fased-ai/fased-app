@@ -563,8 +563,8 @@
 }
 
 .trade-desk-run {
-  border-color: var(--wt-coral);
-  background: var(--wt-coral);
+  border-color: var(--shell-primary);
+  background: var(--shell-primary);
   color: var(--shell-primary-text);
 }
 

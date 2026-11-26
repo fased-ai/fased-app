@@ -51,7 +51,7 @@
   text-underline-offset: 4px;
 }
 .wt .primary {
-  background: var(--wt-coral);
+  background: var(--shell-primary);
   color: var(--shell-primary-text);
   border: 1px solid transparent;
   border-radius: 8px;
@@ -590,8 +590,8 @@
   display: inline-flex;
   justify-content: center;
   align-items: center;
-  background: var(--wt-coral);
-  color: var(--wt-bg);
+  background: var(--shell-primary);
+  color: var(--shell-primary-text);
   border: 0;
   border-radius: 50%;
   padding: 0;

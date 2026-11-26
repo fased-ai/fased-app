@@ -342,8 +342,8 @@
 }
 .wt .wizard-step[data-state="active"] .wizard-step-badge,
 .wt .wizard-step[data-state="done"] .wizard-step-badge {
-  background: var(--wt-coral);
-  border-color: var(--wt-coral);
+  background: var(--shell-primary);
+  border-color: var(--shell-primary);
   color: var(--shell-primary-text);
 }
 .wt .wizard-body {
