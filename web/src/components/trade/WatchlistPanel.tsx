@@ -17,12 +17,18 @@ import {
 export function WatchlistPanel({
   activeVenue,
   activeSymbol,
+  enabledVenues,
   onSelectItem,
 }: {
   activeVenue: string;
   activeSymbol: string;
+  enabledVenues?: string[];
   onSelectItem: (item: WatchlistItem) => void;
 }) {
+  const venueOptions =
+    enabledVenues && enabledVenues.length > 0
+      ? enabledVenues
+      : [...CHART_VENUES];
   const { t } = useUI();
   const core = useCore();
   const [lists, setLists] = useState<Watchlist[]>([]);
@@ -158,7 +164,7 @@ export function WatchlistPanel({
           value={venue}
           onChange={(e) => setVenue(e.target.value as Venue)}
         >
-          {CHART_VENUES.map((v) => (
+          {venueOptions.map((v) => (
             <option key={v} value={v}>
               {v}
             </option>

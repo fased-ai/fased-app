@@ -3,19 +3,33 @@ import { useCore } from "../core";
 import { useUI } from "../ui-preferences";
 import { useWorkspace } from "../workspace";
 import { Badge } from "../components/shared";
-import { Crosshair, Grid2x2, Layers, List, Pin } from "../icons";
+import { WidgetGrid, type WidgetCatalogItem } from "../components/WidgetGrid";
+import {
+  Activity,
+  Bot,
+  CandlestickChart,
+  Crosshair,
+  Grid2x2,
+  Layers,
+  List,
+  Pin,
+  Plus,
+  Settings,
+  Shield,
+  TrendingUp,
+} from "../icons";
 import { CrosshairBus } from "../stream-store";
 import { fetchIntelEvents, type IntelEvent } from "../world-intel";
 import {
+  DATA_PLUGINS_CHANGED_EVENT,
+  fetchDataPlugins,
+} from "../data-plugins";
+import {
   approveDeskTicket,
   closeDeskPosition,
-  formatCurrencyUSD,
-  formatPrice,
   getDeskState,
   listLabScripts,
   rejectDeskTicket,
-  runDeskCycle,
-  type DeskMode,
   type DeskSnapshot,
   type LabScript,
 } from "../quantlab-desk";
@@ -39,17 +53,74 @@ import {
 } from "../market-data";
 import {
   cancelTradeOrder,
+  createTradeBot,
+  deleteTradeBot,
   evaluateTradeOrders,
+  getTradeAccounts,
   getTradeState,
+  listTradeBots,
   setGlobalKillSwitch,
+  setTradeBotStatus,
   submitTradeOrder,
+  type TradeAccountOption,
+  type TradeBot,
   type TradeOrderRequest,
   type TradeSnapshot,
 } from "../trade-engine";
 import { ChartTile } from "../components/trade/ChartTile";
 import { OrderflowPane } from "../components/trade/OrderflowPane";
 import { WatchlistPanel } from "../components/trade/WatchlistPanel";
+import { OrderExecutionWidget } from "../components/trade/OrderExecutionWidget";
+import { PositionsWidget } from "../components/trade/PositionsWidget";
+import { BotAgentWidget } from "../components/trade/BotAgentWidget";
+import type { GridLayout } from "../widget-layout";
 import "./TradeWorkspace.css";
+
+type TradeWidgetID =
+  | "chart"
+  | "execution"
+  | "watchlist"
+  | "microstructure"
+  | "positions"
+  | "bots";
+
+const TRADE_WIDGET_LAYOUT_KEY = "fased.trade.layout.v1";
+
+const TRADE_CATALOG: readonly WidgetCatalogItem<TradeWidgetID>[] = [
+  { id: "chart", title: "Chart", icon: CandlestickChart, defaultSize: "wide" },
+  {
+    id: "execution",
+    title: "Order Execution",
+    icon: TrendingUp,
+    defaultSize: "small",
+  },
+  { id: "watchlist", title: "Watchlist", icon: List, defaultSize: "small" },
+  {
+    id: "microstructure",
+    title: "DOM & Tape",
+    icon: Layers,
+    defaultSize: "small",
+  },
+  {
+    id: "positions",
+    title: "Positions & Orders",
+    icon: Activity,
+    defaultSize: "wide",
+  },
+  { id: "bots", title: "Bots & AI Trader", icon: Bot, defaultSize: "small" },
+];
+
+const DEFAULT_TRADE_WIDGET_LAYOUT: GridLayout<TradeWidgetID> = {
+  version: 1,
+  widgets: [
+    { id: "chart", size: "wide" },
+    { id: "execution", size: "small" },
+    { id: "positions", size: "wide" },
+    { id: "watchlist", size: "small" },
+    { id: "microstructure", size: "small" },
+    { id: "bots", size: "small" },
+  ],
+};
 
 const LAYOUTS: { id: TradeLayoutMode; label: string }[] = [
   { id: "1x1", label: "1×1" },
@@ -62,7 +133,7 @@ const LAYOUTS: { id: TradeLayoutMode; label: string }[] = [
 export function TradeWorkspace() {
   const { t } = useUI();
   const core = useCore();
-  const { streamClient, navigate } = useWorkspace();
+  const { streamClient, agents, navigate, openSettingsModal } = useWorkspace();
   const [config, setConfig] = useState<TradeWorkspaceConfig>(() => {
     try {
       return parseTradeWorkspaceConfig(localStorage.getItem(TRADE_STORAGE_KEY));
@@ -71,12 +142,17 @@ export function TradeWorkspace() {
     }
   });
   const [showEvents, setShowEvents] = useState(true);
+  const [addingWidgets, setAddingWidgets] = useState(false);
+  const [enabledExchanges, setEnabledExchanges] = useState<string[] | null>(
+    null,
+  );
   const [intelEvents, setIntelEvents] = useState<IntelEvent[]>([]);
   const [labScripts, setLabScripts] = useState<LabScript[]>([]);
   const [desk, setDesk] = useState<DeskSnapshot | null>(null);
   const [deskBusy, setDeskBusy] = useState(false);
-  const [deskError, setDeskError] = useState("");
   const [trade, setTrade] = useState<TradeSnapshot | null>(null);
+  const [accounts, setAccounts] = useState<TradeAccountOption[]>([]);
+  const [bots, setBots] = useState<TradeBot[]>([]);
   const [tradeBusy, setTradeBusy] = useState(false);
   const [tradeError, setTradeError] = useState("");
 
@@ -85,21 +161,67 @@ export function TradeWorkspace() {
     crosshairBusRef.current = new CrosshairBus();
   }
 
+  const refreshPlugins = useCallback(async () => {
+    if (core.mode !== "ready") {
+      setEnabledExchanges(null);
+      return;
+    }
+    try {
+      const res = await fetchDataPlugins(core);
+      const active = (res.plugins ?? [])
+        .filter((p) => p.category === "exchanges" && p.enabled && p.dataFeedEnabled)
+        .map((p) => p.id);
+      setEnabledExchanges(active);
+      if (active.length > 0) {
+        setConfig((prev) => ({
+          ...prev,
+          tiles: prev.tiles.map((tile) =>
+            active.includes(tile.venue)
+              ? tile
+              : {
+                  ...tile,
+                  venue: active[0],
+                  symbol: active[0] === "binance" ? "BTCUSDT" : tile.symbol,
+                },
+          ),
+        }));
+      }
+    } catch {
+      setEnabledExchanges([]);
+    }
+  }, [core.mode, core.request]);
+
   const refreshDesk = useCallback(async () => {
     if (core.mode !== "ready") return;
     try {
-      const snap = await getDeskState(core);
-      setDesk(snap);
+      setDesk(await getDeskState(core));
     } catch {}
   }, [core.mode, core.request]);
 
   const refreshTrade = useCallback(async () => {
     if (core.mode !== "ready") return;
     try {
-      const snap = await getTradeState(core);
+      const [snap, accs, bts] = await Promise.all([
+        getTradeState(core),
+        getTradeAccounts(core),
+        listTradeBots(core),
+      ]);
       setTrade(snap);
+      setAccounts(accs);
+      setBots(bts);
     } catch {}
   }, [core.mode, core.request]);
+
+  useEffect(() => {
+    void refreshPlugins();
+    const onPluginsChanged = () => {
+      void refreshPlugins();
+      void refreshTrade();
+    };
+    window.addEventListener(DATA_PLUGINS_CHANGED_EVENT, onPluginsChanged);
+    return () =>
+      window.removeEventListener(DATA_PLUGINS_CHANGED_EVENT, onPluginsChanged);
+  }, [refreshPlugins, refreshTrade]);
 
   useEffect(() => {
     if (core.mode !== "ready") {
@@ -114,16 +236,8 @@ export function TradeWorkspace() {
         if (!cancelled) setLabScripts(res.scripts ?? []);
       })
       .catch(() => {});
-    void getDeskState(core)
-      .then((snap) => {
-        if (!cancelled) setDesk(snap);
-      })
-      .catch(() => {});
-    void getTradeState(core)
-      .then((snap) => {
-        if (!cancelled) setTrade(snap);
-      })
-      .catch(() => {});
+    void refreshDesk();
+    void refreshTrade();
     void fetchDrawings(core)
       .then((serverDrawings) => {
         if (cancelled) return;
@@ -154,7 +268,7 @@ export function TradeWorkspace() {
     return () => {
       cancelled = true;
     };
-  }, [core.mode, core.request]);
+  }, [core.mode, core.request, refreshDesk, refreshTrade]);
 
   useEffect(() => {
     if (!streamClient || core.mode !== "ready") return;
@@ -164,13 +278,14 @@ export function TradeWorkspace() {
       timer = window.setTimeout(() => {
         timer = undefined;
         void refreshDesk();
+        void refreshTrade();
       }, 150);
     });
     return () => {
       if (timer !== undefined) window.clearTimeout(timer);
       unsub();
     };
-  }, [streamClient, core.mode, refreshDesk]);
+  }, [streamClient, core.mode, refreshDesk, refreshTrade]);
 
   useEffect(() => {
     if (core.mode !== "ready" || !showEvents) return;
@@ -239,10 +354,7 @@ export function TradeWorkspace() {
     setConfig((prev) => {
       const curMap = prev.drawingsBySymbol ?? {};
       const nextList = [...(curMap[ovKey] ?? []), enriched].slice(-32);
-      return {
-        ...prev,
-        drawingsBySymbol: { ...curMap, [ovKey]: nextList },
-      };
+      return { ...prev, drawingsBySymbol: { ...curMap, [ovKey]: nextList } };
     });
     if (core.mode === "ready") {
       void saveDrawing(core, enriched).catch(() => {});
@@ -274,9 +386,7 @@ export function TradeWorkspace() {
         drawingsBySymbol: nextDrawings,
         paperOrdersBySymbol: nextOrders,
         tiles: prev.tiles.map((item) =>
-          item.id === tile.id
-            ? { ...item, drawings: [], paperOrders: [] }
-            : item,
+          item.id === tile.id ? { ...item, drawings: [], paperOrders: [] } : item,
         ),
       };
     });
@@ -301,75 +411,6 @@ export function TradeWorkspace() {
     () => (desk?.positions ?? []).filter((p) => p.status === "OPEN"),
     [desk],
   );
-  const pendingDeskTickets = useMemo(
-    () => (desk?.tickets ?? []).filter((tk) => tk.status === "PENDING_PM"),
-    [desk],
-  );
-
-  async function handleRunDeskCycle(mode: DeskMode) {
-    if (core.mode !== "ready" || !activeTile || deskBusy) return;
-    setDeskBusy(true);
-    setDeskError("");
-    try {
-      await runDeskCycle(core, {
-        venue: activeTile.venue,
-        symbol: activeTile.symbol,
-        interval: activeTile.interval,
-        scriptId: activeTile.scriptId || "ema-rsi-trend",
-        mode,
-        limit: 120,
-      });
-      await refreshDesk();
-    } catch (err) {
-      setDeskError(err instanceof Error ? err.message : "Desk cycle failed");
-    } finally {
-      setDeskBusy(false);
-    }
-  }
-
-  async function handleApproveTicket(id: string) {
-    if (core.mode !== "ready" || deskBusy) return;
-    setDeskBusy(true);
-    setDeskError("");
-    try {
-      await approveDeskTicket(core, id);
-      await refreshDesk();
-    } catch (err) {
-      setDeskError(err instanceof Error ? err.message : "Approval failed");
-    } finally {
-      setDeskBusy(false);
-    }
-  }
-
-  async function handleRejectTicket(id: string) {
-    if (core.mode !== "ready" || deskBusy) return;
-    setDeskBusy(true);
-    setDeskError("");
-    try {
-      await rejectDeskTicket(core, id, "PM rejected in Trade dock");
-      await refreshDesk();
-    } catch (err) {
-      setDeskError(err instanceof Error ? err.message : "Rejection failed");
-    } finally {
-      setDeskBusy(false);
-    }
-  }
-
-  async function handleClosePosition(id: string) {
-    if (core.mode !== "ready" || deskBusy) return;
-    setDeskBusy(true);
-    setDeskError("");
-    try {
-      await closeDeskPosition(core, id, { reason: "PM_MANUAL_CLOSE" });
-      await refreshDesk();
-    } catch (err) {
-      setDeskError(
-        err instanceof Error ? err.message : "Close position failed",
-      );
-    } finally {
-      setDeskBusy(false);
-    }
-  }
 
   async function handleSubmitTrade(req: TradeOrderRequest) {
     if (core.mode !== "ready" || tradeBusy) return;
@@ -433,6 +474,248 @@ export function TradeWorkspace() {
     }
   }
 
+  async function handleApproveTicket(id: string) {
+    if (core.mode !== "ready" || deskBusy) return;
+    setDeskBusy(true);
+    try {
+      await approveDeskTicket(core, id);
+      await Promise.all([refreshDesk(), refreshTrade()]);
+    } finally {
+      setDeskBusy(false);
+    }
+  }
+
+  async function handleRejectTicket(id: string) {
+    if (core.mode !== "ready" || deskBusy) return;
+    setDeskBusy(true);
+    try {
+      await rejectDeskTicket(core, id, "PM rejected in Trade");
+      await refreshDesk();
+    } finally {
+      setDeskBusy(false);
+    }
+  }
+
+  async function handleClosePosition(id: string) {
+    if (core.mode !== "ready" || deskBusy) return;
+    setDeskBusy(true);
+    try {
+      await closeDeskPosition(core, id, { reason: "PM_MANUAL_CLOSE" });
+      await refreshDesk();
+    } finally {
+      setDeskBusy(false);
+    }
+  }
+
+  async function handleCreateBot(req: {
+    name: string;
+    kind: "fasedscript" | "ai_agent";
+    accountId: string;
+    venue: string;
+    symbol: string;
+    interval: string;
+    scriptId?: string;
+    agentId?: string;
+    maxNotionalUsd: number;
+  }) {
+    if (core.mode !== "ready" || tradeBusy) return;
+    setTradeBusy(true);
+    setTradeError("");
+    try {
+      await createTradeBot(core, req);
+      await refreshTrade();
+    } catch (err) {
+      setTradeError(err instanceof Error ? err.message : "Create bot failed");
+    } finally {
+      setTradeBusy(false);
+    }
+  }
+
+  async function handleBotAction(id: string, action: "start" | "pause" | "stop") {
+    if (core.mode !== "ready" || tradeBusy) return;
+    setTradeBusy(true);
+    try {
+      await setTradeBotStatus(core, id, action);
+      await refreshTrade();
+    } finally {
+      setTradeBusy(false);
+    }
+  }
+
+  async function handleDeleteBot(id: string) {
+    if (core.mode !== "ready" || tradeBusy) return;
+    setTradeBusy(true);
+    try {
+      await deleteTradeBot(core, id);
+      await refreshTrade();
+    } finally {
+      setTradeBusy(false);
+    }
+  }
+
+  function renderWidgetHeaderExtra(id: TradeWidgetID) {
+    if (id !== "chart") return null;
+    return (
+      <div className="trade-layout-group" role="group" aria-label={t("Chart layout")}>
+        <Grid2x2 size={13} aria-hidden="true" />
+        {LAYOUTS.map((l) => (
+          <button
+            key={l.id}
+            type="button"
+            aria-pressed={config.layout === l.id}
+            className={config.layout === l.id ? "is-selected" : ""}
+            onClick={() => setLayout(l.id)}
+          >
+            {l.label}
+          </button>
+        ))}
+      </div>
+    );
+  }
+
+  function renderWidgetBody(id: TradeWidgetID) {
+    if (id === "chart") {
+      return (
+        <div
+          className={`trade-grid layout-${config.layout}`}
+          data-testid="trade-chart-grid"
+        >
+          {visibleTiles.map((tile) => {
+            const ovKey = symbolOverlayKey(tile.venue, tile.symbol);
+            const drawings = config.drawingsBySymbol?.[ovKey] ?? tile.drawings;
+            const paperOrders =
+              config.paperOrdersBySymbol?.[ovKey] ?? tile.paperOrders;
+            const matchingPositions = openDeskPositions.filter(
+              (p) =>
+                (!p.venue || p.venue === tile.venue) &&
+                p.symbol.toUpperCase() === tile.symbol.toUpperCase(),
+            );
+            const matchingPlans = (trade?.plans ?? []).filter(
+              (pl) =>
+                (pl.status === "active" || pl.status === "filled") &&
+                pl.venue === tile.venue &&
+                pl.symbol.toUpperCase() === tile.symbol.toUpperCase(),
+            );
+            return (
+              <ChartTile
+                key={tile.id}
+                tile={tile}
+                active={tile.id === activeTile?.id}
+                enabledVenues={enabledExchanges ?? undefined}
+                drawings={drawings}
+                paperOrders={paperOrders}
+                streamClient={streamClient}
+                crosshairBus={crosshairBusRef.current ?? undefined}
+                syncCrosshair={config.syncCrosshair}
+                labScripts={labScripts}
+                deskPositions={matchingPositions}
+                tradePlans={matchingPlans}
+                intelEvents={intelEvents}
+                showEvents={showEvents}
+                onSelect={() =>
+                  setConfig((prev) =>
+                    prev.activeTileId === tile.id
+                      ? prev
+                      : { ...prev, activeTileId: tile.id },
+                  )
+                }
+                onChangeTile={updateTile}
+                onAddDrawing={(d) => addDrawing(tile, d)}
+                onAddPaperOrder={(o) => addPaperOrder(tile, o)}
+                onClearOverlays={() => clearOverlays(tile)}
+              />
+            );
+          })}
+        </div>
+      );
+    }
+
+    if (id === "execution" && activeTile) {
+      return (
+        <OrderExecutionWidget
+          venue={activeTile.venue}
+          symbol={activeTile.symbol}
+          interval={activeTile.interval}
+          trade={trade}
+          accounts={accounts}
+          busy={tradeBusy}
+          error={tradeError}
+          onSubmitTrade={(req) => void handleSubmitTrade(req)}
+        />
+      );
+    }
+
+    if (id === "watchlist" && activeTile) {
+      return (
+        <WatchlistPanel
+          activeVenue={activeTile.venue}
+          activeSymbol={activeTile.symbol}
+          enabledVenues={enabledExchanges ?? undefined}
+          onSelectItem={loadWatchlistItem}
+        />
+      );
+    }
+
+    if (id === "microstructure" && activeTile) {
+      return (
+        <OrderflowPane
+          venue={activeTile.venue}
+          symbol={activeTile.symbol}
+          interval={activeTile.interval}
+          tab={config.orderflowTab}
+          streamClient={streamClient}
+          crosshairBus={crosshairBusRef.current ?? undefined}
+          syncCrosshair={config.syncCrosshair}
+          onChangeTab={(nextTab: OrderflowTab) =>
+            setConfig((prev) => ({ ...prev, orderflowTab: nextTab }))
+          }
+        />
+      );
+    }
+
+    if (id === "positions") {
+      return (
+        <PositionsWidget
+          trade={trade}
+          desk={desk}
+          tradeBusy={tradeBusy}
+          deskBusy={deskBusy}
+          onEvaluateTrades={() => void handleEvaluateTrades()}
+          onCancelTrade={(plId) => void handleCancelTrade(plId)}
+          onApproveTicket={(tkId) => void handleApproveTicket(tkId)}
+          onRejectTicket={(tkId) => void handleRejectTicket(tkId)}
+          onClosePosition={(posId) => void handleClosePosition(posId)}
+          onOpenLab={() => navigate("lab/desk")}
+        />
+      );
+    }
+
+    if (id === "bots" && activeTile) {
+      return (
+        <BotAgentWidget
+          venue={activeTile.venue}
+          symbol={activeTile.symbol}
+          interval={activeTile.interval}
+          scripts={labScripts}
+          bots={bots}
+          accounts={accounts}
+          agentProfiles={(agents.view?.profiles ?? []).map((p) => ({
+            id: p.id,
+            name: p.name,
+          }))}
+          busy={tradeBusy}
+          onCreateBot={(req) => void handleCreateBot(req)}
+          onBotAction={(bId, act) => void handleBotAction(bId, act)}
+          onDeleteBot={(bId) => void handleDeleteBot(bId)}
+        />
+      );
+    }
+
+    return null;
+  }
+
+  const isZeroState = core.mode === "ready" && enabledExchanges?.length === 0;
+
   return (
     <section className="trade-workspace" aria-label={t("Trade")}>
       <header className="trade-toolbar">
@@ -444,30 +727,12 @@ export function TradeWorkspace() {
         </div>
 
         <div className="trade-controls">
-          <div
-            className="trade-layout-group"
-            role="group"
-            aria-label={t("Chart layout")}
-          >
-            <Grid2x2 size={14} aria-hidden="true" />
-            {LAYOUTS.map((l) => (
-              <button
-                key={l.id}
-                type="button"
-                aria-pressed={config.layout === l.id}
-                className={config.layout === l.id ? "is-selected" : ""}
-                onClick={() => setLayout(l.id)}
-              >
-                {l.label}
-              </button>
-            ))}
-          </div>
-
           <button
             type="button"
-            className={`trade-toggle-btn ${config.syncCrosshair ? "is-selected" : ""}`}
+            className={`icon-button ${config.syncCrosshair ? "is-selected" : ""}`}
             aria-pressed={config.syncCrosshair}
             aria-label={t("Sync crosshairs")}
+            title={t("Sync crosshairs")}
             onClick={() =>
               setConfig((prev) => ({
                 ...prev,
@@ -475,251 +740,79 @@ export function TradeWorkspace() {
               }))
             }
           >
-            <Crosshair size={14} />
-            {t("Sync")}
+            <Crosshair size={15} aria-hidden="true" />
           </button>
 
           <button
             type="button"
-            className={`trade-toggle-btn ${config.showWatchlist ? "is-selected" : ""}`}
-            aria-pressed={config.showWatchlist}
-            onClick={() =>
-              setConfig((prev) => ({
-                ...prev,
-                showWatchlist: !prev.showWatchlist,
-              }))
-            }
-          >
-            <List size={14} />
-            {t("Watchlist")}
-          </button>
-
-          <button
-            type="button"
-            className={`trade-toggle-btn ${config.showOrderflow ? "is-selected" : ""}`}
-            aria-pressed={config.showOrderflow}
-            onClick={() =>
-              setConfig((prev) => ({
-                ...prev,
-                showOrderflow: !prev.showOrderflow,
-              }))
-            }
-          >
-            <Layers size={14} />
-            {t("Orderflow")}
-          </button>
-
-          <button
-            type="button"
-            className={`trade-toggle-btn ${showEvents ? "is-selected" : ""}`}
+            className={`icon-button ${showEvents ? "is-selected" : ""}`}
             aria-pressed={showEvents}
+            aria-label={t("Events")}
+            title={t("Events")}
             onClick={() => setShowEvents((prev) => !prev)}
           >
-            <Pin size={14} />
-            {t("Events")}
+            <Pin size={15} aria-hidden="true" />
+          </button>
+
+          <button
+            type="button"
+            className={`icon-button ${trade?.killSwitchActive ? "trade-danger-btn" : ""}`}
+            aria-label={t(
+              trade?.killSwitchActive ? "Clear kill switch" : "Kill switch",
+            )}
+            title={t(
+              trade?.killSwitchActive ? "Clear kill switch" : "Kill switch",
+            )}
+            disabled={tradeBusy || core.mode !== "ready"}
+            onClick={() => void handleToggleKill(!trade?.killSwitchActive)}
+          >
+            <Shield size={15} aria-hidden="true" />
+          </button>
+
+          <button
+            type="button"
+            className="icon-button"
+            aria-label={t("Data & Feeds")}
+            title={t("Data & Feeds")}
+            onClick={() => openSettingsModal("data")}
+          >
+            <Settings size={15} aria-hidden="true" />
+          </button>
+
+          <button
+            type="button"
+            className="icon-button"
+            aria-label={t("Widgets")}
+            title={t("Widgets")}
+            onClick={() => setAddingWidgets(true)}
+          >
+            <Plus size={15} aria-hidden="true" />
           </button>
         </div>
       </header>
 
-      <div
-        className={`trade-workbench ${config.showWatchlist ? "has-watchlist" : ""} ${config.showOrderflow ? "has-orderflow" : ""}`}
-      >
-        {config.showWatchlist && activeTile && (
-          <WatchlistPanel
-            activeVenue={activeTile.venue}
-            activeSymbol={activeTile.symbol}
-            onSelectItem={loadWatchlistItem}
-          />
-        )}
-
-        <div className="trade-center-col">
-          <div
-            className={`trade-grid layout-${config.layout}`}
-            data-testid="trade-chart-grid"
+      {isZeroState ? (
+        <div className="trade-empty-cta">
+          <button
+            type="button"
+            className="primary"
+            onClick={() => openSettingsModal("data")}
           >
-            {visibleTiles.map((tile) => {
-              const ovKey = symbolOverlayKey(tile.venue, tile.symbol);
-              const drawings =
-                config.drawingsBySymbol?.[ovKey] ?? tile.drawings;
-              const paperOrders =
-                config.paperOrdersBySymbol?.[ovKey] ?? tile.paperOrders;
-              const matchingPositions = openDeskPositions.filter(
-                (p) =>
-                  (!p.venue || p.venue === tile.venue) &&
-                  p.symbol.toUpperCase() === tile.symbol.toUpperCase(),
-              );
-              const matchingPlans = (trade?.plans ?? []).filter(
-                (pl) =>
-                  (pl.status === "active" || pl.status === "filled") &&
-                  pl.venue === tile.venue &&
-                  pl.symbol.toUpperCase() === tile.symbol.toUpperCase(),
-              );
-              return (
-                <ChartTile
-                  key={tile.id}
-                  tile={tile}
-                  active={tile.id === activeTile?.id}
-                  drawings={drawings}
-                  paperOrders={paperOrders}
-                  streamClient={streamClient}
-                  crosshairBus={crosshairBusRef.current ?? undefined}
-                  syncCrosshair={config.syncCrosshair}
-                  labScripts={labScripts}
-                  deskPositions={matchingPositions}
-                  tradePlans={matchingPlans}
-                  intelEvents={intelEvents}
-                  showEvents={showEvents}
-                  onSelect={() =>
-                    setConfig((prev) =>
-                      prev.activeTileId === tile.id
-                        ? prev
-                        : { ...prev, activeTileId: tile.id },
-                    )
-                  }
-                  onChangeTile={updateTile}
-                  onAddDrawing={(d) => addDrawing(tile, d)}
-                  onAddPaperOrder={(o) => addPaperOrder(tile, o)}
-                  onClearOverlays={() => clearOverlays(tile)}
-                />
-              );
-            })}
-          </div>
-
-          <section
-            className="panel trade-bottom-dock"
-            data-testid="trade-bottom-dock"
-            aria-label={t("Positions")}
-          >
-            <div className="trade-bottom-head">
-              <div className="trade-bottom-stats">
-                <span className="trade-source-pill">
-                  {t(desk?.limits.mode === "paper" ? "Paper" : "Shadow")}
-                </span>
-                <span>
-                  {`${t("Equity")}: ${formatCurrencyUSD(desk?.account.equityUsd ?? 100000)}`}
-                </span>
-                <span>
-                  {`${t("Open positions")}: ${openDeskPositions.length}`}
-                </span>
-                <span>
-                  {`${t("Pending tickets")}: ${pendingDeskTickets.length}`}
-                </span>
-                <span>{`${t("Open plans")}: ${trade?.activeCount ?? 0}`}</span>
-              </div>
-              <div className="trade-desk-actions">
-                <button
-                  type="button"
-                  className="trade-mini-btn"
-                  disabled={tradeBusy || core.mode !== "ready"}
-                  onClick={() => void handleEvaluateTrades()}
-                >
-                  {t("Evaluate plans")}
-                </button>
-                <button
-                  type="button"
-                  className="trade-mini-btn"
-                  onClick={() => navigate("lab/desk")}
-                >
-                  {t("Open Lab")}
-                </button>
-              </div>
-            </div>
-
-            {((trade?.plans?.length ?? 0) > 0 ||
-              pendingDeskTickets.length > 0 ||
-              openDeskPositions.length > 0) && (
-              <div className="trade-bottom-rows">
-                {(trade?.plans ?? []).slice(0, 8).map((pl) => (
-                  <div className="trade-bottom-row" key={pl.id}>
-                    <span>
-                      {`${pl.venue.toUpperCase()} ${pl.symbol} ${pl.strategy.toUpperCase()} ${pl.side.toUpperCase()} · ${pl.quantity} · ${pl.status.toUpperCase()}`}
-                    </span>
-                    {pl.status === "active" && (
-                      <button
-                        type="button"
-                        className="trade-mini-btn"
-                        disabled={tradeBusy}
-                        onClick={() => void handleCancelTrade(pl.id)}
-                      >
-                        {t("Cancel plan")}
-                      </button>
-                    )}
-                  </div>
-                ))}
-                {pendingDeskTickets.map((tk) => (
-                  <div className="trade-bottom-row" key={tk.id}>
-                    <span>
-                      {`${tk.symbol} ${tk.side.toUpperCase()} @ ${formatPrice(tk.entryPrice)} · R:R ${tk.riskReward.toFixed(2)}`}
-                    </span>
-                    <div className="trade-desk-actions">
-                      <button
-                        type="button"
-                        className="trade-mini-btn trade-desk-run"
-                        disabled={deskBusy}
-                        onClick={() => void handleApproveTicket(tk.id)}
-                      >
-                        {t("Approve")}
-                      </button>
-                      <button
-                        type="button"
-                        className="trade-mini-btn"
-                        disabled={deskBusy}
-                        onClick={() => void handleRejectTicket(tk.id)}
-                      >
-                        {t("Reject")}
-                      </button>
-                    </div>
-                  </div>
-                ))}
-                {openDeskPositions.map((pos) => (
-                  <div className="trade-bottom-row" key={pos.id}>
-                    <span>
-                      {`${pos.symbol} ${pos.side.toUpperCase()} · ${pos.quantity} @ ${formatPrice(pos.entryPrice)} · ${formatCurrencyUSD(pos.unrealizedPnlUsd)}`}
-                    </span>
-                    <button
-                      type="button"
-                      className="trade-mini-btn"
-                      disabled={deskBusy}
-                      onClick={() => void handleClosePosition(pos.id)}
-                    >
-                      {t("Close")}
-                    </button>
-                  </div>
-                ))}
-              </div>
-            )}
-          </section>
+            <Settings size={15} aria-hidden="true" />
+            <span>{t("Enable exchanges in Settings")}</span>
+          </button>
         </div>
-
-        {config.showOrderflow && activeTile && (
-          <OrderflowPane
-            venue={activeTile.venue}
-            symbol={activeTile.symbol}
-            interval={activeTile.interval}
-            tab={config.orderflowTab}
-            streamClient={streamClient}
-            crosshairBus={crosshairBusRef.current ?? undefined}
-            syncCrosshair={config.syncCrosshair}
-            desk={desk}
-            trade={trade}
-            activeScriptId={activeTile.scriptId}
-            deskBusy={deskBusy}
-            deskError={deskError}
-            tradeBusy={tradeBusy}
-            tradeError={tradeError}
-            onRunDeskCycle={(mode) => void handleRunDeskCycle(mode)}
-            onApproveTicket={(id) => void handleApproveTicket(id)}
-            onRejectTicket={(id) => void handleRejectTicket(id)}
-            onClosePosition={(id) => void handleClosePosition(id)}
-            onSubmitTrade={(req) => void handleSubmitTrade(req)}
-            onToggleKill={(active) => void handleToggleKill(active)}
-            onOpenLab={() => navigate("lab/desk")}
-            onChangeTab={(nextTab: OrderflowTab) =>
-              setConfig((prev) => ({ ...prev, orderflowTab: nextTab }))
-            }
-          />
-        )}
-      </div>
+      ) : (
+        <WidgetGrid
+          storageKey={TRADE_WIDGET_LAYOUT_KEY}
+          catalog={TRADE_CATALOG}
+          defaultLayout={DEFAULT_TRADE_WIDGET_LAYOUT}
+          renderWidgetHeaderExtra={renderWidgetHeaderExtra}
+          renderBody={renderWidgetBody}
+          addDialogOpen={addingWidgets}
+          onAddDialogOpenChange={setAddingWidgets}
+        />
+      )}
     </section>
   );
 }

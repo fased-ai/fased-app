@@ -17,6 +17,7 @@ export type CandleStyle =
   | "standard"
   | "heikin_ashi"
   | "renko"
+  | "footprint"
   | "range"
   | "kagi"
   | "point_figure"
@@ -275,6 +276,7 @@ export const CANDLE_STYLES: readonly { id: CandleStyle; label: string }[] = [
   { id: "standard", label: "Standard" },
   { id: "heikin_ashi", label: "Heikin Ashi" },
   { id: "renko", label: "Renko" },
+  { id: "footprint", label: "Footprint (Orderflow)" },
   { id: "range", label: "Range" },
   { id: "kagi", label: "Kagi" },
   { id: "point_figure", label: "Point & Figure" },

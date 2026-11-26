@@ -773,6 +773,96 @@
   color: var(--wt-coral);
 }
 
+.trade-tile-menu-anchor {
+  position: relative;
+}
+
+.trade-symbol-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 9px;
+  font-size: 0.78rem;
+  color: var(--wt-text);
+  background: var(--wt-raised);
+  border: 0;
+  border-radius: var(--radius-xs);
+  cursor: pointer;
+}
+
+.trade-symbol-pill span {
+  font-size: 0.7rem;
+  color: var(--wt-muted);
+}
+
+.trade-interval-pills,
+.trade-tile-icon-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+
+.trade-tile-icon-group {
+  margin-left: auto;
+}
+
+.trade-tile-popover {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  z-index: 40;
+  display: grid;
+  gap: 6px;
+  min-width: 170px;
+  padding: 8px;
+  background: var(--wt-raised);
+  border: 1px solid var(--wt-border);
+  border-radius: var(--radius-sm);
+}
+
+.trade-tile-icon-group .trade-tile-popover {
+  left: auto;
+  right: 0;
+}
+
+.trade-tile-popover.is-list {
+  gap: 2px;
+  padding: 4px;
+}
+
+.trade-tile-popover.is-list button {
+  justify-content: flex-start;
+  text-align: left;
+  min-height: 28px;
+  padding: 4px 8px;
+  font-size: 0.76rem;
+  background: transparent;
+  border: 0;
+}
+
+.trade-tile-popover.is-list button.is-selected,
+.trade-tile-popover.is-list button:hover {
+  background: var(--wt-accent-soft);
+  color: var(--wt-coral);
+}
+
+.trade-empty-cta {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 240px;
+  background: var(--wt-surface);
+  border: 1px dashed var(--wt-border);
+  border-radius: var(--radius);
+}
+
+.trade-positions-widget,
+.trade-bots-widget {
+  display: grid;
+  gap: 8px;
+}
+
 @media (max-width: 1100px) {
   .trade-workbench.has-watchlist.has-orderflow,
   .trade-workbench.has-watchlist:not(.has-orderflow),

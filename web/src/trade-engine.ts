@@ -17,6 +17,8 @@ export interface TradeOrderRequest {
   strategy?: TradeStrategy;
   side: TradeSide;
   quantity: number;
+  accountId?: string;
+  executionMode?: "paper" | "live";
   entryPrice?: number;
   stopPrice?: number;
   targetPrice?: number;
@@ -39,6 +41,13 @@ export interface TradeOrderPlan {
   side: TradeSide;
   status: string;
   simulated: boolean;
+  accountId?: string;
+  executionMode?: string;
+  source?: string;
+  botId?: string;
+  agentId?: string;
+  venueOrderId?: string;
+  txSignature?: string;
   quantity: number;
   filledQty: number;
   avgFillPrice?: number;
@@ -144,4 +153,93 @@ export async function setGlobalKillSwitch(
     active,
     reason,
   });
+}
+
+export interface TradeAccountOption {
+  id: string;
+  label: string;
+  kind: "paper" | "solana" | "exchange" | string;
+  executionMode: "paper" | "live";
+  address?: string;
+  venue?: string;
+}
+
+export interface TradeBot {
+  id: string;
+  name: string;
+  kind: "fasedscript" | "ai_agent";
+  accountId: string;
+  executionMode: "paper" | "live";
+  venue: string;
+  symbol: string;
+  interval: string;
+  scriptId?: string;
+  agentId?: string;
+  maxNotionalUsd: number;
+  status: "running" | "paused" | "stopped";
+  lastSignal?: string;
+  lastError?: string;
+  totalOrders: number;
+  lastTickAt?: number;
+  createdAt: number;
+}
+
+export async function getTradeAccounts(
+  core: CoreRequestOnly,
+): Promise<TradeAccountOption[]> {
+  try {
+    const res = await core.request<{ accounts?: TradeAccountOption[] }>(
+      "trade/accounts",
+    );
+    return res.accounts ?? [];
+  } catch {
+    return [{ id: "paper", label: "Paper", kind: "paper", executionMode: "paper" }];
+  }
+}
+
+export async function listTradeBots(
+  core: CoreRequestOnly,
+): Promise<TradeBot[]> {
+  try {
+    const res = await core.request<{ bots?: TradeBot[] }>("trade/bots");
+    return res.bots ?? [];
+  } catch {
+    return [];
+  }
+}
+
+export async function createTradeBot(
+  core: CoreRequestOnly,
+  req: {
+    name: string;
+    kind: "fasedscript" | "ai_agent";
+    accountId: string;
+    venue: string;
+    symbol: string;
+    interval: string;
+    scriptId?: string;
+    agentId?: string;
+    maxNotionalUsd: number;
+  },
+): Promise<TradeBot> {
+  return core.request<TradeBot>("trade/bots", "POST", req);
+}
+
+export async function setTradeBotStatus(
+  core: CoreRequestOnly,
+  id: string,
+  action: "start" | "pause" | "stop",
+): Promise<TradeBot> {
+  return core.request<TradeBot>(
+    `trade/bots/${encodeURIComponent(id)}/${action}`,
+    "POST",
+    {},
+  );
+}
+
+export async function deleteTradeBot(
+  core: CoreRequestOnly,
+  id: string,
+): Promise<void> {
+  await core.request(`trade/bots/${encodeURIComponent(id)}`, "DELETE");
 }
