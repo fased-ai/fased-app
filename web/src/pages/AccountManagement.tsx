@@ -1,5 +1,6 @@
 import { RPCCheck } from "./RPCCheck";
 import { WalletRead } from "./WalletSnapshot";
+import { SolanaWalletsPanel } from "../components/SolanaWalletsPanel";
 import { useUI } from "../ui-preferences";
 import {
   lazy,
@@ -395,6 +396,7 @@ export function AccountManagement() {
     );
   return (
     <div className="wallet-workspace">
+      <SolanaWalletsPanel />
       {rpcAccount && view && (
         <RPCCheck
           key={`${core.instanceId}:${rpcAccount.id}`}
@@ -404,8 +406,11 @@ export function AccountManagement() {
           onSaved={(v) => acceptView(v, core.instanceId)}
         />
       )}
+      <details className="account-advanced">
+        <summary>{uiText("Host Signer (Advanced)")}</summary>
+        <div className="panel account-panel">
       <SectionHead
-        title={uiText("Wallets")}
+        title={uiText("Host Signer")}
         action={
           <div className="account-actions">
             <button
@@ -1031,6 +1036,8 @@ export function AccountManagement() {
           )}
         </>
       )}
+        </div>
+      </details>
     </div>
   );
 }

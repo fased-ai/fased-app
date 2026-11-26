@@ -716,6 +716,10 @@ func (h *HTTPHandler) api(w http.ResponseWriter, r *http.Request) {
 			h.dataPluginsAPI(w, r, token)
 			return
 		}
+		if r.URL.Path == "/api/v1/wallets" || strings.HasPrefix(r.URL.Path, "/api/v1/wallets/") {
+			h.walletsV2API(w, r, token)
+			return
+		}
 		if stage5RouteHook != nil && stage5RouteHook(h, w, r, token) {
 			return
 		}

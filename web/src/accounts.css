@@ -275,3 +275,72 @@
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
+
+.solana-wallets-v2 {
+  display: grid;
+  gap: 14px;
+  margin-bottom: 18px;
+}
+
+.wallet-empty-state {
+  display: grid;
+  justify-items: center;
+  gap: 10px;
+  padding: 28px 16px;
+}
+
+.wallet-v2-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(290px, 1fr));
+  gap: 12px;
+}
+
+.wallet-v2-card {
+  display: grid;
+  gap: 10px;
+  padding: 16px;
+}
+
+.wallet-v2-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.wallet-v2-address-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 8px;
+  background: var(--wt-raised);
+  border-radius: var(--radius-xs);
+}
+
+.wallet-v2-balance-row {
+  font-size: 13px;
+  min-height: 22px;
+}
+
+.mnemonic-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.mnemonic-cell {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  background: var(--wt-raised);
+  border: 1px solid var(--wt-border);
+  border-radius: var(--radius-xs);
+  font-size: 12px;
+}
+
+.mnemonic-cell span {
+  color: var(--wt-muted);
+  font-size: 11px;
+  min-width: 16px;
+}

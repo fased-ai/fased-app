@@ -341,7 +341,7 @@ func RequestBodyLimit(route string) int64 {
 		return 512 * 1024
 	case strings.HasPrefix(route, "/api/v1/agents/v2/"):
 		return 256 * 1024
-	case route == "/api/v1/mcp" || strings.HasPrefix(route, "/api/v1/mcp/clients") || strings.HasPrefix(route, "/api/v1/decision/") || strings.HasPrefix(route, "/api/v1/market/") || strings.HasPrefix(route, "/api/v1/intel/") || strings.HasPrefix(route, "/api/v1/automation/") || strings.HasPrefix(route, "/api/v1/lab/") || strings.HasPrefix(route, "/api/v1/desk/") || strings.HasPrefix(route, "/api/v1/trade/") || strings.HasPrefix(route, "/api/v1/data-plugins"):
+	case route == "/api/v1/mcp" || strings.HasPrefix(route, "/api/v1/mcp/clients") || strings.HasPrefix(route, "/api/v1/decision/") || strings.HasPrefix(route, "/api/v1/market/") || strings.HasPrefix(route, "/api/v1/intel/") || strings.HasPrefix(route, "/api/v1/automation/") || strings.HasPrefix(route, "/api/v1/lab/") || strings.HasPrefix(route, "/api/v1/desk/") || strings.HasPrefix(route, "/api/v1/trade/") || strings.HasPrefix(route, "/api/v1/data-plugins") || strings.HasPrefix(route, "/api/v1/wallets"):
 		return 64 * 1024
 	default:
 		return 16 * 1024
@@ -454,6 +454,20 @@ func allowed(method, route string) bool {
 			return method == http.MethodPost && validPathSegment(strings.TrimSuffix(rel, "/cancel"))
 		}
 		return false
+	}
+	if route == "/api/v1/wallets" {
+		return method == http.MethodGet
+	}
+	if route == "/api/v1/wallets/create" || route == "/api/v1/wallets/import" {
+		return method == http.MethodPost
+	}
+	if strings.HasPrefix(route, "/api/v1/wallets/") {
+		rel := strings.TrimPrefix(route, "/api/v1/wallets/")
+		if strings.HasSuffix(rel, "/export") || strings.HasSuffix(rel, "/balance") {
+			id := strings.TrimSuffix(strings.TrimSuffix(rel, "/export"), "/balance")
+			return method == http.MethodPost && validPathSegment(id)
+		}
+		return method == http.MethodDelete && validPathSegment(rel)
 	}
 	if route == "/api/v1/data-plugins" {
 		return method == http.MethodGet
