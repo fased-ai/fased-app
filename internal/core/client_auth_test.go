@@ -88,7 +88,7 @@ func TestRatePeerKeyExtractsRightmostIPFromMultiHopXFF(t *testing.T) {
 	req2.RemoteAddr = "127.0.0.1:4567"
 	req2.Header.Add("X-Forwarded-For", "198.51.100.1")
 	req2.Header.Add("X-Forwarded-For", "203.0.113.42, 2001:db8::5")
-	if got := h.ratePeerKey(req2); got != "proxy:2001:db8::5" {
-		t.Fatalf("expected rightmost multi-header IP proxy:2001:db8::5, got %q", got)
+	if got := h.ratePeerKey(req2); got != "proxy:2001:db8::/64" {
+		t.Fatalf("expected rightmost multi-header IP normalized to /64 proxy:2001:db8::/64, got %q", got)
 	}
 }

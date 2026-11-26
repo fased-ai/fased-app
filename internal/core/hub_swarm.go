@@ -2,10 +2,14 @@ package core
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -388,7 +392,7 @@ func toolListSwarmSignals(ctx context.Context, s *Store, _ string, rawArgs json.
 	return map[string]any{"signals": signals, "count": len(signals), "untrusted": true}, nil
 }
 
-func previewDraftHubInstall(_ context.Context, _ *Store, _ string, rawArgs json.RawMessage) (approvalDraft, error) {
+func previewDraftHubInstall(ctx context.Context, s *Store, _ string, rawArgs json.RawMessage) (approvalDraft, error) {
 	var req hub.InstallRequest
 	if err := decodeToolArgs(rawArgs, &req); err != nil {
 		return approvalDraft{}, err
@@ -397,10 +401,39 @@ func previewDraftHubInstall(_ context.Context, _ *Store, _ string, rawArgs json.
 	if req.ID == "" {
 		return approvalDraft{}, errors.New("hub package id required")
 	}
-	payload, _ := json.Marshal(req)
+	summary := "Inspect self-signed Ed25519 signature and payload before installing (untrusted community package, WEN SAT bond held)."
+	payloadObj := map[string]any{"id": req.ID}
+	if s != nil {
+		if rt, err := s.ensureStage6Runtime(); err == nil && rt != nil && rt.hub != nil {
+			if listView, lErr := rt.hub.List(ctx); lErr == nil {
+				for _, pkg := range listView.Packages {
+					if pkg.ID == req.ID {
+						sum := sha256.Sum256([]byte(pkg.Payload))
+						digest := hex.EncodeToString(sum[:8])
+						snippet := strings.TrimSpace(pkg.Payload)
+						if len(snippet) > 220 {
+							snippet = snippet[:220] + "…"
+						}
+						authorKey := pkg.AuthorPubKeyHex
+						if len(authorKey) > 16 {
+							authorKey = authorKey[:16] + "…"
+						}
+						summary = fmt.Sprintf("kind=%s name=%q pubkey=%s payloadSha=%s preview=%q (self-signed community package)", pkg.Kind, pkg.Name, authorKey, digest, snippet)
+						payloadObj["kind"] = pkg.Kind
+						payloadObj["name"] = pkg.Name
+						payloadObj["authorPubKeyHex"] = pkg.AuthorPubKeyHex
+						payloadObj["payloadSha256"] = hex.EncodeToString(sum[:])
+						payloadObj["payloadPreview"] = snippet
+						break
+					}
+				}
+			}
+		}
+	}
+	payload, _ := json.Marshal(payloadObj)
 	return approvalDraft{
-		Title:       fmt.Sprintf("Install Verified Hub Package (%s)", req.ID),
-		Summary:     "Verify Ed25519 signature and AST safety before installing (WEN SAT bond held).",
+		Title:       fmt.Sprintf("Install Community Hub Package (%s)", req.ID),
+		Summary:     summary,
 		PayloadJSON: string(payload),
 	}, nil
 }
@@ -587,17 +620,18 @@ func (s *Store) deployHubPackage(ctx context.Context, pkg hub.Package) (string, 
 		if len(content) > 16384 {
 			content = content[:16384]
 		}
+		// Never promote third-party self-signed Hub skill packages into pinned global system prompts.
 		if _, err := s.CreateMemory(ctx, MemoryInput{
 			Scope:   "skill",
 			Title:   pkg.Name,
 			Content: content,
-			Tags:    "hub," + pkg.ID,
-			Source:  "system",
-			Pinned:  true,
+			Tags:    "hub,untrusted," + pkg.ID,
+			Source:  "hub_untrusted",
+			Pinned:  false,
 		}); err != nil {
 			return "", "", err
 		}
-		return "agent_memory", fmt.Sprintf("Saved skill %s", pkg.ID), nil
+		return "agent_memory", fmt.Sprintf("Saved untrusted hub skill %s", pkg.ID), nil
 
 	default:
 		return "", "", fmt.Errorf("unsupported hub package kind %q", pkg.Kind)
@@ -614,6 +648,16 @@ func (h *HTTPHandler) handleSwarmRelay(w http.ResponseWriter, r *http.Request) {
 	if !h.allowRate(r, "swarm-relay", 30) {
 		writeError(w, 429, ErrRateLimited.Error())
 		return
+	}
+	if ct := strings.ToLower(strings.TrimSpace(r.Header.Get("Content-Type"))); !strings.HasPrefix(ct, "application/json") {
+		writeError(w, 415, "JSON content type required")
+		return
+	}
+	if h.store.dir != "" {
+		if _, statErr := os.Stat(filepath.Join(h.store.dir, "swarm", "swarm.sqlite")); statErr != nil {
+			writeError(w, 403, swarm.ErrSwarmDisabled.Error())
+			return
+		}
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, 16*1024)
 	var env swarm.Envelope

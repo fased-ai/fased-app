@@ -80,10 +80,9 @@ func (l *RateLimiter) Allow(now time.Time, key string, limit int) bool {
 			}
 		}
 		if len(l.buckets) >= 1024 {
-			for k := range l.buckets {
-				delete(l.buckets, k)
-				break
-			}
+			// Fail closed when capacity is exhausted by active non-expired buckets instead of
+			// randomly evicting active lockouts.
+			return false
 		}
 		w = &rateWindow{start: now}
 		l.buckets[key] = w

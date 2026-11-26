@@ -56,9 +56,11 @@ func sanitizeDiagValue(s string, max int) string {
 		}
 	}
 	out := strings.TrimSpace(b.String())
-	for _, marker := range []string{"Bearer ", "sk-", "eyJ"} {
-		if idx := strings.Index(out, marker); idx >= 0 {
+	lower := strings.ToLower(out)
+	for _, marker := range []string{"bearer ", "sk-", "xai-", "aiza", "ghp_", "eyj", "api-key=", "apikey=", "access_token=", "refresh_token=", "client_secret="} {
+		if idx := strings.Index(lower, marker); idx >= 0 {
 			out = strings.TrimSpace(out[:idx]) + " [redacted]"
+			lower = strings.ToLower(out)
 		}
 	}
 	return out

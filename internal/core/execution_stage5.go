@@ -166,7 +166,7 @@ func (h *HTTPHandler) handleStage5Route(w http.ResponseWriter, r *http.Request, 
 			writeJSON(w, 200, st)
 			return true
 		case http.MethodDelete:
-			if !h.mutation(w, r) || !h.csrf(w, r, token) {
+			if !h.v2Mutation(w, r, token, false) {
 				return true
 			}
 			venue := strings.TrimSpace(r.URL.Query().Get("venue"))

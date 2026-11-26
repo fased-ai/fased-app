@@ -251,7 +251,9 @@ func (h *HTTPHandler) mcpAPI(w http.ResponseWriter, r *http.Request, token strin
 		}
 		origin := r.Header.Get("Origin")
 		authHeader := strings.TrimSpace(r.Header.Get("Authorization"))
-		if origin != "" || authHeader == "" {
+		if token == mcpScopedSessionSentinel {
+			// Already authenticated via dedicated read/draft-scoped MCP bearer token.
+		} else if origin != "" || authHeader == "" {
 			if !h.origins[origin] {
 				writeError(w, http.StatusForbidden, "same-origin request required")
 				return
@@ -379,7 +381,7 @@ func (h *HTTPHandler) mcpAPI(w http.ResponseWriter, r *http.Request, token strin
 					writeMCPRPCError(w, req.ID, -32603, "failed to queue approval: "+apErr.Error())
 					return
 				}
-				h.store.notifyApprovalRequired(callCtx, ap.ID, "Approval required: "+ap.Title, ap.Summary, true)
+				h.store.notifyApprovalRequired(callCtx, ap.ID, "Approval required: "+ap.Title, ap.Summary, allowTelegramButtonsForApproval(ap.ToolName, ap.PayloadJSON, false))
 				res := map[string]any{
 					"status":     "awaiting_approval",
 					"executed":   false,

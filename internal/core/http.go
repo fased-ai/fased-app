@@ -45,6 +45,7 @@ type HTTPHandler struct {
 	privateProof      privateAccessProofCache
 	desktopRelease    desktopReleaseCache
 	limiter           auth.RateLimiter
+	authLimiter       auth.RateLimiter
 	loopbackPeerUID   func(client, server *net.TCPAddr) (int, bool, error)
 	localNonce        string
 	streamTicketMu    sync.Mutex
@@ -334,6 +335,17 @@ func (h *HTTPHandler) api(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 403, "origin or bearer auth required")
 		return
 	}
+	if r.URL.Path == "/api/v1/mcp" {
+		if rawAuth := strings.TrimSpace(r.Header.Get("Authorization")); strings.HasPrefix(rawAuth, "Bearer "+mcpTokenPrefix) {
+			mcpTok := strings.TrimSpace(strings.TrimPrefix(rawAuth, "Bearer "))
+			if h.store.ValidateMCPToken(r.Context(), mcpTok) {
+				h.mcpAPIWithScopedToken(w, r)
+				return
+			}
+			writeError(w, 401, "invalid or expired MCP token")
+			return
+		}
+	}
 	token := h.resolveStreamSession(r)
 	if !h.ownerSession(r, token) {
 		writeError(w, 401, "owner authentication required")
@@ -441,6 +453,17 @@ func (h *HTTPHandler) api(w http.ResponseWriter, r *http.Request) {
 		if !h.mutation(w, r) || !h.csrf(w, r, token) {
 			return
 		}
+		if !h.allowAuthRate(r, "credentials-kdf", 30) {
+			writeError(w, 429, ErrRateLimited.Error())
+			return
+		}
+		select {
+		case h.authSlots <- struct{}{}:
+			defer func() { <-h.authSlots }()
+		default:
+			writeError(w, 429, "credential operation busy; retry shortly")
+			return
+		}
 		var input VenueCredentialCommand
 		if !decodeJSON(w, r, &input) {
 			return
@@ -458,6 +481,17 @@ func (h *HTTPHandler) api(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if !h.mutation(w, r) || !h.csrf(w, r, token) {
+			return
+		}
+		if !h.allowAuthRate(r, "credentials-kdf", 30) {
+			writeError(w, 429, ErrRateLimited.Error())
+			return
+		}
+		select {
+		case h.authSlots <- struct{}{}:
+			defer func() { <-h.authSlots }()
+		default:
+			writeError(w, 429, "credential operation busy; retry shortly")
 			return
 		}
 		var input RPCCredentialCommand
@@ -693,6 +727,10 @@ func (h *HTTPHandler) api(w http.ResponseWriter, r *http.Request) {
 			h.mcpAPI(w, r, token)
 			return
 		}
+		if r.URL.Path == "/api/v1/mcp/tokens" || strings.HasPrefix(r.URL.Path, "/api/v1/mcp/tokens/") {
+			h.mcpTokensAPI(w, r, token)
+			return
+		}
 		if r.URL.Path == "/api/v1/agents/v2" || strings.HasPrefix(r.URL.Path, "/api/v1/agents/v2/") {
 			h.agentsV2API(w, r, token)
 			return
@@ -785,6 +823,24 @@ var (
 	swarmRelayHook  func(*HTTPHandler, http.ResponseWriter, *http.Request)
 )
 
+func normalizeRateIP(raw string) string {
+	ip := net.ParseIP(strings.TrimSpace(raw))
+	if ip == nil {
+		return strings.TrimSpace(raw)
+	}
+	if v4 := ip.To4(); v4 != nil {
+		return v4.String()
+	}
+	// Bucket IPv6 addresses by /64 prefix to prevent trivial per-IP bucket exhaustion.
+	ip16 := ip.To16()
+	if ip16 != nil {
+		masked := make(net.IP, net.IPv6len)
+		copy(masked[:8], ip16[:8])
+		return masked.String() + "/64"
+	}
+	return ip.String()
+}
+
 func (h *HTTPHandler) ratePeerKey(r *http.Request) string {
 	if id, ok := r.Context().Value(remoteIdentityKey{}).(tailnet.Identity); ok && id.NodeID != "" {
 		return "node:" + id.NodeID
@@ -797,16 +853,17 @@ func (h *HTTPHandler) ratePeerKey(r *http.Request) string {
 			if h.remoteTransport == "cloudflare" {
 				if cfIP := strings.TrimSpace(r.Header.Get("CF-Connecting-IP")); cfIP != "" {
 					if parsed := net.ParseIP(cfIP); parsed != nil {
-						return "proxy:" + parsed.String()
+						return "proxy:" + normalizeRateIP(parsed.String())
 					}
 				}
+				return "proxy:cloudflare-unknown"
 			}
 			if xff := r.Header.Values("X-Forwarded-For"); len(xff) > 0 {
 				for i := len(xff) - 1; i >= 0; i-- {
 					parts := strings.Split(xff[i], ",")
 					for j := len(parts) - 1; j >= 0; j-- {
 						if parsed := net.ParseIP(strings.TrimSpace(parts[j])); parsed != nil {
-							return "proxy:" + parsed.String()
+							return "proxy:" + normalizeRateIP(parsed.String())
 						}
 					}
 				}
@@ -818,11 +875,18 @@ func (h *HTTPHandler) ratePeerKey(r *http.Request) string {
 	if parsed, _, err := net.SplitHostPort(r.RemoteAddr); err == nil && parsed != "" {
 		host = parsed
 	}
-	return "ip:" + host
+	return "ip:" + normalizeRateIP(host)
 }
 
 func (h *HTTPHandler) allowRate(r *http.Request, bucket string, limit int) bool {
+	if strings.HasPrefix(bucket, "auth-") || strings.HasPrefix(bucket, "wallets-sensitive") {
+		return h.allowAuthRate(r, bucket, limit)
+	}
 	return h.limiter.Allow(h.store.now(), bucket+"|"+h.ratePeerKey(r), limit)
+}
+
+func (h *HTTPHandler) allowAuthRate(r *http.Request, bucket string, limit int) bool {
+	return h.authLimiter.Allow(h.store.now(), bucket+"|"+h.ratePeerKey(r), limit)
 }
 
 func (h *HTTPHandler) writeSessionResponse(w http.ResponseWriter, r *http.Request, token string) {

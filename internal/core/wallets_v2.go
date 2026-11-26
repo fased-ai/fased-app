@@ -108,11 +108,13 @@ func (s *Store) hasNativeSigningWallet(ctx context.Context) bool {
 	}
 	cs, err := s.custodyBackend()
 	if err != nil || cs == nil {
-		return false
+		// Fail closed: if custody is configured or signer-vault exists on disk but is temporarily
+		// unreachable, assume a native signing wallet exists so passwordless auto-enter stays off.
+		return true
 	}
 	wallets, err := cs.ListWallets(ctx)
 	if err != nil {
-		return false
+		return true
 	}
 	for _, w := range wallets {
 		if w.Custody == custody.CustodyNativeSigner {

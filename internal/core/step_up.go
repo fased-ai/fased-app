@@ -3,6 +3,7 @@ package core
 import (
 	"context"
 	"crypto/rand"
+	"crypto/subtle"
 	"encoding/base64"
 	"errors"
 	"net/http"
@@ -107,7 +108,13 @@ func (h *HTTPHandler) requireStepUpCtx(w http.ResponseWriter, r *http.Request, s
 		return nil, false
 	}
 	act, wid := normalizeStepUpScope(action, walletID)
-	if !h.allowRate(r, "wallets-sensitive:"+act+":"+wid, 5) || !h.allowRate(r, "wallets-sensitive-total", 20) {
+	actLimit := 5
+	if act == "policy" {
+		actLimit = 8
+	}
+	// Enforce global sensitive ceiling first using isolated authLimiter, and key per-action
+	// (never on unvalidated URL walletIDs) so fake wallet paths cannot exhaust rate buckets.
+	if !h.allowAuthRate(r, "wallets-sensitive-total", 20) || !h.allowAuthRate(r, "wallets-sensitive:"+act, actLimit) {
 		writeError(w, 429, ErrRateLimited.Error())
 		return nil, false
 	}
@@ -134,7 +141,7 @@ func (h *HTTPHandler) requireStepUpCtx(w http.ResponseWriter, r *http.Request, s
 	h.stepUpMu.Lock()
 	h.pruneStepUpLocked(now)
 	entry, ok := h.stepUpTokens[key]
-	valid := ok && entry.sessionHash == sessHash && now.Before(entry.expiresAt) &&
+	valid := ok && subtle.ConstantTimeCompare([]byte(entry.sessionHash), []byte(sessHash)) == 1 && now.Before(entry.expiresAt) &&
 		entry.action == act && (entry.walletID == wid || entry.walletID == "*")
 	if valid {
 		// Single-use: consume immediately upon matching scope.
@@ -174,7 +181,7 @@ func (h *HTTPHandler) ownerPasswordAPI(w http.ResponseWriter, r *http.Request) {
 	if !httpapi.DecodeStrictJSON(w, r, 4*1024, &req) {
 		return
 	}
-	if err := h.store.SetLocalOwnerPassword(r.Context(), req.Password); err != nil {
+	if err := h.store.setLocalOwnerPasswordKeeping(r.Context(), req.Password, tokenHash(token)); err != nil {
 		if errors.Is(err, ErrClaimed) {
 			writeError(w, 409, "owner password is already configured")
 			return
@@ -182,6 +189,7 @@ func (h *HTTPHandler) ownerPasswordAPI(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, err.Error())
 		return
 	}
+	h.clearStepUpForSession(token)
 	// Mirror independent Argon2id owner verifier into fased-signer whenever custody backend is reachable.
 	if cs, cErr := h.store.custodyBackend(); cErr == nil && cs != nil {
 		if has, hErr := cs.HasOwnerAuth(r.Context()); hErr == nil && !has {
