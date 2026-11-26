@@ -175,6 +175,7 @@ type StatusView struct {
 	MainnetLocked     bool               `json:"mainnetLocked"`
 	CappedMode        bool               `json:"cappedMode,omitempty"`
 	MaxOrderMicroUSD  uint64             `json:"maxOrderMicroUsd,omitempty"`
+	KeyStorage        string             `json:"keyStorage,omitempty"`
 	SupportedVenues   []VenueSpec        `json:"supportedVenues"`
 	Credentials       []CredentialStatus `json:"credentials"`
 	RecentOrders      []OrderReceipt     `json:"recentOrders"`

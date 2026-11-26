@@ -10,15 +10,18 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/fased-ai/fased-app/internal/providersecrets"
 )
 
 const hardMaxCappedOrderMicroUSD uint64 = 250_000_000
 
 // Config parameterizes the opt-in Stage 6 Fased Network Swarm service.
 type Config struct {
-	DataDir     string
-	FixtureMode bool
-	Now         func() time.Time
+	DataDir      string
+	FixtureMode  bool
+	Now          func() time.Time
+	SecretSource providersecrets.Source
 }
 
 // Service manages opt-in Swarm configuration, Ed25519 peer registry,
@@ -55,7 +58,7 @@ func NewService(cfg Config) (*Service, error) {
 	if nowFn == nil {
 		nowFn = time.Now
 	}
-	st, err := openStore(cfg.DataDir, nowFn)
+	st, err := openStore(cfg.DataDir, nowFn, cfg.SecretSource)
 	if err != nil {
 		return nil, err
 	}
@@ -139,6 +142,7 @@ func (s *Service) Status(ctx context.Context) (StatusView, error) {
 		LiveCopyLocked:   !SwarmLiveCopyEnabled,
 		CappedMode:       capped,
 		MaxOrderMicroUSD: maxUSD,
+		KeyStorage:       s.store.keyStorage,
 		WENHeld:          true,
 		PeerCount:        len(peers),
 		SignalCount:      len(signals),

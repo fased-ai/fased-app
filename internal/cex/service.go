@@ -9,15 +9,18 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/fased-ai/fased-app/internal/providersecrets"
 )
 
 const hardMaxCappedOrderMicroUSD uint64 = 250_000_000
 
 // Config parameterizes the Stage 5 CEX execution service.
 type Config struct {
-	DataDir     string
-	FixtureMode bool
-	Now         func() time.Time
+	DataDir      string
+	FixtureMode  bool
+	Now          func() time.Time
+	SecretSource providersecrets.Source
 }
 
 // Service coordinates trade-only CEX credential sealing, permission checks,
@@ -60,7 +63,7 @@ func NewService(cfg Config) (*Service, error) {
 	if nowFn == nil {
 		nowFn = time.Now
 	}
-	st, err := openStore(cfg.DataDir, nowFn)
+	st, err := openStore(cfg.DataDir, nowFn, cfg.SecretSource)
 	if err != nil {
 		return nil, err
 	}
@@ -99,6 +102,7 @@ func (s *Service) Status(ctx context.Context) (StatusView, error) {
 		MainnetLocked:     !CEXActivationEnabled && !capped,
 		CappedMode:        capped,
 		MaxOrderMicroUSD:  maxUSD,
+		KeyStorage:        s.store.keyStorage,
 		SupportedVenues:   SupportedVenues(),
 		Credentials:       creds,
 		RecentOrders:      orders,

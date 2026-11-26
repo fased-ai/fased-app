@@ -50,9 +50,10 @@ func (s *Store) ensureStage5Runtime() (*stage5Runtime, error) {
 		return rt, nil
 	}
 	cexSvc, err := cex.NewService(cex.Config{
-		DataDir:     s.dir,
-		FixtureMode: s.providerFixture || s.dir == "",
-		Now:         s.now,
+		DataDir:      s.dir,
+		FixtureMode:  s.providerFixture || s.dir == "",
+		Now:          s.now,
+		SecretSource: s.taskSecrets,
 	})
 	if err != nil {
 		return nil, err

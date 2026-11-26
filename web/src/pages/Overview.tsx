@@ -17,6 +17,7 @@ import {
   Globe2,
   History,
   LayoutDashboard,
+  List,
   Maximize2,
   Menu,
   MoreHorizontal,
@@ -61,6 +62,12 @@ import {
   getDeskState,
   type DeskSnapshot,
 } from "../quantlab-desk";
+import { fetchWatchlists, type Watchlist } from "../market-data";
+import {
+  getTradeState,
+  setGlobalKillSwitch,
+  type TradeSnapshot,
+} from "../trade-engine";
 
 const icons = {
   agents: Bot,
@@ -70,6 +77,8 @@ const icons = {
   predictions: TrendingUp,
   alerts: Bell,
   desk: FlaskConical,
+  trade: TrendingUp,
+  watchlists: List,
   wallets: Wallet,
   activity: History,
   mining: Pickaxe,
@@ -84,6 +93,8 @@ const paths = {
   predictions: "intel",
   alerts: "agents/tasks",
   desk: "lab",
+  trade: "trade",
+  watchlists: "trade",
   wallets: "wallets/overview",
   activity: "activity",
   mining: "terminals/satcoin",
@@ -125,10 +136,15 @@ export function Overview() {
   const [alertItems, setAlertItems] = useState<NotificationItem[]>([]);
   const [alertUnread, setAlertUnread] = useState(0);
   const [deskSnap, setDeskSnap] = useState<DeskSnapshot | null>(null);
+  const [tradeSnap, setTradeSnap] = useState<TradeSnapshot | null>(null);
+  const [tradeBusy, setTradeBusy] = useState(false);
+  const [watchlists, setWatchlists] = useState<Watchlist[]>([]);
   const hasIntelWidget = layout.widgets.some((w) => w.id === "intel");
   const hasPredWidget = layout.widgets.some((w) => w.id === "predictions");
   const hasAlertsWidget = layout.widgets.some((w) => w.id === "alerts");
   const hasDeskWidget = layout.widgets.some((w) => w.id === "desk");
+  const hasTradeWidget = layout.widgets.some((w) => w.id === "trade");
+  const hasWatchlistsWidget = layout.widgets.some((w) => w.id === "watchlists");
   useEffect(() => {
     if (core.mode !== "ready" || !hasAlertsWidget) return;
     let cancelled = false;
@@ -183,6 +199,30 @@ export function Overview() {
       cancelled = true;
     };
   }, [core, hasDeskWidget]);
+  useEffect(() => {
+    if (core.mode !== "ready" || !hasTradeWidget) return;
+    let cancelled = false;
+    void getTradeState(core)
+      .then((res) => {
+        if (!cancelled) setTradeSnap(res);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [core, hasTradeWidget]);
+  useEffect(() => {
+    if (core.mode !== "ready" || !hasWatchlistsWidget) return;
+    let cancelled = false;
+    void fetchWatchlists(core)
+      .then((res) => {
+        if (!cancelled) setWatchlists(res);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [core, hasWatchlistsWidget]);
   const board = useRef<HTMLDivElement>(null);
   const dragging = useRef<WidgetID | undefined>(undefined);
   function closeMenus() {
@@ -582,6 +622,99 @@ export function Overview() {
                 onClick={() => open(paths.alerts)}
               >
                 {t("Event triggers")}
+                <ArrowRight size={14} />
+              </button>
+            </div>
+          )}
+        </div>
+      );
+    }
+    if (id === "trade") {
+      const plans = tradeSnap?.plans ?? [];
+      const activeKill = Boolean(tradeSnap?.killSwitchActive);
+      return (
+        <div className="dashboard-rows" data-testid="overview-trade-widget">
+          <div className="dashboard-row">
+            <span className="dashboard-copy">
+              <strong>{t(activeKill ? "Kill switch" : "Paper")}</strong>
+              <small>
+                {`${t("Open plans")}: ${tradeSnap?.activeCount ?? 0} · ${formatCurrencyUSD(tradeSnap?.policy.dailyLossUsd ?? 0)} / ${formatCurrencyUSD(tradeSnap?.policy.maxDailyLossUsd ?? 2000)}`}
+              </small>
+            </span>
+            <button
+              type="button"
+              className="secondary"
+              disabled={tradeBusy || core.mode !== "ready"}
+              onClick={() => {
+                if (core.mode !== "ready" || tradeBusy) return;
+                setTradeBusy(true);
+                void setGlobalKillSwitch(
+                  core,
+                  !activeKill,
+                  activeKill
+                    ? "Cleared in Overview widget"
+                    : "Activated in Overview widget",
+                )
+                  .then(() => getTradeState(core))
+                  .then((next) => setTradeSnap(next))
+                  .catch(() => {})
+                  .finally(() => setTradeBusy(false));
+              }}
+            >
+              {t(activeKill ? "Clear kill switch" : "Kill switch")}
+            </button>
+          </div>
+          {plans.slice(0, 4).map((pl) => (
+            <button
+              key={pl.id}
+              className="dashboard-row"
+              onClick={() => open(paths.trade)}
+            >
+              <span className="dashboard-copy">
+                <strong>{`${pl.venue.toUpperCase()} ${pl.symbol} · ${pl.strategy.toUpperCase()}`}</strong>
+                <small>{`${pl.side.toUpperCase()} ${pl.quantity} · ${pl.status.toUpperCase()}`}</small>
+              </span>
+              <ArrowRight size={14} />
+            </button>
+          ))}
+          {plans.length === 0 && (
+            <div className="dashboard-empty">
+              <button className="text-button" onClick={() => open(paths.trade)}>
+                {t("Trade")}
+                <ArrowRight size={14} />
+              </button>
+            </div>
+          )}
+        </div>
+      );
+    }
+    if (id === "watchlists") {
+      const items = watchlists[0]?.items ?? [];
+      return (
+        <div
+          className="dashboard-rows"
+          data-testid="overview-watchlists-widget"
+        >
+          {items.slice(0, 5).map((item, idx) => (
+            <button
+              key={`${item.venue}-${item.symbol}-${idx}`}
+              className="dashboard-row"
+              onClick={() => open(paths.watchlists)}
+            >
+              <span className="dashboard-copy">
+                <strong>{item.symbol}</strong>
+                <small>{`${item.venue} · ${item.interval}`}</small>
+              </span>
+              <ArrowRight size={14} />
+            </button>
+          ))}
+          {items.length === 0 && (
+            <div className="dashboard-empty">
+              <button
+                className="text-button"
+                onClick={() => open(paths.watchlists)}
+              >
+                {t("Trade")}
                 <ArrowRight size={14} />
               </button>
             </div>

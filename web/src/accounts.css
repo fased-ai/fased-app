@@ -226,3 +226,52 @@
   padding: 12px 0;
   font-weight: 600;
 }
+.wallet-kpi-strip {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+  margin-bottom: 16px;
+}
+.wallet-kpi-tile {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 12px 14px;
+  background: var(--wt-surface);
+  border-radius: var(--radius-sm);
+}
+.wallet-kpi-tile span {
+  font-size: 12px;
+  color: var(--wt-muted);
+}
+.wallet-kpi-tile strong {
+  font-size: 15px;
+  color: var(--wt-text);
+}
+.wallet-venue-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 8px;
+  margin-top: 10px;
+}
+.wallet-venue-chip {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 10px;
+  background: var(--wt-raised);
+  border-radius: var(--radius-xs);
+  font-size: 12px;
+}
+.wallet-vault-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 12px;
+}
+@media (max-width: 720px) {
+  .wallet-kpi-strip {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}

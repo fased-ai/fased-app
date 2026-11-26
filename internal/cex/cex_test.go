@@ -1,6 +1,7 @@
 package cex
 
 import (
+	"bytes"
 	"context"
 	"crypto/ed25519"
 	"encoding/base64"
@@ -8,9 +9,13 @@ import (
 	"encoding/json"
 	"errors"
 	"net/netip"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/fased-ai/fased-app/internal/providersecrets"
 )
 
 func TestCEXCompileTimeLockAndPermissions(t *testing.T) {
@@ -254,5 +259,125 @@ func TestCEXMainnetCappedPolicyAndCeiling(t *testing.T) {
 	})
 	if err != nil || rec.Status != "mainnet_capped_signed" {
 		t.Fatalf("expected mainnet_capped_signed, got %+v err=%v", rec, err)
+	}
+}
+
+type memorySecretSource struct {
+	keys map[string][]byte
+	err  error
+}
+
+func (m *memorySecretSource) Key(_ context.Context, name string, create bool) ([]byte, error) {
+	if m.err != nil {
+		return nil, m.err
+	}
+	if m.keys == nil {
+		m.keys = make(map[string][]byte)
+	}
+	if k, ok := m.keys[name]; ok {
+		out := make([]byte, len(k))
+		copy(out, k)
+		return out, nil
+	}
+	if !create {
+		return nil, providersecrets.ErrMissing
+	}
+	k := bytes.Repeat([]byte{0x42}, 32)
+	m.keys[name] = k
+	out := make([]byte, len(k))
+	copy(out, k)
+	return out, nil
+}
+
+func TestCEXMasterKeyOSVaultSealingAndMigration(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	src := &memorySecretSource{}
+
+	svc, err := NewService(Config{DataDir: dir, SecretSource: src})
+	if err != nil {
+		t.Fatalf("NewService(os_vault) failed: %v", err)
+	}
+	st, err := svc.Status(context.Background())
+	if err != nil || st.KeyStorage != "os_vault" {
+		t.Fatalf("expected keyStorage=os_vault, got %+v err=%v", st, err)
+	}
+	if _, err := svc.SaveCredential(context.Background(), CredentialInput{
+		Venue:       VenueBinance,
+		Environment: "testnet",
+		APIKey:      "vault-key-1234",
+		APISecret:   "vault-secret-1234",
+		Permissions: []string{"SPOT_TRADE"},
+	}); err != nil {
+		t.Fatalf("SaveCredential failed: %v", err)
+	}
+	_ = svc.Close()
+
+	rawKeyFile, err := os.ReadFile(filepath.Join(dir, "cex", "cex.key"))
+	if err != nil || !bytes.HasPrefix(rawKeyFile, []byte(sealedKeyMagic)) {
+		t.Fatalf("expected sealed prefix on cex.key, got len=%d err=%v", len(rawKeyFile), err)
+	}
+
+	// Reopen with same vault source preserves sealed credentials.
+	svc2, err := NewService(Config{DataDir: dir, SecretSource: src})
+	if err != nil {
+		t.Fatalf("reopen sealed cex store failed: %v", err)
+	}
+	ord, err := svc2.SubmitOrder(context.Background(), OrderRequest{
+		Venue:     VenueBinance,
+		Symbol:    "BTCUSDT",
+		Side:      "BUY",
+		OrderType: "LIMIT",
+		Quantity:  0.01,
+		Price:     50000,
+	})
+	if err != nil || ord.ID == "" {
+		t.Fatalf("SubmitOrder after vault reopen failed: %+v err=%v", ord, err)
+	}
+	_ = svc2.Close()
+
+	// Unavailable vault source falls back cleanly on fresh dir and fails closed on sealed dir.
+	if _, err := NewService(Config{DataDir: dir, SecretSource: &memorySecretSource{err: providersecrets.ErrUnavailable}}); err == nil {
+		t.Fatal("expected sealed cex store to fail without OS vault key")
+	}
+	legacyDir := t.TempDir()
+	svcLegacy, err := NewService(Config{DataDir: legacyDir})
+	if err != nil {
+		t.Fatalf("NewService(file_0600) failed: %v", err)
+	}
+	stLeg, _ := svcLegacy.Status(context.Background())
+	if stLeg.KeyStorage != "file_0600" {
+		t.Fatalf("expected file_0600 fallback, got %+v", stLeg)
+	}
+	if _, err := svcLegacy.SaveCredential(context.Background(), CredentialInput{
+		Venue:       VenueBybit,
+		Environment: "testnet",
+		APIKey:      "leg-key-1234",
+		APISecret:   "leg-secret-1234",
+		Permissions: []string{"SPOT_TRADE"},
+	}); err != nil {
+		t.Fatalf("legacy SaveCredential failed: %v", err)
+	}
+	_ = svcLegacy.Close()
+
+	// Migrating legacy raw 32-byte key to OS vault preserves credentials.
+	svcMig, err := NewService(Config{DataDir: legacyDir, SecretSource: src})
+	if err != nil {
+		t.Fatalf("migrate legacy cex key failed: %v", err)
+	}
+	defer svcMig.Close()
+	stMig, _ := svcMig.Status(context.Background())
+	if stMig.KeyStorage != "os_vault" {
+		t.Fatalf("expected migrated keyStorage=os_vault, got %+v", stMig)
+	}
+	if _, err := svcMig.SubmitOrder(context.Background(), OrderRequest{
+		Venue:     VenueBybit,
+		Symbol:    "ETHUSDT",
+		Side:      "BUY",
+		OrderType: "LIMIT",
+		Quantity:  0.1,
+		Price:     3000,
+	}); err != nil {
+		t.Fatalf("SubmitOrder with migrated credential failed: %v", err)
 	}
 }

@@ -102,6 +102,7 @@ type StatusView struct {
 	LiveCopyLocked   bool        `json:"liveCopyLocked"`
 	CappedMode       bool        `json:"cappedMode,omitempty"`
 	MaxOrderMicroUSD uint64      `json:"maxOrderMicroUsd,omitempty"`
+	KeyStorage       string      `json:"keyStorage,omitempty"`
 	WENHeld          bool        `json:"wenHeld"`
 	PeerCount        int         `json:"peerCount"`
 	SignalCount      int         `json:"signalCount"`
