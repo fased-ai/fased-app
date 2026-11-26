@@ -15,6 +15,7 @@ import {
   type UTCTimestamp,
 } from "lightweight-charts";
 import type { ChartEventPin } from "../../world-intel";
+import type { TradeOrderPlan } from "../../trade-engine";
 import type { CrosshairBus } from "../../stream-store";
 import type {
   PaperPosition,
@@ -145,6 +146,7 @@ export function FasedChartAdapter({
   scriptPlots,
   scriptSignals,
   deskPositions,
+  tradePlans,
   eventPins = [],
   syncedCrosshair = null,
   crosshairBus,
@@ -164,6 +166,7 @@ export function FasedChartAdapter({
   scriptPlots?: ScriptPlotSeries[];
   scriptSignals?: ScriptSignalMarker[];
   deskPositions?: PaperPosition[];
+  tradePlans?: TradeOrderPlan[];
   eventPins?: ChartEventPin[];
   syncedCrosshair?: CrosshairSyncPoint | null;
   crosshairBus?: CrosshairBus;
@@ -726,7 +729,80 @@ export function FasedChartAdapter({
         );
       }
     }
-  }, [drawings, paperOrders, deskPositions]);
+
+    for (const pl of tradePlans ?? []) {
+      if (pl.status !== "active" && pl.status !== "filled") continue;
+      const isBuy = pl.side === "buy";
+      if ((pl.entryPrice ?? 0) > 0) {
+        priceLinesRef.current.push(
+          cSeries.createPriceLine({
+            price: pl.entryPrice!,
+            color: isBuy ? p.cyan : p.coral,
+            lineWidth: 2,
+            lineStyle: LineStyle.Solid,
+            axisLabelVisible: true,
+            title: `ENTRY ${pl.strategy.toUpperCase()} (${pl.quantity})`,
+          }),
+        );
+      }
+      if ((pl.stopPrice ?? 0) > 0) {
+        priceLinesRef.current.push(
+          cSeries.createPriceLine({
+            price: pl.stopPrice!,
+            color: p.coral,
+            lineWidth: 1,
+            lineStyle: LineStyle.Dashed,
+            axisLabelVisible: true,
+            title: `SL ${pl.symbol}`,
+          }),
+        );
+      }
+      if ((pl.targetPrice ?? 0) > 0) {
+        priceLinesRef.current.push(
+          cSeries.createPriceLine({
+            price: pl.targetPrice!,
+            color: p.cyan,
+            lineWidth: 1,
+            lineStyle: LineStyle.Dashed,
+            axisLabelVisible: true,
+            title: `TP ${pl.symbol}`,
+          }),
+        );
+      }
+      if ((pl.trailingStopPrice ?? 0) > 0) {
+        priceLinesRef.current.push(
+          cSeries.createPriceLine({
+            price: pl.trailingStopPrice!,
+            color: p.violet,
+            lineWidth: 1,
+            lineStyle: LineStyle.Dashed,
+            axisLabelVisible: true,
+            title: `TRAIL ${pl.symbol}`,
+          }),
+        );
+      }
+      if ((pl.gridLower ?? 0) > 0 && (pl.gridUpper ?? 0) > 0) {
+        priceLinesRef.current.push(
+          cSeries.createPriceLine({
+            price: pl.gridLower!,
+            color: p.muted,
+            lineWidth: 1,
+            lineStyle: LineStyle.Dotted,
+            axisLabelVisible: true,
+            title: `GRID LO ${pl.symbol}`,
+          }),
+          cSeries.createPriceLine({
+            price: pl.gridUpper!,
+            color: p.muted,
+            lineWidth: 1,
+            lineStyle: LineStyle.Dotted,
+            axisLabelVisible: true,
+            title: `GRID HI ${pl.symbol}`,
+          }),
+        );
+      }
+    }
+  }, [drawings, paperOrders, deskPositions, tradePlans]);
 
   useEffect(() => {
     const applySync = (pt: CrosshairSyncPoint | null) => {

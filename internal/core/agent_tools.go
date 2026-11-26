@@ -951,6 +951,71 @@ func agentV2ToolRegistry() []agentToolEntry {
 			preview: previewDraftSwarmSignal,
 			execute: executeDraftSwarmSignal,
 		},
+		{
+			spec: AgentToolSpec{
+				Name:        "get_trade_state",
+				Tier:        toolTierRead,
+				Description: "Inspect the Unified Trade Engine active plans (Bracket, Trailing ATR, Grid, DCA, TWAP), global kill switch, and risk policy.",
+				Parameters: map[string]any{
+					"type":       "object",
+					"properties": map[string]any{},
+				},
+			},
+			execute: toolGetTradeState,
+		},
+		{
+			spec: AgentToolSpec{
+				Name:        "list_watchlists",
+				Tier:        toolTierRead,
+				Description: "List saved multi-asset market data watchlists and tracked instruments.",
+				Parameters: map[string]any{
+					"type":       "object",
+					"properties": map[string]any{},
+				},
+			},
+			execute: toolListWatchlists,
+		},
+		{
+			spec: AgentToolSpec{
+				Name:        "get_kill_switch_status",
+				Tier:        toolTierRead,
+				Description: "Inspect unified global kill-switch status across Trade Engine, Desk, Automation, and execution routers.",
+				Parameters: map[string]any{
+					"type":       "object",
+					"properties": map[string]any{},
+				},
+			},
+			execute: toolGetKillSwitchStatus,
+		},
+		{
+			spec: AgentToolSpec{
+				Name:        "draft_trade_order",
+				Tier:        toolTierAction,
+				Description: "Propose a simulated multi-strategy order plan (market, limit, bracket, trailing_atr, grid, dca, twap) subject to global kill switch and risk policy. Requires owner approval.",
+				Parameters: map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"venue":           map[string]any{"type": "string", "description": "hyperliquid, binance, bybit, kraken, solana, lighter, or custom."},
+						"symbol":          map[string]any{"type": "string", "description": "Instrument ticker symbol."},
+						"strategy":        map[string]any{"type": "string", "description": "market, limit, bracket, trailing_atr, grid, dca, or twap."},
+						"side":            map[string]any{"type": "string", "description": "buy or sell."},
+						"quantity":        map[string]any{"type": "number", "description": "Order quantity."},
+						"entryPrice":      map[string]any{"type": "number", "description": "Optional limit/entry price."},
+						"stopPrice":       map[string]any{"type": "number", "description": "Stop loss price (required for bracket)."},
+						"targetPrice":     map[string]any{"type": "number", "description": "Take profit price (required for bracket)."},
+						"atrMultiplier":   map[string]any{"type": "number", "description": "ATR(14) multiplier (trailing_atr)."},
+						"gridLower":       map[string]any{"type": "number", "description": "Grid lower bound."},
+						"gridUpper":       map[string]any{"type": "number", "description": "Grid upper bound."},
+						"gridLevels":      map[string]any{"type": "integer", "description": "Grid levels."},
+						"slices":          map[string]any{"type": "integer", "description": "DCA/TWAP slices."},
+						"intervalSeconds": map[string]any{"type": "integer", "description": "DCA/TWAP slice cadence seconds."},
+					},
+					"required": []string{"venue", "symbol", "strategy", "side", "quantity"},
+				},
+			},
+			preview: previewDraftTradeOrder,
+			execute: executeDraftTradeOrder,
+		},
 	}
 }
 

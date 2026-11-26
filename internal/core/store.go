@@ -26,6 +26,7 @@ import (
 	"github.com/fased-ai/fased-app/internal/quantlab"
 	"github.com/fased-ai/fased-app/internal/signer"
 	"github.com/fased-ai/fased-app/internal/telegram"
+	"github.com/fased-ai/fased-app/internal/trade"
 	"github.com/fased-ai/fased-app/internal/update"
 	"github.com/fased-ai/fased-app/internal/worldintel"
 	_ "modernc.org/sqlite"
@@ -80,6 +81,8 @@ type Store struct {
 	quantLabSvc                   *quantlab.Service
 	deskMu                        sync.Mutex
 	deskSvc                       *desk.Service
+	tradeMu                       sync.Mutex
+	tradeSvc                      *trade.Service
 	dir                           string
 	instanceID                    string
 	pauseFault                    func(string) error // Test-only interruption injection, never configuration or IPC.
@@ -488,8 +491,16 @@ func (s *Store) Close() error {
 	if dk != nil {
 		dkErr = dk.Close()
 	}
+	s.tradeMu.Lock()
+	tr := s.tradeSvc
+	s.tradeSvc = nil
+	s.tradeMu.Unlock()
+	var trErr error
+	if tr != nil {
+		trErr = tr.Close()
+	}
 	hlErr := s.clearHyperliquidRuntime()
-	return errors.Join(v2Err, mdErr, decErr, mcpCErr, wiErr, autoErr, qlErr, dkErr, hlErr, s.db.Close())
+	return errors.Join(v2Err, mdErr, decErr, mcpCErr, wiErr, autoErr, qlErr, dkErr, trErr, hlErr, s.db.Close())
 }
 func randomToken() (string, error) {
 	b := make([]byte, 32)

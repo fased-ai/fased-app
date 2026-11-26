@@ -71,6 +71,9 @@ func (s *Store) lighterStatus(ctx context.Context) map[string]any {
 }
 
 func (s *Store) rehearseLighter(ctx context.Context, req LighterRehearseRequest) (*LighterRehearseResult, error) {
+	if s.isGlobalKillActive(ctx) {
+		return nil, errGlobalKillSwitchActive
+	}
 	rt, vaultID, err := s.resolveStage4Vault(req.AgentVaultID)
 	if err != nil {
 		return nil, err
@@ -205,7 +208,7 @@ func (h *HTTPHandler) lighterRehearseAPI(w http.ResponseWriter, r *http.Request,
 	res, err := h.store.rehearseLighter(r.Context(), req)
 	if err != nil {
 		code := 400
-		if errors.Is(err, signer.ErrUnavailable) {
+		if errors.Is(err, signer.ErrUnavailable) || errors.Is(err, errGlobalKillSwitchActive) {
 			code = 403
 		}
 		writeError(w, code, err.Error())

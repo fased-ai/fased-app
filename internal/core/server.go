@@ -355,7 +355,7 @@ func (s *Server) startAgentTasks() {
 			}
 
 			attachBuses := func() {
-				if activeService() == nil {
+				if activeService() == nil && s.Store.loadedOrExistingTradeService() == nil {
 					return
 				}
 				if mdUnsub == nil {
@@ -363,7 +363,7 @@ func (s *Server) startAgentTasks() {
 						mdCh, mdUnsub = md.Subscribe(marketdata.Filter{})
 					}
 				}
-				if wiUnsub == nil {
+				if wiUnsub == nil && activeService() != nil {
 					if wi := s.Store.loadedWorldIntelService(); wi != nil {
 						wiCh, wiUnsub = wi.Subscribe(worldintel.StreamFilter{})
 					}
@@ -388,20 +388,28 @@ func (s *Server) startAgentTasks() {
 			}
 
 			runSweep := func(kinds ...string) {
-				svc := activeService()
-				if svc == nil {
-					return
+				if svc := activeService(); svc != nil {
+					evalCtx, stop := context.WithTimeout(ctx, 30*time.Second)
+					var eErr error
+					if len(kinds) == 0 {
+						_, eErr = svc.EvaluateNow(evalCtx)
+					} else {
+						_, eErr = svc.EvaluateMatching(evalCtx, kinds...)
+					}
+					stop()
+					if eErr != nil && !errors.Is(eErr, context.Canceled) {
+						coreLogger.Warn("automation evaluator sweep held", "err", sanitizeDiagValue(eErr.Error(), 200))
+					}
 				}
-				evalCtx, stop := context.WithTimeout(ctx, 30*time.Second)
-				defer stop()
-				var eErr error
-				if len(kinds) == 0 {
-					_, eErr = svc.EvaluateNow(evalCtx)
-				} else {
-					_, eErr = svc.EvaluateMatching(evalCtx, kinds...)
-				}
-				if eErr != nil && !errors.Is(eErr, context.Canceled) {
-					coreLogger.Warn("automation evaluator sweep held", "err", sanitizeDiagValue(eErr.Error(), 200))
+				if len(kinds) == 0 || len(kinds) > 2 {
+					if ts := s.Store.loadedOrExistingTradeService(); ts != nil {
+						evalCtx, stop := context.WithTimeout(ctx, 15*time.Second)
+						_, tErr := ts.EvaluateActive(evalCtx)
+						stop()
+						if tErr != nil && !errors.Is(tErr, context.Canceled) {
+							coreLogger.Warn("trade evaluator sweep held", "err", sanitizeDiagValue(tErr.Error(), 200))
+						}
+					}
 				}
 			}
 

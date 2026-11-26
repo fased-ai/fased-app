@@ -711,6 +711,68 @@
   gap: 4px;
 }
 
+.trade-ticket-form {
+  gap: 10px;
+}
+
+.trade-ticket-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.trade-ticket-grid label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 0.72rem;
+  color: var(--wt-muted);
+}
+
+.trade-ticket-grid select,
+.trade-ticket-grid input {
+  width: 100%;
+  box-sizing: border-box;
+  min-width: 0;
+  padding: 6px 8px;
+  font-size: 0.78rem;
+  color: var(--wt-text);
+  background: var(--wt-raised);
+  border: 1px solid var(--wt-border);
+  border-radius: var(--radius-xs);
+}
+
+.trade-ticket-pair {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.trade-side-toggle {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.trade-side-toggle button {
+  justify-content: center;
+}
+
+.trade-side-toggle button.is-selected.is-buy {
+  border-color: var(--wt-cyan);
+  color: var(--wt-cyan);
+}
+
+.trade-side-toggle button.is-selected.is-sell {
+  border-color: var(--wt-coral);
+  color: var(--wt-coral);
+}
+
+.trade-danger-btn {
+  border-color: var(--wt-coral);
+  color: var(--wt-coral);
+}
+
 @media (max-width: 1100px) {
   .trade-workbench.has-watchlist.has-orderflow,
   .trade-workbench.has-watchlist:not(.has-orderflow),

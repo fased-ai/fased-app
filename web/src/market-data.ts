@@ -178,7 +178,8 @@ export type Watchlist = {
 };
 
 export type TradeLayoutMode = "1x1" | "1x2" | "2x2" | "3x3" | "4x4";
-export type OrderflowTab = "footprint" | "dom" | "tape" | "intel" | "desk";
+export type OrderflowTab =
+  "ticket" | "footprint" | "dom" | "tape" | "intel" | "desk";
 export type DrawingToolMode =
   "none" | "hline" | "trendline" | "fib" | "paper_buy" | "paper_sell";
 
@@ -374,7 +375,7 @@ export function parseTradeWorkspaceConfig(
       ? (v.layout as TradeLayoutMode)
       : def.layout;
     const orderflowTab: OrderflowTab = (
-      ["footprint", "dom", "tape", "intel", "desk"] as const
+      ["ticket", "footprint", "dom", "tape", "intel", "desk"] as const
     ).includes(v.orderflowTab as OrderflowTab)
       ? (v.orderflowTab as OrderflowTab)
       : def.orderflowTab;

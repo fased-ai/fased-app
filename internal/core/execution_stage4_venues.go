@@ -161,6 +161,9 @@ func verifyPolymarketECRECOVER(signerAddr string, signed *signer.PolymarketSigne
 }
 
 func (s *Store) rehearsePolymarket(ctx context.Context, req PolymarketRehearseRequest) (*PolymarketRehearseResult, error) {
+	if s.isGlobalKillActive(ctx) {
+		return nil, errGlobalKillSwitchActive
+	}
 	rt, vaultID, err := s.resolveStage4Vault(req.AgentVaultID)
 	if err != nil {
 		return nil, err
@@ -277,6 +280,9 @@ func (s *Store) rehearsePolymarket(ctx context.Context, req PolymarketRehearseRe
 }
 
 func (s *Store) rehearseKalshi(ctx context.Context, req KalshiRehearseRequest) (*KalshiRehearseResult, error) {
+	if s.isGlobalKillActive(ctx) {
+		return nil, errGlobalKillSwitchActive
+	}
 	rt, vaultID, err := s.resolveStage4Vault(req.AgentVaultID)
 	if err != nil {
 		return nil, err
@@ -433,7 +439,7 @@ func (h *HTTPHandler) polymarketRehearseAPI(w http.ResponseWriter, r *http.Reque
 	res, err := h.store.rehearsePolymarket(r.Context(), req)
 	if err != nil {
 		code := 400
-		if errors.Is(err, signer.ErrUnavailable) {
+		if errors.Is(err, signer.ErrUnavailable) || errors.Is(err, errGlobalKillSwitchActive) {
 			code = 403
 		}
 		writeError(w, code, err.Error())
@@ -457,7 +463,7 @@ func (h *HTTPHandler) kalshiRehearseAPI(w http.ResponseWriter, r *http.Request, 
 	res, err := h.store.rehearseKalshi(r.Context(), req)
 	if err != nil {
 		code := 400
-		if errors.Is(err, signer.ErrUnavailable) {
+		if errors.Is(err, signer.ErrUnavailable) || errors.Is(err, errGlobalKillSwitchActive) {
 			code = 403
 		}
 		writeError(w, code, err.Error())

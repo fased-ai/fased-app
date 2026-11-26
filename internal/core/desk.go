@@ -238,6 +238,11 @@ func (h *HTTPHandler) deskAPI(w http.ResponseWriter, r *http.Request, token stri
 			writeError(w, 400, err.Error())
 			return
 		}
+		if strings.EqualFold(strings.TrimSpace(in.Action), "kill") {
+			h.store.syncTradeKill(ctx, true, in.Reason, "owner")
+		} else if strings.EqualFold(strings.TrimSpace(in.Action), "unkill") {
+			h.store.syncTradeKill(ctx, false, in.Reason, "owner")
+		}
 		writeJSON(w, 200, st)
 
 	case rel == "cycle":

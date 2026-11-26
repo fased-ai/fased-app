@@ -3,6 +3,13 @@ import { useCore } from "../../core";
 import { useUI } from "../../ui-preferences";
 import { RefreshCw } from "../../icons";
 import type { CrosshairBus, FasedStreamClient } from "../../stream-store";
+import type {
+  TradeMode,
+  TradeOrderRequest,
+  TradeSide,
+  TradeSnapshot,
+  TradeStrategy,
+} from "../../trade-engine";
 import {
   deskStatusLabel,
   formatCurrencyUSD,
@@ -285,13 +292,18 @@ export function OrderflowPane({
   crosshairBus,
   syncCrosshair = true,
   desk = null,
+  trade = null,
   activeScriptId = "",
   deskBusy = false,
   deskError = "",
+  tradeBusy = false,
+  tradeError = "",
   onRunDeskCycle,
   onApproveTicket,
   onRejectTicket,
   onClosePosition,
+  onSubmitTrade,
+  onToggleKill,
   onOpenLab,
   onChangeTab,
 }: {
@@ -304,13 +316,18 @@ export function OrderflowPane({
   crosshairBus?: CrosshairBus;
   syncCrosshair?: boolean;
   desk?: DeskSnapshot | null;
+  trade?: TradeSnapshot | null;
   activeScriptId?: string;
   deskBusy?: boolean;
   deskError?: string;
+  tradeBusy?: boolean;
+  tradeError?: string;
   onRunDeskCycle?: (mode: DeskMode) => void;
   onApproveTicket?: (id: string) => void;
   onRejectTicket?: (id: string) => void;
   onClosePosition?: (id: string) => void;
+  onSubmitTrade?: (req: TradeOrderRequest) => void;
+  onToggleKill?: (active: boolean) => void;
   onOpenLab?: () => void;
   onChangeTab: (tab: OrderflowTab) => void;
 }) {
@@ -330,6 +347,20 @@ export function OrderflowPane({
   const [busFocusedTime, setBusFocusedTime] = useState<number | null>(null);
   const [cycleMode, setCycleMode] = useState<DeskMode>("shadow");
   const modeInitRef = useRef(false);
+  const [ticketMode, setTicketMode] = useState<TradeMode>("manual");
+  const [ticketStrategy, setTicketStrategy] =
+    useState<TradeStrategy>("bracket");
+  const [ticketSide, setTicketSide] = useState<TradeSide>("buy");
+  const [ticketQty, setTicketQty] = useState("1");
+  const [ticketEntry, setTicketEntry] = useState("");
+  const [ticketStop, setTicketStop] = useState("");
+  const [ticketTarget, setTicketTarget] = useState("");
+  const [ticketAtrMult, setTicketAtrMult] = useState("1.5");
+  const [ticketGridLower, setTicketGridLower] = useState("");
+  const [ticketGridUpper, setTicketGridUpper] = useState("");
+  const [ticketGridLevels, setTicketGridLevels] = useState("4");
+  const [ticketSlices, setTicketSlices] = useState("4");
+  const [ticketCadence, setTicketCadence] = useState("60");
 
   useEffect(() => {
     if (desk && !modeInitRef.current) {
@@ -607,6 +638,7 @@ export function OrderflowPane({
   );
 
   const tabs: { id: OrderflowTab; label: string }[] = [
+    { id: "ticket", label: "Ticket" },
     { id: "footprint", label: "Footprint" },
     { id: "dom", label: "DOM" },
     { id: "tape", label: "Tape" },
@@ -656,6 +688,307 @@ export function OrderflowPane({
         <p className="trade-pane-error" role="status">
           {paneError}
         </p>
+      )}
+
+      {tab === "ticket" && (
+        <div
+          className="trade-pane-body trade-ticket-form"
+          data-testid="trade-ticket-pane"
+        >
+          <div className="trade-desk-head">
+            <span className="trade-source-pill">
+              {t(trade?.killSwitchActive ? "Kill switch" : "Paper")}
+            </span>
+            <span className="subtle">
+              {venue} · {symbol}
+            </span>
+          </div>
+
+          <form
+            className="trade-ticket-grid"
+            onSubmit={(e) => {
+              e.preventDefault();
+              if (!onSubmitTrade) return;
+              const qty = Number(ticketQty);
+              const req: TradeOrderRequest = {
+                venue,
+                symbol,
+                interval,
+                mode: ticketMode,
+                strategy: ticketStrategy,
+                side: ticketSide,
+                quantity: Number.isFinite(qty) ? qty : 0,
+              };
+              const entry = Number(ticketEntry);
+              if (Number.isFinite(entry) && entry > 0) req.entryPrice = entry;
+              if (ticketStrategy === "bracket") {
+                const stop = Number(ticketStop);
+                const target = Number(ticketTarget);
+                if (Number.isFinite(stop) && stop > 0) req.stopPrice = stop;
+                if (Number.isFinite(target) && target > 0)
+                  req.targetPrice = target;
+              } else if (ticketStrategy === "trailing_atr") {
+                const mult = Number(ticketAtrMult);
+                if (Number.isFinite(mult) && mult > 0) req.atrMultiplier = mult;
+              } else if (ticketStrategy === "grid") {
+                const lo = Number(ticketGridLower);
+                const hi = Number(ticketGridUpper);
+                const lv = Number.parseInt(ticketGridLevels, 10);
+                if (Number.isFinite(lo) && lo > 0) req.gridLower = lo;
+                if (Number.isFinite(hi) && hi > 0) req.gridUpper = hi;
+                if (Number.isFinite(lv) && lv > 0) req.gridLevels = lv;
+              } else if (
+                ticketStrategy === "dca" ||
+                ticketStrategy === "twap"
+              ) {
+                const sl = Number.parseInt(ticketSlices, 10);
+                const cad = Number.parseInt(ticketCadence, 10);
+                if (Number.isFinite(sl) && sl > 0) req.slices = sl;
+                if (Number.isFinite(cad) && cad > 0) req.intervalSeconds = cad;
+              }
+              onSubmitTrade(req);
+            }}
+          >
+            <div className="trade-ticket-pair">
+              <label>
+                <span>{t("Mode")}</span>
+                <select
+                  aria-label={t("Execution mode")}
+                  value={ticketMode}
+                  onChange={(e) => setTicketMode(e.target.value as TradeMode)}
+                >
+                  <option value="manual">{t("Manual")}</option>
+                  <option value="semi_auto">{t("Semi-Auto")}</option>
+                  <option value="bot">{t("Bot")}</option>
+                  <option value="ai_agent">{t("AI")}</option>
+                </select>
+              </label>
+
+              <label>
+                <span>{t("Strategy")}</span>
+                <select
+                  aria-label={t("Strategy")}
+                  value={ticketStrategy}
+                  onChange={(e) =>
+                    setTicketStrategy(e.target.value as TradeStrategy)
+                  }
+                >
+                  <option value="market">{t("Market")}</option>
+                  <option value="limit">{t("Limit")}</option>
+                  <option value="bracket">{t("Bracket")}</option>
+                  <option value="trailing_atr">{t("Trailing ATR")}</option>
+                  <option value="grid">{t("Grid")}</option>
+                  <option value="dca">{t("DCA")}</option>
+                  <option value="twap">{t("TWAP")}</option>
+                </select>
+              </label>
+            </div>
+
+            <div
+              className="trade-side-toggle"
+              role="group"
+              aria-label={t("Order side")}
+            >
+              <button
+                type="button"
+                className={ticketSide === "buy" ? "is-selected is-buy" : ""}
+                aria-pressed={ticketSide === "buy"}
+                onClick={() => setTicketSide("buy")}
+              >
+                {t("Buy")}
+              </button>
+              <button
+                type="button"
+                className={ticketSide === "sell" ? "is-selected is-sell" : ""}
+                aria-pressed={ticketSide === "sell"}
+                onClick={() => setTicketSide("sell")}
+              >
+                {t("Sell")}
+              </button>
+            </div>
+
+            <div className="trade-ticket-pair">
+              <label>
+                <span>{t("Quantity")}</span>
+                <input
+                  aria-label={t("Quantity")}
+                  type="number"
+                  step="any"
+                  min="0"
+                  value={ticketQty}
+                  onChange={(e) => setTicketQty(e.target.value)}
+                />
+              </label>
+              <label>
+                <span>{t("Entry price")}</span>
+                <input
+                  aria-label={t("Entry price")}
+                  type="number"
+                  step="any"
+                  min="0"
+                  placeholder="0.00"
+                  value={ticketEntry}
+                  onChange={(e) => setTicketEntry(e.target.value)}
+                />
+              </label>
+            </div>
+
+            {ticketStrategy === "bracket" && (
+              <div className="trade-ticket-pair">
+                <label>
+                  <span>{t("Stop price")}</span>
+                  <input
+                    aria-label={t("Stop price")}
+                    type="number"
+                    step="any"
+                    min="0"
+                    value={ticketStop}
+                    onChange={(e) => setTicketStop(e.target.value)}
+                  />
+                </label>
+                <label>
+                  <span>{t("Target price")}</span>
+                  <input
+                    aria-label={t("Target price")}
+                    type="number"
+                    step="any"
+                    min="0"
+                    value={ticketTarget}
+                    onChange={(e) => setTicketTarget(e.target.value)}
+                  />
+                </label>
+              </div>
+            )}
+
+            {ticketStrategy === "trailing_atr" && (
+              <label>
+                <span>{t("ATR multiplier")}</span>
+                <input
+                  aria-label={t("ATR multiplier")}
+                  type="number"
+                  step="0.1"
+                  min="0.1"
+                  value={ticketAtrMult}
+                  onChange={(e) => setTicketAtrMult(e.target.value)}
+                />
+              </label>
+            )}
+
+            {ticketStrategy === "grid" && (
+              <div className="trade-ticket-pair">
+                <label>
+                  <span>{t("Grid lower")}</span>
+                  <input
+                    aria-label={t("Grid lower")}
+                    type="number"
+                    step="any"
+                    min="0"
+                    value={ticketGridLower}
+                    onChange={(e) => setTicketGridLower(e.target.value)}
+                  />
+                </label>
+                <label>
+                  <span>{t("Grid upper")}</span>
+                  <input
+                    aria-label={t("Grid upper")}
+                    type="number"
+                    step="any"
+                    min="0"
+                    value={ticketGridUpper}
+                    onChange={(e) => setTicketGridUpper(e.target.value)}
+                  />
+                </label>
+                <label>
+                  <span>{t("Grid levels")}</span>
+                  <input
+                    aria-label={t("Grid levels")}
+                    type="number"
+                    min="2"
+                    max="20"
+                    value={ticketGridLevels}
+                    onChange={(e) => setTicketGridLevels(e.target.value)}
+                  />
+                </label>
+              </div>
+            )}
+
+            {(ticketStrategy === "dca" || ticketStrategy === "twap") && (
+              <div className="trade-ticket-pair">
+                <label>
+                  <span>{t("Slices")}</span>
+                  <input
+                    aria-label={t("Slices")}
+                    type="number"
+                    min="2"
+                    max="50"
+                    value={ticketSlices}
+                    onChange={(e) => setTicketSlices(e.target.value)}
+                  />
+                </label>
+                <label>
+                  <span>{t("Cadence (sec)")}</span>
+                  <input
+                    aria-label={t("Cadence (sec)")}
+                    type="number"
+                    min="5"
+                    max="86400"
+                    value={ticketCadence}
+                    onChange={(e) => setTicketCadence(e.target.value)}
+                  />
+                </label>
+              </div>
+            )}
+
+            <dl className="trade-metric-grid">
+              <div>
+                <dt>{t("Max order")}</dt>
+                <dd>
+                  {formatCurrencyUSD(
+                    trade?.policy.maxOrderNotionalUsd ?? 25000,
+                  )}
+                </dd>
+              </div>
+              <div>
+                <dt>{t("Daily loss")}</dt>
+                <dd>{`${formatCurrencyUSD(trade?.policy.dailyLossUsd ?? 0)} / ${formatCurrencyUSD(trade?.policy.maxDailyLossUsd ?? 2000)}`}</dd>
+              </div>
+              <div>
+                <dt>{t("Open plans")}</dt>
+                <dd>{`${trade?.activeCount ?? 0} / ${trade?.policy.maxOpenPlans ?? 25}`}</dd>
+              </div>
+            </dl>
+
+            {tradeError && (
+              <p className="trade-pane-error" role="alert">
+                {tradeError}
+              </p>
+            )}
+
+            <div className="trade-desk-actions">
+              <button
+                type="submit"
+                className="trade-mini-btn trade-desk-run"
+                disabled={
+                  tradeBusy ||
+                  core.mode !== "ready" ||
+                  Boolean(trade?.killSwitchActive)
+                }
+              >
+                {t("Submit paper order")}
+              </button>
+              <button
+                type="button"
+                className="trade-mini-btn trade-danger-btn"
+                disabled={tradeBusy || core.mode !== "ready"}
+                onClick={() => onToggleKill?.(!trade?.killSwitchActive)}
+              >
+                {t(
+                  trade?.killSwitchActive ? "Clear kill switch" : "Kill switch",
+                )}
+              </button>
+            </div>
+          </form>
+        </div>
       )}
 
       {tab === "footprint" && (
