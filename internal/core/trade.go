@@ -57,6 +57,9 @@ func (s *Store) tradeService() (*trade.Service, error) {
 			}
 			return "off"
 		},
+		LiveExecutor:    s.executeLiveTradeRoute,
+		ScriptEvaluator: s.evaluateFasedScriptBot,
+		AgentEvaluator:  s.evaluateAIAgentBot,
 		OnAlert: func(ctx context.Context, severity, title, body string) {
 			autoSvc, aErr := s.automationService()
 			if aErr != nil {
@@ -331,6 +334,90 @@ func (h *HTTPHandler) tradeAPI(w http.ResponseWriter, r *http.Request, token str
 			return
 		}
 		writeJSON(w, 200, ks)
+
+	case rel == "accounts":
+		if r.Method != http.MethodGet {
+			writeError(w, 405, "method not allowed")
+			return
+		}
+		accounts := h.store.tradeAccountsView(ctx)
+		writeJSON(w, 200, map[string]any{"accounts": accounts, "count": len(accounts)})
+
+	case rel == "bots":
+		switch r.Method {
+		case http.MethodGet:
+			bots, err := svc.ListBots(ctx)
+			if err != nil {
+				writeError(w, 500, "trade bots unavailable")
+				return
+			}
+			writeJSON(w, 200, map[string]any{"bots": bots, "count": len(bots)})
+		case http.MethodPost:
+			if !h.v2Mutation(w, r, token, true) {
+				return
+			}
+			var in trade.CreateBotRequest
+			if !httpapi.DecodeStrictJSON(w, r, 64*1024, &in) {
+				return
+			}
+			bot, err := svc.CreateBot(ctx, in)
+			if err != nil {
+				writeError(w, 400, err.Error())
+				return
+			}
+			writeJSON(w, 200, bot)
+		default:
+			writeError(w, 405, "method not allowed")
+		}
+
+	case strings.HasPrefix(rel, "bots/"):
+		rest := strings.TrimPrefix(rel, "bots/")
+		if strings.Contains(rest, "/") {
+			parts := strings.SplitN(rest, "/", 2)
+			if len(parts) != 2 || parts[0] == "" {
+				writeError(w, 404, "unknown bot route")
+				return
+			}
+			if r.Method != http.MethodPost {
+				writeError(w, 405, "method not allowed")
+				return
+			}
+			if !h.v2Mutation(w, r, token, false) {
+				return
+			}
+			bot, err := svc.SetBotStatus(ctx, parts[0], parts[1])
+			if err != nil {
+				if errors.Is(err, trade.ErrBotNotFound) {
+					writeError(w, 404, "trade bot not found")
+					return
+				}
+				if errors.Is(err, trade.ErrKillSwitchActive) {
+					writeError(w, 403, err.Error())
+					return
+				}
+				writeError(w, 400, err.Error())
+				return
+			}
+			writeJSON(w, 200, bot)
+			return
+		}
+		if r.Method != http.MethodDelete {
+			writeError(w, 405, "method not allowed")
+			return
+		}
+		if !h.v2Mutation(w, r, token, false) {
+			return
+		}
+		deleted, err := svc.DeleteBot(ctx, rest)
+		if err != nil {
+			writeError(w, 500, err.Error())
+			return
+		}
+		if !deleted {
+			writeError(w, 404, "trade bot not found")
+			return
+		}
+		writeJSON(w, 200, map[string]any{"deleted": true, "id": rest})
 
 	default:
 		writeError(w, 404, "unknown trade operation")

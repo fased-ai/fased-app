@@ -12,7 +12,7 @@ import (
 	"github.com/fased-ai/fased-app/internal/marketdata"
 )
 
-// Config wires injected market data, external kill check, and alert callback for Service.
+// Config wires injected market data, external kill check, live execution router, and alert callback for Service.
 type Config struct {
 	DataDir            string
 	FixtureMode        bool
@@ -20,6 +20,9 @@ type Config struct {
 	MarketReader       func(ctx context.Context, venue, symbol, interval string, limit int) ([]marketdata.Candle, error)
 	ExternalKillActive func(ctx context.Context) bool
 	ExecutionProfile   func() string
+	LiveExecutor       func(ctx context.Context, req OrderRequest, refPrice float64) (LiveExecReceipt, error)
+	ScriptEvaluator    func(ctx context.Context, bot TradeBot, candles []marketdata.Candle) (signal string, side string, note string, err error)
+	AgentEvaluator     func(ctx context.Context, bot TradeBot, candles []marketdata.Candle) (signal string, side string, note string, err error)
 	OnAlert            func(ctx context.Context, severity, title, body string)
 }
 
@@ -201,7 +204,12 @@ func (s *Service) SubmitOrder(ctx context.Context, rawReq OrderRequest) (OrderPl
 		Strategy:        req.Strategy,
 		Side:            req.Side,
 		Status:          StatusActive,
-		Simulated:       true,
+		Simulated:       req.ExecutionMode != ExecutionModeLive,
+		AccountID:       req.AccountID,
+		ExecutionMode:   req.ExecutionMode,
+		Source:          req.Source,
+		BotID:           req.BotID,
+		AgentID:         req.AgentID,
 		Quantity:        req.Quantity,
 		EntryPrice:      req.EntryPrice,
 		StopPrice:       req.StopPrice,
@@ -216,6 +224,35 @@ func (s *Service) SubmitOrder(ctx context.Context, rawReq OrderRequest) (OrderPl
 		AgentNote:       req.AgentNote,
 		CreatedAt:       nowSec,
 		UpdatedAt:       nowSec,
+	}
+
+	if req.ExecutionMode == ExecutionModeLive {
+		if s.cfg.LiveExecutor == nil {
+			return OrderPlan{}, errors.New("live execution router is not configured; switch account to Paper or enable an execution profile")
+		}
+		receipt, liveErr := s.cfg.LiveExecutor(ctx, req, refPrice)
+		if liveErr != nil {
+			return OrderPlan{}, liveErr
+		}
+		plan.Simulated = false
+		plan.VenueOrderID = receipt.VenueOrderID
+		plan.TxSignature = receipt.TxSignature
+		if receipt.FilledPrice > 0 {
+			refPrice = receipt.FilledPrice
+		}
+		plan.EntryPrice = refPrice
+		if receipt.Immediate || req.Strategy == StrategyMarket {
+			plan.Status = StatusFilled
+			plan.FilledQty = req.Quantity
+			plan.AvgFillPrice = refPrice
+			plan.UnrealizedPnLUSD = calcUnrealizedPnL(req.Side, req.Quantity, refPrice, markPrice)
+		} else {
+			plan.Status = StatusActive
+		}
+		if err := s.store.savePlan(ctx, plan); err != nil {
+			return OrderPlan{}, err
+		}
+		return plan, nil
 	}
 
 	switch req.Strategy {

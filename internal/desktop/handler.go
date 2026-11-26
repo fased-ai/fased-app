@@ -461,6 +461,17 @@ func allowed(method, route string) bool {
 	if route == "/api/v1/wallets/create" || route == "/api/v1/wallets/import" {
 		return method == http.MethodPost
 	}
+	if strings.HasPrefix(route, "/api/v1/trade/bots/") {
+		rel := strings.TrimPrefix(route, "/api/v1/trade/bots/")
+		if strings.Contains(rel, "/") {
+			parts := strings.SplitN(rel, "/", 2)
+			if len(parts) == 2 && validPathSegment(parts[0]) && (parts[1] == "start" || parts[1] == "pause" || parts[1] == "stop") {
+				return method == http.MethodPost
+			}
+			return false
+		}
+		return method == http.MethodDelete && validPathSegment(rel)
+	}
 	if strings.HasPrefix(route, "/api/v1/wallets/") {
 		rel := strings.TrimPrefix(route, "/api/v1/wallets/")
 		if strings.HasSuffix(rel, "/export") || strings.HasSuffix(rel, "/balance") {
@@ -570,8 +581,10 @@ func allowed(method, route string) bool {
 		return method == http.MethodPut
 	case "/api/v1/swarm/peers", "/api/v1/swarm/signals":
 		return method == http.MethodGet || method == http.MethodPost
-	case "/api/v1/trade/state":
+	case "/api/v1/trade/state", "/api/v1/trade/accounts":
 		return method == http.MethodGet
+	case "/api/v1/trade/bots":
+		return method == http.MethodGet || method == http.MethodPost
 	case "/api/v1/trade/orders", "/api/v1/trade/evaluate", "/api/v1/trade/kill":
 		return method == http.MethodPost
 	case "/api/v1/trade/policy":

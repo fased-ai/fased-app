@@ -409,6 +409,9 @@ func (s *Server) startAgentTasks() {
 						if tErr != nil && !errors.Is(tErr, context.Canceled) {
 							coreLogger.Warn("trade evaluator sweep held", "err", sanitizeDiagValue(tErr.Error(), 200))
 						}
+						botCtx, stopBots := context.WithTimeout(ctx, 15*time.Second)
+						s.Store.evaluateTradeBots(botCtx, ts)
+						stopBots()
 					}
 				}
 			}
