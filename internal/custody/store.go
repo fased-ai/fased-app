@@ -45,6 +45,7 @@ type Config struct {
 	FastKDF          bool
 	RequireOSKEK     bool
 	RequireOwnerAuth bool
+	AllowLoopbackRPC bool
 	KEKSource        providersecrets.Source // Optional override in tests
 	SocketPath       string                 // Optional explicit socket path reported in status
 	RPCTransport     http.RoundTripper      // Tests only
@@ -54,20 +55,25 @@ type Config struct {
 // Service owns private wallet keys, encrypted execution RPCs, fail-closed policies,
 // immutable transaction reviews, and the durable broadcast ledger.
 type Service struct {
-	dir           string
-	db            *sql.DB
-	masterKey     []byte
-	auditHMACKey  []byte
-	kekProtection string
-	cfg           Config
-	now           func() time.Time
-	mu            sync.Mutex
-	proofMu       sync.Mutex
-	ownerProofs   map[string]ownerProofEntry
-	closed        bool
-	kdfTime       uint32
-	kdfMemory     uint32
-	kdfThreads    uint8
+	dir             string
+	db              *sql.DB
+	masterKey       []byte
+	auditHMACKey    []byte
+	kekProtection   string
+	cfg             Config
+	now             func() time.Time
+	mu              sync.Mutex
+	proofMu         sync.Mutex
+	ownerProofs     map[string]ownerProofEntry
+	kdfSlots        chan struct{}
+	authFailMu      sync.Mutex
+	authFailTimes   []time.Time
+	authConsecFails int
+	authLockUntil   time.Time
+	closed          bool
+	kdfTime         uint32
+	kdfMemory       uint32
+	kdfThreads      uint8
 }
 
 func sqliteURI(path string) string {
@@ -227,6 +233,7 @@ CREATE INDEX IF NOT EXISTS idx_audit_wallet ON audit_log (wallet_id, timestamp D
 		cfg:           cfg,
 		now:           nowFn,
 		ownerProofs:   make(map[string]ownerProofEntry),
+		kdfSlots:      make(chan struct{}, 2),
 		kdfTime:       kdfT,
 		kdfMemory:     kdfM,
 		kdfThreads:    kdfP,
@@ -556,6 +563,46 @@ func (s *Service) GetWallet(ctx context.Context, idOrHandle string) (WalletPubli
 	return s.getWalletLocked(ctx, idOrHandle)
 }
 
+// GetReview returns an immutable prepared transaction review for walletID/reviewID.
+func (s *Service) GetReview(ctx context.Context, walletID, reviewID string) (WalletReview, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed || s.db == nil {
+		return WalletReview{}, errors.New("custody store closed")
+	}
+	w, err := s.getWalletLocked(ctx, walletID)
+	if err != nil {
+		return WalletReview{}, err
+	}
+	var raw string
+	if err := s.db.QueryRowContext(ctx, `SELECT payload_json FROM reviews WHERE id = ? AND wallet_id = ?`, strings.TrimSpace(reviewID), w.ID).Scan(&raw); errors.Is(err, sql.ErrNoRows) {
+		return WalletReview{}, ErrReviewNotFound
+	} else if err != nil {
+		return WalletReview{}, err
+	}
+	var rev WalletReview
+	if err := json.Unmarshal([]byte(raw), &rev); err != nil {
+		return WalletReview{}, err
+	}
+	return rev, nil
+}
+
+func (s *Service) allowLoopbackRPC() bool {
+	return s.cfg.FixtureMode || s.cfg.AllowLoopbackRPC || s.cfg.RPCTransport != nil
+}
+
+func (s *Service) checkRPCURLsAllowed(primaryURL, fallbackURL string) error {
+	if _, _, err := ValidateSolanaRPCURLWithOptions(primaryURL, s.allowLoopbackRPC()); err != nil {
+		return err
+	}
+	if strings.TrimSpace(fallbackURL) != "" {
+		if _, _, err := ValidateSolanaRPCURLWithOptions(fallbackURL, s.allowLoopbackRPC()); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func normalizeWalletSlug(name, role string) string {
 	base := strings.ToLower(strings.TrimSpace(name))
 	if base == "" {
@@ -613,6 +660,9 @@ func (s *Service) CreateNativeWallet(ctx context.Context, name, role, primaryRPC
 		cleanName = cleanName[:64]
 	}
 
+	if err := s.checkRPCURLsAllowed(primaryRPCURL, ""); err != nil {
+		return WalletPublic{}, err
+	}
 	rpcStatus, canonRPC, _, err := VerifyAndPinRPC(ctx, s.cfg.RPCTransport, primaryRPCURL, "", "", s.cfg.FixtureMode)
 	if err != nil {
 		return WalletPublic{}, err
@@ -659,6 +709,9 @@ func (s *Service) AttachExternalWallet(ctx context.Context, custodyType, name, r
 		} else {
 			cleanName = "Watch Wallet"
 		}
+	}
+	if err := s.checkRPCURLsAllowed(primaryRPCURL, ""); err != nil {
+		return WalletPublic{}, err
 	}
 	rpcStatus, canonRPC, _, err := VerifyAndPinRPC(ctx, s.cfg.RPCTransport, primaryRPCURL, "", "", s.cfg.FixtureMode)
 	if err != nil {
@@ -921,6 +974,9 @@ func (s *Service) SetWalletRPC(ctx context.Context, walletID, primaryURL, fallba
 		return WalletPublic{}, err
 	}
 
+	if err := s.checkRPCURLsAllowed(primaryURL, fallbackURL); err != nil {
+		return WalletPublic{}, err
+	}
 	nextStatus, canonPrimary, canonFallback, err := VerifyAndPinRPC(ctx, s.cfg.RPCTransport, primaryURL, fallbackURL, cur.RPC.GenesisHash, s.cfg.FixtureMode)
 	if err != nil {
 		return WalletPublic{}, err
@@ -928,6 +984,9 @@ func (s *Service) SetWalletRPC(ctx context.Context, walletID, primaryURL, fallba
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.closed || s.db == nil {
+		return WalletPublic{}, errors.New("custody store closed")
+	}
 	cur2, err := s.getWalletLocked(ctx, cur.ID)
 	if err != nil {
 		return WalletPublic{}, err
@@ -1117,8 +1176,8 @@ func (s *Service) resolveDestinationAddressLocked(ctx context.Context, raw strin
 func (s *Service) hasUnresolvedBroadcastLocked(ctx context.Context, walletID string) bool {
 	var cnt int
 	_ = s.db.QueryRowContext(ctx,
-		`SELECT COUNT(1) FROM ledger WHERE wallet_id = ? AND state IN (?, ?)`,
-		walletID, LedgerBroadcast, LedgerUnknown,
+		`SELECT COUNT(1) FROM ledger WHERE wallet_id = ? AND state IN (?, ?, ?)`,
+		walletID, LedgerReserved, LedgerBroadcast, LedgerUnknown,
 	).Scan(&cnt)
 	return cnt > 0
 }
@@ -1222,9 +1281,21 @@ func (s *Service) PrepareReview(ctx context.Context, req PrepareReviewRequest) (
 		s.mu.Unlock()
 		return WalletReview{}, fmt.Errorf("%w: wallet policy expired", ErrPolicyDenied)
 	}
-	if req.IsBotOrAuto && (w.Role == RoleVault || w.Role == RoleMining || w.Policy.ApprovalMode == ApprovalManualReview || !w.Connections.AllowTradeBots) {
-		s.mu.Unlock()
-		return WalletReview{}, fmt.Errorf("%w: wallet prohibits autonomous execution", ErrRoleDenied)
+	reqAgentID := strings.TrimSpace(req.AgentID)
+	reqVenue := strings.TrimSpace(req.Venue)
+	if req.IsBotOrAuto {
+		if w.Role == RoleVault || w.Role == RoleMining || w.Policy.ApprovalMode == ApprovalManualReview || !w.Connections.AllowTradeBots {
+			s.mu.Unlock()
+			return WalletReview{}, fmt.Errorf("%w: wallet prohibits autonomous execution", ErrRoleDenied)
+		}
+		if reqAgentID != "" && !slices.Contains(w.Connections.AgentIDs, reqAgentID) {
+			s.mu.Unlock()
+			return WalletReview{}, fmt.Errorf("%w: agent %q is not bound to wallet %s", ErrRoleDenied, reqAgentID, w.Handle)
+		}
+		if reqVenue != "" && len(w.Connections.AllowedVenues) > 0 && !slices.Contains(w.Connections.AllowedVenues, reqVenue) {
+			s.mu.Unlock()
+			return WalletReview{}, fmt.Errorf("%w: venue %q is not allowed on wallet %s", ErrPolicyDenied, reqVenue, w.Handle)
+		}
 	}
 	if !slices.Contains(w.Policy.Operations, op) {
 		s.mu.Unlock()
@@ -1500,6 +1571,10 @@ func (s *Service) PrepareReview(ctx context.Context, req PrepareReviewRequest) (
 		UnsignedMsgBase64:    base64.StdEncoding.EncodeToString(msgBytes),
 		SimulationOK:         simOK,
 		SimulationError:      simErr,
+		IsBotOrAuto:          req.IsBotOrAuto,
+		AgentID:              reqAgentID,
+		SkillGrantID:         strings.TrimSpace(req.SkillGrantID),
+		Venue:                reqVenue,
 		ExpiresAt:            nowSec + 120,
 		Status:               ReviewStatusPrepared,
 		CreatedAt:            nowSec,
@@ -1507,6 +1582,9 @@ func (s *Service) PrepareReview(ctx context.Context, req PrepareReviewRequest) (
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.closed || s.db == nil {
+		return WalletReview{}, errors.New("custody store closed")
+	}
 	rawRev, _ := json.Marshal(review)
 	if _, err := s.db.ExecContext(ctx,
 		`INSERT INTO reviews (id, wallet_id, status, payload_json, expires_at, created_at) VALUES (?, ?, ?, ?, ?, ?)`,
@@ -1571,6 +1649,10 @@ func (s *Service) executePreparedReview(ctx context.Context, walletID, reviewID,
 		return LedgerEntry{}, fmt.Errorf("review %s is %s, not prepared", review.ID, review.Status)
 	}
 	nowSec := s.now().UTC().Unix()
+	if w.Policy.ExpiresAt > 0 && nowSec > w.Policy.ExpiresAt {
+		s.mu.Unlock()
+		return LedgerEntry{}, fmt.Errorf("%w: wallet policy expired", ErrPolicyDenied)
+	}
 	if review.ExpiresAt <= nowSec {
 		s.mu.Unlock()
 		return LedgerEntry{}, errors.New("review expired; prepare a new transaction")
@@ -1757,21 +1839,40 @@ func (s *Service) executePreparedReview(ctx context.Context, walletID, reviewID,
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.closed || s.db == nil {
+		return entry, errors.New("custody store closed")
+	}
 	entry.State = nextState
 	entry.TxSignature = sigStr
 	entry.UpdatedAt = s.now().UTC().Unix()
 	if sendErr != nil {
 		entry.Error = sendErr.Error()
 	}
+	postTx, pErr := s.db.BeginTx(ctx, nil)
+	if pErr != nil {
+		return entry, pErr
+	}
+	defer func() { _ = postTx.Rollback() }()
 	if nextState == LedgerConfirmed {
-		_, _ = s.db.ExecContext(ctx, `UPDATE daily_usage SET reserved_raw = MAX(0, reserved_raw - ?), spent_raw = spent_raw + ? WHERE wallet_id = ? AND day_utc = ?`, debitRaw, debitRaw, w.ID, day)
+		if _, err := postTx.ExecContext(ctx, `UPDATE daily_usage SET reserved_raw = MAX(0, reserved_raw - ?), spent_raw = spent_raw + ? WHERE wallet_id = ? AND day_utc = ?`, debitRaw, debitRaw, w.ID, day); err != nil {
+			return entry, err
+		}
 		if splMint != "" && splDebitRaw > 0 {
-			_, _ = s.db.ExecContext(ctx, `UPDATE daily_asset_usage SET reserved_raw = MAX(0, reserved_raw - ?), spent_raw = spent_raw + ? WHERE wallet_id = ? AND asset_key = ? AND day_utc = ?`, splDebitRaw, splDebitRaw, w.ID, "spl:"+splMint, day)
+			if _, err := postTx.ExecContext(ctx, `UPDATE daily_asset_usage SET reserved_raw = MAX(0, reserved_raw - ?), spent_raw = spent_raw + ? WHERE wallet_id = ? AND asset_key = ? AND day_utc = ?`, splDebitRaw, splDebitRaw, w.ID, "spl:"+splMint, day); err != nil {
+				return entry, err
+			}
 		}
 	}
 	updatedBytes, _ := json.Marshal(entry)
-	_, _ = s.db.ExecContext(ctx, `UPDATE ledger SET state = ?, payload_json = ?, updated_at = ? WHERE id = ?`, entry.State, string(updatedBytes), entry.UpdatedAt, entry.ID)
-	_ = s.appendAuditLocked(ctx, w.ID, "tx_"+nextState, actor, fmt.Sprintf("%s %s %s -> %s sig=%s", review.ID, review.AmountHuman, review.Symbol, review.Destination, entry.TxSignature), review.PolicyHash)
+	if _, err := postTx.ExecContext(ctx, `UPDATE ledger SET state = ?, payload_json = ?, updated_at = ? WHERE id = ?`, entry.State, string(updatedBytes), entry.UpdatedAt, entry.ID); err != nil {
+		return entry, err
+	}
+	if err := s.appendAuditExecLocked(ctx, postTx, w.ID, "tx_"+nextState, actor, fmt.Sprintf("%s %s %s -> %s sig=%s", review.ID, review.AmountHuman, review.Symbol, review.Destination, entry.TxSignature), review.PolicyHash); err != nil {
+		return entry, err
+	}
+	if err := postTx.Commit(); err != nil {
+		return entry, err
+	}
 	return entry, sendErr
 }
 
@@ -1827,22 +1928,28 @@ func (s *Service) ReconcileLedgerEntry(ctx context.Context, walletID, entryID st
 					witnessURL = pubWitness
 				}
 			}
-			if witnessURL != "" {
-				wState, wStatusErr, wErr := checkSignatureStatusRPC(ctx, s.cfg.RPCTransport, witnessURL, entry.TxSignature)
-				if wErr != nil {
-					return entry, errors.New("independent witness RPC unreachable to corroborate failure; keeping cap reservation")
-				}
-				if wState == LedgerConfirmed {
-					// Witness confirms the tx actually landed on-chain; treat as confirmed & spent!
-					nextState = LedgerConfirmed
-					statusErr = wStatusErr
-				} else if wState != LedgerFailed {
-					return entry, errors.New("independent witness RPC did not corroborate transaction failure; keeping reservation")
-				}
+			if witnessURL == "" {
+				return entry, errors.New("no independent witness RPC configured to corroborate failure; keeping cap reservation")
+			}
+			wState, wStatusErr, wErr := checkSignatureStatusRPC(ctx, s.cfg.RPCTransport, witnessURL, entry.TxSignature)
+			if wErr != nil {
+				return entry, errors.New("independent witness RPC unreachable to corroborate failure; keeping cap reservation")
+			}
+			if wState == LedgerConfirmed {
+				// Witness confirms the tx actually landed on-chain; treat as confirmed & spent!
+				nextState = LedgerConfirmed
+				statusErr = wStatusErr
+			} else if wState != LedgerFailed {
+				return entry, errors.New("independent witness RPC did not corroborate transaction failure; keeping reservation")
 			}
 		}
 	}
 
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed || s.db == nil {
+		return entry, errors.New("custody store closed")
+	}
 	reservedAmount := uint64(5_000)
 	var splMint string
 	var splReservedAmount uint64
@@ -1858,14 +1965,32 @@ func (s *Service) ReconcileLedgerEntry(ctx context.Context, walletID, entryID st
 	} else if entry.Operation == "solana.nativeTransfer" && entry.AmountRaw <= math.MaxUint64-5_000 {
 		reservedAmount = entry.AmountRaw + 5_000
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	day := time.Unix(entry.CreatedAt, 0).UTC().Format("2006-01-02")
 	tx, txErr := s.db.BeginTx(ctx, nil)
 	if txErr != nil {
 		return entry, txErr
 	}
 	defer func() { _ = tx.Rollback() }()
+	entry.State = nextState
+	entry.Error = statusErr
+	entry.UpdatedAt = s.now().UTC().Unix()
+	b, _ := json.Marshal(entry)
+	updRes, err := tx.ExecContext(ctx, `UPDATE ledger SET state = ?, payload_json = ?, updated_at = ? WHERE id = ? AND state NOT IN (?, ?)`, entry.State, string(b), entry.UpdatedAt, entry.ID, LedgerConfirmed, LedgerFailed)
+	if err != nil {
+		return entry, err
+	}
+	affected, _ := updRes.RowsAffected()
+	if affected == 0 {
+		// Another concurrent reconcile already finalized this entry; return its committed state without double-adjusting caps.
+		var curRaw string
+		if sErr := tx.QueryRowContext(ctx, `SELECT payload_json FROM ledger WHERE id = ? AND wallet_id = ?`, entry.ID, w.ID).Scan(&curRaw); sErr == nil {
+			var curEntry LedgerEntry
+			if json.Unmarshal([]byte(curRaw), &curEntry) == nil {
+				return curEntry, nil
+			}
+		}
+		return entry, nil
+	}
 	switch nextState {
 	case LedgerConfirmed:
 		if _, err := tx.ExecContext(ctx, `UPDATE daily_usage SET reserved_raw = MAX(0, reserved_raw - ?), spent_raw = spent_raw + ? WHERE wallet_id = ? AND day_utc = ?`, reservedAmount, reservedAmount, w.ID, day); err != nil {
@@ -1885,13 +2010,6 @@ func (s *Service) ReconcileLedgerEntry(ctx context.Context, walletID, entryID st
 				return entry, err
 			}
 		}
-	}
-	entry.State = nextState
-	entry.Error = statusErr
-	entry.UpdatedAt = s.now().UTC().Unix()
-	b, _ := json.Marshal(entry)
-	if _, err := tx.ExecContext(ctx, `UPDATE ledger SET state = ?, payload_json = ?, updated_at = ? WHERE id = ?`, entry.State, string(b), entry.UpdatedAt, entry.ID); err != nil {
-		return entry, err
 	}
 	if err := s.appendAuditExecLocked(ctx, tx, w.ID, "tx_reconciled", "owner", fmt.Sprintf("Reconciled %s -> %s", entry.ID, entry.State), entry.PolicyHash); err != nil {
 		return entry, err
@@ -2030,7 +2148,11 @@ func (s *Service) ImportEncryptedRecovery(ctx context.Context, archiveRaw []byte
 	if pkg.KDFMemory < minMem || pkg.KDFMemory > 262144 {
 		return WalletPublic{}, errors.New("recovery KDF memory out of safe bounds")
 	}
+	if err := s.acquireKDFSlot(ctx); err != nil {
+		return WalletPublic{}, err
+	}
 	key := vault.DeriveKey(passphrase, pkg.Salt, pkg.KDFTime, pkg.KDFMemory, pkg.KDFThreads)
+	s.releaseKDFSlot()
 	defer clear(key)
 	seed, err := vault.OpenAESGCM(key, pkg.Nonce, pkg.Ciphertext, []byte(recoveryFormat+":"+pkg.PublicKey))
 	if err != nil || len(seed) != ed25519.SeedSize {
@@ -2047,12 +2169,18 @@ func (s *Service) ImportEncryptedRecovery(ctx context.Context, archiveRaw []byte
 	if targetRole == "" {
 		targetRole = pkg.Role
 	}
+	if pkg.Role == RoleVault && targetRole != RoleVault {
+		return WalletPublic{}, fmt.Errorf("%w: vault recovery backup cannot be restored into role %q", ErrRoleDenied, targetRole)
+	}
 	if !ValidRole(targetRole) || targetRole == RoleWatch {
 		return WalletPublic{}, errors.New("invalid restored wallet role")
 	}
 	targetName := strings.TrimSpace(name)
 	if targetName == "" {
 		targetName = "Restored " + targetRole
+	}
+	if err := s.checkRPCURLsAllowed(primaryRPCURL, ""); err != nil {
+		return WalletPublic{}, err
 	}
 	rpcStatus, canonRPC, _, err := VerifyAndPinRPC(ctx, s.cfg.RPCTransport, primaryRPCURL, "", "", s.cfg.FixtureMode)
 	if err != nil {

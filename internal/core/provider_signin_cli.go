@@ -17,6 +17,8 @@ import (
 	"sync"
 	"time"
 	"unicode/utf8"
+
+	"github.com/fased-ai/fased-app/internal/providers"
 )
 
 // HostCLIStatus describes whether a supported official vendor CLI is installed
@@ -472,7 +474,7 @@ func probeSingleCLIWithShadow(ctx context.Context, runner providerCLIRunner, spe
 	}
 	lookupTarget := spec.Binary
 	if customBinaryPath != "" {
-		if !validCustomCLIBinaryPath(customBinaryPath) {
+		if !providers.ValidCustomCLIBinaryPathForVendor(customBinaryPath, spec.Binary) {
 			return status
 		}
 		lookupTarget = expandCLIUserPath(customBinaryPath)
@@ -725,7 +727,7 @@ func cliConfigEnvWithShadow(provider, binary, configDir, shadowHome string) []st
 	case provider == "openai":
 		return []string{"CODEX_HOME=" + expanded}
 	case provider == "google":
-		return []string{"GEMINI_CLI_HOME=" + expanded, "HOME=" + expanded}
+		return []string{"GEMINI_CLI_HOME=" + expanded}
 	default:
 		return nil
 	}
@@ -872,6 +874,9 @@ func (s *Store) changeProviderCLI(ctx context.Context, c AIConnectionCommand) (A
 		spec, status, ok := resolveCLIConnectTargetWithShadow(ctx, s.cliRunner(), c.Provider, c.Binary, c.BinaryPath, c.ConfigDir, c.ShadowHome)
 		if !ok {
 			return AIConnectionView{}, errors.New("select a supported CLI subscription provider and vault passphrase")
+		}
+		if c.BinaryPath != "" && !providers.ValidCustomCLIBinaryPathForVendor(c.BinaryPath, spec.Binary) {
+			return AIConnectionView{}, errors.New("custom CLI binary path must match the selected vendor binary")
 		}
 		if c.ShadowHome != "" && spec.Binary != "codex" {
 			return AIConnectionView{}, errors.New("shadow home is only supported for Codex CLI")

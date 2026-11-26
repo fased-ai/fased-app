@@ -458,7 +458,7 @@ func allowed(method, route string) bool {
 	if route == "/api/v1/wallets" {
 		return method == http.MethodGet
 	}
-	if route == "/api/v1/wallets/create" || route == "/api/v1/wallets/import" {
+	if route == "/api/v1/wallets/create" {
 		return method == http.MethodPost
 	}
 	if strings.HasPrefix(route, "/api/v1/trade/bots/") {

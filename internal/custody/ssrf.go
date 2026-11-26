@@ -12,11 +12,24 @@ import (
 	"time"
 )
 
-var cgnatPrefix = netip.MustParsePrefix("100.64.0.0/10")
+var deniedPublicPrefixes = []netip.Prefix{
+	netip.MustParsePrefix("0.0.0.0/8"),       // "This" network (RFC 1122)
+	netip.MustParsePrefix("100.64.0.0/10"),   // CGNAT / Tailscale (RFC 6598)
+	netip.MustParsePrefix("192.0.0.0/24"),    // IETF Protocol Assignments
+	netip.MustParsePrefix("192.0.2.0/24"),    // TEST-NET-1
+	netip.MustParsePrefix("198.18.0.0/15"),   // Benchmarking
+	netip.MustParsePrefix("198.51.100.0/24"), // TEST-NET-2
+	netip.MustParsePrefix("203.0.113.0/24"),  // TEST-NET-3
+	netip.MustParsePrefix("240.0.0.0/4"),     // Reserved
+	netip.MustParsePrefix("64:ff9b::/96"),    // NAT64 well-known prefix
+	netip.MustParsePrefix("2001:db8::/32"),   // Documentation
+	netip.MustParsePrefix("2001::/32"),       // Teredo
+	netip.MustParsePrefix("2002::/16"),       // 6to4
+}
 
 // IsPublicUnicastIP returns true strictly for routable public IPv4/IPv6 addresses.
 // Rejects loopback, RFC1918 private, CGNAT (100.64.0.0/10), link-local/metadata,
-// multicast, unspecified, and IPv4-in-IPv6 private encapsulations.
+// multicast, unspecified, reserved/NAT64/documentation, and IPv4-in-IPv6 encapsulations.
 func IsPublicUnicastIP(raw netip.Addr) bool {
 	if !raw.IsValid() {
 		return false
@@ -27,8 +40,10 @@ func IsPublicUnicastIP(raw netip.Addr) bool {
 		ip.IsMulticast() || ip.IsUnspecified() {
 		return false
 	}
-	if ip.Is4() && cgnatPrefix.Contains(ip) {
-		return false
+	for _, p := range deniedPublicPrefixes {
+		if p.Contains(ip) {
+			return false
+		}
 	}
 	return true
 }
@@ -100,10 +115,11 @@ func dialSSRFSafe(
 		return nil, errors.New("SSRF guard: DNS resolution unavailable")
 	}
 	targets := make([]netip.Addr, 0, len(ips))
+	literalLoopback := isLoopbackHostname(host)
 	for _, raw := range ips {
 		ip := raw.Unmap()
 		if ip.IsLoopback() {
-			if !allowLoopback {
+			if !allowLoopback || !literalLoopback {
 				return nil, errors.New("SSRF blocked: DNS resolved to loopback")
 			}
 			targets = append(targets, ip)
@@ -115,8 +131,8 @@ func dialSSRFSafe(
 		targets = append(targets, ip)
 	}
 	var lastErr error
-	for _, target := range targets {
-		if len(targets) > 6 {
+	for i, target := range targets {
+		if i >= 6 {
 			break
 		}
 		conn, dErr := dial(ctx, network, net.JoinHostPort(target.String(), port))

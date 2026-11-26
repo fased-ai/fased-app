@@ -469,8 +469,8 @@ func TestProviderCLIEnabledToggleConfigDirAndAccentColor(t *testing.T) {
 
 	runner := &fakeACPRunner{
 		paths: map[string]string{
-			"claude":       "/usr/local/bin/claude",
-			"/opt/claude2": "/opt/claude2",
+			"claude":              "/usr/local/bin/claude",
+			"/opt/claude2/claude": "/opt/claude2/claude",
 		},
 		runHandler: func(binary string, args []string, stdin string, extraEnv []string) ([]byte, []byte, int, error) {
 			if len(args) == 1 && args[0] == "--version" {
@@ -485,7 +485,7 @@ func TestProviderCLIEnabledToggleConfigDirAndAccentColor(t *testing.T) {
 		Action:      "cli-connect",
 		Provider:    "anthropic",
 		Binary:      "claude",
-		BinaryPath:  "/opt/claude2",
+		BinaryPath:  "/opt/claude2/claude",
 		ConfigDir:   "~/work-claude",
 		AccentColor: "#D97757",
 		Name:        "Work Claude",
@@ -494,7 +494,7 @@ func TestProviderCLIEnabledToggleConfigDirAndAccentColor(t *testing.T) {
 	if err != nil {
 		t.Fatalf("cli-connect failed: %v", err)
 	}
-	if conn.BinaryPath != "/opt/claude2" || conn.ConfigDir != "~/work-claude" || conn.AccentColor != "#D97757" || conn.CLIVersion != "2.1.329" {
+	if conn.BinaryPath != "/opt/claude2/claude" || conn.ConfigDir != "~/work-claude" || conn.AccentColor != "#D97757" || conn.CLIVersion != "2.1.329" {
 		t.Fatalf("unexpected CLI connection metadata: %+v", conn)
 	}
 

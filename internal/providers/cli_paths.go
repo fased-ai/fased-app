@@ -23,6 +23,39 @@ func ValidCustomCLIBinaryPath(p string) bool {
 	return true
 }
 
+// ValidCustomCLIBinaryPathForVendor enforces ValidCustomCLIBinaryPath and requires that the
+// executable basename (both literal and after symlink resolution if the file exists) matches
+// the expected vendor CLI binary name (blocking arbitrary host executable invocation).
+func ValidCustomCLIBinaryPathForVendor(p, expectedBinary string) bool {
+	if !ValidCustomCLIBinaryPath(p) {
+		return false
+	}
+	want := strings.ToLower(strings.TrimSuffix(strings.TrimSpace(expectedBinary), ".exe"))
+	if want == "" {
+		return false
+	}
+	matchesBase := func(candidate string) bool {
+		base := strings.ToLower(strings.TrimSuffix(filepath.Base(candidate), ".exe"))
+		if base == want {
+			return true
+		}
+		if want == "antigravity" && (base == "agy" || base == "antigravity-acp") {
+			return true
+		}
+		return false
+	}
+	expanded := ExpandCLIUserPath(p)
+	if !matchesBase(expanded) {
+		return false
+	}
+	if resolved, err := filepath.EvalSymlinks(expanded); err == nil && resolved != "" {
+		if !matchesBase(resolved) {
+			return false
+		}
+	}
+	return true
+}
+
 // ValidCLIConfigDir validates a user-supplied CLI config or shadow home directory path.
 func ValidCLIConfigDir(p string) bool {
 	return ValidCustomCLIBinaryPath(p)

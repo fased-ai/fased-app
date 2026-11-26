@@ -1,12 +1,18 @@
 package fasedscript
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"math"
 	"strings"
 
 	"github.com/fased-ai/fased-app/internal/marketdata"
+)
+
+const (
+	MaxStringBytes = 1024
+	MaxAllocBytes  = 16 * 1024 * 1024
 )
 
 type valKind int
@@ -79,24 +85,37 @@ func (e *envScope) assign(name string, v val) error {
 }
 
 type vm struct {
-	candles  []marketdata.Candle
-	barCount int
-	params   map[string]float64
-	resolved map[string]float64
-	inputs   []InputSpec
-	seenIn   map[string]bool
-	plots    []PlotSeries
-	signals  []SignalMarker
-	strategy StrategySpec
-	warnings []string
-	steps    int
+	ctx        context.Context
+	candles    []marketdata.Candle
+	barCount   int
+	params     map[string]float64
+	resolved   map[string]float64
+	inputs     []InputSpec
+	seenIn     map[string]bool
+	plots      []PlotSeries
+	signals    []SignalMarker
+	strategy   StrategySpec
+	warnings   []string
+	steps      int
+	allocBytes int
 }
 
 // Eval executes an immutable compiled FasedScript Program against causal OHLCV bars.
 // Safe for concurrent calls across goroutines with distinct parameter overrides.
 func (p *Program) Eval(candles []marketdata.Candle, params map[string]float64) (EvalResult, error) {
+	return p.EvalContext(context.Background(), candles, params)
+}
+
+// EvalContext executes an immutable compiled FasedScript Program with context cancellation/deadline support.
+func (p *Program) EvalContext(ctx context.Context, candles []marketdata.Candle, params map[string]float64) (EvalResult, error) {
 	if p == nil {
 		return EvalResult{}, errors.New("nil FasedScript program")
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return EvalResult{}, err
 	}
 	n := len(candles)
 	if n == 0 {
@@ -107,6 +126,7 @@ func (p *Program) Eval(candles []marketdata.Candle, params map[string]float64) (
 	}
 
 	m := &vm{
+		ctx:      ctx,
 		candles:  candles,
 		barCount: n,
 		params:   params,
@@ -190,6 +210,9 @@ func (p *Program) Eval(candles []marketdata.Candle, params map[string]float64) (
 }
 
 func (m *vm) step(cost int) error {
+	if m.ctx != nil && m.ctx.Err() != nil {
+		return m.ctx.Err()
+	}
 	m.steps += cost
 	if m.steps > MaxEvalSteps {
 		return fmt.Errorf("FasedScript execution exceeded %d step budget", MaxEvalSteps)
@@ -599,7 +622,17 @@ func (m *vm) evalBinary(op tokenKind, lhs, rhs val) (val, error) {
 
 	case tokPlus, tokMinus, tokStar, tokSlash, tokPercent:
 		if op == tokPlus && (lhs.kind == valStr || rhs.kind == valStr) {
-			return val{kind: valStr, s: fmt.Sprint(scalarPrintable(lhs), scalarPrintable(rhs))}, nil
+			ls := fmt.Sprint(scalarPrintable(lhs))
+			rs := fmt.Sprint(scalarPrintable(rhs))
+			total := len(ls) + len(rs)
+			if total > MaxStringBytes {
+				return val{}, fmt.Errorf("FasedScript string exceeds %d byte limit", MaxStringBytes)
+			}
+			m.allocBytes += total
+			if m.allocBytes > MaxAllocBytes {
+				return val{}, fmt.Errorf("FasedScript memory allocation exceeded %d byte limit", MaxAllocBytes)
+			}
+			return val{kind: valStr, s: ls + rs}, nil
 		}
 		isSeries := lhs.kind == valSeriesFloat || rhs.kind == valSeriesFloat || lhs.kind == valSeriesBool || rhs.kind == valSeriesBool
 		if !isSeries {

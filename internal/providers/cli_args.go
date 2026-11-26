@@ -73,8 +73,7 @@ var disallowedCLIShortFlags = map[string]bool{
 	"-V": true,
 }
 
-var valueTakingCLIFlags = map[string]bool{
-	"-c":                      true,
+var allowedCLILongFlags = map[string]bool{
 	"--config":                true,
 	"--enable":                true,
 	"--disable":               true,
@@ -84,6 +83,29 @@ var valueTakingCLIFlags = map[string]bool{
 	"--reasoning-effort":      true,
 	"--personality":           true,
 	"--service-tier":          true,
+	"--model":                 true,
+	"--search":                true,
+	"--chrome":                true,
+}
+
+var allowedCLIShortFlags = map[string]bool{
+	"-c": true,
+	"-m": true,
+}
+
+var valueTakingCLIFlags = map[string]bool{
+	"-c":                      true,
+	"-m":                      true,
+	"--config":                true,
+	"--enable":                true,
+	"--disable":               true,
+	"--profile":               true,
+	"--cloud-skills-snapshot": true,
+	"--effort":                true,
+	"--reasoning-effort":      true,
+	"--personality":           true,
+	"--service-tier":          true,
+	"--model":                 true,
 }
 
 var disallowedCodexConfigKeys = []string{
@@ -150,6 +172,9 @@ func ParseSafeCLILaunchArgs(raw string) ([]string, error) {
 		lowerFlag := strings.ToLower(flagName)
 		if disallowedCLILongFlags[lowerFlag] || disallowedCLIShortFlags[flagName] {
 			return nil, fmt.Errorf("disallowed launch flag: %s", flagName)
+		}
+		if !allowedCLILongFlags[lowerFlag] && !allowedCLIShortFlags[flagName] {
+			return nil, fmt.Errorf("unsupported launch flag: %s", flagName)
 		}
 		if lowerFlag == "-c" || lowerFlag == "--config" {
 			if hasEq {
@@ -276,6 +301,22 @@ func PrepareCodexShadowHome(configDir, shadowHome string) (string, error) {
 	shadowDir := ExpandCLIUserPath(shadowHome)
 	if shadowDir == "" {
 		return "", errors.New("invalid CLI shadow home path")
+	}
+	cleanShadow := filepath.Clean(shadowDir)
+	allowedRoot := false
+	if home, hErr := os.UserHomeDir(); hErr == nil && home != "" {
+		cleanHome := filepath.Clean(home)
+		if rel, rErr := filepath.Rel(cleanHome, cleanShadow); rErr == nil && rel != "." && !strings.HasPrefix(rel, "..") {
+			allowedRoot = true
+		}
+	}
+	if tmpDir := filepath.Clean(os.TempDir()); tmpDir != "" {
+		if rel, rErr := filepath.Rel(tmpDir, cleanShadow); rErr == nil && rel != "." && !strings.HasPrefix(rel, "..") {
+			allowedRoot = true
+		}
+	}
+	if !allowedRoot {
+		return "", errors.New("CLI shadow home must reside inside user home directory")
 	}
 	if info, err := os.Lstat(shadowDir); err == nil {
 		if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {

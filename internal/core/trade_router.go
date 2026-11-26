@@ -195,6 +195,8 @@ func (s *Store) executeLiveTradeRoute(ctx context.Context, req trade.OrderReques
 				Destination: dest,
 				AmountHuman: strconv.FormatFloat(req.Quantity, 'f', -1, 64),
 				IsBotOrAuto: isBotOrAuto,
+				AgentID:     req.AgentID,
+				Venue:       req.Venue,
 			})
 			if err != nil {
 				return trade.LiveExecReceipt{}, err

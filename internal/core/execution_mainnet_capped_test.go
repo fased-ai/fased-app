@@ -276,7 +276,7 @@ func TestMainnetCappedSolanaAndHyperliquidEndToEnd(t *testing.T) {
 		t.Fatalf("unexpected wired mainnet-capped status: %+v", ev)
 	}
 
-	// 1. Solana Mainnet-Beta v0/ALT message execution succeeds under cap and rejects >$100.
+	// 1. Solana Mainnet-Beta endpoint enforces owner step-up, blocks raw messageBase64, and enforces $100 cap on memo execution.
 	st := v.Status()
 	pubRaw, _ := hex.DecodeString(st.Account.PublicKey)
 	jupKey, _ := onchain.Key(onchain.Jupiter)
@@ -294,21 +294,64 @@ func TestMainnetCappedSolanaAndHyperliquidEndToEnd(t *testing.T) {
 	v0Msg = append(v0Msg, altKey...)
 	v0Msg = append(v0Msg, 1, 0, 0)
 
-	execBody, _ := json.Marshal(SolanaMainnetExecuteRequest{
+	// Missing step-up confirmation MUST be rejected (403).
+	rawBody, _ := json.Marshal(SolanaMainnetExecuteRequest{
 		Asset:             "SOL",
 		MessageBase64:     base64.StdEncoding.EncodeToString(v0Msg),
 		EstimatedMicroUSD: 40_000_000,
 	})
-	solResp := stage4Req(h, http.MethodPost, srv.URL, "/api/v1/execution/solana-mainnet/execute", string(execBody), token, srv.URL, csrfToken(token))
+	noStepResp := stage4Req(h, http.MethodPost, srv.URL, "/api/v1/execution/solana-mainnet/execute", string(rawBody), token, srv.URL, csrfToken(token))
+	if noStepResp.Code != 403 {
+		t.Fatalf("expected 403 without step-up on /solana-mainnet/execute, got %d: %s", noStepResp.Code, noStepResp.Body.String())
+	}
+
+	getMainnetStepUp := func() string {
+		t.Helper()
+		body := `{"password":"` + testPassword + `","action":"execute","walletId":"solana-mainnet"}`
+		rec := stage4Req(h, http.MethodPost, srv.URL, "/api/v1/auth/step-up", body, token, srv.URL, csrfToken(token))
+		if rec.Code != 200 {
+			t.Fatalf("POST /api/v1/auth/step-up failed (%d): %s", rec.Code, rec.Body.String())
+		}
+		var out struct {
+			StepUpToken string `json:"stepUpToken"`
+		}
+		_ = json.Unmarshal(rec.Body.Bytes(), &out)
+		return out.StepUpToken
+	}
+	stage4StepReq := func(path, body, stepTok string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodPost, srv.URL+path, strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Origin", srv.URL)
+		req.Header.Set("Authorization", "Bearer "+token)
+		req.Header.Set("X-CSRF-Token", csrfToken(token))
+		req.Header.Set("X-Fased-Step-Up", stepTok)
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		return rec
+	}
+
+	// Raw caller-supplied messageBase64 MUST be rejected (400) even with valid step-up.
+	rawMsgResp := stage4StepReq("/api/v1/execution/solana-mainnet/execute", string(rawBody), getMainnetStepUp())
+	if rawMsgResp.Code != 400 {
+		t.Fatalf("expected 400 rejecting raw messageBase64 on /solana-mainnet/execute, got %d: %s", rawMsgResp.Code, rawMsgResp.Body.String())
+	}
+
+	// Signer-built memo rehearsal succeeds under cap with valid step-up and rejects >$100.
+	execBody, _ := json.Marshal(SolanaMainnetExecuteRequest{
+		Asset:             "SOL",
+		Memo:              "fased-mainnet-capped-check",
+		EstimatedMicroUSD: 40_000_000,
+	})
+	solResp := stage4StepReq("/api/v1/execution/solana-mainnet/execute", string(execBody), getMainnetStepUp())
 	if solResp.Code != 200 {
 		t.Fatalf("POST /api/v1/execution/solana-mainnet/execute failed (%d): %s", solResp.Code, solResp.Body.String())
 	}
 	overBody, _ := json.Marshal(SolanaMainnetExecuteRequest{
 		Asset:             "SOL",
-		MessageBase64:     base64.StdEncoding.EncodeToString(v0Msg),
+		Memo:              "fased-mainnet-over-cap",
 		EstimatedMicroUSD: 150_000_000,
 	})
-	overResp := stage4Req(h, http.MethodPost, srv.URL, "/api/v1/execution/solana-mainnet/execute", string(overBody), token, srv.URL, csrfToken(token))
+	overResp := stage4StepReq("/api/v1/execution/solana-mainnet/execute", string(overBody), getMainnetStepUp())
 	if overResp.Code != 400 {
 		t.Fatalf("expected >$100 Solana mainnet order to return 400, got %d: %s", overResp.Code, overResp.Body.String())
 	}

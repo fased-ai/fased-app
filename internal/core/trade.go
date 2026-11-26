@@ -248,12 +248,25 @@ func (h *HTTPHandler) tradeAPI(w http.ResponseWriter, r *http.Request, token str
 		if !httpapi.DecodeStrictJSON(w, r, 64*1024, &req) {
 			return
 		}
+		norm, normErr := trade.NormalizeOrderRequest(req)
+		if normErr != nil {
+			writeError(w, 400, normErr.Error())
+			return
+		}
 		orderCtx := ctx
-		if (strings.HasPrefix(req.AccountID, "@wallet:") || strings.HasPrefix(req.AccountID, "wallet:")) &&
-			req.Mode != trade.ModeBot && req.Mode != trade.ModeAIAgent {
-			wid := strings.TrimPrefix(strings.TrimPrefix(strings.TrimSpace(req.AccountID), "@wallet:"), "wallet:")
+		if norm.ExecutionMode == trade.ExecutionModeLive {
+			// Human HTTP live orders can NEVER claim bot/ai_agent mode to skip step-up confirmation.
+			if req.Mode == trade.ModeBot || req.Mode == trade.ModeAIAgent {
+				writeError(w, 403, "autonomous bot/agent modes cannot be invoked via manual order HTTP endpoint")
+				return
+			}
+			req.Mode = trade.ModeManual
+			stepTarget := "trade:" + norm.Venue
+			if strings.HasPrefix(norm.AccountID, "@wallet:") || strings.HasPrefix(norm.AccountID, "wallet:") {
+				stepTarget = strings.TrimPrefix(strings.TrimPrefix(strings.TrimSpace(norm.AccountID), "@wallet:"), "wallet:")
+			}
 			var ok bool
-			orderCtx, ok = h.requireStepUpCtx(w, r, token, "execute", wid)
+			orderCtx, ok = h.requireStepUpCtx(w, r, token, "execute", stepTarget)
 			if !ok {
 				return
 			}
@@ -370,7 +383,20 @@ func (h *HTTPHandler) tradeAPI(w http.ResponseWriter, r *http.Request, token str
 			if !httpapi.DecodeStrictJSON(w, r, 64*1024, &in) {
 				return
 			}
-			bot, err := svc.CreateBot(ctx, in)
+			botCtx := ctx
+			acct := strings.TrimSpace(in.AccountID)
+			if acct != "" && !strings.EqualFold(acct, trade.ExecutionModePaper) {
+				stepTarget := "bot:" + strings.TrimSpace(in.Venue)
+				if strings.HasPrefix(acct, "@wallet:") || strings.HasPrefix(acct, "wallet:") {
+					stepTarget = strings.TrimPrefix(strings.TrimPrefix(acct, "@wallet:"), "wallet:")
+				}
+				var ok bool
+				botCtx, ok = h.requireStepUpCtx(w, r, token, "bot", stepTarget)
+				if !ok {
+					return
+				}
+			}
+			bot, err := svc.CreateBot(botCtx, in)
 			if err != nil {
 				writeError(w, 400, err.Error())
 				return
@@ -395,7 +421,26 @@ func (h *HTTPHandler) tradeAPI(w http.ResponseWriter, r *http.Request, token str
 			if !h.v2Mutation(w, r, token, false) {
 				return
 			}
-			bot, err := svc.SetBotStatus(ctx, parts[0], parts[1])
+			botCtx := ctx
+			if strings.EqualFold(parts[1], "start") {
+				if existing, lErr := svc.ListBots(ctx); lErr == nil {
+					for _, b := range existing {
+						if b.ID == parts[0] && b.AccountID != "" && !strings.EqualFold(b.AccountID, trade.ExecutionModePaper) {
+							stepTarget := "bot:" + b.Venue
+							if strings.HasPrefix(b.AccountID, "@wallet:") || strings.HasPrefix(b.AccountID, "wallet:") {
+								stepTarget = strings.TrimPrefix(strings.TrimPrefix(b.AccountID, "@wallet:"), "wallet:")
+							}
+							var ok bool
+							botCtx, ok = h.requireStepUpCtx(w, r, token, "bot", stepTarget)
+							if !ok {
+								return
+							}
+							break
+						}
+					}
+				}
+			}
+			bot, err := svc.SetBotStatus(botCtx, parts[0], parts[1])
 			if err != nil {
 				if errors.Is(err, trade.ErrBotNotFound) {
 					writeError(w, 404, "trade bot not found")
@@ -497,34 +542,75 @@ func toolGetKillSwitchStatus(ctx context.Context, s *Store, _ string, rawArgs js
 	}, nil
 }
 
+// draftPaperTradeOrderArgs restricts AI/MCP draft_trade_order strictly to simulated paper parameters.
+// Live accountId, executionMode, agentId, botId, and source fields are rejected by DisallowUnknownFields.
+type draftPaperTradeOrderArgs struct {
+	Venue           string  `json:"venue,omitempty"`
+	Symbol          string  `json:"symbol"`
+	Interval        string  `json:"interval,omitempty"`
+	Strategy        string  `json:"strategy,omitempty"`
+	Side            string  `json:"side"`
+	Quantity        float64 `json:"quantity"`
+	EntryPrice      float64 `json:"entryPrice,omitempty"`
+	StopPrice       float64 `json:"stopPrice,omitempty"`
+	TargetPrice     float64 `json:"targetPrice,omitempty"`
+	ATRMultiplier   float64 `json:"atrMultiplier,omitempty"`
+	GridLower       float64 `json:"gridLower,omitempty"`
+	GridUpper       float64 `json:"gridUpper,omitempty"`
+	GridLevels      int     `json:"gridLevels,omitempty"`
+	Slices          int     `json:"slices,omitempty"`
+	IntervalSeconds int     `json:"intervalSeconds,omitempty"`
+	AgentNote       string  `json:"agentNote,omitempty"`
+}
+
+func (a draftPaperTradeOrderArgs) toPaperOrderRequest() trade.OrderRequest {
+	return trade.OrderRequest{
+		Venue:           a.Venue,
+		Symbol:          a.Symbol,
+		Interval:        a.Interval,
+		Mode:            trade.ModeAIAgent,
+		Strategy:        a.Strategy,
+		Side:            a.Side,
+		Quantity:        a.Quantity,
+		AccountID:       trade.ExecutionModePaper,
+		ExecutionMode:   trade.ExecutionModePaper,
+		Source:          trade.SourceAIAgent,
+		EntryPrice:      a.EntryPrice,
+		StopPrice:       a.StopPrice,
+		TargetPrice:     a.TargetPrice,
+		ATRMultiplier:   a.ATRMultiplier,
+		GridLower:       a.GridLower,
+		GridUpper:       a.GridUpper,
+		GridLevels:      a.GridLevels,
+		Slices:          a.Slices,
+		IntervalSeconds: a.IntervalSeconds,
+		AgentNote:       a.AgentNote,
+	}
+}
+
 func previewDraftTradeOrder(_ context.Context, _ *Store, _ string, rawArgs json.RawMessage) (approvalDraft, error) {
-	var req trade.OrderRequest
-	if err := decodeToolArgs(rawArgs, &req); err != nil {
+	var args draftPaperTradeOrderArgs
+	if err := decodeToolArgs(rawArgs, &args); err != nil {
 		return approvalDraft{}, err
 	}
-	if req.Mode == "" {
-		req.Mode = trade.ModeAIAgent
-	}
-	norm, err := trade.NormalizeOrderRequest(req)
+	norm, err := trade.NormalizeOrderRequest(args.toPaperOrderRequest())
 	if err != nil {
 		return approvalDraft{}, err
 	}
 	payload, _ := json.Marshal(norm)
 	return approvalDraft{
 		Title:       fmt.Sprintf("Draft Trade Order (%s %s %.6g %s)", norm.Venue, norm.Strategy, norm.Quantity, norm.Symbol),
-		Summary:     fmt.Sprintf("%s %s (%s mode, simulated paper execution)", strings.ToUpper(norm.Side), norm.Symbol, norm.Mode),
+		Summary:     fmt.Sprintf("%s %s (account=%s execution=%s mode=%s)", strings.ToUpper(norm.Side), norm.Symbol, norm.AccountID, norm.ExecutionMode, norm.Mode),
 		PayloadJSON: string(payload),
 	}, nil
 }
 
 func executeDraftTradeOrder(ctx context.Context, s *Store, _ string, rawArgs json.RawMessage) (any, error) {
-	var req trade.OrderRequest
-	if err := decodeToolArgs(rawArgs, &req); err != nil {
+	var args draftPaperTradeOrderArgs
+	if err := decodeToolArgs(rawArgs, &args); err != nil {
 		return nil, err
 	}
-	if req.Mode == "" {
-		req.Mode = trade.ModeAIAgent
-	}
+	req := args.toPaperOrderRequest()
 	svc, err := s.tradeService()
 	if err != nil {
 		return nil, err
