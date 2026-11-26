@@ -20,7 +20,7 @@ import (
 
 func readCLIRecoveryPassphrase(in *os.File, errOut io.Writer, confirm bool) (string, error) {
 	if in != nil && term.IsTerminal(int(in.Fd())) {
-		_, _ = fmt.Fprint(errOut, "Recovery passphrase (min 8 chars): ")
+		_, _ = fmt.Fprint(errOut, "Recovery passphrase (min 12 chars): ")
 		p1, err := term.ReadPassword(int(in.Fd()))
 		_, _ = fmt.Fprintln(errOut)
 		if err != nil {
@@ -28,8 +28,8 @@ func readCLIRecoveryPassphrase(in *os.File, errOut io.Writer, confirm bool) (str
 		}
 		s1 := string(p1)
 		clear(p1)
-		if len(strings.TrimSpace(s1)) < 8 {
-			return "", errors.New("passphrase must be at least 8 characters")
+		if len(strings.TrimSpace(s1)) < 12 {
+			return "", errors.New("passphrase must be at least 12 characters")
 		}
 		if !confirm {
 			return s1, nil
@@ -53,10 +53,32 @@ func readCLIRecoveryPassphrase(in *os.File, errOut io.Writer, confirm bool) (str
 		return "", err
 	}
 	pass := strings.TrimRight(line, "\r\n")
-	if len(strings.TrimSpace(pass)) < 8 {
-		return "", errors.New("passphrase must be at least 8 characters")
+	if len(strings.TrimSpace(pass)) < 12 {
+		return "", errors.New("passphrase must be at least 12 characters")
 	}
 	return pass, nil
+}
+
+func openCLIWalletBackend(ctx context.Context, dataDir, explicitSocket string) (custody.Backend, *custody.SocketClient, *custody.Service, error) {
+	sock := strings.TrimSpace(explicitSocket)
+	if sock == "" {
+		candidate := filepath.Join(dataDir, "signer-vault", "owner.sock")
+		if ok, _ := custody.ProbeSocketAt(ctx, candidate); ok {
+			sock = candidate
+		}
+	}
+	if sock != "" {
+		c, err := custody.NewSocketClient(sock)
+		if err != nil {
+			return nil, nil, nil, err
+		}
+		return c, c, nil, nil
+	}
+	svc, err := custody.NewService(custody.Config{DataDir: dataDir})
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	return svc, nil, svc, nil
 }
 
 func walletCommand(args []string, in *os.File, out, errOut io.Writer) error {
@@ -78,24 +100,26 @@ func walletCommand(args []string, in *os.File, out, errOut io.Writer) error {
 		fs := flag.NewFlagSet("wallet status", flag.ContinueOnError)
 		fs.SetOutput(errOut)
 		dir := fs.String("data-dir", defDir, "state directory")
+		sock := fs.String("socket", "", "optional fased-signer Unix socket path")
 		asJSON := fs.Bool("json", true, "emit JSON")
 		if err := fs.Parse(rest); err != nil {
 			return err
 		}
-		svc, err := custody.NewService(custody.Config{DataDir: *dir})
+		be, sc, _, err := openCLIWalletBackend(ctx, *dir, *sock)
 		if err != nil {
 			return err
 		}
-		defer svc.Close()
-		list, err := svc.ListWallets(ctx)
+		defer be.Close()
+		list, err := be.ListWallets(ctx)
 		if err != nil {
 			return err
 		}
+		sockReady := sc != nil || custody.ProbeSocket(ctx, *dir)
 		if *asJSON {
 			return json.NewEncoder(out).Encode(map[string]any{
 				"wallets":     list,
 				"count":       len(list),
-				"socketReady": custody.ProbeSocket(ctx, *dir),
+				"socketReady": sockReady,
 			})
 		}
 		for _, w := range list {
@@ -107,18 +131,19 @@ func walletCommand(args []string, in *os.File, out, errOut io.Writer) error {
 		fs := flag.NewFlagSet("wallet create", flag.ContinueOnError)
 		fs.SetOutput(errOut)
 		dir := fs.String("data-dir", defDir, "state directory")
+		sock := fs.String("socket", "", "optional fased-signer Unix socket path")
 		name := fs.String("name", "", "wallet display name")
 		role := fs.String("role", "", "wallet role: agent, trading, vault, mining")
 		rpcURL := fs.String("rpc-url", "", "Solana RPC URL")
 		if err := fs.Parse(rest); err != nil {
 			return err
 		}
-		svc, err := custody.NewService(custody.Config{DataDir: *dir})
+		be, _, _, err := openCLIWalletBackend(ctx, *dir, *sock)
 		if err != nil {
 			return err
 		}
-		defer svc.Close()
-		w, err := svc.CreateNativeWallet(ctx, *name, *role, *rpcURL)
+		defer be.Close()
+		w, err := be.CreateNativeWallet(ctx, *name, *role, *rpcURL)
 		if err != nil {
 			return err
 		}
@@ -128,6 +153,7 @@ func walletCommand(args []string, in *os.File, out, errOut io.Writer) error {
 		fs := flag.NewFlagSet("wallet import", flag.ContinueOnError)
 		fs.SetOutput(errOut)
 		dir := fs.String("data-dir", defDir, "state directory")
+		sock := fs.String("socket", "", "optional fased-signer owner Unix socket path")
 		name := fs.String("name", "", "wallet display name")
 		role := fs.String("role", "", "wallet role: agent, trading, vault, mining")
 		filePath := fs.String("file", "", "absolute path to 0600 Solana JSON keypair file")
@@ -135,12 +161,17 @@ func walletCommand(args []string, in *os.File, out, errOut io.Writer) error {
 		if err := fs.Parse(rest); err != nil {
 			return err
 		}
-		svc, err := custody.NewService(custody.Config{DataDir: *dir})
+		be, sc, svc, err := openCLIWalletBackend(ctx, *dir, *sock)
 		if err != nil {
 			return err
 		}
-		defer svc.Close()
-		w, err := svc.ImportSolanaKeypairFile(ctx, *filePath, *name, *role, *rpcURL)
+		defer be.Close()
+		var w custody.WalletPublic
+		if sc != nil {
+			w, err = sc.ImportSolanaKeypairFile(ctx, *filePath, *name, *role, *rpcURL)
+		} else {
+			w, err = svc.ImportSolanaKeypairFile(ctx, *filePath, *name, *role, *rpcURL)
+		}
 		if err != nil {
 			return err
 		}
@@ -153,18 +184,19 @@ func walletCommand(args []string, in *os.File, out, errOut io.Writer) error {
 		fs := flag.NewFlagSet("wallet rpc set", flag.ContinueOnError)
 		fs.SetOutput(errOut)
 		dir := fs.String("data-dir", defDir, "state directory")
+		sock := fs.String("socket", "", "optional fased-signer Unix socket path")
 		walletID := fs.String("wallet-id", "", "wallet id or @wallet:<id>")
 		rpcURL := fs.String("rpc-url", "", "primary Solana RPC URL")
 		fallbackURL := fs.String("fallback-rpc-url", "", "optional distinct fallback RPC URL")
 		if err := fs.Parse(rest[1:]); err != nil {
 			return err
 		}
-		svc, err := custody.NewService(custody.Config{DataDir: *dir})
+		be, _, _, err := openCLIWalletBackend(ctx, *dir, *sock)
 		if err != nil {
 			return err
 		}
-		defer svc.Close()
-		w, err := svc.SetWalletRPC(ctx, *walletID, *rpcURL, *fallbackURL, "owner-cli")
+		defer be.Close()
+		w, err := be.SetWalletRPC(ctx, *walletID, *rpcURL, *fallbackURL, "owner-cli")
 		if err != nil {
 			return err
 		}
@@ -181,6 +213,7 @@ func walletCommand(args []string, in *os.File, out, errOut io.Writer) error {
 			fs := flag.NewFlagSet("wallet recovery export", flag.ContinueOnError)
 			fs.SetOutput(errOut)
 			dir := fs.String("data-dir", defDir, "state directory")
+			sock := fs.String("socket", "", "optional fased-signer owner Unix socket path")
 			walletID := fs.String("wallet-id", "", "wallet id")
 			output := fs.String("output", "", "new clean absolute output path")
 			if err := fs.Parse(subRest); err != nil {
@@ -197,12 +230,12 @@ func walletCommand(args []string, in *os.File, out, errOut io.Writer) error {
 			if err != nil {
 				return err
 			}
-			svc, err := custody.NewService(custody.Config{DataDir: *dir})
+			be, _, _, err := openCLIWalletBackend(ctx, *dir, *sock)
 			if err != nil {
 				return err
 			}
-			defer svc.Close()
-			archive, fp, err := svc.ExportEncryptedRecovery(ctx, *walletID, pass, "owner-cli")
+			defer be.Close()
+			archive, fp, err := be.ExportEncryptedRecovery(ctx, *walletID, pass, "owner-cli")
 			if err != nil {
 				return err
 			}
@@ -223,6 +256,7 @@ func walletCommand(args []string, in *os.File, out, errOut io.Writer) error {
 			fs := flag.NewFlagSet("wallet recovery import", flag.ContinueOnError)
 			fs.SetOutput(errOut)
 			dir := fs.String("data-dir", defDir, "state directory")
+			sock := fs.String("socket", "", "optional fased-signer owner Unix socket path")
 			filePath := fs.String("file", "", "encrypted recovery file path")
 			name := fs.String("name", "", "wallet display name")
 			role := fs.String("role", "", "optional role override")
@@ -238,12 +272,12 @@ func walletCommand(args []string, in *os.File, out, errOut io.Writer) error {
 			if err != nil {
 				return err
 			}
-			svc, err := custody.NewService(custody.Config{DataDir: *dir})
+			be, _, _, err := openCLIWalletBackend(ctx, *dir, *sock)
 			if err != nil {
 				return err
 			}
-			defer svc.Close()
-			w, err := svc.ImportEncryptedRecovery(ctx, raw, pass, *name, *role, *rpcURL)
+			defer be.Close()
+			w, err := be.ImportEncryptedRecovery(ctx, raw, pass, *name, *role, *rpcURL)
 			if err != nil {
 				return err
 			}
@@ -253,18 +287,24 @@ func walletCommand(args []string, in *os.File, out, errOut io.Writer) error {
 			fs := flag.NewFlagSet("wallet recovery export-raw", flag.ContinueOnError)
 			fs.SetOutput(errOut)
 			dir := fs.String("data-dir", defDir, "state directory")
+			sock := fs.String("socket", "", "optional fased-signer owner Unix socket path")
 			walletID := fs.String("wallet-id", "", "wallet id")
 			output := fs.String("output", "", "new clean absolute output path")
 			ack := fs.Bool("acknowledge-custody-reduction", false, "explicitly acknowledge raw key export outside signer custody")
 			if err := fs.Parse(subRest); err != nil {
 				return err
 			}
-			svc, err := custody.NewService(custody.Config{DataDir: *dir})
+			be, sc, svc, err := openCLIWalletBackend(ctx, *dir, *sock)
 			if err != nil {
 				return err
 			}
-			defer svc.Close()
-			if err := svc.ExportRawKeypairFile(ctx, *walletID, *output, *ack); err != nil {
+			defer be.Close()
+			if sc != nil {
+				err = sc.ExportRawKeypairFile(ctx, *walletID, *output, *ack)
+			} else {
+				err = svc.ExportRawKeypairFile(ctx, *walletID, *output, *ack)
+			}
+			if err != nil {
 				return err
 			}
 			return json.NewEncoder(out).Encode(map[string]any{"output": *output, "custodyReduced": true})

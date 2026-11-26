@@ -61,6 +61,8 @@ func mapSentinelCode(code, msg string) error {
 		base = ErrPolicyConflict
 	case "wrong_password":
 		base = ErrWrongPassword
+	case "owner_auth_required":
+		base = ErrOwnerAuthRequired
 	case "tx_tampered":
 		base = ErrTxTampered
 	case "ambiguous_state":
@@ -92,6 +94,9 @@ func (c *SocketClient) do(ctx context.Context, method, path string, reqBody, out
 	}
 	if reqBody != nil {
 		req.Header.Set("Content-Type", "application/json")
+	}
+	if proof := OwnerProofFromContext(ctx); proof != "" {
+		req.Header.Set(ownerProofHeader, proof)
 	}
 	resp, err := c.client.Do(req)
 	if err != nil {
@@ -138,6 +143,51 @@ func (c *SocketClient) VerifyAuditChain(ctx context.Context) (int, error) {
 		return 0, err
 	}
 	return resp.Count, nil
+}
+
+func (c *SocketClient) HasOwnerAuth(ctx context.Context) (bool, error) {
+	var resp struct {
+		HasOwnerAuth bool `json:"hasOwnerAuth"`
+	}
+	if err := c.do(ctx, http.MethodGet, "/v1/owner/status", nil, &resp); err != nil {
+		return false, err
+	}
+	return resp.HasOwnerAuth, nil
+}
+
+func (c *SocketClient) ConfigureOwnerAuth(ctx context.Context, password string) error {
+	return c.do(ctx, http.MethodPost, "/v1/owner/configure", map[string]string{
+		"password": password,
+	}, nil)
+}
+
+func (c *SocketClient) AuthorizeOwnerAction(ctx context.Context, password, action, walletID string) (string, time.Time, error) {
+	var resp struct {
+		Proof     string `json:"proof"`
+		ExpiresAt int64  `json:"expiresAt"`
+	}
+	if err := c.do(ctx, http.MethodPost, "/v1/owner/authorize", map[string]string{
+		"password": password,
+		"action":   action,
+		"walletId": walletID,
+	}, &resp); err != nil {
+		return "", time.Time{}, err
+	}
+	return resp.Proof, time.Unix(resp.ExpiresAt, 0).UTC(), nil
+}
+
+func (c *SocketClient) ImportSolanaKeypairFile(ctx context.Context, absPath, name, role, primaryRPCURL string) (WalletPublic, error) {
+	var out WalletPublic
+	err := c.do(ctx, http.MethodPost, "/v1/owner/import-raw", map[string]string{
+		"filePath": absPath, "name": name, "role": role, "primaryRpcUrl": primaryRPCURL,
+	}, &out)
+	return out, err
+}
+
+func (c *SocketClient) ExportRawKeypairFile(ctx context.Context, walletID, absOutPath string, ack bool) error {
+	return c.do(ctx, http.MethodPost, "/v1/owner/export-raw", map[string]any{
+		"walletId": walletID, "outputPath": absOutPath, "acknowledgeCustodyReduction": ack,
+	}, nil)
 }
 
 func (c *SocketClient) ListWallets(ctx context.Context) ([]WalletPublic, error) {

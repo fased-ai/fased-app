@@ -238,8 +238,9 @@ func (h *HTTPHandler) api(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			passwordAvailable := claimed && !passwordDisabled(salt)
+			hasNativeWallet := h.store.hasNativeSigningWallet(r.Context())
 			result["passwordAvailable"] = passwordAvailable
-			result["localAutoEnter"] = !h.requirePassword && !passwordAvailable && (h.localPeerVerifiable() || r.Context().Value(privateIPCKey{}) == true)
+			result["localAutoEnter"] = !h.requirePassword && !passwordAvailable && !hasNativeWallet && (h.localPeerVerifiable() || r.Context().Value(privateIPCKey{}) == true)
 		}
 		if h.instanceLocation == "remote" || h.publicHost != "" || h.remoteIngress {
 			hasPW, pwErr := h.store.hasPassword(r.Context())

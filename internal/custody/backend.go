@@ -1,6 +1,9 @@
 package custody
 
-import "context"
+import (
+	"context"
+	"time"
+)
 
 // Backend defines the typed boundary implemented both by the in-process custody *Service
 // and the out-of-process Unix socket *SocketClient. Neither interface ever exposes raw keys.
@@ -8,6 +11,9 @@ type Backend interface {
 	Close() error
 	VerifyAuditChain(ctx context.Context) (int, error)
 	SecurityStatus(ctx context.Context) (SecurityStatus, error)
+	HasOwnerAuth(ctx context.Context) (bool, error)
+	ConfigureOwnerAuth(ctx context.Context, password string) error
+	AuthorizeOwnerAction(ctx context.Context, password, action, walletID string) (string, time.Time, error)
 	ListWallets(ctx context.Context) ([]WalletPublic, error)
 	GetWallet(ctx context.Context, idOrHandle string) (WalletPublic, error)
 	ResolveWallet(ctx context.Context, sel WalletSelector) (WalletPublic, error)
