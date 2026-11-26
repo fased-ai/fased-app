@@ -84,6 +84,8 @@ var allowedCLILongFlags = map[string]bool{
 	"--personality":           true,
 	"--service-tier":          true,
 	"--model":                 true,
+	"--search":                true,
+	"--chrome":                true,
 }
 
 var allowedCLIShortFlags = map[string]bool{
