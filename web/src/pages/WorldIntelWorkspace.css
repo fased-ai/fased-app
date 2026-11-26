@@ -163,6 +163,7 @@
   margin-bottom: 10px;
 }
 
+.wt-intel-head h1,
 .wt-intel-head h2,
 .wt-rail-title {
   margin: 0 0 8px;
@@ -171,6 +172,7 @@
   color: var(--wt-text);
 }
 
+.wt-intel-head h1,
 .wt-intel-head h2 {
   margin: 0;
 }
@@ -238,8 +240,9 @@
 }
 
 .wt button.intel-filter-pill.is-selected {
-  background: color-mix(in srgb, var(--shell-primary) 16%, transparent);
-  color: var(--shell-primary);
+  background: color-mix(in srgb, var(--shell-primary) 18%, transparent);
+  box-shadow: inset 0 0 0 1px var(--shell-primary);
+  color: var(--wt-text);
 }
 
 .intel-pill-count {
@@ -387,6 +390,9 @@
   color: var(--wt-text);
   font-size: 0.82rem;
   font-weight: 600;
+  line-height: 1.35;
+  white-space: normal;
+  overflow-wrap: anywhere;
   text-align: left;
   cursor: pointer;
 }

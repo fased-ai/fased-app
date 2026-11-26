@@ -88,7 +88,7 @@ const icons = {
 const paths = {
   agents: "agents/settings",
   tasks: "agents/tasks",
-  news: "intel",
+  news: "agents/news",
   intel: "intel",
   predictions: "intel",
   alerts: "agents/tasks",

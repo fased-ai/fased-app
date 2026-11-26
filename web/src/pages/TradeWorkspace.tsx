@@ -504,28 +504,9 @@ export function TradeWorkspace() {
       : ["hyperliquid", "binance", "kraken", "solana"];
   const hasLiveAccount = accounts.some((a) => a.executionMode === "live");
 
-  if (isZeroState) {
-    return (
-      <section
-        className="trade-workspace wt-trade-shell"
-        aria-label={t("Trade")}
-      >
-        <div className="trade-empty-cta">
-          <button
-            type="button"
-            className="wt-btn-rose-sm"
-            onClick={() => openSettingsModal("data")}
-          >
-            <Settings size={15} aria-hidden="true" />
-            <span>{t("Enable exchanges in Settings")}</span>
-          </button>
-        </div>
-      </section>
-    );
-  }
-
   return (
     <section className="trade-workspace wt-trade-shell" aria-label={t("Trade")}>
+      <h1 className="sr-only">{t("Trade")}</h1>
       <div className="wt-trade-grid">
         <aside className="wt-trade-left">
           {activeTile && (
@@ -661,6 +642,16 @@ export function TradeWorkspace() {
             </div>
 
             <div className="trade-controls">
+              {isZeroState && (
+                <button
+                  type="button"
+                  className="trade-mini-btn"
+                  onClick={() => openSettingsModal("data")}
+                >
+                  <Settings size={13} aria-hidden="true" />
+                  <span>{t("Data & Feeds")}</span>
+                </button>
+              )}
               <button
                 type="button"
                 className={`icon-button ${config.syncCrosshair ? "is-selected" : ""}`}

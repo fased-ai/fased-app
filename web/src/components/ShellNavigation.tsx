@@ -14,6 +14,7 @@ import {
   MessageSquare,
   Monitor,
   Moon,
+  Newspaper,
   PanelLeftClose,
   PanelLeftOpen,
   PanelRightOpen,
@@ -40,6 +41,7 @@ export const shellPages = [
   { name: "News & Intel", path: "intel", icon: Globe2 },
   { name: "Lab", path: "lab", icon: FlaskConical },
   { name: "Memory", path: "agents/memory", icon: BookOpen },
+  { name: "News", path: "agents/news", icon: Newspaper },
   { name: "Mining", path: "terminals/satcoin", icon: Pickaxe },
   { name: "Onchain", path: "terminals/jupiter", icon: ArrowLeftRight },
   { name: "Hyperliquid", path: "terminals/hyperliquid", icon: TrendingUp },
@@ -114,7 +116,9 @@ export function ShellNavigation() {
     core.capabilities,
     Boolean(agents.view?.wenMining),
   );
-  const railPages = visiblePages.filter((p) => p.path !== "agents/memory");
+  const railPages = visiblePages.filter(
+    (p) => p.path !== "agents/news" && p.path !== "agents/memory",
+  );
   const links = (items: readonly (typeof shellPages)[number][], rail = false) =>
     items.map((p) => (
       <a

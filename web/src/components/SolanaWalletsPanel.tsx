@@ -695,7 +695,7 @@ export function SolanaWalletsPanel() {
         {/* LEFT RAIL (232px) — Switcher, Identity, 2x2 KPIs, Backup/Freeze */}
         <aside className="wt-wpanel" aria-label={t("Wallets")}>
           <div className="wt-whead">
-            <h2>{t("Wallets")}</h2>
+            <h1>{t("Wallets")}</h1>
             <button
               type="button"
               className="wt-btn-soft"
@@ -1412,7 +1412,7 @@ export function SolanaWalletsPanel() {
               </div>
 
               <label className="wt-field">
-                <span>{t("Name")}</span>
+                <span>{t("Wallet name")}</span>
                 <input
                   value={createName}
                   onChange={(e) => setCreateName(e.target.value)}
@@ -1491,7 +1491,7 @@ export function SolanaWalletsPanel() {
               )}
 
               <label className="wt-field">
-                <span>{t("Name")}</span>
+                <span>{t("Wallet name")}</span>
                 <input
                   value={hwName}
                   onChange={(e) => setHwName(e.target.value)}
@@ -1771,7 +1771,7 @@ export function SolanaWalletsPanel() {
               />
             </label>
             <label className="wt-field">
-              <span>{t("Name")}</span>
+              <span>{t("Wallet name")}</span>
               <input
                 value={restoreName}
                 onChange={(e) => setRestoreName(e.target.value)}

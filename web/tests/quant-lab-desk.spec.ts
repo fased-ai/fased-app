@@ -179,8 +179,8 @@ test("Quant Lab IDE, 4-Gate validation, Multi-Seat Paper/Shadow Desk, Overview w
   await expect(
     page
       .getByTestId("chart-tile-tile-1")
-      .getByLabel("Indicator script", { exact: true }),
-  ).toHaveValue("ema-rsi-trend");
+      .getByRole("button", { name: "Indicator script", exact: true }),
+  ).toHaveAttribute("data-script-id", "ema-rsi-trend");
 
   await page.goto(`${url}/#overview`);
   await page.getByRole("button", { name: "Add widgets", exact: true }).click();

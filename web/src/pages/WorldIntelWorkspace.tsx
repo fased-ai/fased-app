@@ -209,8 +209,9 @@ export function WorldIntelWorkspace() {
     return (
       <section
         className="intel-workspace wt-intel-shell"
-        aria-label={t("News & Intel")}
+        aria-label={t("World Intel")}
       >
+        <h1 className="sr-only">{t("World Intel")}</h1>
         <div className="intel-empty-cta">
           <button
             type="button"
@@ -231,7 +232,7 @@ export function WorldIntelWorkspace() {
   return (
     <section
       className="intel-workspace wt-intel-shell"
-      aria-label={t("News & Intel")}
+      aria-label={t("World Intel")}
     >
       {error && <p role="alert">{error}</p>}
 
@@ -239,7 +240,7 @@ export function WorldIntelWorkspace() {
         <aside className="wt-intel-left">
           <div className="wt-wpanel">
             <div className="wt-intel-head">
-              <h2>{t("News & Intel")}</h2>
+              <h1>{t("World Intel")}</h1>
               <div className="wt-intel-head-actions">
                 <button
                   type="button"

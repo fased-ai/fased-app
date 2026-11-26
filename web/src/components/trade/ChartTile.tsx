@@ -329,6 +329,7 @@ export function ChartTile({
           <button
             type="button"
             className="trade-symbol-pill"
+            data-symbol={tile.symbol}
             aria-expanded={openMenu === "symbol"}
             onClick={() =>
               setOpenMenu((m) => (m === "symbol" ? null : "symbol"))
@@ -466,6 +467,7 @@ export function ChartTile({
                 className={`icon-button ${tile.scriptId ? "is-selected" : ""}`}
                 aria-label={t("Indicator script")}
                 title={t("Indicator script")}
+                data-script-id={tile.scriptId ?? ""}
                 onClick={() =>
                   setOpenMenu((m) => (m === "indicators" ? null : "indicators"))
                 }

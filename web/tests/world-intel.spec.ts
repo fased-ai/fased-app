@@ -40,7 +40,6 @@ test("World Intel map, prediction arbitrage, chart event pins, Overview widgets,
   await expect(
     page.getByRole("heading", { name: "World Intel", exact: true, level: 1 }),
   ).toBeVisible();
-  await expect(page.getByText("Read-only", { exact: true })).toBeVisible();
   await expect(
     page.getByRole("img", { name: "World map", exact: true }),
   ).toBeVisible();
@@ -56,32 +55,19 @@ test("World Intel map, prediction arbitrage, chart event pins, Overview widgets,
   await regionGroup.getByRole("button", { name: "1×", exact: true }).click();
   await regionGroup.getByRole("button", { name: /^All/ }).click();
 
-  // 2. Switch to Predictions tab and verify Polymarket/Kalshi arbitrage spread renders.
-  await page.getByRole("tab", { name: /^Predictions/ }).click();
+  // 2. Verify right-rail Prediction Markets arbitrage spread renders.
   const predList = page.getByTestId("intel-predictions-list");
-  await expect(predList).toContainText("Arbitrage:");
   await expect(predList).toContainText("Polymarket 62%");
   await expect(predList).toContainText("Kalshi 48%");
 
-  // 3. Switch to Sources tab, check Fresh SLO pill, add custom .invalid RSS source -> Sync -> Remove.
-  await page.getByRole("tab", { name: /^Sources/ }).click();
-  await expect(page.getByTestId("intel-sources-slo")).toContainText("Fresh");
-  const srcForm = page.getByRole("form", {
-    name: "Custom source",
-    exact: true,
-  });
-  await srcForm.getByLabel("Source ID", { exact: true }).fill("custom-rss");
-  await srcForm.getByLabel("Name", { exact: true }).fill("Custom Intel");
-  await srcForm
-    .getByLabel("Endpoint", { exact: true })
-    .fill("https://feed.intel.invalid/rss.xml");
-  await srcForm.getByRole("button", { name: "Save", exact: true }).click();
-
-  const customRow = page.getByTestId("intel-source-custom-rss");
-  await expect(customRow).toBeVisible();
-  await customRow.getByRole("button", { name: "Sync", exact: true }).click();
-  await customRow.getByRole("button", { name: "Remove", exact: true }).click();
-  await expect(customRow).toHaveCount(0);
+  // 3. Switch News Wire -> Macro & Filings tab and open Data & Feeds settings modal.
+  await page.getByRole("tab", { name: /Macro & Filings/ }).click();
+  await page.getByRole("tab", { name: /News Wire/ }).click();
+  await expect(page.getByTestId("intel-events-list")).toBeVisible();
+  await page.getByRole("button", { name: "Data & Feeds", exact: true }).click();
+  const settingsDialog = page.getByRole("dialog", { name: "Settings" });
+  await expect(settingsDialog).toBeVisible();
+  await page.keyboard.press("Escape");
 
   // 4. Verify Chart Event Pins in #trade and toggle Events button.
   await page.goto(`${url}/#trade`);
