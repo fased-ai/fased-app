@@ -40,7 +40,7 @@ test("Trade workspace renders 1x1..4x4 Lightweight Charts, Orderflow tabs, persi
   await expect(
     page.getByRole("heading", { name: "Trade", exact: true, level: 1 }),
   ).toBeVisible();
-  await expect(page.getByText("Read-only", { exact: true })).toBeVisible();
+  await expect(page.getByText("Paper", { exact: true })).toBeVisible();
 
   const grid = page.getByTestId("trade-chart-grid");
   await expect(grid.locator("article.trade-tile")).toHaveCount(4);
@@ -109,6 +109,36 @@ test("Trade workspace renders 1x1..4x4 Lightweight Charts, Orderflow tabs, persi
     .getByRole("button", { name: "Run 8-Seat Cycle", exact: true })
     .click();
   await expect(deskDock).toContainText("$100,000.00");
+
+  // Unified Execution Ticket: submit paper Bracket order and exercise Kill Switch.
+  await orderflow.getByRole("tab", { name: "Ticket", exact: true }).click();
+  const ticketPane = orderflow.getByTestId("trade-ticket-pane");
+  await expect(ticketPane).toBeVisible();
+  await ticketPane
+    .getByLabel("Strategy", { exact: true })
+    .selectOption("bracket");
+  await ticketPane.getByLabel("Entry price", { exact: true }).fill("100");
+  await ticketPane.getByLabel("Stop price", { exact: true }).fill("95");
+  await ticketPane.getByLabel("Target price", { exact: true }).fill("115");
+  await ticketPane
+    .getByRole("button", { name: "Submit paper order", exact: true })
+    .click();
+  const bottomDock = page.getByTestId("trade-bottom-dock");
+  await expect(bottomDock).toContainText("BRACKET BUY");
+  await expect(bottomDock).toContainText("Open plans: 1");
+
+  await ticketPane
+    .getByRole("button", { name: "Kill switch", exact: true })
+    .click();
+  await expect(
+    ticketPane.getByRole("button", { name: "Clear kill switch", exact: true }),
+  ).toBeVisible();
+  await ticketPane
+    .getByRole("button", { name: "Clear kill switch", exact: true })
+    .click();
+  await expect(
+    ticketPane.getByRole("button", { name: "Kill switch", exact: true }),
+  ).toBeVisible();
 
   // Persistent Watchlist add -> reload -> click picks symbol into active tile.
   const watchlist = page.getByRole("complementary", {

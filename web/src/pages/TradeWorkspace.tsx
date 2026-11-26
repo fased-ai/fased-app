@@ -37,6 +37,15 @@ import {
   type TradeWorkspaceConfig,
   type WatchlistItem,
 } from "../market-data";
+import {
+  cancelTradeOrder,
+  evaluateTradeOrders,
+  getTradeState,
+  setGlobalKillSwitch,
+  submitTradeOrder,
+  type TradeOrderRequest,
+  type TradeSnapshot,
+} from "../trade-engine";
 import { ChartTile } from "../components/trade/ChartTile";
 import { OrderflowPane } from "../components/trade/OrderflowPane";
 import { WatchlistPanel } from "../components/trade/WatchlistPanel";
@@ -67,6 +76,9 @@ export function TradeWorkspace() {
   const [desk, setDesk] = useState<DeskSnapshot | null>(null);
   const [deskBusy, setDeskBusy] = useState(false);
   const [deskError, setDeskError] = useState("");
+  const [trade, setTrade] = useState<TradeSnapshot | null>(null);
+  const [tradeBusy, setTradeBusy] = useState(false);
+  const [tradeError, setTradeError] = useState("");
 
   const crosshairBusRef = useRef<CrosshairBus | null>(null);
   if (!crosshairBusRef.current) {
@@ -81,10 +93,19 @@ export function TradeWorkspace() {
     } catch {}
   }, [core.mode, core.request]);
 
+  const refreshTrade = useCallback(async () => {
+    if (core.mode !== "ready") return;
+    try {
+      const snap = await getTradeState(core);
+      setTrade(snap);
+    } catch {}
+  }, [core.mode, core.request]);
+
   useEffect(() => {
     if (core.mode !== "ready") {
       setLabScripts([]);
       setDesk(null);
+      setTrade(null);
       return;
     }
     let cancelled = false;
@@ -96,6 +117,11 @@ export function TradeWorkspace() {
     void getDeskState(core)
       .then((snap) => {
         if (!cancelled) setDesk(snap);
+      })
+      .catch(() => {});
+    void getTradeState(core)
+      .then((snap) => {
+        if (!cancelled) setTrade(snap);
       })
       .catch(() => {});
     void fetchDrawings(core)
@@ -345,12 +371,76 @@ export function TradeWorkspace() {
     }
   }
 
+  async function handleSubmitTrade(req: TradeOrderRequest) {
+    if (core.mode !== "ready" || tradeBusy) return;
+    setTradeBusy(true);
+    setTradeError("");
+    try {
+      await submitTradeOrder(core, req);
+      await refreshTrade();
+    } catch (err) {
+      setTradeError(
+        err instanceof Error ? err.message : "Trade submission failed",
+      );
+    } finally {
+      setTradeBusy(false);
+    }
+  }
+
+  async function handleCancelTrade(id: string) {
+    if (core.mode !== "ready" || tradeBusy) return;
+    setTradeBusy(true);
+    setTradeError("");
+    try {
+      await cancelTradeOrder(core, id);
+      await refreshTrade();
+    } catch (err) {
+      setTradeError(err instanceof Error ? err.message : "Cancel failed");
+    } finally {
+      setTradeBusy(false);
+    }
+  }
+
+  async function handleEvaluateTrades() {
+    if (core.mode !== "ready" || tradeBusy) return;
+    setTradeBusy(true);
+    setTradeError("");
+    try {
+      await evaluateTradeOrders(core);
+      await refreshTrade();
+    } catch (err) {
+      setTradeError(err instanceof Error ? err.message : "Evaluation failed");
+    } finally {
+      setTradeBusy(false);
+    }
+  }
+
+  async function handleToggleKill(active: boolean) {
+    if (core.mode !== "ready" || tradeBusy) return;
+    setTradeBusy(true);
+    setTradeError("");
+    try {
+      await setGlobalKillSwitch(
+        core,
+        active,
+        active ? "Owner halted trading in #trade" : "Owner cleared kill switch",
+      );
+      await Promise.all([refreshTrade(), refreshDesk()]);
+    } catch (err) {
+      setTradeError(err instanceof Error ? err.message : "Kill switch failed");
+    } finally {
+      setTradeBusy(false);
+    }
+  }
+
   return (
     <section className="trade-workspace" aria-label={t("Trade")}>
       <header className="trade-toolbar">
         <div className="trade-title-group">
           <h1>{t("Trade")}</h1>
-          <Badge>{t("Read-only")}</Badge>
+          <Badge tone={trade?.killSwitchActive ? "danger" : undefined}>
+            {t(trade?.killSwitchActive ? "Kill switch" : "Paper")}
+          </Badge>
         </div>
 
         <div className="trade-controls">
@@ -458,6 +548,12 @@ export function TradeWorkspace() {
                   (!p.venue || p.venue === tile.venue) &&
                   p.symbol.toUpperCase() === tile.symbol.toUpperCase(),
               );
+              const matchingPlans = (trade?.plans ?? []).filter(
+                (pl) =>
+                  (pl.status === "active" || pl.status === "filled") &&
+                  pl.venue === tile.venue &&
+                  pl.symbol.toUpperCase() === tile.symbol.toUpperCase(),
+              );
               return (
                 <ChartTile
                   key={tile.id}
@@ -470,6 +566,7 @@ export function TradeWorkspace() {
                   syncCrosshair={config.syncCrosshair}
                   labScripts={labScripts}
                   deskPositions={matchingPositions}
+                  tradePlans={matchingPlans}
                   intelEvents={intelEvents}
                   showEvents={showEvents}
                   onSelect={() =>
@@ -507,19 +604,48 @@ export function TradeWorkspace() {
                 <span>
                   {`${t("Pending tickets")}: ${pendingDeskTickets.length}`}
                 </span>
+                <span>{`${t("Open plans")}: ${trade?.activeCount ?? 0}`}</span>
               </div>
-              <button
-                type="button"
-                className="trade-mini-btn"
-                onClick={() => navigate("lab/desk")}
-              >
-                {t("Open Lab")}
-              </button>
+              <div className="trade-desk-actions">
+                <button
+                  type="button"
+                  className="trade-mini-btn"
+                  disabled={tradeBusy || core.mode !== "ready"}
+                  onClick={() => void handleEvaluateTrades()}
+                >
+                  {t("Evaluate plans")}
+                </button>
+                <button
+                  type="button"
+                  className="trade-mini-btn"
+                  onClick={() => navigate("lab/desk")}
+                >
+                  {t("Open Lab")}
+                </button>
+              </div>
             </div>
 
-            {(pendingDeskTickets.length > 0 ||
+            {((trade?.plans?.length ?? 0) > 0 ||
+              pendingDeskTickets.length > 0 ||
               openDeskPositions.length > 0) && (
               <div className="trade-bottom-rows">
+                {(trade?.plans ?? []).slice(0, 8).map((pl) => (
+                  <div className="trade-bottom-row" key={pl.id}>
+                    <span>
+                      {`${pl.venue.toUpperCase()} ${pl.symbol} ${pl.strategy.toUpperCase()} ${pl.side.toUpperCase()} · ${pl.quantity} · ${pl.status.toUpperCase()}`}
+                    </span>
+                    {pl.status === "active" && (
+                      <button
+                        type="button"
+                        className="trade-mini-btn"
+                        disabled={tradeBusy}
+                        onClick={() => void handleCancelTrade(pl.id)}
+                      >
+                        {t("Cancel plan")}
+                      </button>
+                    )}
+                  </div>
+                ))}
                 {pendingDeskTickets.map((tk) => (
                   <div className="trade-bottom-row" key={tk.id}>
                     <span>
@@ -575,13 +701,18 @@ export function TradeWorkspace() {
             crosshairBus={crosshairBusRef.current ?? undefined}
             syncCrosshair={config.syncCrosshair}
             desk={desk}
+            trade={trade}
             activeScriptId={activeTile.scriptId}
             deskBusy={deskBusy}
             deskError={deskError}
+            tradeBusy={tradeBusy}
+            tradeError={tradeError}
             onRunDeskCycle={(mode) => void handleRunDeskCycle(mode)}
             onApproveTicket={(id) => void handleApproveTicket(id)}
             onRejectTicket={(id) => void handleRejectTicket(id)}
             onClosePosition={(id) => void handleClosePosition(id)}
+            onSubmitTrade={(req) => void handleSubmitTrade(req)}
+            onToggleKill={(active) => void handleToggleKill(active)}
             onOpenLab={() => navigate("lab/desk")}
             onChangeTab={(nextTab: OrderflowTab) =>
               setConfig((prev) => ({ ...prev, orderflowTab: nextTab }))

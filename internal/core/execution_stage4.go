@@ -468,6 +468,9 @@ func (s *Store) listAgentVaults(ctx context.Context) ([]signer.AgentVaultUsage, 
 }
 
 func (s *Store) rehearseSolanaDevnet(ctx context.Context, req SolanaDevnetRehearseRequest) (*SolanaDevnetRehearseResult, error) {
+	if s.isGlobalKillActive(ctx) {
+		return nil, errGlobalKillSwitchActive
+	}
 	rt := s.stage4Runtime()
 	if rt == nil || rt.devnetExecutor == nil || rt.signerCall == nil {
 		return nil, errors.New("solana devnet execution is not configured")
@@ -674,7 +677,7 @@ func (h *HTTPHandler) solanaDevnetRehearseAPI(w http.ResponseWriter, r *http.Req
 	res, err := h.store.rehearseSolanaDevnet(r.Context(), req)
 	if err != nil {
 		code := 400
-		if errors.Is(err, signer.ErrUnavailable) {
+		if errors.Is(err, signer.ErrUnavailable) || errors.Is(err, errGlobalKillSwitchActive) {
 			code = 403
 		}
 		writeError(w, code, err.Error())
@@ -695,6 +698,9 @@ type SolanaMainnetExecuteRequest struct {
 }
 
 func (s *Store) executeSolanaMainnet(ctx context.Context, req SolanaMainnetExecuteRequest) (*SolanaDevnetRehearseResult, error) {
+	if s.isGlobalKillActive(ctx) {
+		return nil, errGlobalKillSwitchActive
+	}
 	rt := s.stage4Runtime()
 	if rt == nil || rt.profile != signer.ExecutionProfileMainnetCapped || rt.mainnetExecutor == nil || rt.signerCall == nil {
 		return nil, signer.ErrUnavailable
@@ -842,7 +848,7 @@ func (h *HTTPHandler) solanaMainnetExecuteAPI(w http.ResponseWriter, r *http.Req
 	res, err := h.store.executeSolanaMainnet(r.Context(), req)
 	if err != nil {
 		code := 400
-		if errors.Is(err, signer.ErrUnavailable) {
+		if errors.Is(err, signer.ErrUnavailable) || errors.Is(err, errGlobalKillSwitchActive) {
 			code = 403
 		}
 		writeError(w, code, err.Error())

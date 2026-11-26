@@ -287,6 +287,12 @@ func TestNativeAgentV2MCPAndAuthRoutesAllowlist(t *testing.T) {
 		{http.MethodPost, "/api/v1/auth/pair"},
 		{http.MethodGet, "/api/v1/auth/pair/devices"},
 		{http.MethodPost, "/api/v1/auth/pair/devices"},
+		{http.MethodGet, "/api/v1/trade/state"},
+		{http.MethodPost, "/api/v1/trade/orders"},
+		{http.MethodPost, "/api/v1/trade/orders/ord_123-abc/cancel"},
+		{http.MethodPost, "/api/v1/trade/evaluate"},
+		{http.MethodPut, "/api/v1/trade/policy"},
+		{http.MethodPost, "/api/v1/trade/kill"},
 	}
 	for _, tc := range allowedCases {
 		req := httptest.NewRequest(tc[0], "http://wails.localhost"+tc[1], nil)
@@ -312,6 +318,9 @@ func TestNativeAgentV2MCPAndAuthRoutesAllowlist(t *testing.T) {
 		{http.MethodPost, "/api/v1/agents/v2/memories/mem_1"},
 		{http.MethodGet, "/api/v1/agents/v2/unknown"},
 		{http.MethodGet, "/api/v1/agents/v2/usage?bad=1"},
+		{http.MethodPost, "/api/v1/trade/state"},
+		{http.MethodDelete, "/api/v1/trade/orders/ord_1"},
+		{http.MethodPost, "/api/v1/trade/orders/../kill/cancel"},
 	}
 	for _, tc := range deniedCases {
 		req := httptest.NewRequest(tc[0], "http://wails.localhost"+tc[1], nil)

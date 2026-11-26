@@ -30,6 +30,7 @@ import {
   matchEventsForSymbol,
   type IntelEvent,
 } from "../../world-intel";
+import type { TradeOrderPlan } from "../../trade-engine";
 import {
   FasedChartAdapter,
   type ChartAdapterHandle,
@@ -45,6 +46,7 @@ export function ChartTile({
   syncCrosshair = true,
   labScripts = [],
   deskPositions = [],
+  tradePlans = [],
   intelEvents = [],
   showEvents = true,
   onSelect,
@@ -62,6 +64,7 @@ export function ChartTile({
   syncCrosshair?: boolean;
   labScripts?: LabScript[];
   deskPositions?: PaperPosition[];
+  tradePlans?: TradeOrderPlan[];
   intelEvents?: IntelEvent[];
   showEvents?: boolean;
   onSelect: () => void;
@@ -381,6 +384,7 @@ export function ChartTile({
           scriptPlots={scriptPlots}
           scriptSignals={scriptSignals}
           deskPositions={deskPositions}
+          tradePlans={tradePlans}
           eventPins={matchedPins}
           crosshairBus={crosshairBus}
           syncCrosshair={syncCrosshair}

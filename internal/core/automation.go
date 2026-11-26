@@ -407,8 +407,14 @@ func (h *coreTelegramHooks) PositionsSummary(ctx context.Context) (string, error
 
 func (h *coreTelegramHooks) SetAutomationState(ctx context.Context, action, reason, actor string) (automation.ControlState, error) {
 	st, err := h.autoSvc.SetState(ctx, action, reason, actor)
-	if err == nil && strings.EqualFold(strings.TrimSpace(action), "kill") {
-		h.store.syncDeskKill(ctx, reason, actor)
+	if err == nil {
+		act := strings.ToLower(strings.TrimSpace(action))
+		if act == automation.StateActionKill {
+			h.store.syncDeskKill(ctx, reason, actor)
+			h.store.syncTradeKill(ctx, true, reason, actor)
+		} else if act == automation.StateActionUnkill {
+			h.store.syncTradeKill(ctx, false, reason, actor)
+		}
 	}
 	return st, err
 }
@@ -460,8 +466,12 @@ func (h *HTTPHandler) automationAPI(w http.ResponseWriter, r *http.Request, toke
 				writeError(w, 400, err.Error())
 				return
 			}
-			if strings.EqualFold(strings.TrimSpace(in.Action), "kill") {
+			act := strings.ToLower(strings.TrimSpace(in.Action))
+			if act == automation.StateActionKill {
 				h.store.syncDeskKill(ctx, in.Reason, "owner")
+				h.store.syncTradeKill(ctx, true, in.Reason, "owner")
+			} else if act == automation.StateActionUnkill {
+				h.store.syncTradeKill(ctx, false, in.Reason, "owner")
 			}
 			writeJSON(w, 200, st)
 		default:

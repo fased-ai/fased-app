@@ -188,6 +188,10 @@ func (h *HTTPHandler) handleStage5Route(w http.ResponseWriter, r *http.Request, 
 		if !h.mutation(w, r) || !h.csrf(w, r, token) {
 			return true
 		}
+		if h.store.isGlobalKillActive(r.Context()) {
+			writeError(w, 403, errGlobalKillSwitchActive.Error())
+			return true
+		}
 		rt, err := h.store.ensureStage5Runtime()
 		if err != nil {
 			writeError(w, 500, err.Error())
@@ -279,6 +283,10 @@ func (h *HTTPHandler) handleStage5Route(w http.ResponseWriter, r *http.Request, 
 		if !h.mutation(w, r) || !h.csrf(w, r, token) {
 			return true
 		}
+		if h.store.isGlobalKillActive(r.Context()) {
+			writeError(w, 403, errGlobalKillSwitchActive.Error())
+			return true
+		}
 		rt, err := h.store.ensureStage5Runtime()
 		if err != nil {
 			writeError(w, 500, err.Error())
@@ -366,6 +374,9 @@ func previewDraftCEXOrder(_ context.Context, _ *Store, _ string, rawArgs json.Ra
 }
 
 func executeDraftCEXOrder(ctx context.Context, s *Store, _ string, rawArgs json.RawMessage) (any, error) {
+	if s.isGlobalKillActive(ctx) {
+		return nil, errGlobalKillSwitchActive
+	}
 	var req cex.OrderRequest
 	if err := decodeToolArgs(rawArgs, &req); err != nil {
 		return nil, err
@@ -398,6 +409,9 @@ func previewDraftEquitiesOrder(_ context.Context, _ *Store, _ string, rawArgs js
 }
 
 func executeDraftEquitiesOrder(ctx context.Context, s *Store, _ string, rawArgs json.RawMessage) (any, error) {
+	if s.isGlobalKillActive(ctx) {
+		return nil, errGlobalKillSwitchActive
+	}
 	var req equities.OrderRequest
 	if err := decodeToolArgs(rawArgs, &req); err != nil {
 		return nil, err

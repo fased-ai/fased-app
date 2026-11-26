@@ -114,6 +114,7 @@ var (
 	stage4MainnetCappedHook        func(*Store) (bool, uint64)
 	stage4ClearHook                func(*Store)
 	stage4EnsureHyperliquidIPCHook func(context.Context, *Store) bool
+	tradeGlobalKillActiveHook      func(context.Context, *Store) bool
 	extraClearHooksMu              sync.Mutex
 	extraClearHooks                []func(*Store)
 )
@@ -383,6 +384,9 @@ func (s *Store) changeHyperliquid(ctx context.Context, c AgentCommand) (*Hyperli
 		return s.hyperliquidProjection(revision, nil), profile, nil
 
 	case "hyperliquid-review":
+		if tradeGlobalKillActiveHook != nil && tradeGlobalKillActiveHook(ctx, s) {
+			return nil, "", errors.New("global kill switch is active")
+		}
 		if c.Hyperliquid == nil || c.Hyperliquid.Request == nil {
 			return nil, "", errors.New("hyperliquid order draft required")
 		}
@@ -455,6 +459,9 @@ func (s *Store) changeHyperliquid(ctx context.Context, c AgentCommand) (*Hyperli
 		return s.hyperliquidProjection(revision, &rev), profile, nil
 
 	case "hyperliquid-submit":
+		if tradeGlobalKillActiveHook != nil && tradeGlobalKillActiveHook(ctx, s) {
+			return nil, "", errors.New("global kill switch is active")
+		}
 		if c.Hyperliquid == nil || c.Hyperliquid.Digest == "" {
 			return nil, "", errors.New("reviewed order digest required")
 		}

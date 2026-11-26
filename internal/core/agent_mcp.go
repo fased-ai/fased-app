@@ -54,6 +54,9 @@ var mcpReadTools = map[string]bool{
 	"list_hub_packages":        true,
 	"get_swarm_status":         true,
 	"list_swarm_signals":       true,
+	"get_trade_state":          true,
+	"list_watchlists":          true,
+	"get_kill_switch_status":   true,
 }
 
 var mcpDraftTools = map[string]bool{
@@ -69,6 +72,7 @@ var mcpDraftTools = map[string]bool{
 	"draft_equities_order": true,
 	"draft_hub_install":    true,
 	"draft_swarm_signal":   true,
+	"draft_trade_order":    true,
 }
 
 type mcpResourceDescriptor struct {
@@ -167,6 +171,12 @@ var mcpResources = []mcpResourceDescriptor{
 		URI:         "fased://swarm/status",
 		Name:        "Swarm network status",
 		Description: "Opt-in Fased Network Swarm configuration, peers, and verified A2A signals.",
+		MimeType:    "application/json",
+	},
+	{
+		URI:         "fased://trade/state",
+		Name:        "Unified trade engine state",
+		Description: "Active multi-strategy trade plans (Bracket, Trailing ATR, Grid, DCA, TWAP), global kill switch, and risk policy.",
 		MimeType:    "application/json",
 	},
 }
@@ -610,6 +620,8 @@ func readMCPResource(ctx context.Context, s *Store, uri string) (any, error) {
 		return toolListHubPackages(ctx, s, "", []byte(`{}`))
 	case "fased://swarm/status":
 		return toolGetSwarmStatus(ctx, s, "", []byte(`{}`))
+	case "fased://trade/state":
+		return toolGetTradeState(ctx, s, "", []byte(`{}`))
 	default:
 		return nil, errors.New("unknown MCP resource uri")
 	}

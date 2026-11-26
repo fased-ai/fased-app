@@ -703,6 +703,10 @@ func (h *HTTPHandler) api(w http.ResponseWriter, r *http.Request) {
 			h.deskAPI(w, r, token)
 			return
 		}
+		if strings.HasPrefix(r.URL.Path, "/api/v1/trade/") {
+			h.tradeAPI(w, r, token)
+			return
+		}
 		if stage5RouteHook != nil && stage5RouteHook(h, w, r, token) {
 			return
 		}
