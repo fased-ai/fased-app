@@ -453,7 +453,7 @@ func (h *HTTPHandler) api(w http.ResponseWriter, r *http.Request) {
 		if !h.mutation(w, r) || !h.csrf(w, r, token) {
 			return
 		}
-		if !h.allowAuthRate(r, "credentials-kdf", 10) {
+		if !h.allowAuthRate(r, "credentials-kdf", 30) {
 			writeError(w, 429, ErrRateLimited.Error())
 			return
 		}
@@ -483,7 +483,7 @@ func (h *HTTPHandler) api(w http.ResponseWriter, r *http.Request) {
 		if !h.mutation(w, r) || !h.csrf(w, r, token) {
 			return
 		}
-		if !h.allowAuthRate(r, "credentials-kdf", 10) {
+		if !h.allowAuthRate(r, "credentials-kdf", 30) {
 			writeError(w, 429, ErrRateLimited.Error())
 			return
 		}
