@@ -91,3 +91,144 @@ func TestStorePartitioningPruneAndWatchlists(t *testing.T) {
 		t.Fatal("expected invalid watchlist id error")
 	}
 }
+
+func TestStoreChartDrawingsCRUDAndLimits(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	dir := t.TempDir()
+	nowTime := time.Date(2026, 11, 25, 18, 0, 0, 0, time.UTC)
+	store, err := NewStore(dir, func() time.Time { return nowTime })
+	if err != nil {
+		t.Fatalf("NewStore failed: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+
+	// 1. Save horizontal line, trendline, and fib drawings.
+	hline, err := store.SaveDrawing(ctx, ChartDrawing{
+		ID:     "draw-hline-btc",
+		Venue:  VenueHyperliquid,
+		Symbol: "BTC",
+		Kind:   DrawingKindHLine,
+		P1:     DrawingPoint{Time: 1764000000, Price: 95000},
+		Label:  "Breakout level",
+	})
+	if err != nil {
+		t.Fatalf("SaveDrawing hline failed: %v", err)
+	}
+	if hline.CreatedAt != nowTime.Unix() || hline.UpdatedAt != nowTime.Unix() {
+		t.Fatalf("unexpected timestamps on hline: %+v", hline)
+	}
+
+	trend, err := store.SaveDrawing(ctx, ChartDrawing{
+		ID:       "draw-trend-btc",
+		Venue:    VenueHyperliquid,
+		Symbol:   "BTC",
+		Interval: "1h",
+		Kind:     DrawingKindTrendline,
+		P1:       DrawingPoint{Time: 1000, Price: 90000},
+		P2:       &DrawingPoint{Time: 2000, Price: 92000},
+	})
+	if err != nil {
+		t.Fatalf("SaveDrawing trendline failed: %v", err)
+	}
+	if lvl, ok := EvaluateDrawingPrice(trend, 3000); !ok || lvl != 94000 {
+		t.Fatalf("EvaluateDrawingPrice trendline = (%v, %v), want (94000, true)", lvl, ok)
+	}
+	// Vertical trendline avoids division by zero.
+	vert := ChartDrawing{
+		ID:   "draw-vert",
+		Kind: DrawingKindTrendline,
+		P1:   DrawingPoint{Time: 1000, Price: 90000},
+		P2:   &DrawingPoint{Time: 1000, Price: 91500},
+	}
+	if lvl, ok := EvaluateDrawingPrice(vert, 2500); !ok || lvl != 91500 {
+		t.Fatalf("EvaluateDrawingPrice vertical trendline = (%v, %v), want (91500, true)", lvl, ok)
+	}
+
+	fib, err := store.SaveDrawing(ctx, ChartDrawing{
+		ID:       "draw-fib-eth",
+		Venue:    VenueHyperliquid,
+		Symbol:   "ETH",
+		Interval: "15m",
+		Kind:     DrawingKindFib,
+		P1:       DrawingPoint{Time: 1000, Price: 3000},
+		P2:       &DrawingPoint{Time: 2000, Price: 4000},
+	})
+	if err != nil {
+		t.Fatalf("SaveDrawing fib failed: %v", err)
+	}
+	// Fib 0.618 retracement from 4000 high down to 3000 low = 3382.
+	if lvl, ok := EvaluateDrawingPrice(fib, 2500); !ok || lvl < 3381.9 || lvl > 3382.1 {
+		t.Fatalf("EvaluateDrawingPrice fib = (%v, %v), want (~3382, true)", lvl, ok)
+	}
+
+	// Update preserves createdAt while bumping updatedAt.
+	nowTime = nowTime.Add(5 * time.Minute)
+	updated, err := store.SaveDrawing(ctx, ChartDrawing{
+		ID:     "draw-hline-btc",
+		Venue:  VenueHyperliquid,
+		Symbol: "BTC",
+		Kind:   DrawingKindHLine,
+		P1:     DrawingPoint{Time: 1764000000, Price: 95500},
+		Label:  "Adjusted breakout",
+	})
+	if err != nil {
+		t.Fatalf("SaveDrawing update failed: %v", err)
+	}
+	if updated.CreatedAt != hline.CreatedAt || updated.UpdatedAt <= hline.UpdatedAt {
+		t.Fatalf("update did not preserve createdAt/bump updatedAt: old=%+v new=%+v", hline, updated)
+	}
+
+	// Filter by venue + symbol + interval includes symbol-wide (empty interval) drawings.
+	listBTC1h, err := store.ListDrawings(ctx, VenueHyperliquid, "BTC", "1h")
+	if err != nil || len(listBTC1h) != 2 {
+		t.Fatalf("ListDrawings BTC 1h = (%d, %v), want 2", len(listBTC1h), err)
+	}
+	gotFib, found, err := store.GetDrawing(ctx, "draw-fib-eth")
+	if err != nil || !found || gotFib.Kind != DrawingKindFib {
+		t.Fatalf("GetDrawing fib = (%+v, %v, %v)", gotFib, found, err)
+	}
+
+	// Reject malformed inputs.
+	for _, bad := range []ChartDrawing{
+		{ID: "../bad", Venue: VenueHyperliquid, Symbol: "BTC", Kind: DrawingKindHLine, P1: DrawingPoint{Time: 1, Price: 1}},
+		{ID: "bad-kind", Venue: VenueHyperliquid, Symbol: "BTC", Kind: "triangle", P1: DrawingPoint{Time: 1, Price: 1}},
+		{ID: "bad-price", Venue: VenueHyperliquid, Symbol: "BTC", Kind: DrawingKindHLine, P1: DrawingPoint{Time: 1, Price: 0}},
+		{ID: "missing-p2", Venue: VenueHyperliquid, Symbol: "BTC", Kind: DrawingKindTrendline, P1: DrawingPoint{Time: 1, Price: 100}},
+	} {
+		if _, err := store.SaveDrawing(ctx, bad); err == nil {
+			t.Fatalf("expected validation error for drawing %+v", bad)
+		}
+	}
+
+	// Delete drawing.
+	if deleted, err := store.DeleteDrawing(ctx, "draw-fib-eth"); err != nil || !deleted {
+		t.Fatalf("DeleteDrawing failed: deleted=%v err=%v", deleted, err)
+	}
+	if _, found, err := store.GetDrawing(ctx, "draw-fib-eth"); err != nil || found {
+		t.Fatalf("expected deleted drawing absent: found=%v err=%v", found, err)
+	}
+
+	// Enforce per-symbol limit (maxDrawingsPerSymbol = 64). Already 2 saved for hyperliquid:BTC.
+	for i := 2; i < maxDrawingsPerSymbol; i++ {
+		if _, err := store.SaveDrawing(ctx, ChartDrawing{
+			ID:     "draw-cap-" + string(rune('a'+i/26)) + string(rune('a'+i%26)),
+			Venue:  VenueHyperliquid,
+			Symbol: "BTC",
+			Kind:   DrawingKindHLine,
+			P1:     DrawingPoint{Time: int64(1000 + i), Price: float64(90000 + i)},
+		}); err != nil {
+			t.Fatalf("cap setup save %d failed: %v", i, err)
+		}
+	}
+	if _, err := store.SaveDrawing(ctx, ChartDrawing{
+		ID:     "draw-cap-overflow",
+		Venue:  VenueHyperliquid,
+		Symbol: "BTC",
+		Kind:   DrawingKindHLine,
+		P1:     DrawingPoint{Time: 2000, Price: 99999},
+	}); err == nil {
+		t.Fatal("expected per-symbol drawings limit error")
+	}
+}

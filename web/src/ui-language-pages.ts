@@ -6260,6 +6260,13 @@ export const pageCopy = {
     "触发器类型",
     "트리거 유형",
   ],
+  "Drawing breach": [
+    "Пробой уровня графика",
+    "Ruptura de dibujo",
+    "图表划线突破",
+    "차트 드로잉 돌파",
+  ],
+  "Drawing ID": ["ID уровня", "ID de dibujo", "划线 ID", "드로잉 ID"],
   "Trigger name": [
     "Название триггера",
     "Nombre del disparador",

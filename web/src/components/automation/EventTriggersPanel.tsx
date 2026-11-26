@@ -24,6 +24,7 @@ import {
   type TriggerKind,
 } from "../../automation";
 import { listLabScripts, type LabScript } from "../../quantlab-desk";
+import { fetchDrawings, type ChartDrawing } from "../../market-data";
 import { Bell, Pause, Play, RefreshCw, Shield, Trash2, Zap } from "../../icons";
 import { useUI } from "../../ui-preferences";
 import { useWorkspace } from "../../workspace";
@@ -58,6 +59,8 @@ export function EventTriggersPanel() {
   const [minSpreadPct, setMinSpreadPct] = useState("8");
   const [cronExpr, setCronExpr] = useState("*/15 * * * *");
   const [scriptId, setScriptId] = useState("ema-rsi-trend");
+  const [drawingId, setDrawingId] = useState("");
+  const [drawings, setDrawings] = useState<ChartDrawing[]>([]);
   const [labScripts, setLabScripts] = useState<LabScript[]>([]);
   const [actionType, setActionType] = useState<TriggerActionType>("notify");
   const [deskMode, setDeskMode] = useState<"shadow" | "paper">("shadow");
@@ -93,6 +96,21 @@ export function EventTriggersPanel() {
   useEffect(() => {
     void loadAll();
   }, [loadAll]);
+
+  useEffect(() => {
+    if (core.mode !== "ready" || kind !== "drawing_breach") return;
+    let cancelled = false;
+    void fetchDrawings(core, { venue, symbol })
+      .then((list) => {
+        if (cancelled) return;
+        setDrawings(list);
+        setDrawingId((prev) => prev || list[0]?.id || "");
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [core.mode, core.request, kind, venue, symbol]);
 
   useEffect(() => {
     if (!streamClient || core.mode !== "ready") return;
@@ -179,27 +197,38 @@ export function EventTriggersPanel() {
                 comparator,
                 threshold: Number(threshold) || 0,
               }
-            : kind === "fasedscript"
+            : kind === "drawing_breach"
               ? {
                   venue,
                   symbol,
                   interval,
-                  scriptId: scriptId || "ema-rsi-trend",
+                  drawingId: drawingId.trim(),
+                  comparator:
+                    comparator === "pct_change_gte"
+                      ? "cross_above"
+                      : comparator,
                 }
-              : kind === "news"
+              : kind === "fasedscript"
                 ? {
-                    category,
-                    region,
-                    ticker,
-                    minUrgency: Number(minUrgency) || 0,
+                    venue,
+                    symbol,
+                    interval,
+                    scriptId: scriptId || "ema-rsi-trend",
                   }
-                : kind === "prediction"
+                : kind === "news"
                   ? {
-                      minSpreadPct: Number(minSpreadPct) || 5,
+                      category,
+                      region,
+                      ticker,
+                      minUrgency: Number(minUrgency) || 0,
                     }
-                  : {
-                      cronExpr,
-                    },
+                  : kind === "prediction"
+                    ? {
+                        minSpreadPct: Number(minSpreadPct) || 5,
+                      }
+                    : {
+                        cronExpr,
+                      },
         action: {
           type: actionType,
           deskMode: actionType === "desk_cycle" ? deskMode : undefined,
@@ -376,11 +405,21 @@ export function EventTriggersPanel() {
                   id="auto-trig-kind"
                   aria-label={t("Trigger kind")}
                   value={kind}
-                  onChange={(e) => setKind(e.target.value as TriggerKind)}
+                  onChange={(e) => {
+                    const nextKind = e.target.value as TriggerKind;
+                    setKind(nextKind);
+                    if (
+                      nextKind === "drawing_breach" &&
+                      comparator === "pct_change_gte"
+                    ) {
+                      setComparator("cross_above");
+                    }
+                  }}
                 >
                   <option value="news">{t("World Intel")}</option>
                   <option value="price">{t("Price")}</option>
                   <option value="indicator">{t("Indicator")}</option>
+                  <option value="drawing_breach">{t("Drawing breach")}</option>
                   <option value="fasedscript">{t("FasedScript")}</option>
                   <option value="prediction">{t("Prediction spread")}</option>
                   <option value="cron">{t("Cron schedule")}</option>
@@ -449,6 +488,7 @@ export function EventTriggersPanel() {
 
             {(kind === "price" ||
               kind === "indicator" ||
+              kind === "drawing_breach" ||
               kind === "fasedscript") && (
               <>
                 <div className="auto-form-row">
@@ -575,26 +615,54 @@ export function EventTriggersPanel() {
                           <option value="cross_below">
                             {t("Cross below")}
                           </option>
-                          <option value="pct_change_gte">
-                            {t("% change")}
-                          </option>
+                          {kind !== "drawing_breach" && (
+                            <option value="pct_change_gte">
+                              {t("% change")}
+                            </option>
+                          )}
                         </select>
                       </div>
                     </div>
                     <div className="auto-form-row">
-                      <div className="auto-field">
-                        <label htmlFor="auto-trig-thresh">
-                          {t("Threshold")}
-                        </label>
-                        <input
-                          id="auto-trig-thresh"
-                          type="number"
-                          step="any"
-                          aria-label={t("Threshold")}
-                          value={threshold}
-                          onChange={(e) => setThreshold(e.target.value)}
-                        />
-                      </div>
+                      {kind === "drawing_breach" ? (
+                        <div className="auto-field">
+                          <label htmlFor="auto-trig-drawing">
+                            {t("Drawing ID")}
+                          </label>
+                          <input
+                            id="auto-trig-drawing"
+                            type="text"
+                            list="auto-trig-drawings-list"
+                            aria-label={t("Drawing ID")}
+                            placeholder={t("Drawing ID")}
+                            value={drawingId}
+                            onChange={(e) => setDrawingId(e.target.value)}
+                          />
+                          <datalist id="auto-trig-drawings-list">
+                            {drawings.map((d) => (
+                              <option key={d.id} value={d.id}>
+                                {d.label
+                                  ? `${d.label} (${d.kind})`
+                                  : `${d.kind} @ ${d.p1.price}`}
+                              </option>
+                            ))}
+                          </datalist>
+                        </div>
+                      ) : (
+                        <div className="auto-field">
+                          <label htmlFor="auto-trig-thresh">
+                            {t("Threshold")}
+                          </label>
+                          <input
+                            id="auto-trig-thresh"
+                            type="number"
+                            step="any"
+                            aria-label={t("Threshold")}
+                            value={threshold}
+                            onChange={(e) => setThreshold(e.target.value)}
+                          />
+                        </div>
+                      )}
                       <div className="auto-field">
                         <label htmlFor="auto-trig-cd">
                           {t("Cooldown (s)")}

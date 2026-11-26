@@ -112,6 +112,21 @@ CREATE TABLE IF NOT EXISTS sec_cache (
 	payload_json TEXT NOT NULL,
 	updated_at INTEGER NOT NULL
 );
+CREATE TABLE IF NOT EXISTS chart_drawings (
+	id TEXT PRIMARY KEY,
+	venue TEXT NOT NULL,
+	symbol TEXT NOT NULL,
+	interval TEXT NOT NULL DEFAULT '',
+	kind TEXT NOT NULL,
+	p1_time INTEGER NOT NULL,
+	p1_price REAL NOT NULL,
+	p2_time INTEGER,
+	p2_price REAL,
+	label TEXT NOT NULL DEFAULT '',
+	created_at INTEGER NOT NULL,
+	updated_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_chart_drawings_venue_symbol ON chart_drawings (venue, symbol, updated_at DESC);
 `
 	_, err := s.metaDB.Exec(ddl)
 	return err
@@ -433,6 +448,198 @@ func (s *Store) DeleteWatchlist(ctx context.Context, id string) (bool, error) {
 		return false, errors.New("marketdata store closed")
 	}
 	res, err := s.metaDB.ExecContext(ctx, `DELETE FROM watchlists WHERE id = ?`, strings.TrimSpace(id))
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	return n > 0, err
+}
+
+func scanDrawingRow(scan func(dest ...any) error) (ChartDrawing, error) {
+	var d ChartDrawing
+	var p2Time sql.NullInt64
+	var p2Price sql.NullFloat64
+	if err := scan(
+		&d.ID,
+		&d.Venue,
+		&d.Symbol,
+		&d.Interval,
+		&d.Kind,
+		&d.P1.Time,
+		&d.P1.Price,
+		&p2Time,
+		&p2Price,
+		&d.Label,
+		&d.CreatedAt,
+		&d.UpdatedAt,
+	); err != nil {
+		return ChartDrawing{}, err
+	}
+	if p2Time.Valid && p2Price.Valid {
+		d.P2 = &DrawingPoint{Time: p2Time.Int64, Price: p2Price.Float64}
+	}
+	return d, nil
+}
+
+// ListDrawings lists saved chart drawings filtered optionally by venue, symbol, and interval.
+func (s *Store) ListDrawings(ctx context.Context, venue, symbol, interval string) ([]ChartDrawing, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.closed || s.metaDB == nil {
+		return nil, errors.New("marketdata store closed")
+	}
+	var clauses []string
+	var args []any
+	if v := strings.TrimSpace(venue); v != "" {
+		clauses = append(clauses, "venue = ?")
+		args = append(args, v)
+	}
+	if sym := strings.TrimSpace(symbol); sym != "" {
+		clauses = append(clauses, "symbol = ?")
+		args = append(args, sym)
+	}
+	if iv := strings.TrimSpace(interval); iv != "" {
+		clauses = append(clauses, "(interval = '' OR interval = ?)")
+		args = append(args, iv)
+	}
+	query := `
+SELECT id, venue, symbol, interval, kind, p1_time, p1_price, p2_time, p2_price, label, created_at, updated_at
+FROM chart_drawings`
+	if len(clauses) > 0 {
+		query += " WHERE " + strings.Join(clauses, " AND ")
+	}
+	query += " ORDER BY updated_at DESC, id ASC"
+
+	rows, err := s.metaDB.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]ChartDrawing, 0)
+	for rows.Next() {
+		d, scanErr := scanDrawingRow(rows.Scan)
+		if scanErr != nil {
+			return nil, scanErr
+		}
+		out = append(out, d)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// GetDrawing returns a single saved chart drawing by ID.
+func (s *Store) GetDrawing(ctx context.Context, id string) (ChartDrawing, bool, error) {
+	cleanID := strings.TrimSpace(id)
+	if !idPattern.MatchString(cleanID) {
+		return ChartDrawing{}, false, errors.New("drawing id must match [A-Za-z0-9._-] (1-64 chars)")
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.closed || s.metaDB == nil {
+		return ChartDrawing{}, false, errors.New("marketdata store closed")
+	}
+	row := s.metaDB.QueryRowContext(ctx, `
+SELECT id, venue, symbol, interval, kind, p1_time, p1_price, p2_time, p2_price, label, created_at, updated_at
+FROM chart_drawings
+WHERE id = ?
+`, cleanID)
+	d, err := scanDrawingRow(row.Scan)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return ChartDrawing{}, false, nil
+		}
+		return ChartDrawing{}, false, err
+	}
+	return d, true, nil
+}
+
+// SaveDrawing validates and upserts a chart drawing subject to per-symbol and total caps.
+func (s *Store) SaveDrawing(ctx context.Context, d ChartDrawing) (ChartDrawing, error) {
+	clean, err := ValidateChartDrawing(d)
+	if err != nil {
+		return ChartDrawing{}, err
+	}
+	now := s.now().UTC().Unix()
+	if clean.CreatedAt == 0 {
+		clean.CreatedAt = now
+	}
+	clean.UpdatedAt = now
+
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.closed || s.metaDB == nil {
+		return ChartDrawing{}, errors.New("marketdata store closed")
+	}
+
+	var existingCreated int64
+	exists := false
+	err = s.metaDB.QueryRowContext(ctx, `SELECT created_at FROM chart_drawings WHERE id = ?`, clean.ID).Scan(&existingCreated)
+	if err == nil {
+		exists = true
+		if existingCreated > 0 {
+			clean.CreatedAt = existingCreated
+		}
+	} else if !errors.Is(err, sql.ErrNoRows) {
+		return ChartDrawing{}, err
+	}
+
+	if !exists {
+		var symCount int
+		if err := s.metaDB.QueryRowContext(ctx, `SELECT COUNT(*) FROM chart_drawings WHERE venue = ? AND symbol = ?`, clean.Venue, clean.Symbol).Scan(&symCount); err != nil {
+			return ChartDrawing{}, err
+		}
+		if symCount >= maxDrawingsPerSymbol {
+			return ChartDrawing{}, fmt.Errorf("symbol drawings limit (%d) reached", maxDrawingsPerSymbol)
+		}
+		var totalCount int
+		if err := s.metaDB.QueryRowContext(ctx, `SELECT COUNT(*) FROM chart_drawings`).Scan(&totalCount); err != nil {
+			return ChartDrawing{}, err
+		}
+		if totalCount >= maxDrawingsTotal {
+			return ChartDrawing{}, fmt.Errorf("total drawings limit (%d) reached", maxDrawingsTotal)
+		}
+	}
+
+	var p2Time sql.NullInt64
+	var p2Price sql.NullFloat64
+	if clean.P2 != nil {
+		p2Time = sql.NullInt64{Int64: clean.P2.Time, Valid: true}
+		p2Price = sql.NullFloat64{Float64: clean.P2.Price, Valid: true}
+	}
+	if _, err := s.metaDB.ExecContext(ctx, `
+INSERT INTO chart_drawings (id, venue, symbol, interval, kind, p1_time, p1_price, p2_time, p2_price, label, created_at, updated_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT(id) DO UPDATE SET
+	venue = excluded.venue,
+	symbol = excluded.symbol,
+	interval = excluded.interval,
+	kind = excluded.kind,
+	p1_time = excluded.p1_time,
+	p1_price = excluded.p1_price,
+	p2_time = excluded.p2_time,
+	p2_price = excluded.p2_price,
+	label = excluded.label,
+	updated_at = excluded.updated_at
+`, clean.ID, clean.Venue, clean.Symbol, clean.Interval, clean.Kind, clean.P1.Time, clean.P1.Price, p2Time, p2Price, clean.Label, clean.CreatedAt, clean.UpdatedAt); err != nil {
+		return ChartDrawing{}, err
+	}
+	return clean, nil
+}
+
+// DeleteDrawing removes a persisted chart drawing by ID.
+func (s *Store) DeleteDrawing(ctx context.Context, id string) (bool, error) {
+	cleanID := strings.TrimSpace(id)
+	if !idPattern.MatchString(cleanID) {
+		return false, errors.New("drawing id must match [A-Za-z0-9._-] (1-64 chars)")
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.closed || s.metaDB == nil {
+		return false, errors.New("marketdata store closed")
+	}
+	res, err := s.metaDB.ExecContext(ctx, `DELETE FROM chart_drawings WHERE id = ?`, cleanID)
 	if err != nil {
 		return false, err
 	}

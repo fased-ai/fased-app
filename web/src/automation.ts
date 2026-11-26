@@ -1,7 +1,13 @@
 import type { AgentV2CoreClient } from "./agents-v2";
 
 export type TriggerKind =
-  "price" | "indicator" | "fasedscript" | "news" | "prediction" | "cron";
+  | "price"
+  | "indicator"
+  | "drawing_breach"
+  | "fasedscript"
+  | "news"
+  | "prediction"
+  | "cron";
 
 export type TriggerComparator =
   "above" | "below" | "cross_above" | "cross_below" | "pct_change_gte";
@@ -20,6 +26,7 @@ export type TriggerCondition = {
   interval?: string;
   indicator?: TriggerIndicator | "";
   scriptId?: string;
+  drawingId?: string;
   comparator?: TriggerComparator | "";
   threshold?: number;
   category?: string;
@@ -223,6 +230,8 @@ export function summarizeTriggerCondition(tr: EventTrigger): string {
       return `${c.venue ?? "hyperliquid"} ${c.symbol ?? "BTC"} ${c.comparator ?? "above"} ${c.threshold ?? 0}`;
     case "indicator":
       return `${c.symbol ?? "BTC"} ${c.indicator ?? "rsi_14"} ${c.comparator ?? "above"} ${c.threshold ?? 0}`;
+    case "drawing_breach":
+      return `${c.venue ?? "hyperliquid"} ${c.symbol ?? "BTC"} ${c.comparator ?? "cross_above"} ${c.drawingId ?? "drawing"}`;
     case "fasedscript":
       return `${c.venue ?? "hyperliquid"} ${c.symbol ?? "BTC"} ${c.interval ?? "1h"} · ${c.scriptId ?? "script"}`;
     case "news":

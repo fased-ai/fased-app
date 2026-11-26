@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/fased-ai/fased-app/internal/marketdata"
 )
 
 func TestAutomationTelegramAndMCPIntegration(t *testing.T) {
@@ -227,4 +229,64 @@ func TestAutomationTelegramAndMCPIntegration(t *testing.T) {
 	if !strings.Contains(string(ntfRaw), "Approval required: Test Draft") {
 		t.Fatalf("expected approval notification persisted, got %s", ntfRaw)
 	}
+}
+
+func TestDrawingBreachAndReactiveBusTrigger(t *testing.T) {
+	t.Parallel()
+	s := fixtureStore(t)
+	ts, token, csrf := startV2HTTPTestServer(t, s)
+
+	// 1. Persist a horizontal chart drawing at price 100 (synthetic BTC ~94500 is clearly above 100).
+	putDraw := doV2JSONRequest(t, http.MethodPut, ts.URL+"/api/v1/market/drawings", ts.URL, token, csrf, `{"id":"draw-core-hline","venue":"hyperliquid","symbol":"BTC","kind":"hline","p1":{"time":1764000000,"price":100},"label":"Floor"}`, "application/json")
+	if putDraw.StatusCode != http.StatusOK {
+		raw, _ := io.ReadAll(putDraw.Body)
+		putDraw.Body.Close()
+		t.Fatalf("PUT /api/v1/market/drawings = %d: %s", putDraw.StatusCode, raw)
+	}
+	putDraw.Body.Close()
+
+	// 2. Persist a drawing_breach trigger tied to draw-core-hline.
+	putTrig := doV2JSONRequest(t, http.MethodPut, ts.URL+"/api/v1/automation/triggers", ts.URL, token, csrf, `{"id":"trig-draw-reactive","name":"Drawing Floor Break","kind":"drawing_breach","cooldownSeconds":10,"condition":{"venue":"hyperliquid","symbol":"BTC","interval":"1h","drawingId":"draw-core-hline","comparator":"above"},"action":{"type":"notify","severity":"warn"}}`, "application/json")
+	if putTrig.StatusCode != http.StatusOK {
+		raw, _ := io.ReadAll(putTrig.Body)
+		putTrig.Body.Close()
+		t.Fatalf("PUT drawing_breach trigger = %d: %s", putTrig.StatusCode, raw)
+	}
+	putTrig.Body.Close()
+
+	// 3. Start background tasks and verify marketdata.Bus Publish triggers debounced evaluation within 4s (not 15s ticker).
+	srv := &Server{Store: s, dir: s.dir}
+	srv.startAgentTasks()
+	t.Cleanup(func() {
+		if srv.taskCancel != nil {
+			srv.taskCancel()
+			<-srv.taskDone
+		}
+	})
+
+	md, err := s.marketDataService()
+	if err != nil {
+		t.Fatalf("marketDataService: %v", err)
+	}
+	// Give the goroutine a brief moment to attach bus subscription after startup.
+	time.Sleep(150 * time.Millisecond)
+	md.Publish(marketdata.Event{
+		Type:      "candle",
+		Venue:     "hyperliquid",
+		Symbol:    "BTC",
+		Interval:  "1h",
+		Timestamp: time.Now().Unix(),
+	})
+
+	deadline := time.Now().Add(4 * time.Second)
+	for time.Now().Before(deadline) {
+		ntfResp := doV2JSONRequest(t, http.MethodGet, ts.URL+"/api/v1/automation/notifications?limit=20", ts.URL, token, "", "", "")
+		raw, _ := io.ReadAll(ntfResp.Body)
+		ntfResp.Body.Close()
+		if ntfResp.StatusCode == http.StatusOK && strings.Contains(string(raw), "Drawing Floor Break") {
+			return
+		}
+		time.Sleep(80 * time.Millisecond)
+	}
+	t.Fatal("reactive marketdata.Bus event did not fire drawing_breach trigger within 4s")
 }

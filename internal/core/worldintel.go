@@ -15,6 +15,15 @@ import (
 	"github.com/fased-ai/fased-app/internal/worldintel"
 )
 
+func (s *Store) loadedWorldIntelService() *worldintel.Service {
+	if s == nil {
+		return nil
+	}
+	s.worldIntelMu.Lock()
+	defer s.worldIntelMu.Unlock()
+	return s.worldIntelSvc
+}
+
 func (s *Store) worldIntelService() (*worldintel.Service, error) {
 	if s == nil {
 		return nil, errors.New("workspace store unavailable")
@@ -41,6 +50,7 @@ func (s *Store) worldIntelService() (*worldintel.Service, error) {
 		return nil, err
 	}
 	s.worldIntelSvc = svc
+	s.notifyReactiveBus()
 	return svc, nil
 }
 

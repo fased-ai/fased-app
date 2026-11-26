@@ -570,3 +570,118 @@ func TestAutomationPersistsLastFiredAtBeforeAgentPromptCompletion(t *testing.T) 
 		t.Fatalf("expected exactly 1 promptHook invocation, got %d", promptCalls)
 	}
 }
+
+func TestKindDrawingBreachAndEvaluateMatching(t *testing.T) {
+	now := time.Date(2026, 11, 25, 20, 0, 0, 0, time.UTC)
+	drawings := map[string]marketdata.ChartDrawing{
+		"hline-1": {
+			ID:     "hline-1",
+			Venue:  marketdata.VenueHyperliquid,
+			Symbol: "BTC",
+			Kind:   marketdata.DrawingKindHLine,
+			P1:     marketdata.DrawingPoint{Time: 1000, Price: 95000},
+			Label:  "Resistance",
+		},
+		"trend-1": {
+			ID:     "trend-1",
+			Venue:  marketdata.VenueHyperliquid,
+			Symbol: "BTC",
+			Kind:   marketdata.DrawingKindTrendline,
+			P1:     marketdata.DrawingPoint{Time: 1000, Price: 90000},
+			P2:     &marketdata.DrawingPoint{Time: 2000, Price: 92000},
+		},
+	}
+	candles := []marketdata.Candle{
+		{Time: 2000, Open: 91000, High: 92500, Low: 90500, Close: 91800, Volume: 100},
+		{Time: 3000, Open: 91800, High: 95600, Low: 91700, Close: 95500, Volume: 150},
+	}
+
+	svc, err := NewService(Config{
+		DataDir:     t.TempDir(),
+		FixtureMode: true,
+		Now:         func() time.Time { return now },
+		MarketReader: func(_ context.Context, _ string, _ string, _ string, _ int) ([]marketdata.Candle, error) {
+			return candles, nil
+		},
+		DrawingReader: func(_ context.Context, id string) (marketdata.ChartDrawing, bool, error) {
+			d, ok := drawings[id]
+			return d, ok, nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewService: %v", err)
+	}
+	t.Cleanup(func() { _ = svc.Close() })
+
+	// Reject pct_change_gte and missing drawingId.
+	if _, err := svc.SaveTrigger(t.Context(), TriggerInput{
+		ID:        "bad-pct",
+		Name:      "Bad Pct",
+		Kind:      KindDrawingBreach,
+		Condition: TriggerCondition{Venue: "hyperliquid", Symbol: "BTC", DrawingID: "hline-1", Comparator: CompPctChangeGTE},
+		Action:    TriggerAction{Type: ActionNotify},
+	}); err == nil {
+		t.Fatal("expected drawing_breach pct_change_gte rejection")
+	}
+	if _, err := svc.SaveTrigger(t.Context(), TriggerInput{
+		ID:        "missing-did",
+		Name:      "Missing DID",
+		Kind:      KindDrawingBreach,
+		Condition: TriggerCondition{Venue: "hyperliquid", Symbol: "BTC"},
+		Action:    TriggerAction{Type: ActionNotify},
+	}); err == nil {
+		t.Fatal("expected drawing_breach empty drawingId rejection")
+	}
+
+	// Save sloped trendline breach (at t=2000 level=92000 close=91800 <= 92000; at t=3000 level=94000 close=95500 > 94000).
+	if _, err := svc.SaveTrigger(t.Context(), TriggerInput{
+		ID:              "trend-breach",
+		Name:            "Trendline Cross",
+		Kind:            KindDrawingBreach,
+		CooldownSeconds: 60,
+		Condition:       TriggerCondition{Venue: "hyperliquid", Symbol: "BTC", Interval: "1h", DrawingID: "trend-1", Comparator: CompCrossAbove},
+		Action:          TriggerAction{Type: ActionNotify, Severity: SeverityWarn},
+	}); err != nil {
+		t.Fatalf("SaveTrigger trend-breach: %v", err)
+	}
+	if _, err := svc.SaveTrigger(t.Context(), TriggerInput{
+		ID:              "cron-skip",
+		Name:            "Cron Should Be Filtered",
+		Kind:            KindCron,
+		CooldownSeconds: 60,
+		Condition:       TriggerCondition{CronExpr: "* * * * *"},
+		Action:          TriggerAction{Type: ActionNotify},
+	}); err != nil {
+		t.Fatalf("SaveTrigger cron: %v", err)
+	}
+
+	// EvaluateMatching only evaluates KindDrawingBreach, leaving KindCron untouched.
+	sw, err := svc.EvaluateMatching(t.Context(), KindDrawingBreach)
+	if err != nil {
+		t.Fatalf("EvaluateMatching: %v", err)
+	}
+	if sw.Evaluated != 1 || sw.Fired != 1 {
+		t.Fatalf("expected Evaluated=1 Fired=1 for KindDrawingBreach, got %+v", sw)
+	}
+
+	// Venue/symbol mismatch fails cleanly during test evaluation.
+	drawings["hline-1"] = marketdata.ChartDrawing{
+		ID:     "hline-1",
+		Venue:  marketdata.VenueHyperliquid,
+		Symbol: "ETH",
+		Kind:   marketdata.DrawingKindHLine,
+		P1:     marketdata.DrawingPoint{Time: 1000, Price: 3200},
+	}
+	if _, err := svc.SaveTrigger(t.Context(), TriggerInput{
+		ID:        "mismatch-breach",
+		Name:      "Mismatch",
+		Kind:      KindDrawingBreach,
+		Condition: TriggerCondition{Venue: "hyperliquid", Symbol: "BTC", DrawingID: "hline-1", Comparator: CompAbove},
+		Action:    TriggerAction{Type: ActionNotify},
+	}); err != nil {
+		t.Fatalf("SaveTrigger mismatch: %v", err)
+	}
+	if _, err := svc.EvaluateTrigger(t.Context(), "mismatch-breach", true, true); err == nil {
+		t.Fatal("expected venue/symbol mismatch error from EvaluateTrigger")
+	}
+}

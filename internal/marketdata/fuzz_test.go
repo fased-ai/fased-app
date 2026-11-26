@@ -1,6 +1,7 @@
 package marketdata
 
 import (
+	"encoding/json"
 	"math"
 	"testing"
 )
@@ -34,6 +35,17 @@ func FuzzMarketDataParsersAndTransforms(f *testing.F) {
 				for _, b := range out {
 					if math.IsNaN(b.Open) || math.IsNaN(b.Close) || math.IsInf(b.Open, 0) || math.IsInf(b.Close, 0) {
 						t.Fatalf("non-finite transformed bar: %+v", b)
+					}
+				}
+			}
+		}
+
+		var d ChartDrawing
+		if err := json.Unmarshal(data, &d); err == nil {
+			if clean, err := ValidateChartDrawing(d); err == nil {
+				if lvl, ok := EvaluateDrawingPrice(clean, clean.P1.Time+3600); ok {
+					if math.IsNaN(lvl) || math.IsInf(lvl, 0) || lvl <= 0 {
+						t.Fatalf("invalid evaluated drawing level: %v", lvl)
 					}
 				}
 			}
