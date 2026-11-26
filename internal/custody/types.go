@@ -163,6 +163,10 @@ type WalletReview struct {
 	UnsignedMsgBase64    string   `json:"unsignedMsgBase64"`
 	SimulationOK         bool     `json:"simulationOk"`
 	SimulationError      string   `json:"simulationError,omitempty"`
+	IsBotOrAuto          bool     `json:"isBotOrAuto,omitempty"`
+	AgentID              string   `json:"agentId,omitempty"`
+	SkillGrantID         string   `json:"skillGrantId,omitempty"`
+	Venue                string   `json:"venue,omitempty"`
 	ExpiresAt            int64    `json:"expiresAt"`
 	Status               string   `json:"status"`
 	CreatedAt            int64    `json:"createdAt"`
@@ -230,6 +234,9 @@ type PrepareReviewRequest struct {
 	AmountHuman   string         `json:"amountHuman,omitempty"`
 	AmountRaw     uint64         `json:"amountRaw,string,omitempty"`
 	IsBotOrAuto   bool           `json:"isBotOrAuto,omitempty"`
+	AgentID       string         `json:"agentId,omitempty"`
+	SkillGrantID  string         `json:"skillGrantId,omitempty"`
+	Venue         string         `json:"venue,omitempty"`
 	JupiterQuote  *onchain.Quote `json:"jupiterQuote,omitempty"`
 }
 

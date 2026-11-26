@@ -31,12 +31,12 @@ jobs:
       GOFLAGS: -mod=readonly
       FASED_REQUIRE_LINUX_DESKTOP_PACKAGES: "1"
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "24"
           cache: npm
-      - uses: actions/setup-go@v7
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version: "1.26.x"
           cache: true
@@ -50,7 +50,7 @@ jobs:
         env:
           FASED_RELEASE_VERSION: ${{ inputs.release_version }}
         run: node scripts/build-dual-track-cli.mjs
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: fased-cli-archives
           path: .evidence/dual-track-cli/
@@ -68,12 +68,12 @@ jobs:
       GOFLAGS: -mod=readonly
       FASED_REQUIRE_LINUX_DESKTOP_PACKAGES: "1"
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "24"
           cache: npm
-      - uses: actions/setup-go@v7
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version: "1.26.x"
           cache-dependency-path: |
@@ -213,7 +213,7 @@ jobs:
         run: |
           $pfx = Join-Path $env:RUNNER_TEMP 'fased-codesign.pfx'
           if (Test-Path -LiteralPath $pfx) { Remove-Item -LiteralPath $pfx -Force -ErrorAction SilentlyContinue }
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: fased-desktop-${{ matrix.os }}
           path: |
@@ -235,15 +235,15 @@ jobs:
     runs-on: ${{ matrix.os }}
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "24"
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: fased-cli-archives
           path: .evidence/dual-track-cli
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: fased-desktop-${{ matrix.os }}
           path: .evidence
@@ -260,7 +260,7 @@ jobs:
           echo "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$(id -u)/bus" >> "$GITHUB_ENV"
       - name: Run real-host installer & package smoke verification
         run: node scripts/smoke-dual-track-installers.mjs
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
           name: fased-host-smoke-${{ matrix.os }}
@@ -277,23 +277,23 @@ jobs:
       id-token: write
       attestations: write
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "24"
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: fased-cli-archives
           path: .evidence/dual-track-cli
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: fased-desktop-ubuntu-24.04
           path: .evidence/desktop-artifacts/ubuntu-24.04
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: fased-desktop-macos-15
           path: .evidence/desktop-artifacts/macos-15
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: fased-desktop-windows-2025
           path: .evidence/desktop-artifacts/windows-2025
@@ -310,7 +310,7 @@ jobs:
           subject-path: |
             .evidence/dual-track-release/SHA256SUMS.txt
             .evidence/dual-track-release/desktop-release-manifest.json
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: fased-dual-track-release
           path: .evidence/dual-track-release/
@@ -324,7 +324,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: fased-dual-track-release
           path: .evidence/dual-track-release

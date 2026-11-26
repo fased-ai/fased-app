@@ -169,7 +169,20 @@ func TestP0InSignerOwnerAuthBlocksCompromisedApp(t *testing.T) {
 	if _, err := appClient.ExecuteNativeReview(ctx, w.ID, revManual.ID, "owner"); !errors.Is(err, ErrOwnerAuthRequired) {
 		t.Fatalf("expected manual execute without owner proof denied on app.sock, got %v", err)
 	}
-	if _, err := appClient.ExecuteNativeReview(ctx, w.ID, revManual.ID, "trade-bot"); err != nil {
+	if _, err := appClient.ExecuteNativeReview(ctx, w.ID, revManual.ID, "trade-bot"); !errors.Is(err, ErrOwnerAuthRequired) {
+		t.Fatalf("expected actor=trade-bot on manual review denied without owner proof, got %v", err)
+	}
+	revBot, err := appClient.PrepareReview(ctx, PrepareReviewRequest{
+		WalletID:    w.ID,
+		Operation:   "solana.nativeTransfer",
+		Destination: destAddr,
+		AmountHuman: "0.1",
+		IsBotOrAuto: true,
+	})
+	if err != nil {
+		t.Fatalf("PrepareReview(bot): %v", err)
+	}
+	if _, err := appClient.ExecuteNativeReview(ctx, w.ID, revBot.ID, "trade-bot"); err != nil {
 		t.Fatalf("expected bounded-auto trade-bot execution to succeed within caps, got %v", err)
 	}
 }

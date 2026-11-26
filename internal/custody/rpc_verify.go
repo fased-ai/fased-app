@@ -28,6 +28,11 @@ const (
 
 // ValidateSolanaRPCURL enforces strict HTTPS/SSRF rules (allowing loopback HTTP for local testing only).
 func ValidateSolanaRPCURL(raw string) (canonicalURL string, hostOnly string, err error) {
+	return ValidateSolanaRPCURLWithOptions(raw, true)
+}
+
+// ValidateSolanaRPCURLWithOptions enforces strict HTTPS/SSRF rules and only allows loopback URLs when allowLoopback is true.
+func ValidateSolanaRPCURLWithOptions(raw string, allowLoopback bool) (canonicalURL string, hostOnly string, err error) {
 	trimmed := strings.TrimSpace(raw)
 	if trimmed == "" {
 		return "", "", errors.New("Solana RPC URL is required")
@@ -44,6 +49,9 @@ func ValidateSolanaRPCURL(raw string) (canonicalURL string, hostOnly string, err
 	}
 	hostname := strings.ToLower(parsed.Hostname())
 	isLoopback := isLoopbackHostname(hostname)
+	if isLoopback && !allowLoopback {
+		return "", "", errors.New("loopback Solana RPC URLs are disabled in production (enable --allow-loopback-rpc for localnet)")
+	}
 	scheme := strings.ToLower(parsed.Scheme)
 	if scheme != "https" && !(scheme == "http" && isLoopback) {
 		return "", "", errors.New("Solana RPC URL must use HTTPS (or loopback HTTP for localnet)")

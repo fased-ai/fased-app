@@ -302,6 +302,13 @@ func (h *HTTPHandler) api(w http.ResponseWriter, r *http.Request) {
 		var err error
 		if r.URL.Path == "/api/v1/auth/claim" {
 			token, err = h.store.Claim(r.Context(), request.Code, request.Password)
+			if err == nil {
+				if cs, cErr := h.store.custodyBackend(); cErr == nil && cs != nil {
+					if has, hErr := cs.HasOwnerAuth(r.Context()); hErr == nil && !has {
+						_ = cs.ConfigureOwnerAuth(r.Context(), request.Password)
+					}
+				}
+			}
 		} else {
 			token, err = h.store.Login(r.Context(), request.Password)
 		}

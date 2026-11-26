@@ -4,12 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -284,6 +286,10 @@ func (s *SocketServer) handleOwnerStatus(w http.ResponseWriter, r *http.Request)
 func (s *SocketServer) handleOwnerConfigure(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	if !s.isOwnerSocket && s.svc.cfg.RequireOwnerAuth {
+		writeSockErr(w, fmt.Errorf("%w: owner enrollment must use owner socket when --require-owner-auth is enforced", ErrOwnerAuthRequired))
 		return
 	}
 	var req struct {
@@ -701,13 +707,21 @@ func (s *SocketServer) handleWalletSubroute(w http.ResponseWriter, r *http.Reque
 				}
 				_ = decodeSockBody(r, &req)
 				// Manual reviews, vault wallets, and owner/manual-trade executions MUST carry
-				// an in-signer owner proof; only genuinely bounded-auto bot executions proceed on policy alone.
+				// an in-signer owner proof. Only reviews immutably prepared as bounded-auto bot/agent
+				// transactions whose actor matches the wallet's bound connections proceed on policy alone.
 				needOwnerProof := true
 				if wPub, wErr := s.svc.GetWallet(r.Context(), walletID); wErr == nil {
-					actorClean := strings.TrimSpace(req.Actor)
-					isAutoActor := actorClean == "trade-bot" || strings.HasPrefix(actorClean, "agent:")
-					if isAutoActor && wPub.Role != RoleVault && wPub.Role != RoleMining && wPub.Policy.ApprovalMode == ApprovalBoundedAuto && wPub.Connections.AllowTradeBots {
-						needOwnerProof = false
+					if rev, rErr := s.svc.GetReview(r.Context(), walletID, revID); rErr == nil && rev.IsBotOrAuto {
+						actorClean := strings.TrimSpace(req.Actor)
+						actorAllowed := false
+						if rev.AgentID != "" {
+							actorAllowed = actorClean == "agent:"+rev.AgentID && slices.Contains(wPub.Connections.AgentIDs, rev.AgentID)
+						} else {
+							actorAllowed = actorClean == "trade-bot"
+						}
+						if actorAllowed && wPub.Role != RoleVault && wPub.Role != RoleMining && wPub.Policy.ApprovalMode == ApprovalBoundedAuto && wPub.Connections.AllowTradeBots {
+							needOwnerProof = false
+						}
 					}
 				}
 				if needOwnerProof {

@@ -745,27 +745,22 @@ func (s *Store) executeSolanaMainnet(ctx context.Context, req SolanaMainnetExecu
 		return nil, signer.ErrUnavailable
 	}
 
-	var msgBytes []byte
-	if b64 := strings.TrimSpace(req.MessageBase64); b64 != "" {
-		msgBytes, err = base64.StdEncoding.DecodeString(b64)
-		if err != nil {
-			return nil, errors.New("invalid base64 mainnet transaction message")
-		}
-	} else {
-		memo := strings.TrimSpace(req.Memo)
-		if memo == "" {
-			return nil, errors.New("messageBase64 or memo required for solana mainnet execution")
-		}
-		pubRaw, pErr := hex.DecodeString(stResp.Status.Account.PublicKey)
-		if pErr != nil || len(pubRaw) != 32 {
-			return nil, errors.New("invalid signer Ed25519 public key")
-		}
-		var feePayer [32]byte
-		copy(feePayer[:], pubRaw)
-		msgBytes, err = onchain.BuildDevnetComputeMemoMessage(feePayer, bh, 50_000, fee, memo)
-		if err != nil {
-			return nil, err
-		}
+	if strings.TrimSpace(req.MessageBase64) != "" {
+		return nil, errors.New("raw messageBase64 signing is disabled on mainnet-capped; use typed custody intents")
+	}
+	memo := strings.TrimSpace(req.Memo)
+	if memo == "" {
+		return nil, errors.New("memo required for solana mainnet execution")
+	}
+	pubRaw, pErr := hex.DecodeString(stResp.Status.Account.PublicKey)
+	if pErr != nil || len(pubRaw) != 32 {
+		return nil, errors.New("invalid signer Ed25519 public key")
+	}
+	var feePayer [32]byte
+	copy(feePayer[:], pubRaw)
+	msgBytes, err := onchain.BuildDevnetComputeMemoMessage(feePayer, bh, 50_000, fee, memo)
+	if err != nil {
+		return nil, err
 	}
 
 	var opRand [8]byte
@@ -845,7 +840,11 @@ func (h *HTTPHandler) solanaMainnetExecuteAPI(w http.ResponseWriter, r *http.Req
 	if !decodeJSON(w, r, &req) {
 		return
 	}
-	res, err := h.store.executeSolanaMainnet(r.Context(), req)
+	authCtx, ok := h.requireStepUpCtx(w, r, token, "execute", "solana-mainnet")
+	if !ok {
+		return
+	}
+	res, err := h.store.executeSolanaMainnet(authCtx, req)
 	if err != nil {
 		code := 400
 		if errors.Is(err, signer.ErrUnavailable) || errors.Is(err, errGlobalKillSwitchActive) {

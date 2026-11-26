@@ -33,6 +33,7 @@ func signerDaemonCommand(args []string, out, errOut io.Writer) error {
 	sockModeStr := flags.String("socket-mode", "0600", "octal Unix socket file permissions (0600 or 0660)")
 	requireOSKEK := flags.Bool("require-os-kek", false, "require systemd-creds or OS keychain KEK to unwrap signer master key")
 	requireOwnerAuth := flags.Bool("require-owner-auth", false, "require in-signer owner authorization proofs for all privileged IPC actions")
+	allowLoopbackRPC := flags.Bool("allow-loopback-rpc", false, "allow loopback http://127.0.0.1 RPC endpoints for localnet development")
 	fixtureRPC := flags.Bool("fixture-rpc", false, "development-only fixture RPC mode for isolated local testing")
 	if err := flags.Parse(args); err != nil {
 		return err
@@ -65,10 +66,12 @@ func signerDaemonCommand(args []string, out, errOut io.Writer) error {
 		return errors.New("--socket-mode must be 0600 or 0660")
 	}
 
+	effectiveRequireOwnerAuth := *requireOwnerAuth || peerUID != os.Getuid()
 	svc, err := custody.NewService(custody.Config{
 		DataDir:          strings.TrimSpace(*dataDir),
 		RequireOSKEK:     *requireOSKEK,
-		RequireOwnerAuth: *requireOwnerAuth,
+		RequireOwnerAuth: effectiveRequireOwnerAuth,
+		AllowLoopbackRPC: *allowLoopbackRPC,
 		FixtureMode:      *fixtureRPC,
 		FastKDF:          *fixtureRPC,
 		SocketPath:       strings.TrimSpace(*socketPath),

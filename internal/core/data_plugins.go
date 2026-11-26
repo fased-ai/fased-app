@@ -966,12 +966,12 @@ func (s *Store) resolveSolanaRPC(cluster string) (rawURL string, maskedHost stri
 		}
 		if p.SealedAPIKey != nil {
 			if apiKey, kErr := s.unsealPluginValue(p.ID, "apiKey", p.SealedAPIKey); kErr == nil && apiKey != "" {
-				if parsed != nil && strings.Contains(strings.ToLower(parsed.Host), "helius") && !parsed.Query().Has("api-key") {
+				if isTrustedHeliusHost(parsed) && !parsed.Query().Has("api-key") {
 					q := parsed.Query()
 					q.Set("api-key", apiKey)
 					parsed.RawQuery = q.Encode()
 					ep = parsed.String()
-				} else if parsed != nil && strings.Contains(strings.ToLower(parsed.Host), "alchemy") && !strings.Contains(parsed.Path, "/v2/") {
+				} else if isTrustedAlchemyHost(parsed) && !strings.Contains(parsed.Path, "/v2/") {
 					parsed.Path = "/v2/" + apiKey
 					ep = parsed.String()
 				}
@@ -980,6 +980,22 @@ func (s *Store) resolveSolanaRPC(cluster string) (rawURL string, maskedHost stri
 		return ep, hostOnly, true
 	}
 	return "", "", false
+}
+
+func isTrustedHeliusHost(u *url.URL) bool {
+	if u == nil || !strings.EqualFold(u.Scheme, "https") {
+		return false
+	}
+	h := strings.ToLower(strings.TrimSpace(u.Hostname()))
+	return h == "helius-rpc.com" || strings.HasSuffix(h, ".helius-rpc.com")
+}
+
+func isTrustedAlchemyHost(u *url.URL) bool {
+	if u == nil || !strings.EqualFold(u.Scheme, "https") {
+		return false
+	}
+	h := strings.ToLower(strings.TrimSpace(u.Hostname()))
+	return h == "g.alchemy.com" || strings.HasSuffix(h, ".g.alchemy.com")
 }
 
 func (s *Store) TestDataPlugin(ctx context.Context, id string) (DataPluginView, error) {
@@ -1038,10 +1054,13 @@ func (s *Store) TestDataPlugin(ctx context.Context, id string) (DataPluginView, 
 		if rec.Category == PluginCatRPCs {
 			ep := rec.Endpoint
 			if parsed, pErr := url.Parse(ep); pErr == nil && apiKey != "" {
-				if strings.Contains(strings.ToLower(parsed.Host), "helius") && !parsed.Query().Has("api-key") {
+				if isTrustedHeliusHost(parsed) && !parsed.Query().Has("api-key") {
 					q := parsed.Query()
 					q.Set("api-key", apiKey)
 					parsed.RawQuery = q.Encode()
+					ep = parsed.String()
+				} else if isTrustedAlchemyHost(parsed) && !strings.Contains(parsed.Path, "/v2/") {
+					parsed.Path = "/v2/" + apiKey
 					ep = parsed.String()
 				}
 			}

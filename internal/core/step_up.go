@@ -184,7 +184,12 @@ func (h *HTTPHandler) ownerPasswordAPI(w http.ResponseWriter, r *http.Request) {
 	}
 	// Mirror independent Argon2id owner verifier into fased-signer whenever custody backend is reachable.
 	if cs, cErr := h.store.custodyBackend(); cErr == nil && cs != nil {
-		_ = cs.ConfigureOwnerAuth(r.Context(), req.Password)
+		if has, hErr := cs.HasOwnerAuth(r.Context()); hErr == nil && !has {
+			if cfgErr := cs.ConfigureOwnerAuth(r.Context(), req.Password); cfgErr != nil && !errors.Is(cfgErr, custody.ErrOwnerAuthRequired) {
+				writeError(w, 500, "failed to enroll signer owner authorization")
+				return
+			}
+		}
 	}
 	writeJSON(w, 200, map[string]any{"ok": true, "hasPassword": true})
 }

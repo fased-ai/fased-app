@@ -13,7 +13,7 @@ RuntimeDirectoryMode=0750
 StateDirectory=fased-signer
 StateDirectoryMode=0700
 LoadCredentialEncrypted=fased-signer-kek:/etc/credstore.encrypted/fased-signer-kek
-ExecStart=/usr/local/bin/fased-app signer-daemon --data-dir /var/lib/fased-signer --socket /run/fased-signer/app.sock --socket-mode 0660 --allowed-app-user fased-app --require-os-kek
+ExecStart=/usr/local/bin/fased-app signer-daemon --data-dir /var/lib/fased-signer --socket /run/fased-signer/app.sock --socket-mode 0660 --allowed-app-user fased-app --owner-socket /run/fased-signer/owner.sock --require-os-kek --require-owner-auth
 Restart=on-failure
 RestartSec=3
 

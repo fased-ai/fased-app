@@ -17,9 +17,12 @@ import (
 )
 
 const (
-	ownerProofHeader  = "X-Fased-Signer-Proof"
-	ownerProofTTL     = 90 * time.Second
-	ownerMinPassChars = 10
+	ownerProofHeader   = "X-Fased-Signer-Proof"
+	ownerProofTTL      = 90 * time.Second
+	ownerMinPassChars  = 12
+	ownerMaxPassBytes  = 1024
+	maxOwnerProofs     = 64
+	ownerMaxFailsPerMn = 5
 )
 
 type ownerProofCtxKey struct{}
@@ -87,9 +90,16 @@ func (s *Service) hasOwnerAuthLocked(ctx context.Context) (bool, error) {
 // ConfigureOwnerAuth enrolls an independent Argon2id owner password verifier inside signer-vault/.
 // Once enrolled, it cannot be overwritten without direct vault reset so a compromised app cannot replace it.
 func (s *Service) ConfigureOwnerAuth(ctx context.Context, password string) error {
+	if len(password) > ownerMaxPassBytes {
+		return errors.New("owner password exceeds maximum length")
+	}
 	if len(strings.TrimSpace(password)) < ownerMinPassChars {
 		return fmt.Errorf("owner password must be at least %d characters", ownerMinPassChars)
 	}
+	if err := s.acquireKDFSlot(ctx); err != nil {
+		return err
+	}
+	defer s.releaseKDFSlot()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.closed || s.db == nil {
@@ -135,8 +145,16 @@ func (s *Service) AuthorizeOwnerAction(ctx context.Context, password, action, wa
 	if act == "" {
 		return "", time.Time{}, errors.New("owner authorization action required")
 	}
-	if len(strings.TrimSpace(password)) < ownerMinPassChars {
+	if wid == "*" && act != "restore" {
+		return "", time.Time{}, fmt.Errorf("%w: explicit walletId required for %s authorization", ErrOwnerAuthRequired, act)
+	}
+	if len(password) > ownerMaxPassBytes || len(strings.TrimSpace(password)) < ownerMinPassChars {
 		return "", time.Time{}, ErrWrongPassword
+	}
+
+	now := s.now().UTC()
+	if err := s.checkOwnerAuthRateLocked(now); err != nil {
+		return "", time.Time{}, err
 	}
 
 	s.mu.Lock()
@@ -158,28 +176,25 @@ FROM signer_meta WHERE id = 1`).Scan(&salt, &hash, &tParam, &mParam, &pParam)
 		return "", time.Time{}, err
 	}
 	enrolled := len(salt) == 16 && len(hash) == 32
-	if !enrolled {
-		// First verified step-up on an upgraded instance enrolls the signer's independent Argon2id verifier.
-		if eErr := s.enrollOwnerAuthLocked(ctx, password, false); eErr != nil {
-			s.mu.Unlock()
-			return "", time.Time{}, eErr
-		}
-		if qErr := s.db.QueryRowContext(ctx, `
-SELECT owner_pw_salt, owner_pw_hash, owner_pw_time, owner_pw_memory, owner_pw_threads
-FROM signer_meta WHERE id = 1`).Scan(&salt, &hash, &tParam, &mParam, &pParam); qErr != nil {
-			s.mu.Unlock()
-			return "", time.Time{}, qErr
-		}
-	}
 	s.mu.Unlock()
+	if !enrolled {
+		// Fail closed: never auto-enroll arbitrary caller passwords on authorize.
+		return "", time.Time{}, fmt.Errorf("%w: signer owner authorization not configured", ErrOwnerAuthRequired)
+	}
 
+	if err := s.acquireKDFSlot(ctx); err != nil {
+		return "", time.Time{}, err
+	}
 	// Run Argon2id outside DB mutex so concurrent reads do not stall.
 	derived := vault.DeriveKey(password, salt, tParam, mParam, pParam)
+	s.releaseKDFSlot()
 	ok := subtle.ConstantTimeCompare(derived, hash) == 1
 	clear(derived)
 	if !ok {
+		s.recordOwnerAuthFailure(s.now().UTC())
 		return "", time.Time{}, ErrWrongPassword
 	}
+	s.resetOwnerAuthFailures()
 
 	raw := make([]byte, 32)
 	if _, err := rand.Read(raw); err != nil {
@@ -188,7 +203,7 @@ FROM signer_meta WHERE id = 1`).Scan(&salt, &hash, &tParam, &mParam, &pParam); q
 	proof := base64.RawURLEncoding.EncodeToString(raw)
 	clear(raw)
 
-	now := s.now().UTC()
+	now = s.now().UTC()
 	exp := now.Add(ownerProofTTL)
 	s.proofMu.Lock()
 	if s.ownerProofs == nil {
@@ -199,6 +214,10 @@ FROM signer_meta WHERE id = 1`).Scan(&salt, &hash, &tParam, &mParam, &pParam); q
 			delete(s.ownerProofs, k)
 		}
 	}
+	if len(s.ownerProofs) >= maxOwnerProofs {
+		s.proofMu.Unlock()
+		return "", time.Time{}, errors.New("too many pending signer owner authorizations; retry shortly")
+	}
 	s.ownerProofs[hashOwnerProof(proof)] = ownerProofEntry{
 		action:    act,
 		walletID:  wid,
@@ -206,6 +225,72 @@ FROM signer_meta WHERE id = 1`).Scan(&salt, &hash, &tParam, &mParam, &pParam); q
 	}
 	s.proofMu.Unlock()
 	return proof, exp, nil
+}
+
+func (s *Service) acquireKDFSlot(ctx context.Context) error {
+	if s.kdfSlots == nil {
+		return nil
+	}
+	select {
+	case s.kdfSlots <- struct{}{}:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+		return errors.New("signer KDF busy; retry shortly")
+	}
+}
+
+func (s *Service) releaseKDFSlot() {
+	if s.kdfSlots == nil {
+		return
+	}
+	select {
+	case <-s.kdfSlots:
+	default:
+	}
+}
+
+func (s *Service) checkOwnerAuthRateLocked(now time.Time) error {
+	s.authFailMu.Lock()
+	defer s.authFailMu.Unlock()
+	if now.Before(s.authLockUntil) {
+		return fmt.Errorf("%w: signer owner authorization temporarily rate-limited", ErrWrongPassword)
+	}
+	cutoff := now.Add(-time.Minute)
+	kept := s.authFailTimes[:0]
+	for _, ts := range s.authFailTimes {
+		if ts.After(cutoff) {
+			kept = append(kept, ts)
+		}
+	}
+	s.authFailTimes = kept
+	if len(s.authFailTimes) >= ownerMaxFailsPerMn {
+		return fmt.Errorf("%w: signer owner authorization rate limit exceeded", ErrWrongPassword)
+	}
+	return nil
+}
+
+func (s *Service) recordOwnerAuthFailure(now time.Time) {
+	s.authFailMu.Lock()
+	defer s.authFailMu.Unlock()
+	s.authFailTimes = append(s.authFailTimes, now)
+	s.authConsecFails++
+	if s.authConsecFails >= ownerMaxFailsPerMn {
+		shift := min(s.authConsecFails-ownerMaxFailsPerMn, 4)
+		backoff := (5 * time.Second) << shift
+		if backoff > 60*time.Second {
+			backoff = 60 * time.Second
+		}
+		s.authLockUntil = now.Add(backoff)
+	}
+}
+
+func (s *Service) resetOwnerAuthFailures() {
+	s.authFailMu.Lock()
+	defer s.authFailMu.Unlock()
+	s.authConsecFails = 0
+	s.authLockUntil = time.Time{}
 }
 
 // ConsumeOwnerProof validates and atomically consumes a single-use signer owner proof for (action, walletID).
