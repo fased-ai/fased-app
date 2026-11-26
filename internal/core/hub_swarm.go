@@ -35,6 +35,9 @@ func init() {
 	stage6RouteHook = func(h *HTTPHandler, w http.ResponseWriter, r *http.Request, token string) bool {
 		return h.handleStage6Route(w, r, token)
 	}
+	swarmRelayHook = func(h *HTTPHandler, w http.ResponseWriter, r *http.Request) {
+		h.handleSwarmRelay(w, r)
+	}
 }
 
 func (s *Store) ensureStage6Runtime() (*stage6Runtime, error) {
@@ -312,7 +315,7 @@ func (h *HTTPHandler) handleStage6Route(w http.ResponseWriter, r *http.Request, 
 				ing, err := rt.swarm.IngestEnvelope(r.Context(), env)
 				if err != nil {
 					code := 400
-					if errors.Is(err, swarm.ErrSwarmDisabled) || errors.Is(err, swarm.ErrInvalidSignature) || errors.Is(err, swarm.ErrReplayDetected) || errors.Is(err, swarm.ErrTimestampSkew) {
+					if errors.Is(err, swarm.ErrSwarmDisabled) || errors.Is(err, swarm.ErrInvalidSignature) || errors.Is(err, swarm.ErrReplayDetected) || errors.Is(err, swarm.ErrTimestampSkew) || errors.Is(err, swarm.ErrUnknownPeer) {
 						code = 403
 					}
 					writeError(w, code, err.Error())
@@ -599,4 +602,42 @@ func (s *Store) deployHubPackage(ctx context.Context, pkg hub.Package) (string, 
 	default:
 		return "", "", fmt.Errorf("unsupported hub package kind %q", pkg.Kind)
 	}
+}
+
+// handleSwarmRelay admits unauthenticated peer-to-peer HTTP POSTs authenticated solely by
+// Ed25519 signature against the local opt-in trusted swarm_peers allowlist + replay nonce checks.
+func (h *HTTPHandler) handleSwarmRelay(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, 405, "method not allowed")
+		return
+	}
+	if !h.allowRate(r, "swarm-relay", 30) {
+		writeError(w, 429, ErrRateLimited.Error())
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, 16*1024)
+	var env swarm.Envelope
+	if !decodeJSON(w, r, &env) {
+		return
+	}
+	rt, err := h.store.ensureStage6Runtime()
+	if err != nil {
+		writeError(w, 500, err.Error())
+		return
+	}
+	ing, ingErr := rt.swarm.IngestEnvelope(r.Context(), env)
+	if ingErr != nil {
+		code := 400
+		if errors.Is(ingErr, swarm.ErrSwarmDisabled) || errors.Is(ingErr, swarm.ErrInvalidSignature) || errors.Is(ingErr, swarm.ErrReplayDetected) || errors.Is(ingErr, swarm.ErrTimestampSkew) || errors.Is(ingErr, swarm.ErrUnknownPeer) {
+			code = 403
+		}
+		writeError(w, code, ingErr.Error())
+		return
+	}
+	writeJSON(w, 200, map[string]any{
+		"accepted":   true,
+		"envelopeId": ing.EnvelopeID,
+		"kind":       ing.Kind,
+		"untrusted":  true,
+	})
 }

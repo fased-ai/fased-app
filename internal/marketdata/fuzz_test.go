@@ -60,3 +60,29 @@ func FuzzMarketDataParsersAndTransforms(f *testing.F) {
 		}
 	})
 }
+
+func FuzzParseStage5Candles(f *testing.F) {
+	f.Add([]byte(`{"code":"0","msg":"","data":[["1795600000000","61000","61200","60900","61100","120"]]}`))
+	f.Add([]byte(`[[1795600000,3100,3180,3120,3165,420.5]]`))
+	f.Add([]byte(`{"result":{"status":"ok","ticks":[1795600000000],"open":[61000],"high":[61200],"low":[60900],"close":[61100],"volume":[12.3]}}`))
+	f.Add([]byte(`{"bars":[{"t":"2026-11-25T15:00:00Z","o":597,"h":599,"l":596,"c":598,"v":120000,"n":10}]}`))
+
+	f.Fuzz(func(t *testing.T, data []byte) {
+		for _, fn := range []func([]byte) ([]Candle, error){
+			ParseOKXCandles,
+			ParseCoinbaseCandles,
+			ParseDeribitCandles,
+			ParseAlpacaBars,
+		} {
+			candles, err := fn(data)
+			if err != nil {
+				continue
+			}
+			for _, c := range candles {
+				if math.IsNaN(c.Close) || math.IsInf(c.Close, 0) || c.Close <= 0 {
+					t.Fatalf("invalid Stage 5 candle: %+v", c)
+				}
+			}
+		}
+	})
+}

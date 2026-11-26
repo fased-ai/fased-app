@@ -6852,4 +6852,9 @@ export const pageCopy = {
   Conflict: ["Конфликт", "Conflicto", "冲突动态", "분쟁"],
   "SEC Form 4": ["SEC Form 4", "SEC Form 4", "SEC Form 4", "SEC Form 4"],
   Aging: ["Устаревает", "Envejeciendo", "趋于陈旧", "지연 중"],
+  "Add peer": ["Добавить узел", "Agregar par", "添加节点", "피어 추가"],
+  "Peer ID": ["ID узла", "ID del par", "节点 ID", "피어 ID"],
+  Alias: ["Псевдоним", "Alias", "别名", "별칭"],
+  "Public key": ["Публичный ключ", "Clave pública", "公钥", "공개 키"],
+  Signal: ["Сигнал", "Señal", "信号", "시그널"],
 } satisfies Record<string, [string, string, string, string]>;

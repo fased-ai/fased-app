@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"net/http"
 	"strings"
 	"sync"
 	"time"
@@ -18,19 +19,22 @@ const hardMaxCappedOrderMicroUSD uint64 = 250_000_000
 
 // Config parameterizes the opt-in Stage 6 Fased Network Swarm service.
 type Config struct {
-	DataDir      string
-	FixtureMode  bool
-	Now          func() time.Time
-	SecretSource providersecrets.Source
+	DataDir        string
+	FixtureMode    bool
+	Now            func() time.Time
+	SecretSource   providersecrets.Source
+	RelayTransport http.RoundTripper
 }
 
 // Service manages opt-in Swarm configuration, Ed25519 peer registry,
-// replay-protected A2A ingestion, and bounded event pub/sub.
+// replay-protected A2A ingestion, HTTPS peer relay, and bounded event pub/sub.
 type Service struct {
 	store            *store
 	bus              *Bus
 	fixtureMode      bool
 	now              func() time.Time
+	relayTransport   http.RoundTripper
+	relayClient      *http.Client
 	mu               sync.RWMutex
 	cappedEnabled    bool
 	maxOrderMicroUSD uint64
@@ -63,10 +67,12 @@ func NewService(cfg Config) (*Service, error) {
 		return nil, err
 	}
 	svc := &Service{
-		store:       st,
-		bus:         NewBus(),
-		fixtureMode: cfg.FixtureMode,
-		now:         nowFn,
+		store:          st,
+		bus:            NewBus(),
+		fixtureMode:    cfg.FixtureMode,
+		now:            nowFn,
+		relayTransport: cfg.RelayTransport,
+		relayClient:    newRelayHTTPClient(cfg.RelayTransport),
 	}
 	if cfg.FixtureMode {
 		if err := svc.seedFixturePeers(context.Background()); err != nil {
@@ -194,10 +200,15 @@ func (s *Service) AddPeer(ctx context.Context, in PeerInput) (Peer, error) {
 	if err != nil || len(pub) != ed25519.PublicKeySize {
 		return Peer{}, errors.New("swarm peer pubKeyHex must be 32-byte Ed25519 public key hex")
 	}
+	endpoint, err := ValidatePeerEndpoint(in.Endpoint)
+	if err != nil {
+		return Peer{}, err
+	}
 	peer := Peer{
 		PeerID:    peerID,
 		Alias:     alias,
 		PubKeyHex: pubHex,
+		Endpoint:  endpoint,
 		Status:    "verified",
 		AddedAt:   s.now().UTC().Unix(),
 	}
@@ -259,20 +270,42 @@ func (s *Service) IngestEnvelope(ctx context.Context, env Envelope) (Envelope, e
 	return env, nil
 }
 
-// BroadcastSignal signs a local signal with the workspace Ed25519 identity and ingests it into Swarm.
+// BroadcastSignal signs a local signal or chat message with the workspace Ed25519 identity,
+// ingests it locally, and relays it over HTTPS to configured Tailscale/public peers.
 func (s *Service) BroadcastSignal(ctx context.Context, in SignalInput) (Envelope, error) {
 	if s == nil || s.store == nil {
 		return Envelope{}, errors.New("swarm service closed")
 	}
+	kind := strings.ToLower(strings.TrimSpace(in.Kind))
+	if kind == "" {
+		kind = "signal"
+	}
+	if kind != "signal" && kind != "chat" && kind != "critique" {
+		return Envelope{}, errors.New("swarm signal kind must be signal, chat, or critique")
+	}
+	symbol := strings.TrimSpace(in.Symbol)
+	direction := strings.TrimSpace(in.Direction)
+	if kind == "chat" {
+		if symbol == "" {
+			symbol = "GENERAL"
+		}
+		if direction == "" {
+			direction = "NEUTRAL"
+		}
+	}
 	var rnd [12]byte
 	_, _ = rand.Read(rnd[:])
 	now := s.now().UTC()
+	prefix := "sig-"
+	if kind == "chat" {
+		prefix = "chat-"
+	}
 	env := Envelope{
-		EnvelopeID: "sig-" + hex.EncodeToString(rnd[:6]),
+		EnvelopeID: prefix + hex.EncodeToString(rnd[:6]),
 		Nonce:      hex.EncodeToString(rnd[:]),
-		Kind:       "signal",
-		Symbol:     in.Symbol,
-		Direction:  in.Direction,
+		Kind:       kind,
+		Symbol:     symbol,
+		Direction:  direction,
 		Thesis:     in.Thesis,
 		Confidence: in.Confidence,
 		Timestamp:  now.Unix(),
@@ -281,5 +314,10 @@ func (s *Service) BroadcastSignal(ctx context.Context, in SignalInput) (Envelope
 	if err := SignEnvelope(s.store.localKey(), &env); err != nil {
 		return Envelope{}, err
 	}
-	return s.IngestEnvelope(ctx, env)
+	ingested, err := s.IngestEnvelope(ctx, env)
+	if err != nil {
+		return Envelope{}, err
+	}
+	ingested.RelayResults = s.relayEnvelopeToPeers(ctx, ingested)
+	return ingested, nil
 }

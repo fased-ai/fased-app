@@ -22,6 +22,7 @@ const (
 
 	AlpacaPaperOrigin = "https://paper-api.alpaca.markets"
 	AlpacaLiveOrigin  = "https://api.alpaca.markets"
+	AlpacaDataOrigin  = "https://data.alpaca.markets"
 	IBKRLocalOrigin   = "https://127.0.0.1:5000"
 )
 

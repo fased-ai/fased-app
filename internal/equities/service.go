@@ -6,6 +6,8 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"net/http"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -15,9 +17,12 @@ const hardMaxCappedOrderMicroUSD uint64 = 250_000_000
 
 // Config parameterizes the Stage 5 equities & OCC options router.
 type Config struct {
-	DataDir     string
-	FixtureMode bool
-	Now         func() time.Time
+	DataDir         string
+	FixtureMode     bool
+	Now             func() time.Time
+	HTTPTransport   http.RoundTripper
+	AlpacaKeyID     string
+	AlpacaSecretKey string
 }
 
 // Service manages locked Paper equities/options quotes, OCC chains, and paper order routing.
@@ -25,6 +30,8 @@ type Service struct {
 	store            *store
 	client           *Client
 	fixtureMode      bool
+	alpacaKeyID      string
+	alpacaSecretKey  string
 	now              func() time.Time
 	mu               sync.RWMutex
 	cappedEnabled    bool
@@ -52,6 +59,16 @@ func (s *Service) cappedPolicy() (bool, uint64) {
 	return s.cappedEnabled, s.maxOrderMicroUSD
 }
 
+func resolveEnvCred(explicit, primaryEnv, fallbackEnv string) string {
+	if v := strings.TrimSpace(explicit); v != "" {
+		return v
+	}
+	if v := strings.TrimSpace(os.Getenv(primaryEnv)); v != "" {
+		return v
+	}
+	return strings.TrimSpace(os.Getenv(fallbackEnv))
+}
+
 // NewService opens <dataDir>/equities/equities.sqlite and initializes Paper routing guards.
 func NewService(cfg Config) (*Service, error) {
 	nowFn := cfg.Now
@@ -63,10 +80,12 @@ func NewService(cfg Config) (*Service, error) {
 		return nil, err
 	}
 	return &Service{
-		store:       st,
-		client:      NewClient(),
-		fixtureMode: cfg.FixtureMode,
-		now:         nowFn,
+		store:           st,
+		client:          NewClientWithTransport(cfg.HTTPTransport),
+		fixtureMode:     cfg.FixtureMode,
+		alpacaKeyID:     resolveEnvCred(cfg.AlpacaKeyID, "FASED_ALPACA_API_KEY", "APCA_API_KEY_ID"),
+		alpacaSecretKey: resolveEnvCred(cfg.AlpacaSecretKey, "FASED_ALPACA_API_SECRET", "APCA_API_SECRET_KEY"),
+		now:             nowFn,
 	}, nil
 }
 
@@ -100,11 +119,17 @@ func (s *Service) Status(ctx context.Context) (StatusView, error) {
 	}, nil
 }
 
-// GetQuote returns a paper quote for an equity/ETF ticker.
-func (s *Service) GetQuote(_ context.Context, symbol string) (Quote, error) {
+// GetQuote returns a live Alpaca IEX snapshot quote when configured and non-fixture,
+// or falls back to deterministic paper quote fixtures cleanly.
+func (s *Service) GetQuote(ctx context.Context, symbol string) (Quote, error) {
 	clean := strings.ToUpper(strings.TrimSpace(symbol))
 	if !tickerPattern.MatchString(clean) {
 		return Quote{}, errors.New("invalid equity ticker symbol")
+	}
+	if !s.fixtureMode && s.alpacaKeyID != "" && s.alpacaSecretKey != "" {
+		qCtx, cancel := context.WithTimeout(ctx, 8*time.Second)
+		defer cancel()
+		return s.client.FetchAlpacaSnapshotQuote(qCtx, clean, s.alpacaKeyID, s.alpacaSecretKey, s.now().UTC().Unix())
 	}
 	return generateFixtureQuote(clean, s.now().UTC().Unix()), nil
 }

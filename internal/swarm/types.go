@@ -53,6 +53,7 @@ type Peer struct {
 	PeerID    string `json:"peerId"`
 	Alias     string `json:"alias"`
 	PubKeyHex string `json:"pubKeyHex"`
+	Endpoint  string `json:"endpoint,omitempty"`
 	Status    string `json:"status"`
 	AddedAt   int64  `json:"addedAt"`
 }
@@ -62,27 +63,39 @@ type PeerInput struct {
 	PeerID    string `json:"peerId"`
 	Alias     string `json:"alias"`
 	PubKeyHex string `json:"pubKeyHex"`
+	Endpoint  string `json:"endpoint,omitempty"`
+}
+
+// RelayResult captures outbound HTTPS/Tailscale relay delivery per peer.
+type RelayResult struct {
+	PeerID     string `json:"peerId"`
+	Endpoint   string `json:"endpoint"`
+	Delivered  bool   `json:"delivered"`
+	StatusCode int    `json:"statusCode,omitempty"`
+	Error      string `json:"error,omitempty"`
 }
 
 // Envelope is an Ed25519-signed Swarm A2A signal/message.
 // Inbound payloads are strictly marked Untrusted=true so external signals never bypass risk gates.
 type Envelope struct {
-	EnvelopeID      string  `json:"envelopeId"`
-	Nonce           string  `json:"nonce"`
-	SenderPubKeyHex string  `json:"senderPubKeyHex"`
-	Kind            string  `json:"kind"`
-	Symbol          string  `json:"symbol"`
-	Direction       string  `json:"direction"`
-	Thesis          string  `json:"thesis"`
-	Confidence      float64 `json:"confidence"`
-	Timestamp       int64   `json:"timestamp"`
-	SignatureHex    string  `json:"signatureHex"`
-	Untrusted       bool    `json:"untrusted"`
-	VerifiedAt      int64   `json:"verifiedAt,omitempty"`
+	EnvelopeID      string        `json:"envelopeId"`
+	Nonce           string        `json:"nonce"`
+	SenderPubKeyHex string        `json:"senderPubKeyHex"`
+	Kind            string        `json:"kind"`
+	Symbol          string        `json:"symbol"`
+	Direction       string        `json:"direction"`
+	Thesis          string        `json:"thesis"`
+	Confidence      float64       `json:"confidence"`
+	Timestamp       int64         `json:"timestamp"`
+	SignatureHex    string        `json:"signatureHex"`
+	Untrusted       bool          `json:"untrusted"`
+	VerifiedAt      int64         `json:"verifiedAt,omitempty"`
+	RelayResults    []RelayResult `json:"relayResults,omitempty"`
 }
 
-// SignalInput submits a signed local signal broadcast over Swarm A2A.
+// SignalInput submits a signed local signal or chat message broadcast over Swarm A2A.
 type SignalInput struct {
+	Kind       string  `json:"kind,omitempty"`
 	Symbol     string  `json:"symbol"`
 	Direction  string  `json:"direction"`
 	Thesis     string  `json:"thesis"`
@@ -145,8 +158,16 @@ func ValidateEnvelopeFields(env *Envelope) error {
 	if env.Kind == "" {
 		env.Kind = "signal"
 	}
-	if env.Kind != "signal" && env.Kind != "critique" && env.Kind != "heartbeat" {
+	if env.Kind != "signal" && env.Kind != "chat" && env.Kind != "critique" && env.Kind != "heartbeat" {
 		return errors.New("unsupported swarm envelope kind")
+	}
+	if env.Kind == "chat" {
+		if strings.TrimSpace(env.Symbol) == "" {
+			env.Symbol = "GENERAL"
+		}
+		if strings.TrimSpace(env.Direction) == "" {
+			env.Direction = "NEUTRAL"
+		}
 	}
 	env.Symbol = strings.ToUpper(strings.TrimSpace(env.Symbol))
 	if !symbolPattern.MatchString(env.Symbol) {

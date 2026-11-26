@@ -28,6 +28,10 @@ var allowedUpstreamHosts = map[string]bool{
 	"data-api.binance.vision":     true,
 	"api.bybit.com":               true,
 	"api.kraken.com":              true,
+	"www.okx.com":                 true,
+	"api.exchange.coinbase.com":   true,
+	"www.deribit.com":             true,
+	"data.alpaca.markets":         true,
 	"api.geckoterminal.com":       true,
 	"api.dexscreener.com":         true,
 	"mainnet.zklighter.elliot.ai": true,
@@ -228,7 +232,7 @@ func validateUpstreamURL(rawURL string) (*url.URL, error) {
 	return u, nil
 }
 
-func (c *upstreamClient) openRequest(ctx context.Context, method, rawURL string, body []byte, contentType string) (*http.Response, string, error) {
+func (c *upstreamClient) openRequest(ctx context.Context, method, rawURL string, body []byte, contentType string, headers map[string]string) (*http.Response, string, error) {
 	u, err := validateUpstreamURL(rawURL)
 	if err != nil {
 		return nil, "", err
@@ -251,6 +255,11 @@ func (c *upstreamClient) openRequest(ctx context.Context, method, rawURL string,
 		req.Header.Set("User-Agent", defaultUserAgent)
 	}
 	req.Header.Set("Accept", "application/json, text/csv;q=0.9")
+	for k, v := range headers {
+		if k != "" && v != "" {
+			req.Header.Set(k, v)
+		}
+	}
 
 	resp, err := c.http.Do(req)
 	if err != nil {
@@ -263,8 +272,8 @@ func (c *upstreamClient) openRequest(ctx context.Context, method, rawURL string,
 	return resp, host, nil
 }
 
-func (c *upstreamClient) doRequest(ctx context.Context, method, rawURL string, body []byte, contentType string) ([]byte, error) {
-	resp, host, err := c.openRequest(ctx, method, rawURL, body, contentType)
+func (c *upstreamClient) doRequest(ctx context.Context, method, rawURL string, body []byte, contentType string, headers map[string]string) ([]byte, error) {
+	resp, host, err := c.openRequest(ctx, method, rawURL, body, contentType, headers)
 	if err != nil {
 		return nil, err
 	}
@@ -286,7 +295,7 @@ func (c *upstreamClient) doRequest(ctx context.Context, method, rawURL string, b
 // streamGet enforces SSRF, TLS 1.2+, redirect, status, and bounded read
 // controls while letting callers stop reading once top records are parsed.
 func (c *upstreamClient) streamGet(ctx context.Context, rawURL string, fn func(io.Reader) error) error {
-	resp, host, err := c.openRequest(ctx, http.MethodGet, rawURL, nil, "")
+	resp, host, err := c.openRequest(ctx, http.MethodGet, rawURL, nil, "", nil)
 	if err != nil {
 		return err
 	}
@@ -299,9 +308,13 @@ func (c *upstreamClient) streamGet(ctx context.Context, rawURL string, fn func(i
 }
 
 func (c *upstreamClient) get(ctx context.Context, rawURL string) ([]byte, error) {
-	return c.doRequest(ctx, http.MethodGet, rawURL, nil, "")
+	return c.doRequest(ctx, http.MethodGet, rawURL, nil, "", nil)
+}
+
+func (c *upstreamClient) getWithHeaders(ctx context.Context, rawURL string, headers map[string]string) ([]byte, error) {
+	return c.doRequest(ctx, http.MethodGet, rawURL, nil, "", headers)
 }
 
 func (c *upstreamClient) postJSON(ctx context.Context, rawURL string, body []byte) ([]byte, error) {
-	return c.doRequest(ctx, http.MethodPost, rawURL, body, "application/json")
+	return c.doRequest(ctx, http.MethodPost, rawURL, body, "application/json", nil)
 }

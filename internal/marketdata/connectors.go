@@ -765,6 +765,55 @@ func (c *upstreamClient) fetchCandles(ctx context.Context, venue, symbol, interv
 		}
 		return ParseLighterCandles(raw)
 
+	case VenueOKX:
+		u := fmt.Sprintf("https://www.okx.com/api/v5/market/candles?instId=%s&bar=%s&limit=%d",
+			url.QueryEscape(qSym), url.QueryEscape(okxBarParam(interval)), minInt(limit, 300))
+		raw, err := c.get(ctx, u)
+		if err != nil {
+			return nil, err
+		}
+		return ParseOKXCandles(raw)
+
+	case VenueCoinbase:
+		u := fmt.Sprintf("https://api.exchange.coinbase.com/products/%s/candles?granularity=%d",
+			url.PathEscape(qSym), coinbaseGranularityParam(interval))
+		raw, err := c.get(ctx, u)
+		if err != nil {
+			return nil, err
+		}
+		return ParseCoinbaseCandles(raw)
+
+	case VenueDeribit:
+		if endSec <= 0 {
+			endSec = time.Now().Unix()
+		}
+		if startSec <= 0 || startSec >= endSec {
+			startSec = endSec - int64(limit)*validIntervals[interval]
+		}
+		u := fmt.Sprintf("https://www.deribit.com/api/v2/public/get_tradingview_chart_data?instrument_name=%s&start_timestamp=%d&end_timestamp=%d&resolution=%s",
+			url.QueryEscape(qSym), startSec*1000, endSec*1000, url.QueryEscape(deribitResolutionParam(interval)))
+		raw, err := c.get(ctx, u)
+		if err != nil {
+			return nil, err
+		}
+		return ParseDeribitCandles(raw)
+
+	case VenueAlpaca:
+		keyID, secret := resolveAlpacaCreds()
+		if keyID == "" || secret == "" {
+			return nil, errors.New("alpaca market data requires APCA_API_KEY_ID and APCA_API_SECRET_KEY")
+		}
+		u := fmt.Sprintf("https://data.alpaca.markets/v2/stocks/%s/bars?timeframe=%s&limit=%d&feed=iex",
+			url.PathEscape(qSym), url.QueryEscape(alpacaTimeframeParam(interval)), minInt(limit, 1000))
+		raw, err := c.getWithHeaders(ctx, u, map[string]string{
+			"APCA-API-KEY-ID":     keyID,
+			"APCA-API-SECRET-KEY": secret,
+		})
+		if err != nil {
+			return nil, err
+		}
+		return ParseAlpacaBars(raw)
+
 	default:
 		return nil, fmt.Errorf("venue %q does not provide OHLCV candles", venue)
 	}
@@ -892,6 +941,27 @@ func (c *upstreamClient) fetchOrderBook(ctx context.Context, venue, symbol strin
 			return OrderBookSnapshot{}, err
 		}
 		return ParseLighterOrderBook(raw, venue, symbol, nowMs)
+	case VenueOKX:
+		u := fmt.Sprintf("https://www.okx.com/api/v5/market/books?instId=%s&sz=%d", url.QueryEscape(qSym), minInt(limit, 50))
+		raw, err := c.get(ctx, u)
+		if err != nil {
+			return OrderBookSnapshot{}, err
+		}
+		return ParseOKXOrderBook(raw, venue, symbol, nowMs)
+	case VenueCoinbase:
+		u := fmt.Sprintf("https://api.exchange.coinbase.com/products/%s/book?level=2", url.PathEscape(qSym))
+		raw, err := c.get(ctx, u)
+		if err != nil {
+			return OrderBookSnapshot{}, err
+		}
+		return ParseCoinbaseOrderBook(raw, venue, symbol, nowMs)
+	case VenueDeribit:
+		u := fmt.Sprintf("https://www.deribit.com/api/v2/public/get_order_book?instrument_name=%s&depth=%d", url.QueryEscape(qSym), minInt(limit, 50))
+		raw, err := c.get(ctx, u)
+		if err != nil {
+			return OrderBookSnapshot{}, err
+		}
+		return ParseDeribitOrderBook(raw, venue, symbol, nowMs)
 	default:
 		return OrderBookSnapshot{}, fmt.Errorf("orderbook not supported on venue %q", venue)
 	}
@@ -1085,6 +1155,27 @@ func (c *upstreamClient) fetchTrades(ctx context.Context, venue, symbol string, 
 			return nil, err
 		}
 		return ParseLighterTrades(raw)
+	case VenueOKX:
+		u := fmt.Sprintf("https://www.okx.com/api/v5/market/trades?instId=%s&limit=%d", url.QueryEscape(qSym), minInt(limit, 100))
+		raw, err := c.get(ctx, u)
+		if err != nil {
+			return nil, err
+		}
+		return ParseOKXTrades(raw)
+	case VenueCoinbase:
+		u := fmt.Sprintf("https://api.exchange.coinbase.com/products/%s/trades?limit=%d", url.PathEscape(qSym), minInt(limit, 100))
+		raw, err := c.get(ctx, u)
+		if err != nil {
+			return nil, err
+		}
+		return ParseCoinbaseTrades(raw)
+	case VenueDeribit:
+		u := fmt.Sprintf("https://www.deribit.com/api/v2/public/get_last_trades_by_instrument?instrument_name=%s&count=%d", url.QueryEscape(qSym), minInt(limit, 100))
+		raw, err := c.get(ctx, u)
+		if err != nil {
+			return nil, err
+		}
+		return ParseDeribitTrades(raw)
 	default:
 		return []TradeTick{}, nil
 	}

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { Badge } from "../components/shared";
 import { Globe2, RefreshCw } from "../icons";
 import {
+  addSwarmPeer,
   broadcastSwarmSignal,
   getCEXStatus,
   getEquitiesStatus,
@@ -46,6 +47,7 @@ export function NetworkWorkspace() {
     null,
   );
 
+  const [signalKind, setSignalKind] = useState<"signal" | "chat">("signal");
   const [signalSymbol, setSignalSymbol] = useState("SOL");
   const [signalDirection, setSignalDirection] = useState<
     "LONG" | "SHORT" | "NEUTRAL"
@@ -54,6 +56,10 @@ export function NetworkWorkspace() {
     "Spot momentum with bounded paper confirmation",
   );
   const [signalConfidence, setSignalConfidence] = useState("0.75");
+  const [peerIDInput, setPeerIDInput] = useState("");
+  const [peerAliasInput, setPeerAliasInput] = useState("");
+  const [peerPubKeyInput, setPeerPubKeyInput] = useState("");
+  const [peerEndpointInput, setPeerEndpointInput] = useState("");
 
   const [cexVenue, setCexVenue] = useState("binance");
   const [cexSymbol, setCexSymbol] = useState("BTCUSDT");
@@ -135,11 +141,32 @@ export function NetworkWorkspace() {
     try {
       const conf = Number(signalConfidence);
       await broadcastSwarmSignal(core, {
+        kind: signalKind,
         symbol: signalSymbol,
         direction: signalDirection,
         thesis: signalThesis,
         confidence: Number.isFinite(conf) ? conf : 0.7,
       });
+      await refresh();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  };
+
+  const handleAddPeer = async () => {
+    if (core.mode !== "ready") return;
+    setError("");
+    try {
+      await addSwarmPeer(core, {
+        peerId: peerIDInput,
+        alias: peerAliasInput,
+        pubKeyHex: peerPubKeyInput,
+        endpoint: peerEndpointInput.trim() || undefined,
+      });
+      setPeerIDInput("");
+      setPeerAliasInput("");
+      setPeerPubKeyInput("");
+      setPeerEndpointInput("");
       await refresh();
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -317,6 +344,19 @@ export function NetworkWorkspace() {
             </div>
             <div className="network-field-grid">
               <div className="network-field">
+                <label htmlFor="swarm-kind">{t("Kind")}</label>
+                <select
+                  id="swarm-kind"
+                  value={signalKind}
+                  onChange={(e) =>
+                    setSignalKind(e.target.value as "signal" | "chat")
+                  }
+                >
+                  <option value="signal">{t("Signal")}</option>
+                  <option value="chat">{t("Chat")}</option>
+                </select>
+              </div>
+              <div className="network-field">
                 <label htmlFor="swarm-symbol">{t("Symbol")}</label>
                 <input
                   id="swarm-symbol"
@@ -377,12 +417,68 @@ export function NetworkWorkspace() {
               </h2>
               <Badge>{t("Untrusted")}</Badge>
             </div>
+            <details className="network-payload-details">
+              <summary>{t("Add peer")}</summary>
+              <div className="network-field-grid">
+                <div className="network-field">
+                  <label htmlFor="peer-id">{t("Peer ID")}</label>
+                  <input
+                    id="peer-id"
+                    value={peerIDInput}
+                    onChange={(e) => setPeerIDInput(e.target.value)}
+                  />
+                </div>
+                <div className="network-field">
+                  <label htmlFor="peer-alias">{t("Alias")}</label>
+                  <input
+                    id="peer-alias"
+                    value={peerAliasInput}
+                    onChange={(e) => setPeerAliasInput(e.target.value)}
+                  />
+                </div>
+                <div className="network-field">
+                  <label htmlFor="peer-pubkey">{t("Public key")}</label>
+                  <input
+                    id="peer-pubkey"
+                    value={peerPubKeyInput}
+                    onChange={(e) => setPeerPubKeyInput(e.target.value)}
+                  />
+                </div>
+                <div className="network-field">
+                  <label htmlFor="peer-endpoint">{t("Endpoint")}</label>
+                  <input
+                    id="peer-endpoint"
+                    value={peerEndpointInput}
+                    placeholder="https://peer.tailnet.ts.net"
+                    onChange={(e) => setPeerEndpointInput(e.target.value)}
+                  />
+                </div>
+              </div>
+              <div className="network-actions-row">
+                <button
+                  type="button"
+                  className="secondary"
+                  disabled={
+                    core.mode !== "ready" ||
+                    !peerIDInput.trim() ||
+                    !peerAliasInput.trim() ||
+                    !peerPubKeyInput.trim()
+                  }
+                  onClick={() => void handleAddPeer()}
+                >
+                  {t("Add peer")}
+                </button>
+              </div>
+            </details>
             <div className="network-list">
               {swarm.peers.map((peer) => (
                 <div key={peer.peerId} className="network-row">
                   <div className="network-row-top">
                     <strong>{peer.alias}</strong>
-                    <Badge tone="ok">{peer.status}</Badge>
+                    <div className="network-pill-row">
+                      {peer.endpoint && <Badge>{peer.endpoint}</Badge>}
+                      <Badge tone="ok">{peer.status}</Badge>
+                    </div>
                   </div>
                 </div>
               ))}
@@ -392,9 +488,12 @@ export function NetworkWorkspace() {
                     <strong>
                       {sig.symbol} · {sig.direction}
                     </strong>
-                    <Badge tone="warn">
-                      {sig.untrusted ? "untrusted=true" : "trusted"}
-                    </Badge>
+                    <div className="network-pill-row">
+                      <Badge>{sig.kind}</Badge>
+                      <Badge tone="warn">
+                        {sig.untrusted ? "untrusted=true" : "trusted"}
+                      </Badge>
+                    </div>
                   </div>
                   <span>{sig.thesis}</span>
                 </div>
