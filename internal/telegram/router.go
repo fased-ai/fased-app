@@ -108,8 +108,10 @@ func ExecuteCommand(ctx context.Context, hooks ControllerHooks, allowed []int64,
 			Text: strings.Join([]string{
 				"Fased Telegram Controller (read-only / paper mode):",
 				"/status - Automation & workspace summary",
+				"/brief - Trading desk & automation brief",
+				"/positions - Open paper/shadow desk positions",
 				"/alerts [n] - Recent alerts",
-				"/approvals - Pending Agent V2 approvals",
+				"/approvals - Pending Agent & Desk approvals",
 				"/approve <id> [note] - Approve pending non-secret action",
 				"/reject <id> [note] - Reject pending action",
 				"/pause [reason] - Pause event triggers",
@@ -247,6 +249,28 @@ func ExecuteCommand(ctx context.Context, hooks ControllerHooks, allowed []int64,
 			return CommandReply{Authorized: true, Command: cmd, Text: "Unkill failed: " + err.Error()}
 		}
 		return CommandReply{Authorized: true, Command: cmd, Text: "Kill switch cleared. Automation active."}
+
+	case "brief":
+		bh, ok := hooks.(BriefHooks)
+		if !ok {
+			return CommandReply{Authorized: true, Command: cmd, Text: "Brief unavailable."}
+		}
+		text, err := bh.BriefSummary(ctx)
+		if err != nil {
+			return CommandReply{Authorized: true, Command: cmd, Text: "Brief error: " + err.Error()}
+		}
+		return CommandReply{Authorized: true, Command: cmd, Text: text}
+
+	case "positions":
+		bh, ok := hooks.(BriefHooks)
+		if !ok {
+			return CommandReply{Authorized: true, Command: cmd, Text: "No open desk positions."}
+		}
+		text, err := bh.PositionsSummary(ctx)
+		if err != nil {
+			return CommandReply{Authorized: true, Command: cmd, Text: "Positions error: " + err.Error()}
+		}
+		return CommandReply{Authorized: true, Command: cmd, Text: text}
 
 	default:
 		return CommandReply{

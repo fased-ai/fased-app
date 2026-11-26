@@ -172,6 +172,10 @@ func TestServiceTriggersControlsCooldownDedupAndWebhook(t *testing.T) {
 	if !wh.HasSecret || strings.Contains(wh.SecretMasked, whSecret) {
 		t.Fatalf("unexpected webhook secret masking: %+v", wh)
 	}
+	testWH, err := svc.SendWebhookTest(t.Context())
+	if err != nil || (testWH.LastStatus != "delivered" && testWH.LastStatus != "fixture-delivered") {
+		t.Fatalf("SendWebhookTest failed: %+v err=%v", testWH, err)
+	}
 
 	// Reject non-https webhook URL.
 	if _, err := svc.SaveWebhookConfig(t.Context(), WebhookInput{

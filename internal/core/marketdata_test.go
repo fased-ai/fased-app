@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"path/filepath"
 	"strings"
@@ -114,6 +115,42 @@ func TestMarketDataHTTPAndAgentMCPIntegration(t *testing.T) {
 		t.Fatalf("DELETE drawing expected 200, got %d", delDrawResp.StatusCode)
 	}
 	delDrawResp.Body.Close()
+
+	// Custom CSV feed ingest requires CSRF, persists across custom-feeds list, and serves transformed candles.
+	noCSRFCsv := doV2JSONRequest(t, http.MethodPost, ts.URL+"/api/v1/market/ingest", ts.URL, token, "", `{"symbol":"BACKTEST1","interval":"1h","format":"csv","csv":"time,open,high,low,close,volume\n1795262400,10,12,9,11,50\n"}`, "application/json")
+	noCSRFCsv.Body.Close()
+	if noCSRFCsv.StatusCode != http.StatusForbidden {
+		t.Fatalf("expected 403 without CSRF on POST ingest, got %d", noCSRFCsv.StatusCode)
+	}
+	ingestResp := doV2JSONRequest(t, http.MethodPost, ts.URL+"/api/v1/market/ingest", ts.URL, token, csrf, `{"symbol":"BACKTEST1","interval":"1h","format":"csv","csv":"time,open,high,low,close,volume\n1795262400,10,12,9,11,50\n1795266000,11,14,10,13,80\n"}`, "application/json")
+	if ingestResp.StatusCode != http.StatusOK {
+		raw, _ := io.ReadAll(ingestResp.Body)
+		ingestResp.Body.Close()
+		t.Fatalf("POST /api/v1/market/ingest = %d: %s", ingestResp.StatusCode, raw)
+	}
+	ingestResp.Body.Close()
+
+	feedsResp := doV2JSONRequest(t, http.MethodGet, ts.URL+"/api/v1/market/custom-feeds", "", token, "", "", "application/json")
+	if feedsResp.StatusCode != http.StatusOK {
+		feedsResp.Body.Close()
+		t.Fatalf("GET custom-feeds expected 200, got %d", feedsResp.StatusCode)
+	}
+	feedsRaw, _ := io.ReadAll(feedsResp.Body)
+	feedsResp.Body.Close()
+	if !strings.Contains(string(feedsRaw), "BACKTEST1") {
+		t.Fatalf("expected BACKTEST1 in custom-feeds, got %s", feedsRaw)
+	}
+
+	customCandlesResp := doV2JSONRequest(t, http.MethodGet, ts.URL+"/api/v1/market/candles?venue=custom&symbol=BACKTEST1&interval=1h&limit=10", "", token, "", "", "application/json")
+	if customCandlesResp.StatusCode != http.StatusOK {
+		customCandlesResp.Body.Close()
+		t.Fatalf("GET custom candles expected 200, got %d", customCandlesResp.StatusCode)
+	}
+	customCandlesRaw, _ := io.ReadAll(customCandlesResp.Body)
+	customCandlesResp.Body.Close()
+	if !strings.Contains(string(customCandlesRaw), `"source":"custom"`) {
+		t.Fatalf("expected custom source candles, got %s", customCandlesRaw)
+	}
 
 	// SSE /api/v1/market/stream emits initial snapshot event cleanly and terminates on client cancel.
 	sseCtx, cancelSSE := context.WithTimeout(t.Context(), 5*time.Second)

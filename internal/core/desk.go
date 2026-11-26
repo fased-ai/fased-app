@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -119,7 +121,7 @@ func (s *Store) deskService() (*desk.Service, error) {
 				ticket.ID,
 				fmt.Sprintf("PM approval needed: %s %s", strings.ToUpper(ticket.Side), ticket.Symbol),
 				fmt.Sprintf("%s %s %.4f @ %.4f (R:R %.2f, risk $%.2f)", ticket.Venue, ticket.Symbol, ticket.Quantity, ticket.EntryPrice, ticket.RiskReward, ticket.RiskUSD),
-				false,
+				true,
 			)
 		},
 	})
@@ -141,6 +143,30 @@ func (s *Store) syncDeskKill(ctx context.Context, reason, actor string) {
 		return
 	}
 	_ = svc.SyncExternalKill(ctx, reason, actor)
+}
+
+func (s *Store) loadedOrExistingDeskService() *desk.Service {
+	if s == nil {
+		return nil
+	}
+	s.deskMu.Lock()
+	initialized := s.deskSvc != nil
+	existing := s.deskSvc
+	s.deskMu.Unlock()
+	if initialized {
+		return existing
+	}
+	if s.dir == "" {
+		return nil
+	}
+	if _, err := os.Stat(filepath.Join(s.dir, "desk", "desk.sqlite")); err != nil {
+		return nil
+	}
+	svc, err := s.deskService()
+	if err != nil {
+		return nil
+	}
+	return svc
 }
 
 func (h *HTTPHandler) deskAPI(w http.ResponseWriter, r *http.Request, token string) {

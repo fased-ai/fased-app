@@ -151,6 +151,22 @@ func (s *Service) Publish(ctx context.Context, req PublishRequest) (Package, err
 	return pkg, nil
 }
 
+// GetVerified fetches and re-verifies a stored package's signature and AST without marking it installed.
+func (s *Service) GetVerified(ctx context.Context, packageID string) (Package, error) {
+	if s == nil || s.store == nil {
+		return Package{}, errors.New("hub service closed")
+	}
+	cleanID := strings.ToLower(strings.TrimSpace(packageID))
+	pkg, err := s.store.getPackage(ctx, cleanID)
+	if err != nil {
+		return Package{}, err
+	}
+	if err := VerifyPackage(&pkg); err != nil {
+		return Package{}, err
+	}
+	return pkg, nil
+}
+
 // Install re-verifies signature and AST integrity of a stored package before marking it installed.
 func (s *Service) Install(ctx context.Context, packageID string) (Package, error) {
 	if s == nil || s.store == nil {

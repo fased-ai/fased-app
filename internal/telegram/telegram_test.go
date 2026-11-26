@@ -395,3 +395,39 @@ func TestTelegramSaveConfigValidationPreservesTokenAndPollDoesNotRevertConfig(t 
 		t.Fatalf("PollOnce overwrote concurrent SaveConfig: %+v err=%v", finalCfg, err)
 	}
 }
+
+type briefMockHooks struct {
+	mockHooks
+}
+
+func (b *briefMockHooks) BriefSummary(_ context.Context) (string, error) {
+	return "Fased Brief (ACTIVE)\nDesk (paper): Equity $100000.00", nil
+}
+
+func (b *briefMockHooks) PositionsSummary(_ context.Context) (string, error) {
+	return "Open Desk Positions (1):\n- BUY BTC 0.0500 @ 94000.0000", nil
+}
+
+func TestBriefAndPositionsCommands(t *testing.T) {
+	h := &briefMockHooks{}
+	allowed := []int64{777001}
+
+	brief := ExecuteCommand(t.Context(), h, allowed, 777001, 777001, "/brief", "")
+	if !brief.Authorized || brief.Command != "brief" || !strings.Contains(brief.Text, "Fased Brief") {
+		t.Fatalf("unexpected /brief reply: %+v", brief)
+	}
+	pos := ExecuteCommand(t.Context(), h, allowed, 777001, 777001, "/positions", "")
+	if !pos.Authorized || pos.Command != "positions" || !strings.Contains(pos.Text, "BUY BTC") {
+		t.Fatalf("unexpected /positions reply: %+v", pos)
+	}
+	// Unauthorized chat still rejected.
+	unauth := ExecuteCommand(t.Context(), h, allowed, 999999, 999999, "/brief", "")
+	if unauth.Authorized {
+		t.Fatalf("expected unauthorized rejection on /brief: %+v", unauth)
+	}
+	// Missing BriefHooks falls back cleanly.
+	fallback := ExecuteCommand(t.Context(), &mockHooks{}, allowed, 777001, 777001, "/positions", "")
+	if !fallback.Authorized || fallback.Text != "No open desk positions." {
+		t.Fatalf("unexpected fallback /positions reply: %+v", fallback)
+	}
+}

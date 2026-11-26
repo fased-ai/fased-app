@@ -16,6 +16,11 @@ import { useCore } from "./core";
 import { AIConnectionProvider } from "./ai-connection";
 import { useAgents } from "./agents";
 import { FasedStreamClient } from "./stream-store";
+import {
+  dispatchOSNotification,
+  getOSNotificationsEnabled,
+  OS_NOTIFY_PREF_EVENT,
+} from "./os-notifications";
 import type { Action, Provider } from "./state";
 import type { AccountsView } from "./accounts";
 export type ProvidersPreset = {
@@ -165,6 +170,34 @@ function useWorkspaceState() {
       streamGet: core.streamGet,
     });
   }, [core.mode, core.request, core.streamGet]);
+  const [osNotifyEnabled, setOsNotifyEnabled] = useState<boolean>(() =>
+    getOSNotificationsEnabled(),
+  );
+  useEffect(() => {
+    const syncPref = () => setOsNotifyEnabled(getOSNotificationsEnabled());
+    window.addEventListener(OS_NOTIFY_PREF_EVENT, syncPref);
+    window.addEventListener("storage", syncPref);
+    return () => {
+      window.removeEventListener(OS_NOTIFY_PREF_EVENT, syncPref);
+      window.removeEventListener("storage", syncPref);
+    };
+  }, []);
+  useEffect(() => {
+    if (core.mode !== "ready" || !osNotifyEnabled || !streamClientRef.current)
+      return;
+    return streamClientRef.current.subscribe("automation", (msg) => {
+      const payload = msg.payload as
+        | {
+            type?: string;
+            notification?: { id?: string; title?: string; body?: string };
+          }
+        | undefined;
+      const ntf = payload?.notification;
+      if (ntf?.title) {
+        dispatchOSNotification(ntf.id ?? "", ntf.title, ntf.body);
+      }
+    });
+  }, [core.mode, osNotifyEnabled]);
   const agents = useAgents(core);
   const activeAgents = core.mode === "ready" ? agents.view : null;
   const state = useMemo(

@@ -127,6 +127,14 @@ CREATE TABLE IF NOT EXISTS chart_drawings (
 	updated_at INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_chart_drawings_venue_symbol ON chart_drawings (venue, symbol, updated_at DESC);
+CREATE TABLE IF NOT EXISTS custom_feeds (
+	symbol TEXT NOT NULL,
+	interval TEXT NOT NULL,
+	bar_count INTEGER NOT NULL,
+	last_time INTEGER NOT NULL,
+	updated_at INTEGER NOT NULL,
+	PRIMARY KEY (symbol, interval)
+);
 `
 	_, err := s.metaDB.Exec(ddl)
 	return err
@@ -687,6 +695,64 @@ func (s *Store) LoadMacroCache(ctx context.Context, seriesID string) ([]MacroPoi
 		return nil, 0, false, nil
 	}
 	return pts, updated, true, nil
+}
+
+// UpsertCustomFeedMeta persists summary metadata for an imported custom OHLCV feed (capped at 64).
+func (s *Store) UpsertCustomFeedMeta(ctx context.Context, meta CustomFeedSummary) error {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.closed || s.metaDB == nil {
+		return errors.New("marketdata store closed")
+	}
+	var existing int
+	err := s.metaDB.QueryRowContext(ctx, `SELECT 1 FROM custom_feeds WHERE symbol = ? AND interval = ?`, meta.Symbol, meta.Interval).Scan(&existing)
+	if errors.Is(err, sql.ErrNoRows) {
+		var count int
+		if err := s.metaDB.QueryRowContext(ctx, `SELECT COUNT(*) FROM custom_feeds`).Scan(&count); err != nil {
+			return err
+		}
+		if count >= maxCustomFeeds {
+			return fmt.Errorf("custom feeds limit (%d) reached", maxCustomFeeds)
+		}
+	} else if err != nil {
+		return err
+	}
+	_, err = s.metaDB.ExecContext(ctx, `
+INSERT INTO custom_feeds (symbol, interval, bar_count, last_time, updated_at)
+VALUES (?, ?, ?, ?, ?)
+ON CONFLICT(symbol, interval) DO UPDATE SET
+	bar_count = excluded.bar_count,
+	last_time = excluded.last_time,
+	updated_at = excluded.updated_at
+`, meta.Symbol, meta.Interval, meta.BarCount, meta.LastTime, meta.UpdatedAt)
+	return err
+}
+
+// ListCustomFeeds returns stored custom feed summaries sorted by updated_at descending.
+func (s *Store) ListCustomFeeds(ctx context.Context) ([]CustomFeedSummary, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.closed || s.metaDB == nil {
+		return nil, errors.New("marketdata store closed")
+	}
+	rows, err := s.metaDB.QueryContext(ctx, `
+SELECT symbol, interval, bar_count, last_time, updated_at
+FROM custom_feeds
+ORDER BY updated_at DESC, symbol ASC, interval ASC
+`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]CustomFeedSummary, 0)
+	for rows.Next() {
+		var f CustomFeedSummary
+		if err := rows.Scan(&f.Symbol, &f.Interval, &f.BarCount, &f.LastTime, &f.UpdatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, f)
+	}
+	return out, rows.Err()
 }
 
 // Close deterministically closes all SQLite partitions and meta.sqlite.

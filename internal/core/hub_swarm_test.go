@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/fased-ai/fased-app/internal/hub"
+	"github.com/fased-ai/fased-app/internal/marketdata"
 	"github.com/fased-ai/fased-app/internal/swarm"
 )
 
@@ -40,6 +41,31 @@ func TestStage6HubSwarmCoreRoutesWSAndMCP(t *testing.T) {
 	instResp := stage4Req(h, "POST", srv.URL, "/api/v1/hub/install", `{"id":"`+view.Packages[0].ID+`"}`, token, srv.URL, csrfToken(token))
 	if instResp.Code != 200 || !strings.Contains(instResp.Body.String(), `"installed":true`) {
 		t.Fatalf("POST /api/v1/hub/install failed (%d): %s", instResp.Code, instResp.Body.String())
+	}
+	var instPkg hub.Package
+	if err := json.Unmarshal(instResp.Body.Bytes(), &instPkg); err != nil || instPkg.DeployedTarget == "" {
+		t.Fatalf("expected deployedTarget on installed hub package: %+v err=%v", instPkg, err)
+	}
+	if instPkg.ID == "hub-momentum-rsi" {
+		ql, qErr := srv.Store.quantLabService()
+		if qErr != nil {
+			t.Fatalf("quantLabService: %v", qErr)
+		}
+		if _, found, gErr := ql.GetScript(t.Context(), "hub-momentum-rsi"); gErr != nil || !found {
+			t.Fatalf("expected hub-momentum-rsi deployed into quantlab: found=%v err=%v", found, gErr)
+		}
+	}
+	instWL := stage4Req(h, "POST", srv.URL, "/api/v1/hub/install", `{"id":"hub-macro-watchlist"}`, token, srv.URL, csrfToken(token))
+	if instWL.Code != 200 || !strings.Contains(instWL.Body.String(), `"deployedTarget":"marketdata"`) {
+		t.Fatalf("POST /api/v1/hub/install hub-macro-watchlist failed (%d): %s", instWL.Code, instWL.Body.String())
+	}
+	mdSvc, mErr := srv.Store.marketDataService()
+	if mErr != nil {
+		t.Fatalf("marketDataService: %v", mErr)
+	}
+	wls, wErr := mdSvc.ListWatchlists(t.Context())
+	if wErr != nil || !slices.ContainsFunc(wls, func(w marketdata.Watchlist) bool { return w.ID == "hub-macro-watchlist" && len(w.Items) > 0 }) {
+		t.Fatalf("expected hub-macro-watchlist deployed into marketdata: %+v err=%v", wls, wErr)
 	}
 
 	// 3. Swarm opt-in disabled by default, live copy blocked, shadow/paper broadcast marks untrusted=true.

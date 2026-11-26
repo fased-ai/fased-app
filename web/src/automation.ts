@@ -338,6 +338,10 @@ export function saveWebhookConfig(
   return core.request<WebhookConfigView>("automation/webhook", "PUT", input);
 }
 
+export function sendWebhookTest(core: CoreRequestOnly) {
+  return core.request<WebhookConfigView>("automation/webhook/test", "POST");
+}
+
 export function getTelegramConfig(core: CoreRequestOnly) {
   return core.request<TelegramConfigView>("automation/telegram");
 }

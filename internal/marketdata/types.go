@@ -5,7 +5,10 @@ import (
 	"fmt"
 	"math"
 	"regexp"
+	"sort"
+	"strconv"
 	"strings"
+	"time"
 )
 
 const (
@@ -21,6 +24,7 @@ const (
 	VenueAlpaca      = "alpaca"
 	VenueFRED        = "fred"
 	VenueSEC         = "sec"
+	VenueCustom      = "custom"
 )
 
 const (
@@ -41,6 +45,8 @@ const (
 	maxWatchlistItems    = 64
 	maxDrawingsPerSymbol = 64
 	maxDrawingsTotal     = 512
+	maxCustomFeeds       = 64
+	maxCSVBytes          = 512 * 1024
 
 	DrawingKindHLine     = "hline"
 	DrawingKindTrendline = "trendline"
@@ -82,6 +88,7 @@ var (
 		VenueAlpaca:      true,
 		VenueFRED:        true,
 		VenueSEC:         true,
+		VenueCustom:      true,
 	}
 
 	symbolPattern   = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:/-]{0,63}$`)
@@ -572,4 +579,155 @@ func EvaluateDrawingPrice(d ChartDrawing, atTime int64) (float64, bool) {
 	default:
 		return 0, false
 	}
+}
+
+// CustomFeedSummary describes a user-ingested custom OHLCV symbol+interval feed.
+type CustomFeedSummary struct {
+	Symbol    string `json:"symbol"`
+	Interval  string `json:"interval"`
+	BarCount  int    `json:"barCount"`
+	LastTime  int64  `json:"lastTime"`
+	UpdatedAt int64  `json:"updatedAt"`
+}
+
+// IngestCandlesRequest imports CSV or JSON OHLCV bars into the local "custom" venue.
+type IngestCandlesRequest struct {
+	Symbol   string   `json:"symbol"`
+	Interval string   `json:"interval,omitempty"`
+	Format   string   `json:"format,omitempty"`
+	CSV      string   `json:"csv,omitempty"`
+	Candles  []Candle `json:"candles,omitempty"`
+}
+
+func parseCSVTimestamp(raw string) (int64, error) {
+	s := strings.TrimSpace(raw)
+	if s == "" {
+		return 0, errors.New("empty timestamp")
+	}
+	if n, err := strconv.ParseInt(s, 10, 64); err == nil {
+		if n >= 1_000_000_000_000 {
+			n /= 1000
+		}
+		if n <= 0 {
+			return 0, errors.New("timestamp must be positive")
+		}
+		return n, nil
+	}
+	for _, layout := range []string{time.RFC3339Nano, time.RFC3339, "2006-01-02 15:04:05", "2006-01-02"} {
+		if t, err := time.Parse(layout, s); err == nil {
+			if t.Unix() <= 0 {
+				return 0, errors.New("timestamp out of range")
+			}
+			return t.UTC().Unix(), nil
+		}
+	}
+	return 0, fmt.Errorf("invalid timestamp %q", s)
+}
+
+// ParseCSVOHLCV parses CSV OHLCV lines ("time,open,high,low,close[,volume]") into sorted, validated candles.
+func ParseCSVOHLCV(raw string) ([]Candle, error) {
+	if len(raw) > maxCSVBytes {
+		return nil, fmt.Errorf("csv payload exceeds %d bytes", maxCSVBytes)
+	}
+	lines := strings.Split(strings.ReplaceAll(raw, "\r\n", "\n"), "\n")
+	out := make([]Candle, 0, min(len(lines), maxCandlesLimit))
+	sawData := false
+	for idx, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+			continue
+		}
+		parts := strings.Split(trimmed, ",")
+		if len(parts) < 5 || len(parts) > 8 {
+			return nil, fmt.Errorf("line %d: expected 5..6 comma-separated columns", idx+1)
+		}
+		col0 := strings.TrimSpace(strings.Trim(parts[0], `"'`))
+		ts, tsErr := parseCSVTimestamp(col0)
+		if tsErr != nil {
+			low := strings.ToLower(col0)
+			if !sawData && (strings.Contains(low, "time") || strings.Contains(low, "date") || low == "ts") {
+				continue
+			}
+			return nil, fmt.Errorf("line %d: %w", idx+1, tsErr)
+		}
+		parseF := func(col int, name string) (float64, error) {
+			v, err := strconv.ParseFloat(strings.TrimSpace(strings.Trim(parts[col], `"'`)), 64)
+			if err != nil {
+				return 0, fmt.Errorf("line %d: invalid %s", idx+1, name)
+			}
+			return v, nil
+		}
+		o, err := parseF(1, "open")
+		if err != nil {
+			return nil, err
+		}
+		h, err := parseF(2, "high")
+		if err != nil {
+			return nil, err
+		}
+		l, err := parseF(3, "low")
+		if err != nil {
+			return nil, err
+		}
+		c, err := parseF(4, "close")
+		if err != nil {
+			return nil, err
+		}
+		var vol float64
+		if len(parts) >= 6 && strings.TrimSpace(parts[5]) != "" {
+			vol, err = parseF(5, "volume")
+			if err != nil {
+				return nil, err
+			}
+		}
+		if !isFinitePositive(o) || !isFinitePositive(h) || !isFinitePositive(l) || !isFinitePositive(c) || !isFiniteNonNeg(vol) {
+			return nil, fmt.Errorf("line %d: non-positive OHLC or invalid volume", idx+1)
+		}
+		if l > o || l > c || h < o || h < c || l > h {
+			return nil, fmt.Errorf("line %d: inconsistent high/low bounds", idx+1)
+		}
+		sawData = true
+		out = append(out, Candle{Time: ts, Open: o, High: h, Low: l, Close: c, Volume: vol})
+		if len(out) > maxCandlesLimit {
+			return nil, fmt.Errorf("csv exceeds %d candle limit", maxCandlesLimit)
+		}
+	}
+	if len(out) == 0 {
+		return nil, errors.New("no valid OHLCV rows found")
+	}
+	return normalizeCandleSlice(out)
+}
+
+func normalizeCandleSlice(in []Candle) ([]Candle, error) {
+	if len(in) == 0 {
+		return nil, errors.New("at least 1 candle is required")
+	}
+	if len(in) > maxCandlesLimit {
+		return nil, fmt.Errorf("candles exceed %d limit", maxCandlesLimit)
+	}
+	cleaned := make([]Candle, 0, len(in))
+	for i, c := range in {
+		ts := c.Time
+		if ts >= 1_000_000_000_000 {
+			ts /= 1000
+		}
+		if ts <= 0 || !isFinitePositive(c.Open) || !isFinitePositive(c.High) || !isFinitePositive(c.Low) || !isFinitePositive(c.Close) || !isFiniteNonNeg(c.Volume) {
+			return nil, fmt.Errorf("candle %d: invalid timestamp or OHLCV values", i)
+		}
+		if c.Low > c.Open || c.Low > c.Close || c.High < c.Open || c.High < c.Close || c.Low > c.High {
+			return nil, fmt.Errorf("candle %d: inconsistent high/low bounds", i)
+		}
+		c.Time = ts
+		cleaned = append(cleaned, c)
+	}
+	sort.Slice(cleaned, func(i, j int) bool { return cleaned[i].Time < cleaned[j].Time })
+	deduped := make([]Candle, 0, len(cleaned))
+	for _, c := range cleaned {
+		if len(deduped) > 0 && deduped[len(deduped)-1].Time == c.Time {
+			deduped[len(deduped)-1] = c
+		} else {
+			deduped = append(deduped, c)
+		}
+	}
+	return deduped, nil
 }

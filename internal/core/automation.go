@@ -259,12 +259,18 @@ func (h *coreTelegramHooks) StatusSummary(ctx context.Context) (telegram.StatusS
 	if err != nil {
 		approvals = nil
 	}
+	pendingCount := len(approvals)
+	if ds := h.store.loadedOrExistingDeskService(); ds != nil {
+		if tickets, tErr := ds.ListTickets(ctx, "PENDING_PM", 25); tErr == nil {
+			pendingCount += len(tickets)
+		}
+	}
 	return telegram.StatusSnapshot{
 		InstanceID:       h.store.instanceID,
 		AutomationState:  st,
 		EnabledTriggers:  enabledCount,
 		UnreadAlerts:     ntfs.UnreadCount,
-		PendingApprovals: len(approvals),
+		PendingApprovals: pendingCount,
 		FinancialLive:    false,
 	}, nil
 }
@@ -280,7 +286,7 @@ func (h *coreTelegramHooks) ListRecentAlerts(ctx context.Context, limit int) ([]
 func (h *coreTelegramHooks) ListPendingApprovals(ctx context.Context) ([]telegram.PendingApprovalBrief, error) {
 	items, err := h.store.ListPendingApprovals(ctx, 10)
 	if err != nil {
-		return nil, err
+		items = nil
 	}
 	out := make([]telegram.PendingApprovalBrief, 0, len(items))
 	for _, ap := range items {
@@ -290,6 +296,18 @@ func (h *coreTelegramHooks) ListPendingApprovals(ctx context.Context) ([]telegra
 			Title:    ap.Title,
 			Summary:  ap.Summary,
 		})
+	}
+	if ds := h.store.loadedOrExistingDeskService(); ds != nil {
+		if tickets, tErr := ds.ListTickets(ctx, "PENDING_PM", 10); tErr == nil {
+			for _, tk := range tickets {
+				out = append(out, telegram.PendingApprovalBrief{
+					ID:       tk.ID,
+					ToolName: "desk_ticket",
+					Title:    fmt.Sprintf("Desk %s %s (%s)", strings.ToUpper(tk.Side), tk.Symbol, tk.Venue),
+					Summary:  fmt.Sprintf("qty %.4f @ %.4f · R:R %.2f · risk $%.2f", tk.Quantity, tk.EntryPrice, tk.RiskReward, tk.RiskUSD),
+				})
+			}
+		}
 	}
 	return out, nil
 }
@@ -303,17 +321,88 @@ func (h *coreTelegramHooks) ResolveApproval(ctx context.Context, id, decisionArg
 		return "", errors.New("kill switch is active; clear kill switch before approving actions")
 	}
 	ap, err := h.store.GetApproval(ctx, id)
+	if err == nil {
+		if ap.ToolName == "request_secret" {
+			return "", errors.New("request_secret approvals cannot be submitted over Telegram; enter secrets only in local Fased UI")
+		}
+		res, rErr := h.store.ResolveAgentV2Approval(ctx, id, decisionArg, note, false, nil)
+		if rErr != nil {
+			return "", rErr
+		}
+		return fmt.Sprintf("Approval %s marked %s (%s).", res.Approval.ID, res.Approval.Status, res.Approval.ToolName), nil
+	}
+	if ds := h.store.loadedOrExistingDeskService(); ds != nil {
+		if tickets, tErr := ds.ListTickets(ctx, "PENDING_PM", 50); tErr == nil {
+			for _, tk := range tickets {
+				if tk.ID != id {
+					continue
+				}
+				if decisionArg == "approve" {
+					pos, aErr := ds.ApproveTicket(ctx, id, "telegram")
+					if aErr != nil {
+						return "", aErr
+					}
+					return fmt.Sprintf("Desk ticket %s approved; opened %s %s (%s).", id, strings.ToUpper(pos.Side), pos.Symbol, pos.ID), nil
+				}
+				rejNote := strings.TrimSpace(note)
+				if rejNote == "" {
+					rejNote = "Rejected via Telegram"
+				}
+				rej, rErr := ds.RejectTicket(ctx, id, rejNote, "telegram")
+				if rErr != nil {
+					return "", rErr
+				}
+				return fmt.Sprintf("Desk ticket %s rejected (%s).", rej.ID, rej.Symbol), nil
+			}
+		}
+	}
+	return "", err
+}
+
+func (h *coreTelegramHooks) BriefSummary(ctx context.Context) (string, error) {
+	snap, err := h.StatusSummary(ctx)
 	if err != nil {
 		return "", err
 	}
-	if ap.ToolName == "request_secret" {
-		return "", errors.New("request_secret approvals cannot be submitted over Telegram; enter secrets only in local Fased UI")
+	stateLabel := "ACTIVE"
+	if snap.AutomationState.KillSwitchActive {
+		stateLabel = "KILL_SWITCH"
+	} else if snap.AutomationState.Paused {
+		stateLabel = "PAUSED"
 	}
-	res, err := h.store.ResolveAgentV2Approval(ctx, id, decisionArg, note, false, nil)
+	lines := []string{
+		fmt.Sprintf("Fased Brief (%s)", stateLabel),
+		fmt.Sprintf("Triggers: %d enabled | Unread: %d | Approvals: %d", snap.EnabledTriggers, snap.UnreadAlerts, snap.PendingApprovals),
+	}
+	if ds := h.store.loadedOrExistingDeskService(); ds != nil {
+		if dSnap, dErr := ds.GetSnapshot(ctx); dErr == nil {
+			lines = append(lines, fmt.Sprintf(
+				"Desk (%s): Equity $%.2f | Realized $%.2f | Open: %d | Pending PM: %d",
+				dSnap.Limits.Mode, dSnap.Account.EquityUSD, dSnap.Account.RealizedPnLUSD, dSnap.Account.OpenPositions, dSnap.Account.PendingTickets,
+			))
+		}
+	}
+	return strings.Join(lines, "\n"), nil
+}
+
+func (h *coreTelegramHooks) PositionsSummary(ctx context.Context) (string, error) {
+	ds := h.store.loadedOrExistingDeskService()
+	if ds == nil {
+		return "No open desk positions.", nil
+	}
+	positions, err := ds.ListPositions(ctx, "OPEN", 10)
 	if err != nil {
 		return "", err
 	}
-	return fmt.Sprintf("Approval %s marked %s (%s).", res.Approval.ID, res.Approval.Status, res.Approval.ToolName), nil
+	if len(positions) == 0 {
+		return "No open desk positions.", nil
+	}
+	lines := make([]string, 0, len(positions)+1)
+	lines = append(lines, fmt.Sprintf("Open Desk Positions (%d):", len(positions)))
+	for _, p := range positions {
+		lines = append(lines, fmt.Sprintf("- %s %s (%s) %.4f @ %.4f | mark %.4f | uPnL $%.2f", strings.ToUpper(p.Side), p.Symbol, p.Venue, p.Quantity, p.EntryPrice, p.MarkPrice, p.UnrealizedPnL))
+	}
+	return strings.Join(lines, "\n"), nil
 }
 
 func (h *coreTelegramHooks) SetAutomationState(ctx context.Context, action, reason, actor string) (automation.ControlState, error) {
@@ -539,6 +628,21 @@ func (h *HTTPHandler) automationAPI(w http.ResponseWriter, r *http.Request, toke
 		default:
 			writeError(w, 405, "method not allowed")
 		}
+
+	case rel == "webhook/test":
+		if r.Method != http.MethodPost {
+			writeError(w, 405, "method not allowed")
+			return
+		}
+		if !h.v2Mutation(w, r, token, false) {
+			return
+		}
+		cfg, err := autoSvc.SendWebhookTest(ctx)
+		if err != nil {
+			writeError(w, 400, err.Error())
+			return
+		}
+		writeJSON(w, 200, cfg)
 
 	case rel == "telegram":
 		switch r.Method {

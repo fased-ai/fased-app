@@ -99,8 +99,8 @@ export function NetworkWorkspace() {
     if (core.mode !== "ready") return;
     setError("");
     try {
-      await installHubPackage(core, id);
-      setStatusNote(id);
+      const installed = await installHubPackage(core, id);
+      setStatusNote(installed.deployedSummary || installed.id);
       await refresh();
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));

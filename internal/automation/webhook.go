@@ -109,13 +109,40 @@ func (s *Service) deliverWebhook(ctx context.Context, n Notification) string {
 	if err != nil || !found || !cfg.Enabled || strings.TrimSpace(cfg.Endpoint) == "" {
 		return ""
 	}
+	_, status, _ := s.sendWebhookPayload(ctx, cfg, map[string]any{
+		"source":       "fased-automation",
+		"notification": n,
+	})
+	return status
+}
 
+// SendWebhookTest dispatches (or simulates in FixtureMode) a signed test webhook event.
+func (s *Service) SendWebhookTest(ctx context.Context) (WebhookConfig, error) {
+	var cfg persistedWebhookConfig
+	found, err := s.GetJSONValue(ctx, webhookConfigKey, &cfg)
+	if err != nil || !found || strings.TrimSpace(cfg.Endpoint) == "" {
+		return WebhookConfig{}, errors.New("save a webhook HTTPS URL first")
+	}
+	_, _, sendErr := s.sendWebhookPayload(ctx, cfg, map[string]any{
+		"source":    "fased-automation",
+		"event":     "fased.webhook.test",
+		"timestamp": s.now().UTC().Unix(),
+		"message":   "Fased webhook test delivery",
+	})
+	view, viewErr := s.GetWebhookConfig(ctx)
+	if sendErr != nil {
+		return view, sendErr
+	}
+	return view, viewErr
+}
+
+func (s *Service) sendWebhookPayload(ctx context.Context, cfg persistedWebhookConfig, payload any) (persistedWebhookConfig, string, error) {
 	endpoint, err := ValidateWebhookEndpoint(cfg.Endpoint)
 	if err != nil {
 		cfg.LastStatus = "invalid-endpoint"
 		cfg.LastError = err.Error()
 		_ = s.SetJSONValue(ctx, webhookConfigKey, cfg)
-		return "webhook-error"
+		return cfg, "webhook-error", err
 	}
 
 	nowSec := s.now().UTC().Unix()
@@ -124,20 +151,17 @@ func (s *Service) deliverWebhook(ctx context.Context, n Notification) string {
 		cfg.LastError = ""
 		cfg.LastSentAt = nowSec
 		_ = s.SetJSONValue(ctx, webhookConfigKey, cfg)
-		return "fixture-delivered"
+		return cfg, "fixture-delivered", nil
 	}
 
-	payloadBytes, err := json.Marshal(map[string]any{
-		"source":       "fased-automation",
-		"notification": n,
-	})
+	payloadBytes, err := json.Marshal(payload)
 	if err != nil {
-		return "webhook-error"
+		return cfg, "webhook-error", err
 	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(payloadBytes))
 	if err != nil {
-		return "webhook-error"
+		return cfg, "webhook-error", err
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("User-Agent", "fased-automation/1.0")
@@ -151,29 +175,31 @@ func (s *Service) deliverWebhook(ctx context.Context, n Notification) string {
 		cfg.LastError = err.Error()
 		cfg.LastSentAt = nowSec
 		_ = s.SetJSONValue(ctx, webhookConfigKey, cfg)
-		return "webhook-error"
+		return cfg, "webhook-error", err
 	}
 	defer resp.Body.Close()
 	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, maxWebhookResponseBytes+1))
 
 	if resp.StatusCode >= 300 && resp.StatusCode < 400 {
+		redirectErr := errors.New("webhook upstream redirect blocked")
 		cfg.LastStatus = "error"
-		cfg.LastError = errors.New("webhook upstream redirect blocked").Error()
+		cfg.LastError = redirectErr.Error()
 		cfg.LastSentAt = nowSec
 		_ = s.SetJSONValue(ctx, webhookConfigKey, cfg)
-		return "webhook-error"
+		return cfg, "webhook-error", redirectErr
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		httpErr := fmt.Errorf("webhook returned HTTP %d", resp.StatusCode)
 		cfg.LastStatus = fmt.Sprintf("http-%d", resp.StatusCode)
-		cfg.LastError = fmt.Sprintf("webhook returned HTTP %d", resp.StatusCode)
+		cfg.LastError = httpErr.Error()
 		cfg.LastSentAt = nowSec
 		_ = s.SetJSONValue(ctx, webhookConfigKey, cfg)
-		return "webhook-error"
+		return cfg, "webhook-error", httpErr
 	}
 
 	cfg.LastStatus = "delivered"
 	cfg.LastError = ""
 	cfg.LastSentAt = nowSec
 	_ = s.SetJSONValue(ctx, webhookConfigKey, cfg)
-	return "webhook-delivered"
+	return cfg, "webhook-delivered", nil
 }
