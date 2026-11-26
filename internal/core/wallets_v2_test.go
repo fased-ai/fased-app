@@ -7,11 +7,43 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/fased-ai/fased-app/internal/custody"
 )
+
+func doV2JSONWithStepUp(t *testing.T, method, url, origin, token, csrf, stepUp, body string) *http.Response {
+	t.Helper()
+	var bodyReader io.Reader
+	if body != "" {
+		bodyReader = strings.NewReader(body)
+	}
+	req, err := http.NewRequestWithContext(t.Context(), method, url, bodyReader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if origin != "" {
+		req.Header.Set("Origin", origin)
+	}
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+	if csrf != "" {
+		req.Header.Set("X-CSRF-Token", csrf)
+	}
+	if stepUp != "" {
+		req.Header.Set("X-Fased-Step-Up", stepUp)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return resp
+}
 
 func TestWalletsV2HardenedCustodyPoliciesRPCHardwareAndRecovery(t *testing.T) {
 	t.Parallel()
@@ -99,7 +131,46 @@ func TestWalletsV2HardenedCustodyPoliciesRPCHardwareAndRecovery(t *testing.T) {
 		"confirmLoosen":      true,
 		"expectedPolicyHash": created.Wallet.Policy.PolicyHash,
 	})
-	polResp := doV2JSONRequest(t, http.MethodPut, ts.URL+"/api/v1/wallets/"+created.Wallet.ID+"/policy", ts.URL, token, csrf, string(polPayload), "application/json")
+	// Step-up: loosening policy before setting owner password returns 403 owner_password_required.
+	noPWPol := doV2JSONRequest(t, http.MethodPut, ts.URL+"/api/v1/wallets/"+created.Wallet.ID+"/policy", ts.URL, token, csrf, string(polPayload), "application/json")
+	rawNoPW, _ := io.ReadAll(noPWPol.Body)
+	noPWPol.Body.Close()
+	if noPWPol.StatusCode != http.StatusForbidden || !strings.Contains(string(rawNoPW), "owner_password_required") {
+		t.Fatalf("expected 403 owner_password_required before password setup, got code=%d body=%s", noPWPol.StatusCode, rawNoPW)
+	}
+
+	// Configure Local owner password & obtain short-lived step-up confirmation token.
+	const ownerPass = "correct-owner-pass-2026"
+	pwResp := doV2JSONRequest(t, http.MethodPost, ts.URL+"/api/v1/auth/password", ts.URL, token, csrf, `{"password":"`+ownerPass+`"}`, "application/json")
+	pwResp.Body.Close()
+	if pwResp.StatusCode != http.StatusOK {
+		t.Fatalf("POST /api/v1/auth/password failed: %d", pwResp.StatusCode)
+	}
+	if hasPW, _ := s.hasPassword(t.Context()); !hasPW {
+		t.Fatalf("expected hasPassword=true after configuring owner password")
+	}
+
+	// Missing X-Fased-Step-Up header returns 403 step_up_required.
+	noStepPol := doV2JSONRequest(t, http.MethodPut, ts.URL+"/api/v1/wallets/"+created.Wallet.ID+"/policy", ts.URL, token, csrf, string(polPayload), "application/json")
+	rawNoStep, _ := io.ReadAll(noStepPol.Body)
+	noStepPol.Body.Close()
+	if noStepPol.StatusCode != http.StatusForbidden || !strings.Contains(string(rawNoStep), "step_up_required") {
+		t.Fatalf("expected 403 step_up_required, got code=%d body=%s", noStepPol.StatusCode, rawNoStep)
+	}
+
+	stepResp := doV2JSONRequest(t, http.MethodPost, ts.URL+"/api/v1/auth/step-up", ts.URL, token, csrf, `{"password":"`+ownerPass+`"}`, "application/json")
+	rawStep, _ := io.ReadAll(stepResp.Body)
+	stepResp.Body.Close()
+	if stepResp.StatusCode != http.StatusOK {
+		t.Fatalf("POST /api/v1/auth/step-up failed: code=%d body=%s", stepResp.StatusCode, rawStep)
+	}
+	var stepOut struct {
+		StepUpToken string `json:"stepUpToken"`
+	}
+	_ = json.Unmarshal(rawStep, &stepOut)
+	stepUp := stepOut.StepUpToken
+
+	polResp := doV2JSONWithStepUp(t, http.MethodPut, ts.URL+"/api/v1/wallets/"+created.Wallet.ID+"/policy", ts.URL, token, csrf, stepUp, string(polPayload))
 	rawPol, _ := io.ReadAll(polResp.Body)
 	polResp.Body.Close()
 	if polResp.StatusCode != http.StatusOK {
@@ -121,7 +192,7 @@ func TestWalletsV2HardenedCustodyPoliciesRPCHardwareAndRecovery(t *testing.T) {
 	}
 	_ = json.Unmarshal(rawRev, &revOut)
 
-	execResp := doV2JSONRequest(t, http.MethodPost, ts.URL+"/api/v1/wallets/"+created.Wallet.ID+"/reviews/"+revOut.Review.ID+"/execute", ts.URL, token, csrf, `{}`, "application/json")
+	execResp := doV2JSONWithStepUp(t, http.MethodPost, ts.URL+"/api/v1/wallets/"+created.Wallet.ID+"/reviews/"+revOut.Review.ID+"/execute", ts.URL, token, csrf, stepUp, `{}`)
 	execResp.Body.Close()
 	if execResp.StatusCode != http.StatusOK {
 		t.Fatalf("POST /execute failed: %d", execResp.StatusCode)
@@ -154,8 +225,11 @@ func TestWalletsV2HardenedCustodyPoliciesRPCHardwareAndRecovery(t *testing.T) {
 		"confirmLoosen":      true,
 		"expectedPolicyHash": hwOut.Wallet.Policy.PolicyHash,
 	})
-	hwPolResp := doV2JSONRequest(t, http.MethodPut, ts.URL+"/api/v1/wallets/"+hwOut.Wallet.ID+"/policy", ts.URL, token, csrf, string(hwPolPayload), "application/json")
+	hwPolResp := doV2JSONWithStepUp(t, http.MethodPut, ts.URL+"/api/v1/wallets/"+hwOut.Wallet.ID+"/policy", ts.URL, token, csrf, stepUp, string(hwPolPayload))
 	hwPolResp.Body.Close()
+	if hwPolResp.StatusCode != http.StatusOK {
+		t.Fatalf("PUT /hw policy failed: %d", hwPolResp.StatusCode)
+	}
 
 	hwRevResp := doV2JSONRequest(t, http.MethodPost, ts.URL+"/api/v1/wallets/"+hwOut.Wallet.ID+"/reviews", ts.URL, token, csrf,
 		`{"operation":"solana.nativeTransfer","destination":"`+created.Wallet.PublicKey+`","amountHuman":"0.1"}`,
@@ -188,11 +262,90 @@ func TestWalletsV2HardenedCustodyPoliciesRPCHardwareAndRecovery(t *testing.T) {
 		t.Fatalf("expected 200 on valid hardware signed tx, got %d", okSub.StatusCode)
 	}
 
-	// 7. Encrypted Argon2id Backup returns encrypted archive ONLY (no plaintext key).
-	bakResp := doV2JSONRequest(t, http.MethodPost, ts.URL+"/api/v1/wallets/"+created.Wallet.ID+"/backup", ts.URL, token, csrf, `{"passphrase":"secret-pass-123"}`, "application/json")
+	// 7. Encrypted Argon2id Backup returns encrypted archive ONLY (no plaintext key) and hits rate limit on excess calls.
+	bakResp := doV2JSONWithStepUp(t, http.MethodPost, ts.URL+"/api/v1/wallets/"+created.Wallet.ID+"/backup", ts.URL, token, csrf, stepUp, `{"passphrase":"secret-pass-2026"}`)
 	rawBak, _ := io.ReadAll(bakResp.Body)
 	bakResp.Body.Close()
 	if bakResp.StatusCode != http.StatusOK || !strings.Contains(string(rawBak), `"fased-recovery/1"`) {
 		t.Fatalf("POST /backup failed: code=%d body=%s", bakResp.StatusCode, rawBak)
+	}
+
+	// Rate limit check: 2 already used before step-up? Wait: noPWPol & noStepPol returned before password/header after allowRate;
+	// let's make extra backup requests until 429 is returned.
+	hit429 := false
+	for i := 0; i < 6; i++ {
+		extra := doV2JSONWithStepUp(t, http.MethodPost, ts.URL+"/api/v1/wallets/"+created.Wallet.ID+"/backup", ts.URL, token, csrf, stepUp, `{"passphrase":"secret-pass-2026"}`)
+		extra.Body.Close()
+		if extra.StatusCode == http.StatusTooManyRequests {
+			hit429 = true
+			break
+		}
+	}
+	if !hit429 {
+		t.Fatalf("expected 429 rate limit on repeated sensitive wallet endpoints")
+	}
+}
+
+func TestWalletsV2OutOfProcessSignerSocketAndPasswordDisablesAutoEnter(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	signerDir := t.TempDir()
+	signerSvc, err := custody.NewService(custody.Config{
+		DataDir:     signerDir,
+		FixtureMode: true,
+		FastKDF:     true,
+	})
+	if err != nil {
+		t.Fatalf("custody.NewService: %v", err)
+	}
+	t.Cleanup(func() { _ = signerSvc.Close() })
+	sockPath := filepath.Join(signerDir, "app.sock")
+	sockSrv, err := custody.StartSocketServerAt(signerSvc, sockPath, os.Getuid(), 0o600)
+	if err != nil {
+		t.Fatalf("StartSocketServerAt: %v", err)
+	}
+	t.Cleanup(func() { _ = sockSrv.Close(t.Context()) })
+
+	s := fixtureStore(t)
+	s.providerFixture = true
+	s.ConfigureCustodySocket(sockPath)
+	ts, token, csrf := startV2HTTPTestServer(t, s)
+
+	// 1. List wallets confirms out-of-process isolated signer posture.
+	listResp := doV2JSONRequest(t, http.MethodGet, ts.URL+"/api/v1/wallets", "", token, "", "", "application/json")
+	rawList, _ := io.ReadAll(listResp.Body)
+	listResp.Body.Close()
+	if listResp.StatusCode != http.StatusOK || !strings.Contains(string(rawList), `"processIsolated":true`) {
+		t.Fatalf("expected processIsolated=true from GET /api/v1/wallets, got code=%d body=%s", listResp.StatusCode, rawList)
+	}
+
+	// 2. Creating a wallet works via socket and core's dataDir never creates signer-vault/.
+	cr := doV2JSONRequest(t, http.MethodPost, ts.URL+"/api/v1/wallets/create", ts.URL, token, csrf,
+		`{"name":"Isolated Bot","role":"agent","rpcUrl":"https://api.mainnet-beta.solana.com"}`, "application/json")
+	cr.Body.Close()
+	if cr.StatusCode != http.StatusOK {
+		t.Fatalf("socket create wallet failed: %d", cr.StatusCode)
+	}
+	if _, err := os.Stat(filepath.Join(s.dir, "signer-vault")); !os.IsNotExist(err) {
+		t.Fatalf("expected core dir to have NO signer-vault/, got err=%v", err)
+	}
+
+	// 3. Setting Local owner password disables passwordless local browser auto-entry (403).
+	pwResp := doV2JSONRequest(t, http.MethodPost, ts.URL+"/api/v1/auth/password", ts.URL, token, csrf, `{"password":"correct-owner-pass-2026"}`, "application/json")
+	pwResp.Body.Close()
+	if pwResp.StatusCode != http.StatusOK {
+		t.Fatalf("POST /api/v1/auth/password failed: %d", pwResp.StatusCode)
+	}
+	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, ts.URL+"/api/v1/auth/local", strings.NewReader(`{"action":"browser"}`))
+	req.Header.Set("Origin", ts.URL)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Fased-Local", "1")
+	localResp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("POST /api/v1/auth/local: %v", err)
+	}
+	localResp.Body.Close()
+	if localResp.StatusCode != http.StatusForbidden {
+		t.Fatalf("expected 403 blocking passwordless local auto-entry after owner password set, got %d", localResp.StatusCode)
 	}
 }

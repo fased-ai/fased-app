@@ -90,6 +90,8 @@ type Store struct {
 	custodyMu                     sync.Mutex
 	custodySvc                    *custody.Service
 	custodySock                   *custody.SocketServer
+	custodySocketPath             string
+	custodyClient                 *custody.SocketClient
 	dir                           string
 	instanceID                    string
 	pauseFault                    func(string) error // Test-only interruption injection, never configuration or IPC.
@@ -509,10 +511,15 @@ func (s *Store) Close() error {
 	s.custodyMu.Lock()
 	cSvc := s.custodySvc
 	cSock := s.custodySock
+	cClient := s.custodyClient
 	s.custodySvc = nil
 	s.custodySock = nil
+	s.custodyClient = nil
 	s.custodyMu.Unlock()
 	var cErr error
+	if cClient != nil {
+		_ = cClient.Close()
+	}
 	if cSock != nil {
 		_ = cSock.Close(context.Background())
 	}

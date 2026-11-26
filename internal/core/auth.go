@@ -145,6 +145,54 @@ func (s *Store) Login(ctx context.Context, password string) (string, error) {
 	}
 	return s.NewSession(ctx)
 }
+
+// VerifyOwnerPassword verifies the instance owner password without creating a new session.
+func (s *Store) VerifyOwnerPassword(ctx context.Context, password string) error {
+	if len(password) == 0 || len(password) > 1024 {
+		return ErrUnauthorized
+	}
+	var salt, expected []byte
+	if err := s.db.QueryRowContext(ctx, "SELECT password_salt,password_hash FROM instance WHERE id=1 AND password_hash IS NOT NULL").Scan(&salt, &expected); err != nil {
+		return ErrUnauthorized
+	}
+	if len(expected) == 0 || passwordDisabled(salt) {
+		return ErrUnauthorized
+	}
+	derived := passwordHash(password, salt)
+	defer clear(derived)
+	if subtle.ConstantTimeCompare(derived, expected) != 1 {
+		return ErrUnauthorized
+	}
+	return nil
+}
+
+// SetLocalOwnerPassword upgrades a passwordless Local instance to an Argon2id owner password,
+// disabling future passwordless local browser auto-entry.
+func (s *Store) SetLocalOwnerPassword(ctx context.Context, password string) error {
+	if !validPassword(password) {
+		return errors.New("use a password of at least 12 characters and at most 1024 bytes")
+	}
+	s.authMu.Lock()
+	defer s.authMu.Unlock()
+	var salt, existing []byte
+	if err := s.db.QueryRowContext(ctx, "SELECT COALESCE(password_salt,X''),COALESCE(password_hash,X'') FROM instance WHERE id=1").Scan(&salt, &existing); err != nil {
+		return err
+	}
+	if len(existing) > 0 && !passwordDisabled(salt) {
+		return ErrClaimed
+	}
+	newSalt := make([]byte, 16)
+	if _, err := rand.Read(newSalt); err != nil {
+		return err
+	}
+	derived := passwordHash(password, newSalt)
+	defer clear(derived)
+	_, err := s.db.ExecContext(ctx, "UPDATE instance SET password_salt=?,password_hash=?,claim_hash=NULL,claim_expires=NULL WHERE id=1", newSalt, derived)
+	if err != nil {
+		return metadataWriteError(err)
+	}
+	return nil
+}
 func pruneSessionsLocked(ctx context.Context, tx *sql.Tx, now int64, nodeID string) error {
 	if _, err := tx.ExecContext(ctx, "DELETE FROM sessions WHERE expires<=?", now); err != nil {
 		return err

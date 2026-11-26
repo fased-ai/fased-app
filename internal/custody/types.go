@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+
+	"github.com/fased-ai/fased-app/internal/onchain"
 )
 
 const (
@@ -175,7 +177,7 @@ type LedgerEntry struct {
 	UpdatedAt   int64  `json:"updatedAt"`
 }
 
-// AuditEntry records custody and policy lifecycle changes.
+// AuditEntry records tamper-evident hash-chained custody and policy lifecycle changes.
 type AuditEntry struct {
 	ID         string `json:"id"`
 	WalletID   string `json:"walletId"`
@@ -184,6 +186,16 @@ type AuditEntry struct {
 	Summary    string `json:"summary"`
 	PolicyHash string `json:"policyHash,omitempty"`
 	Timestamp  int64  `json:"timestamp"`
+	PrevHash   string `json:"prevHash,omitempty"`
+	EntryHash  string `json:"entryHash,omitempty"`
+}
+
+// SecurityStatus reports the signer process isolation & master-key protection posture.
+type SecurityStatus struct {
+	ProcessIsolated bool   `json:"processIsolated"`
+	KEKProtection   string `json:"kekProtection"` // systemd-creds | os-keychain | file-dev-only
+	SocketPath      string `json:"socketPath,omitempty"`
+	AllowedPeerUID  int    `json:"allowedPeerUid,omitempty"`
 }
 
 // WalletSelector resolves a wallet deterministically according to the selection contract.
@@ -198,13 +210,18 @@ type WalletSelector struct {
 
 // PrepareReviewRequest builds and validates a transaction against wallet policy.
 type PrepareReviewRequest struct {
-	WalletID    string `json:"walletId"`
-	Operation   string `json:"operation"`   // solana.nativeTransfer | solana.splTransferChecked | trade.order
-	Destination string `json:"destination"` // recipient Base58 or @wallet:<id>
-	Mint        string `json:"mint,omitempty"`
-	AmountHuman string `json:"amountHuman,omitempty"`
-	AmountRaw   uint64 `json:"amountRaw,string,omitempty"`
-	IsBotOrAuto bool   `json:"isBotOrAuto,omitempty"`
+	WalletID      string         `json:"walletId"`
+	Operation     string         `json:"operation"`   // solana.nativeTransfer | solana.splTransferChecked | jupiter.swap | trade.order
+	Destination   string         `json:"destination"` // recipient Base58 or @wallet:<id>
+	Mint          string         `json:"mint,omitempty"`
+	OutputMint    string         `json:"outputMint,omitempty"`
+	Decimals      uint8          `json:"decimals,omitempty"`
+	SlippageBps   uint32         `json:"slippageBps,omitempty"`
+	CreateDestATA bool           `json:"createDestAta,omitempty"`
+	AmountHuman   string         `json:"amountHuman,omitempty"`
+	AmountRaw     uint64         `json:"amountRaw,string,omitempty"`
+	IsBotOrAuto   bool           `json:"isBotOrAuto,omitempty"`
+	JupiterQuote  *onchain.Quote `json:"jupiterQuote,omitempty"`
 }
 
 // BalanceResult holds signer-queried balance metrics.

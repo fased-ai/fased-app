@@ -16,10 +16,11 @@ const (
 
 	SolanaSystemProgram = "11111111111111111111111111111111"
 	SolanaComputeBudget = "ComputeBudget111111111111111111111111111111"
-	SolanaTokenProgram  = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
-	SolanaToken2022     = "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"
-	SolanaATAProgram    = "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL"
-	SolanaMemoProgram   = "MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr"
+	SolanaTokenProgram     = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+	SolanaToken2022        = "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"
+	SolanaATAProgram       = "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL"
+	SolanaMemoProgram      = "MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr"
+	SolanaJupiterV6Program = "JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4"
 )
 
 var base58DecodeTable = func() [256]int8 {
@@ -223,8 +224,11 @@ func ParseSolanaKeypair64(raw []byte) (ed25519.PrivateKey, string, error) {
 	return priv, Base58Encode(priv[32:]), nil
 }
 
-// ParseHumanSOLToLamports converts a decimal SOL string (up to 9 decimals) into integer lamports safely.
-func ParseHumanSOLToLamports(s string) (uint64, error) {
+// ParseHumanAmountToRaw converts a decimal amount string with given decimals into uint64 raw units safely.
+func ParseHumanAmountToRaw(s string, decimals uint8) (uint64, error) {
+	if decimals > 18 {
+		return 0, errors.New("token decimals exceed supported bound")
+	}
 	clean := strings.TrimSpace(s)
 	if clean == "" {
 		return 0, errors.New("amount required")
@@ -234,50 +238,78 @@ func ParseHumanSOLToLamports(s string) (uint64, error) {
 	}
 	parts := strings.Split(clean, ".")
 	if len(parts) > 2 {
-		return 0, errors.New("invalid decimal SOL amount")
+		return 0, errors.New("invalid decimal amount")
+	}
+	scale := uint64(1)
+	for i := uint8(0); i < decimals; i++ {
+		scale *= 10
 	}
 	var whole uint64
 	if parts[0] != "" {
 		for _, ch := range parts[0] {
 			if ch < '0' || ch > '9' {
-				return 0, errors.New("invalid digit in SOL amount")
+				return 0, errors.New("invalid digit in amount")
 			}
-			whole = whole*10 + uint64(ch-'0')
+			d := uint64(ch - '0')
+			if whole > (^uint64(0)-d)/10 {
+				return 0, errors.New("amount overflows uint64")
+			}
+			whole = whole*10 + d
 		}
 	}
 	var frac uint64
 	if len(parts) == 2 {
 		fracStr := parts[1]
-		if len(fracStr) > 9 {
-			return 0, errors.New("SOL amount supports at most 9 decimal places")
+		if len(fracStr) > int(decimals) {
+			return 0, fmt.Errorf("amount supports at most %d decimal places", decimals)
 		}
-		for len(fracStr) < 9 {
+		for len(fracStr) < int(decimals) {
 			fracStr += "0"
 		}
 		for _, ch := range fracStr {
 			if ch < '0' || ch > '9' {
-				return 0, errors.New("invalid fractional digit in SOL amount")
+				return 0, errors.New("invalid fractional digit in amount")
 			}
 			frac = frac*10 + uint64(ch-'0')
 		}
 	}
-	lamports := whole*1_000_000_000 + frac
-	if lamports == 0 {
+	if whole > (^uint64(0)-frac)/scale {
+		return 0, errors.New("amount overflows uint64")
+	}
+	raw := whole*scale + frac
+	if raw == 0 {
 		return 0, errors.New("amount must be greater than zero")
 	}
-	return lamports, nil
+	return raw, nil
+}
+
+// FormatRawAmount renders integer raw units cleanly without float rounding.
+func FormatRawAmount(raw uint64, decimals uint8) string {
+	if decimals == 0 {
+		return fmt.Sprintf("%d", raw)
+	}
+	scale := uint64(1)
+	for i := uint8(0); i < decimals; i++ {
+		scale *= 10
+	}
+	whole := raw / scale
+	rem := raw % scale
+	if rem == 0 {
+		return fmt.Sprintf("%d", whole)
+	}
+	frac := fmt.Sprintf("%0*d", int(decimals), rem)
+	frac = strings.TrimRight(frac, "0")
+	return fmt.Sprintf("%d.%s", whole, frac)
+}
+
+// ParseHumanSOLToLamports converts a decimal SOL string (up to 9 decimals) into integer lamports safely.
+func ParseHumanSOLToLamports(s string) (uint64, error) {
+	return ParseHumanAmountToRaw(s, 9)
 }
 
 // FormatLamportsToSOL renders integer lamports cleanly in decimal SOL without float rounding.
 func FormatLamportsToSOL(lamports uint64) string {
-	whole := lamports / 1_000_000_000
-	rem := lamports % 1_000_000_000
-	if rem == 0 {
-		return fmt.Sprintf("%d", whole)
-	}
-	frac := fmt.Sprintf("%09d", rem)
-	frac = strings.TrimRight(frac, "0")
-	return fmt.Sprintf("%d.%s", whole, frac)
+	return FormatRawAmount(lamports, 9)
 }
 
 func shortVecLen(n int) []byte {

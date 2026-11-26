@@ -552,7 +552,7 @@ func allowed(method, route string) bool {
 		return method == "GET"
 	case "/api/v1/setup":
 		return method == "GET" || method == "PUT"
-	case "/api/v1/auth/claim", "/api/v1/auth/login", "/api/v1/auth/logout", "/api/v1/auth/pair":
+	case "/api/v1/auth/claim", "/api/v1/auth/login", "/api/v1/auth/logout", "/api/v1/auth/pair", "/api/v1/auth/password", "/api/v1/auth/step-up":
 		return method == "POST"
 	case "/api/v1/auth/devices", "/api/v1/auth/pair/devices":
 		return method == "GET" || method == "POST"

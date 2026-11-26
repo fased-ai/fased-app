@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useState } from "react";
-import { useCore } from "../core";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { CoreError, useCore } from "../core";
 import { useUI } from "../ui-preferences";
 import { useWorkspace } from "../workspace";
 import {
@@ -29,7 +29,9 @@ import {
   listWalletsV2,
   prepareWalletReview,
   reconcileWalletLedger,
+  requestStepUpToken,
   restoreEncryptedBackupV2,
+  setLocalOwnerPassword,
   setWalletFreeze,
   submitHardwareSignedReview,
   updateWalletConnections,
@@ -43,6 +45,7 @@ import {
   type WalletPolicy,
   type WalletReview,
   type WalletRole,
+  type WalletSecurityPosture,
   type WalletV2,
 } from "../wallets-v2";
 import { Dialog } from "./shared";
@@ -116,9 +119,28 @@ export function SolanaWalletsPanel() {
   const [detectedProvider, setDetectedProvider] = useState("");
 
   // Send / Review state
+  const [sendAssetMode, setSendAssetMode] = useState<"sol" | "spl">("sol");
+  const [sendMint, setSendMint] = useState("");
+  const [sendDecimals, setSendDecimals] = useState("6");
+  const [sendCreateAta, setSendCreateAta] = useState(true);
   const [sendDest, setSendDest] = useState("");
   const [sendAmount, setSendAmount] = useState("0.1");
   const [activeReview, setActiveReview] = useState<WalletReview | null>(null);
+
+  // Security posture & step-up authorization state
+  const [securityPosture, setSecurityPosture] =
+    useState<WalletSecurityPosture | null>(null);
+  const [auditChainVerified, setAuditChainVerified] = useState(false);
+  const [ownerPasswordSet, setOwnerPasswordSet] = useState(true);
+  const [stepUpModalMode, setStepUpModalMode] = useState<
+    "" | "password_setup" | "step_up"
+  >("");
+  const [stepUpPassword, setStepUpPassword] = useState("");
+  const stepUpTokenRef = useRef<{ token: string; expiresAt: number }>({
+    token: "",
+    expiresAt: 0,
+  });
+  const pendingStepUpActionRef = useRef<(() => Promise<void>) | null>(null);
 
   // Policy draft state
   const [polDraft, setPolDraft] = useState<WalletPolicy | null>(null);
@@ -158,6 +180,13 @@ export function SolanaWalletsPanel() {
       const res = await listWalletsV2(core);
       const list = res.wallets ?? [];
       setWallets(list);
+      if (res.security) setSecurityPosture(res.security);
+      if (typeof res.auditChainVerified === "boolean") {
+        setAuditChainVerified(res.auditChainVerified);
+      }
+      if (typeof res.ownerPasswordSet === "boolean") {
+        setOwnerPasswordSet(res.ownerPasswordSet);
+      }
       if (list.length > 0) {
         setSelectedId((prev) =>
           list.some((w) => w.id === prev) ? prev : list[0].id,
@@ -331,6 +360,63 @@ export function SolanaWalletsPanel() {
     };
   }
 
+  async function runWithStepUp(
+    fn: (stepUpToken?: string) => Promise<void>,
+  ): Promise<void> {
+    const cached =
+      stepUpTokenRef.current.expiresAt * 1000 > Date.now() + 5_000
+        ? stepUpTokenRef.current.token
+        : "";
+    try {
+      await fn(cached || undefined);
+    } catch (err) {
+      if (
+        err instanceof CoreError &&
+        (err.code === "owner_password_required" ||
+          err.code === "step_up_required")
+      ) {
+        pendingStepUpActionRef.current = () => runWithStepUp(fn);
+        setStepUpPassword("");
+        setStepUpModalMode(
+          err.code === "owner_password_required" ? "password_setup" : "step_up",
+        );
+        return;
+      }
+      throw err;
+    }
+  }
+
+  async function onSubmitStepUp(e: React.FormEvent) {
+    e.preventDefault();
+    setBusy(true);
+    setError("");
+    try {
+      if (stepUpModalMode === "password_setup") {
+        await setLocalOwnerPassword(core, stepUpPassword);
+        setOwnerPasswordSet(true);
+      }
+      const res = await requestStepUpToken(core, stepUpPassword);
+      stepUpTokenRef.current = {
+        token: res.stepUpToken,
+        expiresAt: res.expiresAt,
+      };
+      const pending = pendingStepUpActionRef.current;
+      pendingStepUpActionRef.current = null;
+      setStepUpPassword("");
+      setStepUpModalMode("");
+      if (pending) {
+        await pending();
+      } else {
+        setNotice("Owner authorization configured");
+        await loadWallets();
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Authorization failed");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function submitPolicySave(confirmLoosen: boolean) {
     if (!selected) return;
     const nextPol = buildEditedPolicy();
@@ -339,14 +425,21 @@ export function SolanaWalletsPanel() {
     setError("");
     setNotice("");
     try {
-      await updateWalletPolicy(core, selected.id, {
-        policy: nextPol,
-        confirmLoosen,
-        expectedPolicyHash: selected.policy.policyHash,
+      await runWithStepUp(async (stepUp) => {
+        await updateWalletPolicy(
+          core,
+          selected.id,
+          {
+            policy: nextPol,
+            confirmLoosen,
+            expectedPolicyHash: selected.policy.policyHash,
+          },
+          stepUp,
+        );
+        setConfirmLoosenModal(false);
+        setNotice("Signer policy updated");
+        await loadWallets();
       });
-      setConfirmLoosenModal(false);
-      setNotice("Signer policy updated");
-      await loadWallets();
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Policy update failed";
       if (!confirmLoosen && msg.toLowerCase().includes("confirmation")) {
@@ -382,18 +475,21 @@ export function SolanaWalletsPanel() {
     setError("");
     setNotice("");
     try {
-      const res = await updateWalletRPC(
-        core,
-        selected.id,
-        editPrimaryRpc.trim(),
-        editFallbackRpc.trim(),
-      );
-      setEditPrimaryRpc("");
-      setEditFallbackRpc("");
-      setNotice(
-        `RPC verified (${res.wallet.rpc.cluster} · ${res.wallet.rpc.host})`,
-      );
-      await loadWallets();
+      await runWithStepUp(async (stepUp) => {
+        const res = await updateWalletRPC(
+          core,
+          selected.id,
+          editPrimaryRpc.trim(),
+          editFallbackRpc.trim(),
+          stepUp,
+        );
+        setEditPrimaryRpc("");
+        setEditFallbackRpc("");
+        setNotice(
+          `RPC verified (${res.wallet.rpc.cluster} · ${res.wallet.rpc.host})`,
+        );
+        await loadWallets();
+      });
     } catch (err) {
       setError(err instanceof Error ? err.message : "RPC verification failed");
     } finally {
@@ -409,9 +505,16 @@ export function SolanaWalletsPanel() {
     setNotice("");
     try {
       const res = await prepareWalletReview(core, selected.id, {
-        operation: "solana.nativeTransfer",
+        operation:
+          sendAssetMode === "spl"
+            ? "solana.splTransferChecked"
+            : "solana.nativeTransfer",
         destination: sendDest.trim(),
         amountHuman: sendAmount.trim(),
+        mint: sendAssetMode === "spl" ? sendMint.trim() : undefined,
+        decimals:
+          sendAssetMode === "spl" ? Number(sendDecimals || "6") : undefined,
+        createDestAta: sendAssetMode === "spl" ? sendCreateAta : undefined,
       });
       setActiveReview(res.review);
       await loadActivity(selected.id);
@@ -444,14 +547,23 @@ export function SolanaWalletsPanel() {
         setNotice(
           `Broadcast ${out.entry.state} · sig=${out.entry.txSignature ?? ""}`,
         );
+        setActiveReview(null);
+        await Promise.all([loadWallets(), loadActivity(selected.id)]);
       } else {
-        const out = await executeNativeWalletReview(core, selected.id, rev.id);
-        setNotice(
-          `Signer executed (${out.entry.state}) · sig=${out.entry.txSignature ?? ""}`,
-        );
+        await runWithStepUp(async (stepUp) => {
+          const out = await executeNativeWalletReview(
+            core,
+            selected.id,
+            rev.id,
+            stepUp,
+          );
+          setNotice(
+            `Signer executed (${out.entry.state}) · sig=${out.entry.txSignature ?? ""}`,
+          );
+          setActiveReview(null);
+          await Promise.all([loadWallets(), loadActivity(selected.id)]);
+        });
       }
-      setActiveReview(null);
-      await Promise.all([loadWallets(), loadActivity(selected.id)]);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Execution failed");
       await loadActivity(selected.id);
@@ -479,14 +591,17 @@ export function SolanaWalletsPanel() {
     if (!selected) return;
     setBusy(true);
     setError("");
+    const willFreeze = !selected.policy.frozen;
     try {
-      await setWalletFreeze(
-        core,
-        selected.id,
-        !selected.policy.frozen,
-        selected.policy.frozen ? "" : "Owner freeze",
-      );
-      await loadWallets();
+      if (willFreeze) {
+        await setWalletFreeze(core, selected.id, true, "Owner freeze");
+        await loadWallets();
+      } else {
+        await runWithStepUp(async (stepUp) => {
+          await setWalletFreeze(core, selected.id, false, "", stepUp);
+          await loadWallets();
+        });
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Freeze update failed");
     } finally {
@@ -500,22 +615,29 @@ export function SolanaWalletsPanel() {
     setBusy(true);
     setError("");
     try {
-      const res = await exportEncryptedBackupV2(core, selected.id, passphrase);
-      const blob = new Blob([JSON.stringify(res.archive, null, 2)], {
-        type: "application/json",
+      await runWithStepUp(async (stepUp) => {
+        const res = await exportEncryptedBackupV2(
+          core,
+          selected.id,
+          passphrase,
+          stepUp,
+        );
+        const blob = new Blob([JSON.stringify(res.archive, null, 2)], {
+          type: "application/json",
+        });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = res.filename;
+        a.click();
+        URL.revokeObjectURL(url);
+        setBackupResult({
+          fingerprint: res.fingerprint,
+          filename: res.filename,
+        });
+        setPassphrase("");
+        await loadActivity(selected.id);
       });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = res.filename;
-      a.click();
-      URL.revokeObjectURL(url);
-      setBackupResult({
-        fingerprint: res.fingerprint,
-        filename: res.filename,
-      });
-      setPassphrase("");
-      await loadActivity(selected.id);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Backup failed");
     } finally {
@@ -529,18 +651,24 @@ export function SolanaWalletsPanel() {
     setError("");
     try {
       const parsed = JSON.parse(restoreArchiveText);
-      const res = await restoreEncryptedBackupV2(core, {
-        archive: parsed,
-        passphrase,
-        name: restoreName.trim(),
-        rpcUrl: restoreRpc.trim(),
+      await runWithStepUp(async (stepUp) => {
+        const res = await restoreEncryptedBackupV2(
+          core,
+          {
+            archive: parsed,
+            passphrase,
+            name: restoreName.trim(),
+            rpcUrl: restoreRpc.trim(),
+          },
+          stepUp,
+        );
+        setRestoreOpen(false);
+        setPassphrase("");
+        setRestoreArchiveText("");
+        setSelectedId(res.wallet.id);
+        setNotice(`Restored ${res.wallet.handle}`);
+        await loadWallets();
       });
-      setRestoreOpen(false);
-      setPassphrase("");
-      setRestoreArchiveText("");
-      setSelectedId(res.wallet.id);
-      setNotice(`Restored ${res.wallet.handle}`);
-      await loadWallets();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Restore failed");
     } finally {
@@ -571,6 +699,47 @@ export function SolanaWalletsPanel() {
             >
               {t("Restore Backup")}
             </button>
+          </div>
+
+          <div className="wt-posture-row">
+            <span
+              className={`wt-posture-pill${securityPosture?.processIsolated ? " is-ok" : " is-warn"}`}
+            >
+              {t(
+                securityPosture?.processIsolated
+                  ? "Isolated Signer"
+                  : "In-Process",
+              )}
+            </span>
+            {securityPosture?.kekProtection && (
+              <span
+                className={`wt-posture-pill${securityPosture.kekProtection === "file-dev-only" ? " is-warn" : " is-ok"}`}
+              >
+                {securityPosture.kekProtection === "systemd-creds"
+                  ? "systemd-creds"
+                  : securityPosture.kekProtection === "os-keychain"
+                    ? t("OS Keychain")
+                    : t("Dev File")}
+              </span>
+            )}
+            {auditChainVerified && (
+              <span className="wt-posture-pill is-ok">
+                {t("Audit Chain Verified")}
+              </span>
+            )}
+            {!ownerPasswordSet && (
+              <button
+                type="button"
+                className="wt-btn-soft"
+                onClick={() => {
+                  pendingStepUpActionRef.current = null;
+                  setStepUpPassword("");
+                  setStepUpModalMode("password_setup");
+                }}
+              >
+                {t("Set Owner Password")}
+              </button>
+            )}
           </div>
 
           <div className="wt-wallet-list">
@@ -699,8 +868,10 @@ export function SolanaWalletsPanel() {
                   disabled={busy}
                   onClick={async () => {
                     try {
-                      await deleteWalletV2(core, selected.id);
-                      await loadWallets();
+                      await runWithStepUp(async (stepUp) => {
+                        await deleteWalletV2(core, selected.id, stepUp);
+                        await loadWallets();
+                      });
                     } catch (e) {
                       setError(e instanceof Error ? e.message : "Delete failed");
                     }
@@ -1343,7 +1514,73 @@ export function SolanaWalletsPanel() {
             </form>
           ) : (
             <div className="wt-form-stack">
+              <div className="wt-seg">
+                <button
+                  type="button"
+                  aria-pressed={sendAssetMode === "sol"}
+                  onClick={() => setSendAssetMode("sol")}
+                >
+                  SOL
+                </button>
+                <button
+                  type="button"
+                  aria-pressed={sendAssetMode === "spl"}
+                  onClick={() => setSendAssetMode("spl")}
+                >
+                  SPL
+                </button>
+              </div>
               <form className="wt-form-stack" onSubmit={onPrepareSend}>
+                {sendAssetMode === "spl" && (
+                  <>
+                    <label className="wt-field">
+                      <span>SPL Mint</span>
+                      <input
+                        value={sendMint}
+                        onChange={(e) => setSendMint(e.target.value)}
+                        placeholder="EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
+                        required
+                      />
+                    </label>
+                    {(selected?.policy.tokenCaps ?? []).length > 0 && (
+                      <div className="wt-preset-chips">
+                        {(selected?.policy.tokenCaps ?? []).map((tc) => (
+                          <button
+                            key={tc.mint || tc.asset}
+                            type="button"
+                            onClick={() => {
+                              if (tc.mint) setSendMint(tc.mint);
+                              if (tc.decimals)
+                                setSendDecimals(String(tc.decimals));
+                            }}
+                          >
+                            {tc.symbol || shortAddr(tc.mint || "")}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                    <label className="wt-field">
+                      <span>Decimals</span>
+                      <input
+                        type="number"
+                        min={0}
+                        max={18}
+                        value={sendDecimals}
+                        onChange={(e) => setSendDecimals(e.target.value)}
+                        required
+                      />
+                    </label>
+                    <label className="wt-toggle-row">
+                      <span>Create Destination ATA</span>
+                      <input
+                        type="checkbox"
+                        checked={sendCreateAta}
+                        onChange={(e) => setSendCreateAta(e.target.checked)}
+                      />
+                    </label>
+                  </>
+                )}
+
                 <label className="wt-field">
                   <span>{t("Amount")}</span>
                   <div className="wt-amount-wrap">
@@ -1352,7 +1589,9 @@ export function SolanaWalletsPanel() {
                       onChange={(e) => setSendAmount(e.target.value)}
                       required
                     />
-                    <span className="wt-amount-suffix">SOL</span>
+                    <span className="wt-amount-suffix">
+                      {sendAssetMode === "spl" ? "SPL" : "SOL"}
+                    </span>
                   </div>
                 </label>
 
@@ -1472,7 +1711,7 @@ export function SolanaWalletsPanel() {
               <span>{t("Passphrase")}</span>
               <input
                 type="password"
-                minLength={8}
+                minLength={12}
                 value={passphrase}
                 onChange={(e) => setPassphrase(e.target.value)}
                 required
@@ -1541,7 +1780,7 @@ export function SolanaWalletsPanel() {
               <span>{t("Passphrase")}</span>
               <input
                 type="password"
-                minLength={8}
+                minLength={12}
                 value={passphrase}
                 onChange={(e) => setPassphrase(e.target.value)}
                 required
@@ -1553,6 +1792,45 @@ export function SolanaWalletsPanel() {
               disabled={busy || !restoreArchiveText}
             >
               {`${t("Restore Backup")} →`}
+            </button>
+          </form>
+        </Dialog>
+      )}
+
+      {/* Owner Password Setup / Step-Up Confirmation Dialog */}
+      {stepUpModalMode !== "" && (
+        <Dialog
+          title={t(
+            stepUpModalMode === "password_setup"
+              ? "Set Owner Password"
+              : "Authorization",
+          )}
+          onClose={() => {
+            pendingStepUpActionRef.current = null;
+            setStepUpPassword("");
+            setStepUpModalMode("");
+          }}
+        >
+          <form className="wt-form-stack" onSubmit={onSubmitStepUp}>
+            <label className="wt-field">
+              <span>
+                {t(
+                  stepUpModalMode === "password_setup"
+                    ? "Set Owner Password"
+                    : "Confirm Owner Password",
+                )}
+              </span>
+              <input
+                type="password"
+                minLength={12}
+                autoComplete="current-password"
+                value={stepUpPassword}
+                onChange={(e) => setStepUpPassword(e.target.value)}
+                required
+              />
+            </label>
+            <button type="submit" className="wt-btn-rose" disabled={busy}>
+              {`${t(stepUpModalMode === "password_setup" ? "Save" : "Approve & Execute")} →`}
             </button>
           </form>
         </Dialog>

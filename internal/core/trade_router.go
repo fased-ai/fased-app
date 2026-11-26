@@ -45,7 +45,7 @@ func (s *Store) tradeAccountsView(ctx context.Context) []TradeAccountOption {
 	if s == nil {
 		return out
 	}
-	if cs, err := s.custodyService(); err == nil && cs != nil {
+	if cs, err := s.custodyBackend(); err == nil && cs != nil {
 		if wallets, wErr := cs.ListWallets(ctx); wErr == nil {
 			for _, w := range wallets {
 				if w.Custody == custody.CustodyWatch || w.Role == custody.RoleWatch || w.Role == custody.RoleMining || w.Policy.Frozen {
@@ -137,8 +137,12 @@ func (s *Store) executeLiveTradeRoute(ctx context.Context, req trade.OrderReques
 		return trade.LiveExecReceipt{}, errGlobalKillSwitchActive
 	}
 	isBotOrAuto := req.Mode == trade.ModeBot || req.Mode == trade.ModeAIAgent
+	var (
+		custodyBackend custody.Backend
+		resolvedWallet *custody.WalletPublic
+	)
 	if strings.HasPrefix(req.AccountID, "@wallet:") || strings.HasPrefix(req.AccountID, "wallet:") {
-		cs, cErr := s.custodyService()
+		cs, cErr := s.custodyBackend()
 		if cErr != nil || cs == nil {
 			return trade.LiveExecReceipt{}, errors.New("custody signer unavailable")
 		}
@@ -157,6 +161,8 @@ func (s *Store) executeLiveTradeRoute(ctx context.Context, req trade.OrderReques
 		if resolved.Custody == custody.CustodyHardware {
 			return trade.LiveExecReceipt{}, fmt.Errorf("hardware wallet %s requires 2-step manual review & on-device signing in Wallets", resolved.Handle)
 		}
+		custodyBackend = cs
+		resolvedWallet = &resolved
 	}
 	if !s.isTradingVenueEnabled(req.Venue) {
 		return trade.LiveExecReceipt{}, fmt.Errorf("trading is disabled for venue %q; enable Trading in Settings -> Data & Feeds", req.Venue)
@@ -171,6 +177,39 @@ func (s *Store) executeLiveTradeRoute(ctx context.Context, req trade.OrderReques
 		return s.executeLiveHyperliquidOrder(ctx, req, refPrice)
 
 	case marketdata.VenueSolana, "onchain":
+		if resolvedWallet != nil && custodyBackend != nil {
+			dest := strings.TrimSpace(resolvedWallet.Connections.SweepToWalletID)
+			if dest == "" && len(resolvedWallet.Policy.Destinations) > 0 {
+				dest = resolvedWallet.Policy.Destinations[0]
+			}
+			actor := "trade-manual"
+			if isBotOrAuto {
+				actor = "trade-bot"
+				if req.AgentID != "" {
+					actor = "agent:" + req.AgentID
+				}
+			}
+			rev, err := custodyBackend.PrepareReview(ctx, custody.PrepareReviewRequest{
+				WalletID:    resolvedWallet.ID,
+				Operation:   "solana.nativeTransfer",
+				Destination: dest,
+				AmountHuman: strconv.FormatFloat(req.Quantity, 'f', -1, 64),
+				IsBotOrAuto: isBotOrAuto,
+			})
+			if err != nil {
+				return trade.LiveExecReceipt{}, err
+			}
+			entry, err := custodyBackend.ExecuteNativeReview(ctx, resolvedWallet.ID, rev.ID, actor)
+			if err != nil {
+				return trade.LiveExecReceipt{}, err
+			}
+			return trade.LiveExecReceipt{
+				VenueOrderID: entry.ID,
+				TxSignature:  entry.TxSignature,
+				FilledPrice:  refPrice,
+				Immediate:    entry.State == custody.LedgerConfirmed || entry.State == custody.LedgerBroadcast,
+			}, nil
+		}
 		estMicro := uint64(math.Max(1000, math.Round(req.Quantity*refPrice*1_000_000)))
 		memo := fmt.Sprintf("fased-%s-%s-%s", req.Symbol, req.Side, strconv.FormatFloat(req.Quantity, 'f', -1, 64))
 		if len(memo) > 64 {

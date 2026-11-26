@@ -829,3 +829,12 @@ func (s *Server) ConfigureInstallationSource(source string) error {
 func (s *Server) ConfigureRequirePassword(v bool) {
 	s.HTTP.Handler.(*HTTPHandler).SetRequirePassword(v)
 }
+
+// ConfigureCustodySocket routes all custody operations through an external isolated
+// fased-signer daemon over Unix socket so core never holds or opens signer-vault/.
+func (s *Server) ConfigureCustodySocket(sockPath string) {
+	if s == nil || s.Store == nil {
+		return
+	}
+	s.Store.ConfigureCustodySocket(sockPath)
+}

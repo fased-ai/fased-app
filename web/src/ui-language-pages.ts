@@ -6903,4 +6903,12 @@ export const pageCopy = {
   "Open Orders": ["Открытые ордера", "Órdenes abiertas", "挂单与计划", "미체결 주문"],
   "Live": ["Live", "En vivo", "实盘", "라이브"],
   "Regions": ["Регионы", "Regiones", "地区", "지역"],
+  "Isolated Signer": ["Изолированный Signer", "Signer aislado", "独立进程签名器", "격리된 서명기"],
+  "In-Process": ["В процессе", "En proceso", "同进程模式", "인프로세스"],
+  "OS Keychain": ["Связка ключей ОС", "Llavero del SO", "系统钥匙串", "OS 키체인"],
+  "Dev File": ["Файл (dev)", "Archivo (dev)", "本地文件密钥", "개발용 파일"],
+  "Audit Chain Verified": ["Цепь аудита проверена", "Cadena de auditoría verificada", "审计链校验通过", "감사 체인 검증됨"],
+  "Set Owner Password": ["Задать пароль владельца", "Definir contraseña de propietario", "设置所有者密码", "소유자 비밀번호 설정"],
+  "Confirm Owner Password": ["Подтвердите пароль владельца", "Confirmar contraseña de propietario", "确认所有者密码", "소유자 비밀번호 확인"],
+  "Authorization": ["Авторизация", "Autorización", "权限验证", "권한 인증"],
 } satisfies Record<string, [string, string, string, string]>;

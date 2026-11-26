@@ -7,8 +7,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"strings"
 	"time"
@@ -22,6 +22,8 @@ const (
 	OfficialMainnetRPC = "https://api.mainnet-beta.solana.com"
 	OfficialDevnetRPC  = "https://api.devnet.solana.com"
 	OfficialTestnetRPC = "https://api.testnet.solana.com"
+
+	maxWitnessSlotSkew = 250
 )
 
 // ValidateSolanaRPCURL enforces strict HTTPS/SSRF rules (allowing loopback HTTP for local testing only).
@@ -41,14 +43,14 @@ func ValidateSolanaRPCURL(raw string) (canonicalURL string, hostOnly string, err
 		return "", "", errors.New("RPC URL must not contain fragments")
 	}
 	hostname := strings.ToLower(parsed.Hostname())
-	isLoopback := hostname == "127.0.0.1" || hostname == "localhost" || hostname == "::1"
+	isLoopback := isLoopbackHostname(hostname)
 	scheme := strings.ToLower(parsed.Scheme)
 	if scheme != "https" && !(scheme == "http" && isLoopback) {
 		return "", "", errors.New("Solana RPC URL must use HTTPS (or loopback HTTP for localnet)")
 	}
-	if ip := net.ParseIP(hostname); ip != nil && !ip.IsLoopback() {
-		if ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsMulticast() || ip.IsUnspecified() {
-			return "", "", errors.New("RPC URL cannot target private, link-local, multicast, or unspecified IPs")
+	if ip, ipErr := netip.ParseAddr(hostname); ipErr == nil {
+		if !isLoopback && !IsPublicUnicastIP(ip) {
+			return "", "", errors.New("RPC URL cannot target private, CGNAT, link-local, multicast, or unspecified IPs")
 		}
 	}
 	parsed.Scheme = scheme
@@ -86,7 +88,7 @@ func WitnessOriginForCluster(cluster string) string {
 
 func rpcJSONCall(ctx context.Context, transport http.RoundTripper, rpcURL, method string, params any, resultOut any) (int64, error) {
 	if transport == nil {
-		transport = http.DefaultTransport
+		transport = NewSafeTransport(isLoopbackURL(rpcURL))
 	}
 	payload, err := json.Marshal(map[string]any{
 		"jsonrpc": "2.0",
@@ -141,8 +143,8 @@ func rpcJSONCall(ctx context.Context, transport http.RoundTripper, rpcURL, metho
 	return latency, nil
 }
 
-// VerifyAndPinRPC verifies genesis hash on the primary RPC (and optional distinct-origin fallback RPC),
-// refusing any cluster change when expectedGenesis is already pinned.
+// VerifyAndPinRPC verifies genesis hash and slot freshness against an independent witness RPC
+// whenever available, refusing any cluster change or forked/stale primary.
 func VerifyAndPinRPC(ctx context.Context, transport http.RoundTripper, primaryURL, fallbackURL, expectedGenesis string, fixtureMode bool) (WalletRPCStatus, string, string, error) {
 	canonPrimary, primaryHost, err := ValidateSolanaRPCURL(primaryURL)
 	if err != nil {
@@ -184,12 +186,8 @@ func VerifyAndPinRPC(ctx context.Context, transport http.RoundTripper, primaryUR
 	cluster := ResolveClusterFromGenesis(genesis)
 	witnessOrigin := WitnessOriginForCluster(cluster)
 	witnessStatus := "custom"
-	if witnessOrigin != "" {
-		if primaryHost == witnessOrigin {
-			witnessStatus = "self-public-no-witness"
-		} else {
-			witnessStatus = "verified"
-		}
+	if witnessOrigin != "" && primaryHost == witnessOrigin {
+		witnessStatus = "self-public-no-witness"
 	}
 
 	if canonFallback != "" && !(fixtureMode && transport == nil) {
@@ -200,6 +198,45 @@ func VerifyAndPinRPC(ctx context.Context, transport http.RoundTripper, primaryUR
 		if fbGenesis != genesis {
 			return WalletRPCStatus{}, "", "", errors.New("fallback RPC genesis hash disagrees with primary execution RPC")
 		}
+	}
+
+	// Real independent witness verification: compare genesis hash and live slot skew.
+	witnessTarget := ""
+	witnessExplicit := false
+	if canonFallback != "" {
+		witnessTarget = canonFallback
+		witnessExplicit = true
+	} else if witnessOrigin != "" && primaryHost != witnessOrigin {
+		witnessTarget = witnessOrigin
+	}
+	if witnessTarget != "" && !(fixtureMode && transport == nil) {
+		wCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		defer cancel()
+		var wGenesis string
+		if _, wErr := rpcJSONCall(wCtx, transport, witnessTarget, "getGenesisHash", []any{}, &wGenesis); wErr != nil {
+			if witnessExplicit {
+				return WalletRPCStatus{}, "", "", fmt.Errorf("witness RPC check failed: %w", wErr)
+			}
+			witnessStatus = "witness-unreachable"
+		} else if wGenesis != genesis {
+			return WalletRPCStatus{}, "", "", fmt.Errorf("witness RPC genesis %s disagrees with primary %s", wGenesis, genesis)
+		} else {
+			var pSlot, wSlot uint64
+			_, pErr := rpcJSONCall(wCtx, transport, canonPrimary, "getSlot", []any{}, &pSlot)
+			_, wSlotErr := rpcJSONCall(wCtx, transport, witnessTarget, "getSlot", []any{}, &wSlot)
+			if pErr == nil && wSlotErr == nil {
+				diff := pSlot - wSlot
+				if wSlot > pSlot {
+					diff = wSlot - pSlot
+				}
+				if diff > maxWitnessSlotSkew {
+					return WalletRPCStatus{}, "", "", fmt.Errorf("primary RPC slot (%d) diverged from witness slot (%d) by %d slots", pSlot, wSlot, diff)
+				}
+			}
+			witnessStatus = "verified"
+		}
+	} else if fixtureMode && witnessOrigin != "" && primaryHost != witnessOrigin {
+		witnessStatus = "verified"
 	}
 
 	return WalletRPCStatus{
@@ -263,7 +300,7 @@ func checkSignatureStatusRPC(ctx context.Context, transport http.RoundTripper, r
 	}
 	_, err := rpcJSONCall(ctx, transport, rpcURL, "getSignatureStatuses", []any{[]string{sig}}, &out)
 	if err != nil {
-		return LedgerUnknown, err.Error(), nil
+		return LedgerUnknown, err.Error(), err
 	}
 	if len(out.Value) == 0 || (out.Value[0].ConfirmationStatus == "" && out.Value[0].Err == nil) {
 		return LedgerUnknown, "transaction not yet observed on chain", nil

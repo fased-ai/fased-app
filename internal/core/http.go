@@ -49,6 +49,8 @@ type HTTPHandler struct {
 	localNonce        string
 	streamTicketMu    sync.Mutex
 	streamTickets     map[string]streamTicketEntry
+	stepUpMu          sync.Mutex
+	stepUpTokens      map[string]stepUpEntry
 	activeWSConns     atomic.Int32
 }
 
@@ -258,6 +260,12 @@ func (h *HTTPHandler) api(w http.ResponseWriter, r *http.Request) {
 		return
 	case "/api/v1/auth/native-local":
 		h.nativeLocalOwnerAPI(w, r)
+		return
+	case "/api/v1/auth/password":
+		h.ownerPasswordAPI(w, r)
+		return
+	case "/api/v1/auth/step-up":
+		h.stepUpAPI(w, r)
 		return
 	case "/api/v1/auth/claim", "/api/v1/auth/login":
 		if r.Method != http.MethodPost {
@@ -654,6 +662,7 @@ func (h *HTTPHandler) api(w http.ResponseWriter, r *http.Request) {
 			writeError(w, 500, "logout failed")
 			return
 		}
+		h.clearStepUpForSession(token)
 		if id, ok := r.Context().Value(remoteIdentityKey{}).(tailnet.Identity); ok && id.NodeID != "" {
 			h.store.markRemoteSignedOut(id.NodeID)
 		}

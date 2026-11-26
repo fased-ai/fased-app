@@ -9,14 +9,17 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
 
+	"github.com/fased-ai/fased-app/internal/custody"
 	"github.com/fased-ai/fased-app/internal/httpapi"
 	"github.com/fased-ai/fased-app/internal/marketdata"
+	"github.com/fased-ai/fased-app/internal/providersecrets"
 	"github.com/fased-ai/fased-app/internal/vault"
 	"github.com/fased-ai/fased-app/internal/worldintel"
 )
@@ -194,10 +197,50 @@ func pluginAAD(pluginID, field string) []byte {
 	return []byte("fased-data-plugin-v1:" + pluginID + ":" + field)
 }
 
+type sealedPluginKeyEnvelope struct {
+	Version    int    `json:"version"`
+	Nonce      []byte `json:"nonce"`
+	Ciphertext []byte `json:"ciphertext"`
+}
+
 func (s *Store) pluginSecretKey(create bool) ([]byte, error) {
+	sealedPath := filepath.Join(s.dir, "data-plugins.key.sealed")
 	keyPath := filepath.Join(s.dir, "data-plugins.key")
+
+	var kek []byte
+	if s.taskSecrets != nil {
+		if k, err := s.taskSecrets.Key(context.Background(), s.dir+":data-plugins", create); err == nil && len(k) == 32 {
+			kek = k
+			defer clear(kek)
+		}
+	}
+
+	if rawSealed, err := readPrivateFile(sealedPath); err == nil {
+		var env sealedPluginKeyEnvelope
+		if jErr := json.Unmarshal(rawSealed, &env); jErr != nil || env.Version != 1 {
+			return nil, errors.New("corrupt sealed data-plugins key")
+		}
+		if len(kek) != 32 {
+			return nil, providersecrets.ErrUnavailable
+		}
+		plain, oErr := providersecrets.Open(kek, env.Nonce, env.Ciphertext, []byte("fased-data-plugins-kek:v1"))
+		if oErr != nil || len(plain) != 32 {
+			return nil, errors.New("failed to unwrap sealed data-plugins key")
+		}
+		return plain, nil
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return nil, err
+	}
+
 	raw, err := readPrivateFile(keyPath)
 	if err == nil && len(raw) == 32 {
+		if len(kek) == 32 {
+			if n, ct, sErr := providersecrets.Seal(kek, raw, []byte("fased-data-plugins-kek:v1")); sErr == nil {
+				if wErr := WritePrivateJSON(sealedPath, sealedPluginKeyEnvelope{Version: 1, Nonce: n, Ciphertext: ct}); wErr == nil {
+					_ = os.Remove(keyPath)
+				}
+			}
+		}
 		return raw, nil
 	}
 	if !errors.Is(err, os.ErrNotExist) && err != nil {
@@ -209,6 +252,14 @@ func (s *Store) pluginSecretKey(create bool) ([]byte, error) {
 	key := make([]byte, 32)
 	if _, err := rand.Read(key); err != nil {
 		return nil, err
+	}
+	if len(kek) == 32 {
+		n, ct, sErr := providersecrets.Seal(kek, key, []byte("fased-data-plugins-kek:v1"))
+		if sErr == nil {
+			if wErr := WritePrivateJSON(sealedPath, sealedPluginKeyEnvelope{Version: 1, Nonce: n, Ciphertext: ct}); wErr == nil {
+				return key, nil
+			}
+		}
 	}
 	if err := privateDir(s.dir); err != nil {
 		return nil, err
@@ -445,6 +496,9 @@ func validatePluginEndpointURL(raw string, allowLocalhost bool) (string, error) 
 	}
 	if scheme != "https" {
 		return "", errors.New("remote endpoints must use https")
+	}
+	if ip, err := netip.ParseAddr(host); err == nil && !custody.IsPublicUnicastIP(ip) {
+		return "", errors.New("private or non-public IP endpoints are blocked")
 	}
 	return u.String(), nil
 }
@@ -968,7 +1022,7 @@ func (s *Store) TestDataPlugin(ctx context.Context, id string) (DataPluginView, 
 	} else if rec.Endpoint != "" {
 		probeCtx, cancel := context.WithTimeout(ctx, 8*time.Second)
 		defer cancel()
-		transport := http.DefaultTransport
+		transport := http.RoundTripper(custody.NewSafeTransport(rec.AllowLocalhost))
 		if s.marketDataTransport != nil {
 			transport = s.marketDataTransport
 		}

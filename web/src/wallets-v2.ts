@@ -143,11 +143,40 @@ export interface AuditEntry {
   timestamp: number;
 }
 
+export interface WalletSecurityPosture {
+  processIsolated: boolean;
+  kekProtection: string;
+  socketPath?: string;
+  allowedPeerUid?: number;
+}
+
 export interface WalletsV2ListResponse {
   wallets: WalletV2[];
   count: number;
   socketReady?: boolean;
   signerPresent?: boolean;
+  security?: WalletSecurityPosture;
+  auditChainCount?: number;
+  auditChainVerified?: boolean;
+  ownerPasswordSet?: boolean;
+}
+
+function stepUpHeaders(stepUpToken?: string): Record<string, string> | undefined {
+  return stepUpToken ? { "X-Fased-Step-Up": stepUpToken } : undefined;
+}
+
+export async function setLocalOwnerPassword(
+  core: CoreRequestOnly,
+  password: string,
+): Promise<{ ok: boolean; hasPassword: boolean }> {
+  return core.request("auth/password", "POST", { password });
+}
+
+export async function requestStepUpToken(
+  core: CoreRequestOnly,
+  password: string,
+): Promise<{ stepUpToken: string; expiresAt: number }> {
+  return core.request("auth/step-up", "POST", { password });
 }
 
 export async function listWalletsV2(
@@ -184,11 +213,14 @@ export async function updateWalletPolicy(
     confirmLoosen?: boolean;
     expectedPolicyHash?: string;
   },
+  stepUpToken?: string,
 ): Promise<{ wallet: WalletV2 }> {
   return core.request<{ wallet: WalletV2 }>(
     `wallets/${encodeURIComponent(walletId)}/policy`,
     "PUT",
     req,
+    undefined,
+    stepUpHeaders(stepUpToken),
   );
 }
 
@@ -197,11 +229,14 @@ export async function setWalletFreeze(
   walletId: string,
   frozen: boolean,
   reason = "",
+  stepUpToken?: string,
 ): Promise<{ wallet: WalletV2 }> {
   return core.request<{ wallet: WalletV2 }>(
     `wallets/${encodeURIComponent(walletId)}/freeze`,
     "POST",
     { frozen, reason },
+    undefined,
+    stepUpHeaders(stepUpToken),
   );
 }
 
@@ -222,11 +257,14 @@ export async function updateWalletRPC(
   walletId: string,
   primaryRpcUrl: string,
   fallbackRpcUrl = "",
+  stepUpToken?: string,
 ): Promise<{ wallet: WalletV2 }> {
   return core.request<{ wallet: WalletV2 }>(
     `wallets/${encodeURIComponent(walletId)}/rpc`,
     "PUT",
     { primaryRpcUrl, fallbackRpcUrl },
+    undefined,
+    stepUpHeaders(stepUpToken),
   );
 }
 
@@ -245,12 +283,19 @@ export async function exportEncryptedBackupV2(
   core: CoreRequestOnly,
   walletId: string,
   passphrase: string,
+  stepUpToken?: string,
 ): Promise<{ archive: unknown; fingerprint: string; filename: string }> {
   return core.request<{
     archive: unknown;
     fingerprint: string;
     filename: string;
-  }>(`wallets/${encodeURIComponent(walletId)}/backup`, "POST", { passphrase });
+  }>(
+    `wallets/${encodeURIComponent(walletId)}/backup`,
+    "POST",
+    { passphrase },
+    undefined,
+    stepUpHeaders(stepUpToken),
+  );
 }
 
 export async function restoreEncryptedBackupV2(
@@ -262,8 +307,15 @@ export async function restoreEncryptedBackupV2(
     role?: WalletRole;
     rpcUrl: string;
   },
+  stepUpToken?: string,
 ): Promise<{ wallet: WalletV2 }> {
-  return core.request<{ wallet: WalletV2 }>("wallets/restore", "POST", req);
+  return core.request<{ wallet: WalletV2 }>(
+    "wallets/restore",
+    "POST",
+    req,
+    undefined,
+    stepUpHeaders(stepUpToken),
+  );
 }
 
 export async function listWalletActivity(
@@ -284,6 +336,9 @@ export async function prepareWalletReview(
     operation: string;
     destination: string;
     amountHuman: string;
+    mint?: string;
+    decimals?: number;
+    createDestAta?: boolean;
     isBotOrAuto?: boolean;
   },
 ): Promise<{ review: WalletReview }> {
@@ -298,11 +353,14 @@ export async function executeNativeWalletReview(
   core: CoreRequestOnly,
   walletId: string,
   reviewId: string,
+  stepUpToken?: string,
 ): Promise<{ entry: LedgerEntry; error?: string }> {
   return core.request(
     `wallets/${encodeURIComponent(walletId)}/reviews/${encodeURIComponent(reviewId)}/execute`,
     "POST",
     {},
+    undefined,
+    stepUpHeaders(stepUpToken),
   );
 }
 
@@ -334,9 +392,13 @@ export async function reconcileWalletLedger(
 export async function deleteWalletV2(
   core: CoreRequestOnly,
   walletId: string,
+  stepUpToken?: string,
 ): Promise<{ deleted: boolean; id: string }> {
   return core.request<{ deleted: boolean; id: string }>(
     `wallets/${encodeURIComponent(walletId)}`,
     "DELETE",
+    undefined,
+    undefined,
+    stepUpHeaders(stepUpToken),
   );
 }

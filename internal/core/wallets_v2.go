@@ -12,6 +12,42 @@ import (
 	"github.com/fased-ai/fased-app/internal/httpapi"
 )
 
+// ConfigureCustodySocket sets the external isolated signer Unix domain socket so core
+// never initializes an in-process signer-vault directory inside s.dir.
+func (s *Store) ConfigureCustodySocket(sockPath string) {
+	if s == nil {
+		return
+	}
+	s.custodyMu.Lock()
+	defer s.custodyMu.Unlock()
+	s.custodySocketPath = strings.TrimSpace(sockPath)
+}
+
+func (s *Store) custodyBackend() (custody.Backend, error) {
+	if s == nil {
+		return nil, errors.New("workspace store unavailable")
+	}
+	s.custodyMu.Lock()
+	sockPath := strings.TrimSpace(s.custodySocketPath)
+	if sockPath != "" {
+		if s.custodyClient != nil {
+			c := s.custodyClient
+			s.custodyMu.Unlock()
+			return c, nil
+		}
+		client, err := custody.NewSocketClient(sockPath)
+		if err != nil {
+			s.custodyMu.Unlock()
+			return nil, err
+		}
+		s.custodyClient = client
+		s.custodyMu.Unlock()
+		return client, nil
+	}
+	s.custodyMu.Unlock()
+	return s.custodyService()
+}
+
 func (s *Store) custodyService() (*custody.Service, error) {
 	if s == nil || s.dir == "" {
 		return nil, errors.New("workspace store unavailable")
@@ -70,7 +106,7 @@ func (h *HTTPHandler) walletsV2API(w http.ResponseWriter, r *http.Request, token
 		writeError(w, 429, ErrRateLimited.Error())
 		return
 	}
-	svc, err := h.store.custodyService()
+	svc, err := h.store.custodyBackend()
 	if err != nil {
 		writeError(w, 500, "custody signer unavailable")
 		return
@@ -89,12 +125,24 @@ func (h *HTTPHandler) walletsV2API(w http.ResponseWriter, r *http.Request, token
 			writeError(w, 500, "wallets unavailable")
 			return
 		}
-		sockReady := custody.ProbeSocket(ctx, h.store.dir)
+		sec, secErr := svc.SecurityStatus(ctx)
+		auditCount, auditErr := svc.VerifyAuditChain(ctx)
+		ownerPasswordSet, _ := h.store.hasPassword(ctx)
+		sockReady := false
+		if secErr == nil && sec.SocketPath != "" {
+			sockReady, _ = custody.ProbeSocketAt(ctx, sec.SocketPath)
+		} else {
+			sockReady = custody.ProbeSocket(ctx, h.store.dir)
+		}
 		writeJSON(w, 200, map[string]any{
-			"wallets":       list,
-			"count":         len(list),
-			"socketReady":   sockReady,
-			"signerPresent": true,
+			"wallets":            list,
+			"count":              len(list),
+			"socketReady":        sockReady,
+			"signerPresent":      true,
+			"security":           sec,
+			"auditChainCount":    auditCount,
+			"auditChainVerified": auditErr == nil,
+			"ownerPasswordSet":   ownerPasswordSet,
 		})
 
 	case rel == "create":
@@ -163,6 +211,9 @@ func (h *HTTPHandler) walletsV2API(w http.ResponseWriter, r *http.Request, token
 		if !httpapi.DecodeStrictJSON(w, r, 64*1024, &in) {
 			return
 		}
+		if !h.requireStepUp(w, r, token, "restore") {
+			return
+		}
 		rec, err := svc.ImportEncryptedRecovery(ctx, in.Archive, in.Passphrase, in.Name, in.Role, in.RPCURL)
 		if err != nil {
 			writeCustodyError(w, err)
@@ -192,6 +243,16 @@ func (h *HTTPHandler) walletsV2API(w http.ResponseWriter, r *http.Request, token
 			if !httpapi.DecodeStrictJSON(w, r, 32*1024, &in) {
 				return
 			}
+			cur, gErr := svc.GetWallet(ctx, id)
+			if gErr != nil {
+				writeCustodyError(w, gErr)
+				return
+			}
+			if !custody.IsPolicyTighterOrEqual(cur.Policy, in.Policy) {
+				if !h.requireStepUp(w, r, token, "policy") {
+					return
+				}
+			}
 			rec, err := svc.UpdatePolicy(ctx, id, in.Policy, in.ConfirmLoosen, in.ExpectedPolicyHash, "owner")
 			if err != nil {
 				writeCustodyError(w, err)
@@ -217,6 +278,11 @@ func (h *HTTPHandler) walletsV2API(w http.ResponseWriter, r *http.Request, token
 		}
 		if !httpapi.DecodeStrictJSON(w, r, 8*1024, &in) {
 			return
+		}
+		if !in.Frozen {
+			if !h.requireStepUp(w, r, token, "unfreeze") {
+				return
+			}
 		}
 		rec, err := svc.SetFreeze(ctx, id, in.Frozen, in.Reason, "owner")
 		if err != nil {
@@ -261,6 +327,9 @@ func (h *HTTPHandler) walletsV2API(w http.ResponseWriter, r *http.Request, token
 		if !httpapi.DecodeStrictJSON(w, r, 16*1024, &in) {
 			return
 		}
+		if !h.requireStepUp(w, r, token, "rpc") {
+			return
+		}
 		rec, err := svc.SetWalletRPC(ctx, id, in.PrimaryRPCURL, in.FallbackRPCURL, "owner")
 		if err != nil {
 			writeCustodyError(w, err)
@@ -297,6 +366,9 @@ func (h *HTTPHandler) walletsV2API(w http.ResponseWriter, r *http.Request, token
 			Passphrase string `json:"passphrase"`
 		}
 		if !httpapi.DecodeStrictJSON(w, r, 8*1024, &in) {
+			return
+		}
+		if !h.requireStepUp(w, r, token, "backup") {
 			return
 		}
 		archiveBytes, fp, err := svc.ExportEncryptedRecovery(ctx, id, in.Passphrase, "owner")
@@ -367,6 +439,9 @@ func (h *HTTPHandler) walletsV2API(w http.ResponseWriter, r *http.Request, token
 			if !h.v2Mutation(w, r, token, true) {
 				return
 			}
+			if !h.requireStepUp(w, r, token, "execute") {
+				return
+			}
 			entry, err := svc.ExecuteNativeReview(ctx, walletID, reviewID, "owner")
 			if err != nil {
 				if entry.ID != "" {
@@ -427,6 +502,9 @@ func (h *HTTPHandler) walletsV2API(w http.ResponseWriter, r *http.Request, token
 			return
 		}
 		if !h.v2Mutation(w, r, token, true) {
+			return
+		}
+		if !h.requireStepUp(w, r, token, "delete") {
 			return
 		}
 		deleted, err := svc.DeleteWallet(ctx, rel)

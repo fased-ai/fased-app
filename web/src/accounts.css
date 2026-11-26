@@ -496,6 +496,34 @@
   font-size: 12px;
 }
 
+.wt-posture-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.wt-posture-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 8px;
+  border-radius: var(--radius-xs);
+  background: var(--wt-raised);
+  color: var(--wt-muted);
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.wt-posture-pill.is-ok {
+  background: var(--wt-ok-bg);
+  color: var(--wt-ok);
+}
+
+.wt-posture-pill.is-warn {
+  background: var(--wt-danger-bg);
+  color: var(--wt-danger);
+}
+
 @media (max-width: 1180px) {
   .wt-wallets-grid {
     grid-template-columns: 196px minmax(0, 1fr) 268px;
