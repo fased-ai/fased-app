@@ -10,7 +10,10 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/fased-ai/fased-app/internal/desk"
 	"github.com/fased-ai/fased-app/internal/hub"
+	"github.com/fased-ai/fased-app/internal/marketdata"
+	"github.com/fased-ai/fased-app/internal/quantlab"
 	"github.com/fased-ai/fased-app/internal/signer"
 	"github.com/fased-ai/fased-app/internal/swarm"
 )
@@ -169,16 +172,11 @@ func (h *HTTPHandler) handleStage6Route(w http.ResponseWriter, r *http.Request, 
 		if !h.mutation(w, r) || !h.csrf(w, r, token) {
 			return true
 		}
-		rt, err := h.store.ensureStage6Runtime()
-		if err != nil {
-			writeError(w, 500, err.Error())
-			return true
-		}
 		var req hub.InstallRequest
 		if !decodeJSON(w, r, &req) {
 			return true
 		}
-		pkg, instErr := rt.hub.Install(r.Context(), req.ID)
+		pkg, instErr := h.store.installAndDeployHubPackage(r.Context(), req.ID)
 		if instErr != nil {
 			code := 400
 			if errors.Is(instErr, hub.ErrSignatureInvalid) {
@@ -408,11 +406,7 @@ func executeDraftHubInstall(ctx context.Context, s *Store, _ string, rawArgs jso
 	if err := decodeToolArgs(rawArgs, &req); err != nil {
 		return nil, err
 	}
-	rt, err := s.ensureStage6Runtime()
-	if err != nil {
-		return nil, err
-	}
-	return rt.hub.Install(ctx, req.ID)
+	return s.installAndDeployHubPackage(ctx, req.ID)
 }
 
 func previewDraftSwarmSignal(_ context.Context, _ *Store, _ string, rawArgs json.RawMessage) (approvalDraft, error) {
@@ -441,4 +435,167 @@ func executeDraftSwarmSignal(ctx context.Context, s *Store, _ string, rawArgs js
 		return nil, err
 	}
 	return rt.swarm.BroadcastSignal(ctx, in)
+}
+
+func (s *Store) installAndDeployHubPackage(ctx context.Context, packageID string) (hub.Package, error) {
+	rt, err := s.ensureStage6Runtime()
+	if err != nil {
+		return hub.Package{}, err
+	}
+	verifiedPkg, err := rt.hub.GetVerified(ctx, packageID)
+	if err != nil {
+		return hub.Package{}, err
+	}
+	target, summary, err := s.deployHubPackage(ctx, verifiedPkg)
+	if err != nil {
+		return hub.Package{}, err
+	}
+	pkg, err := rt.hub.Install(ctx, packageID)
+	if err != nil {
+		return hub.Package{}, err
+	}
+	pkg.DeployedTarget = target
+	pkg.DeployedSummary = summary
+	return pkg, nil
+}
+
+func (s *Store) deployHubPackage(ctx context.Context, pkg hub.Package) (string, string, error) {
+	switch pkg.Kind {
+	case hub.KindFasedScript:
+		ql, err := s.quantLabService()
+		if err != nil {
+			return "", "", err
+		}
+		if _, err := ql.SaveScript(ctx, quantlab.ScriptInput{
+			ID:          pkg.ID,
+			Name:        pkg.Name,
+			Description: fmt.Sprintf("Installed from Community Hub (%s)", pkg.Version),
+			Source:      pkg.Payload,
+		}); err != nil {
+			return "", "", err
+		}
+		return "quantlab", fmt.Sprintf("Saved FasedScript %s", pkg.ID), nil
+
+	case hub.KindWatchlistPack:
+		md, err := s.marketDataService()
+		if err != nil {
+			return "", "", err
+		}
+		var rawPack struct {
+			Items   []marketdata.WatchlistItem `json:"items"`
+			Venues  []string                   `json:"venues"`
+			Symbols []string                   `json:"symbols"`
+		}
+		if err := json.Unmarshal([]byte(pkg.Payload), &rawPack); err != nil {
+			return "", "", fmt.Errorf("invalid watchlist pack JSON: %w", err)
+		}
+		items := make([]marketdata.WatchlistItem, 0, len(rawPack.Items)+len(rawPack.Symbols))
+		for _, it := range rawPack.Items {
+			v, err := marketdata.NormalizeVenue(it.Venue)
+			if err != nil {
+				continue
+			}
+			sym, err := marketdata.NormalizeSymbol(it.Symbol)
+			if err != nil {
+				continue
+			}
+			items = append(items, marketdata.WatchlistItem{
+				Venue:    v,
+				Symbol:   sym,
+				Label:    it.Label,
+				Interval: it.Interval,
+				Style:    it.Style,
+			})
+		}
+		if len(items) == 0 && len(rawPack.Symbols) > 0 {
+			cryptoVenue := marketdata.VenueHyperliquid
+			hasAlpaca := false
+			for _, rv := range rawPack.Venues {
+				v, err := marketdata.NormalizeVenue(rv)
+				if err != nil {
+					continue
+				}
+				if v == marketdata.VenueAlpaca {
+					hasAlpaca = true
+				} else if cryptoVenue == marketdata.VenueHyperliquid && v != marketdata.VenueFRED && v != marketdata.VenueSEC {
+					cryptoVenue = v
+				}
+			}
+			equityTickers := map[string]bool{"SPY": true, "NVDA": true, "AAPL": true, "QQQ": true, "MSFT": true, "AMZN": true, "GOOGL": true, "META": true, "TSLA": true}
+			for _, rs := range rawPack.Symbols {
+				sym, err := marketdata.NormalizeSymbol(rs)
+				if err != nil {
+					continue
+				}
+				v := cryptoVenue
+				if hasAlpaca && equityTickers[strings.ToUpper(sym)] {
+					v = marketdata.VenueAlpaca
+				}
+				items = append(items, marketdata.WatchlistItem{Venue: v, Symbol: sym, Interval: "1h", Style: marketdata.StyleStandard})
+			}
+		}
+		if len(items) == 0 {
+			return "", "", errors.New("watchlist pack contained no valid items")
+		}
+		if _, err := md.SaveWatchlist(ctx, marketdata.Watchlist{
+			ID:    pkg.ID,
+			Name:  pkg.Name,
+			Items: items,
+		}); err != nil {
+			return "", "", err
+		}
+		return "marketdata", fmt.Sprintf("Saved watchlist %s (%d items)", pkg.ID, len(items)), nil
+
+	case hub.KindDeskBlueprint:
+		ds, err := s.deskService()
+		if err != nil {
+			return "", "", err
+		}
+		var bp struct {
+			Category string `json:"category"`
+			Symbol   string `json:"symbol"`
+			Rule     string `json:"rule"`
+		}
+		_ = json.Unmarshal([]byte(pkg.Payload), &bp)
+		rule := strings.TrimSpace(bp.Rule)
+		if rule == "" {
+			rule = strings.TrimSpace(pkg.Name + ": " + pkg.Payload)
+		}
+		if len(rule) > 512 {
+			rule = rule[:512]
+		}
+		cat := strings.TrimSpace(bp.Category)
+		if cat == "" {
+			cat = "entry"
+		}
+		if _, err := ds.SaveLesson(ctx, desk.LessonInput{
+			ID:       pkg.ID,
+			Category: cat,
+			Symbol:   bp.Symbol,
+			Rule:     rule,
+		}); err != nil {
+			return "", "", err
+		}
+		return "desk", fmt.Sprintf("Saved desk blueprint %s", pkg.ID), nil
+
+	case hub.KindSkill:
+		content := strings.TrimSpace(pkg.Payload)
+		if len(content) > 16384 {
+			content = content[:16384]
+		}
+		if _, err := s.CreateMemory(ctx, MemoryInput{
+			Scope:   "skill",
+			Title:   pkg.Name,
+			Content: content,
+			Tags:    "hub," + pkg.ID,
+			Source:  "system",
+			Pinned:  true,
+		}); err != nil {
+			return "", "", err
+		}
+		return "agent_memory", fmt.Sprintf("Saved skill %s", pkg.ID), nil
+
+	default:
+		return "", "", fmt.Errorf("unsupported hub package kind %q", pkg.Kind)
+	}
 }

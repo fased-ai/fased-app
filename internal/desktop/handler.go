@@ -337,6 +337,8 @@ func RequestBodyLimit(route string) int64 {
 	switch {
 	case route == "/api/v1/agents/v2/model-manifest":
 		return 640 * 1024
+	case route == "/api/v1/market/ingest":
+		return 512 * 1024
 	case strings.HasPrefix(route, "/api/v1/agents/v2/"):
 		return 256 * 1024
 	case route == "/api/v1/mcp" || strings.HasPrefix(route, "/api/v1/mcp/clients") || strings.HasPrefix(route, "/api/v1/decision/") || strings.HasPrefix(route, "/api/v1/market/") || strings.HasPrefix(route, "/api/v1/intel/") || strings.HasPrefix(route, "/api/v1/automation/") || strings.HasPrefix(route, "/api/v1/lab/") || strings.HasPrefix(route, "/api/v1/desk/"):
@@ -473,8 +475,10 @@ func allowed(method, route string) bool {
 		return method == "POST"
 	case "/api/v1/auth/devices", "/api/v1/auth/pair/devices":
 		return method == "GET" || method == "POST"
-	case "/api/v1/market/instruments", "/api/v1/market/candles", "/api/v1/market/orderbook", "/api/v1/market/trades", "/api/v1/market/footprint", "/api/v1/market/macro", "/api/v1/market/sec", "/api/v1/market/cohorts", "/api/v1/market/stream":
+	case "/api/v1/market/instruments", "/api/v1/market/candles", "/api/v1/market/orderbook", "/api/v1/market/trades", "/api/v1/market/footprint", "/api/v1/market/macro", "/api/v1/market/sec", "/api/v1/market/cohorts", "/api/v1/market/custom-feeds", "/api/v1/market/stream":
 		return method == http.MethodGet
+	case "/api/v1/market/ingest":
+		return method == http.MethodPost
 	case "/api/v1/market/watchlists", "/api/v1/market/drawings":
 		return method == http.MethodGet || method == http.MethodPut
 	case "/api/v1/decision/config":
@@ -493,7 +497,7 @@ func allowed(method, route string) bool {
 		return method == http.MethodGet || method == http.MethodPost
 	case "/api/v1/automation/triggers", "/api/v1/automation/webhook", "/api/v1/automation/telegram":
 		return method == http.MethodGet || method == http.MethodPut
-	case "/api/v1/automation/evaluate", "/api/v1/automation/notifications/read", "/api/v1/automation/telegram/test", "/api/v1/automation/telegram/simulate":
+	case "/api/v1/automation/evaluate", "/api/v1/automation/notifications/read", "/api/v1/automation/webhook/test", "/api/v1/automation/telegram/test", "/api/v1/automation/telegram/simulate":
 		return method == http.MethodPost
 	case "/api/v1/automation/notifications", "/api/v1/automation/stream":
 		return method == http.MethodGet

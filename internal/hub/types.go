@@ -49,6 +49,8 @@ type Package struct {
 	SATBond         SATBondMetadata `json:"satBond"`
 	Verified        bool            `json:"verified"`
 	Installed       bool            `json:"installed"`
+	DeployedTarget  string          `json:"deployedTarget,omitempty"`
+	DeployedSummary string          `json:"deployedSummary,omitempty"`
 	CreatedAt       int64           `json:"createdAt"`
 }
 

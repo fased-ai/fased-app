@@ -363,6 +363,45 @@
   color: var(--wt-muted);
 }
 
+.trade-csv-import {
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px solid var(--wt-border);
+  font-size: 0.75rem;
+}
+
+.trade-csv-import summary {
+  cursor: pointer;
+  font-weight: 600;
+  color: var(--wt-muted);
+}
+
+.trade-csv-form {
+  display: grid;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.trade-csv-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 6px;
+}
+
+.trade-csv-form input,
+.trade-csv-form select,
+.trade-csv-form textarea {
+  width: 100%;
+  box-sizing: border-box;
+  min-width: 0;
+  padding: 5px 8px;
+  font-size: 0.75rem;
+  color: var(--wt-text);
+  background: var(--wt-raised);
+  border: 0;
+  border-radius: var(--radius-xs);
+}
+
 .trade-tabs {
   display: flex;
   align-items: stretch;

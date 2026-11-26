@@ -4,8 +4,11 @@ import { useUI } from "../../ui-preferences";
 import { Plus, Trash2 } from "../../icons";
 import {
   CHART_VENUES,
+  fetchCustomFeeds,
   fetchWatchlists,
+  ingestCustomCandles,
   saveWatchlist,
+  type CustomFeedSummary,
   type Venue,
   type Watchlist,
   type WatchlistItem,
@@ -28,6 +31,11 @@ export function WatchlistPanel({
   const [filterQuery, setFilterQuery] = useState("");
   const [venueFilter, setVenueFilter] = useState<"all" | Venue>("all");
   const [saving, setSaving] = useState(false);
+  const [customFeeds, setCustomFeeds] = useState<CustomFeedSummary[]>([]);
+  const [csvSymbol, setCsvSymbol] = useState("CUSTOM1");
+  const [csvInterval, setCsvInterval] = useState("1h");
+  const [csvText, setCsvText] = useState("");
+  const [csvStatus, setCsvStatus] = useState("");
 
   useEffect(() => {
     const controller = new AbortController();
@@ -35,6 +43,11 @@ export function WatchlistPanel({
     fetchWatchlists(core, controller.signal)
       .then((res) => {
         if (mounted) setLists(res);
+      })
+      .catch(() => {});
+    fetchCustomFeeds(core, controller.signal)
+      .then((res) => {
+        if (mounted) setCustomFeeds(res);
       })
       .catch(() => {});
     return () => {
@@ -96,6 +109,37 @@ export function WatchlistPanel({
       };
       const saved = await saveWatchlist(core, next);
       setLists([saved, ...lists.slice(1)]);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function importCsvFeed(e: React.FormEvent) {
+    e.preventDefault();
+    const sym = csvSymbol.trim();
+    const raw = csvText.trim();
+    if (!sym || !raw || saving) return;
+    setSaving(true);
+    setCsvStatus("");
+    try {
+      const summary = await ingestCustomCandles(core, {
+        symbol: sym,
+        interval: csvInterval,
+        format: "csv",
+        csv: raw,
+      });
+      const feeds = await fetchCustomFeeds(core);
+      setCustomFeeds(feeds);
+      setCsvText("");
+      setCsvStatus(`${summary.symbol} (${summary.barCount})`);
+      onSelectItem({
+        venue: "custom",
+        symbol: summary.symbol,
+        interval: summary.interval,
+        style: "standard",
+      });
+    } catch (err) {
+      setCsvStatus(err instanceof Error ? err.message : t("Save failed"));
     } finally {
       setSaving(false);
     }
@@ -202,6 +246,75 @@ export function WatchlistPanel({
           );
         })}
       </ul>
+
+      <details className="trade-csv-import" data-testid="custom-csv-import">
+        <summary>{t("Import CSV")}</summary>
+        <form
+          className="trade-csv-form"
+          onSubmit={(e) => void importCsvFeed(e)}
+        >
+          <div className="trade-csv-row">
+            <input
+              aria-label={t("Symbol")}
+              placeholder="CUSTOM1"
+              value={csvSymbol}
+              onChange={(e) => setCsvSymbol(e.target.value)}
+            />
+            <select
+              aria-label={t("Interval")}
+              value={csvInterval}
+              onChange={(e) => setCsvInterval(e.target.value)}
+            >
+              <option value="1m">1m</option>
+              <option value="5m">5m</option>
+              <option value="15m">15m</option>
+              <option value="1h">1h</option>
+              <option value="4h">4h</option>
+              <option value="1d">1d</option>
+            </select>
+          </div>
+          <textarea
+            aria-label={t("CSV data")}
+            placeholder="time,open,high,low,close,volume"
+            rows={3}
+            value={csvText}
+            onChange={(e) => setCsvText(e.target.value)}
+          />
+          <button
+            type="submit"
+            className="primary"
+            disabled={core.mode !== "ready" || saving || !csvText.trim()}
+          >
+            {t("Import")}
+          </button>
+          {csvStatus && <span className="trade-source-pill">{csvStatus}</span>}
+        </form>
+        {customFeeds.length > 0 && (
+          <ul className="trade-watchlist-items">
+            {customFeeds.map((f) => (
+              <li key={`${f.symbol}:${f.interval}`}>
+                <button
+                  type="button"
+                  className="trade-watchlist-pick"
+                  onClick={() =>
+                    onSelectItem({
+                      venue: "custom",
+                      symbol: f.symbol,
+                      interval: f.interval,
+                      style: "standard",
+                    })
+                  }
+                >
+                  <strong>{f.symbol}</strong>
+                  <span>
+                    custom · {f.interval} · {f.barCount}
+                  </span>
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+      </details>
     </aside>
   );
 }

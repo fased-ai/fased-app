@@ -515,6 +515,11 @@ func TestNativeMarketDataRoutesAndSSE(t *testing.T) {
 		{http.MethodPost, "http://wails.localhost/api/v1/market/drawings", false},
 		{http.MethodDelete, "http://wails.localhost/api/v1/market/drawings/draw-1", true},
 		{http.MethodDelete, "http://wails.localhost/api/v1/market/drawings/../bad", false},
+		{http.MethodGet, "http://wails.localhost/api/v1/market/custom-feeds", true},
+		{http.MethodPost, "http://wails.localhost/api/v1/market/ingest", true},
+		{http.MethodGet, "http://wails.localhost/api/v1/market/ingest", false},
+		{http.MethodPost, "http://wails.localhost/api/v1/automation/webhook/test", true},
+		{http.MethodGet, "http://wails.localhost/api/v1/automation/webhook/test", false},
 		{http.MethodGet, "http://wails.localhost/api/v1/market/stream?venue=hyperliquid&symbol=BTC&interval=1h&style=standard", true},
 		{http.MethodGet, "http://wails.localhost/api/v1/market/stream?noSnapshot=1&subs=hyperliquid:BTC:1h:standard,kraken:ETHUSD:1h:standard", true},
 		{http.MethodPost, "http://wails.localhost/api/v1/market/stream", false},
@@ -530,6 +535,9 @@ func TestNativeMarketDataRoutesAndSSE(t *testing.T) {
 	}
 	if RequestBodyLimit("/api/v1/market/watchlists") != 64*1024 {
 		t.Fatal("expected /api/v1/market/watchlists RequestBodyLimit = 64 KiB")
+	}
+	if RequestBodyLimit("/api/v1/market/ingest") != 512*1024 {
+		t.Fatal("expected /api/v1/market/ingest RequestBodyLimit = 512 KiB")
 	}
 	if responseLimit("/api/v1/market/candles") != 1*1024*1024 {
 		t.Fatal("expected /api/v1/market/candles responseLimit = 1 MiB")

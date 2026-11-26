@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/fased-ai/fased-app/internal/httpapi"
 	"github.com/fased-ai/fased-app/internal/marketdata"
 )
 
@@ -361,6 +362,37 @@ func (h *HTTPHandler) marketDataAPI(w http.ResponseWriter, r *http.Request, toke
 			return
 		}
 		writeJSON(w, 200, map[string]any{"deleted": true, "id": strings.TrimSpace(id)})
+
+	case rel == "custom-feeds":
+		if r.Method != http.MethodGet {
+			writeError(w, 405, "method not allowed")
+			return
+		}
+		items, err := svc.ListCustomFeeds(ctx)
+		if err != nil {
+			writeError(w, 500, "custom feeds unavailable")
+			return
+		}
+		writeJSON(w, 200, map[string]any{"feeds": items, "count": len(items)})
+
+	case rel == "ingest":
+		if r.Method != http.MethodPost {
+			writeError(w, 405, "method not allowed")
+			return
+		}
+		if !h.v2Mutation(w, r, token, true) {
+			return
+		}
+		var req marketdata.IngestCandlesRequest
+		if !httpapi.DecodeStrictJSON(w, r, 512*1024, &req) {
+			return
+		}
+		summary, err := svc.IngestCustomCandles(ctx, req)
+		if err != nil {
+			writeError(w, 400, err.Error())
+			return
+		}
+		writeJSON(w, 200, summary)
 
 	case rel == "stream":
 		if r.Method != http.MethodGet {

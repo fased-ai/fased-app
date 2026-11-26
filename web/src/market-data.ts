@@ -1,7 +1,15 @@
 import type { SSEFrame } from "./agents-v2";
 
 export type Venue =
-  "hyperliquid" | "binance" | "bybit" | "kraken" | "solana" | "fred" | "sec";
+  | "hyperliquid"
+  | "binance"
+  | "bybit"
+  | "kraken"
+  | "solana"
+  | "lighter"
+  | "fred"
+  | "sec"
+  | "custom";
 
 export type Interval = "1m" | "5m" | "15m" | "1h" | "4h" | "1d";
 
@@ -233,6 +241,8 @@ export const CHART_VENUES: readonly Venue[] = [
   "bybit",
   "kraken",
   "solana",
+  "lighter",
+  "custom",
 ];
 
 export const DOM_SUPPORTED_VENUES = new Set([
@@ -849,6 +859,44 @@ export async function deleteDrawing(
 ): Promise<void> {
   if (client.mode !== "ready") return;
   await client.request(`market/drawings/${encodeURIComponent(id)}`, "DELETE");
+}
+
+export type CustomFeedSummary = {
+  symbol: string;
+  interval: string;
+  barCount: number;
+  lastTime: number;
+  updatedAt: number;
+};
+
+export async function fetchCustomFeeds(
+  client: MarketRequestClient,
+  signal?: AbortSignal,
+): Promise<CustomFeedSummary[]> {
+  if (client.mode !== "ready") return [];
+  const res = await client.request<{ feeds?: CustomFeedSummary[] }>(
+    "market/custom-feeds",
+    "GET",
+    undefined,
+    signal,
+  );
+  return res.feeds ?? [];
+}
+
+export async function ingestCustomCandles(
+  client: MarketRequestClient,
+  req: {
+    symbol: string;
+    interval?: string;
+    format?: "csv" | "json";
+    csv?: string;
+    candles?: Candle[];
+  },
+): Promise<CustomFeedSummary> {
+  if (client.mode !== "ready") {
+    throw new Error("Connect Core before importing custom feeds.");
+  }
+  return client.request<CustomFeedSummary>("market/ingest", "POST", req);
 }
 
 export async function fetchCohorts(

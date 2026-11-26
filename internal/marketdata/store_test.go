@@ -232,3 +232,57 @@ func TestStoreChartDrawingsCRUDAndLimits(t *testing.T) {
 		t.Fatal("expected per-symbol drawings limit error")
 	}
 }
+
+func TestParseCSVOHLCVAndCustomFeeds(t *testing.T) {
+	csv := "timestamp,open,high,low,close,volume\n" +
+		"2026-11-20,100,110,95,108,500\n" +
+		"2026-11-21 12:00:00,108,115,106,112,750\n" +
+		"1795266000000,112,120,110,118,900\n"
+	candles, err := ParseCSVOHLCV(csv)
+	if err != nil {
+		t.Fatalf("ParseCSVOHLCV: %v", err)
+	}
+	if len(candles) != 3 || candles[2].Close != 118 || candles[2].Time != 1795266000 {
+		t.Fatalf("unexpected parsed candles: %+v", candles)
+	}
+	if _, err := ParseCSVOHLCV("bad,row,1,2,3"); err == nil {
+		t.Fatal("expected malformed CSV timestamp rejection")
+	}
+	if _, err := ParseCSVOHLCV("1795262400,100,90,95,98,1"); err == nil {
+		t.Fatal("expected high < open OHLC rejection")
+	}
+
+	svc, err := NewService(Config{DataDir: t.TempDir(), FixtureMode: true})
+	if err != nil {
+		t.Fatalf("NewService: %v", err)
+	}
+	t.Cleanup(func() { _ = svc.Close() })
+
+	// Empty custom feed returns empty slice even in FixtureMode.
+	emptySeries, err := svc.GetCandles(t.Context(), VenueCustom, "MYFEED", "1h", TransformOptions{Style: StyleStandard}, 50)
+	if err != nil || len(emptySeries.Candles) != 0 {
+		t.Fatalf("expected empty custom series, got %+v err=%v", emptySeries, err)
+	}
+
+	sum, err := svc.IngestCustomCandles(t.Context(), IngestCandlesRequest{
+		Symbol:   "MYFEED",
+		Interval: "1d",
+		Format:   "csv",
+		CSV:      csv,
+	})
+	if err != nil || sum.BarCount != 3 {
+		t.Fatalf("IngestCustomCandles failed: %+v err=%v", sum, err)
+	}
+	series, err := svc.GetCandles(t.Context(), VenueCustom, "MYFEED", "1d", TransformOptions{Style: StyleHeikinAshi}, 50)
+	if err != nil || len(series.Candles) != 3 || series.Source != "custom" {
+		t.Fatalf("GetCandles custom HEIKIN failed: %+v err=%v", series, err)
+	}
+	feeds, err := svc.ListCustomFeeds(t.Context())
+	if err != nil || len(feeds) != 1 || feeds[0].Symbol != "MYFEED" {
+		t.Fatalf("ListCustomFeeds failed: %+v err=%v", feeds, err)
+	}
+	insts, err := svc.ListInstruments(t.Context(), VenueCustom)
+	if err != nil || len(insts) != 1 || insts[0].Symbol != "MYFEED" {
+		t.Fatalf("ListInstruments(custom) failed: %+v err=%v", insts, err)
+	}
+}

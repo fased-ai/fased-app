@@ -7,11 +7,21 @@ import {
   saveTelegramConfig,
   saveWebhookConfig,
   sendTelegramTest,
+  sendWebhookTest,
   simulateTelegramCommand,
   type TelegramCommandReply,
   type TelegramConfigView,
   type WebhookConfigView,
 } from "../automation";
+import {
+  dispatchOSNotification,
+  getOSNotificationPermission,
+  getOSNotificationsEnabled,
+  isOSNotificationSupported,
+  requestOSNotificationPermission,
+  setOSNotificationsEnabled,
+  type OSNotificationPermission,
+} from "../os-notifications";
 import { useUI } from "../ui-preferences";
 import { useWorkspace } from "../workspace";
 
@@ -39,6 +49,13 @@ export function NotificationsPanel() {
   const [whSecret, setWhSecret] = useState("");
   const [whBusy, setWhBusy] = useState(false);
   const [whError, setWhError] = useState("");
+  const [osNotifyEnabled, setOsNotifyEnabled] = useState<boolean>(() =>
+    getOSNotificationsEnabled(),
+  );
+  const [osPerm, setOsPerm] = useState<OSNotificationPermission>(() =>
+    getOSNotificationPermission(),
+  );
+  const [osNote, setOsNote] = useState("");
 
   useEffect(() => {
     if (core.mode !== "ready") return;
@@ -151,6 +168,60 @@ export function NotificationsPanel() {
     } finally {
       setWhBusy(false);
     }
+  }
+
+  async function handleWebhookTest() {
+    if (whBusy) return;
+    setWhBusy(true);
+    setWhError("");
+    try {
+      const updated = await sendWebhookTest(core);
+      setWh(updated);
+    } catch (err) {
+      setWhError(err instanceof Error ? err.message : t("Test failed"));
+    } finally {
+      setWhBusy(false);
+    }
+  }
+
+  async function handleToggleOSNotifications(checked: boolean) {
+    setOsNote("");
+    if (!isOSNotificationSupported()) {
+      setOsPerm("unsupported");
+      setOsNotifyEnabled(false);
+      setOSNotificationsEnabled(false);
+      return;
+    }
+    if (!checked) {
+      setOsNotifyEnabled(false);
+      setOSNotificationsEnabled(false);
+      return;
+    }
+    const perm =
+      osPerm === "granted"
+        ? "granted"
+        : await requestOSNotificationPermission();
+    setOsPerm(perm);
+    const enabled = perm === "granted";
+    setOsNotifyEnabled(enabled);
+    setOSNotificationsEnabled(enabled);
+    if (!enabled) {
+      setOsNote(t("Denied"));
+    }
+  }
+
+  function handleTestOSNotification() {
+    setOsNote("");
+    if (osPerm !== "granted") {
+      setOsNote(t("Denied"));
+      return;
+    }
+    dispatchOSNotification(
+      `test-${Date.now()}`,
+      "Fased",
+      t("Browser notifications"),
+      true,
+    );
   }
 
   return (
@@ -387,6 +458,14 @@ export function NotificationsPanel() {
             <button type="submit" className="primary" disabled={whBusy}>
               {t("Save")}
             </button>
+            <button
+              type="button"
+              className="secondary"
+              disabled={whBusy || !wh?.endpoint}
+              onClick={() => void handleWebhookTest()}
+            >
+              {t("Test webhook")}
+            </button>
             {wh?.hasSecret && (
               <button
                 type="button"
@@ -404,6 +483,43 @@ export function NotificationsPanel() {
         </form>
 
         {whError && <p role="alert">{whError}</p>}
+      </div>
+
+      <div className="settings-modal-card" data-testid="browser-push-card">
+        <div className="settings-modal-row">
+          <strong>{t("Browser notifications")}</strong>
+          <span className="pill">
+            {osPerm === "granted"
+              ? t("Granted")
+              : osPerm === "denied"
+                ? t("Denied")
+                : osPerm === "unsupported"
+                  ? t("Unsupported")
+                  : t("Disabled")}
+          </span>
+        </div>
+        <div className="settings-mcp-form-actions">
+          <label className="settings-checkbox-label">
+            <input
+              type="checkbox"
+              checked={osNotifyEnabled}
+              disabled={!isOSNotificationSupported()}
+              onChange={(e) =>
+                void handleToggleOSNotifications(e.target.checked)
+              }
+            />
+            {t("Browser notifications")}
+          </label>
+          <button
+            type="button"
+            className="secondary"
+            disabled={!isOSNotificationSupported() || osPerm !== "granted"}
+            onClick={handleTestOSNotification}
+          >
+            {t("Test notification")}
+          </button>
+          {osNote && <span className="pill">{osNote}</span>}
+        </div>
       </div>
     </>
   );

@@ -149,3 +149,9 @@ type ControllerHooks interface {
 	ResolveApproval(ctx context.Context, id, decision, note string) (string, error)
 	SetAutomationState(ctx context.Context, action, reason, actor string) (automation.ControlState, error)
 }
+
+// BriefHooks is optionally implemented by ControllerHooks providers to support /brief and /positions.
+type BriefHooks interface {
+	BriefSummary(ctx context.Context) (string, error)
+	PositionsSummary(ctx context.Context) (string, error)
+}

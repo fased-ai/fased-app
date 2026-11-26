@@ -16,6 +16,7 @@ import { useCore } from "./core";
 import { AIConnectionProvider } from "./ai-connection";
 import { useAgents } from "./agents";
 import { FasedStreamClient } from "./stream-store";
+import { dispatchOSNotification } from "./os-notifications";
 import type { Action, Provider } from "./state";
 import type { AccountsView } from "./accounts";
 export type ProvidersPreset = {
@@ -165,6 +166,21 @@ function useWorkspaceState() {
       streamGet: core.streamGet,
     });
   }, [core.mode, core.request, core.streamGet]);
+  useEffect(() => {
+    if (core.mode !== "ready" || !streamClientRef.current) return;
+    return streamClientRef.current.subscribe("automation", (msg) => {
+      const payload = msg.payload as
+        | {
+            type?: string;
+            notification?: { id?: string; title?: string; body?: string };
+          }
+        | undefined;
+      const ntf = payload?.notification;
+      if (ntf?.title) {
+        dispatchOSNotification(ntf.id ?? "", ntf.title, ntf.body);
+      }
+    });
+  }, [core.mode]);
   const agents = useAgents(core);
   const activeAgents = core.mode === "ready" ? agents.view : null;
   const state = useMemo(

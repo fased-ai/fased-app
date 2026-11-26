@@ -290,3 +290,101 @@ func TestDrawingBreachAndReactiveBusTrigger(t *testing.T) {
 	}
 	t.Fatal("reactive marketdata.Bus event did not fire drawing_breach trigger within 4s")
 }
+
+func TestTelegramDeskApprovalBriefPositionsAndWebhookTest(t *testing.T) {
+	t.Parallel()
+	s := fixtureStore(t)
+	ts, token, csrf := startV2HTTPTestServer(t, s)
+
+	// Configure Telegram owner chat + webhook HTTPS endpoint.
+	tgPut := doV2JSONRequest(t, http.MethodPut, ts.URL+"/api/v1/automation/telegram", ts.URL, token, csrf, `{"enabled":true,"botToken":"987654321:TestBotTokenValue_0123456789ABCDEF","allowedChatIds":[777001],"minUrgency":0.5,"notifyOnApproval":true,"notifyOnKillSwitch":true}`, "application/json")
+	if tgPut.StatusCode != http.StatusOK {
+		tgPut.Body.Close()
+		t.Fatalf("PUT telegram = %d", tgPut.StatusCode)
+	}
+	tgPut.Body.Close()
+
+	whPut := doV2JSONRequest(t, http.MethodPut, ts.URL+"/api/v1/automation/webhook", ts.URL, token, csrf, `{"enabled":true,"endpoint":"https://hooks.example.invalid/fased","secret":"whsec-123456"}`, "application/json")
+	if whPut.StatusCode != http.StatusOK {
+		whPut.Body.Close()
+		t.Fatalf("PUT webhook = %d", whPut.StatusCode)
+	}
+	whPut.Body.Close()
+
+	// POST /api/v1/automation/webhook/test requires CSRF and succeeds in fixture mode.
+	whTestNoCSRF := doV2JSONRequest(t, http.MethodPost, ts.URL+"/api/v1/automation/webhook/test", ts.URL, token, "", "", "application/json")
+	whTestNoCSRF.Body.Close()
+	if whTestNoCSRF.StatusCode != http.StatusForbidden {
+		t.Fatalf("expected 403 without CSRF on webhook/test, got %d", whTestNoCSRF.StatusCode)
+	}
+	whTest := doV2JSONRequest(t, http.MethodPost, ts.URL+"/api/v1/automation/webhook/test", ts.URL, token, csrf, "", "application/json")
+	whTestRaw, _ := io.ReadAll(whTest.Body)
+	whTest.Body.Close()
+	if whTest.StatusCode != http.StatusOK || !strings.Contains(string(whTestRaw), `"lastStatus":"fixture-delivered"`) {
+		t.Fatalf("POST webhook/test = %d: %s", whTest.StatusCode, whTestRaw)
+	}
+
+	// Switch Desk to paper mode with RequirePMTap=true, then run a cycle to create a PENDING_PM ticket.
+	limPut := doV2JSONRequest(t, http.MethodPut, ts.URL+"/api/v1/desk/limits", ts.URL, token, csrf, `{"mode":"paper","initialCapitalUsd":100000,"riskPerTradePct":1.0,"maxPositionPct":10.0,"maxOpenPositions":5,"maxDailyLossPct":2.0,"maxConsecutiveLosses":3,"cooldownHours":24,"maxSlippageBps":25,"feeBps":5,"minChartScore":1.0,"minRiskReward":1.0,"staleDataMaxAgeSec":3600,"requirePmTap":true,"requireFourGatePass":false}`, "application/json")
+	if limPut.StatusCode != http.StatusOK {
+		limRaw, _ := io.ReadAll(limPut.Body)
+		limPut.Body.Close()
+		t.Fatalf("PUT desk/limits = %d: %s", limPut.StatusCode, limRaw)
+	}
+	limPut.Body.Close()
+
+	cycResp := doV2JSONRequest(t, http.MethodPost, ts.URL+"/api/v1/desk/cycle", ts.URL, token, csrf, `{"venue":"hyperliquid","symbol":"BTC","interval":"1h","scriptId":"ema-rsi-trend","mode":"paper","limit":120}`, "application/json")
+	if cycResp.StatusCode != http.StatusOK {
+		cRaw, _ := io.ReadAll(cycResp.Body)
+		cycResp.Body.Close()
+		t.Fatalf("POST desk/cycle = %d: %s", cycResp.StatusCode, cRaw)
+	}
+	cycResp.Body.Close()
+
+	ds, err := s.deskService()
+	if err != nil {
+		t.Fatalf("deskService: %v", err)
+	}
+	tickets, err := ds.ListTickets(t.Context(), "PENDING_PM", 10)
+	if err != nil {
+		t.Fatalf("ListTickets: %v", err)
+	}
+	if len(tickets) == 0 {
+		t.Skip("no PENDING_PM ticket emitted for deterministic fixture series")
+		return
+	}
+	ticketID := tickets[0].ID
+
+	// Telegram /brief reports desk summary.
+	briefResp := doV2JSONRequest(t, http.MethodPost, ts.URL+"/api/v1/automation/telegram/simulate", ts.URL, token, csrf, `{"chatId":777001,"text":"/brief"}`, "application/json")
+	briefRaw, _ := io.ReadAll(briefResp.Body)
+	briefResp.Body.Close()
+	if briefResp.StatusCode != http.StatusOK || !strings.Contains(string(briefRaw), "Desk (paper)") {
+		t.Fatalf("Telegram /brief = %d: %s", briefResp.StatusCode, briefRaw)
+	}
+
+	// Approve ticket via Telegram /approve, then verify /positions shows open position.
+	appResp := doV2JSONRequest(t, http.MethodPost, ts.URL+"/api/v1/automation/telegram/simulate", ts.URL, token, csrf, `{"chatId":777001,"text":"/approve `+ticketID+`"}`, "application/json")
+	appRaw, _ := io.ReadAll(appResp.Body)
+	appResp.Body.Close()
+	if appResp.StatusCode != http.StatusOK || !strings.Contains(string(appRaw), "approved") {
+		t.Fatalf("Telegram /approve desk ticket = %d: %s", appResp.StatusCode, appRaw)
+	}
+
+	posResp := doV2JSONRequest(t, http.MethodPost, ts.URL+"/api/v1/automation/telegram/simulate", ts.URL, token, csrf, `{"chatId":777001,"text":"/positions"}`, "application/json")
+	posRaw, _ := io.ReadAll(posResp.Body)
+	posResp.Body.Close()
+	if posResp.StatusCode != http.StatusOK || !strings.Contains(string(posRaw), "Open Desk Positions") {
+		t.Fatalf("Telegram /positions = %d: %s", posResp.StatusCode, posRaw)
+	}
+
+	// Kill switch refuses /approve before looking up or approving any action.
+	killResp := doV2JSONRequest(t, http.MethodPost, ts.URL+"/api/v1/automation/state", ts.URL, token, csrf, `{"action":"kill","reason":"safety test"}`, "application/json")
+	killResp.Body.Close()
+	refuseResp := doV2JSONRequest(t, http.MethodPost, ts.URL+"/api/v1/automation/telegram/simulate", ts.URL, token, csrf, `{"chatId":777001,"text":"/approve `+ticketID+`"}`, "application/json")
+	refuseRaw, _ := io.ReadAll(refuseResp.Body)
+	refuseResp.Body.Close()
+	if refuseResp.StatusCode != http.StatusOK || !strings.Contains(string(refuseRaw), "kill switch is active") {
+		t.Fatalf("expected kill switch refusal on /approve, got %d: %s", refuseResp.StatusCode, refuseRaw)
+	}
+}

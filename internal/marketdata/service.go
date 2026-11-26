@@ -173,6 +173,23 @@ func (s *Service) PruneOldPartitions(maxAgeDays int) (int, error) {
 func (s *Service) ListInstruments(ctx context.Context, venueFilter string) ([]Instrument, error) {
 	nowSec := s.now().UTC().Unix()
 	all := defaultInstrumentsCatalog(nowSec)
+	if customFeeds, err := s.store.ListCustomFeeds(ctx); err == nil {
+		seen := make(map[string]bool, len(customFeeds))
+		for _, f := range customFeeds {
+			if seen[f.Symbol] {
+				continue
+			}
+			seen[f.Symbol] = true
+			all = append(all, Instrument{
+				Venue:      VenueCustom,
+				Symbol:     f.Symbol,
+				Base:       f.Symbol,
+				Quote:      "CUSTOM",
+				AssetClass: "custom",
+				UpdatedAt:  f.UpdatedAt,
+			})
+		}
+	}
 	if strings.TrimSpace(venueFilter) == "" {
 		return all, nil
 	}
@@ -220,7 +237,25 @@ func (s *Service) GetCandles(ctx context.Context, venue, symbol, interval string
 
 	var base []Candle
 	source := "cache"
-	if s.fixtureMode {
+	if v == VenueCustom {
+		cached, qErr := s.store.QueryCandles(ctx, v, sym, iv, 0, 0, limit)
+		if qErr != nil {
+			return CandleSeries{}, qErr
+		}
+		if len(cached) == 0 {
+			return CandleSeries{
+				Venue:     v,
+				Symbol:    sym,
+				Interval:  iv,
+				Style:     style,
+				Candles:   []Candle{},
+				Source:    "custom",
+				UpdatedAt: nowSec,
+			}, nil
+		}
+		base = cached
+		source = "custom"
+	} else if s.fixtureMode {
 		base = generateSyntheticCandles(v, sym, stepSec, startSec, limit)
 		_ = s.store.UpsertCandles(ctx, v, sym, iv, base)
 		if s.cache != nil {
@@ -288,7 +323,7 @@ func (s *Service) GetCandles(ctx context.Context, venue, symbol, interval string
 		base = base[len(base)-limit:]
 	}
 
-	if style == StyleTick || style == StyleVolume {
+	if (style == StyleTick || style == StyleVolume) && v != VenueCustom {
 		var ticks []TradeTick
 		if s.fixtureMode {
 			ticks = generateSyntheticTicks(v, sym, endSec*1000, 180)
@@ -725,6 +760,71 @@ func (s *Service) DeleteDrawing(ctx context.Context, id string) (bool, error) {
 		})
 	}
 	return deleted, nil
+}
+
+// ListCustomFeeds returns stored custom ingested OHLCV feed summaries.
+func (s *Service) ListCustomFeeds(ctx context.Context) ([]CustomFeedSummary, error) {
+	return s.store.ListCustomFeeds(ctx)
+}
+
+// IngestCustomCandles parses CSV or validates JSON OHLCV candles, stores them under the "custom"
+// venue, and publishes a candle event on the bus for reactive charts and automation triggers.
+func (s *Service) IngestCustomCandles(ctx context.Context, req IngestCandlesRequest) (CustomFeedSummary, error) {
+	sym, err := NormalizeSymbol(req.Symbol)
+	if err != nil {
+		return CustomFeedSummary{}, err
+	}
+	iv, err := NormalizeInterval(req.Interval)
+	if err != nil {
+		return CustomFeedSummary{}, err
+	}
+	format := strings.ToLower(strings.TrimSpace(req.Format))
+	if format == "" {
+		if strings.TrimSpace(req.CSV) != "" {
+			format = "csv"
+		} else {
+			format = "json"
+		}
+	}
+	var candles []Candle
+	switch format {
+	case "csv":
+		candles, err = ParseCSVOHLCV(req.CSV)
+	case "json":
+		candles, err = normalizeCandleSlice(req.Candles)
+	default:
+		return CustomFeedSummary{}, fmt.Errorf("unsupported ingest format %q", req.Format)
+	}
+	if err != nil {
+		return CustomFeedSummary{}, err
+	}
+	if err := s.store.UpsertCandles(ctx, VenueCustom, sym, iv, candles); err != nil {
+		return CustomFeedSummary{}, err
+	}
+	if s.cache != nil {
+		s.cache.UpsertCandles(VenueCustom, sym, iv, candles)
+	}
+	latest := candles[len(candles)-1]
+	summary := CustomFeedSummary{
+		Symbol:    sym,
+		Interval:  iv,
+		BarCount:  len(candles),
+		LastTime:  latest.Time,
+		UpdatedAt: s.now().UTC().Unix(),
+	}
+	if err := s.store.UpsertCustomFeedMeta(ctx, summary); err != nil {
+		return CustomFeedSummary{}, err
+	}
+	s.Publish(Event{
+		Type:      "candle",
+		Venue:     VenueCustom,
+		Symbol:    sym,
+		Interval:  iv,
+		Style:     StyleStandard,
+		Timestamp: latest.Time,
+		Payload:   latest,
+	})
+	return summary, nil
 }
 
 func defaultInstrumentsCatalog(nowSec int64) []Instrument {

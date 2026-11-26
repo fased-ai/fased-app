@@ -17,6 +17,8 @@ export type HubPackage = {
   satBond: SATBondMetadata;
   verified: boolean;
   installed: boolean;
+  deployedTarget?: string;
+  deployedSummary?: string;
   createdAt: number;
 };
 

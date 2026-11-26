@@ -50,5 +50,13 @@ func FuzzMarketDataParsersAndTransforms(f *testing.F) {
 				}
 			}
 		}
+
+		if parsed, err := ParseCSVOHLCV(string(data)); err == nil {
+			for _, c := range parsed {
+				if math.IsNaN(c.Close) || math.IsInf(c.Close, 0) || c.Close <= 0 {
+					t.Fatalf("invalid CSV candle: %+v", c)
+				}
+			}
+		}
 	})
 }
