@@ -136,3 +136,51 @@ func TestParseDesktopManifestRejectsTamperingAndAmbiguity(t *testing.T) {
 		t.Fatal("oversized manifest accepted")
 	}
 }
+
+func TestParseDesktopManifestSigningByPlatformPreservesFalseFields(t *testing.T) {
+	t.Parallel()
+	raw := []byte(`{
+		"schemaVersion": 1,
+		"version": "0.2.5",
+		"releaseTag": "v0.2.5-desktop",
+		"source": "` + strings.Repeat("a", 40) + `",
+		"signed": false,
+		"signingByPlatform": {
+			"darwin": { "signed": false, "notarized": false },
+			"windows": { "signed": false },
+			"linux": { "signed": false, "attested": true }
+		},
+		"assets": {
+			"SHA256SUMS.txt": {
+				"url": "https://github.com/fased-ai/fased-app/releases/download/v0.2.5-desktop/SHA256SUMS.txt",
+				"sha256": "` + strings.Repeat("c", 64) + `",
+				"bytes": 1400,
+				"os": "all",
+				"arch": "all",
+				"kind": "checksums"
+			}
+		}
+	}`)
+	got, err := ParseDesktopManifest(raw)
+	if err != nil {
+		t.Fatalf("ParseDesktopManifest rejected signingByPlatform with explicit false fields: %v", err)
+	}
+	if got.SigningByPlatform["darwin"].Notarized == nil || *got.SigningByPlatform["darwin"].Notarized {
+		t.Fatalf("expected darwin.notarized=false, got %+v", got.SigningByPlatform["darwin"])
+	}
+	if got.SigningByPlatform["windows"].Notarized != nil || got.SigningByPlatform["windows"].Attested != nil {
+		t.Fatalf("expected omitted optional fields on windows, got %+v", got.SigningByPlatform["windows"])
+	}
+	if got.SigningByPlatform["linux"].Attested == nil || !*got.SigningByPlatform["linux"].Attested {
+		t.Fatalf("expected linux.attested=true, got %+v", got.SigningByPlatform["linux"])
+	}
+
+	falseAttested := bytes.Replace(raw, []byte(`"attested": true`), []byte(`"attested": false`), 1)
+	gotFalse, err := ParseDesktopManifest(falseAttested)
+	if err != nil {
+		t.Fatalf("ParseDesktopManifest rejected attested=false: %v", err)
+	}
+	if gotFalse.SigningByPlatform["linux"].Attested == nil || *gotFalse.SigningByPlatform["linux"].Attested {
+		t.Fatalf("expected linux.attested=false, got %+v", gotFalse.SigningByPlatform["linux"])
+	}
+}
