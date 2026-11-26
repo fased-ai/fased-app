@@ -38,7 +38,14 @@ function StrategyGlyph({ id }: { id: TradeStrategy }) {
   if (id === "limit") {
     return (
       <svg viewBox="0 0 28 16" className="wt-strat-svg" aria-hidden="true">
-        <line x1="2" y1="8" x2="26" y2="8" strokeWidth="1.8" strokeDasharray="3 2" />
+        <line
+          x1="2"
+          y1="8"
+          x2="26"
+          y2="8"
+          strokeWidth="1.8"
+          strokeDasharray="3 2"
+        />
         <circle cx="14" cy="8" r="2.8" />
       </svg>
     );
@@ -56,7 +63,12 @@ function StrategyGlyph({ id }: { id: TradeStrategy }) {
     return (
       <svg viewBox="0 0 28 16" className="wt-strat-svg" aria-hidden="true">
         <polyline points="2,13 10,9 18,5 26,3" fill="none" strokeWidth="1.8" />
-        <polyline points="2,15 10,12 18,9 26,8" fill="none" strokeWidth="1.2" opacity="0.6" />
+        <polyline
+          points="2,15 10,12 18,9 26,8"
+          fill="none"
+          strokeWidth="1.2"
+          opacity="0.6"
+        />
       </svg>
     );
   }
@@ -124,7 +136,14 @@ export function OrderExecutionWidget({
   const accountOptions: TradeAccountOption[] =
     accounts.length > 0
       ? accounts
-      : [{ id: "paper", label: "Paper", kind: "paper", executionMode: "paper" }];
+      : [
+          {
+            id: "paper",
+            label: "Paper",
+            kind: "paper",
+            executionMode: "paper",
+          },
+        ];
 
   useEffect(() => {
     if (!accountOptions.some((a) => a.id === accountId)) {
@@ -134,8 +153,7 @@ export function OrderExecutionWidget({
 
   const selectedAccount =
     accountOptions.find((a) => a.id === accountId) ?? accountOptions[0];
-  const execMode =
-    selectedAccount?.executionMode === "live" ? "live" : "paper";
+  const execMode = selectedAccount?.executionMode === "live" ? "live" : "paper";
 
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault();

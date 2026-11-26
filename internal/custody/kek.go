@@ -15,12 +15,12 @@ import (
 )
 
 const (
-	sealedMasterKeyName  = "signer-master.key.sealed"
-	systemdKEKCredName   = "fased-signer-kek"
-	masterKeyWrapAAD     = "fased-signer-master-kek:v1"
-	KEKSystemdCreds      = "systemd-creds"
-	KEKOSKeychain        = "os-keychain"
-	KEKFileDevOnly       = "file-dev-only"
+	sealedMasterKeyName = "signer-master.key.sealed"
+	systemdKEKCredName  = "fased-signer-kek"
+	masterKeyWrapAAD    = "fased-signer-master-kek:v1"
+	KEKSystemdCreds     = "systemd-creds"
+	KEKOSKeychain       = "os-keychain"
+	KEKFileDevOnly      = "file-dev-only"
 )
 
 type sealedMasterKeyEnvelope struct {

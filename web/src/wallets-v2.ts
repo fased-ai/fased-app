@@ -161,7 +161,9 @@ export interface WalletsV2ListResponse {
   ownerPasswordSet?: boolean;
 }
 
-function stepUpHeaders(stepUpToken?: string): Record<string, string> | undefined {
+function stepUpHeaders(
+  stepUpToken?: string,
+): Record<string, string> | undefined {
   return stepUpToken ? { "X-Fased-Step-Up": stepUpToken } : undefined;
 }
 

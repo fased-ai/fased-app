@@ -54,7 +54,14 @@ export function BotAgentWidget({
   const accountOptions: TradeAccountOption[] =
     accounts.length > 0
       ? accounts
-      : [{ id: "paper", label: "Paper", kind: "paper", executionMode: "paper" }];
+      : [
+          {
+            id: "paper",
+            label: "Paper",
+            kind: "paper",
+            executionMode: "paper",
+          },
+        ];
 
   function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -131,7 +138,11 @@ export function BotAgentWidget({
             </label>
 
             {kind === "fasedscript" ? (
-              <div className="wt-chip-group" role="group" aria-label={t("Strategy")}>
+              <div
+                className="wt-chip-group"
+                role="group"
+                aria-label={t("Strategy")}
+              >
                 {scripts.map((s) => (
                   <button
                     key={s.id}
@@ -147,7 +158,11 @@ export function BotAgentWidget({
                 )}
               </div>
             ) : (
-              <div className="wt-chip-group" role="group" aria-label={t("Agent")}>
+              <div
+                className="wt-chip-group"
+                role="group"
+                aria-label={t("Agent")}
+              >
                 {agentProfiles.map((p) => (
                   <button
                     key={p.id}
@@ -226,7 +241,9 @@ export function BotAgentWidget({
               </div>
             </div>
           ))}
-          {bots.length === 0 && !adding && <p className="subtle">{t("None")}</p>}
+          {bots.length === 0 && !adding && (
+            <p className="subtle">{t("None")}</p>
+          )}
         </div>
       )}
     </div>

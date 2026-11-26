@@ -151,7 +151,9 @@ export function WidgetGrid<ID extends string>({
 
   return (
     <>
-      {headerActions && <div className="widget-grid-actions">{headerActions}</div>}
+      {headerActions && (
+        <div className="widget-grid-actions">{headerActions}</div>
+      )}
       <div className="dashboard-grid" ref={board}>
         {layout.widgets.map((widget, index) => {
           const meta = metaMap.get(widget.id);

@@ -109,9 +109,9 @@ export function SolanaWalletsPanel() {
   );
 
   // Hardware / Watch attach state
-  const [hwCustody, setHwCustody] = useState<"hardware_standard" | "watch_only">(
-    "hardware_standard",
-  );
+  const [hwCustody, setHwCustody] = useState<
+    "hardware_standard" | "watch_only"
+  >("hardware_standard");
   const [hwRole, setHwRole] = useState<WalletRole>("vault");
   const [hwName, setHwName] = useState("");
   const [hwPubKey, setHwPubKey] = useState("");
@@ -236,7 +236,12 @@ export function SolanaWalletsPanel() {
     setEditFallbackRpc("");
     setActiveReview(null);
     void loadActivity(selected.id);
-  }, [selected?.id, selected?.policy.policyHash, selected?.updatedAt, loadActivity]);
+  }, [
+    selected?.id,
+    selected?.policy.policyHash,
+    selected?.updatedAt,
+    loadActivity,
+  ]);
 
   async function refreshBalance(w: WalletV2) {
     setBusy(true);
@@ -300,7 +305,9 @@ export function SolanaWalletsPanel() {
       setNotice(`Connected ${provider.name} (${shortAddr(account.address)})`);
     } catch (err) {
       setError(
-        err instanceof Error ? err.message : "Wallet Standard connection failed",
+        err instanceof Error
+          ? err.message
+          : "Wallet Standard connection failed",
       );
     }
   }
@@ -873,7 +880,9 @@ export function SolanaWalletsPanel() {
                         await loadWallets();
                       });
                     } catch (e) {
-                      setError(e instanceof Error ? e.message : "Delete failed");
+                      setError(
+                        e instanceof Error ? e.message : "Delete failed",
+                      );
                     }
                   }}
                 >
@@ -910,7 +919,9 @@ export function SolanaWalletsPanel() {
 
             {!selected || !polDraft || !connDraft ? (
               <div className="wt-cluster-line">
-                {t("Create a wallet in the right panel to configure policy & RPC.")}
+                {t(
+                  "Create a wallet in the right panel to configure policy & RPC.",
+                )}
               </div>
             ) : centerTopTab === "policy" ? (
               <div className="wt-form-stack">
@@ -1124,31 +1135,33 @@ export function SolanaWalletsPanel() {
                 <div className="wt-field">
                   <span>Allowed Trading Venues</span>
                   <div className="wt-preset-chips">
-                    {["solana", "hyperliquid", "lighter", "polymarket", "kalshi"].map(
-                      (v) => {
-                        const on = connDraft.allowedVenues.includes(v);
-                        return (
-                          <button
-                            key={v}
-                            type="button"
-                            aria-pressed={on}
-                            disabled={selected.role === "watch"}
-                            onClick={() =>
-                              setConnDraft({
-                                ...connDraft,
-                                allowedVenues: on
-                                  ? connDraft.allowedVenues.filter(
-                                      (x) => x !== v,
-                                    )
-                                  : [...connDraft.allowedVenues, v],
-                              })
-                            }
-                          >
-                            {v}
-                          </button>
-                        );
-                      },
-                    )}
+                    {[
+                      "solana",
+                      "hyperliquid",
+                      "lighter",
+                      "polymarket",
+                      "kalshi",
+                    ].map((v) => {
+                      const on = connDraft.allowedVenues.includes(v);
+                      return (
+                        <button
+                          key={v}
+                          type="button"
+                          aria-pressed={on}
+                          disabled={selected.role === "watch"}
+                          onClick={() =>
+                            setConnDraft({
+                              ...connDraft,
+                              allowedVenues: on
+                                ? connDraft.allowedVenues.filter((x) => x !== v)
+                                : [...connDraft.allowedVenues, v],
+                            })
+                          }
+                        >
+                          {v}
+                        </button>
+                      );
+                    })}
                   </div>
                 </div>
 
@@ -1452,10 +1465,7 @@ export function SolanaWalletsPanel() {
                 >
                   {t("Watch Only")}
                 </button>
-                <button
-                  type="button"
-                  onClick={onConnectWalletStandard}
-                >
+                <button type="button" onClick={onConnectWalletStandard}>
                   Detect
                 </button>
               </div>

@@ -7,7 +7,11 @@ import {
 } from "../../quantlab-desk";
 import type { LabScript } from "../../quantlab-desk";
 import type { Interval } from "../../market-data";
-import type { TradeAccountOption, TradeBot, TradeSnapshot } from "../../trade-engine";
+import type {
+  TradeAccountOption,
+  TradeBot,
+  TradeSnapshot,
+} from "../../trade-engine";
 import type { OrderflowTab } from "../../market-data";
 import type { CrosshairBus, FasedStreamClient } from "../../stream-store";
 import { BotAgentWidget } from "./BotAgentWidget";
@@ -89,19 +93,28 @@ export function PositionsWidget({
   );
   const allPlans = trade?.plans ?? [];
   const activePlans = allPlans.filter(
-    (p) => p.status === "active" || p.status === "pending" || p.status === "queued",
+    (p) =>
+      p.status === "active" || p.status === "pending" || p.status === "queued",
   );
   const historyPlans = allPlans.filter(
-    (p) => p.status !== "active" && p.status !== "pending" && p.status !== "queued",
+    (p) =>
+      p.status !== "active" && p.status !== "pending" && p.status !== "queued",
   );
 
   return (
-    <div className="trade-positions-widget wt-dock" data-testid="trade-bottom-dock">
+    <div
+      className="trade-positions-widget wt-dock"
+      data-testid="trade-bottom-dock"
+    >
       <div className="wt-dock-top">
         <div className="wt-tabs-underline" role="tablist">
           {(
             [
-              { id: "positions", label: "Positions", count: openPositions.length + pendingTickets.length },
+              {
+                id: "positions",
+                label: "Positions",
+                count: openPositions.length + pendingTickets.length,
+              },
               { id: "plans", label: "Open Orders", count: activePlans.length },
               { id: "bots", label: "Bots", count: bots.length },
               { id: "orderflow", label: "DOM & Tape" },
@@ -173,7 +186,9 @@ export function PositionsWidget({
                 {`${pos.symbol} ${pos.side.toUpperCase()} · ${pos.quantity} @ ${formatPrice(pos.entryPrice)}`}
               </span>
               <div className="trade-desk-actions">
-                <span className={pos.unrealizedPnlUsd >= 0 ? "wt-pos" : "wt-neg"}>
+                <span
+                  className={pos.unrealizedPnlUsd >= 0 ? "wt-pos" : "wt-neg"}
+                >
                   {formatCurrencyUSD(pos.unrealizedPnlUsd)}
                 </span>
                 <button

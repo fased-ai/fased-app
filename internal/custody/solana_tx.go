@@ -14,8 +14,8 @@ import (
 const (
 	solanaBase58Alphabet = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
 
-	SolanaSystemProgram = "11111111111111111111111111111111"
-	SolanaComputeBudget = "ComputeBudget111111111111111111111111111111"
+	SolanaSystemProgram    = "11111111111111111111111111111111"
+	SolanaComputeBudget    = "ComputeBudget111111111111111111111111111111"
 	SolanaTokenProgram     = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
 	SolanaToken2022        = "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"
 	SolanaATAProgram       = "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL"

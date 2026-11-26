@@ -159,7 +159,11 @@ export function WatchlistPanel({
       </div>
 
       <form className="trade-watchlist-form" onSubmit={(e) => void addItem(e)}>
-        <div className="trade-venue-filter-row" role="group" aria-label={t("Watchlist venue")}>
+        <div
+          className="trade-venue-filter-row"
+          role="group"
+          aria-label={t("Watchlist venue")}
+        >
           {venueOptions.map((v) => (
             <button
               key={v}
@@ -269,7 +273,11 @@ export function WatchlistPanel({
               value={csvSymbol}
               onChange={(e) => setCsvSymbol(e.target.value)}
             />
-            <div className="trade-venue-filter-row" role="group" aria-label={t("Interval")}>
+            <div
+              className="trade-venue-filter-row"
+              role="group"
+              aria-label={t("Interval")}
+            >
               {["1m", "5m", "15m", "1h", "4h", "1d"].map((iv) => (
                 <button
                   key={iv}

@@ -2,19 +2,10 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useCore } from "../core";
 import { useUI } from "../ui-preferences";
 import { useWorkspace } from "../workspace";
-import {
-  ChevronDown,
-  Crosshair,
-  Pin,
-  Settings,
-  Shield,
-} from "../icons";
+import { ChevronDown, Crosshair, Pin, Settings, Shield } from "../icons";
 import { CrosshairBus } from "../stream-store";
 import { fetchIntelEvents, type IntelEvent } from "../world-intel";
-import {
-  DATA_PLUGINS_CHANGED_EVENT,
-  fetchDataPlugins,
-} from "../data-plugins";
+import { DATA_PLUGINS_CHANGED_EVENT, fetchDataPlugins } from "../data-plugins";
 import {
   approveDeskTicket,
   closeDeskPosition,
@@ -115,7 +106,9 @@ export function TradeWorkspace() {
     try {
       const res = await fetchDataPlugins(core);
       const active = (res.plugins ?? [])
-        .filter((p) => p.category === "exchanges" && p.enabled && p.dataFeedEnabled)
+        .filter(
+          (p) => p.category === "exchanges" && p.enabled && p.dataFeedEnabled,
+        )
         .map((p) => p.id);
       setEnabledExchanges(active);
       if (active.length > 0) {
@@ -332,7 +325,9 @@ export function TradeWorkspace() {
         drawingsBySymbol: nextDrawings,
         paperOrdersBySymbol: nextOrders,
         tiles: prev.tiles.map((item) =>
-          item.id === tile.id ? { ...item, drawings: [], paperOrders: [] } : item,
+          item.id === tile.id
+            ? { ...item, drawings: [], paperOrders: [] }
+            : item,
         ),
       };
     });
@@ -477,7 +472,10 @@ export function TradeWorkspace() {
     }
   }
 
-  async function handleBotAction(id: string, action: "start" | "pause" | "stop") {
+  async function handleBotAction(
+    id: string,
+    action: "start" | "pause" | "stop",
+  ) {
     if (core.mode !== "ready" || tradeBusy) return;
     setTradeBusy(true);
     try {
@@ -508,7 +506,10 @@ export function TradeWorkspace() {
 
   if (isZeroState) {
     return (
-      <section className="trade-workspace wt-trade-shell" aria-label={t("Trade")}>
+      <section
+        className="trade-workspace wt-trade-shell"
+        aria-label={t("Trade")}
+      >
         <div className="trade-empty-cta">
           <button
             type="button"
@@ -565,7 +566,9 @@ export function TradeWorkspace() {
                           key={v}
                           type="button"
                           className={`trade-mini-btn ${activeTile.venue === v ? "is-selected" : ""}`}
-                          onClick={() => updateTile({ ...activeTile, venue: v })}
+                          onClick={() =>
+                            updateTile({ ...activeTile, venue: v })
+                          }
                         >
                           {v}
                         </button>
@@ -697,7 +700,9 @@ export function TradeWorkspace() {
                 <Shield size={13} aria-hidden="true" />
                 <span>
                   {t(
-                    trade?.killSwitchActive ? "Clear kill switch" : "Kill switch",
+                    trade?.killSwitchActive
+                      ? "Clear kill switch"
+                      : "Kill switch",
                   )}
                 </span>
               </button>
@@ -720,7 +725,8 @@ export function TradeWorkspace() {
           >
             {visibleTiles.map((tile) => {
               const ovKey = symbolOverlayKey(tile.venue, tile.symbol);
-              const drawings = config.drawingsBySymbol?.[ovKey] ?? tile.drawings;
+              const drawings =
+                config.drawingsBySymbol?.[ovKey] ?? tile.drawings;
               const paperOrders =
                 config.paperOrdersBySymbol?.[ovKey] ?? tile.paperOrders;
               const matchingPositions = openDeskPositions.filter(

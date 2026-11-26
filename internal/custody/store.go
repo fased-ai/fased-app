@@ -1065,7 +1065,7 @@ func (s *Service) PrepareReview(ctx context.Context, req PrepareReviewRequest) (
 		symbol         = "SOL"
 		amountRaw      = req.AmountRaw
 		amountHuman    string
-		decimals       uint8 = 9
+		decimals       uint8  = 9
 		estFeeLamports uint64 = 5_000
 		programs       []string
 	)

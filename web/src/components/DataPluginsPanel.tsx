@@ -240,7 +240,10 @@ export function DataPluginsPanel() {
       )}
 
       {addingCustom && (
-        <form className="settings-modal-card" onSubmit={(e) => void onAddCustom(e)}>
+        <form
+          className="settings-modal-card"
+          onSubmit={(e) => void onAddCustom(e)}
+        >
           <div className="settings-modal-row">
             <strong>{t("Add custom source")}</strong>
           </div>
@@ -326,7 +329,10 @@ export function DataPluginsPanel() {
 
         <div className="settings-providers-detail">
           {activePlugin ? (
-            <form onSubmit={(e) => void onSaveDetail(e)} className="data-plugin-detail-form">
+            <form
+              onSubmit={(e) => void onSaveDetail(e)}
+              className="data-plugin-detail-form"
+            >
               <div className="settings-modal-row">
                 <strong>{activePlugin.name}</strong>
                 <span

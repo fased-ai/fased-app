@@ -329,7 +329,8 @@
 .wt-field input:focus,
 .wt-field textarea:focus {
   outline: none;
-  box-shadow: 0 0 0 1.5px color-mix(in srgb, var(--shell-primary) 60%, transparent);
+  box-shadow: 0 0 0 1.5px
+    color-mix(in srgb, var(--shell-primary) 60%, transparent);
 }
 
 .wt-amount-wrap {

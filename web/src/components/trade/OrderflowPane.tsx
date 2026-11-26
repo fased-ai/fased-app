@@ -755,7 +755,11 @@ export function OrderflowPane({
           <section>
             <div className="trade-intel-rowhead">
               <h3>{t("Macro")}</h3>
-              <div className="trade-venue-filter-row" role="group" aria-label={t("FRED series")}>
+              <div
+                className="trade-venue-filter-row"
+                role="group"
+                aria-label={t("FRED series")}
+              >
                 {["CPIAUCSL", "UNRATE", "DFF", "DGS10"].map((sid) => (
                   <button
                     key={sid}

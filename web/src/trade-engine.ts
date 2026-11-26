@@ -196,7 +196,9 @@ export async function getTradeAccounts(
     );
     return res.accounts ?? [];
   } catch {
-    return [{ id: "paper", label: "Paper", kind: "paper", executionMode: "paper" }];
+    return [
+      { id: "paper", label: "Paper", kind: "paper", executionMode: "paper" },
+    ];
   }
 }
 

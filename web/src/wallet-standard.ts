@@ -146,7 +146,9 @@ export async function signWalletStandardTransaction(params: {
   );
   const signFeat = provider.features["solana:signTransaction"];
   if (!signFeat || typeof signFeat.signTransaction !== "function") {
-    throw new Error(`${provider.name} does not implement solana:signTransaction`);
+    throw new Error(
+      `${provider.name} does not implement solana:signTransaction`,
+    );
   }
   const chain =
     params.cluster === "devnet"

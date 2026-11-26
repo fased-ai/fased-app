@@ -8,10 +8,7 @@ import {
   Settings,
   Zap,
 } from "../icons";
-import {
-  DATA_PLUGINS_CHANGED_EVENT,
-  fetchDataPlugins,
-} from "../data-plugins";
+import { DATA_PLUGINS_CHANGED_EVENT, fetchDataPlugins } from "../data-plugins";
 import { parseTradeWorkspaceConfig, TRADE_STORAGE_KEY } from "../market-data";
 import { TRIGGER_DRAFT_KEY, type TriggerDraftSeed } from "../automation";
 import { useUI } from "../ui-preferences";
@@ -210,7 +207,10 @@ export function WorldIntelWorkspace() {
 
   if (isZeroState) {
     return (
-      <section className="intel-workspace wt-intel-shell" aria-label={t("News & Intel")}>
+      <section
+        className="intel-workspace wt-intel-shell"
+        aria-label={t("News & Intel")}
+      >
         <div className="intel-empty-cta">
           <button
             type="button"
@@ -229,7 +229,10 @@ export function WorldIntelWorkspace() {
   const regionEntries = Object.entries(mapSummary?.regionCounts ?? {});
 
   return (
-    <section className="intel-workspace wt-intel-shell" aria-label={t("News & Intel")}>
+    <section
+      className="intel-workspace wt-intel-shell"
+      aria-label={t("News & Intel")}
+    >
       {error && <p role="alert">{error}</p>}
 
       <div className="wt-intel-grid">
@@ -294,7 +297,11 @@ export function WorldIntelWorkspace() {
               onChange={(e) => setQuery(e.target.value)}
             />
 
-            <div className="wt-chip-group" role="group" aria-label={t("Category")}>
+            <div
+              className="wt-chip-group"
+              role="group"
+              aria-label={t("Category")}
+            >
               {INTEL_CATEGORIES.map((c) => (
                 <button
                   key={c.id || "all"}
@@ -333,7 +340,9 @@ export function WorldIntelWorkspace() {
               >
                 <span>{t("News Wire")}</span>
                 {filteredEvents.length > 0 && (
-                  <span className="wt-tab-count mono">{filteredEvents.length}</span>
+                  <span className="wt-tab-count mono">
+                    {filteredEvents.length}
+                  </span>
                 )}
               </button>
               <button
@@ -345,7 +354,9 @@ export function WorldIntelWorkspace() {
               >
                 <span>{t("Macro & Filings")}</span>
                 {macroAndFilings.length > 0 && (
-                  <span className="wt-tab-count mono">{macroAndFilings.length}</span>
+                  <span className="wt-tab-count mono">
+                    {macroAndFilings.length}
+                  </span>
                 )}
               </button>
             </div>

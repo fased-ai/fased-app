@@ -106,7 +106,9 @@ export function ChartTile({
   const volTextRef = useRef<HTMLSpanElement | null>(null);
 
   const venueList =
-    enabledVenues && enabledVenues.length > 0 ? enabledVenues : [...CHART_VENUES];
+    enabledVenues && enabledVenues.length > 0
+      ? enabledVenues
+      : [...CHART_VENUES];
   const activeDrawings = drawings ?? tile.drawings;
   const activeOrders = paperOrders ?? tile.paperOrders;
   const overlayCount = activeDrawings.length + activeOrders.length;
@@ -221,9 +223,7 @@ export function ChartTile({
     const topic = `candle:${tile.venue}:${tile.symbol}:${tile.interval}:${tile.style}`;
     return streamClient.subscribe(topic, (msg) => {
       const payload = msg.payload as
-        | Candle
-        | { candles?: Candle[] }
-        | undefined;
+        Candle | { candles?: Candle[] } | undefined;
       if (!payload) return;
       if ("candles" in payload && Array.isArray(payload.candles)) {
         if (payload.candles.length > 0) setCandles(payload.candles);
@@ -293,9 +293,7 @@ export function ChartTile({
   const latest = useMemo(() => {
     if (isFootprint) {
       const bar = footprint?.bars?.[footprint.bars.length - 1];
-      return bar
-        ? { close: bar.close, volume: bar.volume }
-        : null;
+      return bar ? { close: bar.close, volume: bar.volume } : null;
     }
     return candles[candles.length - 1] ?? null;
   }, [candles, footprint, isFootprint]);
@@ -342,7 +340,11 @@ export function ChartTile({
           </button>
           {openMenu === "symbol" && (
             <form className="trade-tile-popover" onSubmit={applySymbolForm}>
-              <div className="wt-venue-chips" role="group" aria-label={t("Venue")}>
+              <div
+                className="wt-venue-chips"
+                role="group"
+                aria-label={t("Venue")}
+              >
                 {venueList.map((v) => (
                   <button
                     key={v}
@@ -367,7 +369,11 @@ export function ChartTile({
           )}
         </div>
 
-        <div className="trade-interval-pills" role="group" aria-label={t("Interval")}>
+        <div
+          className="trade-interval-pills"
+          role="group"
+          aria-label={t("Interval")}
+        >
           {CHART_INTERVALS.map((iv) => (
             <button
               key={iv}

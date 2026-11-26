@@ -504,17 +504,17 @@ func TestCustodyKEKSocketIsolationSPLAndJupiterV0(t *testing.T) {
 	binary.LittleEndian.PutUint16(swapData[24:], 50)
 	binary.LittleEndian.PutUint32(swapData[30:], 1)
 	quote := onchain.Quote{
-		Version:       onchain.Version,
-		Owner:         w.PublicKey,
-		InputMint:     onchain.SOL,
-		OutputMint:    mintAddr,
-		Amount:        "20000000",
-		Output:        "1000000",
-		MinimumOutput: "990000",
+		Version:        onchain.Version,
+		Owner:          w.PublicKey,
+		InputMint:      onchain.SOL,
+		OutputMint:     mintAddr,
+		Amount:         "20000000",
+		Output:         "1000000",
+		MinimumOutput:  "990000",
 		SlippageBPS:    50,
 		MaxFeeLamports: 100_000,
 		FeeLamports:    5000,
-		Blockhash:     bh,
+		Blockhash:      bh,
 		AddressLookupTables: []onchain.AddressLookupTable{{
 			AccountKey: Base58Encode(altPub),
 			Addresses:  []string{Base58Encode(poolPub)},

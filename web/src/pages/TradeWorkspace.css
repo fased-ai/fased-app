@@ -589,7 +589,8 @@
 }
 
 .trade-tile.is-active {
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--wt-border-strong) 70%, transparent);
+  box-shadow: inset 0 0 0 1px
+    color-mix(in srgb, var(--wt-border-strong) 70%, transparent);
 }
 
 .trade-tile-bar {
