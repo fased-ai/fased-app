@@ -537,6 +537,11 @@
   .wt-policy-grid {
     grid-template-columns: 1fr;
   }
+  :root.wt .wt-wallets-shell button,
+  :root.wt .wt-wallets-shell select,
+  :root.wt .wt-wallets-shell input:not([type="checkbox"]) {
+    min-height: 44px;
+  }
 }
 
 /* Host Signer / Accounts compatibility styles */
