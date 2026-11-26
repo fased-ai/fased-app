@@ -83,6 +83,11 @@ type Store struct {
 	deskSvc                       *desk.Service
 	tradeMu                       sync.Mutex
 	tradeSvc                      *trade.Service
+	pluginsMu                     sync.Mutex
+	dataPlugins                   *dataPluginsDoc
+	enforceDataPlugins            bool
+	walletVaultMu                 sync.Mutex
+	walletVaultPtr                any
 	dir                           string
 	instanceID                    string
 	pauseFault                    func(string) error // Test-only interruption injection, never configuration or IPC.

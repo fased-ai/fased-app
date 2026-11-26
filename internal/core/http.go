@@ -712,6 +712,10 @@ func (h *HTTPHandler) api(w http.ResponseWriter, r *http.Request) {
 			h.tradeAPI(w, r, token)
 			return
 		}
+		if r.URL.Path == "/api/v1/data-plugins" || strings.HasPrefix(r.URL.Path, "/api/v1/data-plugins/") {
+			h.dataPluginsAPI(w, r, token)
+			return
+		}
 		if stage5RouteHook != nil && stage5RouteHook(h, w, r, token) {
 			return
 		}

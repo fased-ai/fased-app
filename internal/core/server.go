@@ -538,6 +538,9 @@ func (s *Server) startAgentTasks() {
 				}
 			}
 			runSync := func() {
+				if s.Store.enabledWorldIntelPluginCount() == 0 {
+					return
+				}
 				svc, err := s.Store.worldIntelService()
 				if err != nil {
 					coreLogger.Warn("worldintel background service held", "err", sanitizeDiagValue(err.Error(), 200))

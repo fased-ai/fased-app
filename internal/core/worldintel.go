@@ -180,6 +180,7 @@ func (h *HTTPHandler) worldIntelAPI(w http.ResponseWriter, r *http.Request, toke
 				writeError(w, 400, err.Error())
 				return
 			}
+			h.store.syncWorldIntelSourceState(saved.ID, saved)
 			writeJSON(w, 200, saved)
 		default:
 			writeError(w, 405, "method not allowed")

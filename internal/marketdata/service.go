@@ -71,15 +71,12 @@ func NewService(cfg Config) (*Service, error) {
 		fixtureMode: cfg.FixtureMode,
 		now:         nowFn,
 	}
-	if err := svc.seedDefaultWatchlists(context.Background()); err != nil {
-		svc.hub.Close()
-		_ = store.Close()
-		return nil, err
-	}
+	// Zero-by-default: do not auto-seed external watchlists at boot until the user enables a venue.
 	return svc, nil
 }
 
-func (s *Service) seedDefaultWatchlists(ctx context.Context) error {
+// SeedDefaultWatchlists optionally populates a starter watchlist on explicit owner action.
+func (s *Service) SeedDefaultWatchlists(ctx context.Context) error {
 	existing, err := s.store.ListWatchlists(ctx)
 	if err != nil {
 		return err

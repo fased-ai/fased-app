@@ -30,6 +30,7 @@ export type ProvidersPreset = {
 export type SettingsTab =
   | "general"
   | "providers"
+  | "data"
   | "instance"
   | "notifications"
   | "updates"
