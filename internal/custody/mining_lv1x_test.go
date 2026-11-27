@@ -27,8 +27,8 @@ func TestRoleMiningLV1XPolicyCapsAndApprovalModes(t *testing.T) {
 		Role:              RoleMining,
 		ApprovalMode:      ApprovalBoundedAuto,
 		AutoApproveMaxUSD: 25.0,
-		Operations:        []string{MiningOpCommit, MiningOpClaim, MiningOpSession},
-		Programs:          []string{SolanaSystemProgram, SolanaComputeBudget, onchain.LV1XDevnetProgramID},
+		Operations:        AllMiningOperations(),
+		Programs:          []string{SolanaSystemProgram, SolanaComputeBudget, SolanaTokenProgram, SolanaATAProgram, onchain.LV1XDevnetProgramID},
 		SOLCap: AssetCap{
 			Asset:       "solana:native",
 			Symbol:      "SOL",
@@ -185,5 +185,51 @@ func TestRoleMiningLV1XPolicyCapsAndApprovalModes(t *testing.T) {
 	}
 	if !allowMiningAutonomousExecution(semiWallet, claimRev, "mining-engine") {
 		t.Fatal("expected allowMiningAutonomousExecution=true for Semi-Auto AutoClaim")
+	}
+
+	// Reveal, ClaimSAT, ClaimBTC, Stake/Activate/ClaimStaking/Unstake, and Session Deposit.
+	saltHex := "0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20"
+	for _, tc := range []struct {
+		name string
+		op   string
+		req  MiningLV1XRequest
+		auto bool
+	}{
+		{"reveal", MiningOpReveal, MiningLV1XRequest{RoundSlot: 101, ShardID: 0, Page: 0, EntryRow: 0, Selection: 2, SaltHex: saltHex}, true},
+		{"claim_sat", MiningOpClaimSat, MiningLV1XRequest{RoundSlot: 101, ShardID: 0, Page: 0, EntryRow: 0, CreateATA: true}, true},
+		{"claim_btc", MiningOpClaimBtc, MiningLV1XRequest{RoundSlot: 101, ShardID: 0, Page: 0, EntryRow: 0, BtcMint: onchain.LV1XDevnetBTCMint, CreateATA: true}, true},
+		{"claim_staking", MiningOpClaimStaking, MiningLV1XRequest{BtcMint: onchain.LV1XDevnetBTCMint, CreateATA: true}, true},
+		{"stake", MiningOpStake, MiningLV1XRequest{SatAmountAtoms: onchain.LV1XMinStakeAtoms}, false},
+		{"activate", MiningOpActivateStake, MiningLV1XRequest{}, false},
+		{"unstake", MiningOpUnstake, MiningLV1XRequest{SatAmountAtoms: onchain.LV1XMinStakeAtoms, CreateATA: true}, false},
+		{"sess_deposit", MiningOpSession, MiningLV1XRequest{SessionAction: "deposit", SessionRef: 7, AmountLamports: 15_000_000}, false},
+	} {
+		rev, pErr := svc.PrepareReview(ctx, PrepareReviewRequest{
+			WalletID:    semiWallet.ID,
+			Operation:   tc.op,
+			IsBotOrAuto: tc.auto,
+			MiningLV1X:  &tc.req,
+		})
+		if pErr != nil {
+			t.Fatalf("%s PrepareReview failed: %v", tc.name, pErr)
+		}
+		actor := "owner"
+		if tc.auto {
+			actor = "mining-engine"
+		}
+		led, eErr := svc.ExecuteNativeReview(ctx, semiWallet.ID, rev.ID, actor)
+		if eErr != nil || led.State != LedgerConfirmed {
+			t.Fatalf("%s ExecuteNativeReview failed: state=%s err=%v", tc.name, led.State, eErr)
+		}
+	}
+
+	// Autonomous Stake on Semi-Auto MUST be rejected.
+	if _, err := svc.PrepareReview(ctx, PrepareReviewRequest{
+		WalletID:    semiWallet.ID,
+		Operation:   MiningOpStake,
+		IsBotOrAuto: true,
+		MiningLV1X:  &MiningLV1XRequest{SatAmountAtoms: onchain.LV1XMinStakeAtoms},
+	}); !errors.Is(err, ErrRoleDenied) {
+		t.Fatalf("expected ErrRoleDenied for autonomous stake, got %v", err)
 	}
 }

@@ -15,10 +15,33 @@ import (
 )
 
 const (
-	MiningOpCommit  = "mining.lv1x.commit"
-	MiningOpClaim   = "mining.lv1x.claim"
-	MiningOpSession = "mining.lv1x.session"
+	MiningOpCommit        = "mining.lv1x.commit"
+	MiningOpReveal        = "mining.lv1x.reveal"
+	MiningOpClaim         = "mining.lv1x.claim"
+	MiningOpClaimSat      = "mining.lv1x.claim_sat"
+	MiningOpClaimBtc      = "mining.lv1x.claim_btc"
+	MiningOpSession       = "mining.lv1x.session"
+	MiningOpStake         = "mining.lv1x.stake"
+	MiningOpActivateStake = "mining.lv1x.activate_stake"
+	MiningOpUnstake       = "mining.lv1x.unstake"
+	MiningOpClaimStaking  = "mining.lv1x.claim_staking"
 )
+
+// AllMiningOperations returns all LV1X native RoleMining custody operations.
+func AllMiningOperations() []string {
+	return []string{
+		MiningOpCommit,
+		MiningOpReveal,
+		MiningOpClaim,
+		MiningOpClaimSat,
+		MiningOpClaimBtc,
+		MiningOpSession,
+		MiningOpStake,
+		MiningOpActivateStake,
+		MiningOpUnstake,
+		MiningOpClaimStaking,
+	}
+}
 
 // MiningPolicy bounds Lean V1 (LV1X) mining authority on RoleMining wallets.
 // Devnet uses the pinned LV1X program/ledger by default; Mainnet stays strictly
@@ -35,34 +58,50 @@ type MiningPolicy struct {
 	AllowMainnet          bool     `json:"allowMainnet,omitempty"`
 }
 
-// MiningLV1XRequest parameterizes a mining.lv1x.{commit,claim,session} review.
+// MiningLV1XRequest parameterizes a mining.lv1x.* review.
 type MiningLV1XRequest struct {
-	Cluster        string `json:"cluster,omitempty"`
-	ProgramID      string `json:"programId,omitempty"`
-	LedgerID       string `json:"ledgerId,omitempty"`
-	RoundSlot      uint64 `json:"roundSlot,string"`
-	ShardID        uint8  `json:"shardId"`
-	Page           uint32 `json:"page"`
-	EntryIndex     uint32 `json:"entryIndex"`
-	Nonce          uint64 `json:"nonce,string"`
-	Selection      uint8  `json:"selection"` // 0..4 (A..E bucket)
-	AmountLamports uint64 `json:"amountLamports,string"`
-	SaltHex        string `json:"saltHex,omitempty"`
-	EntriesMask    uint8  `json:"entriesMask,omitempty"`
-	SessionAction  string `json:"sessionAction,omitempty"` // open | stop | close
-	SessionRef     uint64 `json:"sessionRef,string,omitempty"`
-	MaxEntry       uint64 `json:"maxEntry,string,omitempty"`
-	MaxTurnover    uint64 `json:"maxTurnover,string,omitempty"`
-	FirstSlot      uint64 `json:"firstSlot,string,omitempty"`
-	LastSlot       uint64 `json:"lastSlot,string,omitempty"`
-	ExpiresAt      int64  `json:"expiresAt,omitempty"`
-	StrategyID     string `json:"strategyId,omitempty"`
+	Cluster         string `json:"cluster,omitempty"`
+	ProgramID       string `json:"programId,omitempty"`
+	LedgerID        string `json:"ledgerId,omitempty"`
+	RoundSlot       uint64 `json:"roundSlot,string"`
+	ShardID         uint8  `json:"shardId"`
+	Page            uint32 `json:"page"`
+	EntryIndex      uint32 `json:"entryIndex"`
+	EntryRow        uint8  `json:"entryRow"`
+	Nonce           uint64 `json:"nonce,string"`
+	Selection       uint8  `json:"selection"` // 0..4 (A..E bucket)
+	AmountLamports  uint64 `json:"amountLamports,string"`
+	SatAmountAtoms  uint64 `json:"satAmountAtoms,string,omitempty"`
+	SaltHex         string `json:"saltHex,omitempty"`
+	EntriesMask     uint8  `json:"entriesMask,omitempty"`
+	BtcMint         string `json:"btcMint,omitempty"`
+	CreateATA       bool   `json:"createAta,omitempty"`
+	SessionAction   string `json:"sessionAction,omitempty"` // open | deposit | stop | close
+	SessionRef      uint64 `json:"sessionRef,string,omitempty"`
+	MaxEntry        uint64 `json:"maxEntry,string,omitempty"`
+	MaxTurnover     uint64 `json:"maxTurnover,string,omitempty"`
+	FirstSlot       uint64 `json:"firstSlot,string,omitempty"`
+	LastSlot        uint64 `json:"lastSlot,string,omitempty"`
+	ExpiresAt       int64  `json:"expiresAt,omitempty"`
+	ReturnToBudget  *bool  `json:"returnToBudget,omitempty"`
+	StrategyRootHex string `json:"strategyRootHex,omitempty"`
+	StrategyID      string `json:"strategyId,omitempty"`
 }
 
 // isMiningOperation returns true when op is one of the LV1X native mining actions.
 func isMiningOperation(op string) bool {
 	switch op {
-	case MiningOpCommit, MiningOpClaim, MiningOpSession:
+	case MiningOpCommit, MiningOpReveal, MiningOpClaim, MiningOpClaimSat, MiningOpClaimBtc,
+		MiningOpSession, MiningOpStake, MiningOpActivateStake, MiningOpUnstake, MiningOpClaimStaking:
+		return true
+	default:
+		return false
+	}
+}
+
+func isMiningClaimOrRevealOp(op string) bool {
+	switch op {
+	case MiningOpReveal, MiningOpClaim, MiningOpClaimSat, MiningOpClaimBtc, MiningOpClaimStaking:
 		return true
 	default:
 		return false
@@ -189,19 +228,22 @@ func allowMiningAutonomousExecution(w WalletPublic, rev WalletReview, actor stri
 	if actorClean != "mining-engine" && !strings.HasPrefix(actorClean, "task:") {
 		return false
 	}
-	// Semi-Auto permits unattended claim transactions when AutoClaim is enabled;
-	// BoundedAuto allows bounded commits and claims within SOL + USD ceilings.
+	// Semi-Auto permits unattended reveal/claim transactions when AutoClaim is enabled;
+	// BoundedAuto allows bounded commits and reveal/claims within SOL + USD ceilings.
 	if w.Policy.ApprovalMode == ApprovalManualReview {
 		return false
 	}
 	if w.Policy.ApprovalMode == ApprovalSemiAuto {
-		return rev.Operation == MiningOpClaim && normM.AutoClaim
+		return isMiningClaimOrRevealOp(rev.Operation) && normM.AutoClaim
 	}
 	if w.Policy.ApprovalMode != ApprovalBoundedAuto {
 		return false
 	}
-	if rev.Operation == MiningOpClaim {
+	if isMiningClaimOrRevealOp(rev.Operation) {
 		return normM.AutoClaim
+	}
+	if rev.Operation == MiningOpStake || rev.Operation == MiningOpActivateStake || rev.Operation == MiningOpUnstake {
+		return false
 	}
 	if w.Policy.AutoApproveMaxUSD <= 0 || rev.EstimatedUSD <= 0 || rev.EstimatedUSD > w.Policy.AutoApproveMaxUSD {
 		return false
@@ -290,11 +332,16 @@ type preparedMiningDetails struct {
 	ShardID        uint8
 	Page           uint32
 	EntryIndex     uint32
+	EntryRow       uint8
 	Nonce          uint64
 	Selection      uint8
 	Salt           [32]byte
+	StrategyRoot   [32]byte
 	AmountLamports uint64
+	SatAmountAtoms uint64
 	EntriesMask    uint8
+	BTCMint        string
+	CreateATA      bool
 	SessionAction  string
 	SessionRef     uint64
 	FirstSlot      uint64
@@ -302,11 +349,13 @@ type preparedMiningDetails struct {
 	ExpiresAt      int64
 	MaxEntry       uint64
 	MaxTurnover    uint64
+	ReturnToBudget bool
 	EstFeeLamports uint64
 	EstimatedUSD   float64
 	DestAddr       string
 	Symbol         string
 	HumanAmount    string
+	Programs       []string
 }
 
 func (s *Service) validateMiningPrepareLocked(ctx context.Context, w WalletPublic, op string, req PrepareReviewRequest) (preparedMiningDetails, error) {
@@ -360,10 +409,38 @@ func (s *Service) validateMiningPrepareLocked(ctx context.Context, w WalletPubli
 	}
 	out.Page = m.Page
 	out.EntryIndex = m.EntryIndex
+	out.EntryRow = m.EntryRow
+	if int(out.EntryRow) >= onchain.LV1XPageEntries {
+		out.EntryRow = uint8(m.EntryIndex % onchain.LV1XPageEntries)
+	}
 	out.Nonce = m.Nonce
 	out.Selection = m.Selection
 	out.EntriesMask = m.EntriesMask
+	out.CreateATA = m.CreateATA
+	out.ReturnToBudget = true
+	if m.ReturnToBudget != nil {
+		out.ReturnToBudget = *m.ReturnToBudget
+	}
 	out.EstFeeLamports = 10_000
+	out.Programs = []string{SolanaComputeBudget, SolanaSystemProgram, progID}
+
+	requireTokenProgram := func(needATA bool) error {
+		if !slices.Contains(w.Policy.Programs, SolanaTokenProgram) {
+			return fmt.Errorf("%w: SPL Token program must be allowed in mining wallet policy", ErrPolicyDenied)
+		}
+		if !slices.Contains(out.Programs, SolanaTokenProgram) {
+			out.Programs = append(out.Programs, SolanaTokenProgram)
+		}
+		if needATA {
+			if !slices.Contains(w.Policy.Programs, SolanaATAProgram) {
+				return fmt.Errorf("%w: Associated Token program must be allowed in mining wallet policy", ErrPolicyDenied)
+			}
+			if !slices.Contains(out.Programs, SolanaATAProgram) {
+				out.Programs = append(out.Programs, SolanaATAProgram)
+			}
+		}
+		return nil
+	}
 
 	switch op {
 	case MiningOpCommit:
@@ -408,6 +485,22 @@ func (s *Service) validateMiningPrepareLocked(ctx context.Context, w WalletPubli
 		rkAddr, _ := onchain.LV1XRoundPDA(progID, ledgerID, m.RoundSlot)
 		out.DestAddr = rkAddr
 
+	case MiningOpReveal:
+		if out.Selection > 4 {
+			return out, fmt.Errorf("%w: LV1X reveal selection must be 0..4", ErrPolicyDenied)
+		}
+		rawSalt, err := hex.DecodeString(strings.TrimSpace(m.SaltHex))
+		if err != nil || len(rawSalt) != 32 {
+			return out, fmt.Errorf("%w: reveal saltHex must be 64-char hex", ErrPolicyDenied)
+		}
+		copy(out.Salt[:], rawSalt)
+		out.AmountLamports = 0
+		out.EstimatedUSD = (float64(out.EstFeeLamports) / 1e9) * 250.0
+		out.Symbol = "SOL"
+		out.HumanAmount = FormatLamportsToSOL(out.EstFeeLamports)
+		rkAddr, _ := onchain.LV1XRoundPDA(progID, ledgerID, m.RoundSlot)
+		out.DestAddr = rkAddr
+
 	case MiningOpClaim:
 		if out.EntriesMask == 0 {
 			out.EntriesMask = 0x01
@@ -418,9 +511,64 @@ func (s *Service) validateMiningPrepareLocked(ctx context.Context, w WalletPubli
 		out.HumanAmount = FormatLamportsToSOL(out.EstFeeLamports)
 		out.DestAddr = w.PublicKey
 
+	case MiningOpClaimSat:
+		if err := requireTokenProgram(out.CreateATA); err != nil {
+			return out, err
+		}
+		out.AmountLamports = 0
+		out.EstimatedUSD = (float64(out.EstFeeLamports) / 1e9) * 250.0
+		out.Symbol = "SAT"
+		out.HumanAmount = FormatLamportsToSOL(out.EstFeeLamports)
+		out.DestAddr = w.PublicKey
+
+	case MiningOpClaimBtc, MiningOpClaimStaking:
+		if err := requireTokenProgram(out.CreateATA); err != nil {
+			return out, err
+		}
+		btcMint := firstStr(strings.TrimSpace(m.BtcMint), onchain.LV1XDevnetBTCMint)
+		if _, _, err := ValidateSolanaPublicAddress(btcMint); err != nil {
+			return out, fmt.Errorf("invalid BTC mint: %w", err)
+		}
+		out.BTCMint = btcMint
+		out.AmountLamports = 0
+		out.EstimatedUSD = (float64(out.EstFeeLamports) / 1e9) * 250.0
+		out.Symbol = "cbBTC"
+		out.HumanAmount = FormatLamportsToSOL(out.EstFeeLamports)
+		out.DestAddr = w.PublicKey
+
+	case MiningOpStake, MiningOpUnstake:
+		if err := requireTokenProgram(op == MiningOpUnstake && out.CreateATA); err != nil {
+			return out, err
+		}
+		atoms := m.SatAmountAtoms
+		if atoms == 0 {
+			atoms = m.AmountLamports
+		}
+		if op == MiningOpStake && atoms < onchain.LV1XMinStakeAtoms {
+			return out, fmt.Errorf("%w: stake below minimum %d SAT atoms (10 WENSAT)", ErrPolicyDenied, onchain.LV1XMinStakeAtoms)
+		}
+		if atoms == 0 {
+			return out, fmt.Errorf("%w: SAT amount must be positive", ErrPolicyDenied)
+		}
+		out.SatAmountAtoms = atoms
+		out.AmountLamports = 0
+		out.EstimatedUSD = (float64(out.EstFeeLamports) / 1e9) * 250.0
+		out.Symbol = "SAT"
+		out.HumanAmount = fmt.Sprintf("%.4f SAT", float64(atoms)/1e9)
+		stAddr, _ := onchain.LV1XStakingStatePDA(progID, ledgerID)
+		out.DestAddr = stAddr
+
+	case MiningOpActivateStake:
+		out.AmountLamports = 0
+		out.EstimatedUSD = (float64(out.EstFeeLamports) / 1e9) * 250.0
+		out.Symbol = "SAT"
+		out.HumanAmount = FormatLamportsToSOL(out.EstFeeLamports)
+		stAddr, _ := onchain.LV1XStakingStatePDA(progID, ledgerID)
+		out.DestAddr = stAddr
+
 	case MiningOpSession:
 		act := strings.ToLower(strings.TrimSpace(m.SessionAction))
-		if act != "open" && act != "stop" && act != "close" {
+		if act != "open" && act != "deposit" && act != "stop" && act != "close" {
 			return out, fmt.Errorf("%w: invalid LV1X sessionAction %q", ErrPolicyDenied, m.SessionAction)
 		}
 		out.SessionAction = act
@@ -430,7 +578,14 @@ func (s *Service) validateMiningPrepareLocked(ctx context.Context, w WalletPubli
 		out.ExpiresAt = m.ExpiresAt
 		out.MaxEntry = m.MaxEntry
 		out.MaxTurnover = m.MaxTurnover
-		if act == "open" {
+		if strings.TrimSpace(m.StrategyRootHex) != "" {
+			rawRoot, err := hex.DecodeString(strings.TrimSpace(m.StrategyRootHex))
+			if err != nil || len(rawRoot) != 32 {
+				return out, errors.New("strategyRootHex must be 64-char hex")
+			}
+			copy(out.StrategyRoot[:], rawRoot)
+		}
+		if act == "open" || act == "deposit" {
 			amt := m.AmountLamports
 			if amt < onchain.LV1XMinCommitLamports {
 				return out, fmt.Errorf("%w: session deposit below minimum %d", ErrPolicyDenied, onchain.LV1XMinCommitLamports)
@@ -475,6 +630,18 @@ func buildMiningReviewMessage(feePayer [32]byte, bh [32]byte, priorityFee uint64
 			Commitment: commit,
 			MicroLam:   priorityFee,
 		})
+	case MiningOpReveal:
+		return onchain.BuildLV1XRevealMessage(onchain.LV1XRevealParams{
+			ProgramID: md.ProgramID,
+			LedgerID:  md.LedgerID,
+			FeePayer:  feePayer,
+			Blockhash: bh,
+			Slot:      md.RoundSlot,
+			ShardID:   md.ShardID,
+			Page:      md.Page,
+			Items:     []onchain.LV1XRevealItem{{EntryRow: md.EntryRow, Selection: md.Selection, Salt: md.Salt}},
+			MicroLam:  priorityFee,
+		})
 	case MiningOpClaim:
 		return onchain.BuildLV1XClaimSolBatchMessage(onchain.LV1XClaimSolParams{
 			ProgramID:   md.ProgramID,
@@ -488,21 +655,88 @@ func buildMiningReviewMessage(feePayer [32]byte, bh [32]byte, priorityFee uint64
 			EntriesMask: md.EntriesMask,
 			MicroLam:    priorityFee,
 		})
+	case MiningOpClaimSat:
+		return onchain.BuildLV1XClaimSatMessage(onchain.LV1XClaimTokenParams{
+			ProgramID: md.ProgramID,
+			LedgerID:  md.LedgerID,
+			Owner:     feePayer,
+			Blockhash: bh,
+			Slot:      md.RoundSlot,
+			ShardID:   md.ShardID,
+			Page:      md.Page,
+			EntryRow:  md.EntryRow,
+			CreateATA: md.CreateATA,
+			MicroLam:  priorityFee,
+		})
+	case MiningOpClaimBtc:
+		return onchain.BuildLV1XClaimBtcMessage(onchain.LV1XClaimTokenParams{
+			ProgramID: md.ProgramID,
+			LedgerID:  md.LedgerID,
+			Owner:     feePayer,
+			Blockhash: bh,
+			Slot:      md.RoundSlot,
+			ShardID:   md.ShardID,
+			Page:      md.Page,
+			EntryRow:  md.EntryRow,
+			BTCMint:   md.BTCMint,
+			CreateATA: md.CreateATA,
+			MicroLam:  priorityFee,
+		})
+	case MiningOpStake:
+		return onchain.BuildLV1XStakeMessage(onchain.LV1XStakeParams{
+			ProgramID: md.ProgramID,
+			LedgerID:  md.LedgerID,
+			Owner:     feePayer,
+			Blockhash: bh,
+			Action:    "stake",
+			Amount:    md.SatAmountAtoms,
+			MicroLam:  priorityFee,
+		})
+	case MiningOpActivateStake:
+		return onchain.BuildLV1XStakeMessage(onchain.LV1XStakeParams{
+			ProgramID: md.ProgramID,
+			LedgerID:  md.LedgerID,
+			Owner:     feePayer,
+			Blockhash: bh,
+			Action:    "activate",
+			MicroLam:  priorityFee,
+		})
+	case MiningOpClaimStaking:
+		return onchain.BuildLV1XStakeMessage(onchain.LV1XStakeParams{
+			ProgramID: md.ProgramID,
+			LedgerID:  md.LedgerID,
+			Owner:     feePayer,
+			Blockhash: bh,
+			Action:    "claim_reward",
+			BTCMint:   md.BTCMint,
+			CreateATA: md.CreateATA,
+			MicroLam:  priorityFee,
+		})
+	case MiningOpUnstake:
+		return onchain.BuildLV1XStakeMessage(onchain.LV1XStakeParams{
+			ProgramID: md.ProgramID,
+			LedgerID:  md.LedgerID,
+			Owner:     feePayer,
+			Blockhash: bh,
+			Action:    "unstake",
+			Amount:    md.SatAmountAtoms,
+			CreateATA: md.CreateATA,
+			MicroLam:  priorityFee,
+		})
 	case MiningOpSession:
-		var root [32]byte
 		return onchain.BuildLV1XSessionMessage(onchain.LV1XSessionParams{
 			ProgramID:      md.ProgramID,
 			LedgerID:       md.LedgerID,
 			Owner:          feePayer,
 			Blockhash:      bh,
 			Reference:      md.SessionRef,
-			StrategyRoot:   root,
+			StrategyRoot:   md.StrategyRoot,
 			FirstSlot:      md.FirstSlot,
 			LastSlot:       md.LastSlot,
 			ExpiresAt:      md.ExpiresAt,
 			MaxEntry:       md.MaxEntry,
 			MaxTurnover:    md.MaxTurnover,
-			ReturnToBudget: true,
+			ReturnToBudget: md.ReturnToBudget,
 			Deposit:        md.AmountLamports,
 			Action:         md.SessionAction,
 			MicroLam:       priorityFee,

@@ -101,7 +101,7 @@ func TestLV1XPDACommitmentWireAndBPFLoader(t *testing.T) {
 		t.Fatalf("BuildLV1XClaimSolBatchMessage failed: len=%d err=%v", len(claimMsg), err)
 	}
 
-	for _, act := range []string{"open", "stop", "close"} {
+	for _, act := range []string{"open", "deposit", "stop", "close"} {
 		sessMsg, sErr := BuildLV1XSessionMessage(LV1XSessionParams{
 			ProgramID:    LV1XDevnetProgramID,
 			LedgerID:     LV1XDevnetLedgerID,
@@ -120,6 +120,91 @@ func TestLV1XPDACommitmentWireAndBPFLoader(t *testing.T) {
 		if sErr != nil || len(sessMsg) < 60 {
 			t.Fatalf("BuildLV1XSessionMessage(%s): len=%d err=%v", act, len(sessMsg), sErr)
 		}
+	}
+
+	// Reveal, ClaimSAT, ClaimBTC, Stake/Activate/ClaimStaking/Unstake builders + Staking/Treasury PDAs.
+	for _, fn := range []func() (string, error){
+		func() (string, error) { return LV1XStakingStatePDA(LV1XDevnetProgramID, LV1XDevnetLedgerID) },
+		func() (string, error) { return LV1XStakingVaultPDA(LV1XDevnetProgramID, LV1XDevnetLedgerID) },
+		func() (string, error) { return LV1XStakingBTCVaultPDA(LV1XDevnetProgramID, LV1XDevnetLedgerID) },
+		func() (string, error) {
+			return LV1XStakePositionPDA(LV1XDevnetProgramID, LV1XDevnetLedgerID, LV1XDevnetLedgerID)
+		},
+		func() (string, error) { return LV1XTreasuryStatePDA(LV1XDevnetProgramID, LV1XDevnetLedgerID) },
+		func() (string, error) { return LV1XTreasuryBTCVaultPDA(LV1XDevnetProgramID, LV1XDevnetLedgerID) },
+	} {
+		addr, e := fn()
+		if e != nil || addr == "" {
+			t.Fatalf("staking/treasury PDA derivation failed: %v", e)
+		}
+	}
+
+	revMsg, err := BuildLV1XRevealMessage(LV1XRevealParams{
+		ProgramID: LV1XDevnetProgramID,
+		LedgerID:  LV1XDevnetLedgerID,
+		FeePayer:  owner,
+		Blockhash: blockhash,
+		Slot:      42,
+		ShardID:   LV1XUnshardedShardID,
+		Page:      0,
+		Items:     []LV1XRevealItem{{EntryRow: 0, Selection: 2, Salt: salt}},
+	})
+	if err != nil || len(revMsg) < 90 {
+		t.Fatalf("BuildLV1XRevealMessage failed: len=%d err=%v", len(revMsg), err)
+	}
+	satMsg, err := BuildLV1XClaimSatMessage(LV1XClaimTokenParams{
+		ProgramID: LV1XDevnetProgramID,
+		LedgerID:  LV1XDevnetLedgerID,
+		Owner:     owner,
+		Blockhash: blockhash,
+		Slot:      42,
+		ShardID:   LV1XUnshardedShardID,
+		Page:      0,
+		EntryRow:  0,
+		CreateATA: true,
+	})
+	if err != nil || len(satMsg) < 100 {
+		t.Fatalf("BuildLV1XClaimSatMessage failed: len=%d err=%v", len(satMsg), err)
+	}
+	btcMsg, err := BuildLV1XClaimBtcMessage(LV1XClaimTokenParams{
+		ProgramID: LV1XDevnetProgramID,
+		LedgerID:  LV1XDevnetLedgerID,
+		Owner:     owner,
+		Blockhash: blockhash,
+		Slot:      42,
+		ShardID:   0,
+		Page:      1,
+		EntryRow:  2,
+		BTCMint:   LV1XDevnetBTCMint,
+		CreateATA: true,
+	})
+	if err != nil || len(btcMsg) < 100 {
+		t.Fatalf("BuildLV1XClaimBtcMessage failed: len=%d err=%v", len(btcMsg), err)
+	}
+	for _, act := range []string{"stake", "activate", "claim_reward", "unstake"} {
+		stMsg, stErr := BuildLV1XStakeMessage(LV1XStakeParams{
+			ProgramID: LV1XDevnetProgramID,
+			LedgerID:  LV1XDevnetLedgerID,
+			Owner:     owner,
+			Blockhash: blockhash,
+			Action:    act,
+			Amount:    LV1XMinStakeAtoms,
+			BTCMint:   LV1XDevnetBTCMint,
+			CreateATA: true,
+		})
+		if stErr != nil || len(stMsg) < 70 {
+			t.Fatalf("BuildLV1XStakeMessage(%s) failed: len=%d err=%v", act, len(stMsg), stErr)
+		}
+	}
+	if _, err := BuildLV1XStakeMessage(LV1XStakeParams{
+		ProgramID: LV1XDevnetProgramID,
+		LedgerID:  LV1XDevnetLedgerID,
+		Owner:     owner,
+		Blockhash: blockhash,
+		Action:    "stake",
+		Amount:    100,
+	}); err == nil {
+		t.Fatal("expected min stake atoms error")
 	}
 
 	// BPF Loader Upgradeable ELF SHA-256 verification.

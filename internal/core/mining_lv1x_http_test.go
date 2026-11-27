@@ -47,7 +47,34 @@ func TestLV1XMiningCoreRoutesAndMainnetGate(t *testing.T) {
 		t.Fatalf("expected 201 devnet session, got %d: %s", sessDev.Code, sessDev.Body.String())
 	}
 
-	// 4. Stream WS topic "mining" parses cleanly.
+	// 4. Candles, protocol-stats, leaderboard, portfolio, staking & saved strategies endpoints.
+	for _, tc := range []struct {
+		path string
+		want string
+	}{
+		{"/api/v1/mining/candles?interval=10m&limit=30", `"interval":"10m"`},
+		{"/api/v1/mining/protocol-stats?cluster=devnet", `"maxSupplySat":30000000`},
+		{"/api/v1/mining/leaderboard?cluster=devnet&window=24h", `"window":"24h"`},
+		{"/api/v1/mining/portfolio?cluster=devnet", `"cluster":"devnet"`},
+		{"/api/v1/mining/staking?cluster=devnet", `"minStakeSat":10`},
+		{"/api/v1/mining/strategies", `"presets"`},
+	} {
+		resp := stage4Req(h, http.MethodGet, srv.URL, tc.path, "", token, "", "")
+		if resp.Code != http.StatusOK || !strings.Contains(resp.Body.String(), tc.want) {
+			t.Fatalf("GET %s failed (%d): %s", tc.path, resp.Code, resp.Body.String())
+		}
+	}
+
+	saveStrat := stage4Req(h, http.MethodPost, srv.URL, "/api/v1/mining/strategies", `{"name":"Custom Wing","bucketsBps":[1500,2000,3000,2000,1500]}`, token, srv.URL, csrf)
+	if saveStrat.Code != http.StatusCreated || !strings.Contains(saveStrat.Body.String(), `"Custom Wing"`) {
+		t.Fatalf("POST /api/v1/mining/strategies failed (%d): %s", saveStrat.Code, saveStrat.Body.String())
+	}
+	simStrat := stage4Req(h, http.MethodPost, srv.URL, "/api/v1/mining/strategies/simulate", `{"bucketsBps":[1500,2000,3000,2000,1500],"perRoundSol":0.05,"limit":24}`, token, srv.URL, csrf)
+	if simStrat.Code != http.StatusOK || !strings.Contains(simStrat.Body.String(), `"rounds":24`) {
+		t.Fatalf("POST /api/v1/mining/strategies/simulate failed (%d): %s", simStrat.Code, simStrat.Body.String())
+	}
+
+	// 5. Stream WS topic "mining" parses cleanly.
 	if p, err := parseStreamTopic("mining"); err != nil || p.kind != "mining" {
 		t.Fatalf("parseStreamTopic(mining) failed: %+v err=%v", p, err)
 	}
