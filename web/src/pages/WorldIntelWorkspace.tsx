@@ -8,6 +8,7 @@ import {
   Settings,
   Zap,
 } from "../icons";
+import { safeHttpsHref } from "../agents-v2";
 import { DATA_PLUGINS_CHANGED_EVENT, fetchDataPlugins } from "../data-plugins";
 import { parseTradeWorkspaceConfig, TRADE_STORAGE_KEY } from "../market-data";
 import { TRIGGER_DRAFT_KEY, type TriggerDraftSeed } from "../automation";
@@ -417,9 +418,9 @@ export function WorldIntelWorkspace() {
                         <CandlestickChart size={13} aria-hidden="true" />
                       </button>
                     )}
-                    {ev.url?.startsWith("https://") && (
+                    {safeHttpsHref(ev.url) && (
                       <a
-                        href={ev.url}
+                        href={safeHttpsHref(ev.url)}
                         target="_blank"
                         rel="noopener noreferrer"
                         className="icon-button"

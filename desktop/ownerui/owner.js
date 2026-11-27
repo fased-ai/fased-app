@@ -39,7 +39,9 @@ if (trade) {
   const asset = (mint) =>
     mint === "So11111111111111111111111111111111111111112"
       ? [9, "wSOL"]
-      : [6, "USDC"];
+      : mint === "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
+        ? [6, "USDC"]
+        : [0, mint || "UNKNOWN_MINT"];
   const amount = (n, mint) => {
     const [d, s] = asset(mint);
     return unit(n, d) + " " + s;

@@ -21,6 +21,7 @@ import {
   parseChatSlashCommand,
   parseDelegatedToolSummary,
   parseMarkdownBlocks,
+  safeHttpsHref,
   useAgentsV2,
   type AgentApproval,
   type AgentThread,
@@ -63,18 +64,27 @@ function renderInline(segments: InlineSegment[]) {
           {seg.text}
         </code>
       );
-    if (seg.kind === "link")
+    if (seg.kind === "link") {
+      const href = safeHttpsHref(seg.url);
+      if (!href) return <span key={i}>{seg.text}</span>;
+      let host = "";
+      try {
+        host = new URL(href).hostname;
+      } catch {}
       return (
         <a
           key={i}
-          href={seg.url}
+          href={href}
           target="_blank"
           rel="noopener noreferrer"
           className="v2-inline-link"
+          title={host || href}
         >
           {seg.text}
+          {host && !seg.text.includes(host) ? ` (${host})` : ""}
         </a>
       );
+    }
     return <span key={i}>{seg.text}</span>;
   });
 }

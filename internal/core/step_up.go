@@ -199,7 +199,14 @@ func (h *HTTPHandler) requireStepUpCtxBound(w http.ResponseWriter, r *http.Reque
 	}
 	presented := strings.TrimSpace(r.Header.Get("X-Fased-Step-Up"))
 	if presented == "" {
-		writeAuthCodeError(w, 403, "Owner confirmation required", "step_up_required")
+		resp := map[string]string{
+			"error": "Owner confirmation required",
+			"code":  "step_up_required",
+		}
+		if wantDigest != "" {
+			resp["bindingDigest"] = wantDigest
+		}
+		writeJSON(w, 403, resp)
 		return nil, false
 	}
 	now := time.Now()
@@ -227,7 +234,14 @@ func (h *HTTPHandler) requireStepUpCtxBound(w http.ResponseWriter, r *http.Reque
 	}
 	h.stepUpMu.Unlock()
 	if !valid {
-		writeAuthCodeError(w, 403, "Step-up confirmation expired, already used, or invalid for this action; confirm again", "step_up_required")
+		resp := map[string]string{
+			"error": "Step-up confirmation expired, already used, or invalid for this action; confirm again",
+			"code":  "step_up_required",
+		}
+		if wantDigest != "" {
+			resp["bindingDigest"] = wantDigest
+		}
+		writeJSON(w, 403, resp)
 		return nil, false
 	}
 	ctx := r.Context()

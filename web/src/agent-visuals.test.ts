@@ -155,6 +155,7 @@ describe("parseSafeVisualHTML", () => {
       href: "https://docs.solana.com/fees",
       target: "_blank",
       rel: "noopener noreferrer",
+      title: "docs.solana.com",
     });
 
     const path = els.find((el) => el.tag === "path");

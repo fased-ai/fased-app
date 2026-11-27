@@ -91,7 +91,7 @@ func previewRequestSecret(ctx context.Context, s *Store, _ string, rawArgs json.
 			OSVaultAvailable: osVault,
 		})
 		return approvalDraft{
-			Title:       "Secret request: " + sanitizeV2Title(label, displayName+" API key"),
+			Title:       "Secret request: " + displayName + " API key",
 			Summary:     sanitizeV2Title(summary, displayName+" API key"),
 			PayloadJSON: string(payload),
 		}, nil
@@ -171,7 +171,7 @@ func previewRequestSecret(ctx context.Context, s *Store, _ string, rawArgs json.
 			OSVaultAvailable: osVault,
 		})
 		return approvalDraft{
-			Title:       "Secret request: " + sanitizeV2Title(label, "RPC API key"),
+			Title:       "Secret request: " + sanitizeV2Title(matched.Name, matched.ID) + " RPC API key",
 			Summary:     sanitizeV2Title(summary, "RPC API key"),
 			PayloadJSON: string(payload),
 		}, nil

@@ -107,6 +107,7 @@ export function OrderExecutionWidget({
   notice = "",
   initialMode = "manual",
   jupiterQuote = null,
+  onClearJupiterQuote,
   onSubmitTrade,
   onQuoteJupiterSwap,
   onExecuteJupiterSwap,
@@ -121,6 +122,7 @@ export function OrderExecutionWidget({
   notice?: string;
   initialMode?: TradeMode;
   jupiterQuote?: JupiterSwapQuoteResponse | null;
+  onClearJupiterQuote?: () => void;
   onSubmitTrade: (req: TradeOrderRequest) => void;
   onQuoteJupiterSwap?: (req: JupiterSwapQuoteRequest) => void;
   onExecuteJupiterSwap?: (req: JupiterSwapQuoteRequest) => void;
@@ -178,7 +180,11 @@ export function OrderExecutionWidget({
   useEffect(() => {
     const base = symbol.toUpperCase().replace(/[-/]?USD[TC]?$|[-/]?PERP$/i, "");
     const matched = SOLANA_COMMON_TOKENS.find((tok) => tok.symbol === base);
-    const targetMint = matched?.mint ?? SOLANA_COMMON_TOKENS[0].mint;
+    if (!matched) {
+      onClearJupiterQuote?.();
+      return;
+    }
+    const targetMint = matched.mint;
     const quoteMint =
       targetMint === SOLANA_COMMON_TOKENS[1].mint
         ? SOLANA_COMMON_TOKENS[0].mint
@@ -190,7 +196,12 @@ export function OrderExecutionWidget({
       setSwapInMint(targetMint);
       setSwapOutMint(quoteMint);
     }
+    onClearJupiterQuote?.();
   }, [symbol, side]);
+
+  useEffect(() => {
+    onClearJupiterQuote?.();
+  }, [swapInMint, swapOutMint, swapSlippageBps, qty, accountId]);
 
   function buildSwapReq(prepareReview: boolean): JupiterSwapQuoteRequest {
     return {
@@ -367,7 +378,12 @@ export function OrderExecutionWidget({
             value={qty}
             onChange={(e) => setQty(e.target.value)}
           />
-          <span className="wt-unit-badge mono">{symbol}</span>
+          <span className="wt-unit-badge mono">
+            {isSolanaWallet
+              ? (SOLANA_COMMON_TOKENS.find((x) => x.mint === swapInMint)
+                  ?.symbol ?? "SPL")
+              : symbol}
+          </span>
         </div>
       </div>
 

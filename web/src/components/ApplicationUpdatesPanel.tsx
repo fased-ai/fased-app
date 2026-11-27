@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { safeHttpsHref } from "../agents-v2";
 import { useCore } from "../core";
 import { useUI } from "../ui-preferences";
 import { Clock3 } from "../icons";
@@ -250,13 +251,17 @@ export function ApplicationUpdatesPanel() {
                                   key={asset.name}
                                   className="desktop-release-asset"
                                 >
-                                  <a
-                                    href={asset.url}
-                                    target="_blank"
-                                    rel="noopener noreferrer"
-                                  >
-                                    {asset.name}
-                                  </a>
+                                  {safeHttpsHref(asset.url) ? (
+                                    <a
+                                      href={safeHttpsHref(asset.url)}
+                                      target="_blank"
+                                      rel="noopener noreferrer"
+                                    >
+                                      {asset.name}
+                                    </a>
+                                  ) : (
+                                    <span>{asset.name}</span>
+                                  )}
                                   <span className="desktop-release-meta">
                                     <span>{formatByteSize(asset.bytes)}</span>
                                     <code title={asset.sha256}>
@@ -267,15 +272,17 @@ export function ApplicationUpdatesPanel() {
                               ))}
                             </ul>
                           )}
-                          <div className="desktop-release-meta">
-                            <a
-                              href={desktopRelease.releaseUrl}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                            >
-                              {t("Release notes")}
-                            </a>
-                          </div>
+                          {safeHttpsHref(desktopRelease.releaseUrl) && (
+                            <div className="desktop-release-meta">
+                              <a
+                                href={safeHttpsHref(desktopRelease.releaseUrl)}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                              >
+                                {t("Release notes")}
+                              </a>
+                            </div>
+                          )}
                         </>
                       )}
                     </div>

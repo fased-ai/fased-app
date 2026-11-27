@@ -108,8 +108,8 @@ func ParseSECSubmissions(raw []byte, cik string, limit int) ([]SECFiling, error)
 			desc = strings.TrimSpace(rec.PrimaryDocDesc[i])
 		}
 		var docURL string
-		if accNoDashes != "" && doc != "" {
-			docURL = fmt.Sprintf("https://www.sec.gov/Archives/edgar/data/%s/%s/%s", numericCIK, accNoDashes, doc)
+		if accNoDashes != "" && doc != "" && isDigitsOnly(accNoDashes) && !strings.ContainsAny(doc, "/\\?#\r\n") && !strings.Contains(doc, "..") {
+			docURL = fmt.Sprintf("https://www.sec.gov/Archives/edgar/data/%s/%s/%s", url.PathEscape(numericCIK), url.PathEscape(accNoDashes), url.PathEscape(doc))
 		}
 		out = append(out, SECFiling{
 			CIK:             cik,
@@ -123,6 +123,18 @@ func ParseSECSubmissions(raw []byte, cik string, limit int) ([]SECFiling, error)
 		})
 	}
 	return out, nil
+}
+
+func isDigitsOnly(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, r := range s {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 func (c *upstreamClient) fetchFREDSeries(ctx context.Context, seriesID string, updatedAt int64) ([]MacroPoint, error) {

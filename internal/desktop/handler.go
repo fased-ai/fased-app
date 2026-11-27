@@ -15,6 +15,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/fased-ai/fased-app/internal/auth"
 	"github.com/fased-ai/fased-app/internal/connection"
 	"github.com/fased-ai/fased-app/internal/core"
 	"github.com/fased-ai/fased-app/internal/ownerclient"
@@ -26,6 +27,7 @@ type Handler struct {
 	dir             string
 	assets          http.Handler
 	newClient       func(context.Context, string) (*core.Client, bool, json.RawMessage, error)
+	connectLimiter  auth.RateLimiter
 	mu              sync.Mutex
 	instance        string
 }
@@ -46,6 +48,10 @@ func nativeOrigin(origin string) bool {
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.Header().Set("Referrer-Policy", "no-referrer")
+	w.Header().Set("X-Frame-Options", "DENY")
+	w.Header().Set("Permissions-Policy", "camera=(), microphone=(), geolocation=(), payment=(), usb=()")
+	w.Header().Set("Cross-Origin-Opener-Policy", "same-origin")
+	w.Header().Set("Cross-Origin-Resource-Policy", "same-origin")
 	w.Header().Set("Content-Security-Policy", "default-src 'self' wails://wails; script-src 'self' wails://wails; style-src 'self' wails://wails; img-src 'self' wails://wails data:; connect-src 'self' wails://wails; frame-ancestors 'none'; object-src 'none'; base-uri 'none'; form-action 'self'")
 	if r.Host != "wails" && r.Host != "wails.localhost" {
 		fail(w, 403, "unexpected desktop host")
@@ -113,6 +119,10 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if r.URL.Path == "/api/v1/installation/connect" {
+		if !h.connectLimiter.Allow(time.Now(), "desktop-connect", 10) {
+			fail(w, 429, "too many connection probes; wait a moment")
+			return
+		}
 		var target struct {
 			URL        string `json:"url"`
 			InstanceID string `json:"instanceId"`
@@ -121,6 +131,27 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		decoder.DisallowUnknownFields()
 		if decoder.Decode(&target) != nil || decoder.Decode(new(any)) != io.EOF {
 			fail(w, 400, "choose one instance address")
+			return
+		}
+		parsedTarget, pErr := url.Parse(strings.TrimSpace(target.URL))
+		if pErr != nil || parsedTarget.Host == "" || parsedTarget.User != nil {
+			fail(w, 400, "choose one valid instance address")
+			return
+		}
+		switch strings.ToLower(parsedTarget.Scheme) {
+		case "https":
+			if _, oErr := connection.RemoteHTTPSOrigin(target.URL); oErr != nil {
+				fail(w, 400, oErr.Error())
+				return
+			}
+		case "http":
+			host := strings.ToLower(parsedTarget.Hostname())
+			if host != "127.0.0.1" && host != "localhost" && host != "::1" {
+				fail(w, 400, "Remote requires an HTTPS address (Tailscale HTTPS, Cloudflare Tunnel, or your own HTTPS domain)")
+				return
+			}
+		default:
+			fail(w, 400, "Remote requires an HTTPS address (Tailscale HTTPS, Cloudflare Tunnel, or your own HTTPS domain)")
 			return
 		}
 		result, e := connection.Probe(r.Context(), target.URL, target.InstanceID)

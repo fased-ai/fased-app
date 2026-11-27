@@ -47,6 +47,7 @@ export class CoreError extends Error {
     message: string,
     readonly status: number,
     readonly code?: string,
+    readonly bindingDigest?: string,
   ) {
     super(message);
   }
@@ -163,6 +164,9 @@ function useCoreState() {
             : "Core request failed",
           response.status,
           typeof result.code === "string" ? result.code : undefined,
+          typeof result.bindingDigest === "string"
+            ? result.bindingDigest
+            : undefined,
         );
       return result as T;
     },

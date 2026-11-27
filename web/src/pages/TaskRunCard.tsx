@@ -7,6 +7,7 @@ import { useUI } from "../ui-preferences";
 import type { AgentRun, AgentTask, AgentView } from "../agents";
 import { useWorkspace } from "../workspace";
 import { Badge } from "../components/shared";
+import { safeHttpsHref } from "../agents-v2";
 import { PaperResultFacts, paperOutcome } from "./AgentStrategies";
 
 const displayLocale = () =>
@@ -177,9 +178,17 @@ export function TaskRunCard({
               ?.items?.find((n) => n.id === id);
             return item ? (
               <li key={id}>
-                <a href={item.url} target="_blank" rel="noreferrer noopener">
-                  {item.title}
-                </a>
+                {safeHttpsHref(item.url) ? (
+                  <a
+                    href={safeHttpsHref(item.url)}
+                    target="_blank"
+                    rel="noreferrer noopener"
+                  >
+                    {item.title}
+                  </a>
+                ) : (
+                  <span>{item.title}</span>
+                )}
               </li>
             ) : null;
           })}

@@ -697,12 +697,32 @@ export type InlineSegment =
 export function isSafePublicHttpsUrl(raw: string): boolean {
   try {
     const u = new URL(raw.trim());
-    return (
-      u.protocol === "https:" && !!u.hostname && !u.username && !u.password
-    );
+    if (u.protocol !== "https:" || !u.hostname || u.username || u.password) {
+      return false;
+    }
+    const host = u.hostname.toLowerCase().replace(/\.+$/, "");
+    if (
+      !host ||
+      host === "localhost" ||
+      host.endsWith(".localhost") ||
+      host.endsWith(".local") ||
+      host.endsWith(".internal") ||
+      host.includes(":") ||
+      /^\d{1,3}(?:\.\d{1,3}){3}$/.test(host) ||
+      /^(?:0x[0-9a-f]+|\d+)$/i.test(host)
+    ) {
+      return false;
+    }
+    return host.includes(".");
   } catch {
     return false;
   }
+}
+
+export function safeHttpsHref(raw?: string | null): string | undefined {
+  if (!raw) return undefined;
+  const trimmed = raw.trim();
+  return isSafePublicHttpsUrl(trimmed) ? trimmed : undefined;
 }
 
 export type MessageCitation = {

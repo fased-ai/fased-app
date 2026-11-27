@@ -8,6 +8,7 @@ import { signWalletStandardTransaction } from "../wallet-standard";
 import {
   executeNativeWalletReview,
   isWebAuthnAvailable,
+  listWalletsV2,
   quoteTradeJupiterSwap,
   requestPasskeyStepUpToken,
   requestStepUpToken,
@@ -108,14 +109,20 @@ export function TradeWorkspace() {
   const [tradeNotice, setTradeNotice] = useState("");
   const [jupiterQuote, setJupiterQuote] =
     useState<JupiterSwapQuoteResponse | null>(null);
+  const [passkeyEnabled, setPasskeyEnabled] = useState(false);
   const [stepUpMode, setStepUpMode] = useState<
     "" | "password_setup" | "step_up"
   >("");
   const [stepUpPassword, setStepUpPassword] = useState("");
+  const [stepUpPasswordConfirm, setStepUpPasswordConfirm] = useState("");
+  const [stepUpSummary, setStepUpSummary] = useState<
+    { label: string; value: string; mono?: boolean }[]
+  >([]);
   const pendingStepUpRef = useRef<{
     action: string;
     walletId: string;
     bindingDigest?: string;
+    summary?: { label: string; value: string; mono?: boolean }[];
     fn: (stepUpToken?: string) => Promise<void>;
   } | null>(null);
 
@@ -199,6 +206,13 @@ export function TradeWorkspace() {
     void listLabScripts(core)
       .then((res) => {
         if (!cancelled) setLabScripts(res.scripts ?? []);
+      })
+      .catch(() => {});
+    void listWalletsV2(core)
+      .then((res) => {
+        if (!cancelled) {
+          setPasskeyEnabled(Boolean(res.security?.passkeyEnabled));
+        }
       })
       .catch(() => {});
     void refreshDesk();
@@ -385,6 +399,7 @@ export function TradeWorkspace() {
     fn: (stepUpToken?: string) => Promise<void>,
     initialToken?: string,
     bindingDigest?: string,
+    summary?: { label: string; value: string; mono?: boolean }[],
   ): Promise<void> {
     try {
       await fn(initialToken || undefined);
@@ -394,8 +409,24 @@ export function TradeWorkspace() {
         (err.code === "owner_password_required" ||
           err.code === "step_up_required")
       ) {
-        pendingStepUpRef.current = { action, walletId, bindingDigest, fn };
+        const effectiveDigest = err.bindingDigest || bindingDigest;
+        const rows = [...(summary ?? [])];
+        if (
+          effectiveDigest &&
+          !rows.some((r) => r.label === "Digest" || r.label === "Tx Digest")
+        ) {
+          rows.push({ label: "Digest", value: effectiveDigest, mono: true });
+        }
+        pendingStepUpRef.current = {
+          action,
+          walletId,
+          bindingDigest: effectiveDigest,
+          summary: rows,
+          fn,
+        };
         setStepUpPassword("");
+        setStepUpPasswordConfirm("");
+        setStepUpSummary(rows);
         setStepUpMode(
           err.code === "owner_password_required" ? "password_setup" : "step_up",
         );
@@ -408,26 +439,33 @@ export function TradeWorkspace() {
   async function onSubmitTradeStepUp(e: React.FormEvent) {
     e.preventDefault();
     const pending = pendingStepUpRef.current;
+    const pw = stepUpPassword;
+    const mode = stepUpMode;
+    if (mode === "password_setup" && pw !== stepUpPasswordConfirm) {
+      setTradeError("Passwords do not match");
+      return;
+    }
     setTradeBusy(true);
     setTradeError("");
     try {
-      if (stepUpMode === "password_setup") {
-        await setLocalOwnerPassword(core, stepUpPassword);
+      if (mode === "password_setup") {
+        await setLocalOwnerPassword(core, pw);
       }
       let tok = "";
       if (pending) {
         tok = (
           await requestStepUpToken(
             core,
-            stepUpPassword,
+            pw,
             pending.action,
             pending.walletId,
+            pending.bindingDigest ?? "",
           )
         ).stepUpToken;
       }
       pendingStepUpRef.current = null;
-      setStepUpPassword("");
       setStepUpMode("");
+      setStepUpSummary([]);
       if (pending) {
         await runTradeWithStepUp(
           pending.action,
@@ -435,6 +473,7 @@ export function TradeWorkspace() {
           pending.fn,
           tok,
           pending.bindingDigest,
+          pending.summary,
         );
       }
     } catch (err) {
@@ -442,6 +481,8 @@ export function TradeWorkspace() {
         err instanceof Error ? err.message : "Authorization failed",
       );
     } finally {
+      setStepUpPassword("");
+      setStepUpPasswordConfirm("");
       setTradeBusy(false);
     }
   }
@@ -460,6 +501,8 @@ export function TradeWorkspace() {
       );
       pendingStepUpRef.current = null;
       setStepUpPassword("");
+      setStepUpPasswordConfirm("");
+      setStepUpSummary([]);
       setStepUpMode("");
       await runTradeWithStepUp(
         pending.action,
@@ -467,6 +510,7 @@ export function TradeWorkspace() {
         pending.fn,
         res.stepUpToken,
         pending.bindingDigest,
+        pending.summary,
       );
     } catch (err) {
       setTradeError(
@@ -535,11 +579,42 @@ export function TradeWorkspace() {
       if (!rev) {
         throw new Error("Signer review unavailable for Jupiter swap");
       }
+      if (!rev.simulationOk) {
+        throw new Error(
+          rev.simulationError || "Swap simulation failed; execution blocked",
+        );
+      }
+      const summary: { label: string; value: string; mono?: boolean }[] = [
+        { label: "Wallet", value: res.walletHandle, mono: true },
+        {
+          label: "Swap",
+          value: `${res.amountHuman} ${res.inputSymbol} → ${res.outAmountHuman} ${res.outputSymbol}`,
+          mono: true,
+        },
+        { label: "Input Mint", value: res.inputMint, mono: true },
+        { label: "Output Mint", value: res.outputMint, mono: true },
+        {
+          label: "Min Out",
+          value: `${res.minOutAmountHuman} ${res.outputSymbol} (${res.slippageBps} bps)`,
+          mono: true,
+        },
+        {
+          label: "Fee",
+          value: `${rev.estimatedFeeLamports} lamports`,
+          mono: true,
+        },
+        { label: "Tx Digest", value: rev.txDigest, mono: true },
+      ];
       if (rev.custody === "hardware_standard") {
         const acct = accounts.find((a) => a.id === res.walletHandle);
+        if (!acct?.address) {
+          throw new Error(
+            "Hardware wallet public address unavailable; refresh accounts before signing",
+          );
+        }
         const signedB64 = await signWalletStandardTransaction({
           unsignedTxBase64: rev.unsignedTxBase64,
-          expectedAddress: acct?.address ?? "",
+          expectedAddress: acct.address,
           cluster: res.cluster,
         });
         const out = await submitHardwareSignedReview(
@@ -570,6 +645,7 @@ export function TradeWorkspace() {
           },
           undefined,
           rev.txDigest,
+          summary,
         );
       }
     } catch (err) {
@@ -1061,6 +1137,7 @@ export function TradeWorkspace() {
                   notice={tradeNotice}
                   initialMode={composerTab}
                   jupiterQuote={jupiterQuote}
+                  onClearJupiterQuote={() => setJupiterQuote(null)}
                   onSubmitTrade={(req) => void handleSubmitTrade(req)}
                   onQuoteJupiterSwap={(req) => void handleQuoteJupiterSwap(req)}
                   onExecuteJupiterSwap={(req) =>
@@ -1082,10 +1159,26 @@ export function TradeWorkspace() {
           onClose={() => {
             pendingStepUpRef.current = null;
             setStepUpPassword("");
+            setStepUpPasswordConfirm("");
+            setStepUpSummary([]);
             setStepUpMode("");
           }}
         >
           <form className="wt-form-stack" onSubmit={onSubmitTradeStepUp}>
+            {stepUpSummary.length > 0 && (
+              <div className="wt-review-box">
+                {stepUpSummary.map((row) => (
+                  <div key={row.label} className="wt-review-kv">
+                    <span>{row.label}</span>
+                    {row.mono ? (
+                      <code style={{ wordBreak: "break-all" }}>{row.value}</code>
+                    ) : (
+                      <strong>{row.value}</strong>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
             <label className="wt-field">
               <span>
                 {t(
@@ -1097,25 +1190,44 @@ export function TradeWorkspace() {
               <input
                 type="password"
                 minLength={12}
-                autoComplete="current-password"
+                autoComplete={
+                  stepUpMode === "password_setup"
+                    ? "new-password"
+                    : "current-password"
+                }
                 value={stepUpPassword}
                 onChange={(e) => setStepUpPassword(e.target.value)}
                 required
               />
             </label>
+            {stepUpMode === "password_setup" && (
+              <label className="wt-field">
+                <span>{t("Confirm Owner Password")}</span>
+                <input
+                  type="password"
+                  minLength={12}
+                  autoComplete="new-password"
+                  value={stepUpPasswordConfirm}
+                  onChange={(e) => setStepUpPasswordConfirm(e.target.value)}
+                  required
+                />
+              </label>
+            )}
             <button type="submit" className="wt-btn-rose" disabled={tradeBusy}>
               {`${t(stepUpMode === "password_setup" ? "Save" : "Approve & Execute")} →`}
             </button>
-            {stepUpMode === "step_up" && isWebAuthnAvailable() && (
-              <button
-                type="button"
-                className="wt-btn-soft"
-                disabled={tradeBusy}
-                onClick={() => void onSubmitTradePasskeyStepUp()}
-              >
-                {`${t("Confirm with Passkey")} →`}
-              </button>
-            )}
+            {stepUpMode === "step_up" &&
+              passkeyEnabled &&
+              isWebAuthnAvailable() && (
+                <button
+                  type="button"
+                  className="wt-btn-soft"
+                  disabled={tradeBusy}
+                  onClick={() => void onSubmitTradePasskeyStepUp()}
+                >
+                  {`${t("Confirm with Passkey")} →`}
+                </button>
+              )}
           </form>
         </Dialog>
       )}
