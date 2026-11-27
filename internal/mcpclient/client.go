@@ -71,9 +71,11 @@ func dialSafeMCP(ctx context.Context, dialer *net.Dialer, network, addr string, 
 	if err != nil {
 		return nil, err
 	}
+	lowerHost := strings.ToLower(strings.TrimSpace(host))
+	literalLoopback := lowerHost == "localhost" || lowerHost == "127.0.0.1" || lowerHost == "::1"
 	for _, r := range resolved {
 		if r.IP.IsLoopback() {
-			if !allowLocalhost {
+			if !allowLocalhost || !literalLoopback {
 				continue
 			}
 			if conn, dErr := dialer.DialContext(ctx, network, net.JoinHostPort(r.IP.String(), port)); dErr == nil {

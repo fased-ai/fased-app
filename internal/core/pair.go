@@ -423,15 +423,20 @@ func (s *Store) ListPairedDevices(ctx context.Context, currentToken string) ([]P
 
 // RevokePairedDevice removes a paired device entry and invalidates its active session immediately.
 func (s *Store) RevokePairedDevice(ctx context.Context, deviceID string) error {
+	_, err := s.revokePairedDeviceReturningHash(ctx, deviceID)
+	return err
+}
+
+func (s *Store) revokePairedDeviceReturningHash(ctx context.Context, deviceID string) (string, error) {
 	if deviceID == "" {
-		return errors.New("device id required")
+		return "", errors.New("device id required")
 	}
 	s.authMu.Lock()
 	defer s.authMu.Unlock()
 
 	st, err := s.loadPairingStateLocked()
 	if err != nil {
-		return err
+		return "", err
 	}
 	targetHash := ""
 	remaining := make([]pairedDeviceRecord, 0, len(st.Devices))
@@ -443,14 +448,14 @@ func (s *Store) RevokePairedDevice(ctx context.Context, deviceID string) error {
 		remaining = append(remaining, d)
 	}
 	if targetHash == "" {
-		return errors.New("paired device not found")
+		return "", errors.New("paired device not found")
 	}
 	st.Devices = remaining
 	if err = s.savePairingStateLocked(st); err != nil {
-		return err
+		return "", err
 	}
 	_, err = s.db.ExecContext(ctx, "DELETE FROM sessions WHERE token_hash=?", targetHash)
-	return err
+	return targetHash, err
 }
 
 // RevokeAllPairedDevices invalidates every active paired session on this instance.
@@ -611,10 +616,12 @@ func (h *HTTPHandler) pairManageAPI(w http.ResponseWriter, r *http.Request) {
 		}
 		switch req.Action {
 		case "revoke":
-			if err := h.store.RevokePairedDevice(r.Context(), req.DeviceID); err != nil {
+			revokedHash, err := h.store.revokePairedDeviceReturningHash(r.Context(), req.DeviceID)
+			if err != nil {
 				writeError(w, 400, err.Error())
 				return
 			}
+			h.closeStreamsForSessionHash(revokedHash)
 			writeJSON(w, 200, map[string]any{"revoked": 1})
 		case "revoke-all":
 			count, err := h.store.RevokeAllPairedDevices(r.Context())
@@ -622,6 +629,7 @@ func (h *HTTPHandler) pairManageAPI(w http.ResponseWriter, r *http.Request) {
 				writeError(w, 500, "revocation failed")
 				return
 			}
+			h.closeAllStreams()
 			writeJSON(w, 200, map[string]any{"revoked": count})
 		default:
 			writeError(w, 400, "unsupported device action")
@@ -771,10 +779,12 @@ func (h *HTTPHandler) pairDevicesAPI(w http.ResponseWriter, r *http.Request, tok
 				writeError(w, 400, "use sign out to disconnect this device")
 				return
 			}
-			if err := h.store.RevokePairedDevice(r.Context(), req.DeviceID); err != nil {
+			revokedHash, err := h.store.revokePairedDeviceReturningHash(r.Context(), req.DeviceID)
+			if err != nil {
 				writeError(w, 400, err.Error())
 				return
 			}
+			h.closeStreamsForSessionHash(revokedHash)
 			writeJSON(w, 200, map[string]bool{"revoked": true})
 		default:
 			writeError(w, 400, "unsupported device action")

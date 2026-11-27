@@ -55,25 +55,26 @@ type Config struct {
 // Service owns private wallet keys, encrypted execution RPCs, fail-closed policies,
 // immutable transaction reviews, and the durable broadcast ledger.
 type Service struct {
-	dir             string
-	db              *sql.DB
-	masterKey       []byte
-	auditHMACKey    []byte
-	kekProtection   string
-	cfg             Config
-	now             func() time.Time
-	mu              sync.Mutex
-	proofMu         sync.Mutex
-	ownerProofs     map[string]ownerProofEntry
-	kdfSlots        chan struct{}
-	authFailMu      sync.Mutex
-	authFailTimes   []time.Time
-	authConsecFails int
-	authLockUntil   time.Time
-	closed          bool
-	kdfTime         uint32
-	kdfMemory       uint32
-	kdfThreads      uint8
+	dir               string
+	db                *sql.DB
+	masterKey         []byte
+	auditHMACKey      []byte
+	kekProtection     string
+	cfg               Config
+	now               func() time.Time
+	mu                sync.Mutex
+	proofMu           sync.Mutex
+	ownerProofs       map[string]ownerProofEntry
+	passkeyChallenges map[string]passkeyChallengeEntry
+	kdfSlots          chan struct{}
+	authFailMu        sync.Mutex
+	authFailTimes     []time.Time
+	authConsecFails   int
+	authLockUntil     time.Time
+	closed            bool
+	kdfTime           uint32
+	kdfMemory         uint32
+	kdfThreads        uint8
 }
 
 func sqliteURI(path string) string {
@@ -204,6 +205,17 @@ CREATE TABLE IF NOT EXISTS signer_meta (
 	audit_count INTEGER NOT NULL DEFAULT 0
 );
 
+CREATE TABLE IF NOT EXISTS owner_passkeys (
+	credential_id TEXT PRIMARY KEY,
+	label TEXT NOT NULL,
+	rp_id TEXT NOT NULL,
+	alg INTEGER NOT NULL,
+	pub_key_json TEXT NOT NULL,
+	sign_count INTEGER NOT NULL DEFAULT 0,
+	created_at INTEGER NOT NULL,
+	last_used_at INTEGER NOT NULL DEFAULT 0
+);
+
 CREATE TABLE IF NOT EXISTS audit_log (
 	id TEXT PRIMARY KEY,
 	wallet_id TEXT NOT NULL,
@@ -228,17 +240,18 @@ CREATE INDEX IF NOT EXISTS idx_audit_wallet ON audit_log (wallet_id, timestamp D
 		kdfT, kdfM, kdfP = 1, 64, 1
 	}
 	svc := &Service{
-		dir:           dir,
-		db:            db,
-		masterKey:     masterKey,
-		kekProtection: kekProt,
-		cfg:           cfg,
-		now:           nowFn,
-		ownerProofs:   make(map[string]ownerProofEntry),
-		kdfSlots:      make(chan struct{}, 2),
-		kdfTime:       kdfT,
-		kdfMemory:     kdfM,
-		kdfThreads:    kdfP,
+		dir:               dir,
+		db:                db,
+		masterKey:         masterKey,
+		kekProtection:     kekProt,
+		cfg:               cfg,
+		now:               nowFn,
+		ownerProofs:       make(map[string]ownerProofEntry),
+		passkeyChallenges: make(map[string]passkeyChallengeEntry),
+		kdfSlots:          make(chan struct{}, 2),
+		kdfTime:           kdfT,
+		kdfMemory:         kdfM,
+		kdfThreads:        kdfP,
 	}
 	if err := svc.initSignerMetaLocked(ctx); err != nil {
 		_ = svc.Close()
@@ -301,10 +314,13 @@ func (s *Service) initSignerMetaLocked(ctx context.Context) error {
 // SecurityStatus reports KEK protection and signer process isolation posture.
 func (s *Service) SecurityStatus(ctx context.Context) (SecurityStatus, error) {
 	hasOwner, _ := s.HasOwnerAuth(ctx)
+	passkeys, _ := s.ListOwnerPasskeys(ctx)
 	return SecurityStatus{
 		ProcessIsolated:   false,
 		KEKProtection:     firstStr(s.kekProtection, KEKFileDevOnly),
-		OwnerAuthEnforced: hasOwner || s.cfg.RequireOwnerAuth,
+		OwnerAuthEnforced: hasOwner || len(passkeys) > 0 || s.cfg.RequireOwnerAuth,
+		PasskeyCount:      len(passkeys),
+		PasskeyEnabled:    len(passkeys) > 0,
 		SocketPath:        s.cfg.SocketPath,
 		AllowedPeerUID:    os.Getuid(),
 	}, nil
@@ -1745,7 +1761,7 @@ func (s *Service) PrepareReview(ctx context.Context, req PrepareReviewRequest) (
 		AgentID:              reqAgentID,
 		SkillGrantID:         strings.TrimSpace(req.SkillGrantID),
 		Venue:                reqVenue,
-		ExpiresAt:            nowSec + 120,
+		ExpiresAt:            nowSec + 90,
 		Status:               ReviewStatusPrepared,
 		CreatedAt:            nowSec,
 	}

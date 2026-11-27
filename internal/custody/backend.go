@@ -14,6 +14,12 @@ type Backend interface {
 	HasOwnerAuth(ctx context.Context) (bool, error)
 	ConfigureOwnerAuth(ctx context.Context, password string) error
 	AuthorizeOwnerAction(ctx context.Context, password, action, walletID string) (string, time.Time, error)
+	ListOwnerPasskeys(ctx context.Context) ([]OwnerPasskey, error)
+	DeleteOwnerPasskey(ctx context.Context, credentialID string) (bool, error)
+	BeginPasskeyRegistration(ctx context.Context, rpID, origin, label string) (PasskeyRegisterOptions, error)
+	FinishPasskeyRegistration(ctx context.Context, req PasskeyRegisterFinishRequest) (OwnerPasskey, error)
+	BeginPasskeyAssertion(ctx context.Context, rpID, origin, action, walletID, bindingDigest string) (PasskeyAssertOptions, error)
+	FinishPasskeyAssertion(ctx context.Context, req PasskeyAssertFinishRequest) (string, time.Time, string, error)
 	ListWallets(ctx context.Context) ([]WalletPublic, error)
 	GetWallet(ctx context.Context, idOrHandle string) (WalletPublic, error)
 	ResolveWallet(ctx context.Context, sel WalletSelector) (WalletPublic, error)

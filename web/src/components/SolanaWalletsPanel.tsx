@@ -25,10 +25,13 @@ import {
   deleteWalletV2,
   executeNativeWalletReview,
   exportEncryptedBackupV2,
+  isWebAuthnAvailable,
   listWalletActivity,
   listWalletsV2,
   prepareWalletReview,
   reconcileWalletLedger,
+  registerOwnerPasskey,
+  requestPasskeyStepUpToken,
   requestStepUpToken,
   restoreEncryptedBackupV2,
   setLocalOwnerPassword,
@@ -139,6 +142,7 @@ export function SolanaWalletsPanel() {
   const pendingStepUpRef = useRef<{
     action: string;
     walletId: string;
+    bindingDigest?: string;
     fn: (stepUpToken?: string) => Promise<void>;
   } | null>(null);
 
@@ -372,6 +376,7 @@ export function SolanaWalletsPanel() {
     walletId: string,
     fn: (stepUpToken?: string) => Promise<void>,
     initialToken?: string,
+    bindingDigest?: string,
   ): Promise<void> {
     try {
       await fn(initialToken || undefined);
@@ -381,7 +386,7 @@ export function SolanaWalletsPanel() {
         (err.code === "owner_password_required" ||
           err.code === "step_up_required")
       ) {
-        pendingStepUpRef.current = { action, walletId, fn };
+        pendingStepUpRef.current = { action, walletId, bindingDigest, fn };
         setStepUpPassword("");
         setStepUpModalMode(
           err.code === "owner_password_required" ? "password_setup" : "step_up",
@@ -389,6 +394,79 @@ export function SolanaWalletsPanel() {
         return;
       }
       throw err;
+    }
+  }
+
+  async function onSubmitPasskeyStepUp() {
+    const pending = pendingStepUpRef.current;
+    if (!pending) return;
+    setBusy(true);
+    setError("");
+    try {
+      const res = await requestPasskeyStepUpToken(
+        core,
+        pending.action,
+        pending.walletId,
+        pending.bindingDigest ?? "",
+      );
+      pendingStepUpRef.current = null;
+      setStepUpPassword("");
+      setStepUpModalMode("");
+      await runWithStepUp(
+        pending.action,
+        pending.walletId,
+        pending.fn,
+        res.stepUpToken,
+        pending.bindingDigest,
+      );
+    } catch (err) {
+      setError(
+        err instanceof Error ? err.message : "Passkey authorization failed",
+      );
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function onRegisterPasskey() {
+    if (!isWebAuthnAvailable()) {
+      setError("Passkeys are not supported in this browser");
+      return;
+    }
+    setBusy(true);
+    setError("");
+    setNotice("");
+    try {
+      let beginTok: string | undefined;
+      let finishTok: string | undefined;
+      if (ownerPasswordSet) {
+        const pw = window.prompt(
+          "Confirm owner password to register FIDO2 passkey",
+        );
+        if (!pw) {
+          setBusy(false);
+          return;
+        }
+        beginTok = (await requestStepUpToken(core, pw, "passkey-register", "*"))
+          .stepUpToken;
+        finishTok = (
+          await requestStepUpToken(core, pw, "passkey-register", "*")
+        ).stepUpToken;
+      }
+      const res = await registerOwnerPasskey(
+        core,
+        `Passkey ${new Date().toISOString().slice(0, 10)}`,
+        beginTok,
+        finishTok,
+      );
+      setNotice(`Passkey registered (${res.passkey.label})`);
+      await loadWallets();
+    } catch (err) {
+      setError(
+        err instanceof Error ? err.message : "Passkey registration failed",
+      );
+    } finally {
+      setBusy(false);
     }
   }
 
@@ -568,19 +646,25 @@ export function SolanaWalletsPanel() {
         setActiveReview(null);
         await Promise.all([loadWallets(), loadActivity(selected.id)]);
       } else {
-        await runWithStepUp("execute", selected.id, async (stepUp) => {
-          const out = await executeNativeWalletReview(
-            core,
-            selected.id,
-            rev.id,
-            stepUp,
-          );
-          setNotice(
-            `Signer executed (${out.entry.state}) · sig=${out.entry.txSignature ?? ""}`,
-          );
-          setActiveReview(null);
-          await Promise.all([loadWallets(), loadActivity(selected.id)]);
-        });
+        await runWithStepUp(
+          "execute",
+          selected.id,
+          async (stepUp) => {
+            const out = await executeNativeWalletReview(
+              core,
+              selected.id,
+              rev.id,
+              stepUp,
+            );
+            setNotice(
+              `Signer executed (${out.entry.state}) · sig=${out.entry.txSignature ?? ""}`,
+            );
+            setActiveReview(null);
+            await Promise.all([loadWallets(), loadActivity(selected.id)]);
+          },
+          undefined,
+          rev.txDigest,
+        );
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Execution failed");
@@ -744,6 +828,22 @@ export function SolanaWalletsPanel() {
               <span className="wt-posture-pill is-ok">
                 {t("Audit Chain Verified")}
               </span>
+            )}
+            {securityPosture?.passkeyEnabled ? (
+              <span className="wt-posture-pill is-ok">
+                {`Passkey (${securityPosture.passkeyCount ?? 1})`}
+              </span>
+            ) : (
+              isWebAuthnAvailable() && (
+                <button
+                  type="button"
+                  className="wt-btn-soft"
+                  disabled={busy}
+                  onClick={() => void onRegisterPasskey()}
+                >
+                  {t("Passkey")}
+                </button>
+              )
             )}
             {!ownerPasswordSet && (
               <button
@@ -1857,6 +1957,18 @@ export function SolanaWalletsPanel() {
             <button type="submit" className="wt-btn-rose" disabled={busy}>
               {`${t(stepUpModalMode === "password_setup" ? "Save" : "Approve & Execute")} →`}
             </button>
+            {stepUpModalMode === "step_up" &&
+              securityPosture?.passkeyEnabled &&
+              isWebAuthnAvailable() && (
+                <button
+                  type="button"
+                  className="wt-btn-soft"
+                  disabled={busy}
+                  onClick={() => void onSubmitPasskeyStepUp()}
+                >
+                  {`${t("Confirm with Passkey")} →`}
+                </button>
+              )}
           </form>
         </Dialog>
       )}

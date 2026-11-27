@@ -10,6 +10,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/fased-ai/fased-app/internal/providersecrets"
 )
 
 // Config parameterizes the External MCP Client Service.
@@ -17,6 +19,7 @@ type Config struct {
 	DataDir       string
 	FixtureMode   bool
 	Now           func() time.Time
+	SecretSource  providersecrets.Source
 	HTTPTransport http.RoundTripper // Tests only.
 }
 
@@ -40,7 +43,7 @@ func NewService(cfg Config) (*Service, error) {
 	if nowFn == nil {
 		nowFn = time.Now
 	}
-	st, err := openStore(cfg.DataDir)
+	st, err := openStore(cfg.DataDir, cfg.SecretSource)
 	if err != nil {
 		return nil, err
 	}

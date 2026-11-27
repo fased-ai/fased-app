@@ -46,9 +46,10 @@ func OwnerProofFromContext(ctx context.Context) string {
 }
 
 type ownerProofEntry struct {
-	action    string
-	walletID  string
-	expiresAt time.Time
+	action        string
+	walletID      string
+	bindingDigest string
+	expiresAt     time.Time
 }
 
 func hashOwnerProof(proof string) string {
@@ -141,12 +142,24 @@ WHERE id = 1`,
 // AuthorizeOwnerAction verifies the owner password directly inside fased-signer and mints a
 // single-use, 90-second, action-and-wallet-scoped proof that is consumed on first use.
 func (s *Service) AuthorizeOwnerAction(ctx context.Context, password, action, walletID string) (string, time.Time, error) {
+	return s.AuthorizeOwnerActionBound(ctx, password, action, walletID, "")
+}
+
+// AuthorizeOwnerActionBound verifies the owner password directly inside fased-signer and mints
+// a single-use proof optionally bound to an exact SHA-256 bindingDigest (e.g. txDigest or nextPolicyHash).
+func (s *Service) AuthorizeOwnerActionBound(ctx context.Context, password, action, walletID, bindingDigest string) (string, time.Time, error) {
 	act, wid := normalizeOwnerScope(action, walletID)
 	if act == "" {
 		return "", time.Time{}, errors.New("owner authorization action required")
 	}
-	if wid == "*" && act != "restore" {
+	if wid == "*" && act != "restore" && act != "passkey-register" && act != "passkey-delete" {
 		return "", time.Time{}, fmt.Errorf("%w: explicit walletId required for %s authorization", ErrOwnerAuthRequired, act)
+	}
+	cleanBinding := strings.ToLower(strings.TrimSpace(bindingDigest))
+	if cleanBinding != "" {
+		if _, decErr := hex.DecodeString(cleanBinding); decErr != nil || len(cleanBinding) != 64 {
+			return "", time.Time{}, errors.New("bindingDigest must be a 64-character hex SHA-256 digest")
+		}
 	}
 	if len(password) > ownerMaxPassBytes || len(strings.TrimSpace(password)) < ownerMinPassChars {
 		return "", time.Time{}, ErrWrongPassword
@@ -195,7 +208,10 @@ FROM signer_meta WHERE id = 1`).Scan(&salt, &hash, &tParam, &mParam, &pParam)
 		return "", time.Time{}, ErrWrongPassword
 	}
 	s.resetOwnerAuthFailures()
+	return s.mintOwnerProof(act, wid, cleanBinding)
+}
 
+func (s *Service) mintOwnerProof(act, wid, bindingDigest string) (string, time.Time, error) {
 	raw := make([]byte, 32)
 	if _, err := rand.Read(raw); err != nil {
 		return "", time.Time{}, err
@@ -203,7 +219,7 @@ FROM signer_meta WHERE id = 1`).Scan(&salt, &hash, &tParam, &mParam, &pParam)
 	proof := base64.RawURLEncoding.EncodeToString(raw)
 	clear(raw)
 
-	now = s.now().UTC()
+	now := s.now().UTC()
 	exp := now.Add(ownerProofTTL)
 	s.proofMu.Lock()
 	if s.ownerProofs == nil {
@@ -219,9 +235,10 @@ FROM signer_meta WHERE id = 1`).Scan(&salt, &hash, &tParam, &mParam, &pParam)
 		return "", time.Time{}, errors.New("too many pending signer owner authorizations; retry shortly")
 	}
 	s.ownerProofs[hashOwnerProof(proof)] = ownerProofEntry{
-		action:    act,
-		walletID:  wid,
-		expiresAt: exp,
+		action:        act,
+		walletID:      wid,
+		bindingDigest: strings.ToLower(strings.TrimSpace(bindingDigest)),
+		expiresAt:     exp,
 	}
 	s.proofMu.Unlock()
 	return proof, exp, nil
@@ -295,11 +312,18 @@ func (s *Service) resetOwnerAuthFailures() {
 
 // ConsumeOwnerProof validates and atomically consumes a single-use signer owner proof for (action, walletID).
 func (s *Service) ConsumeOwnerProof(action, walletID, proof string) error {
+	return s.ConsumeOwnerProofBound(action, walletID, "", proof)
+}
+
+// ConsumeOwnerProofBound validates and atomically consumes a single-use signer owner proof,
+// enforcing cryptographic digest binding (txDigest or nextPolicyHash) whenever the proof carries one.
+func (s *Service) ConsumeOwnerProofBound(action, walletID, expectedBindingDigest, proof string) error {
 	clean := strings.TrimSpace(proof)
 	if clean == "" {
 		return fmt.Errorf("%w: missing signer owner proof for %s", ErrOwnerAuthRequired, action)
 	}
 	act, wid := normalizeOwnerScope(action, walletID)
+	wantDigest := strings.ToLower(strings.TrimSpace(expectedBindingDigest))
 	key := hashOwnerProof(clean)
 	now := s.now().UTC()
 
@@ -316,6 +340,9 @@ func (s *Service) ConsumeOwnerProof(action, walletID, proof string) error {
 	}
 	if entry.action != act || (entry.walletID != wid && entry.walletID != "*") {
 		return fmt.Errorf("%w: signer owner proof scope mismatch (want %s/%s)", ErrOwnerAuthRequired, act, wid)
+	}
+	if entry.bindingDigest != "" && subtle.ConstantTimeCompare([]byte(entry.bindingDigest), []byte(wantDigest)) != 1 {
+		return fmt.Errorf("%w: signer owner proof digest binding mismatch", ErrOwnerAuthRequired)
 	}
 	// Single-use: consume immediately.
 	delete(s.ownerProofs, key)

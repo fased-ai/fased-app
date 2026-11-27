@@ -540,15 +540,21 @@ func (h *HTTPHandler) deskAPI(w http.ResponseWriter, r *http.Request, token stri
 			writeError(w, 405, "method not allowed")
 			return
 		}
-		h.deskStreamSSE(w, r, svc)
+		h.deskStreamSSE(w, r, token, svc)
 
 	default:
 		writeError(w, 404, "unknown desk operation")
 	}
 }
 
-func (h *HTTPHandler) deskStreamSSE(w http.ResponseWriter, r *http.Request, svc *desk.Service) {
-	snapCtx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+func (h *HTTPHandler) deskStreamSSE(w http.ResponseWriter, r *http.Request, token string, svc *desk.Service) {
+	streamCtx, releaseStream, ok := h.acquireSSEStream(w, r, token)
+	if !ok {
+		return
+	}
+	defer releaseStream()
+
+	snapCtx, cancel := context.WithTimeout(streamCtx, 10*time.Second)
 	snap, err := svc.GetSnapshot(snapCtx)
 	cancel()
 	if err != nil {
@@ -589,7 +595,7 @@ func (h *HTTPHandler) deskStreamSSE(w http.ResponseWriter, r *http.Request, svc 
 
 	for {
 		select {
-		case <-r.Context().Done():
+		case <-streamCtx.Done():
 			return
 		case <-heartbeat.C:
 			if !writeSSE("heartbeat", map[string]any{"timestamp": time.Now().UTC().UnixMilli()}) {

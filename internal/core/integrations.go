@@ -26,6 +26,7 @@ func (s *Store) decisionService() (*decision.Service, error) {
 		DataDir:       s.dir,
 		FixtureMode:   s.providerFixture,
 		Now:           s.now,
+		SecretSource:  s.taskSecrets,
 		HTTPTransport: s.decisionTransport,
 	})
 	if err != nil {
@@ -48,6 +49,7 @@ func (s *Store) mcpClientService() (*mcpclient.Service, error) {
 		DataDir:       s.dir,
 		FixtureMode:   s.providerFixture,
 		Now:           s.now,
+		SecretSource:  s.taskSecrets,
 		HTTPTransport: s.mcpClientTransport,
 	})
 	if err != nil {

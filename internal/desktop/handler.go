@@ -513,6 +513,15 @@ func allowed(method, route string) bool {
 			return false
 		}
 	}
+	if strings.HasPrefix(route, "/api/v1/auth/passkeys/") {
+		seg := strings.TrimPrefix(route, "/api/v1/auth/passkeys/")
+		if !strings.Contains(seg, "/") && method == http.MethodDelete {
+			return validPathSegment(seg)
+		}
+	}
+	if strings.HasPrefix(route, "/api/v1/mcp/tokens/") {
+		return method == http.MethodDelete && validPathSegment(strings.TrimPrefix(route, "/api/v1/mcp/tokens/"))
+	}
 	if route == "/api/v1/data-plugins" {
 		return method == http.MethodGet
 	}
@@ -552,8 +561,14 @@ func allowed(method, route string) bool {
 		return method == "GET"
 	case "/api/v1/setup":
 		return method == "GET" || method == "PUT"
-	case "/api/v1/auth/claim", "/api/v1/auth/login", "/api/v1/auth/logout", "/api/v1/auth/pair", "/api/v1/auth/password", "/api/v1/auth/step-up":
+	case "/api/v1/auth/claim", "/api/v1/auth/login", "/api/v1/auth/logout", "/api/v1/auth/pair", "/api/v1/auth/password", "/api/v1/auth/step-up",
+		"/api/v1/auth/step-up/passkey/begin", "/api/v1/auth/step-up/passkey/finish",
+		"/api/v1/auth/passkeys/register/begin", "/api/v1/auth/passkeys/register/finish":
 		return method == "POST"
+	case "/api/v1/auth/passkeys":
+		return method == "GET"
+	case "/api/v1/mcp/tokens":
+		return method == "GET" || method == "POST"
 	case "/api/v1/auth/devices", "/api/v1/auth/pair/devices":
 		return method == "GET" || method == "POST"
 	case "/api/v1/market/instruments", "/api/v1/market/candles", "/api/v1/market/orderbook", "/api/v1/market/trades", "/api/v1/market/footprint", "/api/v1/market/macro", "/api/v1/market/sec", "/api/v1/market/cohorts", "/api/v1/market/custom-feeds", "/api/v1/market/stream":
@@ -636,7 +651,7 @@ func forward(ctx context.Context, client *core.Client, original *http.Request, b
 	if err != nil {
 		return nil, err
 	}
-	for _, name := range []string{"Authorization", "Content-Type", "X-CSRF-Token", "Accept", "X-Fased-Pair"} {
+	for _, name := range []string{"Authorization", "Content-Type", "X-CSRF-Token", "Accept", "X-Fased-Pair", "X-Fased-Step-Up"} {
 		if value := original.Header.Get(name); value != "" {
 			r.Header.Set(name, value)
 		}

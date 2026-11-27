@@ -92,6 +92,8 @@ func startSocketServer(svc *Service, sockPath string, allowedPeerUID int, mode o
 	mux.HandleFunc("/v1/owner/status", ss.handleOwnerStatus)
 	mux.HandleFunc("/v1/owner/configure", ss.handleOwnerConfigure)
 	mux.HandleFunc("/v1/owner/authorize", ss.handleOwnerAuthorize)
+	mux.HandleFunc("/v1/owner/passkeys", ss.handleOwnerPasskeys)
+	mux.HandleFunc("/v1/owner/passkeys/", ss.handleOwnerPasskeySubroute)
 	if isOwnerSocket {
 		mux.HandleFunc("/v1/owner/import-raw", ss.handleOwnerImportRaw)
 		mux.HandleFunc("/v1/owner/export-raw", ss.handleOwnerExportRaw)
@@ -248,6 +250,10 @@ func (s *SocketServer) handleStatus(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *SocketServer) requireOwnerProof(w http.ResponseWriter, r *http.Request, action, walletID string) bool {
+	return s.requireOwnerProofBound(w, r, action, walletID, "")
+}
+
+func (s *SocketServer) requireOwnerProofBound(w http.ResponseWriter, r *http.Request, action, walletID, bindingDigest string) bool {
 	if s.isOwnerSocket {
 		return true
 	}
@@ -256,15 +262,142 @@ func (s *SocketServer) requireOwnerProof(w http.ResponseWriter, r *http.Request,
 		writeSockErr(w, err)
 		return false
 	}
-	if !enrolled && !s.svc.cfg.RequireOwnerAuth {
+	hasPasskeys, pErr := s.svc.HasOwnerPasskeys(r.Context())
+	if pErr != nil {
+		writeSockErr(w, pErr)
+		return false
+	}
+	if !enrolled && !hasPasskeys && !s.svc.cfg.RequireOwnerAuth {
 		return true
 	}
 	proof := strings.TrimSpace(r.Header.Get(ownerProofHeader))
-	if err := s.svc.ConsumeOwnerProof(action, walletID, proof); err != nil {
+	if err := s.svc.ConsumeOwnerProofBound(action, walletID, bindingDigest, proof); err != nil {
 		writeSockErr(w, err)
 		return false
 	}
 	return true
+}
+
+func (s *SocketServer) handleOwnerPasskeys(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	list, err := s.svc.ListOwnerPasskeys(r.Context())
+	if err != nil {
+		writeSockErr(w, err)
+		return
+	}
+	writeSockJSON(w, http.StatusOK, map[string]any{"passkeys": list})
+}
+
+func (s *SocketServer) handleOwnerPasskeySubroute(w http.ResponseWriter, r *http.Request) {
+	rel := strings.Trim(strings.TrimPrefix(r.URL.Path, "/v1/owner/passkeys/"), "/")
+	switch rel {
+	case "register/begin":
+		if r.Method != http.MethodPost {
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
+		if !s.requireOwnerProof(w, r, "passkey-register", "*") {
+			return
+		}
+		var req struct {
+			RPID   string `json:"rpId"`
+			Origin string `json:"origin"`
+			Label  string `json:"label"`
+		}
+		if err := decodeSockBody(r, &req); err != nil {
+			writeSockErr(w, err)
+			return
+		}
+		opts, err := s.svc.BeginPasskeyRegistration(r.Context(), req.RPID, req.Origin, req.Label)
+		if err != nil {
+			writeSockErr(w, err)
+			return
+		}
+		writeSockJSON(w, http.StatusOK, opts)
+	case "register/finish":
+		if r.Method != http.MethodPost {
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
+		if !s.requireOwnerProof(w, r, "passkey-register", "*") {
+			return
+		}
+		var req PasskeyRegisterFinishRequest
+		if err := decodeSockBody(r, &req); err != nil {
+			writeSockErr(w, err)
+			return
+		}
+		pk, err := s.svc.FinishPasskeyRegistration(r.Context(), req)
+		if err != nil {
+			writeSockErr(w, err)
+			return
+		}
+		writeSockJSON(w, http.StatusOK, pk)
+	case "assert/begin":
+		if r.Method != http.MethodPost {
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
+		var req struct {
+			RPID          string `json:"rpId"`
+			Origin        string `json:"origin"`
+			Action        string `json:"action"`
+			WalletID      string `json:"walletId"`
+			BindingDigest string `json:"bindingDigest"`
+		}
+		if err := decodeSockBody(r, &req); err != nil {
+			writeSockErr(w, err)
+			return
+		}
+		opts, err := s.svc.BeginPasskeyAssertion(r.Context(), req.RPID, req.Origin, req.Action, req.WalletID, req.BindingDigest)
+		if err != nil {
+			writeSockErr(w, err)
+			return
+		}
+		writeSockJSON(w, http.StatusOK, opts)
+	case "assert/finish":
+		if r.Method != http.MethodPost {
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
+		var req PasskeyAssertFinishRequest
+		if err := decodeSockBody(r, &req); err != nil {
+			writeSockErr(w, err)
+			return
+		}
+		proof, exp, bindingDigest, err := s.svc.FinishPasskeyAssertion(r.Context(), req)
+		if err != nil {
+			writeSockErr(w, err)
+			return
+		}
+		writeSockJSON(w, http.StatusOK, map[string]any{
+			"proof":         proof,
+			"expiresAt":     exp.UTC().Unix(),
+			"bindingDigest": bindingDigest,
+		})
+	default:
+		if r.Method != http.MethodDelete || strings.Contains(rel, "/") {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		credID, err := url.PathUnescape(rel)
+		if err != nil {
+			writeSockErr(w, err)
+			return
+		}
+		if !s.requireOwnerProof(w, r, "passkey-delete", "*") {
+			return
+		}
+		deleted, err := s.svc.DeleteOwnerPasskey(r.Context(), credID)
+		if err != nil {
+			writeSockErr(w, err)
+			return
+		}
+		writeSockJSON(w, http.StatusOK, map[string]bool{"deleted": deleted})
+	}
 }
 
 func (s *SocketServer) handleOwnerStatus(w http.ResponseWriter, r *http.Request) {
@@ -554,7 +687,10 @@ func (s *SocketServer) handleWalletSubroute(w http.ResponseWriter, r *http.Reque
 			return
 		}
 		if !IsPolicyTighterOrEqual(cur.Policy, req.Policy) {
-			if !s.requireOwnerProof(w, r, "policy", walletID) {
+			nextPolicy := req.Policy
+			nextPolicy.Role = cur.Role
+			nextPolicy.Version = cur.Policy.Version + 1
+			if !s.requireOwnerProofBound(w, r, "policy", walletID, ComputePolicyHash(nextPolicy)) {
 				return
 			}
 		}
@@ -710,8 +846,10 @@ func (s *SocketServer) handleWalletSubroute(w http.ResponseWriter, r *http.Reque
 				// an in-signer owner proof. Only reviews immutably prepared as bounded-auto bot/agent
 				// transactions whose actor matches the wallet's bound connections proceed on policy alone.
 				needOwnerProof := true
-				if wPub, wErr := s.svc.GetWallet(r.Context(), walletID); wErr == nil {
-					if rev, rErr := s.svc.GetReview(r.Context(), walletID, revID); rErr == nil && rev.IsBotOrAuto {
+				txDigest := ""
+				if rev, rErr := s.svc.GetReview(r.Context(), walletID, revID); rErr == nil {
+					txDigest = rev.TxDigest
+					if wPub, wErr := s.svc.GetWallet(r.Context(), walletID); wErr == nil && rev.IsBotOrAuto {
 						actorClean := strings.TrimSpace(req.Actor)
 						actorAllowed := false
 						if rev.AgentID != "" {
@@ -725,7 +863,7 @@ func (s *SocketServer) handleWalletSubroute(w http.ResponseWriter, r *http.Reque
 					}
 				}
 				if needOwnerProof {
-					if !s.requireOwnerProof(w, r, "execute", walletID) {
+					if !s.requireOwnerProofBound(w, r, "execute", walletID, txDigest) {
 						return
 					}
 				}

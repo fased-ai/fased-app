@@ -50,9 +50,13 @@ type HTTPHandler struct {
 	localNonce        string
 	streamTicketMu    sync.Mutex
 	streamTickets     map[string]streamTicketEntry
+	streamRegMu       sync.Mutex
+	streamRegNext     uint64
+	activeStreams     map[uint64]activeStreamEntry
 	stepUpMu          sync.Mutex
 	stepUpTokens      map[string]stepUpEntry
 	activeWSConns     atomic.Int32
+	activeSSEConns    atomic.Int32
 }
 
 func NewHTTPHandler(store *Store, baseURL, publicOrigin string, assets fs.FS) (*HTTPHandler, error) {
@@ -268,6 +272,12 @@ func (h *HTTPHandler) api(w http.ResponseWriter, r *http.Request) {
 		return
 	case "/api/v1/auth/step-up":
 		h.stepUpAPI(w, r)
+		return
+	case "/api/v1/auth/step-up/passkey/begin", "/api/v1/auth/step-up/passkey/finish":
+		h.stepUpPasskeyAPI(w, r)
+		return
+	case "/api/v1/auth/passkeys":
+		h.passkeysAPI(w, r)
 		return
 	case "/api/v1/auth/claim", "/api/v1/auth/login":
 		if r.Method != http.MethodPost {
@@ -705,6 +715,7 @@ func (h *HTTPHandler) api(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		h.clearStepUpForSession(token)
+		h.closeStreamsForSessionHash(tokenHash(token))
 		if id, ok := r.Context().Value(remoteIdentityKey{}).(tailnet.Identity); ok && id.NodeID != "" {
 			h.store.markRemoteSignedOut(id.NodeID)
 		}
@@ -715,12 +726,16 @@ func (h *HTTPHandler) api(w http.ResponseWriter, r *http.Request) {
 		h.signerStatusAPI(w, r)
 		return
 	default:
+		if strings.HasPrefix(r.URL.Path, "/api/v1/auth/passkeys/") {
+			h.passkeysAPI(w, r)
+			return
+		}
 		if r.URL.Path == "/api/v1/stream/ticket" {
 			h.streamTicketAPI(w, r, token)
 			return
 		}
 		if r.URL.Path == "/api/v1/stream" {
-			h.streamWSAPI(w, r)
+			h.streamWSAPI(w, r, token)
 			return
 		}
 		if r.URL.Path == "/api/v1/mcp" {
