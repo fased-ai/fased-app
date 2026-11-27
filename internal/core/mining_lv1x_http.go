@@ -19,9 +19,83 @@ import (
 )
 
 var (
-	wenLV1XMu      sync.RWMutex
-	wenLV1XEngines = map[*Store]*wenlv1x.Engine{}
+	wenLV1XMu          sync.RWMutex
+	wenLV1XEngines     = map[*Store]*wenlv1x.Engine{}
+	miningReviewMu     sync.Mutex
+	miningReviewByTxDg = map[string]string{}
 )
+
+func rememberMiningReview(walletID, digest, reviewID string) {
+	if walletID == "" || digest == "" || reviewID == "" {
+		return
+	}
+	miningReviewMu.Lock()
+	defer miningReviewMu.Unlock()
+	if len(miningReviewByTxDg) > 512 {
+		clear(miningReviewByTxDg)
+	}
+	miningReviewByTxDg[walletID+":"+strings.ToLower(strings.TrimSpace(digest))] = reviewID
+}
+
+func consumeMiningReview(walletID, digest string) string {
+	miningReviewMu.Lock()
+	defer miningReviewMu.Unlock()
+	key := walletID + ":" + strings.ToLower(strings.TrimSpace(digest))
+	id := miningReviewByTxDg[key]
+	delete(miningReviewByTxDg, key)
+	return id
+}
+
+func (h *HTTPHandler) miningStepUpNeeded(ctx context.Context) bool {
+	if conf, _ := h.ownerAuthConfigured(ctx); conf {
+		return true
+	}
+	if cs, err := h.store.custodyBackend(); err == nil && cs != nil {
+		if sec, sErr := cs.SecurityStatus(ctx); sErr == nil && sec.OwnerAuthEnforced {
+			return true
+		}
+	}
+	return false
+}
+
+// resolveMiningExecuteStepUp runs a dry-run review when no X-Fased-Step-Up header
+// is present, returns a step_up_required challenge bound to rev.TxDigest, and
+// consumes + authenticates with X-Fased-Signer-Proof once presented.
+func (h *HTTPHandler) resolveMiningExecuteStepUp(
+	w http.ResponseWriter,
+	r *http.Request,
+	token, walletID string,
+	prepareFn func(ctx context.Context) (custody.WalletReview, error),
+) (context.Context, string, bool) {
+	ctx := r.Context()
+	if !h.miningStepUpNeeded(ctx) {
+		return ctx, "", true
+	}
+	presented := strings.TrimSpace(r.Header.Get("X-Fased-Step-Up"))
+	if presented != "" {
+		digest := h.presentedStepUpDigest(r, token, "execute", walletID)
+		revID := consumeMiningReview(walletID, digest)
+		authCtx, ok := h.requireStepUpCtxBound(w, r, token, "execute", walletID, digest)
+		if !ok {
+			return nil, "", false
+		}
+		return authCtx, revID, true
+	}
+	// Trigger owner_password_required immediately if no owner password/passkey exists.
+	hasOwnerAuth, _ := h.ownerAuthConfigured(ctx)
+	if !hasOwnerAuth {
+		h.requireStepUpCtxBound(w, r, token, "execute", walletID, "")
+		return nil, "", false
+	}
+	rev, err := prepareFn(ctx)
+	if err != nil {
+		writeMiningErr(w, err)
+		return nil, "", false
+	}
+	rememberMiningReview(walletID, rev.TxDigest, rev.ID)
+	h.requireStepUpCtxBound(w, r, token, "execute", walletID, rev.TxDigest)
+	return nil, "", false
+}
 
 func init() {
 	registerStoreCloseHook(func(s *Store) {
@@ -395,14 +469,24 @@ func (h *HTTPHandler) miningLV1XAPI(w http.ResponseWriter, r *http.Request, toke
 			writeError(w, 400, "walletId is required")
 			return
 		}
+		execCtx := ctx
 		if !in.DryRunPreview && !in.Autonomous {
-			if hasPW, _ := h.store.hasPassword(ctx); hasPW {
-				if _, ok := h.requireStepUpCtx(w, r, token, "mining-commit", in.WalletID); !ok {
-					return
-				}
+			authCtx, revID, ok := h.resolveMiningExecuteStepUp(w, r, token, in.WalletID, func(pCtx context.Context) (custody.WalletReview, error) {
+				dry := in
+				dry.DryRunPreview = true
+				dry.ReviewID = ""
+				rev, _, err := eng.SubmitCommit(pCtx, dry)
+				return rev, err
+			})
+			if !ok {
+				return
+			}
+			execCtx = authCtx
+			if revID != "" {
+				in.ReviewID = revID
 			}
 		}
-		rev, led, cErr := eng.SubmitCommit(ctx, in)
+		rev, led, cErr := eng.SubmitCommit(execCtx, in)
 		if cErr != nil {
 			writeMiningErr(w, cErr)
 			return
@@ -421,7 +505,24 @@ func (h *HTTPHandler) miningLV1XAPI(w http.ResponseWriter, r *http.Request, toke
 			writeError(w, 400, "walletId is required")
 			return
 		}
-		rev, led, rErr := eng.SubmitReveal(ctx, in)
+		execCtx := ctx
+		if !in.DryRunPreview && !in.Autonomous {
+			authCtx, revID, ok := h.resolveMiningExecuteStepUp(w, r, token, in.WalletID, func(pCtx context.Context) (custody.WalletReview, error) {
+				dry := in
+				dry.DryRunPreview = true
+				dry.ReviewID = ""
+				rev, _, err := eng.SubmitReveal(pCtx, dry)
+				return rev, err
+			})
+			if !ok {
+				return
+			}
+			execCtx = authCtx
+			if revID != "" {
+				in.ReviewID = revID
+			}
+		}
+		rev, led, rErr := eng.SubmitReveal(execCtx, in)
 		if rErr != nil {
 			writeMiningErr(w, rErr)
 			return
@@ -444,7 +545,24 @@ func (h *HTTPHandler) miningLV1XAPI(w http.ResponseWriter, r *http.Request, toke
 			writeError(w, 400, "walletId is required")
 			return
 		}
-		rev, led, cErr := eng.SubmitClaim(ctx, in)
+		execCtx := ctx
+		if !in.DryRunPreview && !in.Autonomous {
+			authCtx, revID, ok := h.resolveMiningExecuteStepUp(w, r, token, in.WalletID, func(pCtx context.Context) (custody.WalletReview, error) {
+				dry := in
+				dry.DryRunPreview = true
+				dry.ReviewID = ""
+				rev, _, err := eng.SubmitClaim(pCtx, dry)
+				return rev, err
+			})
+			if !ok {
+				return
+			}
+			execCtx = authCtx
+			if revID != "" {
+				in.ReviewID = revID
+			}
+		}
+		rev, led, cErr := eng.SubmitClaim(execCtx, in)
 		if cErr != nil {
 			writeMiningErr(w, cErr)
 			return
@@ -482,26 +600,36 @@ func (h *HTTPHandler) miningLV1XAPI(w http.ResponseWriter, r *http.Request, toke
 			writeError(w, 400, "walletId is required")
 			return
 		}
-		if rel == "stake" || rel == "unstake" {
-			if hasPW, _ := h.store.hasPassword(ctx); hasPW {
-				if _, ok := h.requireStepUpCtx(w, r, token, "mining-"+rel, in.WalletID); !ok {
-					return
-				}
+		runStakeFn := func(callCtx context.Context, req wenlv1x.StakeActionRequest) (custody.WalletReview, *custody.LedgerEntry, error) {
+			switch rel {
+			case "stake":
+				return eng.SubmitStake(callCtx, req)
+			case "activate-stake":
+				return eng.SubmitActivateStake(callCtx, req)
+			case "unstake":
+				return eng.SubmitUnstake(callCtx, req)
+			default:
+				return eng.SubmitClaimStaking(callCtx, req)
 			}
 		}
-		var rev custody.WalletReview
-		var led *custody.LedgerEntry
-		var sErr error
-		switch rel {
-		case "stake":
-			rev, led, sErr = eng.SubmitStake(ctx, in)
-		case "activate-stake":
-			rev, led, sErr = eng.SubmitActivateStake(ctx, in)
-		case "unstake":
-			rev, led, sErr = eng.SubmitUnstake(ctx, in)
-		case "claim-staking":
-			rev, led, sErr = eng.SubmitClaimStaking(ctx, in)
+		execCtx := ctx
+		if !in.DryRunPreview {
+			authCtx, revID, ok := h.resolveMiningExecuteStepUp(w, r, token, in.WalletID, func(pCtx context.Context) (custody.WalletReview, error) {
+				dry := in
+				dry.DryRunPreview = true
+				dry.ReviewID = ""
+				rev, _, err := runStakeFn(pCtx, dry)
+				return rev, err
+			})
+			if !ok {
+				return
+			}
+			execCtx = authCtx
+			if revID != "" {
+				in.ReviewID = revID
+			}
 		}
+		rev, led, sErr := runStakeFn(execCtx, in)
 		if sErr != nil {
 			writeMiningErr(w, sErr)
 			return
@@ -617,11 +745,6 @@ func (h *HTTPHandler) miningLV1XAPI(w http.ResponseWriter, r *http.Request, toke
 				writeError(w, 400, "walletId is required")
 				return
 			}
-			if hasPW, _ := h.store.hasPassword(ctx); hasPW {
-				if _, ok := h.requireStepUpCtx(w, r, token, "mining-policy", in.WalletID); !ok {
-					return
-				}
-			}
 			cur, gErr := cust.GetWallet(ctx, in.WalletID)
 			if gErr != nil {
 				writeError(w, 404, gErr.Error())
@@ -644,8 +767,19 @@ func (h *HTTPHandler) miningLV1XAPI(w http.ResponseWriter, r *http.Request, toke
 				nextPol.SOLCap.MaxDailyRaw = in.MaxDailyLamports
 			}
 			nextPol.Mining = &in.Mining
+			callCtx := ctx
+			if !custody.IsPolicyTighterOrEqual(cur.Policy, nextPol) || h.miningStepUpNeeded(ctx) {
+				nextForHash := nextPol
+				nextForHash.Role = cur.Role
+				nextForHash.Version = cur.Policy.Version + 1
+				var ok bool
+				callCtx, ok = h.requireStepUpCtxBound(w, r, token, "policy", in.WalletID, custody.ComputePolicyHash(nextForHash))
+				if !ok {
+					return
+				}
+			}
 			expHash := nonEmpty(in.ExpectedPolicyHash, cur.Policy.PolicyHash)
-			upW, uErr := cust.UpdatePolicy(ctx, in.WalletID, nextPol, in.ConfirmLoosen, expHash, "owner")
+			upW, uErr := cust.UpdatePolicy(callCtx, in.WalletID, nextPol, in.ConfirmLoosen, expHash, "owner")
 			if uErr != nil {
 				writeMiningErr(w, uErr)
 				return

@@ -144,6 +144,29 @@ func (h *HTTPHandler) ownerAuthConfigured(ctx context.Context) (bool, error) {
 	return false, nil
 }
 
+func (h *HTTPHandler) presentedStepUpDigest(r *http.Request, sessionToken, action, walletID string) string {
+	presented := strings.TrimSpace(r.Header.Get("X-Fased-Step-Up"))
+	if presented == "" {
+		return ""
+	}
+	now := time.Now()
+	if h.store != nil && h.store.now != nil {
+		now = h.store.now()
+	}
+	act, wid := normalizeStepUpScope(action, walletID)
+	sessHash := tokenHash(sessionToken)
+	h.stepUpMu.Lock()
+	defer h.stepUpMu.Unlock()
+	entry, ok := h.stepUpTokens[tokenHash(presented)]
+	if !ok || !now.Before(entry.expiresAt) || subtle.ConstantTimeCompare([]byte(entry.sessionHash), []byte(sessHash)) != 1 {
+		return ""
+	}
+	if entry.action != act || entry.walletID != wid {
+		return ""
+	}
+	return entry.bindingDigest
+}
+
 // requireStepUpIfOwnerAuthConfigured enforces owner step-up whenever an owner password
 // or passkey is configured (or always when forceRequire is true).
 func (h *HTTPHandler) requireStepUpIfOwnerAuthConfigured(w http.ResponseWriter, r *http.Request, sessionToken, action, walletID string, forceRequire bool) (context.Context, bool) {

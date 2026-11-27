@@ -879,10 +879,10 @@ func generateSyntheticCandles(venue, symbol string, stepSec, startSec int64, cou
 		f := float64(idx)
 		s := float64(seed % 97)
 		phase := f*0.19 + s*0.03
-		drift := math.Sin(f*0.05+float64(seed%31)*0.1)*0.042 +
-			math.Sin(phase)*0.024 +
-			math.Cos(phase*0.5)*0.011 +
-			math.Sin(f*1.45+s)*0.0055
+		drift := math.Sin(f*0.05+float64(seed%31)*0.1)*0.026 +
+			math.Sin(phase)*0.014 +
+			math.Cos(phase*0.5)*0.008 +
+			math.Sin(f*1.45+s)*0.012
 		return math.Max(basePrice*(1.0+drift), basePrice*0.25)
 	}
 	out := make([]Candle, 0, count)

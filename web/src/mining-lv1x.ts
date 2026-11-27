@@ -524,15 +524,29 @@ export async function submitMiningCommit(
 export async function submitMiningReveal(
   core: CoreReq,
   req: RevealRequest,
+  stepUpToken?: string,
 ): Promise<{ review: unknown; ledger: unknown }> {
-  return core.request("mining/reveal", "POST", req);
+  return core.request(
+    "mining/reveal",
+    "POST",
+    req,
+    undefined,
+    stepUpHeaders(stepUpToken),
+  );
 }
 
 export async function submitMiningClaim(
   core: CoreReq,
   req: ClaimRequest,
+  stepUpToken?: string,
 ): Promise<{ review: unknown; ledger: unknown }> {
-  return core.request("mining/claim", "POST", req);
+  return core.request(
+    "mining/claim",
+    "POST",
+    req,
+    undefined,
+    stepUpHeaders(stepUpToken),
+  );
 }
 
 export async function submitMiningClaimAll(
@@ -540,12 +554,19 @@ export async function submitMiningClaimAll(
   walletId: string,
   cluster = "devnet",
   assets: string[] = ["sol", "sat", "btc"],
+  stepUpToken?: string,
 ): Promise<{ ledgers: unknown[]; count: number }> {
-  return core.request("mining/claim-all", "POST", {
-    walletId,
-    cluster,
-    assets,
-  });
+  return core.request(
+    "mining/claim-all",
+    "POST",
+    {
+      walletId,
+      cluster,
+      assets,
+    },
+    undefined,
+    stepUpHeaders(stepUpToken),
+  );
 }
 
 export async function submitMiningStake(
@@ -565,8 +586,15 @@ export async function submitMiningStake(
 export async function submitMiningActivateStake(
   core: CoreReq,
   req: StakeActionRequest,
+  stepUpToken?: string,
 ): Promise<{ review: unknown; ledger: unknown }> {
-  return core.request("mining/activate-stake", "POST", req);
+  return core.request(
+    "mining/activate-stake",
+    "POST",
+    req,
+    undefined,
+    stepUpHeaders(stepUpToken),
+  );
 }
 
 export async function submitMiningUnstake(
@@ -586,8 +614,15 @@ export async function submitMiningUnstake(
 export async function submitMiningClaimStaking(
   core: CoreReq,
   req: StakeActionRequest,
+  stepUpToken?: string,
 ): Promise<{ review: unknown; ledger: unknown }> {
-  return core.request("mining/claim-staking", "POST", req);
+  return core.request(
+    "mining/claim-staking",
+    "POST",
+    req,
+    undefined,
+    stepUpHeaders(stepUpToken),
+  );
 }
 
 export async function listMiningSessions(
@@ -695,15 +730,17 @@ export async function listRoleMiningWallets(
 export async function requestMiningStepUpToken(
   core: CoreReq,
   password: string,
-  action:
-    | "mining-commit"
-    | "mining-session"
-    | "mining-policy"
-    | "mining-stake"
-    | "mining-unstake",
+  action: "policy" | "execute" | "mining-session" | "wallet",
   walletId: string,
+  bindingDigest = "",
 ): Promise<string> {
-  const res = await requestStepUpToken(core, password, action, walletId || "*");
+  const res = await requestStepUpToken(
+    core,
+    password,
+    action,
+    walletId || "*",
+    bindingDigest,
+  );
   return res.stepUpToken;
 }
 

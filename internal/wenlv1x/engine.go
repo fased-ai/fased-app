@@ -603,28 +603,34 @@ func (e *Engine) SubmitCommit(ctx context.Context, req CommitRequest) (custody.W
 		saltHex = hex.EncodeToString(salt[:])
 	}
 
-	rev, err := e.custody.PrepareReview(ctx, custody.PrepareReviewRequest{
-		WalletID:    req.WalletID,
-		Operation:   custody.MiningOpCommit,
-		AmountRaw:   preview.AmountLamports,
-		IsBotOrAuto: req.Autonomous,
-		Venue:       "wen-mining",
-		MiningLV1X: &custody.MiningLV1XRequest{
-			Cluster:        c,
-			ProgramID:      round.ProgramID,
-			LedgerID:       round.LedgerID,
-			RoundSlot:      round.RoundSlot,
-			ShardID:        shardID,
-			EntryIndex:     entryIndex,
-			Page:           entryIndex / onchain.LV1XPageEntries,
-			EntryRow:       uint8(entryIndex % onchain.LV1XPageEntries),
-			Nonce:          nonce,
-			Selection:      preview.DominantBucket,
-			AmountLamports: preview.AmountLamports,
-			SaltHex:        saltHex,
-			StrategyID:     CanonicalPresetID(req.StrategyID),
-		},
-	})
+	var rev custody.WalletReview
+	var err error
+	if strings.TrimSpace(req.ReviewID) != "" {
+		rev, err = e.custody.GetReview(ctx, req.WalletID, strings.TrimSpace(req.ReviewID))
+	} else {
+		rev, err = e.custody.PrepareReview(ctx, custody.PrepareReviewRequest{
+			WalletID:    req.WalletID,
+			Operation:   custody.MiningOpCommit,
+			AmountRaw:   preview.AmountLamports,
+			IsBotOrAuto: req.Autonomous,
+			Venue:       "wen-mining",
+			MiningLV1X: &custody.MiningLV1XRequest{
+				Cluster:        c,
+				ProgramID:      round.ProgramID,
+				LedgerID:       round.LedgerID,
+				RoundSlot:      round.RoundSlot,
+				ShardID:        shardID,
+				EntryIndex:     entryIndex,
+				Page:           entryIndex / onchain.LV1XPageEntries,
+				EntryRow:       uint8(entryIndex % onchain.LV1XPageEntries),
+				Nonce:          nonce,
+				Selection:      preview.DominantBucket,
+				AmountLamports: preview.AmountLamports,
+				SaltHex:        saltHex,
+				StrategyID:     CanonicalPresetID(req.StrategyID),
+			},
+		})
+	}
 	if err != nil {
 		return custody.WalletReview{}, nil, err
 	}
@@ -651,25 +657,34 @@ func (e *Engine) SubmitReveal(ctx context.Context, req RevealRequest) (custody.W
 	if e.custody == nil {
 		return custody.WalletReview{}, nil, errors.New("custody backend unavailable")
 	}
-	rev, err := e.custody.PrepareReview(ctx, custody.PrepareReviewRequest{
-		WalletID:    req.WalletID,
-		Operation:   custody.MiningOpReveal,
-		IsBotOrAuto: req.Autonomous,
-		Venue:       "wen-mining",
-		MiningLV1X: &custody.MiningLV1XRequest{
-			Cluster:   c,
-			ProgramID: custody.EffectiveDevnetProgramID(),
-			LedgerID:  custody.EffectiveDevnetLedgerID(),
-			RoundSlot: req.RoundSlot,
-			ShardID:   req.ShardID,
-			Page:      req.Page,
-			EntryRow:  req.EntryRow,
-			Selection: req.Selection,
-			SaltHex:   req.SaltHex,
-		},
-	})
+	var rev custody.WalletReview
+	var err error
+	if strings.TrimSpace(req.ReviewID) != "" {
+		rev, err = e.custody.GetReview(ctx, req.WalletID, strings.TrimSpace(req.ReviewID))
+	} else {
+		rev, err = e.custody.PrepareReview(ctx, custody.PrepareReviewRequest{
+			WalletID:    req.WalletID,
+			Operation:   custody.MiningOpReveal,
+			IsBotOrAuto: req.Autonomous,
+			Venue:       "wen-mining",
+			MiningLV1X: &custody.MiningLV1XRequest{
+				Cluster:   c,
+				ProgramID: custody.EffectiveDevnetProgramID(),
+				LedgerID:  custody.EffectiveDevnetLedgerID(),
+				RoundSlot: req.RoundSlot,
+				ShardID:   req.ShardID,
+				Page:      req.Page,
+				EntryRow:  req.EntryRow,
+				Selection: req.Selection,
+				SaltHex:   req.SaltHex,
+			},
+		})
+	}
 	if err != nil {
 		return custody.WalletReview{}, nil, err
+	}
+	if req.DryRunPreview {
+		return rev, nil, nil
 	}
 	entry, execErr := e.custody.ExecuteNativeReview(ctx, req.WalletID, rev.ID, actorForAutonomous(req.Autonomous, req.TaskID))
 	if execErr != nil {
@@ -700,26 +715,35 @@ func (e *Engine) SubmitClaim(ctx context.Context, req ClaimRequest) (custody.Wal
 		op = custody.MiningOpClaimBtc
 		kind = "claim_btc"
 	}
-	rev, err := e.custody.PrepareReview(ctx, custody.PrepareReviewRequest{
-		WalletID:    req.WalletID,
-		Operation:   op,
-		IsBotOrAuto: req.Autonomous,
-		Venue:       "wen-mining",
-		MiningLV1X: &custody.MiningLV1XRequest{
-			Cluster:     c,
-			ProgramID:   custody.EffectiveDevnetProgramID(),
-			LedgerID:    custody.EffectiveDevnetLedgerID(),
-			RoundSlot:   req.RoundSlot,
-			ShardID:     req.ShardID,
-			Page:        req.Page,
-			EntryRow:    req.EntryRow,
-			EntriesMask: uint8(1 << (req.EntryRow % 8)),
-			BtcMint:     onchain.LV1XDevnetBTCMint,
-			CreateATA:   req.CreateATA,
-		},
-	})
+	var rev custody.WalletReview
+	var err error
+	if strings.TrimSpace(req.ReviewID) != "" {
+		rev, err = e.custody.GetReview(ctx, req.WalletID, strings.TrimSpace(req.ReviewID))
+	} else {
+		rev, err = e.custody.PrepareReview(ctx, custody.PrepareReviewRequest{
+			WalletID:    req.WalletID,
+			Operation:   op,
+			IsBotOrAuto: req.Autonomous,
+			Venue:       "wen-mining",
+			MiningLV1X: &custody.MiningLV1XRequest{
+				Cluster:     c,
+				ProgramID:   custody.EffectiveDevnetProgramID(),
+				LedgerID:    custody.EffectiveDevnetLedgerID(),
+				RoundSlot:   req.RoundSlot,
+				ShardID:     req.ShardID,
+				Page:        req.Page,
+				EntryRow:    req.EntryRow,
+				EntriesMask: uint8(1 << (req.EntryRow % 8)),
+				BtcMint:     onchain.LV1XDevnetBTCMint,
+				CreateATA:   req.CreateATA,
+			},
+		})
+	}
 	if err != nil {
 		return custody.WalletReview{}, nil, err
+	}
+	if req.DryRunPreview {
+		return rev, nil, nil
 	}
 	entry, execErr := e.custody.ExecuteNativeReview(ctx, req.WalletID, rev.ID, actorForAutonomous(req.Autonomous, req.TaskID))
 	if execErr != nil {
@@ -801,21 +825,30 @@ func (e *Engine) submitStakingOp(ctx context.Context, req StakeActionRequest, op
 		return custody.WalletReview{}, nil, errors.New("custody backend unavailable")
 	}
 	atoms := uint64(req.AmountSAT * 1e9)
-	rev, err := e.custody.PrepareReview(ctx, custody.PrepareReviewRequest{
-		WalletID:  req.WalletID,
-		Operation: op,
-		Venue:     "wen-mining",
-		MiningLV1X: &custody.MiningLV1XRequest{
-			Cluster:        c,
-			ProgramID:      custody.EffectiveDevnetProgramID(),
-			LedgerID:       custody.EffectiveDevnetLedgerID(),
-			SatAmountAtoms: atoms,
-			BtcMint:        onchain.LV1XDevnetBTCMint,
-			CreateATA:      req.CreateATA,
-		},
-	})
+	var rev custody.WalletReview
+	var err error
+	if strings.TrimSpace(req.ReviewID) != "" {
+		rev, err = e.custody.GetReview(ctx, req.WalletID, strings.TrimSpace(req.ReviewID))
+	} else {
+		rev, err = e.custody.PrepareReview(ctx, custody.PrepareReviewRequest{
+			WalletID:  req.WalletID,
+			Operation: op,
+			Venue:     "wen-mining",
+			MiningLV1X: &custody.MiningLV1XRequest{
+				Cluster:        c,
+				ProgramID:      custody.EffectiveDevnetProgramID(),
+				LedgerID:       custody.EffectiveDevnetLedgerID(),
+				SatAmountAtoms: atoms,
+				BtcMint:        onchain.LV1XDevnetBTCMint,
+				CreateATA:      req.CreateATA,
+			},
+		})
+	}
 	if err != nil {
 		return custody.WalletReview{}, nil, err
+	}
+	if req.DryRunPreview {
+		return rev, nil, nil
 	}
 	entry, execErr := e.custody.ExecuteNativeReview(ctx, req.WalletID, rev.ID, "owner")
 	if execErr != nil {
