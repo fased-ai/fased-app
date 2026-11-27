@@ -1116,6 +1116,64 @@
   margin-top: 4px;
 }
 
+.mine-tasks-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.mine-tasks-drawer {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.mine-tasks-drawer-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.mine-tasks-drawer-head strong {
+  color: var(--wt-text);
+  font-size: 13px;
+}
+
+.mine-task-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.mine-task-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.mine-task-title {
+  color: var(--wt-text);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.mine-task-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.mine-automate-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
 @media (max-width: 1200px) {
   .mine-grid-3col {
     grid-template-columns: minmax(0, 1fr) 334px;

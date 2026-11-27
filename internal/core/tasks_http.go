@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/fased-ai/fased-app/internal/httpapi"
+	"github.com/fased-ai/fased-app/internal/marketdata"
 	"github.com/fased-ai/fased-app/internal/quantlab"
 	"github.com/fased-ai/fased-app/internal/tasks"
 	"github.com/fased-ai/fased-app/internal/wenlv1x"
@@ -19,8 +20,9 @@ import (
 )
 
 var (
-	tasksEngineMu sync.RWMutex
-	tasksEngines  = map[*Store]*tasks.Engine{}
+	tasksEngineMu     sync.RWMutex
+	tasksEngines      = map[*Store]*tasks.Engine{}
+	taskBridgeStarted sync.Map
 )
 
 func init() {
@@ -77,7 +79,130 @@ func (s *Store) startTasksEngine(ctx context.Context) {
 	}
 	if eng, err := s.tasksEngine(); err == nil && eng != nil {
 		eng.Start(ctx)
+		s.startTaskEventBridge(ctx, eng)
 	}
+}
+
+func (s *Store) startTaskEventBridge(ctx context.Context, eng *tasks.Engine) {
+	if s == nil || eng == nil || ctx == nil {
+		return
+	}
+	if _, loaded := taskBridgeStarted.LoadOrStore(eng, struct{}{}); loaded {
+		return
+	}
+	go func() {
+		defer taskBridgeStarted.Delete(eng)
+
+		var mdCh <-chan marketdata.Event
+		var mdUnsub func()
+		var wiCh <-chan worldintel.StreamEvent
+		var wiUnsub func()
+		var lv1xCh <-chan wenlv1x.MiningEvent
+		var lv1xUnsub func()
+
+		defer func() {
+			if mdUnsub != nil {
+				mdUnsub()
+			}
+			if wiUnsub != nil {
+				wiUnsub()
+			}
+			if lv1xUnsub != nil {
+				lv1xUnsub()
+			}
+		}()
+
+		attach := func() {
+			if mdCh == nil {
+				if md := s.loadedMarketDataService(); md != nil {
+					mdCh, mdUnsub = md.Subscribe(marketdata.Filter{})
+				}
+			}
+			if wiCh == nil {
+				if wi := s.loadedWorldIntelService(); wi != nil {
+					wiCh, wiUnsub = wi.Subscribe(worldintel.StreamFilter{})
+				}
+			}
+			if lv1xCh == nil {
+				if lv := s.loadedWENLV1XEngine(); lv != nil {
+					lv1xCh, lv1xUnsub = lv.Subscribe()
+				}
+			}
+		}
+
+		attach()
+		ticker := time.NewTicker(1500 * time.Millisecond)
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				attach()
+			case ev, ok := <-mdCh:
+				if !ok {
+					mdCh = nil
+					continue
+				}
+				rawType := strings.ToLower(strings.TrimSpace(ev.Type))
+				if rawType == "" {
+					rawType = "tick"
+				}
+				topic := "market." + rawType
+				if b, err := json.Marshal(map[string]any{
+					"type":      ev.Type,
+					"venue":     ev.Venue,
+					"symbol":    ev.Symbol,
+					"interval":  ev.Interval,
+					"timestamp": ev.Timestamp,
+				}); err == nil {
+					eng.EmitEvent(ctx, topic, string(b))
+					if rawType != "tick" {
+						eng.EmitEvent(ctx, "market.tick", string(b))
+					}
+				}
+			case ev, ok := <-wiCh:
+				if !ok {
+					wiCh = nil
+					continue
+				}
+				if ev.Event != nil && ev.Event.Urgency >= 0.7 {
+					if b, err := json.Marshal(map[string]any{
+						"id":        ev.Event.ID,
+						"sourceId":  ev.Event.SourceID,
+						"category":  ev.Event.Category,
+						"urgency":   ev.Event.Urgency,
+						"sentiment": ev.Event.Sentiment,
+						"tickers":   ev.Event.Tickers,
+					}); err == nil {
+						eng.EmitEvent(ctx, "world.urgent", string(b))
+					}
+				} else if ev.Prediction != nil {
+					if b, err := json.Marshal(map[string]any{
+						"id":    ev.Prediction.ID,
+						"venue": ev.Prediction.Venue,
+						"slug":  ev.Prediction.Slug,
+					}); err == nil {
+						eng.EmitEvent(ctx, "world.prediction", string(b))
+					}
+				}
+			case ev, ok := <-lv1xCh:
+				if !ok {
+					lv1xCh = nil
+					continue
+				}
+				if b, err := json.Marshal(ev); err == nil {
+					rawEvent := strings.ToLower(strings.TrimSpace(ev.Event))
+					if rawEvent == "round.updated" {
+						eng.EmitEvent(ctx, "mining.round.opened", string(b))
+					} else if rawEvent != "" {
+						eng.EmitEvent(ctx, "mining."+rawEvent, string(b))
+					}
+				}
+			}
+		}
+	}()
 }
 
 func (s *Store) syncTasksKill(ctx context.Context, active bool, reason, actor string) {

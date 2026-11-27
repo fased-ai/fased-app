@@ -415,18 +415,29 @@ WHERE builtin=1`,
 	return nil
 }
 
-// matchesEventFilter checks simple colon-delimited prefix or wildcard event filters.
+// matchesEventFilter checks comma-separated colon/dot prefix or wildcard event filters.
 func matchesEventFilter(filter, topic string) bool {
-	f := strings.TrimSpace(strings.ToLower(filter))
 	t := strings.TrimSpace(strings.ToLower(topic))
-	if f == "" || f == "*" {
-		return true
+	raw := strings.TrimSpace(strings.ToLower(filter))
+	if raw == "" || raw == "*" {
+		return t != ""
 	}
-	if f == t {
-		return true
+	for _, part := range strings.Split(raw, ",") {
+		f := strings.TrimSpace(part)
+		if f == "" {
+			continue
+		}
+		if f == "*" || f == t {
+			return true
+		}
+		if strings.HasSuffix(f, ":*") || strings.HasSuffix(f, ".*") {
+			if strings.HasPrefix(t, strings.TrimSuffix(f, "*")) {
+				return true
+			}
+		}
+		if strings.HasPrefix(t, f+":") || strings.HasPrefix(t, f+".") {
+			return true
+		}
 	}
-	if strings.HasSuffix(f, ":*") {
-		return strings.HasPrefix(t, strings.TrimSuffix(f, "*"))
-	}
-	return strings.HasPrefix(t, f+":")
+	return false
 }

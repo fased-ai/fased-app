@@ -207,3 +207,95 @@ func TestTasksStandaloneHybridKillAndSwarm(t *testing.T) {
 		t.Fatal("expected Activate to fail while kill switch active")
 	}
 }
+
+func TestEmitEventSubSecondPushCooldownAndKillSwitch(t *testing.T) {
+	ctx := context.Background()
+	var triggered atomic.Int64
+	doneCh := make(chan string, 8)
+	eng, err := NewEngine(Config{
+		DataDir: t.TempDir(),
+		Now:     time.Now,
+		DomainRunner: func(_ context.Context, tk Task, in RunInput) (RunOutput, error) {
+			triggered.Add(1)
+			select {
+			case doneCh <- tk.ID + ":" + in.TriggerSource:
+			default:
+			}
+			return RunOutput{Status: "completed", ActionTaken: "push_eval", DecisionSummary: "ok"}, nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewEngine: %v", err)
+	}
+	defer func() { _ = eng.Close() }()
+
+	eventTask, err := eng.CreateTask(ctx, Task{
+		Name:           "Round Opened Listener",
+		GoalDomain:     GoalMining,
+		GoalObjective:  "React immediately to LV1X round transitions",
+		ScheduleKind:   ScheduleEvent,
+		ScheduleSpec:   ScheduleSpec{EventFilter: "mining.round.opened"},
+		ExecMode:       ExecStandalone,
+		ApprovalPolicy: ApprovalSemiAuto,
+		Constraints:    TaskConstraints{CooldownSec: 30},
+		Status:         StatusActive,
+	})
+	if err != nil {
+		t.Fatalf("CreateTask event: %v", err)
+	}
+
+	contTask, err := eng.CreateTask(ctx, Task{
+		Name:           "Continuous Multi-Topic Listener",
+		GoalDomain:     GoalTrading,
+		GoalObjective:  "React to market ticks and live fills",
+		ScheduleKind:   ScheduleContinuous,
+		ScheduleSpec:   ScheduleSpec{IntervalSec: 15, EventFilter: "market.tick,trade.fill"},
+		ExecMode:       ExecStandalone,
+		ApprovalPolicy: ApprovalSemiAuto,
+		Constraints:    TaskConstraints{CooldownSec: 15},
+		Status:         StatusActive,
+	})
+	if err != nil {
+		t.Fatalf("CreateTask continuous: %v", err)
+	}
+
+	// Sub-second dispatch for ScheduleEvent
+	if n := eng.EmitEvent(ctx, "mining.round.opened", `{"roundSlot":37}`); n != 1 {
+		t.Fatalf("expected 1 dispatched task for mining.round.opened, got %d", n)
+	}
+	select {
+	case msg := <-doneCh:
+		if msg != eventTask.ID+":event:mining.round.opened" {
+			t.Fatalf("unexpected trigger message %q", msg)
+		}
+	case <-time.After(250 * time.Millisecond):
+		t.Fatal("expected event-triggered run within 250ms")
+	}
+
+	// Cooldown deduplication prevents duplicate bursts within CooldownSec
+	if n := eng.EmitEvent(ctx, "mining.round.opened", `{"roundSlot":37}`); n != 0 {
+		t.Fatalf("expected 0 dispatched during cooldown, got %d", n)
+	}
+
+	// Sub-second dispatch for ScheduleContinuous with EventFilter
+	if n := eng.EmitEvent(ctx, "trade.fill", `{"venue":"kraken"}`); n != 1 {
+		t.Fatalf("expected 1 dispatched continuous task for trade.fill, got %d", n)
+	}
+	select {
+	case msg := <-doneCh:
+		if msg != contTask.ID+":event:trade.fill" {
+			t.Fatalf("unexpected continuous trigger message %q", msg)
+		}
+	case <-time.After(250 * time.Millisecond):
+		t.Fatal("expected continuous-filtered run within 250ms")
+	}
+
+	// KillAll blocks further push dispatches until ClearKill
+	if _, err := eng.KillAll(ctx, "stop push", "owner"); err != nil {
+		t.Fatalf("KillAll: %v", err)
+	}
+	if n := eng.EmitEvent(ctx, "market.tick", `{}`); n != 0 {
+		t.Fatalf("expected 0 dispatches while killed, got %d", n)
+	}
+	eng.ClearKill()
+}
