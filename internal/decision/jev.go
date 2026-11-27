@@ -6,7 +6,6 @@ import (
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/rand"
-	"crypto/tls"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -27,6 +26,7 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/fased-ai/fased-app/internal/netguard"
 	"github.com/fased-ai/fased-app/internal/providersecrets"
 	_ "modernc.org/sqlite"
 )
@@ -150,28 +150,14 @@ func isPublicUnicastIP(ip net.IP) bool {
 }
 
 func dialPublicAddress(ctx context.Context, dialer *net.Dialer, network, addr string) (net.Conn, error) {
-	host, port, err := net.SplitHostPort(addr)
-	if err != nil {
-		return nil, err
+	var dialFn func(context.Context, string, string) (net.Conn, error)
+	if dialer != nil {
+		dialFn = dialer.DialContext
 	}
-	if ip := net.ParseIP(host); ip != nil {
-		if !isPublicUnicastIP(ip) {
-			return nil, fmt.Errorf("blocked non-public IP %s", ip)
-		}
-		return dialer.DialContext(ctx, network, net.JoinHostPort(ip.String(), port))
-	}
-	resolved, err := net.DefaultResolver.LookupIPAddr(ctx, host)
-	if err != nil {
-		return nil, err
-	}
-	for _, r := range resolved {
-		if isPublicUnicastIP(r.IP) {
-			if conn, dErr := dialer.DialContext(ctx, network, net.JoinHostPort(r.IP.String(), port)); dErr == nil {
-				return conn, nil
-			}
-		}
-	}
-	return nil, fmt.Errorf("no public unicast IP available for %q", host)
+	return netguard.SafeDialContext(netguard.Options{
+		DialTimeout: 5 * time.Second,
+		Dial:        dialFn,
+	})(ctx, network, addr)
 }
 
 // NewService initializes isolated encrypted Jev decision storage under <dataDir>/integrations/.
@@ -216,14 +202,9 @@ CREATE TABLE IF NOT EXISTS jev_config (
 
 	transport := cfg.HTTPTransport
 	if transport == nil {
-		dialer := &net.Dialer{Timeout: 5 * time.Second}
-		transport = &http.Transport{
-			DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
-				return dialPublicAddress(ctx, dialer, network, addr)
-			},
-			ForceAttemptHTTP2: true,
-			TLSClientConfig:   &tls.Config{MinVersion: tls.VersionTLS12},
-		}
+		transport = netguard.NewSafeTransport(netguard.Options{
+			DialTimeout: 5 * time.Second,
+		})
 	}
 
 	return &Service{

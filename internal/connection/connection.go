@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"github.com/fased-ai/fased-app/internal/core"
+	"github.com/fased-ai/fased-app/internal/netguard"
 	"io"
 	"mime"
 	"net"
@@ -116,7 +117,14 @@ func Inspect(ctx context.Context, value, expected string) (Result, error) {
 	return probe(ctx, value, expected, client)
 }
 func instanceClient() (*http.Client, func()) {
-	transport := &http.Transport{Proxy: nil, TLSHandshakeTimeout: 3 * time.Second, ResponseHeaderTimeout: 3 * time.Second, DisableCompression: true}
+	transport := netguard.NewSafeTransport(netguard.Options{
+		AllowLoopback:         true,
+		AllowTailscaleHosts:   true,
+		DialTimeout:           3 * time.Second,
+		TLSHandshakeTimeout:   3 * time.Second,
+		ResponseHeaderTimeout: 3 * time.Second,
+	})
+	transport.DisableCompression = true
 	client := &http.Client{Transport: transport, Timeout: 5 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return errors.New("instance redirects are refused") }}
 	return client, transport.CloseIdleConnections
 }

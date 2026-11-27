@@ -1,7 +1,7 @@
 import { useUI } from "../ui-preferences";
 import { useState } from "react";
 import { Dialog } from "../components/shared";
-import { buildNewsChatPrompt } from "../agents-v2";
+import { buildNewsChatPrompt, safeHttpsHref } from "../agents-v2";
 import { RefreshCw, Settings2 } from "../icons";
 import type { AgentView } from "../agents";
 import { useWorkspace } from "../workspace";
@@ -211,15 +211,19 @@ export function NewsInputs({ view: v }: { view: AgentView }) {
                   {t(freshness)}
                 </span>
               </div>
-              <a
-                className="news-title"
-                href={item.url}
-                target="_blank"
-                rel="noopener noreferrer"
-                referrerPolicy="no-referrer"
-              >
-                {item.title}
-              </a>
+              {safeHttpsHref(item.url) ? (
+                <a
+                  className="news-title"
+                  href={safeHttpsHref(item.url)}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  referrerPolicy="no-referrer"
+                >
+                  {item.title}
+                </a>
+              ) : (
+                <span className="news-title">{item.title}</span>
+              )}
               <div className="news-headline-actions">
                 <button
                   type="button"

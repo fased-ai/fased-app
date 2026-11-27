@@ -45,9 +45,13 @@ const stagedDesktop = "cmd/fased-install/wallet-desktop.bin";
 const owned = [];
 await mkdir(".evidence/bin", { recursive: true });
 try {
-  const flags = version
-    ? [`-X github.com/fased-ai/fased-app/internal/core.Version=${version}`]
-    : [];
+  const flags = [
+    "-s",
+    "-w",
+    ...(version
+      ? [`-X github.com/fased-ai/fased-app/internal/core.Version=${version}`]
+      : []),
+  ];
   if (signer) {
     const bytes = await readFile(signer);
     if (!bytes.length || bytes.length > 64 * 1024 * 1024)
@@ -94,6 +98,7 @@ try {
     "go",
     [
       "build",
+      "-buildvcs=false",
       "-trimpath",
       ...(tags.length ? ["-tags", tags.join(",")] : []),
       ...(flags.length ? ["-ldflags", flags.join(" ")] : []),

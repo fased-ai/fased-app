@@ -17,6 +17,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/fased-ai/fased-app/internal/netguard"
 	"github.com/fased-ai/fased-app/internal/signer"
 )
 
@@ -52,13 +53,8 @@ func ValidateOrigin(raw string) (string, error) {
 	return canon, nil
 }
 
-var cgnatPrefix = netip.MustParsePrefix("100.64.0.0/10")
-
 func isPublicUnicastIP(ip netip.Addr) bool {
-	ip = ip.Unmap()
-	return ip.IsValid() && ip.IsGlobalUnicast() && !ip.IsPrivate() && !ip.IsLoopback() &&
-		!ip.IsLinkLocalUnicast() && !ip.IsLinkLocalMulticast() && !ip.IsMulticast() && !ip.IsUnspecified() &&
-		!cgnatPrefix.Contains(ip)
+	return netguard.IsPublicUnicastIP(ip)
 }
 
 func interleavePublicIPs(ips []netip.Addr) ([]netip.Addr, error) {

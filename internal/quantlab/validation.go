@@ -184,14 +184,16 @@ func sliceStrategy(spec fasedscript.StrategySpec, start int) fasedscript.Strateg
 	return out
 }
 
-func evalAndSimulateWindow(candles []marketdata.Candle, evalStart int, prog *fasedscript.Program, params map[string]float64, cfg BacktestConfig) (BacktestMetrics, error) {
+var validationSem = make(chan struct{}, 2)
+
+func evalAndSimulateWindow(ctx context.Context, candles []marketdata.Candle, evalStart int, prog *fasedscript.Program, params map[string]float64, cfg BacktestConfig) (BacktestMetrics, error) {
 	if evalStart < 0 {
 		evalStart = 0
 	}
 	if evalStart >= len(candles) {
 		return BacktestMetrics{FinalEquity: cfg.InitialCapital}, nil
 	}
-	ev, err := prog.Eval(candles, params)
+	ev, err := prog.EvalContext(ctx, candles, params)
 	if err != nil {
 		return BacktestMetrics{}, err
 	}
@@ -271,6 +273,15 @@ func buildParamGrid(inputs []fasedscript.InputSpec, baseParams map[string]float6
 
 // RunFourGateValidation executes deterministic Gates 1-4 on compiled FasedScript and candles.
 func RunFourGateValidation(ctx context.Context, candles []marketdata.Candle, prog *fasedscript.Program, cfg BacktestConfig) (FourGateReport, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	select {
+	case validationSem <- struct{}{}:
+		defer func() { <-validationSem }()
+	case <-ctx.Done():
+		return FourGateReport{}, ctx.Err()
+	}
 	var warnings []string
 
 	// Reserve chronological locked holdout slice from the tail.
@@ -296,7 +307,7 @@ func RunFourGateValidation(ctx context.Context, candles []marketdata.Candle, pro
 		if ctx.Err() != nil {
 			return FourGateReport{}, ctx.Err()
 		}
-		ev, err := prog.Eval(inSample, params)
+		ev, err := prog.EvalContext(ctx, inSample, params)
 		if err != nil {
 			return FourGateReport{}, err
 		}
@@ -344,7 +355,7 @@ func RunFourGateValidation(ctx context.Context, candles []marketdata.Candle, pro
 		return FourGateReport{}, ctx.Err()
 	}
 	// Evaluate real baseline across full non-holdout IS + full curve.
-	fullEval, err := prog.Eval(candles, bestParams)
+	fullEval, err := prog.EvalContext(ctx, candles, bestParams)
 	if err != nil {
 		return FourGateReport{}, err
 	}
@@ -354,7 +365,7 @@ func RunFourGateValidation(ctx context.Context, candles []marketdata.Candle, pro
 	}
 
 	// Gate 2: 1,000x Historical Bar Permutation Monte Carlo (bounded parallel deterministic workers).
-	isEval, err := prog.Eval(inSample, bestParams)
+	isEval, err := prog.EvalContext(ctx, inSample, bestParams)
 	if err != nil {
 		return FourGateReport{}, err
 	}
@@ -380,7 +391,7 @@ func RunFourGateValidation(ctx context.Context, candles []marketdata.Candle, pro
 	if err != nil {
 		return FourGateReport{}, err
 	}
-	holdMetrics, err := evalAndSimulateWindow(candles, holdoutStart, prog, frozenParams, cfg)
+	holdMetrics, err := evalAndSimulateWindow(ctx, candles, holdoutStart, prog, frozenParams, cfg)
 	if err != nil {
 		return FourGateReport{}, err
 	}
@@ -488,7 +499,7 @@ func runWalkForwardFolds(ctx context.Context, candles []marketdata.Candle, prog 
 			if ctx.Err() != nil {
 				return nil, nil, ctx.Err()
 			}
-			ev, err := prog.Eval(trainSlice, params)
+			ev, err := prog.EvalContext(ctx, trainSlice, params)
 			if err != nil {
 				continue
 			}
@@ -514,7 +525,7 @@ func runWalkForwardFolds(ctx context.Context, candles []marketdata.Candle, prog 
 		}
 
 		// Evaluate OOS test slice with full train prefix warm-up (zero look-ahead).
-		oosMetrics, err := evalAndSimulateWindow(candles[:testEnd], trainEnd, prog, chosen, cfg)
+		oosMetrics, err := evalAndSimulateWindow(ctx, candles[:testEnd], trainEnd, prog, chosen, cfg)
 		if err != nil {
 			oosMetrics = BacktestMetrics{}
 		}
@@ -580,7 +591,7 @@ func runPermutationSweep(ctx context.Context, candles []marketdata.Candle, prog 
 	return runParallelPermutations(ctx, iters, func(idx int) float64 {
 		seed := baseSeed ^ uint64(idx+1)*0x9e3779b97f4a7c15
 		permed := PermuteCandles(candles, seed)
-		ev, err := prog.Eval(permed, params)
+		ev, err := prog.EvalContext(ctx, permed, params)
 		if err != nil {
 			return 0
 		}
@@ -594,7 +605,7 @@ func runHoldoutPermutationSweep(ctx context.Context, prefix, holdout []marketdat
 	return runParallelPermutations(ctx, iters, func(idx int) float64 {
 		seed := baseSeed ^ uint64(idx+1)*0x9e3779b97f4a7c15
 		permedFull := PermuteCandlesWithPrefix(prefix, holdout, seed)
-		m, err := evalAndSimulateWindow(permedFull, evalStart, prog, params, cfg)
+		m, err := evalAndSimulateWindow(ctx, permedFull, evalStart, prog, params, cfg)
 		if err != nil {
 			return 0
 		}

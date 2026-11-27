@@ -1,11 +1,10 @@
-//go:build !linux
+//go:build !linux && !darwin
 
 package custody
 
 import (
-	"fmt"
+	"errors"
 	"net"
-	"os"
 )
 
 type peerCredListener struct {
@@ -32,8 +31,8 @@ func (l *peerCredListener) Accept() (net.Conn, error) {
 }
 
 func verifyPeerConnUID(_ net.Conn, allowedUID int) error {
-	if allowedUID >= 0 && os.Getuid() != allowedUID {
-		return fmt.Errorf("peer uid check failed (process uid %d != %d)", os.Getuid(), allowedUID)
+	if allowedUID >= 0 {
+		return errors.New("OS unix socket peer UID verification unsupported on this platform; failing closed")
 	}
 	return nil
 }

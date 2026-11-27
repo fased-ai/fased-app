@@ -156,12 +156,64 @@ func ValidateDevnetMessage(messageBytes []byte, expectedFeePayer [32]byte) error
 		if dataLen > 512 || pos+dataLen > len(messageBytes) {
 			return errors.New("truncated devnet instruction data")
 		}
+		data := messageBytes[pos : pos+dataLen]
 		pos += dataLen
+
+		switch progID {
+		case Compute:
+			if err := validateComputeBudgetIx(data); err != nil {
+				return err
+			}
+		case MemoProgram:
+			if len(data) == 0 || len(data) > 256 {
+				return errors.New("devnet memo instruction out of bounds")
+			}
+		case System:
+			if len(data) != 12 || binary.LittleEndian.Uint32(data[0:4]) != 2 || acctIdxCount != 2 {
+				return errors.New("only System::Transfer permitted on devnet executor")
+			}
+		case Token:
+			return errors.New("raw SPL Token instructions are disabled on legacy devnet executor; use typed custody intents")
+		case AssociatedToken:
+			if len(data) != 1 || data[0] != 1 || acctIdxCount != 6 {
+				return errors.New("only idempotent ATA creation permitted on devnet executor")
+			}
+		case Jupiter:
+			return errors.New("raw Jupiter instructions require typed custody swap validation")
+		}
 	}
 	if pos != len(messageBytes) {
 		return errors.New("unexpected trailing bytes in devnet message")
 	}
 	return nil
+}
+
+func validateComputeBudgetIx(data []byte) error {
+	if len(data) < 5 {
+		return errors.New("invalid compute budget instruction length")
+	}
+	switch data[0] {
+	case 2: // SetComputeUnitLimit(u32)
+		if len(data) != 5 {
+			return errors.New("invalid SetComputeUnitLimit instruction length")
+		}
+		cu := binary.LittleEndian.Uint32(data[1:5])
+		if cu == 0 || cu > 1_400_000 {
+			return errors.New("compute unit limit out of safe bounds")
+		}
+		return nil
+	case 3: // SetComputeUnitPrice(u64)
+		if len(data) != 9 {
+			return errors.New("invalid SetComputeUnitPrice instruction length")
+		}
+		price := binary.LittleEndian.Uint64(data[1:9])
+		if price > 1_000_000 {
+			return errors.New("compute unit price exceeds safe ceiling")
+		}
+		return nil
+	default:
+		return errors.New("unsupported compute budget opcode")
+	}
 }
 
 // ValidateSolanaMainnetMessage parses a legacy or v0/ALT Solana transaction message,
@@ -273,9 +325,26 @@ func ValidateSolanaMainnetMessage(messageBytes []byte, expectedFeePayer [32]byte
 		pos += dataLen
 
 		switch progID {
+		case Compute:
+			if err := validateComputeBudgetIx(data); err != nil {
+				return err
+			}
+		case MemoProgram:
+			if len(data) == 0 || len(data) > 256 {
+				return errors.New("mainnet memo instruction out of bounds")
+			}
 		case System:
 			if len(data) != 12 || binary.LittleEndian.Uint32(data[0:4]) != 2 || len(acctIdxs) != 2 || acctIdxs[0] != 0 {
 				return errors.New("only System::Transfer authorized under mainnet-capped execution")
+			}
+			if binary.LittleEndian.Uint64(data[4:12]) == 0 {
+				return errors.New("System::Transfer amount must be positive")
+			}
+		case Token:
+			return errors.New("raw SPL Token instructions are disabled on legacy mainnet-capped executor; use typed custody intents")
+		case AssociatedToken:
+			if len(data) != 1 || data[0] != 1 || len(acctIdxs) != 6 || acctIdxs[0] != 0 {
+				return errors.New("only idempotent ATA creation authorized under mainnet-capped execution")
 			}
 		case Jupiter:
 			if len(data) < 38 || (!bytes.Equal(data[:8], routeV2[:]) && !bytes.Equal(data[:8], sharedRouteV2[:])) {

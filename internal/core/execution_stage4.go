@@ -122,6 +122,9 @@ var (
 
 func init() {
 	stage4CapabilitiesHook = func(s *Store) (bool, bool, bool) {
+		if s != nil && s.liveCustodyEnabled() {
+			return true, true, false
+		}
 		rt := s.stage4Runtime()
 		if rt != nil && (rt.profile == signer.ExecutionProfileTestnet || rt.profile == signer.ExecutionProfileMainnetCapped) {
 			return true, true, false
@@ -392,6 +395,14 @@ func (server *Server) ConfigureTestnetExecution(ctx context.Context, cfg Testnet
 	return server.Store.ConfigureTestnetExecution(ctx, cfg)
 }
 
+func (s *Store) hyperliquidRequiresStepUp() bool {
+	if hyperliquidActivationEnabled || signer.HyperliquidActivationEnabled {
+		return true
+	}
+	rt := s.stage4Runtime()
+	return rt != nil && rt.profile == signer.ExecutionProfileMainnetCapped
+}
+
 func (s *Store) executionStatus(ctx context.Context) ExecutionStatusView {
 	view := ExecutionStatusView{
 		Profile:       signer.ExecutionProfileOff,
@@ -400,6 +411,12 @@ func (s *Store) executionStatus(ctx context.Context) ExecutionStatusView {
 	}
 	rt := s.stage4Runtime()
 	if rt == nil || (rt.profile != signer.ExecutionProfileTestnet && rt.profile != signer.ExecutionProfileMainnetCapped) {
+		if s.liveCustodyEnabled() {
+			view.Available = true
+			view.WalletSigner = true
+			view.FinancialExecution = true
+			view.MainnetLocked = false
+		}
 		return view
 	}
 	view.Profile = rt.profile
@@ -522,17 +539,7 @@ func (s *Store) rehearseSolanaDevnet(ctx context.Context, req SolanaDevnetRehear
 	if stResp.Status.Account.Network == "mainnet" || stResp.Status.Account.Network == "mainnet-beta" {
 		return nil, signer.ErrUnavailable
 	}
-	pubRaw, err := hex.DecodeString(stResp.Status.Account.PublicKey)
-	if err != nil || len(pubRaw) != 32 {
-		return nil, errors.New("invalid signer Ed25519 public key")
-	}
-	var feePayer [32]byte
-	copy(feePayer[:], pubRaw)
 
-	msgBytes, err := onchain.BuildDevnetComputeMemoMessage(feePayer, bh, 50_000, fee, memo)
-	if err != nil {
-		return nil, err
-	}
 	var opRand [8]byte
 	if _, err := rand.Read(opRand[:]); err != nil {
 		return nil, err
@@ -543,13 +550,16 @@ func (s *Store) rehearseSolanaDevnet(ctx context.Context, req SolanaDevnetRehear
 		Action:       "solana-devnet-sign",
 		AgentVaultID: vaultID,
 		SolanaDevnetSign: &signer.SolanaDevnetSignIntent{
-			Network:           "devnet",
-			GenesisHash:       onchain.SolanaDevnetGenesisHash,
-			OperationID:       opID,
-			Asset:             asset,
-			EstimatedMicroUSD: est,
-			MessageBase64:     base64.StdEncoding.EncodeToString(msgBytes),
-			ExpiresAt:         time.Now().Unix() + 120,
+			Network:                  "devnet",
+			GenesisHash:              onchain.SolanaDevnetGenesisHash,
+			OperationID:              opID,
+			Asset:                    asset,
+			EstimatedMicroUSD:        est,
+			Blockhash:                onchain.Base58(bh[:]),
+			ComputeUnitLimit:         50_000,
+			PriorityFeeMicroLamports: fee,
+			Memo:                     memo,
+			ExpiresAt:                time.Now().Unix() + 120,
 		},
 	})
 	if err != nil {
@@ -674,7 +684,11 @@ func (h *HTTPHandler) solanaDevnetRehearseAPI(w http.ResponseWriter, r *http.Req
 	if !decodeJSON(w, r, &req) {
 		return
 	}
-	res, err := h.store.rehearseSolanaDevnet(r.Context(), req)
+	authCtx, ok := h.requireStepUpIfOwnerAuthConfigured(w, r, token, "execute", "solana-devnet", false)
+	if !ok {
+		return
+	}
+	res, err := h.store.rehearseSolanaDevnet(authCtx, req)
 	if err != nil {
 		code := 400
 		if errors.Is(err, signer.ErrUnavailable) || errors.Is(err, errGlobalKillSwitchActive) {
@@ -752,17 +766,6 @@ func (s *Store) executeSolanaMainnet(ctx context.Context, req SolanaMainnetExecu
 	if memo == "" {
 		return nil, errors.New("memo required for solana mainnet execution")
 	}
-	pubRaw, pErr := hex.DecodeString(stResp.Status.Account.PublicKey)
-	if pErr != nil || len(pubRaw) != 32 {
-		return nil, errors.New("invalid signer Ed25519 public key")
-	}
-	var feePayer [32]byte
-	copy(feePayer[:], pubRaw)
-	msgBytes, err := onchain.BuildDevnetComputeMemoMessage(feePayer, bh, 50_000, fee, memo)
-	if err != nil {
-		return nil, err
-	}
-
 	var opRand [8]byte
 	if _, err := rand.Read(opRand[:]); err != nil {
 		return nil, err
@@ -773,13 +776,16 @@ func (s *Store) executeSolanaMainnet(ctx context.Context, req SolanaMainnetExecu
 		Action:       "solana-mainnet-capped-sign",
 		AgentVaultID: vaultID,
 		SolanaMainnetCappedSign: &signer.SolanaMainnetCappedSignIntent{
-			Network:           "mainnet-beta",
-			GenesisHash:       onchain.SolanaMainnetGenesisHash,
-			OperationID:       opID,
-			Asset:             asset,
-			EstimatedMicroUSD: req.EstimatedMicroUSD,
-			MessageBase64:     base64.StdEncoding.EncodeToString(msgBytes),
-			ExpiresAt:         time.Now().Unix() + 120,
+			Network:                  "mainnet-beta",
+			GenesisHash:              onchain.SolanaMainnetGenesisHash,
+			OperationID:              opID,
+			Asset:                    asset,
+			EstimatedMicroUSD:        req.EstimatedMicroUSD,
+			Blockhash:                onchain.Base58(bh[:]),
+			ComputeUnitLimit:         50_000,
+			PriorityFeeMicroLamports: fee,
+			Memo:                     memo,
+			ExpiresAt:                time.Now().Unix() + 120,
 		},
 	})
 	if err != nil {

@@ -696,7 +696,8 @@ func TestAgentV2GetThreadPaginationAndRemoteMCPBearer(t *testing.T) {
 		t.Fatalf("unexpected page3: %+v", page3)
 	}
 
-	// 2. Owner-authenticated Remote HTTPS /api/v1/mcp admits non-browser Bearer token (refuses browser Origin without CSRF).
+	// 2. Owner-authenticated Remote HTTPS /api/v1/mcp REJECTS full owner session Bearer token
+	// and requires a dedicated scoped fased_mcp_* token instead (Wave S-7).
 	code, err := s.IssueClaimCode(t.Context())
 	if err != nil {
 		t.Fatal(err)
@@ -720,8 +721,24 @@ func TestAgentV2GetThreadPaginationAndRemoteMCPBearer(t *testing.T) {
 	req.Header.Set("Authorization", "Bearer "+token)
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
-	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"result"`) {
-		t.Fatalf("expected 200 remote Bearer MCP ping, got %d %s", w.Code, w.Body.String())
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401 rejecting full owner session Bearer on remote HTTPS /api/v1/mcp, got %d %s", w.Code, w.Body.String())
+	}
+
+	// Dedicated scoped fased_mcp_* token succeeds on remote HTTPS /api/v1/mcp.
+	mcpRawTok, _, err := s.CreateMCPToken(t.Context(), "remote-mcp-client", 0)
+	if err != nil {
+		t.Fatalf("CreateMCPToken: %v", err)
+	}
+	scopedReq := httptest.NewRequest(http.MethodPost, "https://remote.example.com/api/v1/mcp", strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"ping"}`))
+	scopedReq.Host = "remote.example.com"
+	scopedReq.Header.Set("X-Forwarded-Proto", "https")
+	scopedReq.Header.Set("Content-Type", "application/json")
+	scopedReq.Header.Set("Authorization", "Bearer "+mcpRawTok)
+	ws := httptest.NewRecorder()
+	h.ServeHTTP(ws, scopedReq)
+	if ws.Code != http.StatusOK || !strings.Contains(ws.Body.String(), `"result"`) {
+		t.Fatalf("expected 200 remote scoped MCP ping, got %d %s", ws.Code, ws.Body.String())
 	}
 
 	// Browser-origin request using Bearer without CSRF must still be rejected.

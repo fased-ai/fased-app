@@ -150,15 +150,15 @@ func TestAutomationTelegramAndMCPIntegration(t *testing.T) {
 		t.Fatalf("expected save_memory approval resolved over Telegram, got %q", txt)
 	}
 
-	// Telegram /kill activates kill switch, /unkill CONFIRM clears it cleanly.
+	// Telegram /kill activates kill switch; /unkill over Telegram is refused fail-closed (requires local UI step-up).
 	if auth, txt := sim(777001, "/kill volatility"); !auth || !strings.Contains(txt, "KILL SWITCH ACTIVE") {
 		t.Fatalf("expected /kill success, got %q", txt)
 	}
 	if auth, txt := sim(777001, "/resume"); !auth || !strings.Contains(txt, "Refused") && !strings.Contains(txt, "refused") {
 		t.Fatalf("expected /resume refused while killed, got %q", txt)
 	}
-	if auth, txt := sim(777001, "/unkill CONFIRM"); !auth || !strings.Contains(txt, "Kill switch cleared") {
-		t.Fatalf("expected /unkill CONFIRM success, got %q", txt)
+	if auth, txt := sim(777001, "/unkill CONFIRM"); !auth || !strings.Contains(txt, "requires owner step-up in the local UI") {
+		t.Fatalf("expected /unkill CONFIRM refused over Telegram, got %q", txt)
 	}
 
 	// SSE /api/v1/automation/stream emits ready event cleanly.

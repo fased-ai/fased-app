@@ -47,7 +47,7 @@ func TestCLIPathsElectronArgsAndShadowHome(t *testing.T) {
 		t.Fatal("failed to detect Electron bundle marker")
 	}
 
-	args, err := ParseSafeCLILaunchArgs(`--profile "safe-mode" -c model_reasoning_effort=high`)
+	args, err := ParseSafeCLILaunchArgs(`--effort "high" -c model_reasoning_effort=high`)
 	if err != nil || len(args) != 4 {
 		t.Fatalf("expected safe args, got %v err=%v", args, err)
 	}
@@ -56,6 +56,7 @@ func TestCLIPathsElectronArgsAndShadowHome(t *testing.T) {
 		"-s workspace-write",
 		"-c sandbox_mode=danger-full-access",
 		"-c auth=something",
+		"--profile safe-mode",
 		"--profile $(id)",
 		"positional",
 	} {

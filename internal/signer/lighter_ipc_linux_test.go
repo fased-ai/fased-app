@@ -122,6 +122,8 @@ func TestLighterLinuxIPCRoundTrip(t *testing.T) {
 			ClientOrderIndex:  505,
 			BaseAmount:        150,
 			Price:             180000,
+			SizeDecimals:      5,
+			PriceDecimals:     2,
 			OrderType:         0,
 			TimeInForce:       1,
 			OrderExpiry:       (now + 3600) * 1000,

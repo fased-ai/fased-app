@@ -117,10 +117,11 @@ type Update struct {
 
 // PendingApprovalBrief summarizes a queued Agent V2 approval without sensitive payload fields.
 type PendingApprovalBrief struct {
-	ID       string `json:"id"`
-	ToolName string `json:"toolName"`
-	Title    string `json:"title"`
-	Summary  string `json:"summary"`
+	ID           string `json:"id"`
+	ToolName     string `json:"toolName"`
+	Title        string `json:"title"`
+	Summary      string `json:"summary"`
+	AllowButtons bool   `json:"allowButtons"`
 }
 
 // StatusSnapshot reports live automation and workspace status for /status.

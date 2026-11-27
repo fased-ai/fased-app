@@ -263,7 +263,7 @@ func TestValidationAndConfigStatisticalFixes(t *testing.T) {
 	}
 
 	// 6. Causal warm-up prefix enables ema(close, 30) to generate signals cleanly in a 40-bar holdout tail.
-	mWarm, err := evalAndSimulateWindow(candles, len(candles)-40, emaProg, map[string]float64{"p": 30}, flatCfg)
+	mWarm, err := evalAndSimulateWindow(t.Context(), candles, len(candles)-40, emaProg, map[string]float64{"p": 30}, flatCfg)
 	if err != nil {
 		t.Fatalf("evalAndSimulateWindow warm-up check failed: %v", err)
 	}

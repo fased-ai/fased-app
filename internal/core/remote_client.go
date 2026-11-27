@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/fased-ai/fased-app/internal/netguard"
 	"github.com/fased-ai/fased-app/internal/tailnet"
 )
 
@@ -20,7 +21,13 @@ func NewRemoteClient(ctx context.Context, origin, instanceID string) (*Client, e
 	if err != nil || len(instanceID) < 16 || len(instanceID) > 128 {
 		return nil, errors.New("choose the verified Tailscale instance with fased connect")
 	}
-	transport := &http.Transport{Proxy: nil, TLSHandshakeTimeout: 5 * time.Second, ResponseHeaderTimeout: 10 * time.Second, DisableCompression: true}
+	transport := netguard.NewSafeTransport(netguard.Options{
+		AllowTailscaleHosts:   true,
+		DialTimeout:           5 * time.Second,
+		TLSHandshakeTimeout:   5 * time.Second,
+		ResponseHeaderTimeout: 10 * time.Second,
+	})
+	transport.DisableCompression = true
 	return newRemoteClient(ctx, origin, instanceID, transport)
 }
 func newRemoteClient(ctx context.Context, origin, instanceID string, transport http.RoundTripper) (*Client, error) {

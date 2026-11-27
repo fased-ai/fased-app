@@ -3,7 +3,6 @@ package marketdata
 import (
 	"bytes"
 	"context"
-	"crypto/tls"
 	"errors"
 	"fmt"
 	"io"
@@ -12,6 +11,8 @@ import (
 	"net/url"
 	"strings"
 	"time"
+
+	"github.com/fased-ai/fased-app/internal/netguard"
 )
 
 const (
@@ -108,33 +109,14 @@ func interleavePublicIPs(addrs []net.IPAddr) []net.IPAddr {
 }
 
 func dialPublicAddress(ctx context.Context, dialer *net.Dialer, network, addr string) (net.Conn, error) {
-	host, port, err := net.SplitHostPort(addr)
-	if err != nil {
-		return nil, fmt.Errorf("invalid target address %q: %w", addr, err)
+	var dialFn func(context.Context, string, string) (net.Conn, error)
+	if dialer != nil {
+		dialFn = dialer.DialContext
 	}
-	if ip := net.ParseIP(host); ip != nil {
-		if !isPublicUnicastIP(ip) {
-			return nil, fmt.Errorf("blocked non-public IP %s", ip)
-		}
-		return dialer.DialContext(ctx, network, net.JoinHostPort(ip.String(), port))
-	}
-	resolved, err := net.DefaultResolver.LookupIPAddr(ctx, host)
-	if err != nil {
-		return nil, fmt.Errorf("resolve host %q: %w", host, err)
-	}
-	candidates := interleavePublicIPs(resolved)
-	if len(candidates) == 0 {
-		return nil, fmt.Errorf("no public unicast IP resolved for host %q", host)
-	}
-	var lastErr error
-	for _, c := range candidates {
-		conn, dialErr := dialer.DialContext(ctx, network, net.JoinHostPort(c.IP.String(), port))
-		if dialErr == nil {
-			return conn, nil
-		}
-		lastErr = dialErr
-	}
-	return nil, lastErr
+	return netguard.SafeDialContext(netguard.Options{
+		DialTimeout: 5 * time.Second,
+		Dial:        dialFn,
+	})(ctx, network, addr)
 }
 
 // upstreamClient wraps an SSRF-safe, redirect-disabled, TLS 1.2+ HTTP client.
@@ -147,32 +129,18 @@ type upstreamClient struct {
 func newUpstreamClient(override http.RoundTripper) *upstreamClient {
 	transport := override
 	if transport == nil {
-		dialer := &net.Dialer{
-			Timeout:   5 * time.Second,
-			KeepAlive: 30 * time.Second,
-		}
-		transport = &http.Transport{
-			DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
-				return dialPublicAddress(ctx, dialer, network, addr)
-			},
-			ForceAttemptHTTP2:     true,
-			MaxIdleConns:          16,
-			IdleConnTimeout:       30 * time.Second,
+		transport = netguard.NewSafeTransport(netguard.Options{
+			DialTimeout:           5 * time.Second,
 			TLSHandshakeTimeout:   5 * time.Second,
-			ExpectContinueTimeout: 1 * time.Second,
 			ResponseHeaderTimeout: 8 * time.Second,
-			TLSClientConfig: &tls.Config{
-				MinVersion: tls.VersionTLS12,
-			},
-		}
+			MaxIdleConns:          16,
+		})
 	}
 	return &upstreamClient{
 		http: &http.Client{
-			Transport: transport,
-			Timeout:   defaultRequestTimeout,
-			CheckRedirect: func(*http.Request, []*http.Request) error {
-				return http.ErrUseLastResponse
-			},
+			Transport:     transport,
+			Timeout:       defaultRequestTimeout,
+			CheckRedirect: netguard.RefuseRedirects,
 		},
 		poolCache:  newTTLCache[string](256, nil),
 		poolFlight: newCallGroup(),
@@ -195,25 +163,14 @@ func validateUpstreamWSURL(rawURL string) (*url.URL, error) {
 }
 
 func newUpstreamWSHttpClient() *http.Client {
-	dialer := &net.Dialer{
-		Timeout:   6 * time.Second,
-		KeepAlive: 25 * time.Second,
-	}
-	transport := &http.Transport{
-		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
-			return dialPublicAddress(ctx, dialer, network, addr)
-		},
-		ForceAttemptHTTP2:   false,
+	transport := netguard.NewSafeTransport(netguard.Options{
+		DialTimeout:         6 * time.Second,
 		TLSHandshakeTimeout: 6 * time.Second,
-		TLSClientConfig: &tls.Config{
-			MinVersion: tls.VersionTLS12,
-		},
-	}
+	})
+	transport.ForceAttemptHTTP2 = false
 	return &http.Client{
-		Transport: transport,
-		CheckRedirect: func(*http.Request, []*http.Request) error {
-			return http.ErrUseLastResponse
-		},
+		Transport:     transport,
+		CheckRedirect: netguard.RefuseRedirects,
 	}
 }
 

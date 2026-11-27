@@ -143,11 +143,13 @@ type OrderPlan struct {
 	LastEvaluatedAt   int64   `json:"lastEvaluatedAt,omitempty"`
 }
 
-// RiskPolicy enforces hard Go pre-trade bounds and daily loss ceilings.
+// RiskPolicy enforces hard Go pre-trade bounds and daily loss/notional ceilings.
 type RiskPolicy struct {
 	MaxOrderNotionalUSD float64 `json:"maxOrderNotionalUsd"`
+	MaxDailyNotionalUSD float64 `json:"maxDailyNotionalUsd,omitempty"`
 	MaxDailyLossUSD     float64 `json:"maxDailyLossUsd"`
 	MaxOpenPlans        int     `json:"maxOpenPlans"`
+	DailyNotionalUSD    float64 `json:"dailyNotionalUsd,omitempty"`
 	DailyLossUSD        float64 `json:"dailyLossUsd"`
 	DailyLossDay        string  `json:"dailyLossDay,omitempty"`
 }
@@ -185,6 +187,7 @@ type EvaluateSummary struct {
 func DefaultRiskPolicy() RiskPolicy {
 	return RiskPolicy{
 		MaxOrderNotionalUSD: 25000,
+		MaxDailyNotionalUSD: 100000,
 		MaxDailyLossUSD:     2000,
 		MaxOpenPlans:        25,
 	}
@@ -195,14 +198,17 @@ func ValidateRiskPolicy(p RiskPolicy) error {
 	if !isFinitePositive(p.MaxOrderNotionalUSD) || p.MaxOrderNotionalUSD > 10_000_000 {
 		return fmt.Errorf("%w: maxOrderNotionalUsd must be between 0 and 10,000,000", ErrRiskRejected)
 	}
+	if p.MaxDailyNotionalUSD != 0 && (!isFinitePositive(p.MaxDailyNotionalUSD) || p.MaxDailyNotionalUSD > 50_000_000) {
+		return fmt.Errorf("%w: maxDailyNotionalUsd must be between 0 and 50,000,000", ErrRiskRejected)
+	}
 	if !isFinitePositive(p.MaxDailyLossUSD) || p.MaxDailyLossUSD > 1_000_000 {
 		return fmt.Errorf("%w: maxDailyLossUsd must be between 0 and 1,000,000", ErrRiskRejected)
 	}
 	if p.MaxOpenPlans < 1 || p.MaxOpenPlans > 100 {
 		return fmt.Errorf("%w: maxOpenPlans must be between 1 and 100", ErrRiskRejected)
 	}
-	if !isFiniteNonNeg(p.DailyLossUSD) {
-		return fmt.Errorf("%w: dailyLossUsd must be finite non-negative", ErrRiskRejected)
+	if !isFiniteNonNeg(p.DailyLossUSD) || !isFiniteNonNeg(p.DailyNotionalUSD) {
+		return fmt.Errorf("%w: dailyLossUsd and dailyNotionalUsd must be finite non-negative", ErrRiskRejected)
 	}
 	return nil
 }

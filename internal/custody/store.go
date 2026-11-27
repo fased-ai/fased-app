@@ -261,9 +261,14 @@ CREATE INDEX IF NOT EXISTS idx_audit_wallet ON audit_log (wallet_id, timestamp D
 }
 
 func (s *Service) initSignerMetaLocked(ctx context.Context) error {
-	// Idempotent schema migration for pre-Wave-S3 custody vaults.
+	// Idempotent schema migration for pre-Wave-S3/S5/S6 custody vaults.
 	_, _ = s.db.ExecContext(ctx, `ALTER TABLE signer_meta ADD COLUMN audit_head_hash TEXT NOT NULL DEFAULT ''`)
 	_, _ = s.db.ExecContext(ctx, `ALTER TABLE signer_meta ADD COLUMN audit_count INTEGER NOT NULL DEFAULT 0`)
+	_, _ = s.db.ExecContext(ctx, `ALTER TABLE signer_meta ADD COLUMN audit_anchor_mac TEXT NOT NULL DEFAULT ''`)
+	_, _ = s.db.ExecContext(ctx, `ALTER TABLE signer_meta ADD COLUMN global_freeze INTEGER NOT NULL DEFAULT 0`)
+	_, _ = s.db.ExecContext(ctx, `ALTER TABLE signer_meta ADD COLUMN global_freeze_reason TEXT NOT NULL DEFAULT ''`)
+	_, _ = s.db.ExecContext(ctx, `ALTER TABLE signer_meta ADD COLUMN global_freeze_by TEXT NOT NULL DEFAULT ''`)
+	_, _ = s.db.ExecContext(ctx, `ALTER TABLE signer_meta ADD COLUMN global_freeze_at INTEGER NOT NULL DEFAULT 0`)
 	if _, err := s.db.ExecContext(ctx, `INSERT OR IGNORE INTO signer_meta (id) VALUES (1)`); err != nil {
 		return err
 	}
@@ -311,6 +316,72 @@ func (s *Service) initSignerMetaLocked(ctx context.Context) error {
 	return nil
 }
 
+func (s *Service) isGlobalFrozenLocked(ctx context.Context) (bool, string) {
+	if s.db == nil {
+		return true, "custody store closed"
+	}
+	var active int
+	var reason string
+	if err := s.db.QueryRowContext(ctx, `SELECT global_freeze, global_freeze_reason FROM signer_meta WHERE id = 1`).Scan(&active, &reason); err != nil {
+		return false, ""
+	}
+	return active != 0, reason
+}
+
+// GetGlobalFreeze reports the signer-authoritative global emergency freeze latch.
+func (s *Service) GetGlobalFreeze(ctx context.Context) (GlobalFreezeState, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed || s.db == nil {
+		return GlobalFreezeState{}, errors.New("custody store closed")
+	}
+	var active int
+	var st GlobalFreezeState
+	if err := s.db.QueryRowContext(ctx, `SELECT global_freeze, global_freeze_reason, global_freeze_by, global_freeze_at FROM signer_meta WHERE id = 1`).Scan(&active, &st.Reason, &st.UpdatedBy, &st.UpdatedAt); err != nil {
+		return GlobalFreezeState{}, err
+	}
+	st.Active = active != 0
+	return st, nil
+}
+
+// SetGlobalFreeze latches or clears the signer-authoritative global emergency freeze.
+func (s *Service) SetGlobalFreeze(ctx context.Context, active bool, reason, actor string) (GlobalFreezeState, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed || s.db == nil {
+		return GlobalFreezeState{}, errors.New("custody store closed")
+	}
+	nowSec := s.now().UTC().Unix()
+	cleanReason := strings.TrimSpace(reason)
+	if active && cleanReason == "" {
+		cleanReason = "Global emergency freeze"
+	}
+	cleanActor := firstStr(actor, "owner")
+	flag := 0
+	if active {
+		flag = 1
+	}
+	if _, err := s.db.ExecContext(ctx,
+		`UPDATE signer_meta SET global_freeze = ?, global_freeze_reason = ?, global_freeze_by = ?, global_freeze_at = ? WHERE id = 1`,
+		flag, cleanReason, cleanActor, nowSec,
+	); err != nil {
+		return GlobalFreezeState{}, err
+	}
+	action := "global_freeze_cleared"
+	if active {
+		action = "global_freeze_activated"
+	}
+	if err := s.appendAuditLocked(ctx, "global", action, cleanActor, cleanReason, ""); err != nil {
+		return GlobalFreezeState{}, err
+	}
+	return GlobalFreezeState{
+		Active:    active,
+		Reason:    cleanReason,
+		UpdatedBy: cleanActor,
+		UpdatedAt: nowSec,
+	}, nil
+}
+
 // SecurityStatus reports KEK protection and signer process isolation posture.
 func (s *Service) SecurityStatus(ctx context.Context) (SecurityStatus, error) {
 	hasOwner, _ := s.HasOwnerAuth(ctx)
@@ -352,6 +423,7 @@ func (s *Service) Close() error {
 	clear(s.auditHMACKey)
 	s.proofMu.Lock()
 	clear(s.ownerProofs)
+	clear(s.passkeyChallenges)
 	s.proofMu.Unlock()
 	if s.db != nil {
 		err := s.db.Close()
@@ -425,6 +497,12 @@ func computeAuditEntryHashV2(hmacKey []byte, prevHash string, entry AuditEntry) 
 	return "v2:" + hex.EncodeToString(mac.Sum(nil))
 }
 
+func computeAuditAnchorMAC(hmacKey []byte, count int, headHash string) string {
+	mac := hmac.New(sha256.New, hmacKey)
+	_, _ = mac.Write([]byte(fmt.Sprintf("fased-audit-anchor:v1:%d:%s", count, headHash)))
+	return hex.EncodeToString(mac.Sum(nil))
+}
+
 func (s *Service) appendAuditExecLocked(ctx context.Context, q sqlExecQuerier, walletID, action, actor, summary, policyHash string) error {
 	id, err := randomHexID("aud", 8)
 	if err != nil {
@@ -463,9 +541,16 @@ func (s *Service) appendAuditExecLocked(ctx context.Context, q sqlExecQuerier, w
 	); err != nil {
 		return err
 	}
+	var curCount int
+	_ = q.QueryRowContext(ctx, `SELECT audit_count FROM signer_meta WHERE id = 1`).Scan(&curCount)
+	nextCount := curCount + 1
+	anchorMAC := ""
+	if len(s.auditHMACKey) == 32 {
+		anchorMAC = computeAuditAnchorMAC(s.auditHMACKey, nextCount, entry.EntryHash)
+	}
 	_, err = q.ExecContext(ctx,
-		`UPDATE signer_meta SET audit_head_hash = ?, audit_count = audit_count + 1 WHERE id = 1`,
-		entry.EntryHash,
+		`UPDATE signer_meta SET audit_head_hash = ?, audit_count = ?, audit_anchor_mac = ? WHERE id = 1`,
+		entry.EntryHash, nextCount, anchorMAC,
 	)
 	return err
 }
@@ -476,7 +561,7 @@ func (s *Service) appendAuditLocked(ctx context.Context, walletID, action, actor
 
 // VerifyAuditChain walks the tamper-evident audit log in insertion order, verifies every link
 // (HMAC-SHA256 v2 keyed by signer-sealed audit key, forbidding v1 downgrade after v2), and
-// verifies the final head hash and row count against signer_meta to detect silent truncation.
+// verifies the final head hash, row count, and keyed HMAC anchor against signer_meta to detect truncation.
 func (s *Service) VerifyAuditChain(ctx context.Context) (int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -485,7 +570,8 @@ func (s *Service) VerifyAuditChain(ctx context.Context) (int, error) {
 	}
 	var expectedHead string
 	var expectedCount int
-	if err := s.db.QueryRowContext(ctx, `SELECT audit_head_hash, audit_count FROM signer_meta WHERE id = 1`).Scan(&expectedHead, &expectedCount); err != nil {
+	var anchorMAC string
+	if err := s.db.QueryRowContext(ctx, `SELECT audit_head_hash, audit_count, audit_anchor_mac FROM signer_meta WHERE id = 1`).Scan(&expectedHead, &expectedCount, &anchorMAC); err != nil {
 		return 0, fmt.Errorf("read audit anchor: %w", err)
 	}
 	rows, err := s.db.QueryContext(ctx, `SELECT payload_json FROM audit_log ORDER BY rowid ASC`)
@@ -495,7 +581,7 @@ func (s *Service) VerifyAuditChain(ctx context.Context) (int, error) {
 	defer rows.Close()
 	prevHash := ""
 	count := 0
-	seenV2 := strings.HasPrefix(expectedHead, "v2:")
+	seenV2 := false
 	for rows.Next() {
 		var raw string
 		if err := rows.Scan(&raw); err != nil {
@@ -532,6 +618,12 @@ func (s *Service) VerifyAuditChain(ctx context.Context) (int, error) {
 	}
 	if count != expectedCount || !hmac.Equal([]byte(prevHash), []byte(expectedHead)) {
 		return count, fmt.Errorf("audit chain truncated or head mismatch (got count=%d, want count=%d)", count, expectedCount)
+	}
+	if anchorMAC != "" && len(s.auditHMACKey) == 32 {
+		wantAnchor := computeAuditAnchorMAC(s.auditHMACKey, expectedCount, expectedHead)
+		if !hmac.Equal([]byte(anchorMAC), []byte(wantAnchor)) {
+			return count, errors.New("audit anchor HMAC tampered")
+		}
 	}
 	return count, nil
 }
@@ -1386,6 +1478,10 @@ func (s *Service) PrepareReview(ctx context.Context, req PrepareReviewRequest) (
 		s.mu.Unlock()
 		return WalletReview{}, fmt.Errorf("%w: wallet is frozen", ErrPolicyDenied)
 	}
+	if gFrozen, gReason := s.isGlobalFrozenLocked(ctx); gFrozen {
+		s.mu.Unlock()
+		return WalletReview{}, fmt.Errorf("%w: global emergency freeze active: %s", ErrPolicyDenied, firstStr(gReason, "owner freeze"))
+	}
 	if s.hasUnresolvedBroadcastLocked(ctx, w.ID) {
 		s.mu.Unlock()
 		return WalletReview{}, ErrAmbiguousState
@@ -1410,9 +1506,13 @@ func (s *Service) PrepareReview(ctx context.Context, req PrepareReviewRequest) (
 			s.mu.Unlock()
 			return WalletReview{}, fmt.Errorf("%w: skill grant %q is not bound to wallet %s", ErrRoleDenied, reqSkillID, w.Handle)
 		}
-		if len(activeSkillGrant.Actions) > 0 && !slices.Contains(activeSkillGrant.Actions, op) {
+		if len(activeSkillGrant.Actions) == 0 || !slices.Contains(activeSkillGrant.Actions, op) {
 			s.mu.Unlock()
 			return WalletReview{}, fmt.Errorf("%w: skill grant %q does not permit operation %q", ErrPolicyDenied, reqSkillID, op)
+		}
+		if req.IsBotOrAuto && !activeSkillGrant.ScheduledAllowed {
+			s.mu.Unlock()
+			return WalletReview{}, fmt.Errorf("%w: skill grant %q prohibits scheduled/autonomous execution", ErrPolicyDenied, reqSkillID)
 		}
 	}
 	if req.IsBotOrAuto {
@@ -1442,10 +1542,15 @@ func (s *Service) PrepareReview(ctx context.Context, req PrepareReviewRequest) (
 		destAddr       string
 		destPK         [32]byte
 		mintAddr       string
+		outputMintAddr string
 		mintPK         [32]byte
 		symbol         = "SOL"
 		amountRaw      = req.AmountRaw
 		amountHuman    string
+		quotedOutRaw   uint64
+		minOutRaw      uint64
+		slippageBps    uint32
+		estimatedUSD   float64
 		decimals       uint8  = 9
 		estFeeLamports uint64 = 5_000
 		programs       []string
@@ -1488,6 +1593,9 @@ func (s *Service) PrepareReview(ctx context.Context, req PrepareReviewRequest) (
 			return WalletReview{}, fmt.Errorf("%w: amount+fee exceeds remaining daily cap", ErrPolicyDenied)
 		}
 		amountHuman = FormatLamportsToSOL(amountRaw)
+		// Conservative signer-side upper-bound USD valuation for SOL native transfers ($250/SOL ceiling)
+		// so bounded_auto AutoApproveMaxUSD and SkillGrant.MaxPerTxUSD are strictly enforced.
+		estimatedUSD = (float64(amountRaw) / 1e9) * 250.0
 		programs = []string{SolanaComputeBudget, SolanaSystemProgram}
 
 	case "solana.splTransferChecked":
@@ -1557,6 +1665,9 @@ func (s *Service) PrepareReview(ctx context.Context, req PrepareReviewRequest) (
 		}
 		symbol = firstStr(tc.Symbol, mintAddr[:6])
 		amountHuman = FormatRawAmount(amountRaw, decimals)
+		if mintAddr == onchain.USDC {
+			estimatedUSD = float64(amountRaw) / 1_000_000.0
+		}
 		programs = []string{SolanaComputeBudget, SolanaATAProgram, SolanaTokenProgram}
 
 	case "jupiter.swap":
@@ -1614,16 +1725,59 @@ func (s *Service) PrepareReview(ctx context.Context, req PrepareReviewRequest) (
 			s.mu.Unlock()
 			return WalletReview{}, fmt.Errorf("%w: swap output amount must be positive", ErrPolicyDenied)
 		}
+		// Compute conservative minOutRaw and enforce caller/floor minimums so worst-price
+		// outputs (e.g. q.Output="1") cannot drain a wallet cap.
+		minOutRaw = outRaw
+		if q.SlippageBPS > 0 && q.SlippageBPS < 10_000 {
+			minOutRaw = outRaw * uint64(10_000-q.SlippageBPS) / 10_000
+		}
+		if q.MinimumOutput != "" {
+			if parsedMin, mErr := onchain.Uint(q.MinimumOutput); mErr == nil && parsedMin > minOutRaw {
+				minOutRaw = parsedMin
+			}
+		}
+		if req.MinOutputRaw > 0 && outRaw < req.MinOutputRaw {
+			s.mu.Unlock()
+			return WalletReview{}, fmt.Errorf("%w: swap output %d below required floor %d", ErrPolicyDenied, outRaw, req.MinOutputRaw)
+		}
+		if minOutRaw == 0 {
+			s.mu.Unlock()
+			return WalletReview{}, fmt.Errorf("%w: swap minimum output must be positive after slippage", ErrPolicyDenied)
+		}
+		// Catch degenerate USDC/SOL worst-price drain (e.g. >= 0.01 SOL quoted for < $0.01 USDC).
+		if q.InputMint == onchain.SOL && q.OutputMint == onchain.USDC && inRaw >= 10_000_000 && outRaw < 10_000 {
+			s.mu.Unlock()
+			return WalletReview{}, fmt.Errorf("%w: swap output %d micro-USDC for %d lamports fails minimum price floor", ErrPolicyDenied, outRaw, inRaw)
+		}
+		if q.InputMint == onchain.USDC {
+			estimatedUSD = float64(inRaw) / 1_000_000.0
+		} else if q.OutputMint == onchain.USDC {
+			estimatedUSD = float64(outRaw) / 1_000_000.0
+		}
+		quotedOutRaw = outRaw
+		outputMintAddr = q.OutputMint
+		slippageBps = uint32(q.SlippageBPS)
+
 		feeWorst := max(q.FeeLamports, q.MaxFeeLamports)
 		if feeWorst > estFeeLamports {
 			estFeeLamports = feeWorst
 		}
-		if q.RentLamports > 0 {
-			if estFeeLamports > math.MaxUint64-q.RentLamports {
+		// Derive ATA creation rent inside signer from actual AssociatedToken setup instructions
+		// instead of trusting caller-supplied q.RentLamports (which could be zeroed).
+		const solanaATARentLamports uint64 = 2_039_280
+		var ataSetupCount uint64
+		for _, ix := range q.Instructions {
+			if ix.ProgramID == SolanaATAProgram {
+				ataSetupCount++
+			}
+		}
+		effectiveRent := max(q.RentLamports, ataSetupCount*solanaATARentLamports)
+		if effectiveRent > 0 {
+			if estFeeLamports > math.MaxUint64-effectiveRent {
 				s.mu.Unlock()
 				return WalletReview{}, fmt.Errorf("%w: swap fee+rent overflows uint64", ErrPolicyDenied)
 			}
-			estFeeLamports += q.RentLamports
+			estFeeLamports += effectiveRent
 		}
 		if q.InputMint == onchain.SOL {
 			if inRaw > math.MaxUint64-estFeeLamports {
@@ -1746,12 +1900,18 @@ func (s *Service) PrepareReview(ctx context.Context, req PrepareReviewRequest) (
 		Programs:             programs,
 		Destination:          destAddr,
 		Mint:                 mintAddr,
+		OutputMint:           outputMintAddr,
 		Symbol:               symbol,
 		AmountRaw:            amountRaw,
 		AmountHuman:          amountHuman,
+		QuotedOutRaw:         quotedOutRaw,
+		MinOutRaw:            minOutRaw,
+		SlippageBps:          slippageBps,
+		EstimatedUSD:         estimatedUSD,
 		EstimatedFeeLamports: estFeeLamports,
 		PolicyVersion:        w.Policy.Version,
 		PolicyHash:           w.Policy.PolicyHash,
+		ConnectionsHash:      ComputeConnectionsHash(w.Connections),
 		TxDigest:             hex.EncodeToString(digestBytes[:]),
 		UnsignedTxBase64:     base64.StdEncoding.EncodeToString(unsignedPkt),
 		UnsignedMsgBase64:    base64.StdEncoding.EncodeToString(msgBytes),
@@ -1814,6 +1974,10 @@ func (s *Service) executePreparedReview(ctx context.Context, walletID, reviewID,
 		s.mu.Unlock()
 		return LedgerEntry{}, fmt.Errorf("%w: wallet is frozen", ErrPolicyDenied)
 	}
+	if gFrozen, gReason := s.isGlobalFrozenLocked(ctx); gFrozen {
+		s.mu.Unlock()
+		return LedgerEntry{}, fmt.Errorf("%w: global emergency freeze active: %s", ErrPolicyDenied, firstStr(gReason, "owner freeze"))
+	}
 	if s.hasUnresolvedBroadcastLocked(ctx, w.ID) {
 		s.mu.Unlock()
 		return LedgerEntry{}, ErrAmbiguousState
@@ -1848,6 +2012,10 @@ func (s *Service) executePreparedReview(ctx context.Context, walletID, reviewID,
 	if review.PolicyHash != w.Policy.PolicyHash {
 		s.mu.Unlock()
 		return LedgerEntry{}, ErrPolicyConflict
+	}
+	if review.ConnectionsHash != "" && review.ConnectionsHash != ComputeConnectionsHash(w.Connections) {
+		s.mu.Unlock()
+		return LedgerEntry{}, fmt.Errorf("%w: wallet connections or skill grants changed after review preparation", ErrPolicyConflict)
 	}
 	if !review.SimulationOK {
 		s.mu.Unlock()
@@ -1904,8 +2072,9 @@ func (s *Service) executePreparedReview(ctx context.Context, walletID, reviewID,
 		return LedgerEntry{}, err
 	}
 
-	// Atomically reserve daily cap and mark review executed BEFORE broadcast.
-	day := s.dayUTC()
+	// Atomically reserve daily cap and mark review executed BEFORE broadcast, deriving day
+	// from nowSec (matching entry.CreatedAt) to prevent UTC midnight rollover cap leaks.
+	day := time.Unix(nowSec, 0).UTC().Format("2006-01-02")
 	ledID, err := randomHexID("led", 8)
 	if err != nil {
 		s.mu.Unlock()
@@ -2252,25 +2421,38 @@ func (s *Service) ListActivity(ctx context.Context, walletID string) (reviews []
 	return reviews, ledger, audit, nil
 }
 
+func recoveryV2AAD(pkg RecoveryPackage) []byte {
+	return []byte(fmt.Sprintf("%s:v2:%s:%s:%s:%s:%d:%d:%d",
+		pkg.Format, pkg.WalletID, pkg.Role, pkg.PublicKey, pkg.KDF, pkg.KDFTime, pkg.KDFMemory, pkg.KDFThreads))
+}
+
 // ExportEncryptedRecovery seals the native signer key into an Argon2id+AES-GCM recovery archive + SHA-256 checksum.
 func (s *Service) ExportEncryptedRecovery(ctx context.Context, walletID, passphrase, actor string) (archive []byte, fingerprint string, err error) {
 	if len(strings.TrimSpace(passphrase)) < recoveryMinPass {
 		return nil, "", fmt.Errorf("recovery passphrase must be at least %d characters", recoveryMinPass)
 	}
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	if s.closed || s.db == nil {
+		s.mu.Unlock()
+		return nil, "", errors.New("custody store closed")
+	}
 	w, err := s.getWalletLocked(ctx, walletID)
 	if err != nil {
+		s.mu.Unlock()
 		return nil, "", err
 	}
 	if w.Custody != CustodyNativeSigner {
+		s.mu.Unlock()
 		return nil, "", fmt.Errorf("%w: only native signer wallets have an exportable key", ErrRoleDenied)
 	}
 	var kn, kc []byte
 	if err := s.db.QueryRowContext(ctx, `SELECT key_nonce, key_ciphertext FROM wallet_keys WHERE wallet_id = ?`, w.ID).Scan(&kn, &kc); err != nil {
+		s.mu.Unlock()
 		return nil, "", err
 	}
 	seed, err := s.openBytes("custody-key:"+w.ID+":"+w.PublicKey, kn, kc)
+	kdfT, kdfM, kdfP := s.kdfTime, s.kdfMemory, s.kdfThreads
+	s.mu.Unlock()
 	if err != nil {
 		return nil, "", err
 	}
@@ -2284,33 +2466,44 @@ func (s *Service) ExportEncryptedRecovery(ctx context.Context, walletID, passphr
 	if err != nil {
 		return nil, "", err
 	}
-	key := vault.DeriveKey(passphrase, salt, s.kdfTime, s.kdfMemory, s.kdfThreads)
-	defer clear(key)
-	ct, err := vault.SealAESGCM(key, nonce, seed, []byte(recoveryFormat+":"+w.PublicKey))
-	if err != nil {
+	if err := s.acquireKDFSlot(ctx); err != nil {
 		return nil, "", err
 	}
+	// Run Argon2id outside s.mu so concurrent signer RPCs never stall.
+	key := vault.DeriveKey(passphrase, salt, kdfT, kdfM, kdfP)
+	s.releaseKDFSlot()
+	defer clear(key)
 	pkg := RecoveryPackage{
-		Version:    1,
+		Version:    2,
 		Format:     recoveryFormat,
 		WalletID:   w.ID,
 		Role:       w.Role,
 		PublicKey:  w.PublicKey,
 		KDF:        "argon2id",
-		KDFTime:    s.kdfTime,
-		KDFMemory:  s.kdfMemory,
-		KDFThreads: s.kdfThreads,
+		KDFTime:    kdfT,
+		KDFMemory:  kdfM,
+		KDFThreads: kdfP,
 		Salt:       salt,
 		Nonce:      nonce,
-		Ciphertext: ct,
 	}
+	ct, err := vault.SealAESGCM(key, nonce, seed, recoveryV2AAD(pkg))
+	if err != nil {
+		return nil, "", err
+	}
+	pkg.Ciphertext = ct
 	archive, err = json.MarshalIndent(pkg, "", "  ")
 	if err != nil {
 		return nil, "", err
 	}
 	sum := sha256.Sum256(archive)
 	fp := hex.EncodeToString(sum[:])
-	if err := s.appendAuditLocked(ctx, w.ID, "encrypted_recovery_exported", firstStr(actor, "owner"), "Exported Argon2id encrypted backup fp="+fp[:16], w.Policy.PolicyHash); err != nil {
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed || s.db == nil {
+		return nil, "", errors.New("custody store closed")
+	}
+	if err := s.appendAuditLocked(ctx, w.ID, "encrypted_recovery_exported", firstStr(actor, "owner"), "Exported Argon2id v2 encrypted backup fp="+fp[:16], w.Policy.PolicyHash); err != nil {
 		return nil, "", err
 	}
 	return archive, fp, nil
@@ -2322,7 +2515,7 @@ func (s *Service) ImportEncryptedRecovery(ctx context.Context, archiveRaw []byte
 		return WalletPublic{}, errors.New("invalid recovery archive size")
 	}
 	var pkg RecoveryPackage
-	if err := json.Unmarshal(archiveRaw, &pkg); err != nil || pkg.Version != 1 || pkg.Format != recoveryFormat {
+	if err := json.Unmarshal(archiveRaw, &pkg); err != nil || (pkg.Version != 1 && pkg.Version != 2) || pkg.Format != recoveryFormat {
 		return WalletPublic{}, errors.New("unsupported encrypted recovery package")
 	}
 	if pkg.KDF != "argon2id" || len(pkg.Salt) != 16 || len(pkg.Nonce) != 12 {
@@ -2344,7 +2537,13 @@ func (s *Service) ImportEncryptedRecovery(ctx context.Context, archiveRaw []byte
 	key := vault.DeriveKey(passphrase, pkg.Salt, pkg.KDFTime, pkg.KDFMemory, pkg.KDFThreads)
 	s.releaseKDFSlot()
 	defer clear(key)
-	seed, err := vault.OpenAESGCM(key, pkg.Nonce, pkg.Ciphertext, []byte(recoveryFormat+":"+pkg.PublicKey))
+	var aad []byte
+	if pkg.Version == 2 {
+		aad = recoveryV2AAD(pkg)
+	} else {
+		aad = []byte(recoveryFormat + ":" + pkg.PublicKey)
+	}
+	seed, err := vault.OpenAESGCM(key, pkg.Nonce, pkg.Ciphertext, aad)
 	if err != nil || len(seed) != ed25519.SeedSize {
 		return WalletPublic{}, ErrWrongPassword
 	}
@@ -2358,6 +2557,11 @@ func (s *Service) ImportEncryptedRecovery(ctx context.Context, archiveRaw []byte
 	targetRole := strings.ToLower(strings.TrimSpace(role))
 	if targetRole == "" {
 		targetRole = pkg.Role
+	}
+	// Legacy v1 backups did not bind pkg.Role inside AES-GCM AAD; refuse non-vault target roles
+	// on v1 imports to prevent plaintext role-downgrade attacks against Vault backups.
+	if pkg.Version == 1 && targetRole != RoleVault {
+		return WalletPublic{}, fmt.Errorf("%w: legacy v1 recovery archive lacks authenticated role metadata and may only be restored into role %q", ErrRoleDenied, RoleVault)
 	}
 	if pkg.Role == RoleVault && targetRole != RoleVault {
 		return WalletPublic{}, fmt.Errorf("%w: vault recovery backup cannot be restored into role %q", ErrRoleDenied, targetRole)
@@ -2402,6 +2606,9 @@ func (s *Service) ImportSolanaKeypairFile(ctx context.Context, absPath, name, ro
 	cleanRole := strings.ToLower(strings.TrimSpace(role))
 	if !ValidRole(cleanRole) || cleanRole == RoleWatch {
 		return WalletPublic{}, errors.New("role must be agent, trading, vault, or mining")
+	}
+	if err := s.checkRPCURLsAllowed(primaryRPCURL, ""); err != nil {
+		return WalletPublic{}, err
 	}
 	rpcStatus, canonRPC, _, err := VerifyAndPinRPC(ctx, s.cfg.RPCTransport, primaryRPCURL, "", "", s.cfg.FixtureMode)
 	if err != nil {

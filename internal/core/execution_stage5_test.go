@@ -39,15 +39,15 @@ func TestStage5CEXAndEquitiesCoreRoutesAndTools(t *testing.T) {
 	if venuesResp.Code != 200 || !strings.Contains(venuesResp.Body.String(), `"mainnetLocked":true`) {
 		t.Fatalf("GET /api/v1/cex/venues failed (%d): %s", venuesResp.Code, venuesResp.Body.String())
 	}
-	badCredResp := stage4Req(h, "POST", srv.URL, "/api/v1/cex/credentials", `{
+	badCredResp := stage4ReqWithStepUp(h, "POST", srv.URL, "/api/v1/cex/credentials", `{
 		"venue":"bybit","environment":"testnet","apiKey":"bybit-key-123456","apiSecret":"bybit-secret-123456","permissions":["trade","withdraw"]
-	}`, token, srv.URL, csrfToken(token))
+	}`, token, srv.URL, csrfToken(token), stage4StepUpToken(t, h, token, "cex-credentials", "*"))
 	if badCredResp.Code != 403 {
 		t.Fatalf("expected 403 for withdrawal scope, got %d: %s", badCredResp.Code, badCredResp.Body.String())
 	}
-	goodCredResp := stage4Req(h, "POST", srv.URL, "/api/v1/cex/credentials", `{
+	goodCredResp := stage4ReqWithStepUp(h, "POST", srv.URL, "/api/v1/cex/credentials", `{
 		"venue":"bybit","label":"bybit-paper","environment":"testnet","apiKey":"bybit-key-123456","apiSecret":"bybit-secret-value-xyz","permissions":["spot_trade"]
-	}`, token, srv.URL, csrfToken(token))
+	}`, token, srv.URL, csrfToken(token), stage4StepUpToken(t, h, token, "cex-credentials", "*"))
 	if goodCredResp.Code != 200 {
 		t.Fatalf("POST /api/v1/cex/credentials failed (%d): %s", goodCredResp.Code, goodCredResp.Body.String())
 	}
@@ -56,16 +56,16 @@ func TestStage5CEXAndEquitiesCoreRoutesAndTools(t *testing.T) {
 		t.Fatalf("GET /api/v1/cex/status invalid or leaked secret (%d): %s", statusResp.Code, statusResp.Body.String())
 	}
 
-	mainnetCEXResp := stage4Req(h, "POST", srv.URL, "/api/v1/cex/orders", `{
+	mainnetCEXResp := stage4ReqWithStepUp(h, "POST", srv.URL, "/api/v1/cex/orders", `{
 		"venue":"bybit","symbol":"BTCUSDT","side":"BUY","orderType":"LIMIT","quantity":0.1,"price":50000,"environment":"mainnet"
-	}`, token, srv.URL, csrfToken(token))
+	}`, token, srv.URL, csrfToken(token), stage4StepUpToken(t, h, token, "execute", "cex"))
 	if mainnetCEXResp.Code != 403 {
 		t.Fatalf("expected 403 for mainnet CEX order while locked, got %d: %s", mainnetCEXResp.Code, mainnetCEXResp.Body.String())
 	}
 
-	paperCEXResp := stage4Req(h, "POST", srv.URL, "/api/v1/cex/orders", `{
+	paperCEXResp := stage4ReqWithStepUp(h, "POST", srv.URL, "/api/v1/cex/orders", `{
 		"venue":"bybit","symbol":"BTCUSDT","side":"BUY","orderType":"LIMIT","quantity":0.1,"price":50000,"environment":"testnet"
-	}`, token, srv.URL, csrfToken(token))
+	}`, token, srv.URL, csrfToken(token), stage4StepUpToken(t, h, token, "execute", "cex"))
 	if paperCEXResp.Code != 200 {
 		t.Fatalf("POST /api/v1/cex/orders testnet dryrun failed (%d): %s", paperCEXResp.Code, paperCEXResp.Body.String())
 	}
@@ -87,15 +87,15 @@ func TestStage5CEXAndEquitiesCoreRoutesAndTools(t *testing.T) {
 	if err := json.Unmarshal(optResp.Body.Bytes(), &chain); err != nil || len(chain.Contracts) == 0 {
 		t.Fatalf("unexpected options chain: %+v err=%v", chain, err)
 	}
-	badIBKR := stage4Req(h, "POST", srv.URL, "/api/v1/equities/orders", `{
+	badIBKR := stage4ReqWithStepUp(h, "POST", srv.URL, "/api/v1/equities/orders", `{
 		"venue":"ibkr","accountId":"U123456","symbol":"NVDA","side":"BUY","orderType":"MARKET","quantity":1
-	}`, token, srv.URL, csrfToken(token))
+	}`, token, srv.URL, csrfToken(token), stage4StepUpToken(t, h, token, "execute", "equities"))
 	if badIBKR.Code != 400 {
 		t.Fatalf("expected 400 for non-DU IBKR account, got %d: %s", badIBKR.Code, badIBKR.Body.String())
 	}
-	goodEq := stage4Req(h, "POST", srv.URL, "/api/v1/equities/orders", `{
+	goodEq := stage4ReqWithStepUp(h, "POST", srv.URL, "/api/v1/equities/orders", `{
 		"venue":"alpaca","symbol":"SPY","side":"BUY","orderType":"LIMIT","quantity":1,"limitPrice":590
-	}`, token, srv.URL, csrfToken(token))
+	}`, token, srv.URL, csrfToken(token), stage4StepUpToken(t, h, token, "execute", "equities"))
 	if goodEq.Code != 200 {
 		t.Fatalf("POST /api/v1/equities/orders failed (%d): %s", goodEq.Code, goodEq.Body.String())
 	}

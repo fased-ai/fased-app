@@ -11,6 +11,10 @@ import (
 	"golang.org/x/sys/unix"
 )
 
+func openNoFollowReadOnly(path string) (*os.File, error) {
+	return os.OpenFile(path, os.O_RDONLY|unix.O_NOFOLLOW, 0)
+}
+
 // readPrivateRegularFile safely opens a regular, non-symlink, single-link, 0600-max
 // private file without a stat-then-open TOCTOU race.
 func readPrivateRegularFile(cleanAbsPath string, maxBytes int64) ([]byte, error) {

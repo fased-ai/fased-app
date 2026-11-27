@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io/fs"
+	"net/http"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -89,13 +90,25 @@ func ownerWindow(link string) error {
 
 func ownerOptions(owner *WalletOwner, assets fs.FS) *options.App {
 	return &options.App{
-		Title:                    "Fased Wallet",
-		Width:                    520,
-		Height:                   700,
-		MinWidth:                 390,
-		MinHeight:                640,
-		BackgroundColour:         options.NewRGBA(13, 13, 18, 255),
-		AssetServer:              &assetserver.Options{Assets: assets},
+		Title:            "Fased Wallet",
+		Width:            520,
+		Height:           700,
+		MinWidth:         390,
+		MinHeight:        640,
+		BackgroundColour: options.NewRGBA(13, 13, 18, 255),
+		AssetServer: &assetserver.Options{
+			Assets: assets,
+			Middleware: func(next http.Handler) http.Handler {
+				return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					w.Header().Set("X-Frame-Options", "DENY")
+					w.Header().Set("X-Content-Type-Options", "nosniff")
+					w.Header().Set("Referrer-Policy", "no-referrer")
+					w.Header().Set("Cache-Control", "no-store")
+					w.Header().Set("Permissions-Policy", "camera=(), microphone=(), geolocation=(), payment=(), usb=()")
+					next.ServeHTTP(w, r)
+				})
+			},
+		},
 		Menu:                     window.MacApplicationMenu(),
 		Bind:                     []interface{}{owner},
 		EnableDefaultContextMenu: false,

@@ -222,7 +222,11 @@ func validateVenueOrigin(venue, env, rawURL, accountID string, allowLiveCapped b
 		if e != "paper" && !(allowLiveCapped && e == "live") {
 			return ErrExecutionDisabled
 		}
-		if acct := strings.ToUpper(strings.TrimSpace(accountID)); acct != "" && !allowLiveCapped && !ibkrPaperPattern.MatchString(acct) {
+		acct := strings.ToUpper(strings.TrimSpace(accountID))
+		if allowLiveCapped && e == "live" && (acct == "" || len(acct) > 32) {
+			return errors.New("ibkr live-capped execution requires a non-empty accountId")
+		}
+		if acct != "" && !allowLiveCapped && !ibkrPaperPattern.MatchString(acct) {
 			return errors.New("ibkr account must be a DU* paper account while EquitiesActivationEnabled is false")
 		}
 		if rawURL != "" {

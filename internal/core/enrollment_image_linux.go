@@ -459,12 +459,13 @@ func enrollmentSQLite(ctx context.Context, data, wal []byte, serialize bool, fil
 		return nil, "", 0, errEnrollmentImage
 	}
 	classified := map[string]bool{"instance": true, "sessions": true, "accounts": true, "update_pause": true, "application_updates": true, "agent_workspace": true, "wen_research": true, "agent_history": true, "sqlite_sequence": true}
+	optionalTables := map[string]bool{"instance_security_meta": true, "session_activity": true, "security_audit_log": true}
 	if schema == RemoteOwnerStateSchema {
 		classified["remote_owner"], classified["remote_sessions"] = true, true
 	}
 	for tables.Next() {
 		var name, kind string
-		if tables.Scan(&name, &kind) != nil || kind != "table" || !classified[name] {
+		if tables.Scan(&name, &kind) != nil || kind != "table" || (!classified[name] && !optionalTables[name]) {
 			tables.Close()
 			return nil, "", 0, errEnrollmentImage
 		}

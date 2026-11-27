@@ -178,7 +178,7 @@ func TestStage4PredictionVenuesDefaultOffAndControlledExecution(t *testing.T) {
 
 	// Polymarket rehearse ($4.00 = 10 shares @ 0.40) + controlled L2 credentials.
 	pmBody := `{"tokenId":"777","side":"BUY","price":"0.40","shares":"10","fetchBook":true,"submit":true,"credentials":{"address":"` + execView.PolymarketSignerAddress + `","apiKey":"demo-k","secret":"c2VjcmV0LWtleQ==","passphrase":"demo-p"}}`
-	pmResp := stage4Req(h, "POST", srv.URL, "/api/v1/execution/polymarket/rehearse", pmBody, token, srv.URL, csrfToken(token))
+	pmResp := stage4ReqWithStepUp(h, "POST", srv.URL, "/api/v1/execution/polymarket/rehearse", pmBody, token, srv.URL, csrfToken(token), stage4StepUpToken(t, h, token, "execute", "polymarket"))
 	if pmResp.Code != 200 {
 		t.Fatalf("polymarket rehearse failed (%d): %s", pmResp.Code, pmResp.Body.String())
 	}
@@ -190,26 +190,19 @@ func TestStage4PredictionVenuesDefaultOffAndControlledExecution(t *testing.T) {
 		t.Fatalf("unexpected PolymarketRehearseResult: %+v", pmRes)
 	}
 
-	// Kalshi rehearse ($2.00 = 5 contracts @ 0.4000).
+	// Kalshi detached POST order signing MUST fail closed until signer-owned HTTPS egress exists.
 	kBody := `{"ticker":"KXBTC-26","side":"bid","count":"5","price":"0.4000","fetchBook":true,"submit":true}`
-	kResp := stage4Req(h, "POST", srv.URL, "/api/v1/execution/kalshi/rehearse", kBody, token, srv.URL, csrfToken(token))
-	if kResp.Code != 200 {
-		t.Fatalf("kalshi rehearse failed (%d): %s", kResp.Code, kResp.Body.String())
-	}
-	var kRes KalshiRehearseResult
-	if err := json.Unmarshal(kResp.Body.Bytes(), &kRes); err != nil {
-		t.Fatal(err)
-	}
-	if !kRes.PSSVerified || kRes.EstimatedMicroUSD != 2_000_000 || kRes.BestYesBid != "0.4000" || kRes.Submission == nil || !kRes.Submission.Submitted || kRes.Submission.OrderID != "k-live-1" {
-		t.Fatalf("unexpected KalshiRehearseResult: %+v", kRes)
+	kResp := stage4ReqWithStepUp(h, "POST", srv.URL, "/api/v1/execution/kalshi/rehearse", kBody, token, srv.URL, csrfToken(token), stage4StepUpToken(t, h, token, "execute", "kalshi"))
+	if kResp.Code != 400 || !strings.Contains(kResp.Body.String(), "signer-owned HTTPS egress required") {
+		t.Fatalf("expected Kalshi detached POST order rehearse to fail closed, got %d: %s", kResp.Code, kResp.Body.String())
 	}
 
-	// AgentVault usage shows $6.00 spent across both venues; next $2.00 exceeds $7.00 daily cap.
+	// AgentVault usage shows $4.00 spent on Polymarket; next $4.00 Polymarket order exceeds $7.00 daily cap.
 	vResp := stage4Req(h, "GET", srv.URL, "/api/v1/vaults", "", token, srv.URL, "")
-	if vResp.Code != 200 || !strings.Contains(vResp.Body.String(), `"dailySpentMicroUsd":"6000000"`) {
-		t.Fatalf("expected 6000000 daily spend in /api/v1/vaults (%d): %s", vResp.Code, vResp.Body.String())
+	if vResp.Code != 200 || !strings.Contains(vResp.Body.String(), `"dailySpentMicroUsd":"4000000"`) {
+		t.Fatalf("expected 4000000 daily spend in /api/v1/vaults (%d): %s", vResp.Code, vResp.Body.String())
 	}
-	overCap := stage4Req(h, "POST", srv.URL, "/api/v1/execution/kalshi/rehearse", `{"ticker":"KXBTC-26","side":"bid","count":"5","price":"0.4000"}`, token, srv.URL, csrfToken(token))
+	overCap := stage4ReqWithStepUp(h, "POST", srv.URL, "/api/v1/execution/polymarket/rehearse", `{"tokenId":"777","side":"BUY","price":"0.40","shares":"10"}`, token, srv.URL, csrfToken(token), stage4StepUpToken(t, h, token, "execute", "polymarket"))
 	if overCap.Code != 400 || !strings.Contains(overCap.Body.String(), "daily spend limit exceeded") {
 		t.Fatalf("expected 400 daily spend limit exceeded, got %d: %s", overCap.Code, overCap.Body.String())
 	}

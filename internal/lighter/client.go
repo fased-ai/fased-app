@@ -21,12 +21,11 @@ import (
 	"strings"
 	"time"
 
+	"github.com/fased-ai/fased-app/internal/netguard"
 	"github.com/fased-ai/fased-app/internal/signer"
 )
 
 const maxResponseBytes = 4 * 1024 * 1024
-
-var cgnatPrefix = netip.MustParsePrefix("100.64.0.0/10")
 
 // Client is a bounded SSRF-safe Lighter L2 REST adapter.
 type Client struct {
@@ -38,10 +37,7 @@ type Client struct {
 }
 
 func isPublicUnicastIP(ip netip.Addr) bool {
-	ip = ip.Unmap()
-	return ip.IsValid() && ip.IsGlobalUnicast() && !ip.IsPrivate() && !ip.IsLoopback() &&
-		!ip.IsLinkLocalUnicast() && !ip.IsLinkLocalMulticast() && !ip.IsMulticast() && !ip.IsUnspecified() &&
-		!cgnatPrefix.Contains(ip)
+	return netguard.IsPublicUnicastIP(ip)
 }
 
 func interleavePublicIPs(ips []netip.Addr) ([]netip.Addr, error) {
@@ -469,6 +465,8 @@ func BuildCreateOrderIntent(draft OrderDraft, meta OrderBookMeta, now int64) (si
 		ClientOrderIndex:  clientOrderIdx,
 		BaseAmount:        int64(baseU),
 		Price:             uint32(priceU),
+		SizeDecimals:      uint8(meta.SupportedSizeDecimals),
+		PriceDecimals:     uint8(meta.SupportedPriceDecimals),
 		IsAsk:             isAsk,
 		OrderType:         orderType,
 		TimeInForce:       tif,

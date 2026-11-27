@@ -78,7 +78,7 @@ func extractOAuthError(raw []byte) (string, string) {
 }
 
 func logProviderDiag(stage string, fields map[string]any) {
-	payload := map[string]any{"stage": stage}
+	payload := map[string]any{"stage": sanitizeDiagValue(stage, 64)}
 	for k, v := range fields {
 		if s, ok := v.(string); ok {
 			if s == "" {

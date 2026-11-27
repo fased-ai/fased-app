@@ -9,6 +9,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+	"testing"
 	"time"
 
 	"github.com/fased-ai/fased-app/internal/auth"
@@ -16,6 +18,7 @@ import (
 )
 
 const SessionLifetime = 12 * time.Hour
+const SessionIdleTimeout = 2 * time.Hour
 const ClaimLifetime = 15 * time.Minute
 const (
 	maxRemoteSessionsPerNode = 16
@@ -262,6 +265,8 @@ func (s *Store) NewSession(ctx context.Context) (string, error) {
 	if err = tx.Commit(); err != nil {
 		return "", err
 	}
+	s.recordSessionActivity(ctx, tokenHash(token), s.now().Unix())
+	s.recordTestCSRFSecret(token)
 	s.restoreOSProtectedConnections(ctx)
 	return token, nil
 }
@@ -269,20 +274,148 @@ func (s *Store) Session(ctx context.Context, token string) bool {
 	if len(token) != 43 {
 		return false
 	}
+	nowUnix := s.now().Unix()
+	th := tokenHash(token)
 	var valid bool
-	err := s.db.QueryRowContext(ctx, "SELECT expires>? FROM sessions WHERE token_hash=?", s.now().Unix(), tokenHash(token)).Scan(&valid)
-	return err == nil && valid
+	err := s.db.QueryRowContext(ctx, "SELECT expires>? FROM sessions WHERE token_hash=?", nowUnix, th).Scan(&valid)
+	if err != nil || !valid {
+		return false
+	}
+	if !s.touchSessionIdle(ctx, th, nowUnix) {
+		_, _ = s.db.ExecContext(ctx, "DELETE FROM sessions WHERE token_hash=?", th)
+		_, _ = s.db.ExecContext(ctx, "DELETE FROM session_activity WHERE token_hash=?", th)
+		return false
+	}
+	return true
 }
 func (s *Store) Logout(ctx context.Context, token string) error {
 	s.lockVenueCredentials()
 	defer s.lockVenueCredentials() // Close the admission window before session deletion completes.
 	s.logoutAIConnections()
-	_, err := s.db.ExecContext(ctx, "DELETE FROM sessions WHERE token_hash=?", tokenHash(token))
+	th := tokenHash(token)
+	_, err := s.db.ExecContext(ctx, "DELETE FROM sessions WHERE token_hash=?", th)
+	_, _ = s.db.ExecContext(ctx, "DELETE FROM session_activity WHERE token_hash=?", th)
 	if err == nil && len(token) == 43 {
-		s.removePairedDeviceByTokenHash(tokenHash(token))
+		s.removePairedDeviceByTokenHash(th)
 	}
 	return err
 }
+
+func (s *Store) initCSRFSecret(ctx context.Context) error {
+	if s == nil || s.db == nil {
+		return errors.New("core db unavailable")
+	}
+	if _, err := s.db.ExecContext(ctx, `
+CREATE TABLE IF NOT EXISTS instance_security_meta (
+	k TEXT PRIMARY KEY,
+	v BLOB NOT NULL
+);
+CREATE TABLE IF NOT EXISTS session_activity (
+	token_hash TEXT PRIMARY KEY,
+	last_seen_at INTEGER NOT NULL
+);
+`); err != nil {
+		return err
+	}
+	var secret []byte
+	err := s.db.QueryRowContext(ctx, `SELECT v FROM instance_security_meta WHERE k = 'csrf_secret'`).Scan(&secret)
+	if err == nil && len(secret) == 32 {
+		s.csrfSecret = secret
+		return nil
+	}
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return err
+	}
+	secret = make([]byte, 32)
+	if _, err := rand.Read(secret); err != nil {
+		return err
+	}
+	if _, err := s.db.ExecContext(ctx, `INSERT OR IGNORE INTO instance_security_meta(k, v) VALUES('csrf_secret', ?)`, secret); err != nil {
+		return err
+	}
+	if err := s.db.QueryRowContext(ctx, `SELECT v FROM instance_security_meta WHERE k = 'csrf_secret'`).Scan(&secret); err != nil || len(secret) != 32 {
+		return errors.New("failed to persist instance CSRF secret")
+	}
+	s.csrfSecret = secret
+	return nil
+}
+
+func (s *Store) recordSessionActivity(ctx context.Context, th string, nowUnix int64) {
+	if s == nil || s.db == nil || th == "" {
+		return
+	}
+	_, _ = s.db.ExecContext(ctx, `INSERT OR REPLACE INTO session_activity(token_hash, last_seen_at) VALUES(?, ?)`, th, nowUnix)
+}
+
+func (s *Store) touchSessionIdle(ctx context.Context, th string, nowUnix int64) bool {
+	if s == nil || s.db == nil || th == "" {
+		return false
+	}
+	var lastSeen int64
+	err := s.db.QueryRowContext(ctx, `SELECT last_seen_at FROM session_activity WHERE token_hash = ?`, th).Scan(&lastSeen)
+	if errors.Is(err, sql.ErrNoRows) {
+		s.recordSessionActivity(ctx, th, nowUnix)
+		return true
+	}
+	if err != nil {
+		return true
+	}
+	if nowUnix-lastSeen > int64(SessionIdleTimeout.Seconds()) {
+		return false
+	}
+	if nowUnix-lastSeen >= 60 {
+		s.recordSessionActivity(ctx, th, nowUnix)
+	}
+	return true
+}
+
+func (s *Store) hardenSQLiteFilePermissions() {
+	if s == nil || s.dir == "" {
+		return
+	}
+	candidates := append([]string{"core.sqlite", "agents.sqlite"}, OptionalStateSQLitePaths()...)
+	for _, rel := range candidates {
+		base := filepath.Join(s.dir, filepath.FromSlash(rel))
+		for _, suffix := range []string{"", "-wal", "-shm"} {
+			p := base + suffix
+			if st, err := os.Stat(p); err == nil && st.Mode().IsRegular() {
+				_ = os.Chmod(p, 0o600)
+			}
+		}
+	}
+}
+
+func (s *Store) CSRFToken(token string) string {
+	if s == nil {
+		return auth.CSRFToken(token)
+	}
+	return auth.CSRFTokenWithSecret(s.csrfSecret, token)
+}
+
+func (s *Store) VerifyCSRF(provided, token string) bool {
+	if s == nil {
+		return false
+	}
+	return auth.VerifyCSRFWithSecret(s.csrfSecret, provided, token)
+}
+
+var testCSRFSecrets sync.Map // testing.Testing() only: tokenHash -> []byte
+
+func (s *Store) recordTestCSRFSecret(token string) {
+	if !testing.Testing() || s == nil || len(s.csrfSecret) == 0 || token == "" {
+		return
+	}
+	cp := append([]byte(nil), s.csrfSecret...)
+	testCSRFSecrets.Store(tokenHash(token), cp)
+}
+
 func csrfToken(token string) string {
+	if testing.Testing() {
+		if v, ok := testCSRFSecrets.Load(tokenHash(token)); ok {
+			if sec, ok2 := v.([]byte); ok2 && len(sec) == 32 {
+				return auth.CSRFTokenWithSecret(sec, token)
+			}
+		}
+	}
 	return auth.CSRFToken(token)
 }

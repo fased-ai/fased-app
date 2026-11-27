@@ -1040,25 +1040,24 @@ export function QuantLabWorkspace() {
                 </>
               )}
 
-              {desk?.control.killSwitchActive &&
-                !desk?.control.externalKillActive && (
-                  <>
-                    <input
-                      aria-label={t("Confirm")}
-                      placeholder="CONFIRM"
-                      value={confirmUnkill}
-                      onChange={(e) => setConfirmUnkill(e.target.value)}
-                    />
-                    <button
-                      type="button"
-                      className="primary"
-                      disabled={busy}
-                      onClick={() => void onDeskControl("unkill")}
-                    >
-                      <span>{t("Clear kill switch")}</span>
-                    </button>
-                  </>
-                )}
+              {killed && (
+                <>
+                  <input
+                    aria-label={t("Confirm")}
+                    placeholder="CONFIRM"
+                    value={confirmUnkill}
+                    onChange={(e) => setConfirmUnkill(e.target.value)}
+                  />
+                  <button
+                    type="button"
+                    className="primary"
+                    disabled={busy}
+                    onClick={() => void onDeskControl("unkill")}
+                  >
+                    <span>{t("Clear kill switch")}</span>
+                  </button>
+                </>
+              )}
 
               <button
                 type="button"

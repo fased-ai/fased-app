@@ -3,7 +3,6 @@ package swarm
 import (
 	"bytes"
 	"context"
-	"crypto/tls"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -19,6 +18,8 @@ import (
 	"time"
 
 	"crypto/ed25519"
+
+	"github.com/fased-ai/fased-app/internal/netguard"
 )
 
 const (
@@ -28,28 +29,8 @@ const (
 	maxRelayConcurrency = 8
 )
 
-var (
-	tailscaleCGNATPrefix = netip.MustParsePrefix("100.64.0.0/10")
-	tailscaleULAPrefix   = netip.MustParsePrefix("fd7a:115c:a1e0::/48")
-	rfc2544BenchPrefix   = netip.MustParsePrefix("198.18.0.0/15")
-	testNet1Prefix       = netip.MustParsePrefix("192.0.2.0/24")
-)
-
 func isAllowedRelayIP(ip netip.Addr) bool {
-	ip = ip.Unmap()
-	if !ip.IsValid() || ip.IsUnspecified() || ip.IsLoopback() || ip.IsMulticast() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() {
-		return false
-	}
-	if tailscaleCGNATPrefix.Contains(ip) || tailscaleULAPrefix.Contains(ip) {
-		return true
-	}
-	if ip.Is4() && (rfc2544BenchPrefix.Contains(ip) || testNet1Prefix.Contains(ip)) {
-		return false
-	}
-	if ip.IsPrivate() {
-		return false
-	}
-	return ip.IsGlobalUnicast()
+	return netguard.IsPublicUnicastIP(ip) || netguard.IsTailscalePeerIP(ip)
 }
 
 // ValidatePeerEndpoint validates and canonicalizes an optional HTTPS Tailscale or public Swarm relay endpoint.
@@ -91,65 +72,31 @@ func ValidatePeerEndpoint(raw string) (string, error) {
 }
 
 func dialRelayAddress(ctx context.Context, dialer *net.Dialer, network, addr string) (net.Conn, error) {
-	host, port, err := net.SplitHostPort(addr)
-	if err != nil {
-		return nil, err
+	var dialFn func(context.Context, string, string) (net.Conn, error)
+	if dialer != nil {
+		dialFn = dialer.DialContext
 	}
-	if ip, err := netip.ParseAddr(host); err == nil {
-		if !isAllowedRelayIP(ip) {
-			return nil, fmt.Errorf("blocked swarm relay IP %s", ip)
-		}
-		return dialer.DialContext(ctx, network, net.JoinHostPort(ip.String(), port))
-	}
-	ips, err := net.DefaultResolver.LookupNetIP(ctx, "ip", host)
-	if err != nil || len(ips) == 0 {
-		return nil, fmt.Errorf("resolve swarm peer %q: %w", host, err)
-	}
-	var allowed []netip.Addr
-	for _, ip := range ips {
-		if isAllowedRelayIP(ip) {
-			allowed = append(allowed, ip)
-		}
-	}
-	if len(allowed) == 0 {
-		return nil, fmt.Errorf("swarm peer %q resolved only disallowed local/private IPs", host)
-	}
-	var lastErr error
-	for _, ip := range allowed {
-		conn, dErr := dialer.DialContext(ctx, network, net.JoinHostPort(ip.String(), port))
-		if dErr == nil {
-			return conn, nil
-		}
-		lastErr = dErr
-	}
-	return nil, lastErr
+	return netguard.SafeDialContext(netguard.Options{
+		AllowTailscaleHosts: true,
+		DialTimeout:         4 * time.Second,
+		Dial:                dialFn,
+	})(ctx, network, addr)
 }
 
 func newRelayHTTPClient(override http.RoundTripper) *http.Client {
 	transport := override
 	if transport == nil {
-		dialer := &net.Dialer{
-			Timeout:   4 * time.Second,
-			KeepAlive: 30 * time.Second,
-		}
-		transport = &http.Transport{
-			DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
-				return dialRelayAddress(ctx, dialer, network, addr)
-			},
-			Proxy:                 nil,
+		transport = netguard.NewSafeTransport(netguard.Options{
+			AllowTailscaleHosts:   true,
+			DialTimeout:           4 * time.Second,
 			TLSHandshakeTimeout:   4 * time.Second,
 			ResponseHeaderTimeout: 4 * time.Second,
-			TLSClientConfig: &tls.Config{
-				MinVersion: tls.VersionTLS12,
-			},
-		}
+		})
 	}
 	return &http.Client{
-		Transport: transport,
-		Timeout:   relayTimeout,
-		CheckRedirect: func(*http.Request, []*http.Request) error {
-			return http.ErrUseLastResponse
-		},
+		Transport:     transport,
+		Timeout:       relayTimeout,
+		CheckRedirect: netguard.RefuseRedirects,
 	}
 }
 

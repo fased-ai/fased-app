@@ -96,6 +96,10 @@ func writeKeyAtomic(keyPath string, data []byte) error {
 		_ = tmp.Close()
 		return err
 	}
+	if err := tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		return err
+	}
 	if err := tmp.Close(); err != nil {
 		return err
 	}
@@ -103,6 +107,10 @@ func writeKeyAtomic(keyPath string, data []byte) error {
 		return err
 	}
 	_ = os.Chmod(keyPath, 0o600)
+	if df, dErr := os.Open(dir); dErr == nil {
+		_ = df.Sync()
+		_ = df.Close()
+	}
 	return nil
 }
 

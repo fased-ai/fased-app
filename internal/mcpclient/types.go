@@ -30,9 +30,12 @@ func mustParseCIDR(raw string) *net.IPNet {
 
 // RemoteTool describes a discovered tool advertised by an external MCP server.
 type RemoteTool struct {
-	Name        string         `json:"name"`
-	Description string         `json:"description,omitempty"`
-	InputSchema map[string]any `json:"inputSchema,omitempty"`
+	Name         string         `json:"name"`
+	Description  string         `json:"description,omitempty"`
+	InputSchema  map[string]any `json:"inputSchema,omitempty"`
+	Annotations  map[string]any `json:"annotations,omitempty"`
+	SchemaSHA256 string         `json:"schemaSha256,omitempty"`
+	SchemaDrift  bool           `json:"schemaDrift,omitempty"`
 }
 
 // RemoteResource describes a discovered resource advertised by an external MCP server.

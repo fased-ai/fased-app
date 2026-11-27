@@ -220,6 +220,17 @@ func (m *vm) step(cost int) error {
 	return nil
 }
 
+func (m *vm) chargeAlloc(bytes int) error {
+	if bytes <= 0 {
+		return nil
+	}
+	m.allocBytes += bytes
+	if m.allocBytes > MaxAllocBytes {
+		return fmt.Errorf("FasedScript allocation exceeded %d byte memory budget", MaxAllocBytes)
+	}
+	return nil
+}
+
 func (m *vm) execStmt(st stmt, scope *envScope) error {
 	if err := m.step(1); err != nil {
 		return err
@@ -943,6 +954,19 @@ func (m *vm) callBuiltin(name string, args []val) (val, error) {
 		period, err := asScalarInt(args[1], 1, 500)
 		if err != nil {
 			return val{}, err
+		}
+		if err := m.chargeAlloc(m.barCount * 8); err != nil {
+			return val{}, err
+		}
+		switch name {
+		case "wma", "highest", "lowest", "stddev", "stdDev", "zscore", "zScore":
+			extraCost := (m.barCount * period) / 64
+			if extraCost < 1 {
+				extraCost = 1
+			}
+			if err := m.step(extraCost); err != nil {
+				return val{}, err
+			}
 		}
 		var res []float64
 		switch name {

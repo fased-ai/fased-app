@@ -25,7 +25,9 @@ func (Native) Key(ctx context.Context, instance string, create bool) ([]byte, er
 		return nil, ErrUnavailable
 	}
 	if directory := os.Getenv("CREDENTIALS_DIRECTORY"); directory != "" {
-		if !filepath.IsAbs(directory) || filepath.Clean(directory) != directory || !strings.HasPrefix(directory, "/run/credentials/") {
+		userCredPrefix := fmt.Sprintf("/run/user/%d/credentials/", os.Geteuid())
+		if !filepath.IsAbs(directory) || filepath.Clean(directory) != directory ||
+			(!strings.HasPrefix(directory, "/run/credentials/") && !strings.HasPrefix(directory, userCredPrefix)) {
 			return nil, ErrUnavailable
 		}
 		name := filepath.Join(directory, CredentialName)

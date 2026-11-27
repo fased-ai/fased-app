@@ -45,9 +45,58 @@ const signer = resolve(".evidence/bin/fased-signer");
 if (process.platform === "linux") {
   execFileSync(
     "go",
-    ["build", "-trimpath", "-o", signer, "./cmd/fased-signer"],
+    [
+      "build",
+      "-buildvcs=false",
+      "-trimpath",
+      "-ldflags",
+      "-s -w",
+      "-o",
+      signer,
+      "./cmd/fased-signer",
+    ],
     { stdio: "inherit", env: { ...process.env, CGO_ENABLED: "0" } },
   );
+}
+// Sign Windows PE binaries BEFORE cmd/fased-package computes bundle.json hashes
+// so both portable .zip archives and Inno Setup payloads carry authentic signatures.
+let preSignedWinPfxTmp = "";
+if (windows) {
+  const preWinSigning = resolveWindowsSigningConfig(process.env);
+  if (preWinSigning.enabled) {
+    const preSigntool = findWindowsSigntool();
+    let prePfx = preWinSigning.pfxPath;
+    if (!prePfx && preWinSigning.pfxBase64) {
+      preSignedWinPfxTmp = resolve(".evidence/temp-presign-codesign.pfx");
+      await writeFile(
+        preSignedWinPfxTmp,
+        Buffer.from(preWinSigning.pfxBase64, "base64"),
+        { mode: 0o600 },
+      );
+      prePfx = preSignedWinPfxTmp;
+    }
+    try {
+      for (const binTarget of [engine, desktop]) {
+        execFileSync(
+          preSigntool,
+          buildWindowsSigntoolSignArgs({
+            pfxPath: prePfx,
+            password: preWinSigning.password,
+            timestampUrl: preWinSigning.timestampUrl,
+            targetExe: binTarget,
+          }),
+          { stdio: "inherit" },
+        );
+        execFileSync(preSigntool, buildWindowsSigntoolVerifyArgs(binTarget), {
+          stdio: "inherit",
+        });
+      }
+    } finally {
+      if (preSignedWinPfxTmp) {
+        await rm(preSignedWinPfxTmp, { force: true });
+      }
+    }
+  }
 }
 execFileSync(
   "go",

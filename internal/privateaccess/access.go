@@ -25,6 +25,7 @@ import (
 
 	"github.com/fased-ai/fased-app/internal/connection"
 	"github.com/fased-ai/fased-app/internal/core"
+	"github.com/fased-ai/fased-app/internal/netguard"
 	"github.com/fased-ai/fased-app/internal/tailnet"
 )
 
@@ -406,7 +407,15 @@ func (m Manager) verifyEndpoint(ctx context.Context, p Plan, instanceID string) 
 		}
 		return m.verifyFromDevice(ctx, p, instanceID, selfID)
 	}
-	client := &http.Client{Timeout: 8 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return errors.New("private access redirected") }}
+	client := &http.Client{
+		Timeout: 8 * time.Second,
+		Transport: netguard.NewSafeTransport(netguard.Options{
+			AllowTailscaleHosts: true,
+			DialTimeout:         5 * time.Second,
+			TLSHandshakeTimeout: 5 * time.Second,
+		}),
+		CheckRedirect: func(*http.Request, []*http.Request) error { return errors.New("private access redirected") },
+	}
 	if m.Client != nil {
 		client = m.Client
 	}

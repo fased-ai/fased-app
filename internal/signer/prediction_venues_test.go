@@ -372,7 +372,8 @@ func TestKalshiDemoKeyCustodyAndPSSSigning(t *testing.T) {
 		t.Fatal("expected rejection of query string in signed path")
 	}
 
-	// Valid order signing succeeds and passes independent RSA-PSS SHA-256 verification.
+	// Detached Kalshi POST order signing is disabled fail-closed because Kalshi V2 RSA-PSS
+	// does not sign the JSON request body (requires signer-owned HTTPS egress).
 	orderReq := KalshiSignIntent{
 		Environment:       "demo",
 		Method:            "POST",
@@ -384,12 +385,8 @@ func TestKalshiDemoKeyCustodyAndPSSSigning(t *testing.T) {
 		EstimatedMicroUSD: 4_500_000,
 		ExpiresAt:         now + 300,
 	}
-	signedOrd, err := v.SignKalshiRequestIPC(orderReq, vaultID)
-	if err != nil {
-		t.Fatalf("SignKalshiRequestIPC order failed: %v", err)
-	}
-	if err := VerifyKalshiPSSSignature(st.PublicKeyPEM, signedOrd.TimestampMs, signedOrd.Method, signedOrd.Path, signedOrd.SignatureBase64); err != nil {
-		t.Fatalf("VerifyKalshiPSSSignature order failed: %v", err)
+	if _, err := v.SignKalshiRequestIPC(orderReq, vaultID); err == nil || !strings.Contains(err.Error(), "signer-owned HTTPS egress required") {
+		t.Fatalf("expected detached Kalshi order signing to fail closed, got %v", err)
 	}
 
 	// Balance query & cancel order work cleanly without debiting spend.
@@ -420,21 +417,6 @@ func TestKalshiDemoKeyCustodyAndPSSSigning(t *testing.T) {
 	}
 	if err := VerifyKalshiPSSSignature(st.PublicKeyPEM, signedCancel.TimestampMs, signedCancel.Method, signedCancel.Path, signedCancel.SignatureBase64); err != nil {
 		t.Fatalf("VerifyKalshiPSSSignature cancel failed: %v", err)
-	}
-
-	// Second $5.00 order exceeds $9.00 daily cap ($4.50 + $5.00 = $9.50).
-	if _, err := v.SignKalshiRequestIPC(KalshiSignIntent{
-		Environment:       "demo",
-		Method:            "POST",
-		Path:              "/trade-api/v2/portfolio/events/orders",
-		TimestampMs:       time.Now().UnixMilli(),
-		Ticker:            "KXBTC-26DEC31-B100K",
-		Asset:             "USD",
-		OperationID:       "kalshi-ord-over-daily",
-		EstimatedMicroUSD: 5_000_000,
-		ExpiresAt:         now + 300,
-	}, vaultID); err == nil {
-		t.Fatal("expected daily cap rejection for second kalshi order")
 	}
 
 	// Locked vault rejects signing with ErrLocked.

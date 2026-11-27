@@ -1,6 +1,7 @@
 package core
 
 import (
+	"fmt"
 	"io"
 	"log/slog"
 	"os"
@@ -10,7 +11,7 @@ import (
 )
 
 var (
-	logSecretPattern = regexp.MustCompile(`(?i)(bearer\s+[A-Za-z0-9._~+/=-]{8,}|(?:sk|pk|xai|ghp|gho|ghu|ghs|glpat|AIza)[A-Za-z0-9_-]{8,}|(?:access_token|refresh_token|id_token|client_secret|password|passphrase|mnemonic|seed|sessionToken)=[^\s&"']+|#(?:pair|local|setup)=[A-Za-z0-9_-]{8,})`)
+	logSecretPattern = regexp.MustCompile(`(?i)(bearer\s+[A-Za-z0-9._~+/=-]{8,}|fased_mcp_[A-Za-z0-9._~+/=-]{8,}|(?:sk|pk|xai|ghp|gho|ghu|ghs|glpat|AIza)[A-Za-z0-9_-]{8,}|eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}|/bot\d+:[A-Za-z0-9_-]{16,}|/v[23]/[A-Za-z0-9_-]{16,}|(?:api[-_]?key|access_token|refresh_token|id_token|client_secret|password|passphrase|mnemonic|seed|sessionToken|fased_session|__Host-fased_session)=[^\s&"';]+|#(?:pair|local|setup)=[A-Za-z0-9_-]{8,}|\b[0-9a-f]{64}\b)`)
 )
 
 func isSensitiveLogKey(key string) bool {
@@ -49,6 +50,11 @@ func newRedactingLogger(w io.Writer) *slog.Logger {
 			}
 			if a.Value.Kind() == slog.KindString {
 				return slog.String(a.Key, redactLogString(a.Value.String()))
+			}
+			if a.Value.Kind() == slog.KindAny {
+				if v := a.Value.Any(); v != nil {
+					return slog.String(a.Key, redactLogString(fmt.Sprint(v)))
+				}
 			}
 			return a
 		},

@@ -120,6 +120,12 @@ func decodeShortVec(b []byte) (val int, read int, err error) {
 	var shift uint
 	for i := 0; i < len(b) && i < 3; i++ {
 		by := b[i]
+		if i > 0 && by == 0 {
+			return 0, 0, errors.New("non-canonical shortvec encoding")
+		}
+		if i == 2 && (by&^0x03) != 0 {
+			return 0, 0, errors.New("shortvec overflow")
+		}
 		val |= int(by&0x7f) << shift
 		if by&0x80 == 0 {
 			return val, i + 1, nil

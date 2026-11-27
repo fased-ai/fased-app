@@ -2,6 +2,7 @@ package core
 
 import (
 	"bufio"
+	"context"
 	"crypto/rand"
 	"encoding/binary"
 	"errors"
@@ -22,7 +23,10 @@ import (
 	"sync/atomic"
 )
 
-const sessionCookie = "fased_session"
+const (
+	sessionCookie     = "fased_session"
+	hostSessionCookie = "__Host-fased_session"
+)
 
 type HTTPHandler struct {
 	wenResearchOrigin string
@@ -34,6 +38,7 @@ type HTTPHandler struct {
 	publicHost        string
 	remoteIngress     bool
 	remoteProxyTrust  bool
+	proxySharedSecret string
 	remoteTransport   string
 	instanceLocation  string
 	instanceOwnerUID  int
@@ -45,7 +50,9 @@ type HTTPHandler struct {
 	privateProof      privateAccessProofCache
 	desktopRelease    desktopReleaseCache
 	limiter           auth.RateLimiter
+	unauthLimiter     auth.RateLimiter
 	authLimiter       auth.RateLimiter
+	loginBackoff      auth.GlobalBackoff
 	loopbackPeerUID   func(client, server *net.TCPAddr) (int, bool, error)
 	localNonce        string
 	streamTicketMu    sync.Mutex
@@ -112,12 +119,23 @@ func (h *HTTPHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				writeError(w, 403, "loopback reverse proxy peer required")
 				return
 			}
+			if h.proxySharedSecret != "" {
+				if !auth.ConstantTimeEqual([]byte(r.Header.Get("X-Fased-Proxy-Secret")), []byte(h.proxySharedSecret)) {
+					writeError(w, 403, "reverse proxy authentication required")
+					return
+				}
+			} else if !h.checkLoopbackPeerUID(r, true) {
+				writeError(w, 403, "verified loopback reverse proxy peer required")
+				return
+			}
 		}
 		protos := r.Header.Values("X-Forwarded-Proto")
 		if r.TLS == nil && (len(protos) != 1 || !strings.EqualFold(strings.TrimSpace(protos[0]), "https")) {
 			writeError(w, 403, "HTTPS proxy required")
 			return
 		}
+		w.Header().Set("Strict-Transport-Security", "max-age=31536000")
+	} else if r.TLS != nil || r.Context().Value(remoteIdentityKey{}) != nil {
 		w.Header().Set("Strict-Transport-Security", "max-age=31536000")
 	}
 	if !h.hosts[r.Host] {
@@ -229,7 +247,7 @@ func (h *HTTPHandler) api(w http.ResponseWriter, r *http.Request) {
 			result["remoteEnrolled"] = owner.UserID != 0
 			result["legacyAuthenticated"] = h.store.Session(r.Context(), token)
 			if result["legacyAuthenticated"] == true {
-				result["csrfToken"] = csrfToken(token)
+				result["csrfToken"] = h.store.CSRFToken(token)
 			}
 			if !valid && id.NodeID != "" && h.store.isRemoteSignedOut(id.NodeID) {
 				result["remoteSignedOut"] = true
@@ -260,7 +278,7 @@ func (h *HTTPHandler) api(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		if valid {
-			result["csrfToken"] = csrfToken(token)
+			result["csrfToken"] = h.store.CSRFToken(token)
 		}
 		writeJSON(w, 200, result)
 		return
@@ -292,6 +310,12 @@ func (h *HTTPHandler) api(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if !h.allowRate(r, "auth-login", 8) {
+			h.store.RecordSecurityAudit(r.Context(), "auth.login.rate_limited", h.ratePeerKey(r), r.URL.Path, "denied", "")
+			writeError(w, 429, ErrRateLimited.Error())
+			return
+		}
+		if r.Context().Value(privateIPCKey{}) != true && !h.loginBackoff.Allow(h.store.now()) {
+			h.store.RecordSecurityAudit(r.Context(), "auth.login.backoff", h.ratePeerKey(r), r.URL.Path, "denied", "")
 			writeError(w, 429, ErrRateLimited.Error())
 			return
 		}
@@ -324,9 +348,13 @@ func (h *HTTPHandler) api(w http.ResponseWriter, r *http.Request) {
 			token, err = h.store.Login(r.Context(), request.Password)
 		}
 		if err != nil {
+			h.loginBackoff.RecordFailure(h.store.now())
+			h.store.RecordSecurityAudit(r.Context(), "auth.login.failed", h.ratePeerKey(r), r.URL.Path, "denied", "")
 			writeError(w, 401, "authentication failed; check credentials and claim-code expiry")
 			return
 		}
+		h.loginBackoff.Reset()
+		h.store.RecordSecurityAudit(r.Context(), "auth.login.succeeded", h.ratePeerKey(r), r.URL.Path, "ok", "")
 		if id, ok := r.Context().Value(remoteIdentityKey{}).(tailnet.Identity); ok && id.NodeID != "" {
 			h.store.clearRemoteSignedOut(id.NodeID)
 		}
@@ -348,8 +376,8 @@ func (h *HTTPHandler) api(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Path == "/api/v1/mcp" {
 		if rawAuth := strings.TrimSpace(r.Header.Get("Authorization")); strings.HasPrefix(rawAuth, "Bearer "+mcpTokenPrefix) {
 			mcpTok := strings.TrimSpace(strings.TrimPrefix(rawAuth, "Bearer "))
-			if h.store.ValidateMCPToken(r.Context(), mcpTok) {
-				h.mcpAPIWithScopedToken(w, r)
+			if ok, scopes := h.store.ValidateMCPTokenWithScopes(r.Context(), mcpTok); ok {
+				h.mcpAPIWithScopedToken(w, r.WithContext(context.WithValue(r.Context(), mcpTokenScopesKey{}, scopes)))
 				return
 			}
 			writeError(w, 401, "invalid or expired MCP token")
@@ -894,7 +922,11 @@ func (h *HTTPHandler) ratePeerKey(r *http.Request) string {
 }
 
 func (h *HTTPHandler) allowRate(r *http.Request, bucket string, limit int) bool {
-	if strings.HasPrefix(bucket, "auth-") || strings.HasPrefix(bucket, "wallets-sensitive") {
+	switch bucket {
+	case "auth-login", "auth-claim", "auth-pair", "auth-local":
+		return h.unauthLimiter.Allow(h.store.now(), bucket+"|"+h.ratePeerKey(r), limit)
+	}
+	if strings.HasPrefix(bucket, "auth-") || strings.HasPrefix(bucket, "wallets-sensitive") || strings.HasPrefix(bucket, "mcp-tokens") {
 		return h.allowAuthRate(r, bucket, limit)
 	}
 	return h.limiter.Allow(h.store.now(), bucket+"|"+h.ratePeerKey(r), limit)
@@ -909,7 +941,7 @@ func (h *HTTPHandler) writeSessionResponse(w http.ResponseWriter, r *http.Reques
 	h.setCookie(w, r, token, int(SessionLifetime.Seconds()))
 	resp := map[string]any{
 		"authenticated": true,
-		"csrfToken":     csrfToken(token),
+		"csrfToken":     h.store.CSRFToken(token),
 		"sessionMode":   mode,
 	}
 	if mode != "cookie" {
@@ -1040,7 +1072,7 @@ func (h *HTTPHandler) csrf(w http.ResponseWriter, r *http.Request, token string)
 	if h.custodyAccountsRequest(r) || h.custodyOnchainRequest(r) {
 		return true
 	}
-	if !auth.VerifyCSRF(r.Header.Get("X-CSRF-Token"), token) {
+	if !h.store.VerifyCSRF(r.Header.Get("X-CSRF-Token"), token) {
 		writeError(w, 403, "CSRF token required")
 		return false
 	}
@@ -1048,13 +1080,11 @@ func (h *HTTPHandler) csrf(w http.ResponseWriter, r *http.Request, token string)
 }
 func (h *HTTPHandler) session(r *http.Request) string {
 	if h.sessionMode(r) == "cookie" {
-		if cookie, err := r.Cookie(sessionCookie); err == nil && cookie.Value != "" {
+		if cookie, err := r.Cookie(hostSessionCookie); err == nil && cookie.Value != "" {
 			return cookie.Value
 		}
-		if r.URL.Path == "/api/v1/mcp" && r.Header.Get("Origin") == "" && r.Header.Get("Sec-Fetch-Site") == "" {
-			if auth := r.Header.Get("Authorization"); strings.HasPrefix(auth, "Bearer ") {
-				return strings.TrimPrefix(auth, "Bearer ")
-			}
+		if cookie, err := r.Cookie(sessionCookie); err == nil && cookie.Value != "" {
+			return cookie.Value
 		}
 		return ""
 	}
@@ -1067,7 +1097,27 @@ func (h *HTTPHandler) setCookie(w http.ResponseWriter, r *http.Request, token st
 	if r.TLS == nil && !(h.publicHost != "" && r.Host == h.publicHost) {
 		return
 	}
-	http.SetCookie(w, &http.Cookie{Name: sessionCookie, Value: token, Path: "/api/", HttpOnly: true, Secure: r.TLS != nil || (h.publicHost != "" && r.Host == h.publicHost), SameSite: http.SameSiteStrictMode, MaxAge: maxAge})
+	http.SetCookie(w, &http.Cookie{
+		Name:     hostSessionCookie,
+		Value:    token,
+		Path:     "/",
+		HttpOnly: true,
+		Secure:   true,
+		SameSite: http.SameSiteStrictMode,
+		MaxAge:   maxAge,
+	})
+	if maxAge < 0 {
+		// Also clear legacy cookie name on logout.
+		http.SetCookie(w, &http.Cookie{
+			Name:     sessionCookie,
+			Value:    "",
+			Path:     "/api/",
+			HttpOnly: true,
+			Secure:   true,
+			SameSite: http.SameSiteStrictMode,
+			MaxAge:   -1,
+		})
+	}
 }
 func (h *HTTPHandler) sessionMode(r *http.Request) string {
 	if r.TLS != nil || (h.publicHost != "" && r.Host == h.publicHost) {

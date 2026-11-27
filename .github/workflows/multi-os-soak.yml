@@ -21,13 +21,15 @@ jobs:
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 25
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "24"
           cache: npm
       - run: npm ci
-      - uses: actions/setup-go@v7
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version: "1.26.x"
           cache: true
@@ -46,10 +48,12 @@ jobs:
           node scripts/build-dual-track-cli.mjs
           node scripts/smoke-dual-track-installers.mjs --cli-dir .evidence/dual-track-cli --desktop-dir .evidence/nonexistent-cli-only --output .evidence/dual-track-host-smoke-linux-arm64.json
       - name: Native linux/arm64 Multi-OS container soak (Debian 12/13, Fedora 41-43, Ubuntu 24.04)
+        env:
+          FASED_SOAK_DISTROS: ${{ inputs.distros || 'debian:12,debian:13,fedora:41,fedora:42,fedora:43,ubuntu:24.04' }}
         run: |
           mkdir -p .evidence/multi-os-soak
-          node scripts/soak-multi-os.mjs --runtime docker --arch arm64 --distros "${{ inputs.distros || 'debian:12,debian:13,fedora:41,fedora:42,fedora:43,ubuntu:24.04' }}" --output .evidence/multi-os-soak/multi-os-soak-arm64.json
-      - uses: actions/upload-artifact@v7
+          node scripts/soak-multi-os.mjs --runtime docker --arch arm64 --distros "$FASED_SOAK_DISTROS" --output .evidence/multi-os-soak/multi-os-soak-arm64.json
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: multi-os-soak-arm64
           include-hidden-files: true
@@ -62,23 +66,27 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "24"
           cache: npm
       - run: npm ci
-      - uses: actions/setup-go@v7
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version: "1.26.x"
           cache: true
       - name: Build frontend assets
         run: npm run build
       - name: Linux amd64 Multi-OS container soak (Debian 12/13, Fedora 41-43, Ubuntu 24.04)
+        env:
+          FASED_SOAK_DISTROS: ${{ inputs.distros || 'debian:12,debian:13,fedora:41,fedora:42,fedora:43,ubuntu:24.04' }}
         run: |
           mkdir -p .evidence/multi-os-soak
-          node scripts/soak-multi-os.mjs --runtime docker --arch amd64 --distros "${{ inputs.distros || 'debian:12,debian:13,fedora:41,fedora:42,fedora:43,ubuntu:24.04' }}" --output .evidence/multi-os-soak/multi-os-soak-amd64.json
-      - uses: actions/upload-artifact@v7
+          node scripts/soak-multi-os.mjs --runtime docker --arch amd64 --distros "$FASED_SOAK_DISTROS" --output .evidence/multi-os-soak/multi-os-soak-amd64.json
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: multi-os-soak-amd64
           include-hidden-files: true

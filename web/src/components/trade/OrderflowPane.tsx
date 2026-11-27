@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { safeHttpsHref } from "../../agents-v2";
 import { useCore } from "../../core";
 import { useUI } from "../../ui-preferences";
 import { RefreshCw } from "../../icons";
@@ -809,8 +810,12 @@ export function OrderflowPane({
                   <span>
                     {f.form} · {f.filingDate}
                   </span>
-                  {f.url ? (
-                    <a href={f.url} target="_blank" rel="noopener noreferrer">
+                  {safeHttpsHref(f.url) ? (
+                    <a
+                      href={safeHttpsHref(f.url)}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                    >
                       EDGAR
                     </a>
                   ) : null}

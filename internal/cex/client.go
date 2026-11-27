@@ -11,11 +11,11 @@ import (
 	"net/url"
 	"strings"
 	"time"
+
+	"github.com/fased-ai/fased-app/internal/netguard"
 )
 
 const maxResponseBytes = 512 * 1024
-
-var cgnatPrefix = netip.MustParsePrefix("100.64.0.0/10")
 
 // Client is an SSRF-hardened TLS 1.2+ HTTP client scoped exclusively to sandbox/testnet
 // CEX origins while CEXActivationEnabled is false.
@@ -24,10 +24,7 @@ type Client struct {
 }
 
 func isPublicUnicastIP(ip netip.Addr) bool {
-	ip = ip.Unmap()
-	return ip.IsValid() && ip.IsGlobalUnicast() && !ip.IsPrivate() && !ip.IsLoopback() &&
-		!ip.IsLinkLocalUnicast() && !ip.IsLinkLocalMulticast() && !ip.IsMulticast() && !ip.IsUnspecified() &&
-		!cgnatPrefix.Contains(ip)
+	return netguard.IsPublicUnicastIP(ip)
 }
 
 func interleavePublicIPs(ips []netip.Addr) ([]netip.Addr, error) {

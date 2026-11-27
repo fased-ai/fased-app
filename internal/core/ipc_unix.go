@@ -29,7 +29,7 @@ func listenIPC(dir, id string) (net.Listener, string, string, error) {
 		listener.Close()
 		return nil, "", "", err
 	}
-	return listener, "unix", address, nil
+	return wrapIPCPeerCredListener(listener), "unix", address, nil
 }
 func dialIPC(ctx context.Context, network, address string) (net.Conn, error) {
 	var dialer net.Dialer

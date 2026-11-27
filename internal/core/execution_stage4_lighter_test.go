@@ -134,7 +134,7 @@ func TestStage4LighterDefaultOffAndControlledExecution(t *testing.T) {
 
 	// Valid $4.50 ETH limit order (0.0025 ETH @ $1800.00) with leverage=3x.
 	body := `{"symbol":"ETH","side":"BUY","price":"1800.00","size":"0.0025","leverage":3,"accountIndex":42,"nonce":1,"fetchMarket":true,"submit":true}`
-	lResp := stage4Req(h, "POST", srv.URL, "/api/v1/execution/lighter/rehearse", body, token, srv.URL, csrfToken(token))
+	lResp := stage4ReqWithStepUp(h, "POST", srv.URL, "/api/v1/execution/lighter/rehearse", body, token, srv.URL, csrfToken(token), stage4StepUpToken(t, h, token, "execute", "lighter"))
 	if lResp.Code != 200 {
 		t.Fatalf("lighter rehearse failed (%d): %s", lResp.Code, lResp.Body.String())
 	}
@@ -147,13 +147,13 @@ func TestStage4LighterDefaultOffAndControlledExecution(t *testing.T) {
 	}
 
 	// Over-leverage (6 > 4) rejected cleanly.
-	overLev := stage4Req(h, "POST", srv.URL, "/api/v1/execution/lighter/rehearse", `{"symbol":"ETH","side":"BUY","price":"1800.00","size":"0.001","leverage":6,"accountIndex":42,"nonce":2}`, token, srv.URL, csrfToken(token))
+	overLev := stage4ReqWithStepUp(h, "POST", srv.URL, "/api/v1/execution/lighter/rehearse", `{"symbol":"ETH","side":"BUY","price":"1800.00","size":"0.001","leverage":6,"accountIndex":42,"nonce":2}`, token, srv.URL, csrfToken(token), stage4StepUpToken(t, h, token, "execute", "lighter"))
 	if overLev.Code != 400 || !strings.Contains(overLev.Body.String(), "leverage limit") {
 		t.Fatalf("expected 400 leverage limit error, got %d: %s", overLev.Code, overLev.Body.String())
 	}
 
 	// Daily spend check: $4.50 spent, next $4.50 ($9.00 > $8.00) rejected cleanly.
-	overCap := stage4Req(h, "POST", srv.URL, "/api/v1/execution/lighter/rehearse", `{"symbol":"ETH","side":"BUY","price":"1800.00","size":"0.0025","leverage":2,"accountIndex":42,"nonce":3}`, token, srv.URL, csrfToken(token))
+	overCap := stage4ReqWithStepUp(h, "POST", srv.URL, "/api/v1/execution/lighter/rehearse", `{"symbol":"ETH","side":"BUY","price":"1800.00","size":"0.0025","leverage":2,"accountIndex":42,"nonce":3}`, token, srv.URL, csrfToken(token), stage4StepUpToken(t, h, token, "execute", "lighter"))
 	if overCap.Code != 400 || !strings.Contains(overCap.Body.String(), "daily spend limit exceeded") {
 		t.Fatalf("expected 400 daily spend limit exceeded, got %d: %s", overCap.Code, overCap.Body.String())
 	}

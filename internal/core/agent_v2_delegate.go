@@ -121,6 +121,7 @@ func toolDelegateToAgent(ctx context.Context, s *Store, callerProfileID string, 
 		finalText   string
 		toolsUsed   []string
 		seenTools   = map[string]bool{}
+		subTainted  = IsContextTainted(ctx)
 		totalIn     int64
 		totalOut    int64
 		totalCached int64
@@ -157,6 +158,9 @@ func toolDelegateToAgent(ctx context.Context, s *Store, callerProfileID string, 
 
 		toolMsgs := make([]AgentV2Message, 0, len(turn.ToolCalls))
 		for idx, call := range turn.ToolCalls {
+			if idx >= agentV2MaxToolCallsPerRound {
+				break
+			}
 			callID := strings.TrimSpace(call.CallID)
 			if callID == "" {
 				callID = fmt.Sprintf("delegate_%d_%d", round+1, idx+1)
@@ -176,13 +180,23 @@ func toolDelegateToAgent(ctx context.Context, s *Store, callerProfileID string, 
 				tc.Status = "error"
 				tc.ErrorText = fmt.Sprintf("tool %q is not permitted in read-only delegation mode", call.Name)
 				tc.ResultJSON = encodeToolResultJSON(map[string]any{"status": "error", "error": tc.ErrorText})
+			} else if subTainted && isEgressToolBlockedWhenTainted(call.Name) {
+				tc.Tier = entry.spec.Tier
+				tc.Status = "error"
+				tc.ErrorText = fmt.Sprintf("tool %q blocked in tainted delegation context", call.Name)
+				tc.ResultJSON = encodeToolResultJSON(map[string]any{"status": "blocked", "error": tc.ErrorText})
 			} else {
 				tc.Tier = entry.spec.Tier
 				if !seenTools[call.Name] {
 					seenTools[call.Name] = true
 					toolsUsed = append(toolsUsed, call.Name)
 				}
-				res, execErr := entry.execute(childCtx, s, targetProfile.ID, json.RawMessage(argsJSON))
+				toolCtx, toolCancel := context.WithTimeout(WithTaintState(childCtx, subTainted), agentV2PerToolTimeout)
+				res, execErr := entry.execute(toolCtx, s, targetProfile.ID, json.RawMessage(argsJSON))
+				toolCancel()
+				if isUntrustedExternalTool(call.Name) {
+					subTainted = true
+				}
 				if execErr != nil {
 					tc.Status = "error"
 					tc.ErrorText = execErr.Error()
@@ -193,9 +207,13 @@ func toolDelegateToAgent(ctx context.Context, s *Store, callerProfileID string, 
 				}
 			}
 			assistantMsg.ToolCalls = append(assistantMsg.ToolCalls, tc)
+			toolContent := tc.ResultJSON
+			if isUntrustedExternalTool(call.Name) && tc.Status == "completed" {
+				toolContent = wrapUntrustedContextBlock("untrusted_tool_output", tc.ResultJSON)
+			}
 			toolMsgs = append(toolMsgs, AgentV2Message{
 				Role:     "tool",
-				Content:  tc.ResultJSON,
+				Content:  toolContent,
 				CallID:   tc.CallID,
 				ToolName: tc.ToolName,
 				Status:   tc.Status,

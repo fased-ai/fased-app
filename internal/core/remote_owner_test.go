@@ -497,7 +497,7 @@ func TestRemoteSecuritySeamsRateCapLogoutAndLoopbackClosure(t *testing.T) {
 		t.Fatalf("explicit confirm remote login failed or leaked sessionToken: %d %s", confirmRes.Code, confirmRes.Body.String())
 	}
 	cookies := confirmRes.Result().Cookies()
-	if len(cookies) != 1 || cookies[0].Name != sessionCookie {
+	if len(cookies) != 1 || cookies[0].Name != hostSessionCookie {
 		t.Fatalf("missing remote session cookie: %+v", cookies)
 	}
 

@@ -28,12 +28,27 @@ func stripANSI(s string) string {
 	return ansiCSIPattern.ReplaceAllString(s, "")
 }
 
+func isAllowedDeviceAuthHost(host string) bool {
+	h := strings.ToLower(strings.TrimSpace(host))
+	switch h {
+	case "auth.openai.com", "openai.com", "platform.openai.com",
+		"accounts.google.com", "oauth2.googleapis.com",
+		"claude.ai", "console.anthropic.com", "anthropic.com",
+		"x.ai", "accounts.x.ai", "console.x.ai":
+		return true
+	}
+	return strings.HasSuffix(h, ".openai.com") ||
+		strings.HasSuffix(h, ".anthropic.com") ||
+		strings.HasSuffix(h, ".google.com") ||
+		strings.HasSuffix(h, ".x.ai")
+}
+
 func parseDeviceAuthLine(raw string) (string, string) {
 	line := stripANSI(raw)
 	verificationURL := ""
 	if match := httpsURLRegex.FindString(line); match != "" {
 		cleaned := strings.TrimRight(match, ".,;:!?)]}>\"'")
-		if u, err := url.Parse(cleaned); err == nil && u.Scheme == "https" && u.Host != "" {
+		if u, err := url.Parse(cleaned); err == nil && u.Scheme == "https" && u.Host != "" && u.User == nil && isAllowedDeviceAuthHost(u.Hostname()) {
 			verificationURL = cleaned
 		}
 	}

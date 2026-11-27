@@ -71,12 +71,25 @@ func startSocketServer(svc *Service, sockPath string, allowedPeerUID int, mode o
 	if err := os.MkdirAll(parent, 0o750); err != nil {
 		return nil, err
 	}
-	_ = os.Remove(targetSock)
+	if st, sErr := os.Lstat(targetSock); sErr == nil {
+		if st.Mode()&os.ModeSocket == 0 {
+			return nil, errors.New("refusing to unlink non-socket file at custody socket path")
+		}
+		if rErr := os.Remove(targetSock); rErr != nil {
+			return nil, rErr
+		}
+	} else if !os.IsNotExist(sErr) {
+		return nil, sErr
+	}
 	rawLn, err := net.Listen("unix", targetSock)
 	if err != nil {
 		return nil, err
 	}
-	_ = os.Chmod(targetSock, mode)
+	if err := os.Chmod(targetSock, mode); err != nil {
+		_ = rawLn.Close()
+		_ = os.Remove(targetSock)
+		return nil, err
+	}
 	ln := newPeerCredListener(rawLn, allowedPeerUID)
 
 	ss := &SocketServer{
@@ -88,6 +101,7 @@ func startSocketServer(svc *Service, sockPath string, allowedPeerUID int, mode o
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/v1/status", ss.handleStatus)
+	mux.HandleFunc("/v1/global-freeze", ss.handleGlobalFreeze)
 	mux.HandleFunc("/v1/audit/verify", ss.handleVerifyAudit)
 	mux.HandleFunc("/v1/owner/status", ss.handleOwnerStatus)
 	mux.HandleFunc("/v1/owner/configure", ss.handleOwnerConfigure)
@@ -108,6 +122,10 @@ func startSocketServer(svc *Service, sockPath string, allowedPeerUID int, mode o
 	srv := &http.Server{
 		Handler:           mux,
 		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       15 * time.Second,
+		WriteTimeout:      35 * time.Second,
+		IdleTimeout:       60 * time.Second,
+		MaxHeaderBytes:    16 * 1024,
 	}
 	ss.httpSrv = srv
 	go func() {
@@ -223,6 +241,42 @@ func decodeSockBody(r *http.Request, dst any) error {
 		return err
 	}
 	return json.Unmarshal(raw, dst)
+}
+
+func (s *SocketServer) handleGlobalFreeze(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		st, err := s.svc.GetGlobalFreeze(r.Context())
+		if err != nil {
+			writeSockErr(w, err)
+			return
+		}
+		writeSockJSON(w, http.StatusOK, st)
+	case http.MethodPost:
+		var req struct {
+			Active bool   `json:"active"`
+			Reason string `json:"reason"`
+			Actor  string `json:"actor"`
+		}
+		if err := decodeSockBody(r, &req); err != nil {
+			writeSockErr(w, err)
+			return
+		}
+		// Activating emergency freeze works immediately without step-up; clearing it MUST require owner proof.
+		if !req.Active {
+			if !s.requireOwnerProof(w, r, "unfreeze", "global") {
+				return
+			}
+		}
+		st, err := s.svc.SetGlobalFreeze(r.Context(), req.Active, req.Reason, req.Actor)
+		if err != nil {
+			writeSockErr(w, err)
+			return
+		}
+		writeSockJSON(w, http.StatusOK, st)
+	default:
+		w.WriteHeader(http.StatusMethodNotAllowed)
+	}
 }
 
 func (s *SocketServer) handleStatus(w http.ResponseWriter, r *http.Request) {
@@ -368,7 +422,7 @@ func (s *SocketServer) handleOwnerPasskeySubroute(w http.ResponseWriter, r *http
 			writeSockErr(w, err)
 			return
 		}
-		proof, exp, bindingDigest, err := s.svc.FinishPasskeyAssertion(r.Context(), req)
+		proof, exp, act, wid, bindingDigest, err := s.svc.FinishPasskeyAssertion(r.Context(), req)
 		if err != nil {
 			writeSockErr(w, err)
 			return
@@ -376,6 +430,8 @@ func (s *SocketServer) handleOwnerPasskeySubroute(w http.ResponseWriter, r *http
 		writeSockJSON(w, http.StatusOK, map[string]any{
 			"proof":         proof,
 			"expiresAt":     exp.UTC().Unix(),
+			"action":        act,
+			"walletId":      wid,
 			"bindingDigest": bindingDigest,
 		})
 	default:
@@ -445,22 +501,24 @@ func (s *SocketServer) handleOwnerAuthorize(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	var req struct {
-		Password string `json:"password"`
-		Action   string `json:"action"`
-		WalletID string `json:"walletId"`
+		Password      string `json:"password"`
+		Action        string `json:"action"`
+		WalletID      string `json:"walletId"`
+		BindingDigest string `json:"bindingDigest"`
 	}
 	if err := decodeSockBody(r, &req); err != nil {
 		writeSockErr(w, err)
 		return
 	}
-	proof, exp, err := s.svc.AuthorizeOwnerAction(r.Context(), req.Password, req.Action, req.WalletID)
+	proof, exp, err := s.svc.AuthorizeOwnerActionBound(r.Context(), req.Password, req.Action, req.WalletID, req.BindingDigest)
 	if err != nil {
 		writeSockErr(w, err)
 		return
 	}
 	writeSockJSON(w, http.StatusOK, map[string]any{
-		"proof":     proof,
-		"expiresAt": exp.UTC().Unix(),
+		"proof":         proof,
+		"bindingDigest": req.BindingDigest,
+		"expiresAt":     exp.UTC().Unix(),
 	})
 }
 
@@ -830,6 +888,20 @@ func (s *SocketServer) handleWalletSubroute(w http.ResponseWriter, r *http.Reque
 			writeSockJSON(w, http.StatusOK, rev)
 			return
 		}
+		if len(parts) == 3 && r.Method == http.MethodGet {
+			revID, err := url.PathUnescape(parts[2])
+			if err != nil {
+				writeSockErr(w, err)
+				return
+			}
+			rev, err := s.svc.GetReview(r.Context(), walletID, revID)
+			if err != nil {
+				writeSockErr(w, err)
+				return
+			}
+			writeSockJSON(w, http.StatusOK, rev)
+			return
+		}
 		if len(parts) == 4 && r.Method == http.MethodPost {
 			revID, err := url.PathUnescape(parts[2])
 			if err != nil {
@@ -844,7 +916,8 @@ func (s *SocketServer) handleWalletSubroute(w http.ResponseWriter, r *http.Reque
 				_ = decodeSockBody(r, &req)
 				// Manual reviews, vault wallets, and owner/manual-trade executions MUST carry
 				// an in-signer owner proof. Only reviews immutably prepared as bounded-auto bot/agent
-				// transactions whose actor matches the wallet's bound connections proceed on policy alone.
+				// transactions whose actor, connections hash, skill grant, and signer-computed USD
+				// ceilings all verify proceed without interactive owner proof.
 				needOwnerProof := true
 				txDigest := ""
 				if rev, rErr := s.svc.GetReview(r.Context(), walletID, revID); rErr == nil {
@@ -852,12 +925,30 @@ func (s *SocketServer) handleWalletSubroute(w http.ResponseWriter, r *http.Reque
 					if wPub, wErr := s.svc.GetWallet(r.Context(), walletID); wErr == nil && rev.IsBotOrAuto {
 						actorClean := strings.TrimSpace(req.Actor)
 						actorAllowed := false
+						var matchedGrant *SkillGrant
+						if rev.SkillGrantID != "" {
+							for i := range wPub.Connections.SkillGrants {
+								if strings.TrimSpace(wPub.Connections.SkillGrants[i].SkillID) == rev.SkillGrantID {
+									g := wPub.Connections.SkillGrants[i]
+									matchedGrant = &g
+									break
+								}
+							}
+						}
 						if rev.AgentID != "" {
 							actorAllowed = actorClean == "agent:"+rev.AgentID && slices.Contains(wPub.Connections.AgentIDs, rev.AgentID)
-						} else {
-							actorAllowed = actorClean == "trade-bot"
+						} else if rev.SkillGrantID != "" && matchedGrant != nil && matchedGrant.ScheduledAllowed {
+							actorAllowed = actorClean == "skill:"+rev.SkillGrantID || actorClean == "trade-bot"
 						}
-						if actorAllowed && wPub.Role != RoleVault && wPub.Role != RoleMining && wPub.Policy.ApprovalMode == ApprovalBoundedAuto && wPub.Connections.AllowTradeBots {
+						connMatch := rev.ConnectionsHash != "" && rev.ConnectionsHash == ComputeConnectionsHash(wPub.Connections)
+						usdAllowed := wPub.Policy.AutoApproveMaxUSD > 0 && rev.EstimatedUSD > 0 && rev.EstimatedUSD <= wPub.Policy.AutoApproveMaxUSD
+						if matchedGrant != nil && matchedGrant.MaxPerTxUSD > 0 && rev.EstimatedUSD > matchedGrant.MaxPerTxUSD {
+							usdAllowed = false
+						}
+						if wPub.Policy.DailyLossCapUSD > 0 && rev.EstimatedUSD > wPub.Policy.DailyLossCapUSD {
+							usdAllowed = false
+						}
+						if actorAllowed && connMatch && usdAllowed && wPub.Role != RoleVault && wPub.Role != RoleMining && wPub.Policy.ApprovalMode == ApprovalBoundedAuto && wPub.Connections.AllowTradeBots {
 							needOwnerProof = false
 						}
 					}

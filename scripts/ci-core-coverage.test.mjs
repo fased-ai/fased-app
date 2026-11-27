@@ -158,11 +158,11 @@ test("full race groups retain every package and require parallel scenarios and d
   );
   assert.match(scenarios, /runs-on: ubuntu-24\.04\n\s+timeout-minutes: 10/);
   for (const prerequisite of [
-    "actions/checkout@v7",
-    "actions/setup-node@v7",
+    "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+    "actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1",
     'node-version: "24"',
     "npm ci",
-    "actions/setup-go@v7",
+    "actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5",
     'go-version: "1.26.x"',
     "npm run build",
     "npm run build:core",
@@ -255,7 +255,7 @@ test("ordinary admission checks run once in parallel without consuming the manag
     workflow.indexOf("  handoff:\n"),
   );
   const download = scenarios.indexOf(
-    "      - uses: actions/download-artifact@v8\n",
+    "      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333",
   );
   assert.ok(
     buildArtifacts.indexOf("      - run: npm run build:core\n") >
@@ -409,14 +409,14 @@ test("static vet, fuzz seed regression, and release assembler tests stay wired i
   assert.match(checks, /scripts\/build-core\.test\.mjs/);
   assert.match(checks, /- run: go vet \.\/\.\.\./);
   assert.match(checks, /- run: go -C desktop vet \.\/\.\.\./);
-  assert.match(checks, /- run: go -C desktop test \.\/\.\.\./);
+  assert.match(checks, /- run: go -C desktop test -race \.\/\.\.\./);
   assert.match(
     checks,
-    /go test -run='\^Fuzz' \.\/internal\/core \.\/internal\/decision \.\/internal\/marketdata \.\/internal\/mcpclient \.\/internal\/signer \.\/internal\/update \.\/internal\/wenpm1 \.\/internal\/worldintel \.\/internal\/automation \.\/internal\/telegram \.\/internal\/fasedscript \.\/internal\/quantlab \.\/internal\/desk \.\/internal\/cex \.\/internal\/equities \.\/internal\/hub \.\/internal\/swarm/,
+    /go test -run='\^Fuzz' \.\/internal\/core \.\/internal\/custody \.\/internal\/onchain \.\/internal\/auth \.\/internal\/polymarket \.\/internal\/kalshi \.\/internal\/lighter \.\/internal\/decision \.\/internal\/marketdata \.\/internal\/mcpclient \.\/internal\/signer \.\/internal\/update \.\/internal\/wenpm1 \.\/internal\/worldintel \.\/internal\/automation \.\/internal\/telegram \.\/internal\/fasedscript \.\/internal\/quantlab \.\/internal\/desk \.\/internal\/cex \.\/internal\/equities \.\/internal\/hub \.\/internal\/swarm/,
   );
   assert.match(desktop, /- run: go -C desktop vet \.\/\.\.\./);
   assert.match(audit, /govulncheck/);
-  assert.match(audit, /FuzzDecodeFrames/);
+  assert.match(audit, /go test -list '\^Fuzz'/);
   assert.match(dependabot, /package-ecosystem: "gomod"/);
   assert.match(dependabot, /directory: "\/desktop"/);
   assert.match(dependabot, /package-ecosystem: "npm"/);

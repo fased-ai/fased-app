@@ -338,13 +338,26 @@ func (s *Service) ConsumeOwnerProofBound(action, walletID, expectedBindingDigest
 	if !ok {
 		return fmt.Errorf("%w: signer owner proof expired, already used, or invalid", ErrOwnerAuthRequired)
 	}
-	if entry.action != act || (entry.walletID != wid && entry.walletID != "*") {
+	if entry.action != act || (entry.walletID != wid && (entry.walletID != "*" || isWalletScopedOwnerAction(act))) {
 		return fmt.Errorf("%w: signer owner proof scope mismatch (want %s/%s)", ErrOwnerAuthRequired, act, wid)
 	}
-	if entry.bindingDigest != "" && subtle.ConstantTimeCompare([]byte(entry.bindingDigest), []byte(wantDigest)) != 1 {
-		return fmt.Errorf("%w: signer owner proof digest binding mismatch", ErrOwnerAuthRequired)
+	if wantDigest != "" {
+		if entry.bindingDigest == "" || subtle.ConstantTimeCompare([]byte(entry.bindingDigest), []byte(wantDigest)) != 1 {
+			return fmt.Errorf("%w: signer owner proof digest binding mismatch", ErrOwnerAuthRequired)
+		}
+	} else if entry.bindingDigest != "" {
+		return fmt.Errorf("%w: digest-bound proof cannot be used for unbound action", ErrOwnerAuthRequired)
 	}
 	// Single-use: consume immediately.
 	delete(s.ownerProofs, key)
 	return nil
+}
+
+func isWalletScopedOwnerAction(act string) bool {
+	switch act {
+	case "execute", "policy", "unfreeze", "connections", "rpc", "backup", "delete", "bot":
+		return true
+	default:
+		return false
+	}
 }

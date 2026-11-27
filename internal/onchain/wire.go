@@ -152,6 +152,7 @@ func ValidateInstructions(q Quote) error {
 				return errors.New("invalid Jupiter route plan")
 			}
 			a := ix.Accounts
+			coreEnd := 10
 			if !shared {
 				if len(a) < 10 || a[0].Pubkey != q.Owner || !a[0].IsSigner || a[1].Pubkey != source || !a[1].IsWritable || a[2].Pubkey != dest || !a[2].IsWritable || a[3].Pubkey != q.InputMint || a[4].Pubkey != q.OutputMint || a[5].Pubkey != Token || a[6].Pubkey != Token || a[7].Pubkey != Jupiter || a[8].Pubkey != EventAuthority || a[9].Pubkey != Jupiter {
 					return errors.New("Jupiter token/wallet account binding differs")
@@ -182,10 +183,19 @@ func ValidateInstructions(q Quote) error {
 					a[9].Pubkey != Token || a[9].IsSigner {
 					return errors.New("Jupiter shared-account binding differs")
 				}
-				validTail := (a[10].Pubkey == EventAuthority && a[11].Pubkey == Jupiter) ||
-					(len(a) >= 13 && a[10].Pubkey == Jupiter && a[11].Pubkey == EventAuthority && a[12].Pubkey == Jupiter)
-				if !validTail {
+				if a[10].Pubkey == EventAuthority && a[11].Pubkey == Jupiter {
+					coreEnd = 12
+				} else if len(a) >= 13 && a[10].Pubkey == Jupiter && a[11].Pubkey == EventAuthority && a[12].Pubkey == Jupiter {
+					coreEnd = 13
+				} else {
 					return errors.New("Jupiter shared-account tail binding differs")
+				}
+			}
+			// Guard remaining_accounts: never allow q.Owner to be marked writable/signer
+			// or extra unvalidated token authorities inside AMM pool accounts.
+			for j := coreEnd; j < len(a); j++ {
+				if a[j].Pubkey == q.Owner && (a[j].IsWritable || a[j].IsSigner) {
+					return errors.New("Jupiter remaining accounts may not mark wallet owner writable or signer")
 				}
 			}
 		default:
@@ -273,16 +283,26 @@ func Message(q Quote) ([]byte, error) {
 		Token:           true,
 		AssociatedToken: true,
 		Compute:         true,
+		EventAuthority:  true,
+		Jupiter:         true,
 		q.InputMint:     true,
 		q.OutputMint:    true,
 	}
 	for _, ix := range ixs {
 		pinned[ix.ProgramID] = true
 		if ix.ProgramID == Jupiter {
-			// Pin the first 10 core Jupiter swap accounts (token program, user authority,
-			// source/destination ATAs, program authority/vaults, mints, event authority)
-			// so they can NEVER be substituted via a v0 Address Lookup Table.
-			limit := min(len(ix.Accounts), 10)
+			// Pin all core Jupiter swap accounts (10 for RouteV2 [0..9],
+			// 12 or 13 for SharedAccountsRouteV2 including EventAuthority and Program)
+			// so none can EVER be substituted via a v0 Address Lookup Table while
+			// keeping DEX pool remaining_accounts ALT-eligible.
+			coreCount := 10
+			if rawIx, dErr := base64.StdEncoding.Strict().DecodeString(ix.Data); dErr == nil && len(rawIx) >= 8 && bytes.Equal(rawIx[:8], sharedRouteV2[:]) {
+				coreCount = 12
+				if len(ix.Accounts) >= 13 && ix.Accounts[10].Pubkey == Jupiter && ix.Accounts[11].Pubkey == EventAuthority && ix.Accounts[12].Pubkey == Jupiter {
+					coreCount = 13
+				}
+			}
+			limit := min(len(ix.Accounts), coreCount)
 			for i := 0; i < limit; i++ {
 				pinned[ix.Accounts[i].Pubkey] = true
 			}

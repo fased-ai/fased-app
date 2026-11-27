@@ -92,11 +92,13 @@ type Store struct {
 	custodySock                   *custody.SocketServer
 	custodySocketPath             string
 	custodyClient                 *custody.SocketClient
+	allowLiveCustody              bool
 	dir                           string
 	instanceID                    string
 	pauseFault                    func(string) error // Test-only interruption injection, never configuration or IPC.
 	backupFault                   func(string) error // Test-only partial write/crash injection.
 	bootID                        string
+	csrfSecret                    []byte
 	now                           func() time.Time
 	authMu                        sync.Mutex
 	localLaunchHash               string
@@ -428,6 +430,10 @@ PRAGMA user_version=1;`)
 	if err = store.restoreTaskAccess(ctx); err != nil {
 		return nil, err
 	}
+	if err = store.initCSRFSecret(ctx); err != nil {
+		return nil, err
+	}
+	store.hardenSQLiteFilePermissions()
 	store.probeTaskSecrets(ctx)
 	store.restoreOSProtectedConnections(ctx)
 	return store, nil

@@ -162,6 +162,8 @@ func (s *Store) remoteSession(ctx context.Context, id tailnet.Identity, code, ex
 	if err = tx.Commit(); err != nil {
 		return "", err
 	}
+	s.recordSessionActivity(ctx, tokenHash(token), s.now().Unix())
+	s.recordTestCSRFSecret(token)
 	s.restoreOSProtectedConnections(ctx)
 	return token, nil
 }
@@ -409,10 +411,17 @@ func (h *HTTPHandler) remoteDevicesAPI(w http.ResponseWriter, r *http.Request) {
 	if !decodeJSON(w, r, &request) {
 		return
 	}
-	link, err := h.store.changeRemoteDevices(r.Context(), id, request.Action, request.NodeID)
+	link, revokedHashes, err := h.store.changeRemoteDevicesWithRevoked(r.Context(), id, request.Action, request.NodeID)
 	if err != nil {
 		writeError(w, 409, err.Error())
 		return
+	}
+	for _, rh := range revokedHashes {
+		h.closeStreamsForSessionHash(rh)
+		h.clearStepUpForSessionHash(rh)
+	}
+	if request.Action == "revoke" {
+		h.store.RecordSecurityAudit(r.Context(), "remote.device.revoke", id.NodeID, request.NodeID, "revoked", "")
 	}
 	result := map[string]string{}
 	if link != "" {
@@ -421,42 +430,47 @@ func (h *HTTPHandler) remoteDevicesAPI(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, result)
 }
 func (s *Store) changeRemoteDevices(ctx context.Context, id tailnet.Identity, action, node string) (string, error) {
+	link, _, err := s.changeRemoteDevicesWithRevoked(ctx, id, action, node)
+	return link, err
+}
+func (s *Store) changeRemoteDevicesWithRevoked(ctx context.Context, id tailnet.Identity, action, node string) (string, []string, error) {
 	s.authMu.Lock()
 	defer s.authMu.Unlock()
 	owner, err := s.remoteOwner(ctx)
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
 	if !remoteDeviceAllowed(owner, id) {
-		return "", ErrUnauthorized
+		return "", nil, ErrUnauthorized
 	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
 	defer tx.Rollback()
 	phase, _, err := readPause(ctx, tx)
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
 	if phase == "paused" {
-		return "", ErrCorePaused
+		return "", nil, ErrCorePaused
 	}
 	proof := ""
+	var revokedHashes []string
 	switch action {
 	case "invite":
 		if len(owner.Devices) >= 16 {
-			return "", errors.New("Remove an unused device first")
+			return "", nil, errors.New("Remove an unused device first")
 		}
 		proof, err = randomToken()
 		if err != nil {
-			return "", err
+			return "", nil, err
 		}
 		owner.InviteHash = tokenHash(proof)
 		owner.InviteExpires = s.now().Add(ClaimLifetime).Unix()
 	case "revoke":
 		if node == "" || node == id.NodeID {
-			return "", errors.New("Use another approved device before removing this one")
+			return "", nil, errors.New("Use another approved device before removing this one")
 		}
 		found := false
 		devices := make([]tailnet.Identity, 0, len(owner.Devices))
@@ -468,26 +482,36 @@ func (s *Store) changeRemoteDevices(ctx context.Context, id tailnet.Identity, ac
 			}
 		}
 		if !found {
-			return "", errors.New("Device not found")
+			return "", nil, errors.New("Device not found")
 		}
 		owner.Devices = devices
-		if _, err = tx.ExecContext(ctx, "DELETE FROM sessions WHERE token_hash IN (SELECT token_hash FROM remote_sessions WHERE node_id=?)", node); err != nil {
-			return "", err
+		if rows, rErr := tx.QueryContext(ctx, "SELECT token_hash FROM remote_sessions WHERE node_id=?", node); rErr == nil {
+			for rows.Next() {
+				var th string
+				if rows.Scan(&th) == nil && th != "" {
+					revokedHashes = append(revokedHashes, th)
+				}
+			}
+			_ = rows.Close()
 		}
+		if _, err = tx.ExecContext(ctx, "DELETE FROM sessions WHERE token_hash IN (SELECT token_hash FROM remote_sessions WHERE node_id=?)", node); err != nil {
+			return "", nil, err
+		}
+		_, _ = tx.ExecContext(ctx, "DELETE FROM session_activity WHERE token_hash IN (SELECT token_hash FROM remote_sessions WHERE node_id=?)", node)
 		// Revoking access also invalidates any outstanding enrollment link.
 		owner.InviteHash = ""
 		owner.InviteExpires = 0
 	default:
-		return "", errors.New("Unsupported device action")
+		return "", nil, errors.New("Unsupported device action")
 	}
 	document, _ := json.Marshal(owner)
 	if _, err = tx.ExecContext(ctx, "UPDATE remote_owner SET document=? WHERE id=1", string(document)); err != nil {
-		return "", err
+		return "", nil, err
 	}
 	if err = tx.Commit(); err != nil {
-		return "", err
+		return "", nil, err
 	}
-	return proof, nil
+	return proof, revokedHashes, nil
 }
 
 func remoteClaimScope(id tailnet.Identity) string {

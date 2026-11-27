@@ -10,6 +10,7 @@ import (
 	"io"
 	"mime"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -501,6 +502,18 @@ func (s *Store) SaveModelManifest(ctx context.Context, raw []byte, source string
 	return s.ModelManifestStatus(ctx), nil
 }
 
+func sanitizePublicManifestURL(u *url.URL) string {
+	if u == nil || u.Scheme == "" || u.Host == "" {
+		return ""
+	}
+	clean := &url.URL{
+		Scheme: strings.ToLower(u.Scheme),
+		Host:   u.Host,
+		Path:   u.Path,
+	}
+	return clean.String()
+}
+
 func (s *Store) FetchAndSaveModelManifest(ctx context.Context, rawURL string) (ModelManifestStatus, error) {
 	if s == nil {
 		return ModelManifestStatus{}, errors.New("workspace store unavailable")
@@ -512,7 +525,7 @@ func (s *Store) FetchAndSaveModelManifest(ctx context.Context, rawURL string) (M
 	}
 	if s.providerFixture && s.agentV2TransportOverride == nil && s.marketDataTransport == nil && strings.HasSuffix(strings.ToLower(targetURL.Hostname()), ".invalid") {
 		fixtureRaw := []byte(`{"version":1,"updatedAt":1760000000,"models":[{"provider":"openai","id":"gpt-6.3-manifest-preview","name":"GPT 6.3 Manifest Preview","contextTokens":256000,"outputTokens":16384,"input":3000000,"cached":750000,"output":12000000,"currency":"USD","reasoning":"high","capabilities":["tools","reasoning"]}]}`)
-		return s.SaveModelManifest(ctx, fixtureRaw, sanitizePublicURL(targetURL.String()))
+		return s.SaveModelManifest(ctx, fixtureRaw, sanitizePublicManifestURL(targetURL))
 	}
 	fetchCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
@@ -560,7 +573,7 @@ func (s *Store) FetchAndSaveModelManifest(ctx context.Context, rawURL string) (M
 	if err != nil || len(raw) == 0 || len(raw) > modelManifestMaxBytes {
 		return ModelManifestStatus{}, errors.New("model manifest response exceeds 512 KiB size limit")
 	}
-	return s.SaveModelManifest(ctx, raw, sanitizePublicURL(targetURL.String()))
+	return s.SaveModelManifest(ctx, raw, sanitizePublicManifestURL(targetURL))
 }
 
 func (s *Store) ClearModelManifest(ctx context.Context) (ModelManifestStatus, error) {

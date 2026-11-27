@@ -348,17 +348,18 @@ func (s *Service) EvaluateBots(ctx context.Context) (BotEvaluateSummary, error) 
 	if err != nil {
 		return sum, err
 	}
-	if len(bots) == 0 {
-		return sum, nil
-	}
-
 	halted, ks, err := s.isKillHalted(ctx)
 	if err != nil {
 		return sum, err
 	}
-	nowSec := s.now().UTC().Unix()
 	if halted {
 		sum.Halted = true
+	}
+	if len(bots) == 0 {
+		return sum, nil
+	}
+	nowSec := s.now().UTC().Unix()
+	if halted {
 		for _, bot := range bots {
 			bot.Status = BotStatusPaused
 			bot.LastError = firstNonEmpty(ks.Reason, "Paused by global kill switch")

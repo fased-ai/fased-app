@@ -132,14 +132,18 @@ func TestTradeRouterAccountsBotsDeskUnificationAndKillSwitch(t *testing.T) {
 		t.Fatalf("expected unified desk fill in trade/state: %s", rawSt)
 	}
 
-	// 6. Global kill switch halts bots on evaluation.
+	// 6. Global kill switch immediately pauses running bots and keeps EvaluateBots halted.
 	killResp := doV2JSONRequest(t, http.MethodPost, ts.URL+"/api/v1/trade/kill", ts.URL, token, csrf, `{"active":true,"reason":"emergency stop"}`, "application/json")
 	killResp.Body.Close()
 	if killResp.StatusCode != http.StatusOK {
 		t.Fatalf("POST /api/v1/trade/kill failed: %d", killResp.StatusCode)
 	}
+	botsAfterKill, _ := tradeSvc.ListBots(t.Context())
+	if len(botsAfterKill) != 1 || botsAfterKill[0].Status != "paused" {
+		t.Fatalf("expected kill switch to immediately pause running bot, got %+v", botsAfterKill)
+	}
 	killSum, _ := tradeSvc.EvaluateBots(t.Context())
-	if !killSum.Halted || killSum.Paused != 1 {
-		t.Fatalf("expected EvaluateBots halted+paused=1 after kill, got %+v", killSum)
+	if !killSum.Halted {
+		t.Fatalf("expected EvaluateBots halted=true after kill, got %+v", killSum)
 	}
 }

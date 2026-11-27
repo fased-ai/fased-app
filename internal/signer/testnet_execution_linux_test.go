@@ -84,6 +84,11 @@ func TestServeTestnetExecutionIPC(t *testing.T) {
 	if !stResp.Status.TestnetExecution || stResp.Status.Account == nil {
 		t.Fatalf("unexpected status response: %+v", stResp.Status)
 	}
+	var bh [32]byte
+	for i := range bh {
+		bh[i] = byte(i + 7)
+	}
+	bhB58 := onchain.Base58(bh[:])
 	msgB64 := buildValidDevnetTestMessage(t, v, "fased-ipc-devnet")
 
 	// Typed hash guard rejects stray extra fields.
@@ -95,7 +100,8 @@ func TestServeTestnetExecutionIPC(t *testing.T) {
 			OperationID:       "ipc-bad-field",
 			Asset:             "SOL",
 			EstimatedMicroUSD: 500_000,
-			MessageBase64:     msgB64,
+			Blockhash:         bhB58,
+			Memo:              "fased-ipc-devnet",
 			ExpiresAt:         now + 300,
 		},
 		AgentVaultID: vaultID,
@@ -104,16 +110,36 @@ func TestServeTestnetExecutionIPC(t *testing.T) {
 		t.Fatal("expected typed request hash guard error")
 	}
 
-	signResp, err := hlSocketCall(t, cfg, false, Request{
+	// Raw messageBase64 must be rejected over IPC.
+	if _, err := hlSocketCall(t, cfg, false, Request{
 		Action: "solana-devnet-sign",
 		SolanaDevnetSign: &SolanaDevnetSignIntent{
 			Network:           "devnet",
 			GenesisHash:       onchain.SolanaDevnetGenesisHash,
-			OperationID:       "ipc-sol-1",
+			OperationID:       "ipc-raw-blocked",
 			Asset:             "SOL",
 			EstimatedMicroUSD: 500_000,
 			MessageBase64:     msgB64,
 			ExpiresAt:         now + 300,
+		},
+		AgentVaultID: vaultID,
+	}); err == nil {
+		t.Fatal("expected raw messageBase64 to be rejected over IPC")
+	}
+
+	signResp, err := hlSocketCall(t, cfg, false, Request{
+		Action: "solana-devnet-sign",
+		SolanaDevnetSign: &SolanaDevnetSignIntent{
+			Network:                  "devnet",
+			GenesisHash:              onchain.SolanaDevnetGenesisHash,
+			OperationID:              "ipc-sol-1",
+			Asset:                    "SOL",
+			EstimatedMicroUSD:        500_000,
+			Blockhash:                bhB58,
+			ComputeUnitLimit:         50_000,
+			PriorityFeeMicroLamports: 1_000,
+			Memo:                     "fased-ipc-devnet",
+			ExpiresAt:                now + 300,
 		},
 		AgentVaultID: vaultID,
 	})
@@ -124,10 +150,9 @@ func TestServeTestnetExecutionIPC(t *testing.T) {
 		t.Fatalf("unexpected signed response: %+v", signResp)
 	}
 	rawTx, _ := base64.StdEncoding.DecodeString(signResp.SolanaDevnetSigned.SignedTxBase64)
-	msgBytes, _ := base64.StdEncoding.DecodeString(msgB64)
 	priv := ed25519.NewKeyFromSeed(v.seed)
 	defer wipe(priv)
-	if !ed25519.Verify(ed25519.PublicKey(priv[ed25519.SeedSize:]), msgBytes, rawTx[1:65]) {
+	if len(rawTx) <= 65 || !ed25519.Verify(ed25519.PublicKey(priv[ed25519.SeedSize:]), rawTx[65:], rawTx[1:65]) {
 		t.Fatal("IPC signed Devnet transaction failed Ed25519 verification")
 	}
 

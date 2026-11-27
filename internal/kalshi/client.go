@@ -19,6 +19,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/fased-ai/fased-app/internal/netguard"
 	"github.com/fased-ai/fased-app/internal/signer"
 )
 
@@ -27,8 +28,6 @@ const maxResponseBytes = 1024 * 1024
 // RequestSigner signs a canonical Kalshi V2 request (timestampMs + METHOD + pathWithoutQuery)
 // inside fased-signer under AgentVaultPolicy bounds.
 type RequestSigner func(ctx context.Context, intent signer.KalshiSignIntent) (*signer.KalshiSignedRequest, error)
-
-var cgnatPrefix = netip.MustParsePrefix("100.64.0.0/10")
 
 // Client is a bounded SSRF-safe Kalshi V2 Demo API REST adapter.
 type Client struct {
@@ -39,10 +38,7 @@ type Client struct {
 }
 
 func isPublicUnicastIP(ip netip.Addr) bool {
-	ip = ip.Unmap()
-	return ip.IsValid() && ip.IsGlobalUnicast() && !ip.IsPrivate() && !ip.IsLoopback() &&
-		!ip.IsLinkLocalUnicast() && !ip.IsLinkLocalMulticast() && !ip.IsMulticast() && !ip.IsUnspecified() &&
-		!cgnatPrefix.Contains(ip)
+	return netguard.IsPublicUnicastIP(ip)
 }
 
 func interleavePublicIPs(ips []netip.Addr) ([]netip.Addr, error) {

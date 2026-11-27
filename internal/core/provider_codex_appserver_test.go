@@ -22,10 +22,9 @@ func TestCLILaunchArgsValidation(t *testing.T) {
 	}{
 		{"", nil},
 		{"   ", nil},
-		{"--search", []string{"--search"}},
 		{"--enable web_search_request", []string{"--enable", "web_search_request"}},
 		{`-c model_reasoning_effort="high"`, []string{"-c", "model_reasoning_effort=high"}},
-		{"--config=model_reasoning_effort=medium --chrome", []string{"--config=model_reasoning_effort=medium", "--chrome"}},
+		{"--config=model_reasoning_effort=medium --effort high", []string{"--config=model_reasoning_effort=medium", "--effort", "high"}},
 	}
 	for _, tc := range validCases {
 		got, err := parseSafeCLILaunchArgs(tc.raw)
@@ -47,6 +46,8 @@ func TestCLILaunchArgsValidation(t *testing.T) {
 		"--search\n--yolo",
 		"-",
 		"--",
+		"--search",
+		"--chrome",
 		"exec --search",
 		"--search extra-positional",
 		"--yolo",

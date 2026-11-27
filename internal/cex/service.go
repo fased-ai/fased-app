@@ -174,6 +174,19 @@ func (s *Service) SubmitOrder(ctx context.Context, req OrderRequest) (OrderRecei
 	}
 
 	now := s.now().UTC()
+	if req.Environment == "mainnet" && maxUSD > 0 {
+		dayStart := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC).Unix()
+		dayEnd := dayStart + 86400
+		spentUSD, spendErr := s.store.dailyMainnetSpendUSD(ctx, dayStart, dayEnd)
+		if spendErr != nil {
+			return OrderReceipt{}, spendErr
+		}
+		const maxDailyMainnetUSD = 1000.0
+		orderUSD := req.Quantity * req.Price
+		if spentUSD+orderUSD > maxDailyMainnetUSD {
+			return OrderReceipt{}, fmt.Errorf("cex mainnet daily spend cap ($%.0f) exceeded (spent=$%.2f, order=$%.2f)", maxDailyMainnetUSD, spentUSD, orderUSD)
+		}
+	}
 	tsMs := fmt.Sprintf("%d", now.UnixMilli())
 	digest, err := SignOrderDigest(req.Venue, apiKey, secret, tsMs, req)
 	if err != nil {

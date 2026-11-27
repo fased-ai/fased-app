@@ -344,6 +344,9 @@ func validateOrderRequest(req *OrderRequest, maxOrderMicroUSD uint64) error {
 		if req.OrderType != "LIMIT" || req.Price <= 0 {
 			return errors.New("mainnet-capped cex order requires LIMIT with positive price")
 		}
+		if !isUSDQuotedSymbol(req.Symbol) {
+			return errors.New("mainnet-capped cex order requires a USD/USDC/USDT-quoted symbol")
+		}
 		if req.Quantity*req.Price*1_000_000 > float64(maxOrderMicroUSD) {
 			return errors.New("cex order notional exceeds mainnet-capped limit")
 		}
@@ -353,6 +356,16 @@ func validateOrderRequest(req *OrderRequest, maxOrderMicroUSD uint64) error {
 		return errors.New("clientOrderId exceeds 64 characters")
 	}
 	return nil
+}
+
+func isUSDQuotedSymbol(sym string) bool {
+	u := strings.ToUpper(strings.TrimSpace(sym))
+	for _, suf := range []string{"-USD", "/USD", "USD", "-USDT", "/USDT", "USDT", "-USDC", "/USDC", "USDC"} {
+		if strings.HasSuffix(u, suf) && len(u) > len(suf) {
+			return true
+		}
+	}
+	return false
 }
 
 func keyFingerprint(apiKey string) string {

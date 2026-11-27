@@ -138,6 +138,8 @@ func TestP0InSignerOwnerAuthBlocksCompromisedApp(t *testing.T) {
 	pol := w.Policy
 	pol.Frozen = false
 	pol.ApprovalMode = ApprovalBoundedAuto
+	pol.AutoApproveMaxUSD = 50
+	pol.DailyLossCapUSD = 200
 	pol.Operations = []string{"solana.nativeTransfer"}
 	pol.Programs = []string{SolanaSystemProgram, SolanaComputeBudget}
 	pol.Destinations = []string{destAddr}
@@ -152,7 +154,15 @@ func TestP0InSignerOwnerAuthBlocksCompromisedApp(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ownerClient.UpdatePolicy: %v", err)
 	}
-	w, err = ownerClient.UpdateConnections(ctx, w.ID, WalletConnections{AllowTradeBots: true}, "owner-cli")
+	w, err = ownerClient.UpdateConnections(ctx, w.ID, WalletConnections{
+		AllowTradeBots: true,
+		SkillGrants: []SkillGrant{{
+			SkillID:          "bot-skill-1",
+			Actions:          []string{"solana.nativeTransfer"},
+			MaxPerTxUSD:      50,
+			ScheduledAllowed: true,
+		}},
+	}, "owner-cli")
 	if err != nil {
 		t.Fatalf("ownerClient.UpdateConnections: %v", err)
 	}
@@ -173,11 +183,12 @@ func TestP0InSignerOwnerAuthBlocksCompromisedApp(t *testing.T) {
 		t.Fatalf("expected actor=trade-bot on manual review denied without owner proof, got %v", err)
 	}
 	revBot, err := appClient.PrepareReview(ctx, PrepareReviewRequest{
-		WalletID:    w.ID,
-		Operation:   "solana.nativeTransfer",
-		Destination: destAddr,
-		AmountHuman: "0.1",
-		IsBotOrAuto: true,
+		WalletID:     w.ID,
+		Operation:    "solana.nativeTransfer",
+		Destination:  destAddr,
+		AmountHuman:  "0.1",
+		IsBotOrAuto:  true,
+		SkillGrantID: "bot-skill-1",
 	})
 	if err != nil {
 		t.Fatalf("PrepareReview(bot): %v", err)

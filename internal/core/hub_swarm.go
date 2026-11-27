@@ -439,9 +439,33 @@ func previewDraftHubInstall(ctx context.Context, s *Store, _ string, rawArgs jso
 }
 
 func executeDraftHubInstall(ctx context.Context, s *Store, _ string, rawArgs json.RawMessage) (any, error) {
-	var req hub.InstallRequest
+	var req struct {
+		ID              string `json:"id"`
+		Kind            string `json:"kind,omitempty"`
+		Name            string `json:"name,omitempty"`
+		AuthorPubKeyHex string `json:"authorPubKeyHex,omitempty"`
+		PayloadSHA256   string `json:"payloadSha256,omitempty"`
+		PayloadPreview  string `json:"payloadPreview,omitempty"`
+	}
 	if err := decodeToolArgs(rawArgs, &req); err != nil {
 		return nil, err
+	}
+	rt, err := s.ensureStage6Runtime()
+	if err != nil {
+		return nil, err
+	}
+	verifiedPkg, err := rt.hub.GetVerified(ctx, req.ID)
+	if err != nil {
+		return nil, err
+	}
+	if req.PayloadSHA256 != "" {
+		actualSum := sha256.Sum256([]byte(verifiedPkg.Payload))
+		if !strings.EqualFold(hex.EncodeToString(actualSum[:]), strings.TrimSpace(req.PayloadSHA256)) {
+			return nil, errors.New("hub package payload changed since approval preview (TOCTOU blocked)")
+		}
+	}
+	if req.AuthorPubKeyHex != "" && !strings.EqualFold(verifiedPkg.AuthorPubKeyHex, strings.TrimSpace(req.AuthorPubKeyHex)) {
+		return nil, errors.New("hub package author key changed since approval preview (TOCTOU blocked)")
 	}
 	return s.installAndDeployHubPackage(ctx, req.ID)
 }

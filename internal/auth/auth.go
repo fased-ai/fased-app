@@ -47,6 +47,29 @@ func VerifyCSRF(provided, token string) bool {
 	return ConstantTimeEqual([]byte(provided), []byte(CSRFToken(token)))
 }
 
+// CSRFTokenWithSecret derives a server-keyed HMAC-SHA256 CSRF token bound to both
+// a persistent per-instance secret and the active session token.
+func CSRFTokenWithSecret(secret []byte, token string) string {
+	if len(secret) == 0 {
+		return CSRFToken(token)
+	}
+	mac := hmac.New(sha256.New, secret)
+	_, _ = mac.Write([]byte("fased-core-csrf-v2:"))
+	_, _ = mac.Write([]byte(token))
+	return base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
+}
+
+// VerifyCSRFWithSecret validates a CSRF header using the persistent per-instance secret.
+func VerifyCSRFWithSecret(secret []byte, provided, token string) bool {
+	if token == "" || provided == "" {
+		return false
+	}
+	if len(secret) == 0 {
+		return VerifyCSRF(provided, token)
+	}
+	return ConstantTimeEqual([]byte(provided), []byte(CSRFTokenWithSecret(secret, token)))
+}
+
 // ConstantTimeEqual reports whether a and b contain identical bytes in constant time.
 func ConstantTimeEqual(a, b []byte) bool {
 	return subtle.ConstantTimeCompare(a, b) == 1
@@ -54,10 +77,14 @@ func ConstantTimeEqual(a, b []byte) bool {
 
 type rateWindow struct {
 	start    time.Time
+	lastSeen time.Time
 	attempts int
+	locked   bool
 }
 
-// RateLimiter enforces fixed-window per-key rate limits with bounded memory (1,024 active buckets).
+// RateLimiter enforces per-key rate limits with bounded memory (1,024 active buckets).
+// Expired buckets are purged first; unlocked idle buckets are evicted LRU so IP spray
+// cannot DoS ordinary traffic, while actively locked-out buckets are never evicted.
 type RateLimiter struct {
 	mu      sync.Mutex
 	buckets map[string]*rateWindow
@@ -80,20 +107,92 @@ func (l *RateLimiter) Allow(now time.Time, key string, limit int) bool {
 			}
 		}
 		if len(l.buckets) >= 1024 {
-			// Fail closed when capacity is exhausted by active non-expired buckets instead of
-			// randomly evicting active lockouts.
-			return false
+			// Evict oldest idle UNLOCKED bucket (LRU) so active lockouts can never be
+			// cleared by bucket flooding; if all 1,024 buckets are actively locked, fail closed.
+			var evictKey string
+			var oldest time.Time
+			for k, existing := range l.buckets {
+				if existing.locked {
+					continue
+				}
+				if evictKey == "" || existing.lastSeen.Before(oldest) {
+					evictKey = k
+					oldest = existing.lastSeen
+				}
+			}
+			if evictKey == "" {
+				return false
+			}
+			delete(l.buckets, evictKey)
 		}
-		w = &rateWindow{start: now}
+		w = &rateWindow{start: now, lastSeen: now}
 		l.buckets[key] = w
 	}
 	if now.Sub(w.start) >= time.Minute {
 		w.start = now
 		w.attempts = 0
+		w.locked = false
 	}
+	w.lastSeen = now
 	if w.attempts >= limit {
+		w.locked = true
 		return false
 	}
 	w.attempts++
+	if w.attempts >= limit {
+		w.locked = true
+	}
 	return true
+}
+
+// GlobalBackoff tracks instance-wide authentication failures across all source IPs
+// and enforces progressive backoff against distributed credential stuffing.
+type GlobalBackoff struct {
+	mu          sync.Mutex
+	windowStart time.Time
+	failures    int
+	blockedTill time.Time
+}
+
+// Allow reports whether an unauthenticated login/claim attempt is permitted at now.
+func (g *GlobalBackoff) Allow(now time.Time) bool {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if !g.blockedTill.IsZero() && now.Before(g.blockedTill) {
+		return false
+	}
+	if !g.windowStart.IsZero() && now.Sub(g.windowStart) >= 5*time.Minute {
+		g.failures = 0
+		g.windowStart = time.Time{}
+	}
+	return true
+}
+
+// RecordFailure increments the global failure counter and applies progressive cooldowns
+// after sustained distributed failures (30+ in 5m -> 15s, 60+ -> 60s, 100+ -> 5m).
+func (g *GlobalBackoff) RecordFailure(now time.Time) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.windowStart.IsZero() || now.Sub(g.windowStart) >= 5*time.Minute {
+		g.windowStart = now
+		g.failures = 0
+	}
+	g.failures++
+	switch {
+	case g.failures >= 100:
+		g.blockedTill = now.Add(5 * time.Minute)
+	case g.failures >= 60:
+		g.blockedTill = now.Add(60 * time.Second)
+	case g.failures >= 30:
+		g.blockedTill = now.Add(15 * time.Second)
+	}
+}
+
+// Reset clears the failure counter upon a successful owner login/claim.
+func (g *GlobalBackoff) Reset() {
+	g.mu.Lock()
+	g.failures = 0
+	g.windowStart = time.Time{}
+	g.blockedTill = time.Time{}
+	g.mu.Unlock()
 }

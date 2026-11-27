@@ -83,6 +83,7 @@ func (s *Service) refreshPolicyDay(ctx context.Context) (RiskPolicy, error) {
 	if pol.DailyLossDay != today {
 		pol.DailyLossDay = today
 		pol.DailyLossUSD = 0
+		pol.DailyNotionalUSD = 0
 		_ = s.store.savePolicy(ctx, pol)
 	}
 	return pol, nil
@@ -157,7 +158,7 @@ func (s *Service) SubmitOrder(ctx context.Context, rawReq OrderRequest) (OrderPl
 	var markPrice float64
 	if s.cfg.MarketReader != nil {
 		c, cErr := s.readCandles(ctx, req.Venue, req.Symbol, req.Interval, 64)
-		if cErr != nil && (req.EntryPrice == 0 || req.Strategy == StrategyTrailingATR) {
+		if cErr != nil && (req.EntryPrice == 0 || req.Strategy == StrategyTrailingATR || req.Strategy == StrategyMarket || req.ExecutionMode == ExecutionModeLive) {
 			return OrderPlan{}, cErr
 		}
 		if cErr == nil && len(c) > 0 {
@@ -178,10 +179,21 @@ func (s *Service) SubmitOrder(ctx context.Context, rawReq OrderRequest) (OrderPl
 	if markPrice <= 0 {
 		markPrice = refPrice
 	}
+	// Never allow a caller-supplied low entryPrice to understate live order notional relative to markPrice.
+	riskPrice := refPrice
+	if req.ExecutionMode == ExecutionModeLive && markPrice > riskPrice {
+		riskPrice = markPrice
+	}
+	if req.Strategy == StrategyMarket && isFinitePositive(markPrice) {
+		refPrice = markPrice
+	}
 
-	notional := req.Quantity * refPrice
+	notional := req.Quantity * riskPrice
 	if notional > pol.MaxOrderNotionalUSD {
 		return OrderPlan{}, fmt.Errorf("%w: order notional $%.2f exceeds max $%.2f", ErrRiskRejected, notional, pol.MaxOrderNotionalUSD)
+	}
+	if pol.MaxDailyNotionalUSD > 0 && pol.DailyNotionalUSD+notional > pol.MaxDailyNotionalUSD {
+		return OrderPlan{}, fmt.Errorf("%w: cumulative daily notional $%.2f + $%.2f exceeds max $%.2f", ErrRiskRejected, pol.DailyNotionalUSD, notional, pol.MaxDailyNotionalUSD)
 	}
 
 	if req.Strategy == StrategyBracket {
@@ -252,6 +264,8 @@ func (s *Service) SubmitOrder(ctx context.Context, rawReq OrderRequest) (OrderPl
 		if err := s.store.savePlan(ctx, plan); err != nil {
 			return OrderPlan{}, err
 		}
+		pol.DailyNotionalUSD = roundUSD(pol.DailyNotionalUSD + notional)
+		_ = s.store.savePolicy(ctx, pol)
 		return plan, nil
 	}
 
@@ -303,6 +317,8 @@ func (s *Service) SubmitOrder(ctx context.Context, rawReq OrderRequest) (OrderPl
 	if err := s.store.savePlan(ctx, plan); err != nil {
 		return OrderPlan{}, err
 	}
+	pol.DailyNotionalUSD = roundUSD(pol.DailyNotionalUSD + notional)
+	_ = s.store.savePolicy(ctx, pol)
 	return plan, nil
 }
 
@@ -607,6 +623,16 @@ func (s *Service) SetKillSwitch(ctx context.Context, active bool, reason, actor 
 				_ = s.store.savePlan(ctx, p)
 			}
 		}
+		if bots, bErr := s.store.listBots(ctx, BotStatusRunning, 200); bErr == nil {
+			for _, b := range bots {
+				if b.Status == BotStatusRunning {
+					b.Status = BotStatusPaused
+					b.LastError = cleanReason
+					b.UpdatedAt = nowSec
+					_ = s.store.saveBot(ctx, b)
+				}
+			}
+		}
 	}
 	return ks, nil
 }
@@ -627,6 +653,7 @@ func (s *Service) UpdatePolicy(ctx context.Context, in RiskPolicy) (RiskPolicy, 
 		return RiskPolicy{}, err
 	}
 	in.DailyLossUSD = cur.DailyLossUSD
+	in.DailyNotionalUSD = cur.DailyNotionalUSD
 	in.DailyLossDay = cur.DailyLossDay
 	if err := ValidateRiskPolicy(in); err != nil {
 		return RiskPolicy{}, err

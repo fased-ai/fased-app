@@ -877,36 +877,13 @@ func (v *Vault) SignKalshiRequestIPC(intent KalshiSignIntent, agentVaultID strin
 		return nil, errors.New("kalshi timestampMs outside allowed window")
 	}
 
-	dayUTC := nowTime.UTC().Format("2006-01-02")
-	asset := strings.ToUpper(strings.TrimSpace(intent.Asset))
 	var spendRec *AgentVaultSpendRecord
 	if isOrder {
-		if strings.TrimSpace(intent.Ticker) == "" || len(intent.Ticker) > 64 {
-			return nil, errors.New("kalshi order requires valid market ticker")
-		}
-		if asset == "" || len(asset) > 24 || asset != intent.Asset {
-			return nil, errors.New("invalid kalshi order asset symbol")
-		}
-		if intent.EstimatedMicroUSD == 0 {
-			return nil, errors.New("kalshi order requires non-zero estimated micro-USD risk")
-		}
-		if err := v.validateAgentVaultForVenueLocked(agentVaultID, "kalshi", asset, 0, intent.EstimatedMicroUSD, intent.ReduceOnly, nowUnix, dayUTC); err != nil {
-			return nil, err
-		}
-		spendRec = &AgentVaultSpendRecord{
-			VaultID:       agentVaultID,
-			OperationID:   intent.OperationID,
-			Venue:         "kalshi",
-			Asset:         asset,
-			DayUTC:        dayUTC,
-			SpendMicroUSD: intent.EstimatedMicroUSD,
-		}
-		if err := ValidateAgentVaultSpendRecord(*spendRec); err != nil {
-			return nil, err
-		}
-		if v.ledger.agentVaultOps[spendRec.OperationID] {
-			return nil, errors.New("duplicate agent vault operation identity")
-		}
+		// Kalshi V2 RSA-PSS only signs (timestampMs + METHOD + path), NEVER the HTTP JSON body.
+		// Detached header signing for order submission would allow a compromised app process to
+		// request a $0.01 signature and transmit an unbounded order body, bypassing AgentVaultPolicy.
+		// Fail closed until signer-owned HTTPS egress is implemented.
+		return nil, errors.New("kalshi detached order signing disabled: signer-owned HTTPS egress required")
 	} else {
 		if intent.EstimatedMicroUSD != 0 {
 			return nil, errors.New("kalshi query or cancel must have zero estimated spend")

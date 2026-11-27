@@ -8,6 +8,17 @@ import (
 	"os"
 )
 
+func openNoFollowReadOnly(path string) (*os.File, error) {
+	info, err := os.Lstat(path)
+	if err != nil {
+		return nil, err
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return nil, errors.New("symlink not allowed")
+	}
+	return os.Open(path)
+}
+
 func readPrivateRegularFile(cleanAbsPath string, maxBytes int64) ([]byte, error) {
 	info, err := os.Lstat(cleanAbsPath)
 	if err != nil {

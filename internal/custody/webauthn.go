@@ -15,11 +15,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"math/big"
 	"net"
 	"net/url"
 	"strings"
 	"time"
+
+	"filippo.io/edwards25519"
 )
 
 const (
@@ -30,7 +33,10 @@ const (
 	maxOwnerPasskeys     = 16
 	authDataFlagUP       = 0x01
 	authDataFlagUV       = 0x04
+	authDataFlagBE       = 0x08
+	authDataFlagBS       = 0x10
 	authDataFlagAT       = 0x40
+	authDataFlagED       = 0x80
 )
 
 // OwnerPasskey is the public metadata for a WebAuthn/FIDO2 passkey registered directly inside fased-signer.
@@ -124,16 +130,19 @@ func validateWebAuthnOriginAndRP(rpID, rawOrigin string) (string, string, error)
 	}
 	host := strings.ToLower(u.Hostname())
 	if u.Scheme != "https" {
-		if !(u.Scheme == "http" && (host == "localhost" || host == "127.0.0.1" || host == "::1")) {
-			return "", "", errors.New("WebAuthn origin must be HTTPS or loopback localhost")
+		if !(u.Scheme == "http" && host == "localhost") {
+			return "", "", errors.New("WebAuthn origin must be HTTPS or http://localhost (IP literals forbidden by WebAuthn §5.4.2)")
 		}
 	}
 	cleanRP := strings.ToLower(strings.TrimSpace(rpID))
 	if cleanRP == "" {
 		cleanRP = host
 	}
-	if ip := net.ParseIP(cleanRP); ip != nil && cleanRP != host {
-		return "", "", errors.New("WebAuthn rpId must match origin host")
+	if net.ParseIP(cleanRP) != nil {
+		return "", "", errors.New("WebAuthn rpId must not be an IP address literal")
+	}
+	if cleanRP != "localhost" && !strings.Contains(cleanRP, ".") {
+		return "", "", errors.New("WebAuthn rpId must be localhost or a multi-label domain")
 	}
 	if cleanRP != host && !strings.HasSuffix(host, "."+cleanRP) {
 		return "", "", errors.New("WebAuthn rpId does not match origin host")
@@ -486,59 +495,65 @@ func (s *Service) BeginPasskeyAssertion(ctx context.Context, rpID, origin, actio
 
 // FinishPasskeyAssertion verifies a WebAuthn assertion signature inside fased-signer and mints
 // a single-use, action-, wallet-, and digest-bound owner proof without any password crossing fased-app.
-func (s *Service) FinishPasskeyAssertion(ctx context.Context, req PasskeyAssertFinishRequest) (string, time.Time, string, error) {
+// It returns the signer-authoritative (proof, expiresAt, action, walletID, bindingDigest) so
+// fased-app can never substitute a weaker/broader scope on /step-up/passkey/finish.
+func (s *Service) FinishPasskeyAssertion(ctx context.Context, req PasskeyAssertFinishRequest) (string, time.Time, string, string, string, error) {
 	now := s.now().UTC()
 	if err := s.checkOwnerAuthRateLocked(now); err != nil {
-		return "", time.Time{}, "", err
+		return "", time.Time{}, "", "", "", err
 	}
 	chEntry, err := s.consumePasskeyChallenge(req.Challenge, "assert")
 	if err != nil {
 		s.recordOwnerAuthFailure(s.now().UTC())
-		return "", time.Time{}, "", err
+		return "", time.Time{}, "", "", "", err
 	}
 	credID := strings.TrimSpace(req.CredentialID)
 	if credID == "" {
-		return "", time.Time{}, "", fmt.Errorf("%w: credentialId required", ErrOwnerAuthRequired)
+		return "", time.Time{}, "", "", "", fmt.Errorf("%w: credentialId required", ErrOwnerAuthRequired)
 	}
 
 	clientDataRaw, err := decodeB64URL(req.ClientDataJSON)
 	if err != nil || len(clientDataRaw) == 0 || len(clientDataRaw) > 16*1024 {
-		return "", time.Time{}, "", errors.New("invalid clientDataJSON encoding")
+		return "", time.Time{}, "", "", "", errors.New("invalid clientDataJSON encoding")
 	}
 	var cd webAuthnClientData
 	if err := json.Unmarshal(clientDataRaw, &cd); err != nil {
-		return "", time.Time{}, "", errors.New("malformed clientDataJSON")
+		return "", time.Time{}, "", "", "", errors.New("malformed clientDataJSON")
 	}
 	if cd.Type != "webauthn.get" || cd.Challenge != strings.TrimSpace(req.Challenge) || cd.Origin != chEntry.origin || cd.CrossOrigin {
 		s.recordOwnerAuthFailure(s.now().UTC())
-		return "", time.Time{}, "", fmt.Errorf("%w: WebAuthn assertion clientData mismatch", ErrOwnerAuthRequired)
+		return "", time.Time{}, "", "", "", fmt.Errorf("%w: WebAuthn assertion clientData mismatch", ErrOwnerAuthRequired)
 	}
 
 	authData, err := decodeB64URL(req.AuthenticatorData)
 	if err != nil || len(authData) < 37 || len(authData) > 16*1024 {
-		return "", time.Time{}, "", errors.New("invalid authenticatorData")
+		return "", time.Time{}, "", "", "", errors.New("invalid authenticatorData")
 	}
 	sigBytes, err := decodeB64URL(req.Signature)
 	if err != nil || len(sigBytes) < 32 || len(sigBytes) > 512 {
-		return "", time.Time{}, "", errors.New("invalid assertion signature encoding")
+		return "", time.Time{}, "", "", "", errors.New("invalid assertion signature encoding")
 	}
 
 	rpHash := sha256.Sum256([]byte(chEntry.rpID))
 	if !bytes.Equal(authData[:32], rpHash[:]) {
 		s.recordOwnerAuthFailure(s.now().UTC())
-		return "", time.Time{}, "", fmt.Errorf("%w: authenticatorData rpIdHash mismatch", ErrOwnerAuthRequired)
+		return "", time.Time{}, "", "", "", fmt.Errorf("%w: authenticatorData rpIdHash mismatch", ErrOwnerAuthRequired)
 	}
 	flags := authData[32]
 	if flags&authDataFlagUP == 0 || flags&authDataFlagUV == 0 {
 		s.recordOwnerAuthFailure(s.now().UTC())
-		return "", time.Time{}, "", fmt.Errorf("%w: passkey user presence and verification required", ErrOwnerAuthRequired)
+		return "", time.Time{}, "", "", "", fmt.Errorf("%w: passkey user presence and verification required", ErrOwnerAuthRequired)
+	}
+	if flags&authDataFlagBS != 0 && flags&authDataFlagBE == 0 {
+		s.recordOwnerAuthFailure(s.now().UTC())
+		return "", time.Time{}, "", "", "", fmt.Errorf("%w: invalid WebAuthn L3 backup flags (BS=1 with BE=0)", ErrOwnerAuthRequired)
 	}
 	newSignCount := binary.BigEndian.Uint32(authData[33:37])
 
 	s.mu.Lock()
 	if s.closed || s.db == nil {
 		s.mu.Unlock()
-		return "", time.Time{}, "", errors.New("custody store closed")
+		return "", time.Time{}, "", "", "", errors.New("custody store closed")
 	}
 	var (
 		storedRPID string
@@ -553,27 +568,27 @@ SELECT label, rp_id, alg, pub_key_json, sign_count FROM owner_passkeys WHERE cre
 	if errors.Is(err, sql.ErrNoRows) {
 		s.mu.Unlock()
 		s.recordOwnerAuthFailure(s.now().UTC())
-		return "", time.Time{}, "", fmt.Errorf("%w: unknown passkey credential", ErrOwnerAuthRequired)
+		return "", time.Time{}, "", "", "", fmt.Errorf("%w: unknown passkey credential", ErrOwnerAuthRequired)
 	}
 	if err != nil {
 		s.mu.Unlock()
-		return "", time.Time{}, "", err
+		return "", time.Time{}, "", "", "", err
 	}
 	if storedRPID != chEntry.rpID {
 		s.mu.Unlock()
 		s.recordOwnerAuthFailure(s.now().UTC())
-		return "", time.Time{}, "", fmt.Errorf("%w: passkey rpId mismatch", ErrOwnerAuthRequired)
+		return "", time.Time{}, "", "", "", fmt.Errorf("%w: passkey rpId mismatch", ErrOwnerAuthRequired)
 	}
 	// Clone detection: when either stored or presented signCount is non-zero, count must strictly increase.
 	if (prevCount > 0 || newSignCount > 0) && newSignCount <= prevCount {
 		s.mu.Unlock()
 		s.recordOwnerAuthFailure(s.now().UTC())
-		return "", time.Time{}, "", fmt.Errorf("%w: passkey signCount did not advance (possible cloned authenticator)", ErrOwnerAuthRequired)
+		return "", time.Time{}, "", "", "", fmt.Errorf("%w: passkey signCount did not advance (possible cloned authenticator)", ErrOwnerAuthRequired)
 	}
 	var pub storedPasskeyPubKey
 	if err := json.Unmarshal([]byte(pubJSON), &pub); err != nil {
 		s.mu.Unlock()
-		return "", time.Time{}, "", errors.New("corrupted stored passkey public key")
+		return "", time.Time{}, "", "", "", errors.New("corrupted stored passkey public key")
 	}
 	clientDataHash := sha256.Sum256(clientDataRaw)
 	signedPayload := make([]byte, 0, len(authData)+len(clientDataHash))
@@ -583,13 +598,13 @@ SELECT label, rp_id, alg, pub_key_json, sign_count FROM owner_passkeys WHERE cre
 	if !verifyWebAuthnSignature(alg, pub, signedPayload, sigBytes) {
 		s.mu.Unlock()
 		s.recordOwnerAuthFailure(s.now().UTC())
-		return "", time.Time{}, "", fmt.Errorf("%w: invalid passkey signature", ErrOwnerAuthRequired)
+		return "", time.Time{}, "", "", "", fmt.Errorf("%w: invalid passkey signature", ErrOwnerAuthRequired)
 	}
 
 	nowUnix := s.now().UTC().Unix()
 	if _, err := s.db.ExecContext(ctx, `UPDATE owner_passkeys SET sign_count = ?, last_used_at = ? WHERE credential_id = ?`, newSignCount, nowUnix, credID); err != nil {
 		s.mu.Unlock()
-		return "", time.Time{}, "", err
+		return "", time.Time{}, "", "", "", err
 	}
 	bindNote := ""
 	if chEntry.bindingDigest != "" {
@@ -601,9 +616,9 @@ SELECT label, rp_id, alg, pub_key_json, sign_count FROM owner_passkeys WHERE cre
 	s.resetOwnerAuthFailures()
 	proof, exp, err := s.mintOwnerProof(chEntry.action, chEntry.walletID, chEntry.bindingDigest)
 	if err != nil {
-		return "", time.Time{}, "", err
+		return "", time.Time{}, "", "", "", err
 	}
-	return proof, exp, chEntry.bindingDigest, nil
+	return proof, exp, chEntry.action, chEntry.walletID, chEntry.bindingDigest, nil
 }
 
 func verifyWebAuthnSignature(alg int, pub storedPasskeyPubKey, signedData, sig []byte) bool {
@@ -758,8 +773,14 @@ func (r *cborReader) readValue(depth int) (any, error) {
 	}
 	switch major {
 	case 0: // unsigned int
+		if val > math.MaxInt64 {
+			return nil, errors.New("CBOR unsigned int overflows int64")
+		}
 		return int64(val), nil
 	case 1: // negative int (-1 - val)
+		if val > math.MaxInt64 {
+			return nil, errors.New("CBOR negative int overflows int64")
+		}
 		return -1 - int64(val), nil
 	case 2: // byte string
 		if val > 65536 {
@@ -810,7 +831,12 @@ func (r *cborReader) readValue(depth int) (any, error) {
 			}
 			switch k.(type) {
 			case int64, string:
+				if _, dup := m[k]; dup {
+					return nil, errors.New("duplicate CBOR map key")
+				}
 				m[k] = v
+			default:
+				return nil, errors.New("unsupported CBOR map key type")
 			}
 		}
 		return m, nil
@@ -826,6 +852,9 @@ func extractAuthDataFromAttestationObject(raw []byte) ([]byte, error) {
 	v, err := rd.readValue(0)
 	if err != nil {
 		return nil, err
+	}
+	if rd.pos != len(raw) {
+		return nil, errors.New("trailing bytes in attestationObject")
 	}
 	m, ok := v.(map[any]any)
 	if !ok {
@@ -843,6 +872,9 @@ func parseCOSEPublicKey(raw []byte) (int, storedPasskeyPubKey, error) {
 	v, err := rd.readValue(0)
 	if err != nil {
 		return 0, storedPasskeyPubKey{}, fmt.Errorf("decode COSE key: %w", err)
+	}
+	if rd.pos != len(raw) {
+		return 0, storedPasskeyPubKey{}, errors.New("trailing bytes in COSE public key")
 	}
 	m, ok := v.(map[any]any)
 	if !ok {
@@ -871,9 +903,16 @@ func parseCOSEPublicKey(raw []byte) (int, storedPasskeyPubKey, error) {
 			Y:   base64.RawURLEncoding.EncodeToString(yBytes),
 		}, nil
 	case kty == 1 && alg == coseAlgEdDSA && crv == 6:
-		// OKP Ed25519
+		// OKP Ed25519: verify canonical curve encoding AND reject low-order/identity torsion points.
 		if len(xBytes) != ed25519.PublicKeySize {
 			return 0, storedPasskeyPubKey{}, errors.New("invalid Ed25519 COSE key length")
+		}
+		pt, pErr := (&edwards25519.Point{}).SetBytes(xBytes)
+		if pErr != nil {
+			return 0, storedPasskeyPubKey{}, errors.New("invalid Ed25519 COSE curve point")
+		}
+		if (&edwards25519.Point{}).MultByCofactor(pt).Equal(edwards25519.NewIdentityPoint()) == 1 {
+			return 0, storedPasskeyPubKey{}, errors.New("Ed25519 COSE key is a forbidden low-order or identity point")
 		}
 		return coseAlgEdDSA, storedPasskeyPubKey{
 			Crv: "Ed25519",

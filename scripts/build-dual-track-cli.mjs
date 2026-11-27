@@ -98,8 +98,10 @@ function inspectFile(filePath) {
 
 function createUnixZipFromStage(outDir, folderName, zipPath) {
   const py = [
-    "import os, stat, sys, zipfile",
+    "import os, stat, sys, time, zipfile",
     "root_dir, folder, dest = sys.argv[1], sys.argv[2], sys.argv[3]",
+    "epoch = int(os.environ.get('SOURCE_DATE_EPOCH', '1704067200'))",
+    "dt = time.gmtime(max(epoch, 315532800))[:6]",
     "base = os.path.join(root_dir, folder)",
     "with zipfile.ZipFile(dest, 'w', compression=zipfile.ZIP_DEFLATED) as zf:",
     "  for dirpath, dirnames, filenames in os.walk(base):",
@@ -109,7 +111,7 @@ function createUnixZipFromStage(outDir, folderName, zipPath) {
     "      full = os.path.join(dirpath, fn)",
     "      rel = os.path.relpath(full, root_dir)",
     "      st = os.stat(full)",
-    "      zi = zipfile.ZipInfo.from_file(full, rel)",
+    "      zi = zipfile.ZipInfo(rel, date_time=dt)",
     "      zi.create_system = 3",
     "      mode = 0o755 if (st.st_mode & 0o111) else 0o644",
     "      zi.external_attr = ((stat.S_IFREG | mode) << 16)",
@@ -143,7 +145,7 @@ export function main() {
   rmSync(outDir, { recursive: true, force: true });
   mkdirSync(outDir, { recursive: true, mode: 0o755 });
 
-  const ldflags = `-X github.com/fased-ai/fased-app/internal/core.Version=${version}`;
+  const ldflags = `-s -w -X github.com/fased-ai/fased-app/internal/core.Version=${version}`;
   const assets = {};
   const windowsTargets = [];
   const unixCliTargets = [];
@@ -160,6 +162,7 @@ export function main() {
       "go",
       [
         "build",
+        "-buildvcs=false",
         "-trimpath",
         "-ldflags",
         ldflags,
@@ -179,6 +182,7 @@ export function main() {
         "go",
         [
           "build",
+          "-buildvcs=false",
           "-trimpath",
           "-ldflags",
           ldflags,

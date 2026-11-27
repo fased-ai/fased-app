@@ -438,7 +438,7 @@ func TestCookieModeOmitsSessionTokenAndRejectsBearer(t *testing.T) {
 		t.Fatalf("cookie response leaked sessionToken or wrong mode: %v", payload)
 	}
 	cookies := w.Result().Cookies()
-	if len(cookies) != 1 || cookies[0].Name != sessionCookie {
+	if len(cookies) != 1 || cookies[0].Name != hostSessionCookie {
 		t.Fatalf("missing session cookie: %+v", cookies)
 	}
 	cookieVal := cookies[0].Value

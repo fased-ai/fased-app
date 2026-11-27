@@ -32,6 +32,8 @@ type AgentThread struct {
 	SourceKind       string `json:"sourceKind,omitempty"`
 	SourceRef        string `json:"sourceRef,omitempty"`
 	Archived         bool   `json:"archived"`
+	TaintedAt        int64  `json:"taintedAt,omitempty"`
+	TaintReason      string `json:"taintReason,omitempty"`
 	CreatedAt        int64  `json:"createdAt"`
 	UpdatedAt        int64  `json:"updatedAt"`
 	MessageCount     int    `json:"messageCount,omitempty"`
@@ -89,6 +91,7 @@ type AgentApproval struct {
 	Summary      string `json:"summary"`
 	PayloadJSON  string `json:"payloadJson"`
 	Status       string `json:"status"`
+	Tainted      bool   `json:"tainted,omitempty"`
 	DecisionNote string `json:"decisionNote,omitempty"`
 	CreatedAt    int64  `json:"createdAt"`
 	DecidedAt    int64  `json:"decidedAt,omitempty"`
@@ -355,10 +358,86 @@ PRAGMA user_version=3;
 			return nil, err
 		}
 	}
+	if _, err := db.ExecContext(ctx, `
+CREATE TABLE IF NOT EXISTS thread_taint(
+	thread_id TEXT PRIMARY KEY REFERENCES threads(id) ON DELETE CASCADE,
+	tainted_at INTEGER NOT NULL,
+	taint_reason TEXT NOT NULL DEFAULT ''
+);
+CREATE TABLE IF NOT EXISTS approval_taint(
+	approval_id TEXT PRIMARY KEY REFERENCES approvals(id) ON DELETE CASCADE,
+	tainted INTEGER NOT NULL DEFAULT 1
+);
+`); err != nil {
+		return nil, fmt.Errorf("init agent taint tables: %w", err)
+	}
 	v2 := &agentV2Store{db: db}
 	s.agentV2 = v2
 	cleanup = false
 	return v2, nil
+}
+
+// MarkThreadTainted persistently records that untrusted external content entered threadID.
+func (s *Store) MarkThreadTainted(ctx context.Context, threadID, reason string) {
+	v2, err := s.ensureAgentV2(ctx)
+	if err != nil || strings.TrimSpace(threadID) == "" {
+		return
+	}
+	cleanReason := strings.TrimSpace(reason)
+	if len(cleanReason) > 160 {
+		cleanReason = cleanReason[:160]
+	}
+	_, _ = v2.db.ExecContext(ctx, `
+INSERT INTO thread_taint(thread_id, tainted_at, taint_reason)
+VALUES(?, ?, ?)
+ON CONFLICT(thread_id) DO UPDATE SET
+	tainted_at = CASE WHEN thread_taint.tainted_at > 0 THEN thread_taint.tainted_at ELSE excluded.tainted_at END,
+	taint_reason = CASE WHEN thread_taint.taint_reason != '' THEN thread_taint.taint_reason ELSE excluded.taint_reason END
+`, threadID, s.now().UTC().Unix(), cleanReason)
+}
+
+// GetThreadTaint returns persisted taint timestamp and reason for threadID.
+func (s *Store) GetThreadTaint(ctx context.Context, threadID string) (int64, string) {
+	v2, err := s.ensureAgentV2(ctx)
+	if err != nil || strings.TrimSpace(threadID) == "" {
+		return 0, ""
+	}
+	var ts int64
+	var reason string
+	if err := v2.db.QueryRowContext(ctx, `SELECT tainted_at, taint_reason FROM thread_taint WHERE thread_id = ?`, threadID).Scan(&ts, &reason); err != nil {
+		return 0, ""
+	}
+	return ts, reason
+}
+
+// MarkApprovalTainted records that an approval was proposed in a tainted context.
+func (s *Store) MarkApprovalTainted(ctx context.Context, approvalID string) {
+	v2, err := s.ensureAgentV2(ctx)
+	if err != nil || strings.TrimSpace(approvalID) == "" {
+		return
+	}
+	_, _ = v2.db.ExecContext(ctx, `INSERT OR REPLACE INTO approval_taint(approval_id, tainted) VALUES(?, 1)`, approvalID)
+}
+
+// IsApprovalTainted reports whether approvalID or its parent thread is tainted.
+func (s *Store) IsApprovalTainted(ctx context.Context, approvalID string) bool {
+	v2, err := s.ensureAgentV2(ctx)
+	if err != nil || strings.TrimSpace(approvalID) == "" {
+		return false
+	}
+	var tainted int
+	if err := v2.db.QueryRowContext(ctx, `SELECT tainted FROM approval_taint WHERE approval_id = ?`, approvalID).Scan(&tainted); err == nil && tainted == 1 {
+		return true
+	}
+	var threadTainted int64
+	if err := v2.db.QueryRowContext(ctx, `
+SELECT COALESCE(tt.tainted_at, 0)
+FROM approvals a
+LEFT JOIN thread_taint tt ON tt.thread_id = a.thread_id
+WHERE a.id = ?`, approvalID).Scan(&threadTainted); err == nil && threadTainted > 0 {
+		return true
+	}
+	return false
 }
 
 func sanitizeV2Title(title, fallback string) string {

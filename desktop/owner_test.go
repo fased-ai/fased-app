@@ -8,6 +8,8 @@ import (
 	"github.com/wailsapp/wails/v2"
 	wailsruntime "github.com/wailsapp/wails/v2/pkg/runtime"
 	"io/fs"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -25,8 +27,18 @@ func TestOwnerWindowAssetsAndBindingsAreIsolated(t *testing.T) {
 		t.Fatal(err)
 	}
 	opts := ownerOptions(owner, assets)
-	if len(opts.Bind) != 1 || opts.Bind[0] != owner || opts.AssetServer.Handler != nil || opts.AssetServer.Middleware != nil {
+	if len(opts.Bind) != 1 || opts.Bind[0] != owner || opts.AssetServer.Handler != nil {
 		t.Fatal("owner window inherited a core transport")
+	}
+	if opts.AssetServer.Middleware == nil {
+		t.Fatal("owner window missing security header middleware")
+	}
+	rec := httptest.NewRecorder()
+	opts.AssetServer.Middleware(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/index.html", nil))
+	if rec.Header().Get("X-Frame-Options") != "DENY" || rec.Header().Get("X-Content-Type-Options") != "nosniff" {
+		t.Fatalf("owner window missing security headers: %v", rec.Header())
 	}
 	script, err := fs.ReadFile(assets, "owner.js")
 	if err != nil {

@@ -145,6 +145,8 @@ func TestLighterIPCSigningAndAgentVaultCustody(t *testing.T) {
 				ClientOrderIndex:  1001,
 				BaseAmount:        200,
 				Price:             225000,
+				SizeDecimals:      5,
+				PriceDecimals:     2,
 				IsAsk:             0,
 				OrderType:         0,
 				TimeInForce:       1,
@@ -228,6 +230,31 @@ func TestLighterIPCSigningAndAgentVaultCustody(t *testing.T) {
 			if _, err := v.SignLighterOrderIPC(LighterOrderIntent{
 				Network:           "testnet",
 				ChainID:           LighterTestnetChainID,
+				OperationID:       "l-underreported-notional",
+				Asset:             "ETH",
+				EstimatedMicroUSD: 1, // spoofed $0.000001 for huge order
+				Leverage:          2,
+				AccountIndex:      42,
+				ApiKeyIndex:       1,
+				MarketIndex:       0,
+				ClientOrderIndex:  1099,
+				BaseAmount:        10_000_000,
+				Price:             999_999,
+				SizeDecimals:      4,
+				PriceDecimals:     2,
+				OrderType:         0,
+				TimeInForce:       1,
+				OrderExpiry:       (now + 3600) * 1000,
+				Nonce:             11,
+				ExpiredAt:         (now + 300) * 1000,
+				IntentExpiresAt:   now + 300,
+			}, vaultID); err == nil {
+				t.Fatal("expected signer-derived notional cap rejection when caller spoofs EstimatedMicroUSD=1")
+			}
+
+			if _, err := v.SignLighterOrderIPC(LighterOrderIntent{
+				Network:           "testnet",
+				ChainID:           LighterTestnetChainID,
 				OperationID:       "l-over-daily-reopen",
 				Asset:             "ETH",
 				EstimatedMicroUSD: 4_000_000,
@@ -238,6 +265,8 @@ func TestLighterIPCSigningAndAgentVaultCustody(t *testing.T) {
 				ClientOrderIndex:  1002,
 				BaseAmount:        200,
 				Price:             200000,
+				SizeDecimals:      5,
+				PriceDecimals:     2,
 				OrderType:         0,
 				TimeInForce:       1,
 				OrderExpiry:       (now + 3600) * 1000,

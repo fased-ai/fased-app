@@ -2,16 +2,15 @@ package core
 
 import (
 	"context"
-	"crypto/tls"
 	"errors"
 	"io"
-	"net"
 	"net/http"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/fased-ai/fased-app/internal/localprovider"
+	"github.com/fased-ai/fased-app/internal/netguard"
 )
 
 // This transport implements the official origin only. Production activation is
@@ -24,22 +23,14 @@ type openAITransport struct {
 }
 
 func newOpenAITransport() *openAITransport {
-	return &openAITransport{enabled: providerActivationEnabled, wire: &http.Transport{
-		Proxy:             nil,
-		DialContext:       (&net.Dialer{Timeout: 10 * time.Second}).DialContext,
-		ForceAttemptHTTP2: true,
-		TLSClientConfig: &tls.Config{
-			MinVersion:       tls.VersionTLS12,
-			CurvePreferences: []tls.CurveID{tls.X25519, tls.CurveP256, tls.CurveP384},
-		},
+	return &openAITransport{enabled: providerActivationEnabled, wire: netguard.NewSafeTransport(netguard.Options{
+		DialTimeout:            10 * time.Second,
 		TLSHandshakeTimeout:    10 * time.Second,
 		ResponseHeaderTimeout:  120 * time.Second,
 		MaxResponseHeaderBytes: 32768,
-		DisableKeepAlives:      false,
 		MaxIdleConns:           8,
 		IdleConnTimeout:        30 * time.Second,
-		DisableCompression:     false,
-	}}
+	})}
 }
 
 var defaultNativeProviderTransports sync.Map

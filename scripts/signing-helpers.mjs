@@ -90,9 +90,9 @@ export function resolveWindowsSigningConfig(env = process.env) {
     env.WINDOWS_SIGN_TIMESTAMP_URL || DEFAULT_WINDOWS_TIMESTAMP_URL,
   ).trim();
 
-  if (!/^https?:\/\/\S+$/.test(timestampUrl)) {
+  if (!/^https:\/\/\S+$/.test(timestampUrl)) {
     throw new Error(
-      `Invalid WINDOWS_SIGN_TIMESTAMP_URL: must be an http:// or https:// URL without whitespace.`,
+      `Invalid WINDOWS_SIGN_TIMESTAMP_URL: must be an https:// URL without whitespace.`,
     );
   }
 

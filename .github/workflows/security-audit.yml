@@ -23,14 +23,16 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "24"
           cache: npm
       - run: npm ci
       - run: npm run build
-      - uses: actions/setup-go@v7
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version: "1.26.x"
           cache-dependency-path: |
@@ -42,44 +44,21 @@ jobs:
           go -C desktop vet ./...
       - name: Go vulnerability audit (govulncheck)
         run: |
-          go install golang.org/x/vuln/cmd/govulncheck@latest
+          go install golang.org/x/vuln/cmd/govulncheck@v1.1.4
           # Enforce zero reachable vulnerabilities across all shipping binaries & desktop module.
           govulncheck ./cmd/fased-app ./cmd/fased-signer ./cmd/fased-install ./cmd/fased-package ./cmd/fased-release-candidate
           (cd desktop && govulncheck ./...)
-      - name: Bounded Go fuzzing across all fuzz targets
+      - name: Bounded Go fuzzing across all discovered fuzz targets
         env:
           FASED_FAST_TEST_KDF: "1"
           FUZZ_TIME: ${{ inputs.fuzz_time || '5s' }}
         run: |
           set -euo pipefail
-          for target in \
-            "./internal/core:FuzzUniqueAIJSON" \
-            "./internal/core:FuzzPartialAIAnswerAndReadAIStream" \
-            "./internal/core:FuzzProviderSignInCallbacks" \
-            "./internal/core:FuzzValidateOIDCIDToken" \
-            "./internal/core:FuzzVaultCiphertextBoundAndFormats" \
-            "./internal/core:FuzzPublicRPCDestinationAndTargetOrdering" \
-            "./internal/signer:FuzzHyperliquidDecimalAndAddress" \
-            "./internal/update:FuzzStrictJSONBounded" \
-            "./internal/update:FuzzParseDesktopManifest" \
-            "./internal/wenpm1:FuzzDecodeFrames" \
-            "./internal/marketdata:FuzzMarketDataParsersAndTransforms" \
-            "./internal/decision:FuzzJevEvaluateParser" \
-            "./internal/mcpclient:FuzzMCPClientJSONRPC" \
-            "./internal/worldintel:FuzzWorldIntelParsers" \
-            "./internal/automation:FuzzAutomationInputs" \
-            "./internal/telegram:FuzzTelegramUpdateParser" \
-            "./internal/fasedscript:FuzzFasedScriptCompileAndEval" \
-            "./internal/quantlab:FuzzQuantLabInputs" \
-            "./internal/desk:FuzzDeskInputs" \
-            "./internal/cex:FuzzCEXOrderAndPermissionParsers" \
-            "./internal/equities:FuzzEquitiesAndOCCParsers" \
-            "./internal/hub:FuzzHubManifestAndSignature" \
-            "./internal/swarm:FuzzSwarmEnvelopeAndA2A"; do
-            pkg="${target%%:*}"
-            fn="${target##*:}"
-            echo "=== Fuzzing ${pkg} :: ${fn} (${FUZZ_TIME}) ==="
-            go test -run='^$' -fuzz="^${fn}\$" -fuzztime="${FUZZ_TIME}" "${pkg}"
+          for pkg in $(go list ./internal/...); do
+            for fn in $(go test -list '^Fuzz' "$pkg" 2>/dev/null | grep '^Fuzz' || true); do
+              echo "=== Fuzzing ${pkg} :: ${fn} (${FUZZ_TIME}) ==="
+              go test -run='^$' -fuzz="^${fn}\$" -fuzztime="${FUZZ_TIME}" "${pkg}"
+            done
           done
       - name: Production npm dependency audit
         run: npm audit --omit=dev --audit-level=high

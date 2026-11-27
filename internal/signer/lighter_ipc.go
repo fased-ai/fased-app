@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"math/big"
 	"slices"
 	"strings"
 )
@@ -49,6 +50,8 @@ type LighterOrderIntent struct {
 	ClientOrderIndex  int64  `json:"clientOrderIndex"`
 	BaseAmount        int64  `json:"baseAmount"`
 	Price             uint32 `json:"price"`
+	SizeDecimals      uint8  `json:"sizeDecimals,omitempty"`
+	PriceDecimals     uint8  `json:"priceDecimals,omitempty"`
 	IsAsk             uint8  `json:"isAsk"`
 	OrderType         uint8  `json:"orderType"`
 	TimeInForce       uint8  `json:"timeInForce"`
@@ -178,6 +181,40 @@ func (v *Vault) LighterStatus() (*LighterStatus, error) {
 	return st, nil
 }
 
+// lighterOrderNotionalMicroUSD derives the authoritative order notional in micro-USD
+// directly from the signed BaseAmount and Price using bounded market decimals so a
+// compromised app caller cannot under-report EstimatedMicroUSD.
+func lighterOrderNotionalMicroUSD(intent LighterOrderIntent) (uint64, error) {
+	sizeDec := intent.SizeDecimals
+	priceDec := intent.PriceDecimals
+	if sizeDec == 0 && priceDec == 0 {
+		// Pinned defaults for known Lighter testnet markets when caller omits decimals.
+		switch intent.MarketIndex {
+		case 0: // ETH
+			sizeDec, priceDec = 4, 2
+		case 1: // BTC
+			sizeDec, priceDec = 5, 1
+		case 2: // SOL
+			sizeDec, priceDec = 2, 3
+		default:
+			sizeDec, priceDec = 4, 2
+		}
+	}
+	if sizeDec > 6 || priceDec > 6 || int(sizeDec)+int(priceDec) > 8 {
+		return 0, errors.New("lighter market decimals out of safe bounds")
+	}
+	// ceil(BaseAmount * Price * 1_000_000 / 10^(sizeDec + priceDec))
+	denom := new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(sizeDec+priceDec)), nil)
+	num := new(big.Int).Mul(big.NewInt(intent.BaseAmount), new(big.Int).SetUint64(uint64(intent.Price)))
+	num.Mul(num, big.NewInt(1_000_000))
+	num.Add(num, new(big.Int).Sub(denom, big.NewInt(1)))
+	micro := new(big.Int).Quo(num, denom)
+	if !micro.IsUint64() || micro.Sign() <= 0 {
+		return 0, errors.New("lighter derived notional micro-USD out of bounds")
+	}
+	return micro.Uint64(), nil
+}
+
 // SignLighterOrderIPC validates a Lighter Testnet L2CreateOrder intent against AgentVaultPolicy,
 // signs the Poseidon2 digest using domain-separated ECgFp5 Schnorr, and journals spend.
 func (v *Vault) SignLighterOrderIPC(intent LighterOrderIntent, agentVaultID string) (*LighterSignedTx, error) {
@@ -192,9 +229,6 @@ func (v *Vault) SignLighterOrderIPC(intent LighterOrderIntent, agentVaultID stri
 	}
 	if intent.Asset == "" || len(intent.Asset) > 24 || strings.ToUpper(strings.TrimSpace(intent.Asset)) != intent.Asset {
 		return nil, errors.New("invalid lighter order asset symbol")
-	}
-	if intent.EstimatedMicroUSD == 0 {
-		return nil, errors.New("lighter order requires non-zero estimated micro-USD risk")
 	}
 	if intent.AccountIndex < 0 || intent.AccountIndex > lighterMaxAccountIndex {
 		return nil, errors.New("lighter accountIndex out of range")
@@ -211,6 +245,14 @@ func (v *Vault) SignLighterOrderIPC(intent LighterOrderIntent, agentVaultID stri
 	if intent.BaseAmount <= 0 || intent.BaseAmount > (1<<48)-1 || intent.Price == 0 {
 		return nil, errors.New("lighter baseAmount and price must be positive")
 	}
+	derivedMicroUSD, err := lighterOrderNotionalMicroUSD(intent)
+	if err != nil {
+		return nil, err
+	}
+	effectiveMicroUSD := derivedMicroUSD
+	if intent.EstimatedMicroUSD > effectiveMicroUSD {
+		effectiveMicroUSD = intent.EstimatedMicroUSD
+	}
 	if intent.IsAsk > 1 || intent.ReduceOnly > 1 || intent.OrderType > 6 || intent.TimeInForce > 2 {
 		return nil, errors.New("invalid lighter order flags or type")
 	}
@@ -224,7 +266,7 @@ func (v *Vault) SignLighterOrderIPC(intent LighterOrderIntent, agentVaultID stri
 		return nil, errors.New("lighter GTT/PostOnly orders require future orderExpiry")
 	}
 
-	if err := v.validateAgentVaultForVenueLocked(agentVaultID, "lighter", intent.Asset, intent.Leverage, intent.EstimatedMicroUSD, intent.ReduceOnly == 1, nowUnix, dayUTC); err != nil {
+	if err := v.validateAgentVaultForVenueLocked(agentVaultID, "lighter", intent.Asset, intent.Leverage, effectiveMicroUSD, intent.ReduceOnly == 1, nowUnix, dayUTC); err != nil {
 		return nil, err
 	}
 	spendRec := AgentVaultSpendRecord{
@@ -233,7 +275,7 @@ func (v *Vault) SignLighterOrderIPC(intent LighterOrderIntent, agentVaultID stri
 		Venue:         "lighter",
 		Asset:         intent.Asset,
 		DayUTC:        dayUTC,
-		SpendMicroUSD: intent.EstimatedMicroUSD,
+		SpendMicroUSD: effectiveMicroUSD,
 	}
 	if err := ValidateAgentVaultSpendRecord(spendRec); err != nil {
 		return nil, err
@@ -321,7 +363,7 @@ func (v *Vault) SignLighterOrderIPC(intent LighterOrderIntent, agentVaultID stri
 		TxInfoJSON:        string(txInfoBytes),
 		Nonce:             intent.Nonce,
 		OperationID:       intent.OperationID,
-		EstimatedMicroUSD: intent.EstimatedMicroUSD,
+		EstimatedMicroUSD: effectiveMicroUSD,
 	}, nil
 }
 

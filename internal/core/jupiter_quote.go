@@ -443,6 +443,12 @@ func (s *Store) quoteJupiterSwap(ctx context.Context, walletID string, req Jupit
 	}
 
 	if req.PrepareReview {
+		if s.isGlobalKillActive(ctx) {
+			return res, errGlobalKillSwitchActive
+		}
+		if err := s.checkMainnetCustodyAllowed(ctx, svc, w.ID); err != nil {
+			return res, err
+		}
 		rev, rErr := svc.PrepareReview(ctx, custody.PrepareReviewRequest{
 			WalletID:     w.ID,
 			Operation:    "jupiter.swap",
@@ -452,6 +458,7 @@ func (s *Store) quoteJupiterSwap(ctx context.Context, walletID string, req Jupit
 			SlippageBps:  slippage,
 			AmountRaw:    amountRaw,
 			AmountHuman:  amountHuman,
+			MinOutputRaw: minOutRaw,
 			JupiterQuote: quoteObj,
 		})
 		if rErr != nil {

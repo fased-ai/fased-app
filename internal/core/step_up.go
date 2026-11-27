@@ -63,7 +63,13 @@ func (h *HTTPHandler) clearStepUpForSession(sessionToken string) {
 	if h == nil || sessionToken == "" {
 		return
 	}
-	sessHash := tokenHash(sessionToken)
+	h.clearStepUpForSessionHash(tokenHash(sessionToken))
+}
+
+func (h *HTTPHandler) clearStepUpForSessionHash(sessHash string) {
+	if h == nil || sessHash == "" {
+		return
+	}
 	h.stepUpMu.Lock()
 	defer h.stepUpMu.Unlock()
 	for k, v := range h.stepUpTokens {
@@ -71,6 +77,15 @@ func (h *HTTPHandler) clearStepUpForSession(sessionToken string) {
 			delete(h.stepUpTokens, k)
 		}
 	}
+}
+
+func (h *HTTPHandler) clearAllStepUp() {
+	if h == nil {
+		return
+	}
+	h.stepUpMu.Lock()
+	clear(h.stepUpTokens)
+	h.stepUpMu.Unlock()
 }
 
 func (h *HTTPHandler) issueStepUpToken(sessionToken, action, walletID, signerProof string) (string, time.Time, error) {
@@ -113,6 +128,39 @@ func (h *HTTPHandler) requireStepUpCtx(w http.ResponseWriter, r *http.Request, s
 	return h.requireStepUpCtxBound(w, r, sessionToken, action, walletID, "")
 }
 
+func (h *HTTPHandler) ownerAuthConfigured(ctx context.Context) (bool, error) {
+	hasPW, err := h.store.hasPassword(ctx)
+	if err != nil {
+		return false, err
+	}
+	if hasPW {
+		return true, nil
+	}
+	if cs, cErr := h.store.custodyBackend(); cErr == nil && cs != nil {
+		if pks, pErr := cs.ListOwnerPasskeys(ctx); pErr == nil && len(pks) > 0 {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// requireStepUpIfOwnerAuthConfigured enforces owner step-up whenever an owner password
+// or passkey is configured (or always when forceRequire is true).
+func (h *HTTPHandler) requireStepUpIfOwnerAuthConfigured(w http.ResponseWriter, r *http.Request, sessionToken, action, walletID string, forceRequire bool) (context.Context, bool) {
+	if forceRequire {
+		return h.requireStepUpCtx(w, r, sessionToken, action, walletID)
+	}
+	configured, err := h.ownerAuthConfigured(r.Context())
+	if err != nil {
+		writeError(w, 500, "auth state unavailable")
+		return nil, false
+	}
+	if !configured {
+		return r.Context(), true
+	}
+	return h.requireStepUpCtx(w, r, sessionToken, action, walletID)
+}
+
 // requireStepUpCtxBound validates and atomically consumes a single-use step-up token,
 // verifying cryptographic digest binding (txDigest or nextPolicyHash) whenever present.
 func (h *HTTPHandler) requireStepUpCtxBound(w http.ResponseWriter, r *http.Request, sessionToken, action, walletID, expectedBindingDigest string) (context.Context, bool) {
@@ -151,7 +199,14 @@ func (h *HTTPHandler) requireStepUpCtxBound(w http.ResponseWriter, r *http.Reque
 	}
 	presented := strings.TrimSpace(r.Header.Get("X-Fased-Step-Up"))
 	if presented == "" {
-		writeAuthCodeError(w, 403, "Owner confirmation required", "step_up_required")
+		resp := map[string]string{
+			"error": "Owner confirmation required",
+			"code":  "step_up_required",
+		}
+		if wantDigest != "" {
+			resp["bindingDigest"] = wantDigest
+		}
+		writeJSON(w, 403, resp)
 		return nil, false
 	}
 	now := time.Now()
@@ -163,16 +218,30 @@ func (h *HTTPHandler) requireStepUpCtxBound(w http.ResponseWriter, r *http.Reque
 	h.stepUpMu.Lock()
 	h.pruneStepUpLocked(now)
 	entry, ok := h.stepUpTokens[key]
-	digestOK := entry.bindingDigest == "" || subtle.ConstantTimeCompare([]byte(entry.bindingDigest), []byte(wantDigest)) == 1
+	digestOK := true
+	if wantDigest != "" {
+		digestOK = entry.bindingDigest != "" && subtle.ConstantTimeCompare([]byte(entry.bindingDigest), []byte(wantDigest)) == 1
+	} else if entry.bindingDigest != "" {
+		digestOK = false
+	}
+	walletScoped := act == "execute" || act == "policy" || act == "unfreeze" || act == "connections" || act == "rpc" || act == "backup" || act == "delete" || act == "bot"
+	walletOK := entry.walletID == wid || (!walletScoped && entry.walletID == "*")
 	valid := ok && subtle.ConstantTimeCompare([]byte(entry.sessionHash), []byte(sessHash)) == 1 && now.Before(entry.expiresAt) &&
-		entry.action == act && (entry.walletID == wid || entry.walletID == "*") && digestOK
+		entry.action == act && walletOK && digestOK
 	if valid {
 		// Single-use: consume immediately upon matching scope.
 		delete(h.stepUpTokens, key)
 	}
 	h.stepUpMu.Unlock()
 	if !valid {
-		writeAuthCodeError(w, 403, "Step-up confirmation expired, already used, or invalid for this action; confirm again", "step_up_required")
+		resp := map[string]string{
+			"error": "Step-up confirmation expired, already used, or invalid for this action; confirm again",
+			"code":  "step_up_required",
+		}
+		if wantDigest != "" {
+			resp["bindingDigest"] = wantDigest
+		}
+		writeJSON(w, 403, resp)
 		return nil, false
 	}
 	ctx := r.Context()
@@ -252,9 +321,10 @@ func (h *HTTPHandler) stepUpAPI(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		Password string `json:"password"`
-		Action   string `json:"action"`
-		WalletID string `json:"walletId"`
+		Password      string `json:"password"`
+		Action        string `json:"action"`
+		WalletID      string `json:"walletId"`
+		BindingDigest string `json:"bindingDigest"`
 	}
 	if !httpapi.DecodeStrictJSON(w, r, 4*1024, &req) {
 		return
@@ -264,6 +334,12 @@ func (h *HTTPHandler) stepUpAPI(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, "step-up action scope required")
 		return
 	}
+	walletScoped := act == "execute" || act == "policy" || act == "unfreeze" || act == "connections" || act == "rpc" || act == "backup" || act == "delete" || act == "bot"
+	if walletScoped && wid == "*" {
+		writeError(w, 400, "explicit walletId required for "+act+" step-up")
+		return
+	}
+	cleanBinding := strings.ToLower(strings.TrimSpace(req.BindingDigest))
 	select {
 	case h.authSlots <- struct{}{}:
 		defer func() { <-h.authSlots }()
@@ -277,7 +353,7 @@ func (h *HTTPHandler) stepUpAPI(w http.ResponseWriter, r *http.Request) {
 	}
 	var signerProof string
 	if cs, cErr := h.store.custodyBackend(); cErr == nil && cs != nil {
-		proof, _, aErr := cs.AuthorizeOwnerAction(r.Context(), req.Password, act, wid)
+		proof, _, aErr := cs.AuthorizeOwnerActionBound(r.Context(), req.Password, act, wid, cleanBinding)
 		if aErr != nil {
 			if errors.Is(aErr, custody.ErrWrongPassword) {
 				writeAuthCodeError(w, 403, "incorrect signer owner password", "wrong_password")
@@ -294,16 +370,17 @@ func (h *HTTPHandler) stepUpAPI(w http.ResponseWriter, r *http.Request) {
 			signerProof = proof
 		}
 	}
-	stepTok, exp, err := h.issueStepUpToken(token, act, wid, signerProof)
+	stepTok, exp, err := h.issueStepUpTokenBound(token, act, wid, cleanBinding, signerProof)
 	if err != nil {
 		writeError(w, 500, "failed to issue step-up confirmation")
 		return
 	}
 	writeJSON(w, 200, map[string]any{
-		"stepUpToken": stepTok,
-		"action":      act,
-		"walletId":    wid,
-		"expiresAt":   exp.UTC().Unix(),
+		"stepUpToken":   stepTok,
+		"action":        act,
+		"walletId":      wid,
+		"bindingDigest": cleanBinding,
+		"expiresAt":     exp.UTC().Unix(),
 	})
 }
 
@@ -381,8 +458,17 @@ func (h *HTTPHandler) passkeysAPI(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		callCtx := r.Context()
-		hasPW, _ := h.store.hasPassword(r.Context())
-		if hasPW {
+		hasPW, pwErr := h.store.hasPassword(r.Context())
+		if pwErr != nil {
+			writeError(w, 500, "auth state unavailable")
+			return
+		}
+		existingPKs, pkErr := cs.ListOwnerPasskeys(r.Context())
+		if pkErr != nil {
+			writeCustodyError(w, pkErr)
+			return
+		}
+		if hasPW || len(existingPKs) > 0 {
 			var stepOK bool
 			callCtx, stepOK = h.requireStepUpCtx(w, r, token, "passkey-register", "*")
 			if !stepOK {
@@ -413,8 +499,17 @@ func (h *HTTPHandler) passkeysAPI(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		callCtx := r.Context()
-		hasPW, _ := h.store.hasPassword(r.Context())
-		if hasPW {
+		hasPW, pwErr := h.store.hasPassword(r.Context())
+		if pwErr != nil {
+			writeError(w, 500, "auth state unavailable")
+			return
+		}
+		existingPKs, pkErr := cs.ListOwnerPasskeys(r.Context())
+		if pkErr != nil {
+			writeCustodyError(w, pkErr)
+			return
+		}
+		if hasPW || len(existingPKs) > 0 {
 			var stepOK bool
 			callCtx, stepOK = h.requireStepUpCtx(w, r, token, "passkey-register", "*")
 			if !stepOK {
@@ -433,7 +528,7 @@ func (h *HTTPHandler) passkeysAPI(w http.ResponseWriter, r *http.Request) {
 			writeError(w, 405, "method not allowed")
 			return
 		}
-		if !h.mutation(w, r) || !h.csrf(w, r, token) {
+		if !h.v2Mutation(w, r, token, false) {
 			return
 		}
 		authCtx, stepOK := h.requireStepUpCtx(w, r, token, "passkey-delete", "*")
@@ -521,12 +616,7 @@ func (h *HTTPHandler) stepUpPasskeyAPI(w http.ResponseWriter, r *http.Request) {
 		if !httpapi.DecodeStrictJSON(w, r, 32*1024, &req) {
 			return
 		}
-		act, wid := normalizeStepUpScope(req.Action, req.WalletID)
-		if act == "" {
-			writeError(w, 400, "step-up action scope required")
-			return
-		}
-		proof, _, bindingDigest, err := cs.FinishPasskeyAssertion(r.Context(), custody.PasskeyAssertFinishRequest{
+		proof, _, signerAct, signerWID, bindingDigest, err := cs.FinishPasskeyAssertion(r.Context(), custody.PasskeyAssertFinishRequest{
 			Challenge:         req.Challenge,
 			CredentialID:      req.CredentialID,
 			ClientDataJSON:    req.ClientDataJSON,
@@ -537,15 +627,26 @@ func (h *HTTPHandler) stepUpPasskeyAPI(w http.ResponseWriter, r *http.Request) {
 			writeCustodyError(w, err)
 			return
 		}
-		stepTok, exp, err := h.issueStepUpTokenBound(token, act, wid, bindingDigest, proof)
+		// Never trust caller-supplied action/walletId on /finish; enforce exact match against
+		// the signer-verified challenge scope so passkey assertions cannot be scope-escalated.
+		reqAct, reqWID := normalizeStepUpScope(req.Action, req.WalletID)
+		if reqAct != "" && reqAct != signerAct {
+			writeError(w, 403, "passkey assertion action scope mismatch")
+			return
+		}
+		if req.WalletID != "" && reqWID != signerWID {
+			writeError(w, 403, "passkey assertion wallet scope mismatch")
+			return
+		}
+		stepTok, exp, err := h.issueStepUpTokenBound(token, signerAct, signerWID, bindingDigest, proof)
 		if err != nil {
 			writeError(w, 500, "failed to issue step-up confirmation")
 			return
 		}
 		writeJSON(w, 200, map[string]any{
 			"stepUpToken":   stepTok,
-			"action":        act,
-			"walletId":      wid,
+			"action":        signerAct,
+			"walletId":      signerWID,
 			"bindingDigest": bindingDigest,
 			"method":        "passkey",
 			"expiresAt":     exp.UTC().Unix(),

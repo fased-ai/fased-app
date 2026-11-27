@@ -325,7 +325,23 @@ function isSafeSvgAttrValue(prop: string, rawVal: string): boolean {
   if (prop === "textAnchor") {
     return /^(?:start|middle|end)$/i.test(val);
   }
-  return /^-?\d+(?:\.\d+)?(?:%|px|em|rem)?$/.test(val);
+  const m = /^(-?\d+(?:\.\d+)?)(%|px|em|rem)?$/.exec(val);
+  if (!m) return false;
+  const num = Number(m[1]);
+  if (!Number.isFinite(num)) return false;
+  if (prop === "width" || prop === "height") {
+    return num >= 0 && num <= 1200;
+  }
+  if (prop === "fontSize") {
+    return num > 0 && num <= 48;
+  }
+  if (prop === "strokeWidth") {
+    return num >= 0 && num <= 24;
+  }
+  if (prop === "opacity") {
+    return num >= 0 && num <= 1;
+  }
+  return Math.abs(num) <= 10000;
 }
 
 function parseRawAttributes(rawAttrs: string): Record<string, string> {
@@ -353,6 +369,11 @@ function sanitizeElementAttrs(
       attrs.href = href;
       attrs.target = "_blank";
       attrs.rel = "noopener noreferrer";
+      try {
+        attrs.title = new URL(href).hostname;
+      } catch {
+        /* ignore */
+      }
       return { tag: "a", attrs };
     }
     return { tag: "span", attrs: {} };

@@ -3,10 +3,12 @@ package custody
 import (
 	"context"
 	"encoding/base64"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"net/netip"
 	"net/url"
@@ -98,6 +100,21 @@ func WitnessOriginForCluster(cluster string) string {
 	}
 }
 
+func sanitizeRPCError(err error, rpcURL string) error {
+	if err == nil {
+		return nil
+	}
+	var ue *url.Error
+	if errors.As(err, &ue) {
+		host := "rpc"
+		if u, pErr := url.Parse(rpcURL); pErr == nil && u.Host != "" {
+			host = u.Scheme + "://" + u.Host
+		}
+		return fmt.Errorf("%s %s: %v", ue.Op, host, ue.Err)
+	}
+	return err
+}
+
 func rpcJSONCall(ctx context.Context, transport http.RoundTripper, rpcURL, method string, params any, resultOut any) (int64, error) {
 	if transport == nil {
 		transport = NewSafeTransport(isLoopbackURL(rpcURL))
@@ -120,13 +137,13 @@ func rpcJSONCall(ctx context.Context, transport http.RoundTripper, rpcURL, metho
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, rpcURL, strings.NewReader(string(payload)))
 	if err != nil {
-		return 0, err
+		return 0, sanitizeRPCError(err, rpcURL)
 	}
 	req.Header.Set("Content-Type", "application/json")
 	start := time.Now()
 	resp, err := client.Do(req)
 	if err != nil {
-		return 0, err
+		return 0, sanitizeRPCError(err, rpcURL)
 	}
 	defer resp.Body.Close()
 	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 256*1024))
@@ -236,7 +253,12 @@ func VerifyAndPinRPC(ctx context.Context, transport http.RoundTripper, primaryUR
 			var pSlot, wSlot uint64
 			_, pErr := rpcJSONCall(wCtx, transport, canonPrimary, "getSlot", []any{}, &pSlot)
 			_, wSlotErr := rpcJSONCall(wCtx, transport, witnessTarget, "getSlot", []any{}, &wSlot)
-			if pErr == nil && wSlotErr == nil {
+			if pErr != nil || wSlotErr != nil {
+				if witnessExplicit {
+					return WalletRPCStatus{}, "", "", errors.New("witness slot freshness check failed")
+				}
+				witnessStatus = "slot-unverified"
+			} else {
 				diff := pSlot - wSlot
 				if wSlot > pSlot {
 					diff = wSlot - pSlot
@@ -244,8 +266,8 @@ func VerifyAndPinRPC(ctx context.Context, transport http.RoundTripper, primaryUR
 				if diff > maxWitnessSlotSkew {
 					return WalletRPCStatus{}, "", "", fmt.Errorf("primary RPC slot (%d) diverged from witness slot (%d) by %d slots", pSlot, wSlot, diff)
 				}
+				witnessStatus = "verified"
 			}
-			witnessStatus = "verified"
 		}
 	} else if fixtureMode && witnessOrigin != "" && primaryHost != witnessOrigin {
 		witnessStatus = "verified"
@@ -344,8 +366,9 @@ func verifyAddressLookupTablesRPC(ctx context.Context, transport http.RoundTripp
 		}
 		var out struct {
 			Value *struct {
-				Owner string   `json:"owner"`
-				Data  []string `json:"data"`
+				Owner      string   `json:"owner"`
+				Executable bool     `json:"executable"`
+				Data       []string `json:"data"`
 			} `json:"value"`
 		}
 		if _, err := rpcJSONCall(ctx, transport, rpcURL, "getAccountInfo", []any{
@@ -354,12 +377,16 @@ func verifyAddressLookupTablesRPC(ctx context.Context, transport http.RoundTripp
 		}, &out); err != nil {
 			return fmt.Errorf("verify ALT %s failed: %w", tbl.AccountKey, err)
 		}
-		if out.Value == nil || out.Value.Owner != solanaALTProgramID || len(out.Value.Data) == 0 {
-			return fmt.Errorf("ALT %s is missing or not owned by AddressLookupTable program", tbl.AccountKey)
+		if out.Value == nil || out.Value.Owner != solanaALTProgramID || out.Value.Executable || len(out.Value.Data) < 1 || (len(out.Value.Data) >= 2 && out.Value.Data[1] != "base64") {
+			return fmt.Errorf("ALT %s is missing, executable, or not owned by AddressLookupTable program", tbl.AccountKey)
 		}
 		raw, err := base64.StdEncoding.DecodeString(out.Value.Data[0])
 		if err != nil || len(raw) < solanaALTHeaderBytes || (len(raw)-solanaALTHeaderBytes)%32 != 0 {
 			return fmt.Errorf("ALT %s has invalid on-chain data layout", tbl.AccountKey)
+		}
+		// Verify Solana AddressLookupTableState header: type == 1 (LookupTable) and active (deactivation_slot == u64::MAX).
+		if binary.LittleEndian.Uint32(raw[0:4]) != 1 || binary.LittleEndian.Uint64(raw[4:12]) != math.MaxUint64 {
+			return fmt.Errorf("ALT %s is uninitialized or deactivating", tbl.AccountKey)
 		}
 		onchainCount := (len(raw) - solanaALTHeaderBytes) / 32
 		if len(tbl.Addresses) > onchainCount {

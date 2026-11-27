@@ -20,6 +20,10 @@ import (
 )
 
 func stage4Req(h http.Handler, method, baseURL, path, body, token, origin, csrf string) *httptest.ResponseRecorder {
+	return stage4ReqWithStepUp(h, method, baseURL, path, body, token, origin, csrf, "")
+}
+
+func stage4ReqWithStepUp(h http.Handler, method, baseURL, path, body, token, origin, csrf, stepUp string) *httptest.ResponseRecorder {
 	r := httptest.NewRequest(method, baseURL+path, strings.NewReader(body))
 	if body != "" {
 		r.Header.Set("Content-Type", "application/json")
@@ -33,9 +37,21 @@ func stage4Req(h http.Handler, method, baseURL, path, body, token, origin, csrf 
 	if csrf != "" {
 		r.Header.Set("X-CSRF-Token", csrf)
 	}
+	if stepUp != "" {
+		r.Header.Set("X-Fased-Step-Up", stepUp)
+	}
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, r)
 	return w
+}
+
+func stage4StepUpToken(t *testing.T, h *HTTPHandler, token, action, walletID string) string {
+	t.Helper()
+	tok, _, err := h.issueStepUpToken(token, action, walletID, "")
+	if err != nil {
+		t.Fatalf("issueStepUpToken(%s/%s): %v", action, walletID, err)
+	}
+	return tok
 }
 
 func stage4TestSignerRelay(v *signer.Vault) func(context.Context, signer.Request) (signer.Response, error) {
@@ -401,8 +417,14 @@ func TestStage4TestnetActivationDevnetRehearsalAndTools(t *testing.T) {
 		t.Fatal("WEN mining must stay held under Stage 4 testnet activation")
 	}
 
-	// Simulate-only rehearsal succeeds.
-	simResp := stage4Req(h, "POST", srv.URL, "/api/v1/execution/solana-devnet/rehearse", `{"memo":"sim-check","estimatedMicroUsd":1000,"simulateOnly":true}`, token, srv.URL, csrfToken(token))
+	// Missing step-up on claimed owner instance fails closed with 403 step_up_required.
+	noStepResp := stage4Req(h, "POST", srv.URL, "/api/v1/execution/solana-devnet/rehearse", `{"memo":"sim-check","estimatedMicroUsd":1000,"simulateOnly":true}`, token, srv.URL, csrfToken(token))
+	if noStepResp.Code != 403 || !strings.Contains(noStepResp.Body.String(), "step_up_required") {
+		t.Fatalf("expected 403 step_up_required without step-up, got (%d): %s", noStepResp.Code, noStepResp.Body.String())
+	}
+
+	// Simulate-only rehearsal succeeds with step-up.
+	simResp := stage4ReqWithStepUp(h, "POST", srv.URL, "/api/v1/execution/solana-devnet/rehearse", `{"memo":"sim-check","estimatedMicroUsd":1000,"simulateOnly":true}`, token, srv.URL, csrfToken(token), stage4StepUpToken(t, h, token, "execute", "solana-devnet"))
 	if simResp.Code != 200 || strings.Contains(simResp.Body.String(), secretKey) {
 		t.Fatalf("simulate rehearse failed (%d): %s", simResp.Code, simResp.Body.String())
 	}
@@ -411,8 +433,8 @@ func TestStage4TestnetActivationDevnetRehearsalAndTools(t *testing.T) {
 		t.Fatalf("unexpected simulate result: %+v err=%v", simRes, err)
 	}
 
-	// Live mock SendWithRebroadcast rehearsal succeeds.
-	liveResp := stage4Req(h, "POST", srv.URL, "/api/v1/execution/solana-devnet/rehearse", `{"memo":"live-mock","estimatedMicroUsd":2000}`, token, srv.URL, csrfToken(token))
+	// Live mock SendWithRebroadcast rehearsal succeeds with fresh single-use step-up.
+	liveResp := stage4ReqWithStepUp(h, "POST", srv.URL, "/api/v1/execution/solana-devnet/rehearse", `{"memo":"live-mock","estimatedMicroUsd":2000}`, token, srv.URL, csrfToken(token), stage4StepUpToken(t, h, token, "execute", "solana-devnet"))
 	if liveResp.Code != 200 || strings.Contains(liveResp.Body.String(), secretKey) {
 		t.Fatalf("live rehearse failed (%d): %s", liveResp.Code, liveResp.Body.String())
 	}

@@ -93,7 +93,7 @@ func linuxDefinition(p Paths, o Options, bubblewrap bool) ([]byte, error) {
 		// before the OS helper can enter its distribution-supplied profile.
 		protection = ""
 	}
-	unit := "[Unit]\nDescription=Fased App private core\nAfter=network.target\n\n[Service]\nType=simple\nExecStart=" + strings.Join(args, " ") + "\nRestart=on-failure\nRestartSec=3\nTimeoutStopSec=15\nUMask=0077\nNoNewPrivileges=yes\n" + protection + "RestrictSUIDSGID=yes\nLockPersonality=yes\n\n[Install]\nWantedBy=default.target\n"
+	unit := "[Unit]\nDescription=Fased App private core\nAfter=network.target\n\n[Service]\nType=simple\nExecStart=" + strings.Join(args, " ") + "\nRestart=on-failure\nRestartSec=3\nTimeoutStopSec=15\nUMask=0077\nLimitCORE=0\nNoNewPrivileges=yes\n" + protection + "RestrictSUIDSGID=yes\nLockPersonality=yes\n\n[Install]\nWantedBy=default.target\n"
 	return []byte(unit), nil
 }
 func systemctl(ctx context.Context, args ...string) (string, error) {

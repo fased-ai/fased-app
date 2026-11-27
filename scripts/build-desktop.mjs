@@ -25,6 +25,10 @@ if (process.platform === "darwin")
   ]
     .filter(Boolean)
     .join(" ");
+if (process.platform === "linux")
+  environment.CGO_LDFLAGS = [process.env.CGO_LDFLAGS, "-Wl,-z,relro,-z,now"]
+    .filter(Boolean)
+    .join(" ");
 await writeFile(
   ".evidence/desktop-build.json",
   JSON.stringify(
@@ -44,15 +48,14 @@ execFileSync(
     "-C",
     "desktop",
     "build",
+    "-buildvcs=false",
     "-trimpath",
     "-tags",
     tags,
-    ...(version
-      ? [
-          "-ldflags",
-          `-X github.com/fased-ai/fased-app/internal/core.Version=${version}`,
-        ]
-      : []),
+    "-ldflags",
+    version
+      ? `-s -w -X github.com/fased-ai/fased-app/internal/core.Version=${version}`
+      : "-s -w",
     "-o",
     output,
     ".",

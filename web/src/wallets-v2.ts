@@ -227,8 +227,11 @@ export async function requestStepUpToken(
   password: string,
   action: string,
   walletId = "*",
+  bindingDigest = "",
 ): Promise<{ stepUpToken: string; expiresAt: number }> {
-  return core.request("auth/step-up", "POST", { password, action, walletId });
+  const payload: Record<string, string> = { password, action, walletId };
+  if (bindingDigest) payload.bindingDigest = bindingDigest;
+  return core.request("auth/step-up", "POST", payload);
 }
 
 function b64urlToBytes(b64url: string): Uint8Array {
@@ -248,12 +251,25 @@ function bytesToB64url(buf: ArrayBuffer | Uint8Array): string {
 }
 
 export function isWebAuthnAvailable(): boolean {
-  return (
-    typeof window !== "undefined" &&
-    typeof window.PublicKeyCredential !== "undefined" &&
-    typeof navigator !== "undefined" &&
-    typeof navigator.credentials !== "undefined"
-  );
+  if (
+    typeof window === "undefined" ||
+    typeof window.PublicKeyCredential === "undefined" ||
+    typeof navigator === "undefined" ||
+    typeof navigator.credentials === "undefined"
+  ) {
+    return false;
+  }
+  const loc = window.location;
+  if (!loc) return false;
+  if (loc.protocol === "wails:") return false;
+  const host = (loc.hostname || "").toLowerCase();
+  if (!host) return false;
+  if (host === "wails" || host === "wails.localhost") return false;
+  // WebAuthn RP IDs cannot be IP literals (IPv4 or bracketed IPv6).
+  if (/^\d{1,3}(?:\.\d{1,3}){3}$/.test(host) || host.includes(":")) {
+    return false;
+  }
+  return loc.protocol === "https:" || host === "localhost";
 }
 
 export async function listOwnerPasskeys(

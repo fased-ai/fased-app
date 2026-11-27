@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/fased-ai/fased-app/internal/custody"
 	"github.com/fased-ai/fased-app/internal/httpapi"
+	"github.com/fased-ai/fased-app/internal/signer"
 )
 
 // ConfigureCustodySocket sets the external isolated signer Unix domain socket so core
@@ -24,6 +26,47 @@ func (s *Store) ConfigureCustodySocket(sockPath string) {
 	s.custodyMu.Lock()
 	defer s.custodyMu.Unlock()
 	s.custodySocketPath = strings.TrimSpace(sockPath)
+}
+
+// ConfigureLiveCustody enables explicit mainnet native custody signing & broadcast
+// when --allow-live-custody or --execution-profile=mainnet-capped is configured.
+func (s *Store) ConfigureLiveCustody(enabled bool) {
+	if s == nil {
+		return
+	}
+	s.custodyMu.Lock()
+	defer s.custodyMu.Unlock()
+	s.allowLiveCustody = enabled
+}
+
+func (s *Store) liveCustodyEnabled() bool {
+	if s == nil {
+		return false
+	}
+	s.custodyMu.Lock()
+	enabled := s.allowLiveCustody
+	s.custodyMu.Unlock()
+	if enabled {
+		return true
+	}
+	if rt := s.stage4Runtime(); rt != nil && rt.profile == signer.ExecutionProfileMainnetCapped {
+		return true
+	}
+	return false
+}
+
+func (s *Store) checkMainnetCustodyAllowed(ctx context.Context, svc custody.Backend, walletID string) error {
+	if s == nil || s.providerFixture || s.liveCustodyEnabled() {
+		return nil
+	}
+	w, err := svc.GetWallet(ctx, walletID)
+	if err != nil {
+		return nil
+	}
+	if w.Custody == custody.CustodyNativeSigner && w.RPC.Cluster == "mainnet-beta" {
+		return fmt.Errorf("%w: mainnet native custody signing is locked while --execution-profile=off (start with --allow-live-custody or --execution-profile=mainnet-capped)", custody.ErrPolicyDenied)
+	}
+	return nil
 }
 
 func (s *Store) custodyBackend() (custody.Backend, error) {
@@ -194,6 +237,10 @@ func (h *HTTPHandler) walletsV2API(w http.ResponseWriter, r *http.Request, token
 		if !h.v2Mutation(w, r, token, true) {
 			return
 		}
+		authCtx, ok := h.requireStepUpIfOwnerAuthConfigured(w, r, token, "wallet-create", "*", false)
+		if !ok {
+			return
+		}
 		var in struct {
 			Name   string `json:"name"`
 			Role   string `json:"role"`
@@ -202,7 +249,7 @@ func (h *HTTPHandler) walletsV2API(w http.ResponseWriter, r *http.Request, token
 		if !httpapi.DecodeStrictJSON(w, r, 16*1024, &in) {
 			return
 		}
-		rec, err := svc.CreateNativeWallet(ctx, in.Name, in.Role, in.RPCURL)
+		rec, err := svc.CreateNativeWallet(authCtx, in.Name, in.Role, in.RPCURL)
 		if err != nil {
 			writeCustodyError(w, err)
 			return
@@ -471,7 +518,15 @@ func (h *HTTPHandler) walletsV2API(w http.ResponseWriter, r *http.Request, token
 		if !h.v2Mutation(w, r, token, false) {
 			return
 		}
+		if h.store.isGlobalKillActive(ctx) {
+			writeError(w, 403, errGlobalKillSwitchActive.Error())
+			return
+		}
 		id := strings.TrimSuffix(rel, "/reviews")
+		if err := h.store.checkMainnetCustodyAllowed(ctx, svc, id); err != nil {
+			writeCustodyError(w, err)
+			return
+		}
 		var in custody.PrepareReviewRequest
 		if !httpapi.DecodeStrictJSON(w, r, 16*1024, &in) {
 			return
@@ -495,21 +550,25 @@ func (h *HTTPHandler) walletsV2API(w http.ResponseWriter, r *http.Request, token
 			return
 		}
 		walletID, reviewID, action := parts[0], parts[2], parts[3]
+		if h.store.isGlobalKillActive(ctx) {
+			writeError(w, 403, errGlobalKillSwitchActive.Error())
+			return
+		}
 		switch action {
 		case "execute":
 			if !h.v2Mutation(w, r, token, true) {
 				return
 			}
-			expectedDigest := ""
-			if revs, _, _, aErr := svc.ListActivity(ctx, walletID); aErr == nil {
-				for _, rv := range revs {
-					if rv.ID == reviewID {
-						expectedDigest = rv.TxDigest
-						break
-					}
-				}
+			if err := h.store.checkMainnetCustodyAllowed(ctx, svc, walletID); err != nil {
+				writeCustodyError(w, err)
+				return
 			}
-			authCtx, ok := h.requireStepUpCtxBound(w, r, token, "execute", walletID, expectedDigest)
+			rev, rErr := svc.GetReview(ctx, walletID, reviewID)
+			if rErr != nil {
+				writeCustodyError(w, rErr)
+				return
+			}
+			authCtx, ok := h.requireStepUpCtxBound(w, r, token, "execute", walletID, rev.TxDigest)
 			if !ok {
 				return
 			}

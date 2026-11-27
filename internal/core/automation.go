@@ -205,7 +205,7 @@ func (s *Store) dispatchAutomationAgentPrompt(ctx context.Context, tr automation
 	_, _ = s.AppendMessage(ctx, AgentV2Message{
 		ThreadID: targetID,
 		Role:     "user",
-		Content:  prompt,
+		Content:  framedPrompt,
 		Status:   "completed",
 	})
 	_, _ = s.AppendMessage(ctx, AgentV2Message{
@@ -299,11 +299,13 @@ func (h *coreTelegramHooks) ListPendingApprovals(ctx context.Context) ([]telegra
 	}
 	out := make([]telegram.PendingApprovalBrief, 0, len(items))
 	for _, ap := range items {
+		apTainted := h.store.IsApprovalTainted(ctx, ap.ID)
 		out = append(out, telegram.PendingApprovalBrief{
-			ID:       ap.ID,
-			ToolName: ap.ToolName,
-			Title:    ap.Title,
-			Summary:  ap.Summary,
+			ID:           ap.ID,
+			ToolName:     ap.ToolName,
+			Title:        ap.Title,
+			Summary:      ap.Summary,
+			AllowButtons: allowTelegramButtonsForApproval(ap.ToolName, ap.PayloadJSON, apTainted),
 		})
 	}
 	if ds := h.store.loadedOrExistingDeskService(); ds != nil {
@@ -333,6 +335,12 @@ func (h *coreTelegramHooks) ResolveApproval(ctx context.Context, id, decisionArg
 	if err == nil {
 		if ap.ToolName == "request_secret" {
 			return "", errors.New("request_secret approvals cannot be submitted over Telegram; enter secrets only in local Fased UI")
+		}
+		if decisionArg == "approve" {
+			apTainted := h.store.IsApprovalTainted(ctx, id)
+			if !allowTelegramButtonsForApproval(ap.ToolName, ap.PayloadJSON, apTainted) {
+				return "", errors.New("high-risk or tainted approvals cannot be approved over Telegram; review and confirm inside Fased UI")
+			}
 		}
 		res, rErr := h.store.ResolveAgentV2Approval(ctx, id, decisionArg, note, false, nil)
 		if rErr != nil {
@@ -415,15 +423,13 @@ func (h *coreTelegramHooks) PositionsSummary(ctx context.Context) (string, error
 }
 
 func (h *coreTelegramHooks) SetAutomationState(ctx context.Context, action, reason, actor string) (automation.ControlState, error) {
+	act := strings.ToLower(strings.TrimSpace(action))
+	if act == automation.StateActionUnkill {
+		return automation.ControlState{}, errors.New("clearing global emergency kill switch requires owner step-up in the local UI")
+	}
 	st, err := h.autoSvc.SetState(ctx, action, reason, actor)
-	if err == nil {
-		act := strings.ToLower(strings.TrimSpace(action))
-		if act == automation.StateActionKill {
-			h.store.syncDeskKill(ctx, reason, actor)
-			h.store.syncTradeKill(ctx, true, reason, actor)
-		} else if act == automation.StateActionUnkill {
-			h.store.syncTradeKill(ctx, false, reason, actor)
-		}
+	if err == nil && act == automation.StateActionKill {
+		_, _ = h.store.syncGlobalKill(ctx, true, reason, actor)
 	}
 	return st, err
 }
@@ -470,17 +476,26 @@ func (h *HTTPHandler) automationAPI(w http.ResponseWriter, r *http.Request, toke
 			if !httpapi.DecodeStrictJSON(w, r, 64*1024, &in) {
 				return
 			}
-			st, err := autoSvc.SetState(ctx, in.Action, in.Reason, "owner")
+			act := strings.ToLower(strings.TrimSpace(in.Action))
+			autoCtx := ctx
+			if act == automation.StateActionUnkill {
+				if hasPW, _ := h.store.hasPassword(ctx); hasPW {
+					var ok bool
+					autoCtx, ok = h.requireStepUpCtx(w, r, token, "unfreeze", "global")
+					if !ok {
+						return
+					}
+				}
+			}
+			st, err := autoSvc.SetState(autoCtx, in.Action, in.Reason, "owner")
 			if err != nil {
 				writeError(w, 400, err.Error())
 				return
 			}
-			act := strings.ToLower(strings.TrimSpace(in.Action))
 			if act == automation.StateActionKill {
-				h.store.syncDeskKill(ctx, in.Reason, "owner")
-				h.store.syncTradeKill(ctx, true, in.Reason, "owner")
+				_, _ = h.store.syncGlobalKill(autoCtx, true, in.Reason, "owner")
 			} else if act == automation.StateActionUnkill {
-				h.store.syncTradeKill(ctx, false, in.Reason, "owner")
+				_, _ = h.store.syncGlobalKill(autoCtx, false, in.Reason, "owner")
 			}
 			writeJSON(w, 200, st)
 		default:

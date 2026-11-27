@@ -152,13 +152,17 @@ func TestWalletsV2HardenedCustodyPoliciesRPCHardwareAndRecovery(t *testing.T) {
 		t.Fatalf("expected hasPassword=true after configuring owner password")
 	}
 
-	getScopedStepUp := func(action, walletID string) string {
+	getScopedStepUpBound := func(action, walletID, bindingDigest string) string {
 		t.Helper()
-		body, _ := json.Marshal(map[string]string{
+		payload := map[string]string{
 			"password": ownerPass,
 			"action":   action,
 			"walletId": walletID,
-		})
+		}
+		if bindingDigest != "" {
+			payload["bindingDigest"] = bindingDigest
+		}
+		body, _ := json.Marshal(payload)
 		resp := doV2JSONRequest(t, http.MethodPost, ts.URL+"/api/v1/auth/step-up", ts.URL, token, csrf, string(body), "application/json")
 		raw, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
@@ -170,6 +174,10 @@ func TestWalletsV2HardenedCustodyPoliciesRPCHardwareAndRecovery(t *testing.T) {
 		}
 		_ = json.Unmarshal(raw, &out)
 		return out.StepUpToken
+	}
+	getScopedStepUp := func(action, walletID string) string {
+		t.Helper()
+		return getScopedStepUpBound(action, walletID, "")
 	}
 
 	// Vault autonomous binding STILL hard-blocked (403) even with valid step-up!
@@ -197,7 +205,18 @@ func TestWalletsV2HardenedCustodyPoliciesRPCHardwareAndRecovery(t *testing.T) {
 		t.Fatalf("expected 403 rejecting backup-scoped token on policy endpoint, got %d", wrongScopeResp.StatusCode)
 	}
 
-	polStep := getScopedStepUp("policy", created.Wallet.ID)
+	// Unbound policy step-up MUST be rejected fail-closed (Wave S-6 digest binding).
+	unboundPolStep := getScopedStepUp("policy", created.Wallet.ID)
+	unboundPolResp := doV2JSONWithStepUp(t, http.MethodPut, ts.URL+"/api/v1/wallets/"+created.Wallet.ID+"/policy", ts.URL, token, csrf, unboundPolStep, string(polPayload))
+	unboundPolResp.Body.Close()
+	if unboundPolResp.StatusCode != http.StatusForbidden {
+		t.Fatalf("expected 403 rejecting unbound policy step-up token, got %d", unboundPolResp.StatusCode)
+	}
+
+	nextPol := pol
+	nextPol.Role = created.Wallet.Role
+	nextPol.Version = created.Wallet.Policy.Version + 1
+	polStep := getScopedStepUpBound("policy", created.Wallet.ID, custody.ComputePolicyHash(nextPol))
 	polResp := doV2JSONWithStepUp(t, http.MethodPut, ts.URL+"/api/v1/wallets/"+created.Wallet.ID+"/policy", ts.URL, token, csrf, polStep, string(polPayload))
 	rawPol, _ := io.ReadAll(polResp.Body)
 	polResp.Body.Close()
@@ -232,11 +251,38 @@ func TestWalletsV2HardenedCustodyPoliciesRPCHardwareAndRecovery(t *testing.T) {
 	}
 	_ = json.Unmarshal(rawRev, &revOut)
 
-	execStep := getScopedStepUp("execute", created.Wallet.ID)
+	// Unbound execute step-up MUST be rejected fail-closed.
+	unboundExecStep := getScopedStepUp("execute", created.Wallet.ID)
+	unboundExecResp := doV2JSONWithStepUp(t, http.MethodPost, ts.URL+"/api/v1/wallets/"+created.Wallet.ID+"/reviews/"+revOut.Review.ID+"/execute", ts.URL, token, csrf, unboundExecStep, `{}`)
+	unboundExecResp.Body.Close()
+	if unboundExecResp.StatusCode != http.StatusForbidden {
+		t.Fatalf("expected 403 rejecting unbound execute step-up token, got %d", unboundExecResp.StatusCode)
+	}
+
+	execStep := getScopedStepUpBound("execute", created.Wallet.ID, revOut.Review.TxDigest)
 	execResp := doV2JSONWithStepUp(t, http.MethodPost, ts.URL+"/api/v1/wallets/"+created.Wallet.ID+"/reviews/"+revOut.Review.ID+"/execute", ts.URL, token, csrf, execStep, `{}`)
 	execResp.Body.Close()
 	if execResp.StatusCode != http.StatusOK {
 		t.Fatalf("POST /execute failed: %d", execResp.StatusCode)
+	}
+
+	// Wave S-6: DELETE /api/v1/auth/passkeys/{credID} must NOT return 405; with valid step-up it reaches signer (404 for unknown credID).
+	delPKStep := getScopedStepUp("passkey-delete", "*")
+	delPKResp := doV2JSONWithStepUp(t, http.MethodDelete, ts.URL+"/api/v1/auth/passkeys/nonexistent-cred-id", ts.URL, token, csrf, delPKStep, "")
+	delPKResp.Body.Close()
+	if delPKResp.StatusCode == http.StatusMethodNotAllowed {
+		t.Fatalf("DELETE /api/v1/auth/passkeys/{id} returned 405 Method Not Allowed (regression)")
+	}
+	if delPKResp.StatusCode != http.StatusNotFound && delPKResp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("expected 404/400 for nonexistent passkey delete, got %d", delPKResp.StatusCode)
+	}
+
+	// Wave S-6: POST /api/v1/wallets/create requires step-up once owner password is set.
+	noStepCreate := doV2JSONRequest(t, http.MethodPost, ts.URL+"/api/v1/wallets/create", ts.URL, token, csrf,
+		`{"name":"Blocked Without StepUp","role":"agent","rpcUrl":"https://api.mainnet-beta.solana.com"}`, "application/json")
+	noStepCreate.Body.Close()
+	if noStepCreate.StatusCode != http.StatusForbidden {
+		t.Fatalf("expected 403 on POST /wallets/create without step-up after password configured, got %d", noStepCreate.StatusCode)
 	}
 
 	// 6. Attach Hardware Wallet & verify tampered signed tx is rejected cleanly (403).
@@ -266,7 +312,10 @@ func TestWalletsV2HardenedCustodyPoliciesRPCHardwareAndRecovery(t *testing.T) {
 		"confirmLoosen":      true,
 		"expectedPolicyHash": hwOut.Wallet.Policy.PolicyHash,
 	})
-	hwPolStep := getScopedStepUp("policy", hwOut.Wallet.ID)
+	hwNextPol := hwPol
+	hwNextPol.Role = hwOut.Wallet.Role
+	hwNextPol.Version = hwOut.Wallet.Policy.Version + 1
+	hwPolStep := getScopedStepUpBound("policy", hwOut.Wallet.ID, custody.ComputePolicyHash(hwNextPol))
 	hwPolResp := doV2JSONWithStepUp(t, http.MethodPut, ts.URL+"/api/v1/wallets/"+hwOut.Wallet.ID+"/policy", ts.URL, token, csrf, hwPolStep, string(hwPolPayload))
 	hwPolResp.Body.Close()
 	if hwPolResp.StatusCode != http.StatusOK {
