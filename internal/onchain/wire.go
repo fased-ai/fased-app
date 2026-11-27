@@ -267,9 +267,26 @@ func Message(q Quote) ([]byte, error) {
 		}
 	}
 
-	pinned := map[string]bool{q.Owner: true}
+	pinned := map[string]bool{
+		q.Owner:         true,
+		System:          true,
+		Token:           true,
+		AssociatedToken: true,
+		Compute:         true,
+		q.InputMint:     true,
+		q.OutputMint:    true,
+	}
 	for _, ix := range ixs {
 		pinned[ix.ProgramID] = true
+		if ix.ProgramID == Jupiter {
+			// Pin the first 10 core Jupiter swap accounts (token program, user authority,
+			// source/destination ATAs, program authority/vaults, mints, event authority)
+			// so they can NEVER be substituted via a v0 Address Lookup Table.
+			limit := min(len(ix.Accounts), 10)
+			for i := 0; i < limit; i++ {
+				pinned[ix.Accounts[i].Pubkey] = true
+			}
+		}
 	}
 	if src, srcErr := TokenAccount(q.Owner, q.InputMint); srcErr == nil {
 		pinned[src] = true

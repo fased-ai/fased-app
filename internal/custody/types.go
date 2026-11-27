@@ -240,15 +240,24 @@ type PrepareReviewRequest struct {
 	JupiterQuote  *onchain.Quote `json:"jupiterQuote,omitempty"`
 }
 
-// BalanceResult holds signer-queried balance metrics.
+// TokenBalance holds a single SPL token account balance queried via signer RPC.
+type TokenBalance struct {
+	Mint        string `json:"mint"`
+	AmountRaw   uint64 `json:"amountRaw,string"`
+	Decimals    uint8  `json:"decimals"`
+	AmountHuman string `json:"amountHuman"`
+}
+
+// BalanceResult holds signer-queried SOL and SPL token balance metrics.
 type BalanceResult struct {
-	WalletID  string `json:"walletId"`
-	PublicKey string `json:"publicKey"`
-	Cluster   string `json:"cluster"`
-	RPCHost   string `json:"rpcHost"`
-	Lamports  uint64 `json:"lamports,string"`
-	SOL       string `json:"sol"`
-	LatencyMs int64  `json:"latencyMs"`
+	WalletID  string         `json:"walletId"`
+	PublicKey string         `json:"publicKey"`
+	Cluster   string         `json:"cluster"`
+	RPCHost   string         `json:"rpcHost"`
+	Lamports  uint64         `json:"lamports,string"`
+	SOL       string         `json:"sol"`
+	Tokens    []TokenBalance `json:"tokens,omitempty"`
+	LatencyMs int64          `json:"latencyMs"`
 }
 
 // RecoveryPackage is an Argon2id + AES-256-GCM encrypted backup safe for Local & VPS portability.
@@ -371,6 +380,14 @@ func NormalizePolicy(p WalletPolicy) WalletPolicy {
 	}
 	if out.TokenCaps == nil {
 		out.TokenCaps = []AssetCap{}
+	} else {
+		normCaps := make([]AssetCap, len(out.TokenCaps))
+		for i, tc := range out.TokenCaps {
+			tc.Mint = strings.TrimSpace(tc.Mint)
+			tc.Symbol = strings.TrimSpace(tc.Symbol)
+			normCaps[i] = tc
+		}
+		out.TokenCaps = normCaps
 	}
 	out.FreezeReason = strings.TrimSpace(out.FreezeReason)
 	return out
@@ -406,11 +423,14 @@ func IsPolicyTighterOrEqual(prevRaw, nextRaw WalletPolicy) bool {
 	}
 	prevTokens := map[string]AssetCap{}
 	for _, tc := range prev.TokenCaps {
-		prevTokens[tc.Mint] = tc
+		prevTokens[strings.TrimSpace(tc.Mint)] = tc
 	}
 	for _, tc := range next.TokenCaps {
-		ptc, ok := prevTokens[tc.Mint]
+		ptc, ok := prevTokens[strings.TrimSpace(tc.Mint)]
 		if !ok {
+			return false
+		}
+		if tc.Decimals != ptc.Decimals {
 			return false
 		}
 		if tc.MaxPerTxRaw > ptc.MaxPerTxRaw || tc.MaxDailyRaw > ptc.MaxDailyRaw {

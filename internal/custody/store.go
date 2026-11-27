@@ -199,7 +199,9 @@ CREATE TABLE IF NOT EXISTS signer_meta (
 	owner_pw_memory INTEGER NOT NULL DEFAULT 0,
 	owner_pw_threads INTEGER NOT NULL DEFAULT 0,
 	audit_hmac_nonce BLOB,
-	audit_hmac_ciphertext BLOB
+	audit_hmac_ciphertext BLOB,
+	audit_head_hash TEXT NOT NULL DEFAULT '',
+	audit_count INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS audit_log (
@@ -246,8 +248,26 @@ CREATE INDEX IF NOT EXISTS idx_audit_wallet ON audit_log (wallet_id, timestamp D
 }
 
 func (s *Service) initSignerMetaLocked(ctx context.Context) error {
+	// Idempotent schema migration for pre-Wave-S3 custody vaults.
+	_, _ = s.db.ExecContext(ctx, `ALTER TABLE signer_meta ADD COLUMN audit_head_hash TEXT NOT NULL DEFAULT ''`)
+	_, _ = s.db.ExecContext(ctx, `ALTER TABLE signer_meta ADD COLUMN audit_count INTEGER NOT NULL DEFAULT 0`)
 	if _, err := s.db.ExecContext(ctx, `INSERT OR IGNORE INTO signer_meta (id) VALUES (1)`); err != nil {
 		return err
+	}
+	// Backfill anchored audit head/count for existing vaults upgraded from pre-Wave-S3.
+	var anchoredCount int
+	var anchoredHead string
+	if err := s.db.QueryRowContext(ctx, `SELECT audit_count, audit_head_hash FROM signer_meta WHERE id = 1`).Scan(&anchoredCount, &anchoredHead); err == nil && anchoredCount == 0 && anchoredHead == "" {
+		var actualCount int
+		if s.db.QueryRowContext(ctx, `SELECT COUNT(1) FROM audit_log`).Scan(&actualCount) == nil && actualCount > 0 {
+			var lastRaw string
+			if s.db.QueryRowContext(ctx, `SELECT payload_json FROM audit_log ORDER BY rowid DESC LIMIT 1`).Scan(&lastRaw) == nil {
+				var last AuditEntry
+				if json.Unmarshal([]byte(lastRaw), &last) == nil && last.EntryHash != "" {
+					_, _ = s.db.ExecContext(ctx, `UPDATE signer_meta SET audit_head_hash = ?, audit_count = ? WHERE id = 1`, last.EntryHash, actualCount)
+				}
+			}
+		}
 	}
 	var nonce, ct []byte
 	if err := s.db.QueryRowContext(ctx, `SELECT audit_hmac_nonce, audit_hmac_ciphertext FROM signer_meta WHERE id = 1`).Scan(&nonce, &ct); err != nil {
@@ -421,9 +441,15 @@ func (s *Service) appendAuditExecLocked(ctx context.Context, q sqlExecQuerier, w
 	if err != nil {
 		return err
 	}
-	_, err = q.ExecContext(ctx,
+	if _, err := q.ExecContext(ctx,
 		`INSERT INTO audit_log(id, wallet_id, payload_json, timestamp) VALUES (?, ?, ?, ?)`,
 		entry.ID, entry.WalletID, string(raw), entry.Timestamp,
+	); err != nil {
+		return err
+	}
+	_, err = q.ExecContext(ctx,
+		`UPDATE signer_meta SET audit_head_hash = ?, audit_count = audit_count + 1 WHERE id = 1`,
+		entry.EntryHash,
 	)
 	return err
 }
@@ -432,11 +458,20 @@ func (s *Service) appendAuditLocked(ctx context.Context, walletID, action, actor
 	return s.appendAuditExecLocked(ctx, s.db, walletID, action, actor, summary, policyHash)
 }
 
-// VerifyAuditChain walks the tamper-evident audit log in insertion order and verifies every link
-// (HMAC-SHA256 v2 keyed by signer-sealed audit key, plus legacy v1 SHA-256 compatibility).
+// VerifyAuditChain walks the tamper-evident audit log in insertion order, verifies every link
+// (HMAC-SHA256 v2 keyed by signer-sealed audit key, forbidding v1 downgrade after v2), and
+// verifies the final head hash and row count against signer_meta to detect silent truncation.
 func (s *Service) VerifyAuditChain(ctx context.Context) (int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.closed || s.db == nil {
+		return 0, errors.New("custody store closed")
+	}
+	var expectedHead string
+	var expectedCount int
+	if err := s.db.QueryRowContext(ctx, `SELECT audit_head_hash, audit_count FROM signer_meta WHERE id = 1`).Scan(&expectedHead, &expectedCount); err != nil {
+		return 0, fmt.Errorf("read audit anchor: %w", err)
+	}
 	rows, err := s.db.QueryContext(ctx, `SELECT payload_json FROM audit_log ORDER BY rowid ASC`)
 	if err != nil {
 		return 0, err
@@ -444,6 +479,7 @@ func (s *Service) VerifyAuditChain(ctx context.Context) (int, error) {
 	defer rows.Close()
 	prevHash := ""
 	count := 0
+	seenV2 := strings.HasPrefix(expectedHead, "v2:")
 	for rows.Next() {
 		var raw string
 		if err := rows.Scan(&raw); err != nil {
@@ -462,7 +498,11 @@ func (s *Service) VerifyAuditChain(ctx context.Context) (int, error) {
 				return count, fmt.Errorf("audit entry %s requires HMAC key", e.ID)
 			}
 			expected = computeAuditEntryHashV2(s.auditHMACKey, prevHash, e)
+			seenV2 = true
 		} else {
+			if seenV2 {
+				return count, fmt.Errorf("audit entry %s downgraded to unkeyed v1 hash", e.ID)
+			}
 			expected = computeAuditEntryHashV1(prevHash, e)
 		}
 		if !hmac.Equal([]byte(e.EntryHash), []byte(expected)) {
@@ -471,7 +511,13 @@ func (s *Service) VerifyAuditChain(ctx context.Context) (int, error) {
 		prevHash = e.EntryHash
 		count++
 	}
-	return count, rows.Err()
+	if err := rows.Err(); err != nil {
+		return count, err
+	}
+	if count != expectedCount || !hmac.Equal([]byte(prevHash), []byte(expectedHead)) {
+		return count, fmt.Errorf("audit chain truncated or head mismatch (got count=%d, want count=%d)", count, expectedCount)
+	}
+	return count, nil
 }
 
 func (s *Service) getWalletLocked(ctx context.Context, idOrHandle string) (WalletPublic, error) {
@@ -800,7 +846,38 @@ func (s *Service) UpdatePolicy(ctx context.Context, walletID string, rawNext Wal
 	next.Role = cur.Role
 	next = NormalizePolicy(next)
 
-	// Validate destinations and programs format when provided.
+	// Validate approval mode, numeric bounds, destinations, programs, and token caps strictly.
+	switch next.ApprovalMode {
+	case ApprovalManualReview, ApprovalSemiAuto, ApprovalBoundedAuto:
+	default:
+		return WalletPublic{}, fmt.Errorf("invalid approval mode %q", next.ApprovalMode)
+	}
+	if math.IsNaN(next.AutoApproveMaxUSD) || math.IsInf(next.AutoApproveMaxUSD, 0) || next.AutoApproveMaxUSD < 0 {
+		return WalletPublic{}, errors.New("autoApproveMaxUsd must be a finite non-negative number")
+	}
+	if math.IsNaN(next.DailyLossCapUSD) || math.IsInf(next.DailyLossCapUSD, 0) || next.DailyLossCapUSD < 0 {
+		return WalletPublic{}, errors.New("dailyLossCapUsd must be a finite non-negative number")
+	}
+	if next.MaxSlippageBps > 5000 {
+		return WalletPublic{}, errors.New("maxSlippageBps cannot exceed 5000 (50%)")
+	}
+	seenMints := map[string]bool{}
+	for _, tc := range next.TokenCaps {
+		mint := strings.TrimSpace(tc.Mint)
+		if _, _, mErr := ValidateSolanaPublicAddress(mint); mErr != nil {
+			return WalletPublic{}, fmt.Errorf("invalid token cap mint %q", tc.Mint)
+		}
+		if seenMints[mint] {
+			return WalletPublic{}, fmt.Errorf("duplicate token cap mint %q", mint)
+		}
+		seenMints[mint] = true
+		if tc.Decimals > 18 {
+			return WalletPublic{}, fmt.Errorf("invalid token decimals %d for %s", tc.Decimals, mint)
+		}
+		if tc.MaxDailyRaw > 0 && tc.MaxPerTxRaw > tc.MaxDailyRaw {
+			return WalletPublic{}, fmt.Errorf("token cap maxPerTxRaw exceeds maxDailyRaw for %s", mint)
+		}
+	}
 	for _, p := range next.Programs {
 		if _, _, pErr := ValidateSolanaPublicAddress(p); pErr != nil {
 			return WalletPublic{}, fmt.Errorf("invalid program ID %q", p)
@@ -1053,9 +1130,18 @@ func (s *Service) FetchBalance(ctx context.Context, walletID string) (BalanceRes
 
 	var lamports uint64
 	var latency int64
+	var tokens []TokenBalance
 	if s.cfg.FixtureMode && s.cfg.RPCTransport == nil {
 		lamports = 2_500_000_000
 		latency = 3
+		tokens = []TokenBalance{
+			{
+				Mint:        "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+				AmountRaw:   250_000_000,
+				Decimals:    6,
+				AmountHuman: "250",
+			},
+		}
 	} else {
 		var out struct {
 			Value uint64 `json:"value"`
@@ -1066,6 +1152,9 @@ func (s *Service) FetchBalance(ctx context.Context, walletID string) (BalanceRes
 		}
 		lamports = out.Value
 		latency = lat
+		if splTokens, sErr := fetchSPLBalancesRPC(ctx, s.cfg.RPCTransport, rpcCreds.PrimaryURL, w.PublicKey); sErr == nil {
+			tokens = splTokens
+		}
 	}
 	return BalanceResult{
 		WalletID:  w.ID,
@@ -1074,6 +1163,7 @@ func (s *Service) FetchBalance(ctx context.Context, walletID string) (BalanceRes
 		RPCHost:   w.RPC.Host,
 		Lamports:  lamports,
 		SOL:       FormatLamportsToSOL(lamports),
+		Tokens:    tokens,
 		LatencyMs: latency,
 	}, nil
 }
@@ -1094,8 +1184,15 @@ func (s *Service) ResolveWallet(ctx context.Context, sel WalletSelector) (Wallet
 		if sel.IsAutonomous && (w.Role == RoleVault || w.Role == RoleMining || !w.Connections.AllowTradeBots) {
 			return fmt.Errorf("%w: wallet %s is not authorized for autonomous execution", ErrRoleDenied, w.Handle)
 		}
-		if sel.Venue != "" && len(w.Connections.AllowedVenues) > 0 && !slices.Contains(w.Connections.AllowedVenues, strings.ToLower(strings.TrimSpace(sel.Venue))) {
-			return fmt.Errorf("%w: wallet %s is not connected to venue %s", ErrPolicyDenied, w.Handle, sel.Venue)
+		if sel.Venue != "" {
+			cleanVenue := strings.ToLower(strings.TrimSpace(sel.Venue))
+			if sel.IsAutonomous {
+				if len(w.Connections.AllowedVenues) == 0 || !slices.Contains(w.Connections.AllowedVenues, cleanVenue) {
+					return fmt.Errorf("%w: wallet %s does not authorize autonomous execution on venue %s", ErrPolicyDenied, w.Handle, sel.Venue)
+				}
+			} else if len(w.Connections.AllowedVenues) > 0 && !slices.Contains(w.Connections.AllowedVenues, cleanVenue) {
+				return fmt.Errorf("%w: wallet %s is not connected to venue %s", ErrPolicyDenied, w.Handle, sel.Venue)
+			}
 		}
 		return nil
 	}
@@ -1282,7 +1379,26 @@ func (s *Service) PrepareReview(ctx context.Context, req PrepareReviewRequest) (
 		return WalletReview{}, fmt.Errorf("%w: wallet policy expired", ErrPolicyDenied)
 	}
 	reqAgentID := strings.TrimSpace(req.AgentID)
-	reqVenue := strings.TrimSpace(req.Venue)
+	reqVenue := strings.ToLower(strings.TrimSpace(req.Venue))
+	reqSkillID := strings.TrimSpace(req.SkillGrantID)
+	var activeSkillGrant *SkillGrant
+	if reqSkillID != "" {
+		for i := range w.Connections.SkillGrants {
+			if strings.TrimSpace(w.Connections.SkillGrants[i].SkillID) == reqSkillID {
+				g := w.Connections.SkillGrants[i]
+				activeSkillGrant = &g
+				break
+			}
+		}
+		if activeSkillGrant == nil {
+			s.mu.Unlock()
+			return WalletReview{}, fmt.Errorf("%w: skill grant %q is not bound to wallet %s", ErrRoleDenied, reqSkillID, w.Handle)
+		}
+		if len(activeSkillGrant.Actions) > 0 && !slices.Contains(activeSkillGrant.Actions, op) {
+			s.mu.Unlock()
+			return WalletReview{}, fmt.Errorf("%w: skill grant %q does not permit operation %q", ErrPolicyDenied, reqSkillID, op)
+		}
+	}
 	if req.IsBotOrAuto {
 		if w.Role == RoleVault || w.Role == RoleMining || w.Policy.ApprovalMode == ApprovalManualReview || !w.Connections.AllowTradeBots {
 			s.mu.Unlock()
@@ -1292,7 +1408,7 @@ func (s *Service) PrepareReview(ctx context.Context, req PrepareReviewRequest) (
 			s.mu.Unlock()
 			return WalletReview{}, fmt.Errorf("%w: agent %q is not bound to wallet %s", ErrRoleDenied, reqAgentID, w.Handle)
 		}
-		if reqVenue != "" && len(w.Connections.AllowedVenues) > 0 && !slices.Contains(w.Connections.AllowedVenues, reqVenue) {
+		if reqVenue != "" && (len(w.Connections.AllowedVenues) == 0 || !slices.Contains(w.Connections.AllowedVenues, reqVenue)) {
 			s.mu.Unlock()
 			return WalletReview{}, fmt.Errorf("%w: venue %q is not allowed on wallet %s", ErrPolicyDenied, reqVenue, w.Handle)
 		}
@@ -1409,11 +1525,19 @@ func (s *Service) PrepareReview(ctx context.Context, req PrepareReviewRequest) (
 			s.mu.Unlock()
 			return WalletReview{}, fmt.Errorf("%w: destination %s is not in wallet allowlist", ErrPolicyDenied, destAddr)
 		}
+		if activeSkillGrant != nil && len(activeSkillGrant.AllowedMints) > 0 && !slices.Contains(activeSkillGrant.AllowedMints, mintAddr) {
+			s.mu.Unlock()
+			return WalletReview{}, fmt.Errorf("%w: skill grant %q does not allow mint %s", ErrPolicyDenied, activeSkillGrant.SkillID, mintAddr)
+		}
+		const splATARentLamports uint64 = 2_039_280
+		if req.CreateDestATA {
+			estFeeLamports += splATARentLamports
+		}
 		if w.Policy.SOLCap.MaxPerTxRaw < estFeeLamports ||
 			w.Policy.SOLCap.MaxDailyRaw == 0 ||
 			w.DailySpentLamports+w.DailyReservedLamports+estFeeLamports > w.Policy.SOLCap.MaxDailyRaw {
 			s.mu.Unlock()
-			return WalletReview{}, fmt.Errorf("%w: fee lamports exceed remaining SOL cap", ErrPolicyDenied)
+			return WalletReview{}, fmt.Errorf("%w: fee and ATA rent lamports exceed remaining SOL cap", ErrPolicyDenied)
 		}
 		symbol = firstStr(tc.Symbol, mintAddr[:6])
 		amountHuman = FormatRawAmount(amountRaw, decimals)
@@ -1435,13 +1559,29 @@ func (s *Service) PrepareReview(ctx context.Context, req PrepareReviewRequest) (
 				return WalletReview{}, fmt.Errorf("%w: swap instruction program %s not permitted in policy", ErrPolicyDenied, ix.ProgramID)
 			}
 		}
-		if w.Policy.MaxSlippageBps == 0 || uint32(q.SlippageBPS) > w.Policy.MaxSlippageBps {
+		maxSlip := w.Policy.MaxSlippageBps
+		if activeSkillGrant != nil && activeSkillGrant.MaxSlippageBps > 0 && activeSkillGrant.MaxSlippageBps < maxSlip {
+			maxSlip = activeSkillGrant.MaxSlippageBps
+		}
+		if maxSlip == 0 || uint32(q.SlippageBPS) > maxSlip {
 			s.mu.Unlock()
-			return WalletReview{}, fmt.Errorf("%w: swap slippage %d bps exceeds max %d bps", ErrPolicyDenied, q.SlippageBPS, w.Policy.MaxSlippageBps)
+			return WalletReview{}, fmt.Errorf("%w: swap slippage %d bps exceeds max %d bps", ErrPolicyDenied, q.SlippageBPS, maxSlip)
 		}
 		if req.OutputMint != "" && q.OutputMint != strings.TrimSpace(req.OutputMint) {
 			s.mu.Unlock()
 			return WalletReview{}, fmt.Errorf("%w: swap output mint mismatch", ErrPolicyDenied)
+		}
+		if q.OutputMint != onchain.SOL {
+			if _, ok := findTokenCap(w.Policy.TokenCaps, q.OutputMint); !ok {
+				s.mu.Unlock()
+				return WalletReview{}, fmt.Errorf("%w: swap output mint %s is not allowlisted in wallet token caps", ErrPolicyDenied, q.OutputMint)
+			}
+		}
+		if activeSkillGrant != nil && len(activeSkillGrant.AllowedMints) > 0 {
+			if !slices.Contains(activeSkillGrant.AllowedMints, q.InputMint) || !slices.Contains(activeSkillGrant.AllowedMints, q.OutputMint) {
+				s.mu.Unlock()
+				return WalletReview{}, fmt.Errorf("%w: skill grant %q does not allow swap mint pair", ErrPolicyDenied, activeSkillGrant.SkillID)
+			}
 		}
 		if q.Owner != "" && q.Owner != w.PublicKey {
 			s.mu.Unlock()
@@ -1453,8 +1593,21 @@ func (s *Service) PrepareReview(ctx context.Context, req PrepareReviewRequest) (
 			s.mu.Unlock()
 			return WalletReview{}, fmt.Errorf("%w: invalid swap input amount", ErrPolicyDenied)
 		}
-		if q.FeeLamports > estFeeLamports {
-			estFeeLamports = q.FeeLamports
+		outRaw, oErr := onchain.Uint(q.Output)
+		if oErr != nil || outRaw == 0 {
+			s.mu.Unlock()
+			return WalletReview{}, fmt.Errorf("%w: swap output amount must be positive", ErrPolicyDenied)
+		}
+		feeWorst := max(q.FeeLamports, q.MaxFeeLamports)
+		if feeWorst > estFeeLamports {
+			estFeeLamports = feeWorst
+		}
+		if q.RentLamports > 0 {
+			if estFeeLamports > math.MaxUint64-q.RentLamports {
+				s.mu.Unlock()
+				return WalletReview{}, fmt.Errorf("%w: swap fee+rent overflows uint64", ErrPolicyDenied)
+			}
+			estFeeLamports += q.RentLamports
 		}
 		if q.InputMint == onchain.SOL {
 			if inRaw > math.MaxUint64-estFeeLamports {
@@ -1496,7 +1649,13 @@ func (s *Service) PrepareReview(ctx context.Context, req PrepareReviewRequest) (
 		destAddr = q.OutputMint
 		amountRaw = inRaw
 		symbol = "JUP-SWAP"
-		programs = []string{SolanaComputeBudget, SolanaJupiterV6Program}
+		progList := []string{SolanaComputeBudget}
+		for _, ix := range q.Instructions {
+			if !slices.Contains(progList, ix.ProgramID) {
+				progList = append(progList, ix.ProgramID)
+			}
+		}
+		programs = progList
 	}
 
 	rpcCreds, err := s.unsealRPCLocked(ctx, w.ID)
@@ -1510,6 +1669,13 @@ func (s *Service) PrepareReview(ctx context.Context, req PrepareReviewRequest) (
 		return WalletReview{}, err
 	}
 
+	priorityFeeMicro := uint64(1_000)
+	if !(s.cfg.FixtureMode && s.cfg.RPCTransport == nil) && op != "jupiter.swap" {
+		if est := estimatePriorityFeeRPC(ctx, s.cfg.RPCTransport, rpcCreds.PrimaryURL); est >= 1_000 {
+			priorityFeeMicro = est
+		}
+	}
+
 	var msgBytes []byte
 	switch op {
 	case "solana.nativeTransfer":
@@ -1517,23 +1683,27 @@ func (s *Service) PrepareReview(ctx context.Context, req PrepareReviewRequest) (
 		if bErr != nil {
 			return WalletReview{}, bErr
 		}
-		msgBytes, err = onchain.BuildSolanaTransferMessage(feePayerPK, destPK, bh, amountRaw, 50_000, 1_000)
+		msgBytes, err = onchain.BuildSolanaTransferMessage(feePayerPK, destPK, bh, amountRaw, 50_000, priorityFeeMicro)
 	case "solana.splTransferChecked":
 		bh, bErr := s.fetchBlockhashOrFixture(ctx, w.ID, rpcCreds.PrimaryURL)
 		if bErr != nil {
 			return WalletReview{}, bErr
 		}
-		msgBytes, err = onchain.BuildSPLTransferMessage(feePayerPK, destPK, mintPK, bh, amountRaw, decimals, req.CreateDestATA, 100_000, 1_000)
+		msgBytes, err = onchain.BuildSPLTransferMessage(feePayerPK, destPK, mintPK, bh, amountRaw, decimals, req.CreateDestATA, 100_000, priorityFeeMicro)
 	case "jupiter.swap":
 		q := *req.JupiterQuote
 		q.Owner = w.PublicKey
-		if strings.TrimSpace(q.Blockhash) == "" {
-			bh, bErr := s.fetchBlockhashOrFixture(ctx, w.ID, rpcCreds.PrimaryURL)
-			if bErr != nil {
-				return WalletReview{}, bErr
+		if len(q.AddressLookupTables) > 0 && !(s.cfg.FixtureMode && s.cfg.RPCTransport == nil) {
+			if altErr := verifyAddressLookupTablesRPC(ctx, s.cfg.RPCTransport, rpcCreds.PrimaryURL, q.AddressLookupTables); altErr != nil {
+				return WalletReview{}, fmt.Errorf("%w: %v", ErrPolicyDenied, altErr)
 			}
-			q.Blockhash = Base58Encode(bh[:])
 		}
+		// Always populate recent blockhash from the signer's pinned RPC instead of trusting caller input.
+		bh, bErr := s.fetchBlockhashOrFixture(ctx, w.ID, rpcCreds.PrimaryURL)
+		if bErr != nil {
+			return WalletReview{}, bErr
+		}
+		q.Blockhash = Base58Encode(bh[:])
 		msgBytes, err = onchain.Message(q)
 	}
 	if err != nil {
@@ -1592,7 +1762,9 @@ func (s *Service) PrepareReview(ctx context.Context, req PrepareReviewRequest) (
 	); err != nil {
 		return WalletReview{}, err
 	}
-	s.appendAuditLocked(ctx, w.ID, "review_prepared", "system", fmt.Sprintf("Prepared %s %s %s -> %s (simOK=%t)", review.ID, review.AmountHuman, review.Symbol, review.Destination, review.SimulationOK), w.Policy.PolicyHash)
+	if err := s.appendAuditLocked(ctx, w.ID, "review_prepared", "system", fmt.Sprintf("Prepared %s %s %s -> %s (simOK=%t)", review.ID, review.AmountHuman, review.Symbol, review.Destination, review.SimulationOK), w.Policy.PolicyHash); err != nil {
+		return WalletReview{}, err
+	}
 	return review, nil
 }
 
@@ -2122,7 +2294,9 @@ func (s *Service) ExportEncryptedRecovery(ctx context.Context, walletID, passphr
 	}
 	sum := sha256.Sum256(archive)
 	fp := hex.EncodeToString(sum[:])
-	s.appendAuditLocked(ctx, w.ID, "encrypted_recovery_exported", firstStr(actor, "owner"), "Exported Argon2id encrypted backup fp="+fp[:16], w.Policy.PolicyHash)
+	if err := s.appendAuditLocked(ctx, w.ID, "encrypted_recovery_exported", firstStr(actor, "owner"), "Exported Argon2id encrypted backup fp="+fp[:16], w.Policy.PolicyHash); err != nil {
+		return nil, "", err
+	}
 	return archive, fp, nil
 }
 

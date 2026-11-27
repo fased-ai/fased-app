@@ -82,6 +82,13 @@ export interface WalletV2 {
   updatedAt: number;
 }
 
+export interface WalletTokenBalance {
+  mint: string;
+  amountRaw: string;
+  decimals: number;
+  amountHuman: string;
+}
+
 export interface WalletBalanceResult {
   walletId: string;
   publicKey: string;
@@ -89,6 +96,7 @@ export interface WalletBalanceResult {
   rpcHost: string;
   lamports: string;
   sol: string;
+  tokens?: WalletTokenBalance[];
   latencyMs: number;
 }
 

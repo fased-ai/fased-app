@@ -99,7 +99,7 @@ func (s *Store) isTradingVenueEnabled(venue string) bool {
 	}
 	cleanVenue := strings.ToLower(strings.TrimSpace(venue))
 	if cleanVenue == marketdata.VenueSolana || cleanVenue == "onchain" {
-		if cs := s.loadedCustodyService(); cs != nil {
+		if cs, cErr := s.custodyBackend(); cErr == nil && cs != nil {
 			if wallets, err := cs.ListWallets(context.Background()); err == nil && len(wallets) > 0 {
 				return true
 			}
@@ -178,39 +178,9 @@ func (s *Store) executeLiveTradeRoute(ctx context.Context, req trade.OrderReques
 
 	case marketdata.VenueSolana, "onchain":
 		if resolvedWallet != nil && custodyBackend != nil {
-			dest := strings.TrimSpace(resolvedWallet.Connections.SweepToWalletID)
-			if dest == "" && len(resolvedWallet.Policy.Destinations) > 0 {
-				dest = resolvedWallet.Policy.Destinations[0]
-			}
-			actor := "trade-manual"
-			if isBotOrAuto {
-				actor = "trade-bot"
-				if req.AgentID != "" {
-					actor = "agent:" + req.AgentID
-				}
-			}
-			rev, err := custodyBackend.PrepareReview(ctx, custody.PrepareReviewRequest{
-				WalletID:    resolvedWallet.ID,
-				Operation:   "solana.nativeTransfer",
-				Destination: dest,
-				AmountHuman: strconv.FormatFloat(req.Quantity, 'f', -1, 64),
-				IsBotOrAuto: isBotOrAuto,
-				AgentID:     req.AgentID,
-				Venue:       req.Venue,
-			})
-			if err != nil {
-				return trade.LiveExecReceipt{}, err
-			}
-			entry, err := custodyBackend.ExecuteNativeReview(ctx, resolvedWallet.ID, rev.ID, actor)
-			if err != nil {
-				return trade.LiveExecReceipt{}, err
-			}
-			return trade.LiveExecReceipt{
-				VenueOrderID: entry.ID,
-				TxSignature:  entry.TxSignature,
-				FilledPrice:  refPrice,
-				Immediate:    entry.State == custody.LedgerConfirmed || entry.State == custody.LedgerBroadcast,
-			}, nil
+			// Never silently translate a #trade buy/sell signal into an outbound solana.nativeTransfer.
+			// Live Solana trading on @wallet: requires a signer-verified jupiter.swap quote.
+			return trade.LiveExecReceipt{}, fmt.Errorf("%w: live Solana trading on %s requires a verified Jupiter swap quote (direct outbound SOL transfers are disabled in #trade)", custody.ErrPolicyDenied, resolvedWallet.Handle)
 		}
 		estMicro := uint64(math.Max(1000, math.Round(req.Quantity*refPrice*1_000_000)))
 		memo := fmt.Sprintf("fased-%s-%s-%s", req.Symbol, req.Side, strconv.FormatFloat(req.Quantity, 'f', -1, 64))
