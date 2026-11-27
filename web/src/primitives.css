@@ -255,8 +255,8 @@
   padding: 10px 14px;
   border: 0;
   border-radius: 10px;
-  background: linear-gradient(180deg, var(--wt-coral-hover), var(--wt-coral));
-  color: var(--wt-on-accent);
+  background: var(--shell-primary);
+  color: var(--shell-primary-text);
   font-size: 14px;
   font-weight: 650;
   cursor: pointer;
@@ -264,7 +264,7 @@
 
 :root.wt button.f-btn-primary:hover:not(:disabled),
 :root.wt button.wt-btn-rose:hover:not(:disabled) {
-  filter: brightness(1.06);
+  background: var(--shell-primary-hover);
   border-color: transparent;
 }
 
@@ -279,11 +279,17 @@
   padding: 5px 12px;
   border: 0;
   border-radius: var(--radius-sm);
-  background: linear-gradient(180deg, var(--wt-coral-hover), var(--wt-coral));
-  color: var(--wt-on-accent);
+  background: var(--shell-primary);
+  color: var(--shell-primary-text);
   font-size: 12px;
   font-weight: 650;
   cursor: pointer;
+}
+
+:root.wt button.f-btn-primary-sm:hover:not(:disabled),
+:root.wt button.wt-btn-rose-sm:hover:not(:disabled) {
+  background: var(--shell-primary-hover);
+  border-color: transparent;
 }
 
 :root.wt button.f-btn-primary:disabled,

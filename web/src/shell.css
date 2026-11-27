@@ -12,9 +12,9 @@
   --shell-header: #0a0c10;
   --shell-input: #161a22;
   --shell-hover: #1d222c;
-  --shell-primary: #e5476a;
+  --shell-primary: #d4365a;
   --shell-primary-text: #ffffff;
-  --shell-primary-hover: #ec5a7a;
+  --shell-primary-hover: #c22b4e;
   --shell-active: var(--wt-raised-2);
   --shell-shadow: rgba(0, 0, 0, 0.45);
   --wt-ok-bg: color-mix(in srgb, var(--wt-ok-fill) 14%, transparent);
