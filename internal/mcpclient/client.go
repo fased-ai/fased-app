@@ -3,7 +3,6 @@ package mcpclient
 import (
 	"bytes"
 	"context"
-	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -14,6 +13,8 @@ import (
 	"net/url"
 	"strings"
 	"time"
+
+	"github.com/fased-ai/fased-app/internal/netguard"
 )
 
 type rpcRequest struct {
@@ -51,65 +52,29 @@ func ParseJSONRPCResult(raw []byte) (json.RawMessage, error) {
 }
 
 func dialSafeMCP(ctx context.Context, dialer *net.Dialer, network, addr string, allowLocalhost bool) (net.Conn, error) {
-	host, port, err := net.SplitHostPort(addr)
-	if err != nil {
-		return nil, err
+	var dialFn func(context.Context, string, string) (net.Conn, error)
+	if dialer != nil {
+		dialFn = dialer.DialContext
 	}
-	if ip := net.ParseIP(host); ip != nil {
-		if ip.IsLoopback() {
-			if !allowLocalhost {
-				return nil, fmt.Errorf("blocked loopback MCP target %s", ip)
-			}
-			return dialer.DialContext(ctx, network, net.JoinHostPort(ip.String(), port))
-		}
-		if !isPublicUnicastIP(ip) {
-			return nil, fmt.Errorf("blocked non-public MCP IP %s", ip)
-		}
-		return dialer.DialContext(ctx, network, net.JoinHostPort(ip.String(), port))
-	}
-	resolved, err := net.DefaultResolver.LookupIPAddr(ctx, host)
-	if err != nil {
-		return nil, err
-	}
-	lowerHost := strings.ToLower(strings.TrimSpace(host))
-	literalLoopback := lowerHost == "localhost" || lowerHost == "127.0.0.1" || lowerHost == "::1"
-	for _, r := range resolved {
-		if r.IP.IsLoopback() {
-			if !allowLocalhost || !literalLoopback {
-				continue
-			}
-			if conn, dErr := dialer.DialContext(ctx, network, net.JoinHostPort(r.IP.String(), port)); dErr == nil {
-				return conn, nil
-			}
-			continue
-		}
-		if isPublicUnicastIP(r.IP) {
-			if conn, dErr := dialer.DialContext(ctx, network, net.JoinHostPort(r.IP.String(), port)); dErr == nil {
-				return conn, nil
-			}
-		}
-	}
-	return nil, fmt.Errorf("no permitted IP resolved for MCP host %q", host)
+	return netguard.SafeDialContext(netguard.Options{
+		AllowLoopback: allowLocalhost,
+		DialTimeout:   5 * time.Second,
+		Dial:          dialFn,
+	})(ctx, network, addr)
 }
 
 func newHTTPClient(override http.RoundTripper, allowLocalhost bool) *http.Client {
 	transport := override
 	if transport == nil {
-		dialer := &net.Dialer{Timeout: 5 * time.Second}
-		transport = &http.Transport{
-			DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
-				return dialSafeMCP(ctx, dialer, network, addr, allowLocalhost)
-			},
-			ForceAttemptHTTP2: true,
-			TLSClientConfig:   &tls.Config{MinVersion: tls.VersionTLS12},
-		}
+		transport = netguard.NewSafeTransport(netguard.Options{
+			AllowLoopback: allowLocalhost,
+			DialTimeout:   5 * time.Second,
+		})
 	}
 	return &http.Client{
-		Transport: transport,
-		Timeout:   15 * time.Second,
-		CheckRedirect: func(*http.Request, []*http.Request) error {
-			return http.ErrUseLastResponse
-		},
+		Transport:     transport,
+		Timeout:       15 * time.Second,
+		CheckRedirect: netguard.RefuseRedirects,
 	}
 }
 

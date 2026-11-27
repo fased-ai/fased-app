@@ -107,7 +107,7 @@ func runStateBackup(args []string, defaultData string, out, errOut io.Writer) er
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
-	stageDir, err := os.MkdirTemp("", "fased-backup-*")
+	stageDir, err := os.MkdirTemp(absData, ".fased-backup-*")
 	if err != nil {
 		return err
 	}
@@ -269,7 +269,7 @@ func runStateRestore(args []string, defaultData string, out, errOut io.Writer) e
 		}
 	}
 
-	stageDir, err := os.MkdirTemp("", "fased-restore-*")
+	stageDir, err := os.MkdirTemp(absData, ".fased-restore-*")
 	if err != nil {
 		return err
 	}

@@ -1,6 +1,7 @@
 package core
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -11,6 +12,8 @@ import (
 	"time"
 	"unicode/utf8"
 )
+
+const agentV2TurnTimeout = 5 * time.Minute
 
 func (h *HTTPHandler) v2Mutation(w http.ResponseWriter, r *http.Request, token string, requireJSON bool) bool {
 	if !h.origins[r.Header.Get("Origin")] {
@@ -522,9 +525,14 @@ func (h *HTTPHandler) agentV2MessagesAPI(w http.ResponseWriter, r *http.Request,
 	}
 	defer release()
 
+	turnCtx, turnCancel := context.WithTimeout(r.Context(), agentV2TurnTimeout)
+	defer turnCancel()
+	unreg := h.registerSessionStream(tokenHash(token), turnCancel)
+	defer unreg()
+
 	if !v2WantsSSE(r) {
 		_ = http.NewResponseController(w).SetWriteDeadline(time.Time{})
-		res, err := h.store.RunAgentV2Turn(r.Context(), threadID, in, nil)
+		res, err := h.store.RunAgentV2Turn(turnCtx, threadID, in, nil)
 		if err != nil {
 			writeError(w, 400, err.Error())
 			return
@@ -534,8 +542,8 @@ func (h *HTTPHandler) agentV2MessagesAPI(w http.ResponseWriter, r *http.Request,
 	}
 
 	emit, _ := startV2SSE(w)
-	_, err = h.store.RunAgentV2Turn(r.Context(), threadID, in, emit)
-	if err != nil && r.Context().Err() == nil {
+	_, err = h.store.RunAgentV2Turn(turnCtx, threadID, in, emit)
+	if err != nil && turnCtx.Err() == nil {
 		emit(AgentStreamEvent{
 			Type:     "error",
 			ThreadID: threadID,
@@ -638,9 +646,14 @@ func (h *HTTPHandler) agentV2SideAPI(w http.ResponseWriter, r *http.Request, tok
 	}
 	defer release()
 
+	turnCtx, turnCancel := context.WithTimeout(r.Context(), agentV2TurnTimeout)
+	defer turnCancel()
+	unreg := h.registerSessionStream(tokenHash(token), turnCancel)
+	defer unreg()
+
 	if !v2WantsSSE(r) {
 		_ = http.NewResponseController(w).SetWriteDeadline(time.Time{})
-		res, err := h.store.RunAgentV2SideQuestion(r.Context(), threadID, in, nil)
+		res, err := h.store.RunAgentV2SideQuestion(turnCtx, threadID, in, nil)
 		if err != nil {
 			writeError(w, 400, err.Error())
 			return
@@ -650,8 +663,8 @@ func (h *HTTPHandler) agentV2SideAPI(w http.ResponseWriter, r *http.Request, tok
 	}
 
 	emit, _ := startV2SSE(w)
-	_, err = h.store.RunAgentV2SideQuestion(r.Context(), threadID, in, emit)
-	if err != nil && r.Context().Err() == nil {
+	_, err = h.store.RunAgentV2SideQuestion(turnCtx, threadID, in, emit)
+	if err != nil && turnCtx.Err() == nil {
 		emit(AgentStreamEvent{
 			Type:     "error",
 			ThreadID: threadID,
@@ -704,9 +717,14 @@ func (h *HTTPHandler) agentV2ApprovalAPI(w http.ResponseWriter, r *http.Request,
 	}
 	defer release()
 
+	turnCtx, turnCancel := context.WithTimeout(r.Context(), agentV2TurnTimeout)
+	defer turnCancel()
+	unreg := h.registerSessionStream(tokenHash(token), turnCancel)
+	defer unreg()
+
 	if !v2WantsSSE(r) {
 		_ = http.NewResponseController(w).SetWriteDeadline(time.Time{})
-		res, err := h.store.ResolveAgentV2ApprovalWithSecret(r.Context(), approvalID, req.Decision, req.Note, req.Secret, resume, nil)
+		res, err := h.store.ResolveAgentV2ApprovalWithSecret(turnCtx, approvalID, req.Decision, req.Note, req.Secret, resume, nil)
 		if errors.Is(err, ErrApprovalNotFound) {
 			writeError(w, 404, err.Error())
 			return
@@ -724,8 +742,8 @@ func (h *HTTPHandler) agentV2ApprovalAPI(w http.ResponseWriter, r *http.Request,
 	}
 
 	emit, _ := startV2SSE(w)
-	_, err = h.store.ResolveAgentV2ApprovalWithSecret(r.Context(), approvalID, req.Decision, req.Note, req.Secret, resume, emit)
-	if err != nil && r.Context().Err() == nil {
+	_, err = h.store.ResolveAgentV2ApprovalWithSecret(turnCtx, approvalID, req.Decision, req.Note, req.Secret, resume, emit)
+	if err != nil && turnCtx.Err() == nil {
 		emit(AgentStreamEvent{
 			Type:     "error",
 			ThreadID: ap.ThreadID,

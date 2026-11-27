@@ -9,6 +9,8 @@ import (
 	"net/url"
 	"strconv"
 	"time"
+
+	"github.com/fased-ai/fased-app/internal/netguard"
 )
 
 // ConfigureWENResearch opts into an ordinary local read service, before Serve.
@@ -76,7 +78,16 @@ func (h *HTTPHandler) wenMarketDataAPI(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
 	defer cancel()
 	request, _ := http.NewRequestWithContext(ctx, "GET", h.wenResearchOrigin+"/api/mining/v1/research?lookback="+n, nil)
-	transport := &http.Transport{Proxy: nil}
+	allowLoop := false
+	if parsedOrigin, pErr := url.Parse(h.wenResearchOrigin); pErr == nil {
+		allowLoop = netguard.IsLoopbackHostname(parsedOrigin.Hostname())
+	}
+	transport := netguard.NewSafeTransport(netguard.Options{
+		AllowLoopback:         allowLoop,
+		DialTimeout:           3 * time.Second,
+		TLSHandshakeTimeout:   3 * time.Second,
+		ResponseHeaderTimeout: 3 * time.Second,
+	})
 	defer transport.CloseIdleConnections()
 	client := &http.Client{Transport: transport, CheckRedirect: func(*http.Request, []*http.Request) error { return errors.New("research redirect refused") }}
 	response, e := client.Do(request)

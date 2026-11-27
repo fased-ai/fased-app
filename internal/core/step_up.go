@@ -63,7 +63,13 @@ func (h *HTTPHandler) clearStepUpForSession(sessionToken string) {
 	if h == nil || sessionToken == "" {
 		return
 	}
-	sessHash := tokenHash(sessionToken)
+	h.clearStepUpForSessionHash(tokenHash(sessionToken))
+}
+
+func (h *HTTPHandler) clearStepUpForSessionHash(sessHash string) {
+	if h == nil || sessHash == "" {
+		return
+	}
 	h.stepUpMu.Lock()
 	defer h.stepUpMu.Unlock()
 	for k, v := range h.stepUpTokens {
@@ -71,6 +77,15 @@ func (h *HTTPHandler) clearStepUpForSession(sessionToken string) {
 			delete(h.stepUpTokens, k)
 		}
 	}
+}
+
+func (h *HTTPHandler) clearAllStepUp() {
+	if h == nil {
+		return
+	}
+	h.stepUpMu.Lock()
+	clear(h.stepUpTokens)
+	h.stepUpMu.Unlock()
 }
 
 func (h *HTTPHandler) issueStepUpToken(sessionToken, action, walletID, signerProof string) (string, time.Time, error) {

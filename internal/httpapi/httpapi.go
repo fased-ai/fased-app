@@ -14,12 +14,15 @@ import (
 	"strings"
 )
 
-// SetSecurityHeaders applies Fased's default strict browser CSP and framing headers.
+// SetSecurityHeaders applies Fased's default strict browser CSP, isolation, and framing headers.
 func SetSecurityHeaders(w http.ResponseWriter) {
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.Header().Set("Referrer-Policy", "no-referrer")
 	w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; object-src 'none'; base-uri 'none'; form-action 'self'")
 	w.Header().Set("X-Frame-Options", "DENY")
+	w.Header().Set("Permissions-Policy", "camera=(), microphone=(), geolocation=(), payment=(), usb=()")
+	w.Header().Set("Cross-Origin-Opener-Policy", "same-origin")
+	w.Header().Set("Cross-Origin-Resource-Policy", "same-origin")
 }
 
 // IsLoopbackHost reports whether host parses as a loopback IP literal.

@@ -138,7 +138,7 @@ func TestPairingLifecycleSecurityAndCookieMode(t *testing.T) {
 	}
 	var cookie1 *http.Cookie
 	for _, ck := range wPair.Result().Cookies() {
-		if ck.Name == sessionCookie {
+		if ck.Name == hostSessionCookie {
 			cookie1 = ck
 			break
 		}
@@ -213,7 +213,7 @@ func TestPairingLifecycleSecurityAndCookieMode(t *testing.T) {
 	}
 	var cookie2 *http.Cookie
 	for _, ck := range wPair2.Result().Cookies() {
-		if ck.Name == sessionCookie {
+		if ck.Name == hostSessionCookie {
 			cookie2 = ck
 			break
 		}

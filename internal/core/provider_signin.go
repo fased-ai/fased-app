@@ -17,7 +17,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"math/big"
 	"mime"
 	"net"
@@ -78,7 +77,8 @@ func extractOAuthError(raw []byte) (string, string) {
 }
 
 func logProviderDiag(stage string, fields map[string]any) {
-	payload := map[string]any{"stage": stage}
+	attrs := make([]any, 0, len(fields)*2+2)
+	attrs = append(attrs, "stage", sanitizeDiagValue(stage, 64))
 	for k, v := range fields {
 		if s, ok := v.(string); ok {
 			if s == "" {
@@ -86,13 +86,9 @@ func logProviderDiag(stage string, fields map[string]any) {
 			}
 			v = sanitizeDiagValue(s, 180)
 		}
-		payload[k] = v
+		attrs = append(attrs, k, v)
 	}
-	encoded, err := json.Marshal(payload)
-	if err != nil {
-		return
-	}
-	log.Printf("fased provider diag: %s", encoded)
+	coreLogger.Info("fased provider diag", attrs...)
 }
 
 type ProviderSignInView struct {

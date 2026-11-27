@@ -27,6 +27,7 @@ import (
 )
 
 func main() {
+	applyRestrictiveUmask()
 	err := dispatchPackageInstance(os.Args[1:])
 	if err == nil {
 		err = run(os.Args[1:], os.Stdin, os.Stdout, os.Stderr)

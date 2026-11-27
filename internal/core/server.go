@@ -9,6 +9,7 @@ import (
 	"github.com/fased-ai/fased-app/internal/tailnet"
 	"github.com/fased-ai/fased-app/internal/worldintel"
 	"io/fs"
+	"log/slog"
 	"net"
 	"net/http"
 	"os"
@@ -152,6 +153,7 @@ func startModesWithTaskSecrets(ctx context.Context, dir, listen, publicOrigin st
 	}
 	serverCtx, serverCancel := context.WithCancel(context.Background())
 	baseCtx := func(net.Listener) context.Context { return serverCtx }
+	httpErrLog := slog.NewLogLogger(coreLogger.Handler(), slog.LevelError)
 	server := &Server{
 		Store:        store,
 		Listener:     listener,
@@ -160,7 +162,7 @@ func startModesWithTaskSecrets(ctx context.Context, dir, listen, publicOrigin st
 		dir:          dir,
 		serverCtx:    serverCtx,
 		serverCancel: serverCancel,
-		HTTP:         &http.Server{Handler: handler, BaseContext: baseCtx, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second, WriteTimeout: 30 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 16 * 1024},
+		HTTP:         &http.Server{Handler: handler, BaseContext: baseCtx, ErrorLog: httpErrLog, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second, WriteTimeout: 30 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 16 * 1024},
 	}
 	ipc, network, address, err := listenIPC(dir, store.instanceID)
 	if err != nil {
@@ -171,7 +173,7 @@ func startModesWithTaskSecrets(ctx context.Context, dir, listen, publicOrigin st
 	server.IPC = ipc
 	server.ipcNetwork = network
 	server.ipcAddress = address
-	server.IPCServer = &http.Server{Handler: privateIPCHandler(handler), BaseContext: baseCtx, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second, WriteTimeout: 30 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 16 * 1024}
+	server.IPCServer = &http.Server{Handler: privateIPCHandler(handler), BaseContext: baseCtx, ErrorLog: httpErrLog, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second, WriteTimeout: 30 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 16 * 1024}
 	if err = server.writeEndpoint(); err != nil {
 		serverCancel()
 		listener.Close()
@@ -782,7 +784,7 @@ func (s *Server) ConfigureConnectionWithTransport(location, remoteTransport stri
 		h.remoteIngress = true
 		h.remoteProxyTrust = false
 		h.remoteTransport = "tailscale"
-		s.RemoteHTTP = &http.Server{Handler: h.remoteProxy(tailnet.WhoIs), BaseContext: func(net.Listener) context.Context { return s.serverCtx }, ConnContext: tailnet.ConnContext, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second, WriteTimeout: 90 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 16 * 1024}
+		s.RemoteHTTP = &http.Server{Handler: h.remoteProxy(tailnet.WhoIs), BaseContext: func(net.Listener) context.Context { return s.serverCtx }, ConnContext: tailnet.ConnContext, ErrorLog: slog.NewLogLogger(coreLogger.Handler(), slog.LevelError), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second, WriteTimeout: 90 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 16 * 1024}
 	} else if location == "remote" && (remoteTransport == "cloudflare" || remoteTransport == "domain" || remoteTransport == "proxy") {
 		h.remoteIngress = false
 		h.remoteProxyTrust = true

@@ -23,6 +23,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/fased-ai/fased-app/internal/netguard"
 	"github.com/fased-ai/fased-app/internal/update"
 )
 
@@ -57,7 +58,7 @@ func NewControlledClient(rt ControlledTransport) (*Client, error) {
 }
 
 func isPublicUnicastIP(ip netip.Addr) bool {
-	return ip.IsValid() && ip.IsGlobalUnicast() && !ip.IsPrivate() && !ip.IsLoopback() && !ip.IsLinkLocalUnicast() && !ip.IsLinkLocalMulticast() && !ip.IsMulticast() && !ip.IsUnspecified()
+	return netguard.IsPublicUnicastIP(ip)
 }
 
 func interleavePublicIPs(ips []netip.Addr) ([]netip.Addr, error) {

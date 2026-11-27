@@ -23,13 +23,12 @@ import (
 	"strings"
 	"time"
 
+	"github.com/fased-ai/fased-app/internal/netguard"
 	"github.com/fased-ai/fased-app/internal/signer"
 )
 
 // Polymarket paginated market directories (/markets, /sampling-markets) return up to ~2.5 MiB.
 const maxResponseBytes = 4 * 1024 * 1024
-
-var cgnatPrefix = netip.MustParsePrefix("100.64.0.0/10")
 
 // Client is a bounded SSRF-safe Polymarket CLOB REST adapter.
 type Client struct {
@@ -41,10 +40,7 @@ type Client struct {
 }
 
 func isPublicUnicastIP(ip netip.Addr) bool {
-	ip = ip.Unmap()
-	return ip.IsValid() && ip.IsGlobalUnicast() && !ip.IsPrivate() && !ip.IsLoopback() &&
-		!ip.IsLinkLocalUnicast() && !ip.IsLinkLocalMulticast() && !ip.IsMulticast() && !ip.IsUnspecified() &&
-		!cgnatPrefix.Contains(ip)
+	return netguard.IsPublicUnicastIP(ip)
 }
 
 func interleavePublicIPs(ips []netip.Addr) ([]netip.Addr, error) {

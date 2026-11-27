@@ -449,27 +449,73 @@ func toDataPluginView(rec dataPluginRecord) DataPluginView {
 
 func redactedPluginEndpoint(raw string) string {
 	trimmed := strings.TrimSpace(raw)
-	if trimmed == "" || !strings.Contains(trimmed, "?") {
+	if trimmed == "" {
 		return trimmed
 	}
 	u, err := url.Parse(trimmed)
-	if err != nil || u.RawQuery == "" {
+	if err != nil {
 		return trimmed
 	}
-	q := u.Query()
 	changed := false
-	for k := range q {
-		lk := strings.ToLower(strings.TrimSpace(k))
-		if strings.Contains(lk, "key") || strings.Contains(lk, "token") || strings.Contains(lk, "secret") || strings.Contains(lk, "auth") || strings.Contains(lk, "pass") {
-			q.Set(k, "REDACTED")
-			changed = true
+	// Redact path-embedded RPC API keys (/v2/<key>, /v3/<key>, QuickNode /<hex-token>/).
+	if u.Path != "" && u.Path != "/" {
+		segs := strings.Split(u.Path, "/")
+		for i, seg := range segs {
+			if seg == "" {
+				continue
+			}
+			prev := ""
+			if i > 0 {
+				prev = strings.ToLower(segs[i-1])
+			}
+			if (prev == "v2" || prev == "v3" || prev == "apikey" || prev == "token") && len(seg) >= 16 {
+				segs[i] = "REDACTED"
+				changed = true
+				continue
+			}
+			if len(seg) >= 32 && isTokenLikePathSegment(seg) {
+				segs[i] = "REDACTED"
+				changed = true
+			}
+		}
+		if changed {
+			u.Path = strings.Join(segs, "/")
+		}
+	}
+	if u.RawQuery != "" {
+		q := u.Query()
+		for k := range q {
+			lk := strings.ToLower(strings.TrimSpace(k))
+			if strings.Contains(lk, "key") || strings.Contains(lk, "token") || strings.Contains(lk, "secret") || strings.Contains(lk, "auth") || strings.Contains(lk, "pass") {
+				q.Set(k, "REDACTED")
+				changed = true
+			}
+		}
+		if changed {
+			u.RawQuery = q.Encode()
 		}
 	}
 	if !changed {
 		return trimmed
 	}
-	u.RawQuery = q.Encode()
 	return u.String()
+}
+
+func isTokenLikePathSegment(seg string) bool {
+	hasDigit := false
+	hasAlpha := false
+	for _, r := range seg {
+		switch {
+		case r >= '0' && r <= '9':
+			hasDigit = true
+		case (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z'):
+			hasAlpha = true
+		case r == '-' || r == '_':
+		default:
+			return false
+		}
+	}
+	return hasDigit && hasAlpha
 }
 
 func buildPluginsResponse(doc *dataPluginsDoc) DataPluginsResponse {
@@ -566,6 +612,12 @@ func (s *Store) UpdateDataPlugin(ctx context.Context, id string, patch DataPlugi
 	rec := doc.Plugins[idx]
 	if patch.AllowLocalhost != nil {
 		rec.AllowLocalhost = *patch.AllowLocalhost
+		if !rec.AllowLocalhost && rec.Endpoint != "" && patch.Endpoint == nil {
+			if _, err := validatePluginEndpointURL(rec.Endpoint, false); err != nil {
+				s.pluginsMu.Unlock()
+				return DataPluginView{}, err
+			}
+		}
 	}
 	if patch.Endpoint != nil {
 		validated, err := validatePluginEndpointURL(*patch.Endpoint, rec.AllowLocalhost)

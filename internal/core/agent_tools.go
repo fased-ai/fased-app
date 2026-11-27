@@ -1089,8 +1089,7 @@ func sanitizePublicURL(raw string) string {
 	if err != nil || u.Scheme == "" || u.Host == "" {
 		return ""
 	}
-	u.User = nil
-	return u.String()
+	return u.Scheme + "://" + u.Host
 }
 
 func toolWorkspaceStatus(ctx context.Context, s *Store, _ string, rawArgs json.RawMessage) (any, error) {

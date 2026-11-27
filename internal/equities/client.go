@@ -2,7 +2,6 @@ package equities
 
 import (
 	"context"
-	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -14,11 +13,11 @@ import (
 	"net/url"
 	"strings"
 	"time"
+
+	"github.com/fased-ai/fased-app/internal/netguard"
 )
 
 const maxQuoteResponseBytes = 256 * 1024
-
-var cgnatPrefix = netip.MustParsePrefix("100.64.0.0/10")
 
 // Client provides SSRF-safe HTTP transport for Alpaca Paper and loopback transport for IBKR.
 type Client struct {
@@ -27,34 +26,11 @@ type Client struct {
 }
 
 func isPublicUnicastIP(ip netip.Addr) bool {
-	ip = ip.Unmap()
-	return ip.IsValid() && ip.IsGlobalUnicast() && !ip.IsPrivate() && !ip.IsLoopback() &&
-		!ip.IsLinkLocalUnicast() && !ip.IsLinkLocalMulticast() && !ip.IsMulticast() && !ip.IsUnspecified() &&
-		!cgnatPrefix.Contains(ip)
+	return netguard.IsPublicUnicastIP(ip)
 }
 
 func dialPublicAddress(ctx context.Context, network, address string) (net.Conn, error) {
-	host, port, err := net.SplitHostPort(address)
-	if err != nil {
-		return nil, err
-	}
-	ips, err := net.DefaultResolver.LookupNetIP(ctx, "ip", host)
-	if err != nil || len(ips) == 0 {
-		return nil, errors.New("alpaca paper address unavailable")
-	}
-	dialer := &net.Dialer{Timeout: 4 * time.Second}
-	for _, ip := range ips {
-		if !isPublicUnicastIP(ip) {
-			return nil, errors.New("private or loopback alpaca address denied")
-		}
-	}
-	for _, ip := range ips {
-		c, dErr := dialer.DialContext(ctx, network, net.JoinHostPort(ip.String(), port))
-		if dErr == nil {
-			return c, nil
-		}
-	}
-	return nil, errors.New("alpaca paper dial failed")
+	return netguard.SafeDialContext(netguard.Options{DialTimeout: 4 * time.Second})(ctx, network, address)
 }
 
 // NewClient initializes locked Paper clients for Alpaca (SSRF-filtered) and IBKR (loopback only).
@@ -64,32 +40,26 @@ func NewClient() *Client {
 
 // NewClientWithTransport initializes Paper clients with an optional custom HTTP RoundTripper for Alpaca transport testing.
 func NewClientWithTransport(override http.RoundTripper) *Client {
-	var publicTransport http.RoundTripper = &http.Transport{
-		TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12},
-		Proxy:           nil,
-		DialContext:     dialPublicAddress,
-	}
+	var publicTransport http.RoundTripper = netguard.NewSafeTransport(netguard.Options{
+		DialTimeout: 4 * time.Second,
+	})
 	if override != nil {
 		publicTransport = override
 	}
-	loopbackTransport := &http.Transport{
-		TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12},
-		Proxy:           nil,
-	}
+	loopbackTransport := netguard.NewSafeTransport(netguard.Options{
+		LoopbackOnly: true,
+		DialTimeout:  4 * time.Second,
+	})
 	return &Client{
 		alpacaHTTP: &http.Client{
-			Timeout:   8 * time.Second,
-			Transport: publicTransport,
-			CheckRedirect: func(*http.Request, []*http.Request) error {
-				return http.ErrUseLastResponse
-			},
+			Timeout:       8 * time.Second,
+			Transport:     publicTransport,
+			CheckRedirect: netguard.RefuseRedirects,
 		},
 		ibkrHTTP: &http.Client{
-			Timeout:   8 * time.Second,
-			Transport: loopbackTransport,
-			CheckRedirect: func(*http.Request, []*http.Request) error {
-				return http.ErrUseLastResponse
-			},
+			Timeout:       8 * time.Second,
+			Transport:     loopbackTransport,
+			CheckRedirect: netguard.RefuseRedirects,
 		},
 	}
 }

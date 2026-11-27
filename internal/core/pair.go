@@ -622,6 +622,7 @@ func (h *HTTPHandler) pairManageAPI(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			h.closeStreamsForSessionHash(revokedHash)
+			h.clearStepUpForSessionHash(revokedHash)
 			writeJSON(w, 200, map[string]any{"revoked": 1})
 		case "revoke-all":
 			count, err := h.store.RevokeAllPairedDevices(r.Context())
@@ -630,6 +631,7 @@ func (h *HTTPHandler) pairManageAPI(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			h.closeAllStreams()
+			h.clearAllStepUp()
 			writeJSON(w, 200, map[string]any{"revoked": count})
 		default:
 			writeError(w, 400, "unsupported device action")
@@ -785,6 +787,7 @@ func (h *HTTPHandler) pairDevicesAPI(w http.ResponseWriter, r *http.Request, tok
 				return
 			}
 			h.closeStreamsForSessionHash(revokedHash)
+			h.clearStepUpForSessionHash(revokedHash)
 			writeJSON(w, 200, map[string]bool{"revoked": true})
 		default:
 			writeError(w, 400, "unsupported device action")

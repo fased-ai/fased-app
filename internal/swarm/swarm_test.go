@@ -303,7 +303,7 @@ func TestSwarmPeerEndpointValidation(t *testing.T) {
 		{"https://desk-alpha.tail1234.ts.net/", "https://desk-alpha.tail1234.ts.net"},
 		{"https://100.100.1.2:8443/prefix/", "https://100.100.1.2:8443/prefix"},
 		{"https://[fd7a:115c:a1e0::1]:8443", "https://[fd7a:115c:a1e0::1]:8443"},
-		{"https://203.0.113.10:8443", "https://203.0.113.10:8443"},
+		{"https://93.184.216.34:8443", "https://93.184.216.34:8443"},
 	}
 	for _, tc := range valid {
 		got, err := ValidatePeerEndpoint(tc.raw)
@@ -318,6 +318,8 @@ func TestSwarmPeerEndpointValidation(t *testing.T) {
 		"https://node.localhost",
 		"https://127.0.0.1:8443",
 		"https://169.254.169.254/latest/meta-data",
+		"https://100.100.100.200:8443",
+		"https://203.0.113.10:8443",
 		"https://10.0.0.5:8443",
 		"https://192.168.1.10:8443",
 		"https://user:pass@desk.ts.net",

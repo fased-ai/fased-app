@@ -10,7 +10,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -19,6 +18,8 @@ import (
 	"runtime"
 	"strings"
 	"time"
+
+	"github.com/fased-ai/fased-app/internal/netguard"
 )
 
 // AcquisitionOptions has no public defaults. TrustSHA256 must be obtained
@@ -81,14 +82,15 @@ func acquisitionClient(ca []byte) (*http.Client, *http.Transport, error) {
 			return nil, nil, errors.New("invalid development TLS CA")
 		}
 	}
-	transport := &http.Transport{
-		// No environment proxy, cookies, credentials, automatic decompression or
-		// redirect authority is inherited from another client or the process.
-		TLSClientConfig: config, DisableCompression: true,
-		DialContext:         (&net.Dialer{Timeout: 5 * time.Second}).DialContext,
-		TLSHandshakeTimeout: 5 * time.Second, ResponseHeaderTimeout: 5 * time.Second,
+	transport := netguard.NewSafeTransport(netguard.Options{
+		AllowLoopback:          len(ca) != 0,
+		DialTimeout:            5 * time.Second,
+		TLSHandshakeTimeout:    5 * time.Second,
+		ResponseHeaderTimeout:  5 * time.Second,
 		MaxResponseHeaderBytes: 16 << 10,
-	}
+		TLSClientConfig:        config,
+	})
+	transport.DisableCompression = true
 	client := &http.Client{Transport: transport, Timeout: 20 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error {
 		return errors.New("development acquisition forbids every redirect")
 	}}
