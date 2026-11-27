@@ -113,7 +113,8 @@ function defaultLandingRoute() {
   return "overview";
 }
 function getRoute() {
-  const raw = window.location.hash.slice(1);
+  const rawHash = window.location.hash.slice(1);
+  const raw = rawHash.split("?")[0] ?? "";
   if (!raw) return defaultLandingRoute();
   const aliases: Record<string, string> = {
     dashboard: "overview",
@@ -124,7 +125,8 @@ function getRoute() {
     "agents/bots": "agents/tasks",
     terminals: "terminals/jupiter",
     mine: "mine",
-    mining: "terminals/satcoin",
+    mining: "mine",
+    "mine/discover": "mine",
     onchain: "terminals/jupiter",
     hyperliquid: "terminals/hyperliquid",
     charts: "trade",
@@ -140,7 +142,7 @@ function getRoute() {
   const route = aliases[raw] ?? raw;
   if (route === "terminals/asset" || route === "terminals/loss")
     return "terminals/satcoin";
-  return /^(overview|mine|trade|tasks|intel|lab(\/(scripts|desk|journal))?|network|activity|settings|providers|terminals(\/(satcoin|hyperliquid|jupiter))?|agents\/(chat|review|bots|tasks|news|memory|settings)|wallets\/(overview|accounts|permissions|security|activity))$/.test(
+  return /^(overview|mine(\/(assets|strategies|portfolio|stake))?|trade|tasks|intel|lab(\/(scripts|desk|journal))?|network|activity|settings|providers|terminals(\/(satcoin|hyperliquid|jupiter))?|agents\/(chat|review|bots|tasks|news|memory|settings)|wallets\/(overview|accounts|permissions|security|activity))$/.test(
     route,
   )
     ? route

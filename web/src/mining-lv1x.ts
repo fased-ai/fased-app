@@ -12,6 +12,18 @@ export interface StrategyPreset {
   curve: number[];
 }
 
+export interface SavedStrategy {
+  id: string;
+  name: string;
+  description: string;
+  mode: string;
+  bucketsBps: number[];
+  curve: number[];
+  source: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
 export interface RoundBucket {
   index: number;
   code: string;
@@ -51,13 +63,38 @@ export interface StreakEntry {
   code: string;
   moveBps: number;
   poolSol: number;
+  openPriceUsd?: number;
+  closePriceUsd?: number;
+  innerBps?: number;
+  outerBps?: number;
+  minerSat?: number;
   userStaked?: boolean;
   userWon?: boolean;
   satReward?: number;
   settledAt: number;
 }
 
+export interface CandleBar {
+  time: number;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  volume: number;
+  roundSlot?: number;
+  moveBps?: number;
+  winningRange?: number;
+}
+
+export interface CandleResponse {
+  interval: string;
+  symbol: string;
+  source: string;
+  candles: CandleBar[];
+}
+
 export type MiningMode = "manual" | "semi_auto" | "auto";
+export type ScheduleMode = "every" | "choose" | "cycle" | "random";
 
 export interface SessionRecord {
   id: string;
@@ -67,7 +104,15 @@ export interface SessionRecord {
   strategyId: string;
   mode: MiningMode;
   status: string;
+  scheduleMode?: ScheduleMode;
+  horizonLabel?: string;
+  startMode?: "now" | "next" | "plus2";
+  selectedSlots?: number[];
+  roundsCount?: number;
   perRoundSol: number;
+  depositSol?: number;
+  rollingBudget?: boolean;
+  skipRiskWarning?: string;
   totalCommittedSol: number;
   totalClaimedSol: number;
   totalClaimedSat: number;
@@ -81,6 +126,183 @@ export interface SessionRecord {
   lastDecision?: string;
   createdAt: number;
   updatedAt: number;
+}
+
+export interface ProtocolStats {
+  cluster: string;
+  programId: string;
+  ledgerId: string;
+  runtimeAddress: string;
+  mintAddress: string;
+  btcMintAddress: string;
+  poolAddress?: string;
+  stakingAddress: string;
+  treasuryAddress: string;
+  phase: number;
+  phaseName: string;
+  paused: boolean;
+  bootstrapWinddown: boolean;
+  mintedSat: number;
+  maxSupplySat: number;
+  btcTreasurySat: number;
+  totalStakedSat: number;
+  stakedPct: number;
+  volume24hSol: number;
+  lpSol: number;
+  lpSolMin: number;
+  lpSat: number;
+  lpSatMin: number;
+  boostMultiplier: number;
+  boostBudgetSat: number;
+  boostAwardedSat: number;
+  tgeBps: number;
+  vestingDurationSec: number;
+  graduatedAt: number;
+  roundIntervalSec: number;
+  source: string;
+  observedAt: number;
+}
+
+export interface LeaderboardMiner {
+  address: string;
+  shortAddress: string;
+  status: "winner" | "active" | "missed";
+  rounds: number;
+  wins: number;
+  committedSol: number;
+  returnedSol: number;
+  netSol: number;
+  earnedSat: number;
+  earnedBtc: number;
+  lastRoundSlot: number;
+}
+
+export interface LeaderboardRound {
+  roundSlot: number;
+  phase: string;
+  winningRange?: number;
+  code: string;
+  moveBps: number;
+  poolSol: number;
+  minerCount: number;
+  minerSat: number;
+  crowdShares: number[];
+  settledAt: number;
+}
+
+export interface LeaderboardResponse {
+  cluster: string;
+  window: string;
+  volumeSol: number;
+  roundsCount: number;
+  minersCount: number;
+  satAwarded: number;
+  miners: LeaderboardMiner[];
+  rounds: LeaderboardRound[];
+  source: string;
+  observedAt: number;
+}
+
+export interface ClaimableRoundItem {
+  roundSlot: number;
+  shardId: number;
+  page: number;
+  entryRow: number;
+  entriesMask: number;
+  selection: number;
+  selectionCode: string;
+  solLamports: string;
+  satAtoms: string;
+  vestedSatAtoms: string;
+  btcAtoms: string;
+  solClaimed: boolean;
+  btcClaimed: boolean;
+  stakedSol: number;
+}
+
+export interface EntryHistoryItem {
+  id: string;
+  walletId: string;
+  cluster: string;
+  roundSlot: number;
+  kind: string;
+  selection?: number;
+  strategyId?: string;
+  amountSol?: number;
+  amountSat?: number;
+  amountBtc?: number;
+  txSignature?: string;
+  status: string;
+  createdAt: number;
+}
+
+export interface PortfolioResponse {
+  cluster: string;
+  walletId: string;
+  walletPublicKey: string;
+  solBalanceSol: number;
+  satBalance: number;
+  btcBalance: number;
+  claimableSol: number;
+  claimableSat: number;
+  vestedSat: number;
+  claimableBtc: number;
+  vestingProgressPct: number;
+  vestingEndsAt: number;
+  claimItems: ClaimableRoundItem[];
+  history: EntryHistoryItem[];
+  sessions: SessionRecord[];
+  source: string;
+  observedAt: number;
+}
+
+export interface StakingOverviewResponse {
+  cluster: string;
+  stakingAddress: string;
+  positionAddress?: string;
+  phase: number;
+  paused: boolean;
+  minStakeSat: number;
+  totalActiveSat: number;
+  totalPendingSat: number;
+  totalBtcDistributed: number;
+  streamRemainingBtc: number;
+  streamEndTs: number;
+  userActiveSat: number;
+  userPendingSat: number;
+  pendingMatureAt: number;
+  canActivate: boolean;
+  claimableBtc: number;
+  walletSatBalance: number;
+  walletBtcBalance: number;
+  sharePct: number;
+  source: string;
+  observedAt: number;
+}
+
+export interface SimulateRequest {
+  bucketsBps: number[];
+  curve?: number[];
+  perRoundSol: number;
+  limit?: number;
+}
+
+export interface SimulateOutcome {
+  roundSlot: number;
+  winningRange?: number;
+  kind: "exact" | "near" | "miss" | "void";
+  returnPct: number;
+}
+
+export interface SimulateResponse {
+  rounds: number;
+  exactHitPct: number;
+  avgCreditPct: number;
+  retainedPct: number;
+  netSol: number;
+  estSat: number;
+  totalCommitted: number;
+  outcomes: SimulateOutcome[];
 }
 
 export interface CommitPreview {
@@ -103,6 +325,7 @@ export interface MiningStatus {
   round: RoundTelemetry;
   streak: StreakEntry[];
   presets: StrategyPreset[];
+  savedStrategies?: SavedStrategy[];
   sessions: SessionRecord[];
 }
 
@@ -119,11 +342,33 @@ export interface CommitRequest {
   dryRunPreview?: boolean;
 }
 
-export interface ClaimRequest {
+export interface RevealRequest {
   walletId: string;
+  cluster?: string;
   roundSlot: number;
   shardId?: number;
   page?: number;
+  entryRow?: number;
+  selection: number;
+  saltHex: string;
+}
+
+export interface ClaimRequest {
+  walletId: string;
+  cluster?: string;
+  asset?: "sol" | "sat" | "btc";
+  roundSlot: number;
+  shardId?: number;
+  page?: number;
+  entryRow?: number;
+  createAta?: boolean;
+}
+
+export interface StakeActionRequest {
+  walletId: string;
+  cluster?: string;
+  amountSat?: number;
+  createAta?: boolean;
 }
 
 export interface MiningPolicyInput {
@@ -160,6 +405,55 @@ export async function fetchMiningRound(
   );
 }
 
+export async function fetchMiningCandles(
+  core: CoreReq,
+  interval = "10m",
+  limit = 120,
+): Promise<CandleResponse> {
+  return core.request<CandleResponse>(
+    `mining/candles?interval=${encodeURIComponent(interval)}&limit=${limit}`,
+  );
+}
+
+export async function fetchMiningProtocolStats(
+  core: CoreReq,
+  cluster = "devnet",
+): Promise<ProtocolStats> {
+  return core.request<ProtocolStats>(
+    `mining/protocol-stats?cluster=${encodeURIComponent(cluster)}`,
+  );
+}
+
+export async function fetchMiningLeaderboard(
+  core: CoreReq,
+  cluster = "devnet",
+  window = "24h",
+): Promise<LeaderboardResponse> {
+  return core.request<LeaderboardResponse>(
+    `mining/leaderboard?cluster=${encodeURIComponent(cluster)}&window=${encodeURIComponent(window)}`,
+  );
+}
+
+export async function fetchMiningPortfolio(
+  core: CoreReq,
+  cluster = "devnet",
+  walletId = "",
+): Promise<PortfolioResponse> {
+  return core.request<PortfolioResponse>(
+    `mining/portfolio?cluster=${encodeURIComponent(cluster)}&walletId=${encodeURIComponent(walletId)}`,
+  );
+}
+
+export async function fetchMiningStaking(
+  core: CoreReq,
+  cluster = "devnet",
+  walletId = "",
+): Promise<StakingOverviewResponse> {
+  return core.request<StakingOverviewResponse>(
+    `mining/staking?cluster=${encodeURIComponent(cluster)}&walletId=${encodeURIComponent(walletId)}`,
+  );
+}
+
 export async function fetchMiningHistory(
   core: CoreReq,
   limit = 24,
@@ -168,6 +462,42 @@ export async function fetchMiningHistory(
     `mining/history?limit=${limit}`,
   );
   return res.streak ?? [];
+}
+
+export async function listSavedMiningStrategies(
+  core: CoreReq,
+): Promise<{ strategies: SavedStrategy[]; presets: StrategyPreset[] }> {
+  return core.request("mining/strategies");
+}
+
+export async function saveMiningStrategy(
+  core: CoreReq,
+  input: Partial<SavedStrategy>,
+): Promise<SavedStrategy> {
+  const res = await core.request<{ strategy: SavedStrategy }>(
+    "mining/strategies",
+    "POST",
+    input,
+  );
+  return res.strategy;
+}
+
+export async function deleteMiningStrategy(
+  core: CoreReq,
+  id: string,
+): Promise<void> {
+  await core.request(`mining/strategies/${encodeURIComponent(id)}`, "DELETE");
+}
+
+export async function simulateMiningStrategy(
+  core: CoreReq,
+  req: SimulateRequest,
+): Promise<SimulateResponse> {
+  return core.request<SimulateResponse>(
+    "mining/strategies/simulate",
+    "POST",
+    req,
+  );
 }
 
 export async function previewMiningCommit(
@@ -191,11 +521,73 @@ export async function submitMiningCommit(
   );
 }
 
+export async function submitMiningReveal(
+  core: CoreReq,
+  req: RevealRequest,
+): Promise<{ review: unknown; ledger: unknown }> {
+  return core.request("mining/reveal", "POST", req);
+}
+
 export async function submitMiningClaim(
   core: CoreReq,
   req: ClaimRequest,
 ): Promise<{ review: unknown; ledger: unknown }> {
   return core.request("mining/claim", "POST", req);
+}
+
+export async function submitMiningClaimAll(
+  core: CoreReq,
+  walletId: string,
+  cluster = "devnet",
+  assets: string[] = ["sol", "sat", "btc"],
+): Promise<{ ledgers: unknown[]; count: number }> {
+  return core.request("mining/claim-all", "POST", {
+    walletId,
+    cluster,
+    assets,
+  });
+}
+
+export async function submitMiningStake(
+  core: CoreReq,
+  req: StakeActionRequest,
+  stepUpToken?: string,
+): Promise<{ review: unknown; ledger: unknown }> {
+  return core.request(
+    "mining/stake",
+    "POST",
+    req,
+    undefined,
+    stepUpHeaders(stepUpToken),
+  );
+}
+
+export async function submitMiningActivateStake(
+  core: CoreReq,
+  req: StakeActionRequest,
+): Promise<{ review: unknown; ledger: unknown }> {
+  return core.request("mining/activate-stake", "POST", req);
+}
+
+export async function submitMiningUnstake(
+  core: CoreReq,
+  req: StakeActionRequest,
+  stepUpToken?: string,
+): Promise<{ review: unknown; ledger: unknown }> {
+  return core.request(
+    "mining/unstake",
+    "POST",
+    req,
+    undefined,
+    stepUpHeaders(stepUpToken),
+  );
+}
+
+export async function submitMiningClaimStaking(
+  core: CoreReq,
+  req: StakeActionRequest,
+): Promise<{ review: unknown; ledger: unknown }> {
+  return core.request("mining/claim-staking", "POST", req);
 }
 
 export async function listMiningSessions(
@@ -218,6 +610,19 @@ export async function createMiningSession(
     session,
     undefined,
     stepUpHeaders(stepUpToken),
+  );
+  return res.session;
+}
+
+export async function depositMiningSession(
+  core: CoreReq,
+  id: string,
+  depositSol: number,
+): Promise<SessionRecord> {
+  const res = await core.request<{ session: SessionRecord }>(
+    `mining/sessions/${encodeURIComponent(id)}/deposit`,
+    "POST",
+    { depositSol },
   );
   return res.session;
 }
@@ -290,7 +695,12 @@ export async function listRoleMiningWallets(
 export async function requestMiningStepUpToken(
   core: CoreReq,
   password: string,
-  action: "mining-commit" | "mining-session" | "mining-policy",
+  action:
+    | "mining-commit"
+    | "mining-session"
+    | "mining-policy"
+    | "mining-stake"
+    | "mining-unstake",
   walletId: string,
 ): Promise<string> {
   const res = await requestStepUpToken(core, password, action, walletId || "*");
