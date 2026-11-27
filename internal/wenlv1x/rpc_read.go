@@ -164,13 +164,13 @@ func (e *Engine) fetchWalletBalancesRPC(ctx context.Context, owner, satMint, btc
 }
 
 func deriveLV1XSlot(nowSec int64, rt *onchain.LV1XRuntimeAccount) (uint64, int64) {
-	if rt != nil && rt.Epoch > 0 && nowSec >= rt.Epoch {
-		slot := uint64((nowSec - rt.Epoch) / onchain.LV1XRoundIntervalSec)
-		endsAt := rt.Epoch + int64(slot+1)*onchain.LV1XRoundIntervalSec
+	if rt != nil && rt.Epoch > 0 && nowSec+onchain.LV1XRoundIntervalSec >= rt.Epoch {
+		slot := uint64((nowSec - rt.Epoch + onchain.LV1XRoundIntervalSec) / onchain.LV1XRoundIntervalSec)
+		endsAt := rt.Epoch + int64(slot)*onchain.LV1XRoundIntervalSec
 		return slot, endsAt
 	}
-	slot := uint64(nowSec / onchain.LV1XRoundIntervalSec)
-	endsAt := int64(slot+1) * onchain.LV1XRoundIntervalSec
+	slot := uint64((nowSec + onchain.LV1XRoundIntervalSec) / onchain.LV1XRoundIntervalSec)
+	endsAt := int64(slot) * onchain.LV1XRoundIntervalSec
 	return slot, endsAt
 }
 
