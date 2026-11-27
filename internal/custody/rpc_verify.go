@@ -10,8 +10,12 @@ import (
 	"net/http"
 	"net/netip"
 	"net/url"
+	"slices"
+	"strconv"
 	"strings"
 	"time"
+
+	"github.com/fased-ai/fased-app/internal/onchain"
 )
 
 const (
@@ -321,4 +325,143 @@ func checkSignatureStatusRPC(ctx context.Context, transport http.RoundTripper, r
 		return LedgerConfirmed, "", nil
 	}
 	return LedgerBroadcast, "", nil
+}
+
+const (
+	solanaALTProgramID         = "AddressLookupTab1e1111111111111111111111111"
+	solanaALTHeaderBytes       = 56
+	minPriorityFeeMicroLamport = 1_000
+	maxPriorityFeeMicroLamport = 100_000
+)
+
+// verifyAddressLookupTablesRPC fetches each referenced Address Lookup Table account from the
+// wallet's pinned execution RPC and verifies every caller-supplied address matches the actual
+// on-chain table contents byte-for-byte, preventing v0 ALT account substitution.
+func verifyAddressLookupTablesRPC(ctx context.Context, transport http.RoundTripper, rpcURL string, tables []onchain.AddressLookupTable) error {
+	for _, tbl := range tables {
+		if _, _, err := ValidateSolanaPublicAddress(tbl.AccountKey); err != nil {
+			return fmt.Errorf("invalid ALT account key %q", tbl.AccountKey)
+		}
+		var out struct {
+			Value *struct {
+				Owner string   `json:"owner"`
+				Data  []string `json:"data"`
+			} `json:"value"`
+		}
+		if _, err := rpcJSONCall(ctx, transport, rpcURL, "getAccountInfo", []any{
+			tbl.AccountKey,
+			map[string]any{"encoding": "base64", "commitment": "confirmed"},
+		}, &out); err != nil {
+			return fmt.Errorf("verify ALT %s failed: %w", tbl.AccountKey, err)
+		}
+		if out.Value == nil || out.Value.Owner != solanaALTProgramID || len(out.Value.Data) == 0 {
+			return fmt.Errorf("ALT %s is missing or not owned by AddressLookupTable program", tbl.AccountKey)
+		}
+		raw, err := base64.StdEncoding.DecodeString(out.Value.Data[0])
+		if err != nil || len(raw) < solanaALTHeaderBytes || (len(raw)-solanaALTHeaderBytes)%32 != 0 {
+			return fmt.Errorf("ALT %s has invalid on-chain data layout", tbl.AccountKey)
+		}
+		onchainCount := (len(raw) - solanaALTHeaderBytes) / 32
+		if len(tbl.Addresses) > onchainCount {
+			return fmt.Errorf("ALT %s caller address count (%d) exceeds on-chain table (%d)", tbl.AccountKey, len(tbl.Addresses), onchainCount)
+		}
+		for pos, expectedAddr := range tbl.Addresses {
+			offset := solanaALTHeaderBytes + pos*32
+			actualAddr := Base58Encode(raw[offset : offset+32])
+			if actualAddr != expectedAddr {
+				return fmt.Errorf("ALT %s index %d mismatch: caller=%s onchain=%s", tbl.AccountKey, pos, expectedAddr, actualAddr)
+			}
+		}
+	}
+	return nil
+}
+
+// estimatePriorityFeeRPC queries recent prioritization fees and returns a bounded median
+// clamped to [1_000, 100_000] micro-lamports/CU so a malicious RPC cannot force fee drains.
+func estimatePriorityFeeRPC(ctx context.Context, transport http.RoundTripper, rpcURL string) uint64 {
+	var fees []struct {
+		PrioritizationFee uint64 `json:"prioritizationFee"`
+	}
+	if _, err := rpcJSONCall(ctx, transport, rpcURL, "getRecentPrioritizationFees", []any{[]string{}}, &fees); err != nil || len(fees) == 0 {
+		return minPriorityFeeMicroLamport
+	}
+	vals := make([]uint64, 0, len(fees))
+	for _, f := range fees {
+		if f.PrioritizationFee > 0 {
+			vals = append(vals, f.PrioritizationFee)
+		}
+	}
+	if len(vals) == 0 {
+		return minPriorityFeeMicroLamport
+	}
+	slices.Sort(vals)
+	med := vals[len(vals)/2]
+	if med < minPriorityFeeMicroLamport {
+		return minPriorityFeeMicroLamport
+	}
+	if med > maxPriorityFeeMicroLamport {
+		return maxPriorityFeeMicroLamport
+	}
+	return med
+}
+
+// fetchSPLBalancesRPC queries non-zero SPL token balances for ownerPubkey via the wallet's pinned RPC.
+func fetchSPLBalancesRPC(ctx context.Context, transport http.RoundTripper, rpcURL, ownerPubkey string) ([]TokenBalance, error) {
+	var out struct {
+		Value []struct {
+			Account struct {
+				Data struct {
+					Parsed struct {
+						Info struct {
+							Mint        string `json:"mint"`
+							TokenAmount struct {
+								Amount         string `json:"amount"`
+								Decimals       uint8  `json:"decimals"`
+								UIAmountString string `json:"uiAmountString"`
+							} `json:"tokenAmount"`
+						} `json:"info"`
+					} `json:"parsed"`
+				} `json:"data"`
+			} `json:"account"`
+		} `json:"value"`
+	}
+	if _, err := rpcJSONCall(ctx, transport, rpcURL, "getTokenAccountsByOwner", []any{
+		ownerPubkey,
+		map[string]string{"programId": SolanaTokenProgram},
+		map[string]string{"encoding": "jsonParsed"},
+	}, &out); err != nil {
+		return nil, err
+	}
+	byMint := make(map[string]*TokenBalance)
+	for _, item := range out.Value {
+		info := item.Account.Data.Parsed.Info
+		if info.Mint == "" {
+			continue
+		}
+		amt, pErr := strconv.ParseUint(strings.TrimSpace(info.TokenAmount.Amount), 10, 64)
+		if pErr != nil || amt == 0 {
+			continue
+		}
+		if cur, ok := byMint[info.Mint]; ok {
+			cur.AmountRaw += amt
+			cur.AmountHuman = FormatRawAmount(cur.AmountRaw, cur.Decimals)
+		} else {
+			human := strings.TrimSpace(info.TokenAmount.UIAmountString)
+			if human == "" {
+				human = FormatRawAmount(amt, info.TokenAmount.Decimals)
+			}
+			byMint[info.Mint] = &TokenBalance{
+				Mint:        info.Mint,
+				AmountRaw:   amt,
+				Decimals:    info.TokenAmount.Decimals,
+				AmountHuman: human,
+			}
+		}
+	}
+	tokens := make([]TokenBalance, 0, len(byMint))
+	for _, tb := range byMint {
+		tokens = append(tokens, *tb)
+	}
+	slices.SortFunc(tokens, func(a, b TokenBalance) int { return strings.Compare(a.Mint, b.Mint) })
+	return tokens, nil
 }
