@@ -75,21 +75,22 @@ type SkillGrant struct {
 // WalletPolicy defines fail-closed signer-enforced authority bounds.
 // Empty lists or zero caps mean DENY.
 type WalletPolicy struct {
-	Version           int        `json:"version"`
-	PolicyHash        string     `json:"policyHash"`
-	Role              string     `json:"role"`
-	Frozen            bool       `json:"frozen"`
-	FreezeReason      string     `json:"freezeReason,omitempty"`
-	ApprovalMode      string     `json:"approvalMode"` // manual_review | semi_auto | bounded_auto
-	AutoApproveMaxUSD float64    `json:"autoApproveMaxUsd,omitempty"`
-	Operations        []string   `json:"operations"`
-	Programs          []string   `json:"programs"`
-	Destinations      []string   `json:"destinations"`
-	SOLCap            AssetCap   `json:"solCap"`
-	TokenCaps         []AssetCap `json:"tokenCaps"`
-	MaxSlippageBps    uint32     `json:"maxSlippageBps"`
-	DailyLossCapUSD   float64    `json:"dailyLossCapUsd,omitempty"`
-	ExpiresAt         int64      `json:"expiresAt,omitempty"`
+	Version           int           `json:"version"`
+	PolicyHash        string        `json:"policyHash"`
+	Role              string        `json:"role"`
+	Frozen            bool          `json:"frozen"`
+	FreezeReason      string        `json:"freezeReason,omitempty"`
+	ApprovalMode      string        `json:"approvalMode"` // manual_review | semi_auto | bounded_auto
+	AutoApproveMaxUSD float64       `json:"autoApproveMaxUsd,omitempty"`
+	Operations        []string      `json:"operations"`
+	Programs          []string      `json:"programs"`
+	Destinations      []string      `json:"destinations"`
+	SOLCap            AssetCap      `json:"solCap"`
+	TokenCaps         []AssetCap    `json:"tokenCaps"`
+	MaxSlippageBps    uint32        `json:"maxSlippageBps"`
+	DailyLossCapUSD   float64       `json:"dailyLossCapUsd,omitempty"`
+	ExpiresAt         int64         `json:"expiresAt,omitempty"`
+	Mining            *MiningPolicy `json:"mining,omitempty"`
 }
 
 // WalletConnections tracks explicit opt-in bindings between a wallet and Fased agents/modules.
@@ -181,6 +182,8 @@ type WalletReview struct {
 	AgentID              string   `json:"agentId,omitempty"`
 	SkillGrantID         string   `json:"skillGrantId,omitempty"`
 	Venue                string   `json:"venue,omitempty"`
+	MiningCluster        string   `json:"miningCluster,omitempty"`
+	MiningRoundSlot      uint64   `json:"miningRoundSlot,string,omitempty"`
 	ExpiresAt            int64    `json:"expiresAt"`
 	Status               string   `json:"status"`
 	CreatedAt            int64    `json:"createdAt"`
@@ -239,22 +242,23 @@ type WalletSelector struct {
 
 // PrepareReviewRequest builds and validates a transaction against wallet policy.
 type PrepareReviewRequest struct {
-	WalletID      string         `json:"walletId"`
-	Operation     string         `json:"operation"`   // solana.nativeTransfer | solana.splTransferChecked | jupiter.swap | trade.order
-	Destination   string         `json:"destination"` // recipient Base58 or @wallet:<id>
-	Mint          string         `json:"mint,omitempty"`
-	OutputMint    string         `json:"outputMint,omitempty"`
-	Decimals      uint8          `json:"decimals,omitempty"`
-	SlippageBps   uint32         `json:"slippageBps,omitempty"`
-	CreateDestATA bool           `json:"createDestAta,omitempty"`
-	AmountHuman   string         `json:"amountHuman,omitempty"`
-	AmountRaw     uint64         `json:"amountRaw,string,omitempty"`
-	MinOutputRaw  uint64         `json:"minOutputRaw,string,omitempty"`
-	IsBotOrAuto   bool           `json:"isBotOrAuto,omitempty"`
-	AgentID       string         `json:"agentId,omitempty"`
-	SkillGrantID  string         `json:"skillGrantId,omitempty"`
-	Venue         string         `json:"venue,omitempty"`
-	JupiterQuote  *onchain.Quote `json:"jupiterQuote,omitempty"`
+	WalletID      string             `json:"walletId"`
+	Operation     string             `json:"operation"`   // solana.nativeTransfer | solana.splTransferChecked | jupiter.swap | trade.order
+	Destination   string             `json:"destination"` // recipient Base58 or @wallet:<id>
+	Mint          string             `json:"mint,omitempty"`
+	OutputMint    string             `json:"outputMint,omitempty"`
+	Decimals      uint8              `json:"decimals,omitempty"`
+	SlippageBps   uint32             `json:"slippageBps,omitempty"`
+	CreateDestATA bool               `json:"createDestAta,omitempty"`
+	AmountHuman   string             `json:"amountHuman,omitempty"`
+	AmountRaw     uint64             `json:"amountRaw,string,omitempty"`
+	MinOutputRaw  uint64             `json:"minOutputRaw,string,omitempty"`
+	IsBotOrAuto   bool               `json:"isBotOrAuto,omitempty"`
+	AgentID       string             `json:"agentId,omitempty"`
+	SkillGrantID  string             `json:"skillGrantId,omitempty"`
+	Venue         string             `json:"venue,omitempty"`
+	JupiterQuote  *onchain.Quote     `json:"jupiterQuote,omitempty"`
+	MiningLV1X    *MiningLV1XRequest `json:"miningLv1x,omitempty"`
 }
 
 // TokenBalance holds a single SPL token account balance queried via signer RPC.
@@ -422,6 +426,7 @@ func NormalizePolicy(p WalletPolicy) WalletPolicy {
 		out.TokenCaps = normCaps
 	}
 	out.FreezeReason = strings.TrimSpace(out.FreezeReason)
+	out.Mining = NormalizeMiningPolicy(out.Mining)
 	return out
 }
 
@@ -476,6 +481,9 @@ func IsPolicyTighterOrEqual(prevRaw, nextRaw WalletPolicy) bool {
 		return false
 	}
 	if prev.ExpiresAt > 0 && (next.ExpiresAt == 0 || next.ExpiresAt > prev.ExpiresAt) {
+		return false
+	}
+	if !IsMiningPolicyTighterOrEqual(prev.Mining, next.Mining) {
 		return false
 	}
 	return true

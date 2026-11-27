@@ -951,6 +951,9 @@ func (s *SocketServer) handleWalletSubroute(w http.ResponseWriter, r *http.Reque
 						if actorAllowed && connMatch && usdAllowed && wPub.Role != RoleVault && wPub.Role != RoleMining && wPub.Policy.ApprovalMode == ApprovalBoundedAuto && wPub.Connections.AllowTradeBots {
 							needOwnerProof = false
 						}
+						if allowMiningAutonomousExecution(wPub, rev, req.Actor) {
+							needOwnerProof = false
+						}
 					}
 				}
 				if needOwnerProof {

@@ -370,7 +370,7 @@ func RequestBodyLimit(route string) int64 {
 		return 640 * 1024
 	case route == "/api/v1/market/ingest":
 		return 512 * 1024
-	case strings.HasPrefix(route, "/api/v1/agents/v2/") || strings.HasPrefix(route, "/api/v1/tasks"):
+	case strings.HasPrefix(route, "/api/v1/agents/v2/") || strings.HasPrefix(route, "/api/v1/tasks") || strings.HasPrefix(route, "/api/v1/mining"):
 		return 256 * 1024
 	case route == "/api/v1/mcp" || strings.HasPrefix(route, "/api/v1/mcp/clients") || strings.HasPrefix(route, "/api/v1/decision/") || strings.HasPrefix(route, "/api/v1/market/") || strings.HasPrefix(route, "/api/v1/intel/") || strings.HasPrefix(route, "/api/v1/automation/") || strings.HasPrefix(route, "/api/v1/lab/") || strings.HasPrefix(route, "/api/v1/desk/") || strings.HasPrefix(route, "/api/v1/trade/") || strings.HasPrefix(route, "/api/v1/data-plugins") || strings.HasPrefix(route, "/api/v1/wallets"):
 		return 64 * 1024
@@ -532,6 +532,26 @@ func allowed(method, route string) bool {
 			return method == http.MethodDelete
 		}
 		return false
+	}
+	if strings.HasPrefix(route, "/api/v1/mining/") || route == "/api/v1/mining" {
+		rel := strings.TrimPrefix(route, "/api/v1/mining")
+		rel = strings.TrimPrefix(rel, "/")
+		switch rel {
+		case "", "status", "round", "presets", "history":
+			return method == http.MethodGet
+		case "preview", "commit", "claim":
+			return method == http.MethodPost
+		case "sessions":
+			return method == http.MethodGet || method == http.MethodPost
+		case "policy":
+			return method == http.MethodGet || method == http.MethodPut
+		default:
+			parts := strings.Split(rel, "/")
+			if len(parts) == 3 && parts[0] == "sessions" && validPathSegment(parts[1]) && (parts[2] == "stop" || parts[2] == "close") {
+				return method == http.MethodPost
+			}
+			return false
+		}
 	}
 	if strings.HasPrefix(route, "/api/v1/wallets/") {
 		rel := strings.TrimPrefix(route, "/api/v1/wallets/")
@@ -750,7 +770,7 @@ func responseLimit(route string) int64 {
 	if strings.HasPrefix(route, "/api/v1/lab/") {
 		return 2 * 1024 * 1024
 	}
-	if route == "/api/v1/mcp" || strings.HasPrefix(route, "/api/v1/mcp/clients") || strings.HasPrefix(route, "/api/v1/decision/") || strings.HasPrefix(route, "/api/v1/market/") || strings.HasPrefix(route, "/api/v1/intel/") || strings.HasPrefix(route, "/api/v1/automation/") || strings.HasPrefix(route, "/api/v1/desk/") || strings.HasPrefix(route, "/api/v1/trade/") || strings.HasPrefix(route, "/api/v1/cex/") || strings.HasPrefix(route, "/api/v1/equities/") || strings.HasPrefix(route, "/api/v1/hub/") || strings.HasPrefix(route, "/api/v1/swarm/") || strings.HasPrefix(route, "/api/v1/tasks") {
+	if route == "/api/v1/mcp" || strings.HasPrefix(route, "/api/v1/mcp/clients") || strings.HasPrefix(route, "/api/v1/decision/") || strings.HasPrefix(route, "/api/v1/market/") || strings.HasPrefix(route, "/api/v1/intel/") || strings.HasPrefix(route, "/api/v1/automation/") || strings.HasPrefix(route, "/api/v1/desk/") || strings.HasPrefix(route, "/api/v1/trade/") || strings.HasPrefix(route, "/api/v1/cex/") || strings.HasPrefix(route, "/api/v1/equities/") || strings.HasPrefix(route, "/api/v1/hub/") || strings.HasPrefix(route, "/api/v1/swarm/") || strings.HasPrefix(route, "/api/v1/tasks") || strings.HasPrefix(route, "/api/v1/mining") {
 		return 1 * 1024 * 1024
 	}
 	if route == "/api/v1/accounts/read" {
@@ -990,6 +1010,27 @@ func allowedQuery(r *http.Request) bool {
 		(strings.HasSuffix(r.URL.Path, "/runs") || strings.HasSuffix(r.URL.Path, "/logs")):
 		for key := range q {
 			if key != "limit" {
+				return false
+			}
+		}
+		return true
+	case r.Method == http.MethodGet && (r.URL.Path == "/api/v1/mining/status" || r.URL.Path == "/api/v1/mining/round"):
+		for key := range q {
+			if key != "cluster" {
+				return false
+			}
+		}
+		return true
+	case r.Method == http.MethodGet && r.URL.Path == "/api/v1/mining/history":
+		for key := range q {
+			if key != "limit" {
+				return false
+			}
+		}
+		return true
+	case r.Method == http.MethodGet && r.URL.Path == "/api/v1/mining/policy":
+		for key := range q {
+			if key != "walletId" {
 				return false
 			}
 		}

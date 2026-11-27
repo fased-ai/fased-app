@@ -14,6 +14,7 @@ import (
 	"github.com/fased-ai/fased-app/internal/httpapi"
 	"github.com/fased-ai/fased-app/internal/quantlab"
 	"github.com/fased-ai/fased-app/internal/tasks"
+	"github.com/fased-ai/fased-app/internal/wenlv1x"
 	"github.com/fased-ai/fased-app/internal/worldintel"
 )
 
@@ -152,11 +153,65 @@ func (s *Store) runTaskDomain(ctx context.Context, task tasks.Task, input tasks.
 		}, nil
 
 	case tasks.GoalMining:
-		// Native Lean V1 LV1X runner attaches cleanly in Phase 4.
+		mEng, err := s.wenLV1XEngine()
+		if err != nil {
+			return tasks.RunOutput{Status: "failed", DecisionSummary: err.Error()}, err
+		}
+		round := mEng.CurrentRound(ctx, nonEmpty(task.ExecutionBinding.Cluster, "devnet"))
+		walletID := strings.TrimPrefix(strings.TrimSpace(task.ExecutionBinding.WalletHandle), "@wallet:")
+		strategyID := nonEmpty(task.Attachments.StrategyID, "wide")
+		if strategyID == "auto-claim" && walletID != "" && task.ApprovalPolicy != tasks.ApprovalManual {
+			if _, led, cErr := mEng.SubmitClaim(ctx, wenlv1x.ClaimRequest{
+				WalletID:   walletID,
+				RoundSlot:  round.RoundSlot,
+				Autonomous: true,
+				TaskID:     task.ID,
+			}); cErr == nil && led != nil {
+				return tasks.RunOutput{
+					Status:          "completed",
+					ActionTaken:     "mining_auto_claim",
+					DecisionSummary: fmt.Sprintf("Auto-claimed LV1X round %d rewards (tx=%s)", round.RoundSlot, led.TxSignature),
+				}, nil
+			}
+		}
+		dec := wenlv1x.EvaluateTrendDecision(strategyID, task.Constraints.StopOnReversal, round.MoveBps, 10, round, 0.02)
+		if dec.Action == "pause" {
+			b, _ := json.Marshal(dec)
+			return tasks.RunOutput{
+				Status:          "completed",
+				ActionTaken:     "mining_reversal_pause",
+				DecisionSummary: dec.Reason,
+				SignalEmitted:   true,
+				ThresholdHit:    true,
+				ResultJSON:      string(b),
+			}, nil
+		}
+		if walletID != "" && task.ApprovalPolicy == tasks.ApprovalAuto {
+			if _, led, cErr := mEng.SubmitCommit(ctx, wenlv1x.CommitRequest{
+				WalletID:   walletID,
+				Cluster:    nonEmpty(task.ExecutionBinding.Cluster, "devnet"),
+				AmountSOL:  dec.RecommendedSOL,
+				StrategyID: dec.SelectedPreset,
+				Autonomous: true,
+				TaskID:     task.ID,
+			}); cErr == nil && led != nil {
+				b, _ := json.Marshal(dec)
+				return tasks.RunOutput{
+					Status:          "completed",
+					ActionTaken:     "mining_auto_commit",
+					DecisionSummary: fmt.Sprintf("%s -> committed %.3f SOL (bucket %d)", dec.Reason, dec.RecommendedSOL, dec.SelectedBucket),
+					SignalEmitted:   dec.SignalTriggered,
+					ResultJSON:      string(b),
+				}, nil
+			}
+		}
+		b, _ := json.Marshal(dec)
 		return tasks.RunOutput{
 			Status:          "completed",
 			ActionTaken:     "mining_check",
-			DecisionSummary: fmt.Sprintf("Evaluated mining objective %s (strategy %s)", nonEmpty(task.Attachments.StrategyID, "wide"), nonEmpty(task.ScheduleSpec.RoundPhase, "commit")),
+			DecisionSummary: dec.Reason,
+			SignalEmitted:   dec.SignalTriggered,
+			ResultJSON:      string(b),
 		}, nil
 
 	case tasks.GoalMonitoring, tasks.GoalNotifications, tasks.GoalPortfolio:

@@ -866,3 +866,34 @@ func TestNativeUniversalTaskRoutes(t *testing.T) {
 		t.Fatal("expected 256 KiB request limit and 1 MiB response limit on /api/v1/tasks routes")
 	}
 }
+
+func TestNativeLV1XMiningRoutes(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		method string
+		url    string
+		want   bool
+	}{
+		{http.MethodGet, "http://wails.localhost/api/v1/mining/status?cluster=devnet", true},
+		{http.MethodGet, "http://wails.localhost/api/v1/mining/status?evil=1", false},
+		{http.MethodGet, "http://wails.localhost/api/v1/mining/round?cluster=devnet", true},
+		{http.MethodGet, "http://wails.localhost/api/v1/mining/presets", true},
+		{http.MethodGet, "http://wails.localhost/api/v1/mining/history?limit=24", true},
+		{http.MethodPost, "http://wails.localhost/api/v1/mining/preview", true},
+		{http.MethodPost, "http://wails.localhost/api/v1/mining/commit", true},
+		{http.MethodPost, "http://wails.localhost/api/v1/mining/claim", true},
+		{http.MethodGet, "http://wails.localhost/api/v1/mining/sessions", true},
+		{http.MethodPost, "http://wails.localhost/api/v1/mining/sessions", true},
+		{http.MethodPost, "http://wails.localhost/api/v1/mining/sessions/msess-1/stop", true},
+		{http.MethodPost, "http://wails.localhost/api/v1/mining/sessions/msess-1/close", true},
+		{http.MethodGet, "http://wails.localhost/api/v1/mining/policy?walletId=w1", true},
+		{http.MethodPut, "http://wails.localhost/api/v1/mining/policy", true},
+		{http.MethodDelete, "http://wails.localhost/api/v1/mining/sessions/msess-1/close", false},
+	}
+	for _, tc := range cases {
+		req := httptest.NewRequest(tc.method, tc.url, nil)
+		if got := PublicRequestAllowed(req); got != tc.want {
+			t.Fatalf("PublicRequestAllowed(%s %s) = %v, want %v", tc.method, tc.url, got, tc.want)
+		}
+	}
+}
