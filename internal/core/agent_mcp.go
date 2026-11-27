@@ -27,6 +27,8 @@ var mcpReadTools = map[string]bool{
 	"get_token_price":          true,
 	"get_swap_quote":           true,
 	"list_tasks":               true,
+	"tasks_list":               true,
+	"tasks_libraries":          true,
 	"search_memories":          true,
 	"search_news":              true,
 	"list_strategies":          true,
@@ -61,6 +63,7 @@ var mcpReadTools = map[string]bool{
 
 var mcpDraftTools = map[string]bool{
 	"draft_task":           true,
+	"draft_task_v2":        true,
 	"draft_swap":           true,
 	"draft_strategy":       true,
 	"draft_lab_script":     true,

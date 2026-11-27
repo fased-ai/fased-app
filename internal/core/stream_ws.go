@@ -271,8 +271,15 @@ type parsedStreamTopic struct {
 func parseStreamTopic(raw string) (parsedStreamTopic, error) {
 	trimmed := strings.TrimSpace(raw)
 	switch trimmed {
-	case "intel", "automation", "desk", "swarm":
+	case "intel", "automation", "desk", "swarm", "tasks":
 		return parsedStreamTopic{raw: trimmed, kind: trimmed}, nil
+	}
+	if strings.HasPrefix(trimmed, "task:") {
+		taskID := strings.TrimSpace(strings.TrimPrefix(trimmed, "task:"))
+		if taskID == "" || strings.ContainsAny(taskID, " \t\r\n/") {
+			return parsedStreamTopic{}, errors.New("invalid task stream topic")
+		}
+		return parsedStreamTopic{raw: trimmed, kind: "task", symbol: taskID}, nil
 	}
 	parts := strings.Split(trimmed, ":")
 	if len(parts) < 3 {
@@ -542,6 +549,38 @@ func (h *HTTPHandler) streamWSAPI(w http.ResponseWriter, r *http.Request, token 
 							Type:      "event",
 							Topic:     parsed.raw,
 							Event:     evt.Type,
+							Timestamp: evt.Timestamp,
+							Payload:   evt,
+						})
+					}
+				}
+			}()
+		case "tasks", "task":
+			eng, tErr := h.store.tasksEngine()
+			if tErr != nil {
+				stopEntry()
+				return errors.New("tasks engine unavailable")
+			}
+			ch, unsub := eng.Subscribe()
+			subWG.Add(1)
+			go func() {
+				defer subWG.Done()
+				defer unsub()
+				for {
+					select {
+					case <-subCtx.Done():
+						return
+					case evt, ok := <-ch:
+						if !ok {
+							return
+						}
+						if parsed.kind == "task" && evt.TaskID != parsed.symbol && evt.Event != "tasks.killed" {
+							continue
+						}
+						enqueue(streamOutboundFrame{
+							Type:      "event",
+							Topic:     parsed.raw,
+							Event:     evt.Event,
 							Timestamp: evt.Timestamp,
 							Payload:   evt,
 						})

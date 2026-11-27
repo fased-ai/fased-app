@@ -989,6 +989,58 @@ func agentV2ToolRegistry() []agentToolEntry {
 		},
 		{
 			spec: AgentToolSpec{
+				Name:        "tasks_list",
+				Tier:        toolTierRead,
+				Description: "List Universal Task Engine tasks across Mining, Trading, News, Notifications, Portfolio, and Research.",
+				Parameters: map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"goal":   map[string]any{"type": "string", "description": "Optional goal domain filter."},
+						"status": map[string]any{"type": "string", "description": "Optional status filter."},
+					},
+				},
+			},
+			execute: toolTasksList,
+		},
+		{
+			spec: AgentToolSpec{
+				Name:        "tasks_libraries",
+				Tier:        toolTierRead,
+				Description: "List built-in and custom Task Personas, Goal-scoped Skills, and Ready-Made Templates.",
+				Parameters: map[string]any{
+					"type":       "object",
+					"properties": map[string]any{},
+				},
+			},
+			execute: toolTasksLibraries,
+		},
+		{
+			spec: AgentToolSpec{
+				Name:        "draft_task_v2",
+				Tier:        toolTierAction,
+				Description: "Draft a Universal Task (standalone, AI, or hybrid) for Mining, Trading, News, or Ops. Always created in Draft status requiring owner review before live activation.",
+				Parameters: map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"name":           map[string]any{"type": "string", "description": "Task display name."},
+						"goalDomain":     map[string]any{"type": "string", "description": "mining, trading, news, notifications, portfolio, research, monitoring, or custom."},
+						"goalObjective":  map[string]any{"type": "string", "description": "Concise goal constraint."},
+						"templateId":     map[string]any{"type": "string", "description": "Optional template ID to instantiate from."},
+						"scheduleKind":   map[string]any{"type": "string", "description": "continuous, interval, cron, once, or event."},
+						"intervalSec":    map[string]any{"type": "integer", "description": "Interval seconds."},
+						"execMode":       map[string]any{"type": "string", "description": "standalone, ai, or hybrid."},
+						"approvalPolicy": map[string]any{"type": "string", "description": "manual, semi_auto, or auto."},
+						"personaId":      map[string]any{"type": "string", "description": "Optional persona ID."},
+						"strategyId":     map[string]any{"type": "string", "description": "Optional strategy ID."},
+					},
+					"required": []string{"name", "goalDomain"},
+				},
+			},
+			preview: previewDraftTaskV2,
+			execute: executeDraftTaskV2,
+		},
+		{
+			spec: AgentToolSpec{
 				Name:        "draft_trade_order",
 				Tier:        toolTierAction,
 				Description: "Propose a simulated multi-strategy order plan (market, limit, bracket, trailing_atr, grid, dca, twap) subject to global kill switch and risk policy. Requires owner approval.",

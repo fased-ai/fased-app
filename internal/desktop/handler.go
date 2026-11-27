@@ -370,7 +370,7 @@ func RequestBodyLimit(route string) int64 {
 		return 640 * 1024
 	case route == "/api/v1/market/ingest":
 		return 512 * 1024
-	case strings.HasPrefix(route, "/api/v1/agents/v2/"):
+	case strings.HasPrefix(route, "/api/v1/agents/v2/") || strings.HasPrefix(route, "/api/v1/tasks"):
 		return 256 * 1024
 	case route == "/api/v1/mcp" || strings.HasPrefix(route, "/api/v1/mcp/clients") || strings.HasPrefix(route, "/api/v1/decision/") || strings.HasPrefix(route, "/api/v1/market/") || strings.HasPrefix(route, "/api/v1/intel/") || strings.HasPrefix(route, "/api/v1/automation/") || strings.HasPrefix(route, "/api/v1/lab/") || strings.HasPrefix(route, "/api/v1/desk/") || strings.HasPrefix(route, "/api/v1/trade/") || strings.HasPrefix(route, "/api/v1/data-plugins") || strings.HasPrefix(route, "/api/v1/wallets"):
 		return 64 * 1024
@@ -502,6 +502,36 @@ func allowed(method, route string) bool {
 			return false
 		}
 		return method == http.MethodDelete && validPathSegment(rel)
+	}
+	if route == "/api/v1/tasks" {
+		return method == http.MethodGet || method == http.MethodPost
+	}
+	if strings.HasPrefix(route, "/api/v1/tasks/") {
+		rel := strings.TrimPrefix(route, "/api/v1/tasks/")
+		if rel == "libraries" {
+			return method == http.MethodGet
+		}
+		if rel == "from-template" || rel == "swarm" || rel == "kill-all" {
+			return method == http.MethodPost
+		}
+		parts := strings.Split(rel, "/")
+		if len(parts) == 1 && validPathSegment(parts[0]) {
+			return method == http.MethodGet || method == http.MethodPatch || method == http.MethodDelete
+		}
+		if len(parts) == 2 && validPathSegment(parts[0]) {
+			switch parts[1] {
+			case "activate", "pause", "stop", "run":
+				return method == http.MethodPost
+			case "runs", "logs":
+				return method == http.MethodGet
+			case "edges":
+				return method == http.MethodGet || method == http.MethodPost
+			}
+		}
+		if len(parts) == 3 && validPathSegment(parts[0]) && parts[1] == "edges" && validPathSegment(parts[2]) {
+			return method == http.MethodDelete
+		}
+		return false
 	}
 	if strings.HasPrefix(route, "/api/v1/wallets/") {
 		rel := strings.TrimPrefix(route, "/api/v1/wallets/")
@@ -720,7 +750,7 @@ func responseLimit(route string) int64 {
 	if strings.HasPrefix(route, "/api/v1/lab/") {
 		return 2 * 1024 * 1024
 	}
-	if route == "/api/v1/mcp" || strings.HasPrefix(route, "/api/v1/mcp/clients") || strings.HasPrefix(route, "/api/v1/decision/") || strings.HasPrefix(route, "/api/v1/market/") || strings.HasPrefix(route, "/api/v1/intel/") || strings.HasPrefix(route, "/api/v1/automation/") || strings.HasPrefix(route, "/api/v1/desk/") || strings.HasPrefix(route, "/api/v1/trade/") || strings.HasPrefix(route, "/api/v1/cex/") || strings.HasPrefix(route, "/api/v1/equities/") || strings.HasPrefix(route, "/api/v1/hub/") || strings.HasPrefix(route, "/api/v1/swarm/") {
+	if route == "/api/v1/mcp" || strings.HasPrefix(route, "/api/v1/mcp/clients") || strings.HasPrefix(route, "/api/v1/decision/") || strings.HasPrefix(route, "/api/v1/market/") || strings.HasPrefix(route, "/api/v1/intel/") || strings.HasPrefix(route, "/api/v1/automation/") || strings.HasPrefix(route, "/api/v1/desk/") || strings.HasPrefix(route, "/api/v1/trade/") || strings.HasPrefix(route, "/api/v1/cex/") || strings.HasPrefix(route, "/api/v1/equities/") || strings.HasPrefix(route, "/api/v1/hub/") || strings.HasPrefix(route, "/api/v1/swarm/") || strings.HasPrefix(route, "/api/v1/tasks") {
 		return 1 * 1024 * 1024
 	}
 	if route == "/api/v1/accounts/read" {
@@ -943,6 +973,21 @@ func allowedQuery(r *http.Request) bool {
 		}
 		return true
 	case r.Method == http.MethodGet && r.URL.Path == "/api/v1/swarm/signals":
+		for key := range q {
+			if key != "limit" {
+				return false
+			}
+		}
+		return true
+	case r.Method == http.MethodGet && r.URL.Path == "/api/v1/tasks":
+		for key := range q {
+			if key != "goal" && key != "status" && key != "q" && key != "limit" {
+				return false
+			}
+		}
+		return true
+	case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/api/v1/tasks/") &&
+		(strings.HasSuffix(r.URL.Path, "/runs") || strings.HasSuffix(r.URL.Path, "/logs")):
 		for key := range q {
 			if key != "limit" {
 				return false

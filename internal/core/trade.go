@@ -240,6 +240,7 @@ func (s *Store) syncGlobalKill(ctx context.Context, active bool, reason, actor s
 	if active {
 		_ = s.syncCustodyGlobalFreeze(ctx, true, reason, actor)
 		s.syncDeskKill(ctx, reason, actor)
+		s.syncTasksKill(ctx, true, reason, actor)
 		if autoSvc, aErr := s.automationService(); aErr == nil {
 			_, _ = autoSvc.SetState(ctx, automation.StateActionKill, reason, actor)
 		}
@@ -248,6 +249,7 @@ func (s *Store) syncGlobalKill(ctx context.Context, active bool, reason, actor s
 	if err := s.syncCustodyGlobalFreeze(ctx, false, reason, actor); err != nil {
 		return trade.KillState{}, err
 	}
+	s.syncTasksKill(ctx, false, reason, actor)
 	if autoSvc := s.loadedOrExistingAutomationService(); autoSvc != nil {
 		_, _ = autoSvc.SetState(ctx, automation.StateActionUnkill, reason, actor)
 	}

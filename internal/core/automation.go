@@ -16,6 +16,7 @@ import (
 	"github.com/fased-ai/fased-app/internal/desk"
 	"github.com/fased-ai/fased-app/internal/httpapi"
 	"github.com/fased-ai/fased-app/internal/marketdata"
+	"github.com/fased-ai/fased-app/internal/tasks"
 	"github.com/fased-ai/fased-app/internal/telegram"
 	"github.com/fased-ai/fased-app/internal/worldintel"
 )
@@ -432,6 +433,91 @@ func (h *coreTelegramHooks) SetAutomationState(ctx context.Context, action, reas
 		_, _ = h.store.syncGlobalKill(ctx, true, reason, actor)
 	}
 	return st, err
+}
+
+func (h *coreTelegramHooks) ListTasksSummary(ctx context.Context) (string, error) {
+	eng, err := h.store.tasksEngine()
+	if err != nil {
+		return "", err
+	}
+	list, err := eng.Store().ListTasks(ctx, tasks.TaskFilter{Limit: 12})
+	if err != nil {
+		return "", err
+	}
+	if len(list) == 0 {
+		return "No universal tasks configured.", nil
+	}
+	lines := make([]string, 0, len(list)+1)
+	lines = append(lines, fmt.Sprintf("Universal Tasks (%d):", len(list)))
+	for _, t := range list {
+		lines = append(lines, fmt.Sprintf("- %s [%s/%s/%s] %s (runs=%d)", t.ID, t.GoalDomain, t.ExecMode, t.Status, t.Name, t.RunCount))
+	}
+	return strings.Join(lines, "\n"), nil
+}
+
+func (h *coreTelegramHooks) ControlTask(ctx context.Context, action, id, reason, _ string) (string, error) {
+	eng, err := h.store.tasksEngine()
+	if err != nil {
+		return "", err
+	}
+	switch action {
+	case "pause":
+		t, err := eng.Pause(ctx, id, reason)
+		if err != nil {
+			return "", err
+		}
+		return fmt.Sprintf("Task %s paused (%s).", t.Name, t.ID), nil
+	case "activate":
+		cur, err := eng.Store().GetTask(ctx, id)
+		if err != nil {
+			return "", err
+		}
+		if cur.NeedsOwnerStepUpToActivate() {
+			return "", errors.New("activating live/autonomous or tainted tasks requires owner confirmation in local UI")
+		}
+		t, err := eng.Activate(ctx, id)
+		if err != nil {
+			return "", err
+		}
+		return fmt.Sprintf("Task %s activated (%s).", t.Name, t.ID), nil
+	default:
+		return "", fmt.Errorf("unsupported task action %q", action)
+	}
+}
+
+func (h *coreTelegramHooks) TaskLogsSummary(ctx context.Context, id string) (string, error) {
+	eng, err := h.store.tasksEngine()
+	if err != nil {
+		return "", err
+	}
+	logs, err := eng.Store().ListLogs(ctx, id, 8)
+	if err != nil {
+		return "", err
+	}
+	if len(logs) == 0 {
+		return fmt.Sprintf("No logs recorded for task %s.", id), nil
+	}
+	lines := make([]string, 0, len(logs)+1)
+	lines = append(lines, fmt.Sprintf("Task Logs (%s):", id))
+	for _, l := range logs {
+		lines = append(lines, fmt.Sprintf("- [%s/%s] %s", strings.ToUpper(l.Level), l.Stage, l.Message))
+	}
+	return strings.Join(lines, "\n"), nil
+}
+
+func (h *coreTelegramHooks) CreateDraftTaskFromTemplate(ctx context.Context, templateID, actor string) (string, error) {
+	eng, err := h.store.tasksEngine()
+	if err != nil {
+		return "", err
+	}
+	created, err := eng.InstantiateTemplate(ctx, templateID, tasks.Task{
+		Status:     tasks.StatusDraft,
+		CreatedVia: "telegram",
+	})
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("Draft task created: %s (%s) [status=%s]. Review & activate in UI.", created.Name, created.ID, created.Status), nil
 }
 
 func (h *HTTPHandler) automationAPI(w http.ResponseWriter, r *http.Request, token string) {

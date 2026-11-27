@@ -829,3 +829,40 @@ func TestNativeDeskRoutes(t *testing.T) {
 		t.Fatal("expected 64 KiB request limit and 1 MiB response limit on /api/v1/desk routes")
 	}
 }
+
+func TestNativeUniversalTaskRoutes(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		method string
+		url    string
+		want   bool
+	}{
+		{http.MethodGet, "http://wails.localhost/api/v1/tasks", true},
+		{http.MethodGet, "http://wails.localhost/api/v1/tasks?goal=mining&status=active&q=wen&limit=25", true},
+		{http.MethodGet, "http://wails.localhost/api/v1/tasks?evil=1", false},
+		{http.MethodPost, "http://wails.localhost/api/v1/tasks", true},
+		{http.MethodGet, "http://wails.localhost/api/v1/tasks/libraries", true},
+		{http.MethodPost, "http://wails.localhost/api/v1/tasks/from-template", true},
+		{http.MethodPost, "http://wails.localhost/api/v1/tasks/swarm", true},
+		{http.MethodGet, "http://wails.localhost/api/v1/tasks/tsk-1", true},
+		{http.MethodPatch, "http://wails.localhost/api/v1/tasks/tsk-1", true},
+		{http.MethodDelete, "http://wails.localhost/api/v1/tasks/tsk-1", true},
+		{http.MethodPost, "http://wails.localhost/api/v1/tasks/tsk-1/activate", true},
+		{http.MethodPost, "http://wails.localhost/api/v1/tasks/tsk-1/pause", true},
+		{http.MethodPost, "http://wails.localhost/api/v1/tasks/tsk-1/stop", true},
+		{http.MethodPost, "http://wails.localhost/api/v1/tasks/tsk-1/run", true},
+		{http.MethodGet, "http://wails.localhost/api/v1/tasks/tsk-1/runs?limit=20", true},
+		{http.MethodGet, "http://wails.localhost/api/v1/tasks/tsk-1/runs?bad=1", false},
+		{http.MethodGet, "http://wails.localhost/api/v1/tasks/tsk-1/logs?limit=50", true},
+		{http.MethodGet, "http://wails.localhost/api/v1/tasks/bad/path/runs", false},
+	}
+	for _, tc := range cases {
+		req := httptest.NewRequest(tc.method, tc.url, nil)
+		if got := PublicRequestAllowed(req); got != tc.want {
+			t.Fatalf("PublicRequestAllowed(%s %s) = %v, want %v", tc.method, tc.url, got, tc.want)
+		}
+	}
+	if RequestBodyLimit("/api/v1/tasks") != 256*1024 || responseLimit("/api/v1/tasks") != 1*1024*1024 {
+		t.Fatal("expected 256 KiB request limit and 1 MiB response limit on /api/v1/tasks routes")
+	}
+}

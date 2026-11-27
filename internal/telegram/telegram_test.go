@@ -431,3 +431,61 @@ func TestBriefAndPositionsCommands(t *testing.T) {
 		t.Fatalf("unexpected fallback /positions reply: %+v", fallback)
 	}
 }
+
+type taskMockHooks struct {
+	mockHooks
+	lastAction string
+	lastTaskID string
+	lastReason string
+	lastTplID  string
+}
+
+func (m *taskMockHooks) ListTasksSummary(_ context.Context) (string, error) {
+	return "Tasks (2):\n- [active] tsk-1 WEN EV Auto (mining/hybrid)", nil
+}
+
+func (m *taskMockHooks) ControlTask(_ context.Context, action, taskID, reason, _ string) (string, error) {
+	m.lastAction = action
+	m.lastTaskID = taskID
+	m.lastReason = reason
+	return "Task " + taskID + " " + action + "d.", nil
+}
+
+func (m *taskMockHooks) TaskLogsSummary(_ context.Context, taskID string) (string, error) {
+	return "Logs for " + taskID + ":\n- run completed", nil
+}
+
+func (m *taskMockHooks) CreateDraftTaskFromTemplate(_ context.Context, tplID, _ string) (string, error) {
+	m.lastTplID = tplID
+	return "Drafted task tsk-draft from " + tplID, nil
+}
+
+func TestTelegramUniversalTaskCommands(t *testing.T) {
+	h := &taskMockHooks{}
+	allowed := []int64{777001}
+
+	list := ExecuteCommand(t.Context(), h, allowed, 777001, 777001, "/tasks", "")
+	if !list.Authorized || !strings.Contains(list.Text, "WEN EV Auto") {
+		t.Fatalf("unexpected /tasks reply: %+v", list)
+	}
+	pause := ExecuteCommand(t.Context(), h, allowed, 777001, 777001, "/task_pause tsk-1 volatility spike", "")
+	if !pause.Authorized || h.lastAction != "pause" || h.lastTaskID != "tsk-1" || h.lastReason != "volatility spike" {
+		t.Fatalf("unexpected /task_pause result: %+v action=%s reason=%q", pause, h.lastAction, h.lastReason)
+	}
+	resume := ExecuteCommand(t.Context(), h, allowed, 777001, 777001, "/task_resume tsk-1 ready", "")
+	if !resume.Authorized || h.lastAction != "activate" || h.lastTaskID != "tsk-1" {
+		t.Fatalf("unexpected /task_resume result: %+v action=%s", resume, h.lastAction)
+	}
+	logs := ExecuteCommand(t.Context(), h, allowed, 777001, 777001, "/task_logs tsk-1", "")
+	if !logs.Authorized || !strings.Contains(logs.Text, "run completed") {
+		t.Fatalf("unexpected /task_logs reply: %+v", logs)
+	}
+	newDraft := ExecuteCommand(t.Context(), h, allowed, 777001, 777001, "/task_new tpl-mine-ev-auto", "")
+	if !newDraft.Authorized || h.lastTplID != "tpl-mine-ev-auto" || !strings.Contains(newDraft.Text, "Drafted task") {
+		t.Fatalf("unexpected /task_new reply: %+v tpl=%s", newDraft, h.lastTplID)
+	}
+	unauth := ExecuteCommand(t.Context(), h, allowed, 999999, 999999, "/tasks", "")
+	if unauth.Authorized {
+		t.Fatalf("expected unauthorized rejection for /tasks: %+v", unauth)
+	}
+}

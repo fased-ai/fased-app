@@ -189,6 +189,7 @@ func startModesWithTaskSecrets(ctx context.Context, dir, listen, publicOrigin st
 	handler.agentFixture = fixture
 	server.agentFixture = fixture
 	server.startAgentTasks()
+	server.Store.startTasksEngine(serverCtx)
 	failed = false
 	return server, nil
 }
