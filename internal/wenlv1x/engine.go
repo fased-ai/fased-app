@@ -271,7 +271,9 @@ func (e *Engine) CurrentRound(ctx context.Context, cluster string) RoundTelemetr
 	rem := max(0, endsAt-now)
 
 	phase := "commit"
-	if rem <= 45 {
+	if rem <= 30 {
+		phase = "locked"
+	} else if rem <= 60 {
 		phase = "reveal"
 	}
 
@@ -582,6 +584,16 @@ func (e *Engine) SubmitCommit(ctx context.Context, req CommitRequest) (custody.W
 			}
 			if snap.Shard != nil && snap.Shard.ShardID == shardID {
 				entryIndex = snap.Shard.Count
+			} else if !e.fixture && shardID != 0 {
+				if rkAddr, rkErr := onchain.LV1XRoundPDA(round.ProgramID, round.LedgerID, round.RoundSlot); rkErr == nil {
+					if shAddr, shErr := onchain.LV1XShardPDA(round.ProgramID, rkAddr, shardID); shErr == nil {
+						if raws, rErr := e.getMultipleAccounts(ctx, []string{shAddr}); rErr == nil && len(raws) > 0 && len(raws[0]) == onchain.LV1XSpaceRoundShard {
+							if sh, dErr := onchain.DecodeLV1XRoundShard(raws[0]); dErr == nil && sh.ShardID == shardID {
+								entryIndex = sh.Count
+							}
+						}
+					}
+				}
 			}
 		}
 	}

@@ -235,14 +235,21 @@ func TestRuntimeEpochSlotAndLiveCandleSync(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 
-	slot, endsAt := deriveLV1XSlot(1795794600+21*600+123, &onchain.LV1XRuntimeAccount{Epoch: 1795794600})
-	if slot != 21 || endsAt != 1795794600+22*600 {
-		t.Fatalf("deriveLV1XSlot got (%d,%d), want (21,%d)", slot, endsAt, 1795794600+22*600)
+	epoch := int64(1795794600)
+	nowSec := epoch + 21*600 + 123
+	slot, endsAt := deriveLV1XSlot(nowSec, &onchain.LV1XRuntimeAccount{Epoch: epoch})
+	if slot != 22 || endsAt != epoch+22*600 {
+		t.Fatalf("deriveLV1XSlot got (%d,%d), want (22,%d)", slot, endsAt, epoch+22*600)
+	}
+	if nowSec < endsAt-onchain.LV1XRoundIntervalSec || nowSec >= endsAt-60 {
+		t.Fatalf("nowSec=%d outside on-chain commit window [%d, %d)", nowSec, endsAt-onchain.LV1XRoundIntervalSec, endsAt-60)
 	}
 
+	curUnix := nowSec
 	eng, err := NewEngine(Config{
-		DataDir: t.TempDir(),
-		Now:     func() time.Time { return time.Unix(1795794600+21*600+123, 0).UTC() },
+		DataDir:      t.TempDir(),
+		DevnetRPCURL: "http://127.0.0.1:1",
+		Now:          func() time.Time { return time.Unix(curUnix, 0).UTC() },
 		CandleProvider: func(ctx context.Context, interval string, limit int) ([]CandleBar, string, error) {
 			return []CandleBar{{Time: 1795794600, Open: 59900.0, High: 59960.0, Low: 59880.0, Close: 59918.0, Volume: 10}}, "marketdata", nil
 		},
@@ -255,5 +262,19 @@ func TestRuntimeEpochSlotAndLiveCandleSync(t *testing.T) {
 	rt := eng.CurrentRound(ctx, "devnet")
 	if rt.OpenPriceUSD != 59900.0 || rt.MarkPriceUSD != 59918.0 || rt.MoveBps != 3 {
 		t.Fatalf("expected live BTC candle sync in CurrentRound, got open=%.2f mark=%.2f bps=%d", rt.OpenPriceUSD, rt.MarkPriceUSD, rt.MoveBps)
+	}
+	// Derive fallback slot endsAt and verify phase transitions at rem=120, rem=45, rem=15.
+	_, baseEnd := deriveLV1XSlot(epoch, nil)
+	curUnix = baseEnd - 120
+	if got := eng.CurrentRound(ctx, "devnet").Phase; got != "commit" {
+		t.Fatalf("at rem=120 phase=%q want commit", got)
+	}
+	curUnix = baseEnd - 45
+	if got := eng.CurrentRound(ctx, "devnet").Phase; got != "reveal" {
+		t.Fatalf("at rem=45 phase=%q want reveal", got)
+	}
+	curUnix = baseEnd - 15
+	if got := eng.CurrentRound(ctx, "devnet").Phase; got != "locked" {
+		t.Fatalf("at rem=15 phase=%q want locked", got)
 	}
 }
