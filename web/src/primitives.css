@@ -179,9 +179,9 @@
   box-shadow: 0 1px 2px var(--shell-shadow);
 }
 
-:root.wt .f-icon-btn,
-:root.wt .icon-button,
-:root.wt .icon-btn {
+:where(:root.wt) .f-icon-btn,
+:where(:root.wt) .icon-button,
+:where(:root.wt) .icon-btn {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -198,9 +198,9 @@
   flex-shrink: 0;
 }
 
-:root.wt .f-icon-btn:hover:not(:disabled),
-:root.wt .icon-button:hover:not(:disabled),
-:root.wt .icon-btn:hover:not(:disabled) {
+:where(:root.wt) .f-icon-btn:hover:not(:disabled),
+:where(:root.wt) .icon-button:hover:not(:disabled),
+:where(:root.wt) .icon-btn:hover:not(:disabled) {
   background: var(--wt-raised-2);
   border-color: transparent;
   color: var(--wt-text);
@@ -336,16 +336,7 @@
   scrollbar-color: var(--wt-border-strong) transparent;
 }
 
-@media (max-width: 760px), (pointer: coarse) {
-  :root.wt .f-icon-btn,
-  :root.wt .icon-button,
-  :root.wt .icon-btn {
-    width: 44px;
-    height: 44px;
-    min-width: 44px;
-    min-height: 44px;
-  }
-
+@media (max-width: 760px) {
   :root.wt button.f-btn-soft,
   :root.wt button.wt-btn-soft,
   :root.wt button.f-btn-primary-sm,
