@@ -237,6 +237,10 @@ func (h *HTTPHandler) walletsV2API(w http.ResponseWriter, r *http.Request, token
 		if !h.v2Mutation(w, r, token, true) {
 			return
 		}
+		authCtx, ok := h.requireStepUpIfOwnerAuthConfigured(w, r, token, "wallet-create", "*", false)
+		if !ok {
+			return
+		}
 		var in struct {
 			Name   string `json:"name"`
 			Role   string `json:"role"`
@@ -245,7 +249,7 @@ func (h *HTTPHandler) walletsV2API(w http.ResponseWriter, r *http.Request, token
 		if !httpapi.DecodeStrictJSON(w, r, 16*1024, &in) {
 			return
 		}
-		rec, err := svc.CreateNativeWallet(ctx, in.Name, in.Role, in.RPCURL)
+		rec, err := svc.CreateNativeWallet(authCtx, in.Name, in.Role, in.RPCURL)
 		if err != nil {
 			writeCustodyError(w, err)
 			return

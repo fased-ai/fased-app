@@ -676,7 +676,11 @@ func (h *HTTPHandler) solanaDevnetRehearseAPI(w http.ResponseWriter, r *http.Req
 	if !decodeJSON(w, r, &req) {
 		return
 	}
-	res, err := h.store.rehearseSolanaDevnet(r.Context(), req)
+	authCtx, ok := h.requireStepUpIfOwnerAuthConfigured(w, r, token, "execute", "solana-devnet", false)
+	if !ok {
+		return
+	}
+	res, err := h.store.rehearseSolanaDevnet(authCtx, req)
 	if err != nil {
 		code := 400
 		if errors.Is(err, signer.ErrUnavailable) || errors.Is(err, errGlobalKillSwitchActive) {

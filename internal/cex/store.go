@@ -76,15 +76,42 @@ func resolveVaultKey(src providersecrets.Source, name string) []byte {
 }
 
 func writeKeyFileAtomic(keyPath string, data []byte) error {
-	tmpPath := fmt.Sprintf("%s.tmp.%d", keyPath, time.Now().UnixNano())
-	if err := os.WriteFile(tmpPath, data, 0o600); err != nil {
+	dir := filepath.Dir(keyPath)
+	f, err := os.CreateTemp(dir, ".cex-key-*")
+	if err != nil {
+		return err
+	}
+	tmpPath := f.Name()
+	cleanup := true
+	defer func() {
+		if cleanup {
+			_ = os.Remove(tmpPath)
+		}
+	}()
+	if err := f.Chmod(0o600); err != nil {
+		_ = f.Close()
+		return err
+	}
+	if _, err := f.Write(data); err != nil {
+		_ = f.Close()
+		return err
+	}
+	if err := f.Sync(); err != nil {
+		_ = f.Close()
+		return err
+	}
+	if err := f.Close(); err != nil {
 		return err
 	}
 	if err := os.Rename(tmpPath, keyPath); err != nil {
-		_ = os.Remove(tmpPath)
 		return err
 	}
 	_ = os.Chmod(keyPath, 0o600)
+	if df, dErr := os.Open(dir); dErr == nil {
+		_ = df.Sync()
+		_ = df.Close()
+	}
+	cleanup = false
 	return nil
 }
 
@@ -381,6 +408,20 @@ FROM cex_credentials ORDER BY venue ASC
 		out = append(out, st)
 	}
 	return out, rows.Err()
+}
+
+func (s *store) dailyMainnetSpendUSD(ctx context.Context, dayStart, dayEnd int64) (float64, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var total float64
+	if err := s.db.QueryRowContext(ctx, `
+SELECT COALESCE(SUM(quantity * price), 0)
+FROM cex_orders
+WHERE environment = 'mainnet' AND created_at >= ? AND created_at < ?
+`, dayStart, dayEnd).Scan(&total); err != nil {
+		return 0, err
+	}
+	return total, nil
 }
 
 func (s *store) appendOrder(ctx context.Context, rec OrderReceipt) error {

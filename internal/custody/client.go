@@ -162,14 +162,19 @@ func (c *SocketClient) ConfigureOwnerAuth(ctx context.Context, password string) 
 }
 
 func (c *SocketClient) AuthorizeOwnerAction(ctx context.Context, password, action, walletID string) (string, time.Time, error) {
+	return c.AuthorizeOwnerActionBound(ctx, password, action, walletID, "")
+}
+
+func (c *SocketClient) AuthorizeOwnerActionBound(ctx context.Context, password, action, walletID, bindingDigest string) (string, time.Time, error) {
 	var resp struct {
 		Proof     string `json:"proof"`
 		ExpiresAt int64  `json:"expiresAt"`
 	}
 	if err := c.do(ctx, http.MethodPost, "/v1/owner/authorize", map[string]string{
-		"password": password,
-		"action":   action,
-		"walletId": walletID,
+		"password":      password,
+		"action":        action,
+		"walletId":      walletID,
+		"bindingDigest": bindingDigest,
 	}, &resp); err != nil {
 		return "", time.Time{}, err
 	}
@@ -221,16 +226,18 @@ func (c *SocketClient) BeginPasskeyAssertion(ctx context.Context, rpID, origin, 
 	return out, err
 }
 
-func (c *SocketClient) FinishPasskeyAssertion(ctx context.Context, req PasskeyAssertFinishRequest) (string, time.Time, string, error) {
+func (c *SocketClient) FinishPasskeyAssertion(ctx context.Context, req PasskeyAssertFinishRequest) (string, time.Time, string, string, string, error) {
 	var resp struct {
 		Proof         string `json:"proof"`
 		ExpiresAt     int64  `json:"expiresAt"`
+		Action        string `json:"action"`
+		WalletID      string `json:"walletId"`
 		BindingDigest string `json:"bindingDigest"`
 	}
 	if err := c.do(ctx, http.MethodPost, "/v1/owner/passkeys/assert/finish", req, &resp); err != nil {
-		return "", time.Time{}, "", err
+		return "", time.Time{}, "", "", "", err
 	}
-	return resp.Proof, time.Unix(resp.ExpiresAt, 0).UTC(), resp.BindingDigest, nil
+	return resp.Proof, time.Unix(resp.ExpiresAt, 0).UTC(), resp.Action, resp.WalletID, resp.BindingDigest, nil
 }
 
 func (c *SocketClient) ImportSolanaKeypairFile(ctx context.Context, absPath, name, role, primaryRPCURL string) (WalletPublic, error) {

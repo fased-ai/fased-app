@@ -1235,6 +1235,11 @@ func (h *HTTPHandler) dataPluginsAPI(w http.ResponseWriter, r *http.Request, tok
 		if !httpapi.DecodeStrictJSON(w, r, 64*1024, &patch) {
 			return
 		}
+		if patch.Endpoint != nil || patch.APIKey != nil || patch.APISecret != nil || patch.TradingEnabled != nil {
+			if _, ok := h.requireStepUpIfOwnerAuthConfigured(w, r, token, "data-plugin", "*", false); !ok {
+				return
+			}
+		}
 		updated, err := h.store.UpdateDataPlugin(ctx, rel, patch)
 		if err != nil {
 			if errors.Is(err, os.ErrNotExist) {

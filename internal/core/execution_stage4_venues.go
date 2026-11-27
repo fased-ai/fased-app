@@ -436,7 +436,11 @@ func (h *HTTPHandler) polymarketRehearseAPI(w http.ResponseWriter, r *http.Reque
 	if !decodeJSON(w, r, &req) {
 		return
 	}
-	res, err := h.store.rehearsePolymarket(r.Context(), req)
+	authCtx, ok := h.requireStepUpIfOwnerAuthConfigured(w, r, token, "execute", "polymarket", false)
+	if !ok {
+		return
+	}
+	res, err := h.store.rehearsePolymarket(authCtx, req)
 	if err != nil {
 		code := 400
 		if errors.Is(err, signer.ErrUnavailable) || errors.Is(err, errGlobalKillSwitchActive) {
@@ -460,7 +464,11 @@ func (h *HTTPHandler) kalshiRehearseAPI(w http.ResponseWriter, r *http.Request, 
 	if !decodeJSON(w, r, &req) {
 		return
 	}
-	res, err := h.store.rehearseKalshi(r.Context(), req)
+	authCtx, ok := h.requireStepUpIfOwnerAuthConfigured(w, r, token, "execute", "kalshi", false)
+	if !ok {
+		return
+	}
+	res, err := h.store.rehearseKalshi(authCtx, req)
 	if err != nil {
 		code := 400
 		if errors.Is(err, signer.ErrUnavailable) || errors.Is(err, errGlobalKillSwitchActive) {

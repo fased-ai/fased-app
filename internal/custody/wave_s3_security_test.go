@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"math"
 	"net/http"
 	"strings"
 	"testing"
@@ -174,6 +175,8 @@ func TestWaveS3JupiterALTVerificationAndOutputMintAllowlist(t *testing.T) {
 	realKey1, _, _ := ed25519.GenerateKey(rand.Reader)
 	fakeKey1, _, _ := ed25519.GenerateKey(rand.Reader)
 	altData := make([]byte, solanaALTHeaderBytes+32)
+	binary.LittleEndian.PutUint32(altData[0:4], 1)
+	binary.LittleEndian.PutUint64(altData[4:12], math.MaxUint64)
 	copy(altData[solanaALTHeaderBytes:], realKey1)
 	altDataB64 := base64.StdEncoding.EncodeToString(altData)
 	altKeyStr := Base58Encode(altPub)

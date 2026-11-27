@@ -205,7 +205,11 @@ func (h *HTTPHandler) lighterRehearseAPI(w http.ResponseWriter, r *http.Request,
 	if !decodeJSON(w, r, &req) {
 		return
 	}
-	res, err := h.store.rehearseLighter(r.Context(), req)
+	authCtx, ok := h.requireStepUpIfOwnerAuthConfigured(w, r, token, "execute", "lighter", false)
+	if !ok {
+		return
+	}
+	res, err := h.store.rehearseLighter(authCtx, req)
 	if err != nil {
 		code := 400
 		if errors.Is(err, signer.ErrUnavailable) || errors.Is(err, errGlobalKillSwitchActive) {

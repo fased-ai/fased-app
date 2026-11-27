@@ -71,12 +71,25 @@ func startSocketServer(svc *Service, sockPath string, allowedPeerUID int, mode o
 	if err := os.MkdirAll(parent, 0o750); err != nil {
 		return nil, err
 	}
-	_ = os.Remove(targetSock)
+	if st, sErr := os.Lstat(targetSock); sErr == nil {
+		if st.Mode()&os.ModeSocket == 0 {
+			return nil, errors.New("refusing to unlink non-socket file at custody socket path")
+		}
+		if rErr := os.Remove(targetSock); rErr != nil {
+			return nil, rErr
+		}
+	} else if !os.IsNotExist(sErr) {
+		return nil, sErr
+	}
 	rawLn, err := net.Listen("unix", targetSock)
 	if err != nil {
 		return nil, err
 	}
-	_ = os.Chmod(targetSock, mode)
+	if err := os.Chmod(targetSock, mode); err != nil {
+		_ = rawLn.Close()
+		_ = os.Remove(targetSock)
+		return nil, err
+	}
 	ln := newPeerCredListener(rawLn, allowedPeerUID)
 
 	ss := &SocketServer{
@@ -109,6 +122,10 @@ func startSocketServer(svc *Service, sockPath string, allowedPeerUID int, mode o
 	srv := &http.Server{
 		Handler:           mux,
 		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       15 * time.Second,
+		WriteTimeout:      35 * time.Second,
+		IdleTimeout:       60 * time.Second,
+		MaxHeaderBytes:    16 * 1024,
 	}
 	ss.httpSrv = srv
 	go func() {
@@ -405,7 +422,7 @@ func (s *SocketServer) handleOwnerPasskeySubroute(w http.ResponseWriter, r *http
 			writeSockErr(w, err)
 			return
 		}
-		proof, exp, bindingDigest, err := s.svc.FinishPasskeyAssertion(r.Context(), req)
+		proof, exp, act, wid, bindingDigest, err := s.svc.FinishPasskeyAssertion(r.Context(), req)
 		if err != nil {
 			writeSockErr(w, err)
 			return
@@ -413,6 +430,8 @@ func (s *SocketServer) handleOwnerPasskeySubroute(w http.ResponseWriter, r *http
 		writeSockJSON(w, http.StatusOK, map[string]any{
 			"proof":         proof,
 			"expiresAt":     exp.UTC().Unix(),
+			"action":        act,
+			"walletId":      wid,
 			"bindingDigest": bindingDigest,
 		})
 	default:
@@ -482,22 +501,24 @@ func (s *SocketServer) handleOwnerAuthorize(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	var req struct {
-		Password string `json:"password"`
-		Action   string `json:"action"`
-		WalletID string `json:"walletId"`
+		Password      string `json:"password"`
+		Action        string `json:"action"`
+		WalletID      string `json:"walletId"`
+		BindingDigest string `json:"bindingDigest"`
 	}
 	if err := decodeSockBody(r, &req); err != nil {
 		writeSockErr(w, err)
 		return
 	}
-	proof, exp, err := s.svc.AuthorizeOwnerAction(r.Context(), req.Password, req.Action, req.WalletID)
+	proof, exp, err := s.svc.AuthorizeOwnerActionBound(r.Context(), req.Password, req.Action, req.WalletID, req.BindingDigest)
 	if err != nil {
 		writeSockErr(w, err)
 		return
 	}
 	writeSockJSON(w, http.StatusOK, map[string]any{
-		"proof":     proof,
-		"expiresAt": exp.UTC().Unix(),
+		"proof":         proof,
+		"bindingDigest": req.BindingDigest,
+		"expiresAt":     exp.UTC().Unix(),
 	})
 }
 

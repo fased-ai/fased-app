@@ -257,12 +257,12 @@ func TestWaveS4PasskeyDigestBoundExecutionAndPolicyOverSocket(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BeginPasskeyAssertion policy failed: %v", err)
 	}
-	polProof, _, boundDig, err := client.FinishPasskeyAssertion(ctx, buildTestAssertionES256(t, ecPriv, rpID, origin, polOpts.Challenge, credIDB64, authDataFlagUP|authDataFlagUV, 2))
+	polProof, _, polAct, polWID, boundDig, err := client.FinishPasskeyAssertion(ctx, buildTestAssertionES256(t, ecPriv, rpID, origin, polOpts.Challenge, credIDB64, authDataFlagUP|authDataFlagUV, 2))
 	if err != nil {
 		t.Fatalf("FinishPasskeyAssertion policy failed: %v", err)
 	}
-	if boundDig != nextPolHash {
-		t.Fatalf("expected bound digest %s, got %s", nextPolHash, boundDig)
+	if polAct != "policy" || polWID != w1.ID || boundDig != nextPolHash {
+		t.Fatalf("expected (policy, %s, %s), got (%s, %s, %s)", w1.ID, nextPolHash, polAct, polWID, boundDig)
 	}
 
 	// Attempt to sneak a DIFFERENT looser policy under that passkey proof -> MUST FAIL!
@@ -308,7 +308,7 @@ func TestWaveS4PasskeyDigestBoundExecutionAndPolicyOverSocket(t *testing.T) {
 		t.Fatalf("BeginPasskeyAssertion execute failed: %v", err)
 	}
 	// Missing UV flag must fail!
-	if _, _, _, err := client.FinishPasskeyAssertion(ctx, buildTestAssertionES256(t, ecPriv, rpID, origin, execOpts.Challenge, credIDB64, authDataFlagUP, 3)); !errors.Is(err, ErrOwnerAuthRequired) {
+	if _, _, _, _, _, err := client.FinishPasskeyAssertion(ctx, buildTestAssertionES256(t, ecPriv, rpID, origin, execOpts.Challenge, credIDB64, authDataFlagUP, 3)); !errors.Is(err, ErrOwnerAuthRequired) {
 		t.Fatalf("expected assertion without UV flag to fail, got %v", err)
 	}
 	// Re-issue challenge since previous challenge was consumed on failed attempt.
@@ -317,7 +317,7 @@ func TestWaveS4PasskeyDigestBoundExecutionAndPolicyOverSocket(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Cloned signCount (<= 2) must fail!
-	if _, _, _, err := client.FinishPasskeyAssertion(ctx, buildTestAssertionES256(t, ecPriv, rpID, origin, execOpts.Challenge, credIDB64, authDataFlagUP|authDataFlagUV, 2)); !errors.Is(err, ErrOwnerAuthRequired) {
+	if _, _, _, _, _, err := client.FinishPasskeyAssertion(ctx, buildTestAssertionES256(t, ecPriv, rpID, origin, execOpts.Challenge, credIDB64, authDataFlagUP|authDataFlagUV, 2)); !errors.Is(err, ErrOwnerAuthRequired) {
 		t.Fatalf("expected stale signCount to fail, got %v", err)
 	}
 	// Valid signCount=3 bound to revA.TxDigest succeeds.
@@ -325,9 +325,9 @@ func TestWaveS4PasskeyDigestBoundExecutionAndPolicyOverSocket(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	execProof, _, _, err := client.FinishPasskeyAssertion(ctx, buildTestAssertionES256(t, ecPriv, rpID, origin, execOpts.Challenge, credIDB64, authDataFlagUP|authDataFlagUV, 3))
-	if err != nil {
-		t.Fatalf("FinishPasskeyAssertion execute failed: %v", err)
+	execProof, _, execAct, execWID, _, err := client.FinishPasskeyAssertion(ctx, buildTestAssertionES256(t, ecPriv, rpID, origin, execOpts.Challenge, credIDB64, authDataFlagUP|authDataFlagUV, 3))
+	if err != nil || execAct != "execute" || execWID != w1.ID {
+		t.Fatalf("FinishPasskeyAssertion execute failed: act=%s wid=%s err=%v", execAct, execWID, err)
 	}
 
 	// Attempting to execute revB with revA's digest-bound proof MUST FAIL!
@@ -385,14 +385,14 @@ func TestWaveS4PasskeyDigestBoundExecutionAndPolicyOverSocket(t *testing.T) {
 	adBytes := append(rpHash[:], authDataFlagUP|authDataFlagUV, 0, 0, 0, 0)
 	acdHash := sha256.Sum256(acdRaw)
 	edSig := ed25519.Sign(edPriv, append(append([]byte{}, adBytes...), acdHash[:]...))
-	if _, _, _, err := client.FinishPasskeyAssertion(ctx, PasskeyAssertFinishRequest{
+	if _, _, edAct, edWID, _, err := client.FinishPasskeyAssertion(ctx, PasskeyAssertFinishRequest{
 		Challenge:         edAssertOpts.Challenge,
 		CredentialID:      edCredB64,
 		ClientDataJSON:    acdB64,
 		AuthenticatorData: base64.RawURLEncoding.EncodeToString(adBytes),
 		Signature:         base64.RawURLEncoding.EncodeToString(edSig),
-	}); err != nil {
-		t.Fatalf("Ed25519 passkey assertion failed: %v", err)
+	}); err != nil || edAct != "unfreeze" || edWID != w1.ID {
+		t.Fatalf("Ed25519 passkey assertion failed: act=%s wid=%s err=%v", edAct, edWID, err)
 	}
 
 	// Audit chain must verify cleanly across all passkey events.

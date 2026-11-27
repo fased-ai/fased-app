@@ -193,7 +193,15 @@ func (h *HTTPHandler) agentsAPI(w http.ResponseWriter, r *http.Request, token st
 			return
 		}
 	}
-	v, e := h.store.changeAgents(r.Context(), c, h.agentFixture)
+	execCtx := r.Context()
+	if c.Action == "hyperliquid-submit" {
+		var ok bool
+		execCtx, ok = h.requireStepUpIfOwnerAuthConfigured(w, r, token, "execute", "hyperliquid", false)
+		if !ok {
+			return
+		}
+	}
+	v, e := h.store.changeAgents(execCtx, c, h.agentFixture)
 	if errors.Is(e, ErrConflict) || errors.Is(e, ErrCorePaused) {
 		writeError(w, 409, e.Error())
 		return

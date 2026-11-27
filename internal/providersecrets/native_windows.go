@@ -16,6 +16,40 @@ import (
 	"golang.org/x/sys/windows"
 )
 
+func applyOwnerOnlyWindowsDACL(path string) error {
+	tok, err := windows.OpenCurrentProcessToken()
+	if err != nil {
+		return err
+	}
+	defer tok.Close()
+	user, err := tok.GetTokenUser()
+	if err != nil {
+		return err
+	}
+	acl, err := windows.ACLFromEntries([]windows.EXPLICIT_ACCESS{{
+		AccessPermissions: windows.GENERIC_ALL,
+		AccessMode:        windows.GRANT_ACCESS,
+		Inheritance:       windows.SUB_CONTAINERS_AND_OBJECTS_INHERIT,
+		Trustee: windows.TRUSTEE{
+			TrusteeForm:  windows.TRUSTEE_IS_SID,
+			TrusteeType:  windows.TRUSTEE_IS_USER,
+			TrusteeValue: windows.TrusteeValueFromSID(user.User.Sid),
+		},
+	}}, nil)
+	if err != nil {
+		return err
+	}
+	return windows.SetNamedSecurityInfo(
+		path,
+		windows.SE_FILE_OBJECT,
+		windows.DACL_SECURITY_INFORMATION|windows.PROTECTED_DACL_SECURITY_INFORMATION,
+		nil,
+		nil,
+		acl,
+		nil,
+	)
+}
+
 func windowsVaultDir() (string, error) {
 	base := strings.TrimSpace(os.Getenv("LOCALAPPDATA"))
 	if base == "" {
@@ -125,6 +159,10 @@ func (Native) Key(_ context.Context, instance string, create bool) ([]byte, erro
 		clear(key)
 		return nil, ErrUnavailable
 	}
+	if err = applyOwnerOnlyWindowsDACL(dir); err != nil {
+		clear(key)
+		return nil, ErrUnavailable
+	}
 	tmp, err := os.CreateTemp(dir, ".vault-*")
 	if err != nil {
 		clear(key)
@@ -144,6 +182,11 @@ func (Native) Key(_ context.Context, instance string, create bool) ([]byte, erro
 		return nil, ErrUnavailable
 	}
 	if err = tmp.Close(); err != nil {
+		_ = os.Remove(tmpName)
+		clear(key)
+		return nil, ErrUnavailable
+	}
+	if err = applyOwnerOnlyWindowsDACL(tmpName); err != nil {
 		_ = os.Remove(tmpName)
 		clear(key)
 		return nil, ErrUnavailable

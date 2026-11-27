@@ -154,7 +154,11 @@ func (h *HTTPHandler) handleStage5Route(w http.ResponseWriter, r *http.Request, 
 			if !decodeJSON(w, r, &in) {
 				return true
 			}
-			st, saveErr := rt.cex.SaveCredential(r.Context(), in)
+			authCtx, ok := h.requireStepUpIfOwnerAuthConfigured(w, r, token, "cex-credentials", "*", strings.EqualFold(strings.TrimSpace(in.Environment), "mainnet"))
+			if !ok {
+				return true
+			}
+			st, saveErr := rt.cex.SaveCredential(authCtx, in)
 			if saveErr != nil {
 				code := 400
 				if errors.Is(saveErr, cex.ErrExecutionDisabled) || errors.Is(saveErr, cex.ErrWithdrawalScopeDenied) {
@@ -202,7 +206,11 @@ func (h *HTTPHandler) handleStage5Route(w http.ResponseWriter, r *http.Request, 
 		if !decodeJSON(w, r, &req) {
 			return true
 		}
-		rec, subErr := rt.cex.SubmitOrder(r.Context(), req)
+		authCtx, ok := h.requireStepUpIfOwnerAuthConfigured(w, r, token, "execute", "cex", strings.EqualFold(strings.TrimSpace(req.Environment), "mainnet"))
+		if !ok {
+			return true
+		}
+		rec, subErr := rt.cex.SubmitOrder(authCtx, req)
 		if subErr != nil {
 			code := 400
 			if errors.Is(subErr, cex.ErrExecutionDisabled) || errors.Is(subErr, cex.ErrWithdrawalScopeDenied) {
@@ -297,7 +305,11 @@ func (h *HTTPHandler) handleStage5Route(w http.ResponseWriter, r *http.Request, 
 		if !decodeJSON(w, r, &req) {
 			return true
 		}
-		rec, subErr := rt.equities.SubmitOrder(r.Context(), req)
+		authCtx, ok := h.requireStepUpIfOwnerAuthConfigured(w, r, token, "execute", "equities", strings.EqualFold(strings.TrimSpace(req.Environment), "live"))
+		if !ok {
+			return true
+		}
+		rec, subErr := rt.equities.SubmitOrder(authCtx, req)
 		if subErr != nil {
 			code := 400
 			if errors.Is(subErr, equities.ErrExecutionDisabled) {
