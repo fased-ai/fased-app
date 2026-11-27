@@ -176,6 +176,63 @@ func (c *SocketClient) AuthorizeOwnerAction(ctx context.Context, password, actio
 	return resp.Proof, time.Unix(resp.ExpiresAt, 0).UTC(), nil
 }
 
+func (c *SocketClient) ListOwnerPasskeys(ctx context.Context) ([]OwnerPasskey, error) {
+	var resp struct {
+		Passkeys []OwnerPasskey `json:"passkeys"`
+	}
+	if err := c.do(ctx, http.MethodGet, "/v1/owner/passkeys", nil, &resp); err != nil {
+		return nil, err
+	}
+	if resp.Passkeys == nil {
+		return []OwnerPasskey{}, nil
+	}
+	return resp.Passkeys, nil
+}
+
+func (c *SocketClient) DeleteOwnerPasskey(ctx context.Context, credentialID string) (bool, error) {
+	var resp struct {
+		Deleted bool `json:"deleted"`
+	}
+	if err := c.do(ctx, http.MethodDelete, "/v1/owner/passkeys/"+url.PathEscape(credentialID), nil, &resp); err != nil {
+		return false, err
+	}
+	return resp.Deleted, nil
+}
+
+func (c *SocketClient) BeginPasskeyRegistration(ctx context.Context, rpID, origin, label string) (PasskeyRegisterOptions, error) {
+	var out PasskeyRegisterOptions
+	err := c.do(ctx, http.MethodPost, "/v1/owner/passkeys/register/begin", map[string]string{
+		"rpId": rpID, "origin": origin, "label": label,
+	}, &out)
+	return out, err
+}
+
+func (c *SocketClient) FinishPasskeyRegistration(ctx context.Context, req PasskeyRegisterFinishRequest) (OwnerPasskey, error) {
+	var out OwnerPasskey
+	err := c.do(ctx, http.MethodPost, "/v1/owner/passkeys/register/finish", req, &out)
+	return out, err
+}
+
+func (c *SocketClient) BeginPasskeyAssertion(ctx context.Context, rpID, origin, action, walletID, bindingDigest string) (PasskeyAssertOptions, error) {
+	var out PasskeyAssertOptions
+	err := c.do(ctx, http.MethodPost, "/v1/owner/passkeys/assert/begin", map[string]string{
+		"rpId": rpID, "origin": origin, "action": action, "walletId": walletID, "bindingDigest": bindingDigest,
+	}, &out)
+	return out, err
+}
+
+func (c *SocketClient) FinishPasskeyAssertion(ctx context.Context, req PasskeyAssertFinishRequest) (string, time.Time, string, error) {
+	var resp struct {
+		Proof         string `json:"proof"`
+		ExpiresAt     int64  `json:"expiresAt"`
+		BindingDigest string `json:"bindingDigest"`
+	}
+	if err := c.do(ctx, http.MethodPost, "/v1/owner/passkeys/assert/finish", req, &resp); err != nil {
+		return "", time.Time{}, "", err
+	}
+	return resp.Proof, time.Unix(resp.ExpiresAt, 0).UTC(), resp.BindingDigest, nil
+}
+
 func (c *SocketClient) ImportSolanaKeypairFile(ctx context.Context, absPath, name, role, primaryRPCURL string) (WalletPublic, error) {
 	var out WalletPublic
 	err := c.do(ctx, http.MethodPost, "/v1/owner/import-raw", map[string]string{

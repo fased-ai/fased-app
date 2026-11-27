@@ -17,6 +17,7 @@ import (
 	"github.com/fased-ai/fased-app/internal/decision"
 	"github.com/fased-ai/fased-app/internal/fasedscript"
 	"github.com/fased-ai/fased-app/internal/marketdata"
+	"github.com/fased-ai/fased-app/internal/providersecrets"
 	"github.com/fased-ai/fased-app/internal/scheduler"
 	"github.com/fased-ai/fased-app/internal/worldintel"
 )
@@ -26,6 +27,7 @@ type Config struct {
 	DataDir          string
 	FixtureMode      bool
 	Now              func() time.Time
+	SecretSource     providersecrets.Source
 	HTTPTransport    http.RoundTripper // Tests only.
 	MarketReader     func(ctx context.Context, venue, symbol, interval string, limit int) ([]marketdata.Candle, error)
 	DrawingReader    func(ctx context.Context, id string) (marketdata.ChartDrawing, bool, error)
@@ -59,7 +61,7 @@ func NewService(cfg Config) (*Service, error) {
 	if nowFn == nil {
 		nowFn = time.Now
 	}
-	st, err := openStore(cfg.DataDir, nowFn)
+	st, err := openStore(cfg.DataDir, nowFn, cfg.SecretSource)
 	if err != nil {
 		return nil, err
 	}

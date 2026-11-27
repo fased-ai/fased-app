@@ -14,14 +14,15 @@ import (
 	"runtime"
 	"strings"
 	"sync"
-	"time"
 
+	"github.com/fased-ai/fased-app/internal/providersecrets"
 	_ "modernc.org/sqlite"
 )
 
 const (
 	integrationsDirName = "integrations"
 	keyFileName         = "integrations.key"
+	integrationsKeyPurp = "fased-integrations-key:v1"
 	mcpDBName           = "mcpclient.sqlite"
 	secretAAD           = "fased-mcpclient/v1"
 )
@@ -43,78 +44,13 @@ func sqliteFileURI(path string) string {
 	return "file://" + escaped
 }
 
-func loadOrCreateKey(dir string) ([]byte, error) {
+func loadOrCreateKey(dir string, src providersecrets.Source) ([]byte, error) {
 	keyPath := filepath.Join(dir, keyFileName)
-	if raw, err := os.ReadFile(keyPath); err == nil {
-		if len(raw) != 32 {
-			return nil, errors.New("corrupted integrations key length")
-		}
-		return raw, nil
-	} else if !os.IsNotExist(err) {
-		return nil, err
-	}
-
-	key := make([]byte, 32)
-	if _, err := rand.Read(key); err != nil {
-		return nil, err
-	}
-	tmp, err := os.CreateTemp(dir, ".integrations.key.*")
-	if err != nil {
-		return nil, err
-	}
-	tmpPath := tmp.Name()
-	defer func() { _ = os.Remove(tmpPath) }()
-	if err := tmp.Chmod(0o600); err != nil {
-		_ = tmp.Close()
-		return nil, err
-	}
-	if _, err := tmp.Write(key); err != nil {
-		_ = tmp.Close()
-		return nil, err
-	}
-	if err := tmp.Close(); err != nil {
-		return nil, err
-	}
-	linkErr := os.Link(tmpPath, keyPath)
-	if linkErr == nil {
-		return key, nil
-	}
-	if os.IsExist(linkErr) {
-		raw, readErr := os.ReadFile(keyPath)
-		if readErr != nil || len(raw) != 32 {
-			return nil, errors.New("failed to read initialized integrations key")
-		}
-		return raw, nil
-	}
-
-	// Fallback for filesystems that do not support hardlinks.
-	f, err := os.OpenFile(keyPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
-	if err == nil {
-		_, writeErr := f.Write(key)
-		closeErr := f.Close()
-		if writeErr != nil {
-			_ = os.Remove(keyPath)
-			return nil, writeErr
-		}
-		if closeErr != nil {
-			return nil, closeErr
-		}
-		return key, nil
-	}
-	if os.IsExist(err) {
-		for attempt := 0; attempt < 5; attempt++ {
-			raw, readErr := os.ReadFile(keyPath)
-			if readErr == nil && len(raw) == 32 {
-				return raw, nil
-			}
-			time.Sleep(10 * time.Millisecond)
-		}
-		return nil, errors.New("failed to read initialized integrations key")
-	}
-	return nil, err
+	key, _, err := providersecrets.LoadOrCreateSealedKey(context.Background(), src, keyPath, integrationsKeyPurp, false)
+	return key, err
 }
 
-func openStore(dataDir string) (*store, error) {
+func openStore(dataDir string, src providersecrets.Source) (*store, error) {
 	if strings.TrimSpace(dataDir) == "" {
 		return nil, errors.New("mcpclient requires non-empty DataDir")
 	}
@@ -122,7 +58,7 @@ func openStore(dataDir string) (*store, error) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, err
 	}
-	key, err := loadOrCreateKey(dir)
+	key, err := loadOrCreateKey(dir, src)
 	if err != nil {
 		return nil, err
 	}

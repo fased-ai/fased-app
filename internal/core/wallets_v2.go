@@ -292,8 +292,11 @@ func (h *HTTPHandler) walletsV2API(w http.ResponseWriter, r *http.Request, token
 			}
 			callCtx := ctx
 			if !custody.IsPolicyTighterOrEqual(cur.Policy, in.Policy) {
+				nextPolicy := in.Policy
+				nextPolicy.Role = cur.Role
+				nextPolicy.Version = cur.Policy.Version + 1
 				var ok bool
-				callCtx, ok = h.requireStepUpCtx(w, r, token, "policy", id)
+				callCtx, ok = h.requireStepUpCtxBound(w, r, token, "policy", id, custody.ComputePolicyHash(nextPolicy))
 				if !ok {
 					return
 				}
@@ -493,7 +496,16 @@ func (h *HTTPHandler) walletsV2API(w http.ResponseWriter, r *http.Request, token
 			if !h.v2Mutation(w, r, token, true) {
 				return
 			}
-			authCtx, ok := h.requireStepUpCtx(w, r, token, "execute", walletID)
+			expectedDigest := ""
+			if revs, _, _, aErr := svc.ListActivity(ctx, walletID); aErr == nil {
+				for _, rv := range revs {
+					if rv.ID == reviewID {
+						expectedDigest = rv.TxDigest
+						break
+					}
+				}
+			}
+			authCtx, ok := h.requireStepUpCtxBound(w, r, token, "execute", walletID, expectedDigest)
 			if !ok {
 				return
 			}

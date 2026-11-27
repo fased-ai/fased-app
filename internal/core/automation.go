@@ -34,6 +34,7 @@ func (s *Store) automationService() (*automation.Service, error) {
 		DataDir:       s.dir,
 		FixtureMode:   s.providerFixture,
 		Now:           s.now,
+		SecretSource:  s.taskSecrets,
 		HTTPTransport: s.automationTransport,
 		MarketReader: func(ctx context.Context, venue, symbol, interval string, limit int) ([]marketdata.Candle, error) {
 			md, mErr := s.marketDataService()
@@ -736,15 +737,21 @@ func (h *HTTPHandler) automationAPI(w http.ResponseWriter, r *http.Request, toke
 			writeError(w, 405, "method not allowed")
 			return
 		}
-		h.automationStreamSSE(w, r, autoSvc)
+		h.automationStreamSSE(w, r, token, autoSvc)
 
 	default:
 		writeError(w, 404, "unknown automation operation")
 	}
 }
 
-func (h *HTTPHandler) automationStreamSSE(w http.ResponseWriter, r *http.Request, autoSvc *automation.Service) {
-	snapCtx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+func (h *HTTPHandler) automationStreamSSE(w http.ResponseWriter, r *http.Request, token string, autoSvc *automation.Service) {
+	streamCtx, releaseStream, ok := h.acquireSSEStream(w, r, token)
+	if !ok {
+		return
+	}
+	defer releaseStream()
+
+	snapCtx, cancel := context.WithTimeout(streamCtx, 10*time.Second)
 	st, err := autoSvc.GetState(snapCtx)
 	ntfs, nErr := autoSvc.ListNotifications(snapCtx, automation.NotificationFilter{Limit: 15})
 	cancel()
@@ -791,7 +798,7 @@ func (h *HTTPHandler) automationStreamSSE(w http.ResponseWriter, r *http.Request
 
 	for {
 		select {
-		case <-r.Context().Done():
+		case <-streamCtx.Done():
 			return
 		case <-heartbeat.C:
 			if !writeSSE("heartbeat", map[string]any{"timestamp": time.Now().UTC().UnixMilli()}) {

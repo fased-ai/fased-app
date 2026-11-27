@@ -238,14 +238,20 @@ func (h *HTTPHandler) worldIntelAPI(w http.ResponseWriter, r *http.Request, toke
 			writeError(w, 405, "method not allowed")
 			return
 		}
-		h.worldIntelStreamSSE(w, r, svc)
+		h.worldIntelStreamSSE(w, r, token, svc)
 
 	default:
 		writeError(w, 404, "unknown world intelligence operation")
 	}
 }
 
-func (h *HTTPHandler) worldIntelStreamSSE(w http.ResponseWriter, r *http.Request, svc *worldintel.Service) {
+func (h *HTTPHandler) worldIntelStreamSSE(w http.ResponseWriter, r *http.Request, token string, svc *worldintel.Service) {
+	streamCtx, releaseStream, ok := h.acquireSSEStream(w, r, token)
+	if !ok {
+		return
+	}
+	defer releaseStream()
+
 	q := r.URL.Query()
 	filter := worldintel.StreamFilter{
 		Category: q.Get("category"),
@@ -253,7 +259,7 @@ func (h *HTTPHandler) worldIntelStreamSSE(w http.ResponseWriter, r *http.Request
 		Ticker:   q.Get("ticker"),
 	}
 
-	snapCtx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	snapCtx, cancel := context.WithTimeout(streamCtx, 10*time.Second)
 	events, err := svc.ListEvents(snapCtx, worldintel.EventFilter{
 		Category: filter.Category,
 		Region:   filter.Region,
@@ -308,7 +314,7 @@ func (h *HTTPHandler) worldIntelStreamSSE(w http.ResponseWriter, r *http.Request
 
 	for {
 		select {
-		case <-r.Context().Done():
+		case <-streamCtx.Done():
 			return
 		case <-heartbeat.C:
 			if !writeSSE("heartbeat", map[string]any{"timestamp": time.Now().UTC().UnixMilli()}) {

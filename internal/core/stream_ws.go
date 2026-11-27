@@ -22,12 +22,112 @@ const (
 	streamTicketTTL          = 15 * time.Second
 	maxStreamTickets         = 128
 	maxActiveWSConns         = 32
+	maxActiveSSEConns        = 32
 	maxStreamTopicsPerConn   = 64
 	streamOutboundBufferSize = 256
 	wsHeartbeatInterval      = 20 * time.Second
 	wsClientWriteTimeout     = 5 * time.Second
 	wsInboundReadLimit       = 32 * 1024
 )
+
+type activeStreamEntry struct {
+	sessionHash string
+	cancel      context.CancelFunc
+}
+
+func (h *HTTPHandler) registerSessionStream(sessionHash string, cancel context.CancelFunc) func() {
+	if h == nil || cancel == nil {
+		return func() {}
+	}
+	h.streamRegMu.Lock()
+	if h.activeStreams == nil {
+		h.activeStreams = make(map[uint64]activeStreamEntry)
+	}
+	h.streamRegNext++
+	id := h.streamRegNext
+	h.activeStreams[id] = activeStreamEntry{
+		sessionHash: sessionHash,
+		cancel:      cancel,
+	}
+	h.streamRegMu.Unlock()
+	return func() {
+		h.streamRegMu.Lock()
+		delete(h.activeStreams, id)
+		h.streamRegMu.Unlock()
+	}
+}
+
+func (h *HTTPHandler) closeStreamsForSessionHash(sessHash string) {
+	if h == nil || sessHash == "" {
+		return
+	}
+	h.streamTicketMu.Lock()
+	for k, entry := range h.streamTickets {
+		if tokenHash(entry.sessionToken) == sessHash {
+			delete(h.streamTickets, k)
+		}
+	}
+	h.streamTicketMu.Unlock()
+
+	h.streamRegMu.Lock()
+	var cancels []context.CancelFunc
+	for id, entry := range h.activeStreams {
+		if entry.sessionHash == sessHash {
+			cancels = append(cancels, entry.cancel)
+			delete(h.activeStreams, id)
+		}
+	}
+	h.streamRegMu.Unlock()
+	for _, fn := range cancels {
+		fn()
+	}
+}
+
+func (h *HTTPHandler) closeStreamsExceptSessionHash(keepHash string) {
+	if h == nil {
+		return
+	}
+	h.streamTicketMu.Lock()
+	for k, entry := range h.streamTickets {
+		if keepHash == "" || tokenHash(entry.sessionToken) != keepHash {
+			delete(h.streamTickets, k)
+		}
+	}
+	h.streamTicketMu.Unlock()
+
+	h.streamRegMu.Lock()
+	var cancels []context.CancelFunc
+	for id, entry := range h.activeStreams {
+		if keepHash == "" || entry.sessionHash != keepHash {
+			cancels = append(cancels, entry.cancel)
+			delete(h.activeStreams, id)
+		}
+	}
+	h.streamRegMu.Unlock()
+	for _, fn := range cancels {
+		fn()
+	}
+}
+
+func (h *HTTPHandler) closeAllStreams() {
+	h.closeStreamsExceptSessionHash("")
+}
+
+func (h *HTTPHandler) acquireSSEStream(w http.ResponseWriter, r *http.Request, token string) (context.Context, func(), bool) {
+	if h.activeSSEConns.Add(1) > maxActiveSSEConns {
+		h.activeSSEConns.Add(-1)
+		writeError(w, 429, "too many active event streams")
+		return nil, nil, false
+	}
+	ctx, cancel := context.WithCancel(r.Context())
+	unreg := h.registerSessionStream(tokenHash(token), cancel)
+	release := func() {
+		unreg()
+		cancel()
+		h.activeSSEConns.Add(-1)
+	}
+	return ctx, release, true
+}
 
 type streamTicketEntry struct {
 	sessionToken string
@@ -223,7 +323,7 @@ func parseStreamTopic(raw string) (parsedStreamTopic, error) {
 	}
 }
 
-func (h *HTTPHandler) streamWSAPI(w http.ResponseWriter, r *http.Request) {
+func (h *HTTPHandler) streamWSAPI(w http.ResponseWriter, r *http.Request, token string) {
 	if r.Method != http.MethodGet {
 		writeError(w, 405, "method not allowed")
 		return
@@ -263,6 +363,8 @@ func (h *HTTPHandler) streamWSAPI(w http.ResponseWriter, r *http.Request) {
 
 	ctx, cancel := context.WithCancel(r.Context())
 	defer cancel()
+	unreg := h.registerSessionStream(tokenHash(token), cancel)
+	defer unreg()
 
 	sendCh := make(chan streamOutboundFrame, streamOutboundBufferSize)
 	enqueue := func(frame streamOutboundFrame) {

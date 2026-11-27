@@ -437,7 +437,7 @@ func (h *HTTPHandler) marketDataAPI(w http.ResponseWriter, r *http.Request, toke
 			writeError(w, 405, "method not allowed")
 			return
 		}
-		h.marketDataStreamSSE(w, r, svc)
+		h.marketDataStreamSSE(w, r, token, svc)
 
 	default:
 		writeError(w, 404, "unknown market operation")
@@ -491,7 +491,13 @@ func parseStreamSubsParam(raw string) ([]marketdata.Filter, error) {
 	return filters, nil
 }
 
-func (h *HTTPHandler) marketDataStreamSSE(w http.ResponseWriter, r *http.Request, svc *marketdata.Service) {
+func (h *HTTPHandler) marketDataStreamSSE(w http.ResponseWriter, r *http.Request, token string, svc *marketdata.Service) {
+	streamCtx, releaseStream, ok := h.acquireSSEStream(w, r, token)
+	if !ok {
+		return
+	}
+	defer releaseStream()
+
 	q := r.URL.Query()
 	venue := strings.ToLower(strings.TrimSpace(q.Get("venue")))
 	symbol := strings.TrimSpace(q.Get("symbol"))
@@ -656,7 +662,7 @@ func (h *HTTPHandler) marketDataStreamSSE(w http.ResponseWriter, r *http.Request
 
 	for {
 		select {
-		case <-r.Context().Done():
+		case <-streamCtx.Done():
 			return
 		case <-heartbeat.C:
 			if !writeSSE("heartbeat", map[string]any{"timestamp": time.Now().UTC().UnixMilli()}) {

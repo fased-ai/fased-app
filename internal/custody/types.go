@@ -207,6 +207,8 @@ type SecurityStatus struct {
 	ProcessIsolated   bool   `json:"processIsolated"`
 	KEKProtection     string `json:"kekProtection"` // systemd-creds | os-keychain | file-dev-only
 	OwnerAuthEnforced bool   `json:"ownerAuthEnforced"`
+	PasskeyCount      int    `json:"passkeyCount"`
+	PasskeyEnabled    bool   `json:"passkeyEnabled"`
 	SocketPath        string `json:"socketPath,omitempty"`
 	AllowedPeerUID    int    `json:"allowedPeerUid,omitempty"`
 }

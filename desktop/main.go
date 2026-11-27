@@ -99,7 +99,7 @@ func main() {
 				startedUpgraded := false
 				if self, e := os.Executable(); e == nil {
 					packageDir := filepath.Dir(self)
-					if m, e := bundle.Verify(packageDir); e == nil && m.Desktop {
+					if m, e := bundle.Verify(packageDir); e == nil && m.Desktop && !m.UnsignedEngineering {
 						pkgEngine := m.Files[localinstall.EngineName()].SHA256
 						if pkgEngine != "" && installed.Files[localinstall.EngineName()] != pkgEngine {
 							signerPath := ""

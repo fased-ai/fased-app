@@ -16,6 +16,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/fased-ai/fased-app/internal/custody"
 	"github.com/fased-ai/fased-app/internal/signer"
 	"github.com/fased-ai/fased-app/internal/update"
 	"golang.org/x/term"
@@ -35,6 +36,18 @@ func main() {
 func run(args []string, input *os.File, out, errOut io.Writer) error {
 	if compiledFixtureHost != nil && !compiledFixtureHost(0) {
 		return signer.ErrUnavailable
+	}
+	// Unified hardened Custody V2 daemon entrypoint (identical to `fased-app signer-daemon`),
+	// retiring the legacy standalone signer split-brain while preserving CI fixture contracts.
+	if len(args) > 0 && (args[0] == "daemon" || args[0] == "custody-daemon" || args[0] == "signer-daemon") {
+		return custody.RunDaemon(args[1:], "", out, errOut)
+	}
+	if len(args) == 1 && args[0] == "custody-v2-version" {
+		return json.NewEncoder(out).Encode(map[string]any{
+			"protocol": 4,
+			"mode":     "unified-custody-v2",
+			"passkeys": true,
+		})
 	}
 	if len(args) > 0 && (args[0] == "custody-maintenance" || args[0] == "custody-maintenance-inventory" || args[0] == "custody-maintenance-status") {
 		return signerMaintenanceCommand(args, input, out)

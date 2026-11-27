@@ -155,8 +155,47 @@ export interface WalletSecurityPosture {
   processIsolated: boolean;
   kekProtection: string;
   ownerAuthEnforced?: boolean;
+  passkeyCount?: number;
+  passkeyEnabled?: boolean;
   socketPath?: string;
   allowedPeerUid?: number;
+}
+
+export interface OwnerPasskey {
+  credentialId: string;
+  label: string;
+  rpId: string;
+  alg: number;
+  signCount: number;
+  createdAt: number;
+  lastUsedAt?: number;
+}
+
+export interface PasskeyRegisterOptions {
+  challenge: string;
+  rpId: string;
+  rpName: string;
+  userId: string;
+  userName: string;
+  userDisplayName: string;
+  pubKeyCredAlgs: number[];
+  excludeCredentialIds?: string[];
+  timeoutMs: number;
+  userVerification: "required" | "preferred" | "discouraged";
+  attestation: "none" | "indirect" | "direct";
+  expiresAt: number;
+}
+
+export interface PasskeyAssertOptions {
+  challenge: string;
+  rpId: string;
+  allowCredentialIds: string[];
+  action: string;
+  walletId: string;
+  bindingDigest?: string;
+  timeoutMs: number;
+  userVerification: "required" | "preferred" | "discouraged";
+  expiresAt: number;
 }
 
 export interface WalletsV2ListResponse {
@@ -190,6 +229,158 @@ export async function requestStepUpToken(
   walletId = "*",
 ): Promise<{ stepUpToken: string; expiresAt: number }> {
   return core.request("auth/step-up", "POST", { password, action, walletId });
+}
+
+function b64urlToBytes(b64url: string): Uint8Array {
+  const pad =
+    b64url.length % 4 === 0 ? "" : "=".repeat(4 - (b64url.length % 4));
+  const raw = atob(b64url.replace(/-/g, "+").replace(/_/g, "/") + pad);
+  const out = new Uint8Array(raw.length);
+  for (let i = 0; i < raw.length; i++) out[i] = raw.charCodeAt(i);
+  return out;
+}
+
+function bytesToB64url(buf: ArrayBuffer | Uint8Array): string {
+  const bytes = buf instanceof Uint8Array ? buf : new Uint8Array(buf);
+  let bin = "";
+  for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+  return btoa(bin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
+}
+
+export function isWebAuthnAvailable(): boolean {
+  return (
+    typeof window !== "undefined" &&
+    typeof window.PublicKeyCredential !== "undefined" &&
+    typeof navigator !== "undefined" &&
+    typeof navigator.credentials !== "undefined"
+  );
+}
+
+export async function listOwnerPasskeys(
+  core: CoreRequestOnly,
+): Promise<{ passkeys: OwnerPasskey[]; count: number }> {
+  return core.request("auth/passkeys");
+}
+
+export async function registerOwnerPasskey(
+  core: CoreRequestOnly,
+  label: string,
+  beginStepUpToken?: string,
+  finishStepUpToken?: string,
+): Promise<{ passkey: OwnerPasskey }> {
+  if (!isWebAuthnAvailable()) {
+    throw new Error("WebAuthn passkeys are not available in this browser");
+  }
+  const opts = await core.request<PasskeyRegisterOptions>(
+    "auth/passkeys/register/begin",
+    "POST",
+    { label },
+    undefined,
+    stepUpHeaders(beginStepUpToken),
+  );
+  const cred = (await navigator.credentials.create({
+    publicKey: {
+      challenge: b64urlToBytes(opts.challenge) as BufferSource,
+      rp: { id: opts.rpId, name: opts.rpName },
+      user: {
+        id: b64urlToBytes(opts.userId) as BufferSource,
+        name: opts.userName,
+        displayName: opts.userDisplayName,
+      },
+      pubKeyCredParams: opts.pubKeyCredAlgs.map((alg) => ({
+        type: "public-key",
+        alg,
+      })),
+      excludeCredentials: (opts.excludeCredentialIds ?? []).map((id) => ({
+        type: "public-key",
+        id: b64urlToBytes(id) as BufferSource,
+      })),
+      authenticatorSelection: {
+        userVerification: opts.userVerification,
+      },
+      timeout: opts.timeoutMs,
+      attestation: opts.attestation,
+    },
+  })) as PublicKeyCredential | null;
+  if (!cred) {
+    throw new Error("Passkey creation was cancelled");
+  }
+  const resp = cred.response as AuthenticatorAttestationResponse;
+  return core.request<{ passkey: OwnerPasskey }>(
+    "auth/passkeys/register/finish",
+    "POST",
+    {
+      challenge: opts.challenge,
+      label,
+      credentialId: bytesToB64url(cred.rawId),
+      clientDataJSON: bytesToB64url(resp.clientDataJSON),
+      attestationObject: bytesToB64url(resp.attestationObject),
+    },
+    undefined,
+    stepUpHeaders(finishStepUpToken),
+  );
+}
+
+export async function deleteOwnerPasskey(
+  core: CoreRequestOnly,
+  credentialId: string,
+  stepUpToken: string,
+): Promise<{ deleted: boolean; credentialId: string }> {
+  return core.request(
+    `auth/passkeys/${encodeURIComponent(credentialId)}`,
+    "DELETE",
+    undefined,
+    undefined,
+    stepUpHeaders(stepUpToken),
+  );
+}
+
+export async function requestPasskeyStepUpToken(
+  core: CoreRequestOnly,
+  action: string,
+  walletId = "*",
+  bindingDigest = "",
+): Promise<{
+  stepUpToken: string;
+  action: string;
+  walletId: string;
+  bindingDigest?: string;
+  method: "passkey";
+  expiresAt: number;
+}> {
+  if (!isWebAuthnAvailable()) {
+    throw new Error("WebAuthn passkeys are not available in this browser");
+  }
+  const opts = await core.request<PasskeyAssertOptions>(
+    "auth/step-up/passkey/begin",
+    "POST",
+    { action, walletId, bindingDigest },
+  );
+  const assertion = (await navigator.credentials.get({
+    publicKey: {
+      challenge: b64urlToBytes(opts.challenge) as BufferSource,
+      rpId: opts.rpId,
+      allowCredentials: opts.allowCredentialIds.map((id) => ({
+        type: "public-key",
+        id: b64urlToBytes(id) as BufferSource,
+      })),
+      userVerification: opts.userVerification,
+      timeout: opts.timeoutMs,
+    },
+  })) as PublicKeyCredential | null;
+  if (!assertion) {
+    throw new Error("Passkey confirmation was cancelled");
+  }
+  const resp = assertion.response as AuthenticatorAssertionResponse;
+  return core.request("auth/step-up/passkey/finish", "POST", {
+    action,
+    walletId,
+    challenge: opts.challenge,
+    credentialId: bytesToB64url(assertion.rawId),
+    clientDataJSON: bytesToB64url(resp.clientDataJSON),
+    authenticatorData: bytesToB64url(resp.authenticatorData),
+    signature: bytesToB64url(resp.signature),
+  });
 }
 
 export async function listWalletsV2(
