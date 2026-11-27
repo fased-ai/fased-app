@@ -26,14 +26,6 @@
   min-width: 0;
 }
 
-.wt-wpanel {
-  background: var(--wt-surface);
-  border: 0;
-  border-radius: var(--radius);
-  padding: 12px;
-  min-width: 0;
-}
-
 :root.wt button.wt-market-trigger {
   display: inline-flex;
   align-items: center;
@@ -103,33 +95,6 @@
   color: var(--wt-muted);
 }
 
-.wt-kpi-box {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 10px 8px;
-  padding: 10px;
-  background: var(--wt-raised);
-  border: 0;
-  border-radius: 10px;
-}
-
-.wt-kpi-box span {
-  display: block;
-  font-size: 0.7rem;
-  color: var(--wt-muted);
-}
-
-.wt-kpi-box strong {
-  display: block;
-  margin-top: 2px;
-  font-size: 0.84rem;
-  font-weight: 600;
-  color: var(--wt-text);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 .wt-chart-controls {
   display: flex;
   flex-wrap: wrap;
@@ -179,48 +144,8 @@
 .trade-toggle-btn.is-selected,
 .trade-mini-btn.is-selected,
 .trade-venue-filter-btn.is-selected {
-  background: color-mix(in srgb, var(--shell-primary) 16%, transparent);
+  background: var(--wt-raised-2);
   color: var(--wt-text);
-}
-
-/* Rose-underlined tabs (WEN Mine / Claim / Swap standard) */
-.wt-tabs-underline {
-  display: flex;
-  align-items: center;
-  gap: 16px;
-  border-bottom: 1px solid var(--wt-border);
-  overflow-x: auto;
-}
-
-:root.wt .wt-tabs-underline button {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  height: auto;
-  min-height: 32px;
-  padding: 7px 2px 9px;
-  background: transparent;
-  border: 0;
-  border-bottom: 2px solid transparent;
-  border-radius: 0;
-  color: var(--wt-muted);
-  font-size: 0.8rem;
-  font-weight: 600;
-  white-space: nowrap;
-  cursor: pointer;
-}
-
-:root.wt .wt-tabs-underline button:hover:not(:disabled) {
-  background: transparent;
-  border-color: transparent;
-  color: var(--wt-text);
-}
-
-:root.wt .wt-tabs-underline button.is-selected,
-:root.wt .wt-tabs-underline button[aria-selected="true"] {
-  background: transparent;
-  color: var(--wt-text);
-  border-bottom-color: var(--shell-primary);
 }
 
 .wt-tab-count {
@@ -243,25 +168,6 @@
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-}
-
-.wt-hairline-table {
-  display: flex;
-  flex-direction: column;
-}
-
-.wt-hairline-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  padding: 9px 2px;
-  border-bottom: 1px solid var(--wt-border);
-  font-size: 0.78rem;
-}
-
-.wt-hairline-row:last-child {
-  border-bottom: 0;
 }
 
 /* Right Composer Rail */
@@ -508,56 +414,6 @@
 
 .wt-kv-rows strong {
   color: var(--wt-text);
-}
-
-:root.wt button.wt-btn-rose {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-  width: 100%;
-  height: auto;
-  min-height: 44px;
-  padding: 10px 14px;
-  border: 0;
-  border-radius: 10px;
-  background: var(--shell-primary);
-  color: var(--shell-primary-text);
-  font-size: 0.86rem;
-  font-weight: 700;
-  cursor: pointer;
-}
-
-:root.wt button.wt-btn-rose:hover:not(:disabled) {
-  background: var(--shell-primary-hover);
-  border-color: transparent;
-}
-
-:root.wt button.wt-btn-rose:disabled {
-  opacity: 0.45;
-  cursor: not-allowed;
-}
-
-:root.wt button.wt-btn-rose-sm {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-  height: auto;
-  min-height: 34px;
-  padding: 6px 12px;
-  border: 0;
-  border-radius: 8px;
-  background: var(--shell-primary);
-  color: var(--shell-primary-text);
-  font-size: 0.8rem;
-  font-weight: 700;
-  cursor: pointer;
-}
-
-:root.wt button.wt-btn-rose-sm:hover:not(:disabled) {
-  background: var(--shell-primary-hover);
-  border-color: transparent;
 }
 
 /* Charts & Watchlist & Orderflow shared styling */

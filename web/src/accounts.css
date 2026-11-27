@@ -14,14 +14,6 @@
   min-width: 0;
 }
 
-.wt-wpanel {
-  background: var(--wt-surface);
-  border: 0;
-  border-radius: var(--radius);
-  padding: 12px;
-  min-width: 0;
-}
-
 .wt-wcenter {
   display: flex;
   flex-direction: column;
@@ -200,35 +192,6 @@
   white-space: nowrap;
 }
 
-.wt-kpi-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 6px;
-  margin-bottom: 10px;
-}
-
-.wt-kpi-box {
-  background: var(--wt-raised);
-  border-radius: var(--radius-xs);
-  padding: 8px;
-  display: grid;
-  gap: 2px;
-}
-
-.wt-kpi-box span {
-  font-size: 11px;
-  color: var(--wt-muted);
-}
-
-.wt-kpi-box strong {
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--wt-text);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 .wt-rail-btns {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -239,65 +202,9 @@
   grid-column: 1 / -1;
 }
 
-:root.wt button.wt-btn-soft {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-  min-width: 0;
-  height: auto;
-  min-height: 34px;
-  padding: 7px 10px;
-  border: 0;
-  border-radius: var(--radius-xs);
-  background: var(--wt-raised);
-  color: var(--wt-text-2);
-  font-size: 12px;
-  font-weight: 600;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  cursor: pointer;
-}
-
-:root.wt button.wt-btn-soft:hover:not(:disabled) {
-  background: var(--wt-raised-2);
-  border-color: transparent;
-  color: var(--wt-text);
-}
-
 :root.wt button.wt-btn-soft.is-danger {
   color: var(--wt-danger);
   background: var(--wt-danger-bg);
-}
-
-:root.wt button.wt-btn-rose {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-  width: 100%;
-  height: auto;
-  min-height: 44px;
-  padding: 10px 14px;
-  border: 0;
-  border-radius: var(--radius-sm);
-  background: var(--shell-primary);
-  color: var(--shell-primary-text);
-  font-size: 13px;
-  font-weight: 700;
-  cursor: pointer;
-}
-
-:root.wt button.wt-btn-rose:hover:not(:disabled) {
-  background: var(--shell-primary-hover);
-  border-color: transparent;
-}
-
-:root.wt button.wt-btn-rose:disabled,
-:root.wt button.wt-btn-soft:disabled {
-  opacity: 0.45;
-  cursor: not-allowed;
 }
 
 .wt-form-stack {

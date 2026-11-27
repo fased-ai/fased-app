@@ -269,7 +269,7 @@ export function WorldIntelWorkspace() {
               </div>
             </div>
 
-            <div className="wt-kpi-box">
+            <div className="wt-kpi-grid">
               <div>
                 <span>{t("Events")}</span>
                 <strong className="mono">{filteredEvents.length}</strong>
