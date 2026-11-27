@@ -70,6 +70,7 @@ type Engine struct {
 
 	runMu    sync.Mutex
 	inFlight map[string]context.CancelFunc
+	lastEmit map[string]time.Time
 
 	loopMu     sync.Mutex
 	loopCancel context.CancelFunc
@@ -93,6 +94,7 @@ func NewEngine(cfg Config) (*Engine, error) {
 		isKillActive: cfg.IsKillActive,
 		subs:         make(map[uint64]chan TaskEvent),
 		inFlight:     make(map[string]context.CancelFunc),
+		lastEmit:     make(map[string]time.Time),
 	}, nil
 }
 
@@ -382,37 +384,81 @@ func (e *Engine) Tick(ctx context.Context) {
 	}
 }
 
-// EmitEvent evaluates active event-scheduled tasks matching topic & cooldown.
-func (e *Engine) EmitEvent(ctx context.Context, topic, payloadJSON string) {
-	if e.killBlocked(ctx) {
-		return
+func (e *Engine) hasInFlightLocked(taskID string) bool {
+	prefix := taskID + ":"
+	for flightKey := range e.inFlight {
+		if flightKey == taskID || strings.HasPrefix(flightKey, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+// EmitEvent evaluates active event-scheduled and event-filtered continuous tasks matching topic,
+// enforces in-flight and cooldown deduplication, and returns the count of dispatched async runs.
+func (e *Engine) EmitEvent(ctx context.Context, topic, payloadJSON string) int {
+	if e == nil || e.killBlocked(ctx) {
+		return 0
+	}
+	cleanTopic := strings.TrimSpace(topic)
+	if cleanTopic == "" {
+		return 0
 	}
 	tasks, err := e.store.ListTasks(ctx, TaskFilter{Status: StatusActive, Limit: 200})
 	if err != nil {
-		return
+		return 0
 	}
-	nowUnix := e.now().Unix()
+	nowTime := e.now()
+	nowUnix := nowTime.Unix()
+	dispatched := 0
 	for _, t := range tasks {
-		if t.ScheduleKind != ScheduleEvent {
+		if t.ScheduleKind != ScheduleEvent && !(t.ScheduleKind == ScheduleContinuous && strings.TrimSpace(t.ScheduleSpec.EventFilter) != "") {
 			continue
 		}
-		if !matchesEventFilter(t.ScheduleSpec.EventFilter, topic) {
+		if t.Constraints.MaxRuns > 0 && t.RunCount >= t.Constraints.MaxRuns {
 			continue
 		}
-		if t.Constraints.CooldownSec > 0 && t.LastRunAt > 0 && nowUnix-t.LastRunAt < t.Constraints.CooldownSec {
+		if t.Constraints.ExpiresAt > 0 && nowUnix > t.Constraints.ExpiresAt {
 			continue
 		}
+		if !matchesEventFilter(t.ScheduleSpec.EventFilter, cleanTopic) {
+			continue
+		}
+		e.runMu.Lock()
+		if e.hasInFlightLocked(t.ID) {
+			e.runMu.Unlock()
+			continue
+		}
+		if t.Constraints.CooldownSec > 0 {
+			cd := time.Duration(t.Constraints.CooldownSec) * time.Second
+			if prev, ok := e.lastEmit[t.ID]; ok && nowTime.Sub(prev) < cd {
+				e.runMu.Unlock()
+				continue
+			}
+			if t.LastRunAt > 0 && nowUnix-t.LastRunAt < t.Constraints.CooldownSec {
+				e.runMu.Unlock()
+				continue
+			}
+		}
+		if e.lastEmit == nil {
+			e.lastEmit = make(map[string]time.Time)
+		}
+		e.lastEmit[t.ID] = nowTime
+		e.runMu.Unlock()
+
 		taskID := t.ID
+		dispatched++
 		e.wg.Add(1)
 		go func() {
 			defer e.wg.Done()
 			_, _ = e.RunTaskNow(ctx, taskID, RunInput{
-				TriggerSource:    "event:" + topic,
-				EventTopic:       topic,
+				TriggerSource:    "event:" + cleanTopic,
+				EventTopic:       cleanTopic,
 				EventPayloadJSON: payloadJSON,
 			})
 		}()
 	}
+	return dispatched
 }
 
 // RunTaskNow executes a task synchronously through its configured ExecMode (standalone / ai / hybrid),

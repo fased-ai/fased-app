@@ -152,9 +152,29 @@ test("Native Lean V1 Mine Workspace (#mine/*): 100% WEN parity (BTC chart, 80 mi
   await subnav.getByRole("button", { name: "Stake", exact: true }).click();
   await expect(page.getByText("Active Staked Pool")).toBeVisible();
 
-  // Back to main Mine view for contrast audit.
+  // Back to main Mine view, create & control a GoalMining task from #mine Automate overlay, and run contrast audit.
   await subnav.getByRole("button", { name: "Mine", exact: true }).click();
   await expect(page.locator(".mine-bin-group i")).toHaveCount(80);
+
+  await page.getByRole("button", { name: "Automate mining task" }).click();
+  await expect(
+    page.getByRole("heading", { name: "Automate Mining Task", exact: true }),
+  ).toBeVisible();
+  await page.getByLabel("Task Name").fill("Cert Auto Tails");
+  await page.getByRole("button", { name: "Create & Activate" }).click();
+
+  const tasksDrawer = page.getByRole("region", {
+    name: "Mining tasks",
+    exact: true,
+  });
+  await expect(tasksDrawer).toContainText("Cert Auto Tails");
+  await tasksDrawer
+    .getByRole("button", { name: "Run task Cert Auto Tails", exact: true })
+    .click();
+  await tasksDrawer
+    .getByRole("button", { name: "Pause task Cert Auto Tails", exact: true })
+    .click();
+  await expect(tasksDrawer).toContainText("paused");
 
   // 6. Dark mode WCAG AA + zero errors / zero external requests / zero overflow.
   const report = await auditPageAccessibility(page, { checkContrast: true });

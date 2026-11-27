@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
@@ -11,8 +12,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/fased-ai/fased-app/internal/cex"
 	"github.com/fased-ai/fased-app/internal/custody"
 	"github.com/fased-ai/fased-app/internal/decision"
+	"github.com/fased-ai/fased-app/internal/equities"
 	"github.com/fased-ai/fased-app/internal/fasedscript"
 	"github.com/fased-ai/fased-app/internal/hyperliquid"
 	"github.com/fased-ai/fased-app/internal/marketdata"
@@ -133,8 +136,13 @@ func (s *Store) isTradingVenueEnabled(venue string) bool {
 }
 
 func (s *Store) executeLiveTradeRoute(ctx context.Context, req trade.OrderRequest, refPrice float64) (trade.LiveExecReceipt, error) {
-	if s.isExternalKillActiveForTrade(ctx) {
+	if s.isExternalKillActiveForTrade(ctx) || s.isCustodyGlobalFrozen(ctx) {
 		return trade.LiveExecReceipt{}, errGlobalKillSwitchActive
+	}
+	if ts := s.loadedOrExistingTradeService(); ts != nil {
+		if snap, sErr := ts.GetSnapshot(ctx); sErr == nil && snap.KillSwitchActive {
+			return trade.LiveExecReceipt{}, errGlobalKillSwitchActive
+		}
 	}
 	isBotOrAuto := req.Mode == trade.ModeBot || req.Mode == trade.ModeAIAgent
 	var (
@@ -172,9 +180,20 @@ func (s *Store) executeLiveTradeRoute(ctx context.Context, req trade.OrderReques
 		return trade.LiveExecReceipt{}, errors.New("live execution disabled (--execution-profile=off); switch account to Paper or restart with --execution-profile=testnet|mainnet-capped")
 	}
 
-	switch req.Venue {
+	var (
+		rec    trade.LiveExecReceipt
+		err    error
+		estUSD float64
+	)
+
+	effPrice := req.EntryPrice
+	if effPrice <= 0 {
+		effPrice = refPrice
+	}
+
+	switch strings.ToLower(strings.TrimSpace(req.Venue)) {
 	case marketdata.VenueHyperliquid:
-		return s.executeLiveHyperliquidOrder(ctx, req, refPrice)
+		rec, err = s.executeLiveHyperliquidOrder(ctx, req, refPrice)
 
 	case marketdata.VenueSolana, "onchain":
 		if resolvedWallet != nil && custodyBackend != nil {
@@ -188,38 +207,39 @@ func (s *Store) executeLiveTradeRoute(ctx context.Context, req trade.OrderReques
 			memo = memo[:64]
 		}
 		if rt.profile == signer.ExecutionProfileMainnetCapped && rt.mainnetExecutor != nil {
-			res, err := s.executeSolanaMainnet(ctx, SolanaMainnetExecuteRequest{
+			res, mErr := s.executeSolanaMainnet(ctx, SolanaMainnetExecuteRequest{
 				Asset:             req.Symbol,
 				Memo:              memo,
 				EstimatedMicroUSD: estMicro,
 			})
-			if err != nil {
-				return trade.LiveExecReceipt{}, err
+			if mErr != nil {
+				return trade.LiveExecReceipt{}, mErr
 			}
-			return trade.LiveExecReceipt{
+			rec = trade.LiveExecReceipt{
 				VenueOrderID: res.OperationID,
 				TxSignature:  res.Signature,
 				FilledPrice:  refPrice,
 				Immediate:    res.Confirmed || res.Broadcasted,
-			}, nil
+			}
+		} else {
+			res, dErr := s.rehearseSolanaDevnet(ctx, SolanaDevnetRehearseRequest{
+				Asset:             req.Symbol,
+				Memo:              memo,
+				EstimatedMicroUSD: estMicro,
+			})
+			if dErr != nil {
+				return trade.LiveExecReceipt{}, dErr
+			}
+			rec = trade.LiveExecReceipt{
+				VenueOrderID: res.OperationID,
+				TxSignature:  res.Signature,
+				FilledPrice:  refPrice,
+				Immediate:    res.Confirmed || res.Broadcasted,
+			}
 		}
-		res, err := s.rehearseSolanaDevnet(ctx, SolanaDevnetRehearseRequest{
-			Asset:             req.Symbol,
-			Memo:              memo,
-			EstimatedMicroUSD: estMicro,
-		})
-		if err != nil {
-			return trade.LiveExecReceipt{}, err
-		}
-		return trade.LiveExecReceipt{
-			VenueOrderID: res.OperationID,
-			TxSignature:  res.Signature,
-			FilledPrice:  refPrice,
-			Immediate:    res.Confirmed || res.Broadcasted,
-		}, nil
 
 	case marketdata.VenueLighter:
-		res, err := s.rehearseLighter(ctx, LighterRehearseRequest{
+		res, lErr := s.rehearseLighter(ctx, LighterRehearseRequest{
 			Symbol:    req.Symbol,
 			Side:      strings.ToUpper(req.Side),
 			Price:     strconv.FormatFloat(refPrice, 'f', -1, 64),
@@ -227,52 +247,173 @@ func (s *Store) executeLiveTradeRoute(ctx context.Context, req trade.OrderReques
 			OrderType: strings.ToUpper(req.Strategy),
 			Submit:    true,
 		})
-		if err != nil {
-			return trade.LiveExecReceipt{}, err
+		if lErr != nil {
+			return trade.LiveExecReceipt{}, lErr
 		}
-		return trade.LiveExecReceipt{
+		rec = trade.LiveExecReceipt{
 			VenueOrderID: res.OperationID,
 			FilledPrice:  refPrice,
 			Immediate:    res.Submission != nil,
-		}, nil
+		}
 
 	case "polymarket":
-		res, err := s.rehearsePolymarket(ctx, PolymarketRehearseRequest{
+		res, pErr := s.rehearsePolymarket(ctx, PolymarketRehearseRequest{
 			TokenID: req.Symbol,
 			Side:    strings.ToUpper(req.Side),
 			Price:   strconv.FormatFloat(refPrice, 'f', -1, 64),
 			Shares:  strconv.FormatFloat(req.Quantity, 'f', -1, 64),
 			Submit:  true,
 		})
-		if err != nil {
-			return trade.LiveExecReceipt{}, err
+		if pErr != nil {
+			return trade.LiveExecReceipt{}, pErr
 		}
-		return trade.LiveExecReceipt{
+		rec = trade.LiveExecReceipt{
 			VenueOrderID: res.OperationID,
 			FilledPrice:  refPrice,
 			Immediate:    res.Submission != nil,
-		}, nil
+		}
 
 	case "kalshi":
-		res, err := s.rehearseKalshi(ctx, KalshiRehearseRequest{
+		res, kErr := s.rehearseKalshi(ctx, KalshiRehearseRequest{
 			Ticker: req.Symbol,
 			Side:   strings.ToLower(req.Side),
 			Count:  strconv.FormatFloat(math.Max(1, math.Round(req.Quantity)), 'f', 0, 64),
 			Price:  strconv.FormatFloat(refPrice, 'f', -1, 64),
 			Submit: true,
 		})
-		if err != nil {
-			return trade.LiveExecReceipt{}, err
+		if kErr != nil {
+			return trade.LiveExecReceipt{}, kErr
 		}
-		return trade.LiveExecReceipt{
+		rec = trade.LiveExecReceipt{
 			VenueOrderID: res.OperationID,
 			FilledPrice:  refPrice,
 			Immediate:    res.Submission != nil,
-		}, nil
+		}
+
+	case marketdata.VenueBinance, marketdata.VenueCoinbase, marketdata.VenueKraken, marketdata.VenueBybit, marketdata.VenueOKX:
+		st5, sErr := s.ensureStage5Runtime()
+		if sErr != nil {
+			return trade.LiveExecReceipt{}, sErr
+		}
+		env := "testnet"
+		orderType := "MARKET"
+		if req.Strategy == trade.StrategyLimit || rt.profile == signer.ExecutionProfileMainnetCapped {
+			orderType = "LIMIT"
+		}
+		if rt.profile == signer.ExecutionProfileMainnetCapped {
+			maxOrd := uint64(250_000_000)
+			if rt.mainnetPolicy.MaxOrderMicroUSD > 0 && rt.mainnetPolicy.MaxOrderMicroUSD < maxOrd {
+				maxOrd = rt.mainnetPolicy.MaxOrderMicroUSD
+			}
+			if cErr := st5.cex.ConfigureMainnetCapped(maxOrd); cErr != nil {
+				return trade.LiveExecReceipt{}, cErr
+			}
+			env = "mainnet"
+		}
+		sym := strings.ToUpper(strings.TrimSpace(req.Symbol))
+		if sym != "" && !strings.ContainsAny(sym, "-/") && !strings.HasSuffix(sym, "USD") && !strings.HasSuffix(sym, "USDT") && !strings.HasSuffix(sym, "USDC") {
+			sym += "-USD"
+		}
+		cexRec, cErr := st5.cex.SubmitOrder(ctx, cex.OrderRequest{
+			Venue:       strings.ToLower(strings.TrimSpace(req.Venue)),
+			Symbol:      sym,
+			Side:        strings.ToUpper(req.Side),
+			OrderType:   orderType,
+			Quantity:    req.Quantity,
+			Price:       effPrice,
+			Environment: env,
+		})
+		if cErr != nil {
+			return trade.LiveExecReceipt{}, cErr
+		}
+		fillPx := cexRec.Price
+		if fillPx <= 0 {
+			fillPx = effPrice
+		}
+		estUSD = cexRec.Quantity * fillPx
+		rec = trade.LiveExecReceipt{
+			VenueOrderID: cexRec.ID,
+			TxSignature:  cexRec.Digest,
+			FilledPrice:  fillPx,
+			Immediate:    true,
+		}
+
+	case marketdata.VenueAlpaca, "ibkr":
+		st5, sErr := s.ensureStage5Runtime()
+		if sErr != nil {
+			return trade.LiveExecReceipt{}, sErr
+		}
+		env := "paper"
+		orderType := "MARKET"
+		if req.Strategy == trade.StrategyLimit || rt.profile == signer.ExecutionProfileMainnetCapped {
+			orderType = "LIMIT"
+		}
+		if rt.profile == signer.ExecutionProfileMainnetCapped {
+			maxOrd := uint64(250_000_000)
+			if rt.mainnetPolicy.MaxOrderMicroUSD > 0 && rt.mainnetPolicy.MaxOrderMicroUSD < maxOrd {
+				maxOrd = rt.mainnetPolicy.MaxOrderMicroUSD
+			}
+			if cErr := st5.equities.ConfigureMainnetCapped(maxOrd); cErr != nil {
+				return trade.LiveExecReceipt{}, cErr
+			}
+			env = "live"
+		}
+		acct := strings.TrimSpace(req.AccountID)
+		if strings.EqualFold(req.Venue, "ibkr") {
+			if acct == "" || strings.HasPrefix(strings.ToLower(acct), "plugin:") {
+				if env == "live" {
+					acct = "U0000001"
+				} else {
+					acct = "DU0000001"
+				}
+			}
+		} else if strings.HasPrefix(strings.ToLower(acct), "plugin:") {
+			acct = ""
+		}
+		eqRec, eErr := st5.equities.SubmitOrder(ctx, equities.OrderRequest{
+			Venue:       strings.ToLower(strings.TrimSpace(req.Venue)),
+			AccountID:   acct,
+			Symbol:      strings.ToUpper(strings.TrimSpace(req.Symbol)),
+			Side:        strings.ToUpper(req.Side),
+			OrderType:   orderType,
+			Quantity:    req.Quantity,
+			LimitPrice:  effPrice,
+			Environment: env,
+		})
+		if eErr != nil {
+			return trade.LiveExecReceipt{}, eErr
+		}
+		fillPx := eqRec.LimitPrice
+		if fillPx <= 0 {
+			fillPx = effPrice
+		}
+		estUSD = eqRec.Quantity * fillPx
+		rec = trade.LiveExecReceipt{
+			VenueOrderID: eqRec.ID,
+			FilledPrice:  fillPx,
+			Immediate:    true,
+		}
 
 	default:
 		return trade.LiveExecReceipt{}, fmt.Errorf("live execution is not supported for venue %q; switch account to Paper", req.Venue)
 	}
+	if err != nil {
+		return trade.LiveExecReceipt{}, err
+	}
+	if eng := s.loadedTasksEngine(); eng != nil {
+		if payload, mErr := json.Marshal(map[string]any{
+			"venue":        req.Venue,
+			"symbol":       req.Symbol,
+			"side":         req.Side,
+			"quantity":     req.Quantity,
+			"filledPrice":  rec.FilledPrice,
+			"venueOrderId": rec.VenueOrderID,
+			"notionalUsd":  estUSD,
+		}); mErr == nil {
+			eng.EmitEvent(ctx, "trade.fill", string(payload))
+		}
+	}
+	return rec, nil
 }
 
 func (s *Store) executeLiveHyperliquidOrder(ctx context.Context, req trade.OrderRequest, refPrice float64) (trade.LiveExecReceipt, error) {
