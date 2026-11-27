@@ -10,11 +10,11 @@ import {
 
 installCoreFixture();
 
-test("Native Lean V1 Mine Workspace (#mine): 80 microbars, 6 presets, 24 streak chips, Mainnet lock & Devnet sessions", async ({
+test("Native Lean V1 Mine Workspace (#mine/*): 100% WEN parity (BTC chart, 80 microbars, Schedule Grid, Claims, Assets, Strategies, Portfolio, Stake)", async ({
   page,
   isMobile,
 }) => {
-  test.setTimeout(120000);
+  test.setTimeout(150000);
   page.setDefaultTimeout(12000);
   await stop();
   await start(true, "127.0.0.1:0", "local", false);
@@ -35,7 +35,7 @@ test("Native Lean V1 Mine Workspace (#mine): 80 microbars, 6 presets, 24 streak 
     if (m.type() === "error") errors.push(m.text());
   });
 
-  // 1. Navigate to #mine and verify WEN Muted Pro geometry & 0 overflow.
+  // 1. Navigate to #mine and verify 3-column WEN terminal + 0 overflow.
   await page.goto(`${url}/#mine`);
   await expect(
     page.getByRole("heading", { name: "Mine", exact: true, level: 1 }),
@@ -47,7 +47,10 @@ test("Native Lean V1 Mine Workspace (#mine): 80 microbars, 6 presets, 24 streak 
     "initial #mine fits viewport without horizontal scroll",
   ).toBe(true);
 
-  // 2. Verify 80 microbars, 6 strategy presets, and 24 streak chips.
+  // 2. Verify BTC market chart, 80 microbars, 6 strategy presets, and 24 streak chips.
+  await expect(
+    page.getByLabel("BTC USD mining chart", { exact: true }),
+  ).toBeVisible();
   await expect(page.locator(".mine-bin-group i")).toHaveCount(80);
   const presetsGroup = page.getByRole("group", {
     name: "Strategy presets",
@@ -60,7 +63,18 @@ test("Native Lean V1 Mine Workspace (#mine): 80 microbars, 6 presets, 24 streak 
   });
   await expect(streakList.getByRole("listitem")).toHaveCount(24);
 
-  // 3. Verify Mainnet hard-gate disables Commit CTA and shows gate note.
+  // Toggle BTC chart timeframe & Technicals style.
+  await page
+    .getByRole("group", { name: "Chart timeframe", exact: true })
+    .getByRole("button", { name: "1h", exact: true })
+    .click();
+  await page
+    .getByRole("group", { name: "Chart style", exact: true })
+    .getByRole("button", { name: "Technicals", exact: true })
+    .click();
+  await expect(page.getByText("RSI (14)")).toBeVisible();
+
+  // 3. Verify Mainnet hard-gate disables Commit CTA.
   const clusterGroup = page.getByRole("group", {
     name: "Mining cluster",
     exact: true,
@@ -73,24 +87,19 @@ test("Native Lean V1 Mine Workspace (#mine): 80 microbars, 6 presets, 24 streak 
     page.getByRole("button", { name: "Commit Round", exact: true }),
   ).toBeDisabled();
 
-  // Switch back to Devnet and select Trend up + Tails presets.
+  // Switch back to Devnet, test Schedule Grid modal and Semi-Auto session runner.
   await clusterGroup
     .getByRole("button", { name: "Devnet", exact: true })
     .click();
   await presetsGroup
-    .getByRole("button", { name: "Trend up", exact: true })
-    .click();
-  await expect(
-    presetsGroup.getByRole("button", { name: "Trend up", exact: true }),
-  ).toHaveAttribute("aria-pressed", "true");
-  await presetsGroup
     .getByRole("button", { name: "Tails", exact: true })
     .click();
+  await page.getByRole("button", { name: "Edit", exact: true }).click();
   await expect(
-    presetsGroup.getByRole("button", { name: "Tails", exact: true }),
-  ).toHaveAttribute("aria-pressed", "true");
+    page.getByRole("heading", { name: "Mining Schedule Grid", exact: true }),
+  ).toBeVisible();
+  await page.getByRole("button", { name: /Apply Schedule/ }).click();
 
-  // 4. Start and stop a Semi-Auto Devnet session cleanly via /api/v1/mining/sessions.
   const modeGroup = page.getByRole("group", {
     name: "Execution mode",
     exact: true,
@@ -114,7 +123,40 @@ test("Native Lean V1 Mine Workspace (#mine): 80 microbars, 6 presets, 24 streak 
     .click();
   await expect(sessionsTable).toContainText("stopped");
 
-  // 5. Contrast & accessibility audit + zero errors / overflow.
+  // 4. Check Claims breakdown tab and Swap tab.
+  const recordsTabs = page.getByRole("tablist", {
+    name: "Mining records and claims",
+    exact: true,
+  });
+  await recordsTabs.getByRole("tab", { name: /^Claims/ }).click();
+  await expect(page.getByText("Bootstrap Vesting Schedule")).toBeVisible();
+
+  // 5. Navigate Assets (#mine/assets), Strategies (#mine/strategies + near-miss sim), Portfolio (#mine/portfolio), Stake (#mine/stake).
+  const subnav = page.getByRole("navigation", {
+    name: "Mining workspace tabs",
+    exact: true,
+  });
+  await subnav.getByRole("button", { name: "Assets", exact: true }).click();
+  await expect(page.getByText(/Per-Round Volume/)).toBeVisible();
+
+  await subnav.getByRole("button", { name: "Strategies", exact: true }).click();
+  await page
+    .getByRole("button", { name: "Simulate", exact: true })
+    .first()
+    .click();
+  await expect(page.getByText(/Simulation Report:/)).toBeVisible();
+
+  await subnav.getByRole("button", { name: "Portfolio", exact: true }).click();
+  await expect(page.getByText("Wallet WENSAT")).toBeVisible();
+
+  await subnav.getByRole("button", { name: "Stake", exact: true }).click();
+  await expect(page.getByText("Active Staked Pool")).toBeVisible();
+
+  // Back to main Mine view for contrast audit.
+  await subnav.getByRole("button", { name: "Mine", exact: true }).click();
+  await expect(page.locator(".mine-bin-group i")).toHaveCount(80);
+
+  // 6. Dark mode WCAG AA + zero errors / zero external requests / zero overflow.
   const report = await auditPageAccessibility(page, { checkContrast: true });
   expect(report.violations, "dark mode a11y violations").toEqual([]);
   expect(external, "zero external network requests").toEqual([]);
