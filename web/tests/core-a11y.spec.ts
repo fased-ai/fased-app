@@ -22,6 +22,7 @@ test("WCAG 2.1 AA, ARIA landmarks, contrast, and keyboard Escape focus return ho
     { hash: "#news", name: "News" },
     { hash: "#lab", name: "Quant Lab" },
     { hash: "#agents/chat", name: "Chat" },
+    { hash: "#tasks", name: "Tasks" },
     { hash: "#agents/tasks", name: "Tasks" },
     { hash: "#agents/memory", name: "Memory" },
     { hash: "#agents/news", name: "News" },

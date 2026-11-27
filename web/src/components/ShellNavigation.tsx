@@ -33,7 +33,7 @@ import { Dialog } from "./shared";
 export const shellPages = [
   { name: "Mine", path: "mine", icon: Pickaxe },
   { name: "Trade", path: "trade", icon: CandlestickChart },
-  { name: "Tasks", path: "agents/tasks", icon: Clock3 },
+  { name: "Tasks", path: "tasks", icon: Clock3 },
   { name: "News", path: "intel", icon: Newspaper },
   { name: "Chat", path: "agents/chat", icon: MessageSquare },
   { name: "Dashboard", path: "overview", icon: Globe2 },
@@ -130,7 +130,7 @@ export function ShellNavigation() {
         aria-current={route === p.path ? "page" : undefined}
         onClick={closeMore}
         className={
-          p.path === "agents/tasks"
+          p.path === "tasks"
             ? "shell-overflow-route"
             : ["mine", "trade", "intel"].includes(p.path)
               ? "shell-wide-overflow-route"
@@ -168,7 +168,7 @@ export function ShellNavigation() {
               href={`#${p.path}`}
               aria-current={route === p.path ? "page" : undefined}
               className={
-                p.path === "agents/tasks"
+                p.path === "tasks"
                   ? "shell-top-extra"
                   : ["mine", "trade", "intel"].includes(p.path)
                     ? "shell-top-extra shell-top-wide"
