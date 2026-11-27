@@ -2,6 +2,7 @@ package core
 
 import (
 	"bufio"
+	"context"
 	"crypto/rand"
 	"encoding/binary"
 	"errors"
@@ -375,8 +376,8 @@ func (h *HTTPHandler) api(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Path == "/api/v1/mcp" {
 		if rawAuth := strings.TrimSpace(r.Header.Get("Authorization")); strings.HasPrefix(rawAuth, "Bearer "+mcpTokenPrefix) {
 			mcpTok := strings.TrimSpace(strings.TrimPrefix(rawAuth, "Bearer "))
-			if h.store.ValidateMCPToken(r.Context(), mcpTok) {
-				h.mcpAPIWithScopedToken(w, r)
+			if ok, scopes := h.store.ValidateMCPTokenWithScopes(r.Context(), mcpTok); ok {
+				h.mcpAPIWithScopedToken(w, r.WithContext(context.WithValue(r.Context(), mcpTokenScopesKey{}, scopes)))
 				return
 			}
 			writeError(w, 401, "invalid or expired MCP token")

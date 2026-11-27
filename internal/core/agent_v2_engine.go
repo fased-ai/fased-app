@@ -91,19 +91,50 @@ const (
 	agentV2PerToolTimeout       = 20 * time.Second
 )
 
+type taintContextKey struct{}
+
+// WithTaintState propagates prompt-injection taint across contexts (including agent delegation).
+func WithTaintState(ctx context.Context, tainted bool) context.Context {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if !tainted {
+		return ctx
+	}
+	return context.WithValue(ctx, taintContextKey{}, true)
+}
+
+// IsContextTainted reports whether untrusted external content has tainted ctx.
+func IsContextTainted(ctx context.Context) bool {
+	if ctx == nil {
+		return false
+	}
+	v, _ := ctx.Value(taintContextKey{}).(bool)
+	return v
+}
+
 func wrapUntrustedContextBlock(tag, body string) string {
 	var b [8]byte
 	_, _ = rand.Read(b[:])
 	nonce := hex.EncodeToString(b[:])
 	clean := strings.TrimSpace(body)
-	return fmt.Sprintf("<%s nonce=\"%s\">\n%s\n</%s>", tag, nonce, clean, tag)
+	// Neutralize any attempted delimiter breakout matching this tag prefix.
+	neutral := strings.NewReplacer(
+		"</"+tag+"_", "</"+tag+"[neutralized]_",
+		"<"+tag+"_", "<"+tag+"[neutralized]_",
+		"</"+tag+">", "</"+tag+"[neutralized]>",
+	).Replace(clean)
+	return fmt.Sprintf("<%s_%s>\n%s\n</%s_%s>", tag, nonce, neutral, tag, nonce)
 }
 
 func isUntrustedExternalTool(name string) bool {
 	switch strings.TrimSpace(name) {
 	case "fetch_web_page", "web_search", "search_news", "get_world_intel",
 		"get_prediction_markets", "list_swarm_signals", "list_hub_packages",
-		"call_external_mcp_tool", "delegate_to_agent":
+		"call_external_mcp_tool", "delegate_to_agent",
+		"list_notifications", "get_macro_or_sec",
+		"get_desk_state", "list_desk_journal", "list_desk_lessons",
+		"search_memories", "get_token_price", "get_swap_quote":
 		return true
 	default:
 		return false
@@ -112,7 +143,7 @@ func isUntrustedExternalTool(name string) bool {
 
 func isEgressToolBlockedWhenTainted(name string) bool {
 	switch strings.TrimSpace(name) {
-	case "fetch_web_page", "call_external_mcp_tool":
+	case "fetch_web_page", "web_search", "call_external_mcp_tool":
 		return true
 	default:
 		return false
@@ -554,7 +585,10 @@ func (s *Store) runAgentV2LoopWithHandoff(ctx context.Context, threadID, latestQ
 	}
 
 	var lastAssistant *AgentV2Message
-	var turnTainted bool
+	turnTainted := IsContextTainted(ctx)
+	if ts, _ := s.GetThreadTaint(ctx, threadID); ts > 0 {
+		turnTainted = true
+	}
 	var totalToolCalls int
 	var totalDrafts int
 	for round := 0; round < maxRounds; round++ {
@@ -564,6 +598,12 @@ func (s *Store) runAgentV2LoopWithHandoff(ctx context.Context, threadID, latestQ
 		detail, err := s.GetThread(ctx, threadID)
 		if err != nil {
 			return nil, false, err
+		}
+		// Permanently force toolsEnabled=false on untrusted feed & MCP approval threads.
+		if detail.Thread.SourceKind == "automation" || detail.Thread.SourceKind == "mcp" ||
+			detail.Thread.Title == "Event Automation Feed" || detail.Thread.Title == "MCP Approvals" {
+			toolsEnabled = false
+			specs = nil
 		}
 		if latestQuery == "" {
 			for i := len(detail.Messages) - 1; i >= 0; i-- {
@@ -577,6 +617,14 @@ func (s *Store) runAgentV2LoopWithHandoff(ctx context.Context, threadID, latestQ
 		summary, windowMsgs, err := s.contextWindowForModel(ctx, detail, target.Model, true)
 		if err != nil {
 			return nil, false, err
+		}
+		// Mark thread tainted whenever any untrusted Hub memory is recalled into system instructions.
+		for _, m := range selectPromptMemories(ctx, s, detail.Thread.ProfileID, latestQuery) {
+			if m.Source == "hub_untrusted" {
+				turnTainted = true
+				s.MarkThreadTainted(ctx, threadID, "hub_untrusted_memory")
+				break
+			}
 		}
 		instructions := buildAgentV2Instructions(ctx, s, detail.Thread.ProfileID, summary, latestQuery)
 		if round == 0 && strings.TrimSpace(handoffNote) != "" {
@@ -733,11 +781,12 @@ func (s *Store) runAgentV2LoopWithHandoff(ctx context.Context, threadID, latestQ
 				_ = s.UpdateToolCall(ctx, tc)
 				emitEvent(emit, AgentStreamEvent{Type: "tool_call", ThreadID: threadID, MessageID: assistantMsg.ID, ToolCall: &tc})
 
-				toolCtx, toolCancel := context.WithTimeout(ctx, agentV2PerToolTimeout)
+				toolCtx, toolCancel := context.WithTimeout(WithTaintState(ctx, turnTainted), agentV2PerToolTimeout)
 				res, execErr := entry.execute(toolCtx, s, detail.Thread.ProfileID, json.RawMessage(argsJSON))
 				toolCancel()
 				if isUntrustedExternalTool(call.Name) {
 					turnTainted = true
+					s.MarkThreadTainted(ctx, threadID, "tool:"+call.Name)
 				}
 				if execErr != nil {
 					tc.Status = "error"
@@ -747,6 +796,10 @@ func (s *Store) runAgentV2LoopWithHandoff(ctx context.Context, threadID, latestQ
 					tc.Status = "completed"
 					tc.ResultJSON = encodeToolResultJSON(res)
 				}
+				toolMsgContent := tc.ResultJSON
+				if isUntrustedExternalTool(call.Name) && tc.Status == "completed" {
+					toolMsgContent = wrapUntrustedContextBlock("untrusted_tool_output", tc.ResultJSON)
+				}
 				tc.CompletedAt = s.now().Unix()
 				if err := s.UpdateToolCall(ctx, tc); err != nil {
 					return nil, false, err
@@ -754,7 +807,7 @@ func (s *Store) runAgentV2LoopWithHandoff(ctx context.Context, threadID, latestQ
 				if _, err := s.AppendMessage(ctx, AgentV2Message{
 					ThreadID: threadID,
 					Role:     "tool",
-					Content:  tc.ResultJSON,
+					Content:  toolMsgContent,
 					CallID:   tc.CallID,
 					ToolName: tc.ToolName,
 					Status:   tc.Status,
@@ -823,6 +876,10 @@ func (s *Store) runAgentV2LoopWithHandoff(ctx context.Context, threadID, latestQ
 			})
 			if err != nil {
 				return nil, false, err
+			}
+			if turnTainted {
+				ap.Tainted = true
+				s.MarkApprovalTainted(ctx, ap.ID)
 			}
 			totalDrafts++
 			s.notifyApprovalRequired(ctx, ap.ID, "Approval required: "+ap.Title, ap.Summary, allowTelegramButtonsForApproval(ap.ToolName, ap.PayloadJSON, turnTainted))

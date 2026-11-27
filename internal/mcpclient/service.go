@@ -2,6 +2,8 @@ package mcpclient
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -197,6 +199,23 @@ func (s *Service) SyncServer(ctx context.Context, id string) (ServerConfig, erro
 	if err := json.Unmarshal(toolsRaw, &toolsResp); err != nil {
 		return ServerConfig{}, fmt.Errorf("decode tools/list: %w", err)
 	}
+	// Anti-rug-pull pinning: compute canonical SHA-256 of each tool definition and
+	// flag any schema/description/annotation drift against previously synced tools.
+	prevHash := make(map[string]string, len(cfg.Tools))
+	for _, old := range cfg.Tools {
+		if old.SchemaSHA256 != "" {
+			prevHash[old.Name] = old.SchemaSHA256
+		}
+	}
+	var driftErr string
+	for i := range toolsResp.Tools {
+		h := hashRemoteToolSchema(toolsResp.Tools[i])
+		toolsResp.Tools[i].SchemaSHA256 = h
+		if oldH, existed := prevHash[toolsResp.Tools[i].Name]; existed && oldH != h {
+			toolsResp.Tools[i].SchemaDrift = true
+			driftErr = fmt.Sprintf("MCP tool %q schema changed after sync (rug-pull protection); review and re-approve before calling", toolsResp.Tools[i].Name)
+		}
+	}
 
 	var resourcesResp struct {
 		Resources []RemoteResource `json:"resources"`
@@ -208,7 +227,18 @@ func (s *Service) SyncServer(ctx context.Context, id string) (ServerConfig, erro
 		_ = json.Unmarshal(resRaw, &resourcesResp)
 	}
 
-	return s.store.updateCapabilities(ctx, id, toolsResp.Tools, resourcesResp.Resources, nowSec, "")
+	return s.store.updateCapabilities(ctx, id, toolsResp.Tools, resourcesResp.Resources, nowSec, driftErr)
+}
+
+func hashRemoteToolSchema(t RemoteTool) string {
+	canon, _ := json.Marshal(map[string]any{
+		"name":        t.Name,
+		"description": t.Description,
+		"inputSchema": t.InputSchema,
+		"annotations": t.Annotations,
+	})
+	sum := sha256.Sum256(canon)
+	return hex.EncodeToString(sum[:])
 }
 
 // CallTool invokes a named tool on a configured external MCP server after enforcing
@@ -227,6 +257,23 @@ func (s *Service) CallTool(ctx context.Context, serverID, toolName string, rawAr
 	}
 	if cfg.ReadOnly && isMutatingToolName(name) {
 		return CallResult{}, fmt.Errorf("tool %q blocked by read-only MCP client policy", name)
+	}
+	for _, tMeta := range cfg.Tools {
+		if tMeta.Name != name {
+			continue
+		}
+		if tMeta.SchemaDrift {
+			return CallResult{}, fmt.Errorf("tool %q blocked due to schema change after initial sync (rug-pull protection)", name)
+		}
+		if cfg.ReadOnly && tMeta.Annotations != nil {
+			if destr, ok := tMeta.Annotations["destructiveHint"].(bool); ok && destr {
+				return CallResult{}, fmt.Errorf("tool %q marked destructiveHint=true; blocked by read-only MCP policy", name)
+			}
+			if ro, ok := tMeta.Annotations["readOnlyHint"].(bool); ok && !ro {
+				return CallResult{}, fmt.Errorf("tool %q marked readOnlyHint=false; blocked by read-only MCP policy", name)
+			}
+		}
+		break
 	}
 	if len(cfg.AllowedTools) > 0 {
 		allowed := false

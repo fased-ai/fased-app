@@ -205,7 +205,7 @@ func (s *Store) dispatchAutomationAgentPrompt(ctx context.Context, tr automation
 	_, _ = s.AppendMessage(ctx, AgentV2Message{
 		ThreadID: targetID,
 		Role:     "user",
-		Content:  prompt,
+		Content:  framedPrompt,
 		Status:   "completed",
 	})
 	_, _ = s.AppendMessage(ctx, AgentV2Message{
@@ -299,11 +299,13 @@ func (h *coreTelegramHooks) ListPendingApprovals(ctx context.Context) ([]telegra
 	}
 	out := make([]telegram.PendingApprovalBrief, 0, len(items))
 	for _, ap := range items {
+		apTainted := h.store.IsApprovalTainted(ctx, ap.ID)
 		out = append(out, telegram.PendingApprovalBrief{
-			ID:       ap.ID,
-			ToolName: ap.ToolName,
-			Title:    ap.Title,
-			Summary:  ap.Summary,
+			ID:           ap.ID,
+			ToolName:     ap.ToolName,
+			Title:        ap.Title,
+			Summary:      ap.Summary,
+			AllowButtons: allowTelegramButtonsForApproval(ap.ToolName, ap.PayloadJSON, apTainted),
 		})
 	}
 	if ds := h.store.loadedOrExistingDeskService(); ds != nil {
@@ -333,6 +335,12 @@ func (h *coreTelegramHooks) ResolveApproval(ctx context.Context, id, decisionArg
 	if err == nil {
 		if ap.ToolName == "request_secret" {
 			return "", errors.New("request_secret approvals cannot be submitted over Telegram; enter secrets only in local Fased UI")
+		}
+		if decisionArg == "approve" {
+			apTainted := h.store.IsApprovalTainted(ctx, id)
+			if !allowTelegramButtonsForApproval(ap.ToolName, ap.PayloadJSON, apTainted) {
+				return "", errors.New("high-risk or tainted approvals cannot be approved over Telegram; review and confirm inside Fased UI")
+			}
 		}
 		res, rErr := h.store.ResolveAgentV2Approval(ctx, id, decisionArg, note, false, nil)
 		if rErr != nil {

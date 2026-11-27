@@ -44,6 +44,11 @@ CREATE TABLE IF NOT EXISTS mcp_tokens (
 // CreateMCPToken mints a dedicated, revocable MCP-only bearer token (`fased_mcp_...`)
 // restricted strictly to `/api/v1/mcp` read+draft scopes and rejected on all owner `/api/v1/*` routes.
 func (s *Store) CreateMCPToken(ctx context.Context, label string, ttl time.Duration) (string, MCPTokenView, error) {
+	return s.CreateMCPTokenWithScopes(ctx, label, ttl, []string{"read", "draft"})
+}
+
+// CreateMCPTokenWithScopes mints a dedicated MCP token with explicit scopes ("read" or "read,draft").
+func (s *Store) CreateMCPTokenWithScopes(ctx context.Context, label string, ttl time.Duration, scopes []string) (string, MCPTokenView, error) {
 	if err := s.ensureMCPTokensTable(ctx); err != nil {
 		return "", MCPTokenView{}, err
 	}
@@ -60,6 +65,18 @@ func (s *Store) CreateMCPToken(ctx context.Context, label string, ttl time.Durat
 	if ttl > mcpTokenMaxTTL {
 		ttl = mcpTokenMaxTTL
 	}
+	normScopes := []string{}
+	seenScope := map[string]bool{}
+	for _, sc := range scopes {
+		sc = strings.ToLower(strings.TrimSpace(sc))
+		if (sc == "read" || sc == "draft") && !seenScope[sc] {
+			seenScope[sc] = true
+			normScopes = append(normScopes, sc)
+		}
+	}
+	if len(normScopes) == 0 {
+		normScopes = []string{"read"}
+	}
 	raw, err := randomToken()
 	if err != nil {
 		return "", MCPTokenView{}, err
@@ -74,14 +91,14 @@ func (s *Store) CreateMCPToken(ctx context.Context, label string, ttl time.Durat
 	expSec := s.now().UTC().Add(ttl).Unix()
 	if _, err := s.db.ExecContext(ctx,
 		`INSERT INTO mcp_tokens (id, label, token_hash, scopes, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?)`,
-		id, cleanLabel, tokenHash(fullTok), "read,draft", nowSec, expSec,
+		id, cleanLabel, tokenHash(fullTok), strings.Join(normScopes, ","), nowSec, expSec,
 	); err != nil {
 		return "", MCPTokenView{}, err
 	}
 	return fullTok, MCPTokenView{
 		ID:        id,
 		Label:     cleanLabel,
-		Scopes:    []string{"read", "draft"},
+		Scopes:    normScopes,
 		CreatedAt: nowSec,
 		ExpiresAt: expSec,
 	}, nil
@@ -89,19 +106,43 @@ func (s *Store) CreateMCPToken(ctx context.Context, label string, ttl time.Durat
 
 // ValidateMCPToken checks whether raw is a valid, non-expired dedicated MCP token.
 func (s *Store) ValidateMCPToken(ctx context.Context, raw string) bool {
+	ok, _ := s.ValidateMCPTokenWithScopes(ctx, raw)
+	return ok
+}
+
+// ValidateMCPTokenWithScopes checks whether raw is valid and returns its granted scope set.
+func (s *Store) ValidateMCPTokenWithScopes(ctx context.Context, raw string) (bool, map[string]bool) {
 	trimmed := strings.TrimSpace(raw)
 	if !strings.HasPrefix(trimmed, mcpTokenPrefix) || len(trimmed) < len(mcpTokenPrefix)+32 {
-		return false
+		return false, nil
 	}
 	if err := s.ensureMCPTokensTable(ctx); err != nil {
-		return false
+		return false, nil
 	}
 	var exp int64
-	err := s.db.QueryRowContext(ctx, `SELECT expires_at FROM mcp_tokens WHERE token_hash = ?`, tokenHash(trimmed)).Scan(&exp)
-	if err != nil {
-		return false
+	var scopeStr string
+	err := s.db.QueryRowContext(ctx, `SELECT expires_at, scopes FROM mcp_tokens WHERE token_hash = ?`, tokenHash(trimmed)).Scan(&exp, &scopeStr)
+	if err != nil || s.now().UTC().Unix() >= exp {
+		return false, nil
 	}
-	return s.now().UTC().Unix() < exp
+	out := map[string]bool{}
+	for _, sc := range strings.Split(scopeStr, ",") {
+		sc = strings.ToLower(strings.TrimSpace(sc))
+		if sc != "" {
+			out[sc] = true
+		}
+	}
+	return true, out
+}
+
+type mcpTokenScopesKey struct{}
+
+func mcpScopesFromContext(ctx context.Context) map[string]bool {
+	if ctx == nil {
+		return nil
+	}
+	m, _ := ctx.Value(mcpTokenScopesKey{}).(map[string]bool)
+	return m
 }
 
 // ListMCPTokens returns active dedicated MCP tokens without exposing secrets.

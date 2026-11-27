@@ -52,6 +52,13 @@ func ValidCustomCLIBinaryPathForVendor(p, expectedBinary string) bool {
 		if !matchesBase(resolved) {
 			return false
 		}
+		// Reject executables residing in world-writable directories (e.g. /tmp).
+		if dirInfo, dErr := os.Stat(filepath.Dir(resolved)); dErr == nil && dirInfo.Mode().Perm()&0o002 != 0 {
+			return false
+		}
+		if fileInfo, fErr := os.Stat(resolved); fErr == nil && fileInfo.Mode().Perm()&0o002 != 0 {
+			return false
+		}
 	}
 	return true
 }

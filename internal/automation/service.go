@@ -51,8 +51,12 @@ type Service struct {
 	cfg           Config
 	notifyMu      sync.RWMutex
 	onNotify      func(ctx context.Context, n Notification) string
-	promptMu      sync.RWMutex
-	onAgentPrompt func(ctx context.Context, tr Trigger, prompt string, untrusted bool)
+	promptMu         sync.RWMutex
+	onAgentPrompt    func(ctx context.Context, tr Trigger, prompt string, untrusted bool)
+	promptBudgetMu   sync.Mutex
+	promptWindowHour int64
+	promptHourCount  int
+	promptInFlight   bool
 }
 
 // NewService opens isolated <dataDir>/automation/automation.sqlite storage.
@@ -89,6 +93,33 @@ func (s *Service) SetAgentPromptHook(fn func(ctx context.Context, tr Trigger, pr
 	s.promptMu.Lock()
 	defer s.promptMu.Unlock()
 	s.onAgentPrompt = fn
+}
+
+const maxAgentPromptsPerHour = 12
+
+func (s *Service) acquireAgentPromptSlot() bool {
+	s.promptBudgetMu.Lock()
+	defer s.promptBudgetMu.Unlock()
+	if s.promptInFlight {
+		return false
+	}
+	curHour := s.now().UTC().Unix() / 3600
+	if curHour != s.promptWindowHour {
+		s.promptWindowHour = curHour
+		s.promptHourCount = 0
+	}
+	if s.promptHourCount >= maxAgentPromptsPerHour {
+		return false
+	}
+	s.promptHourCount++
+	s.promptInFlight = true
+	return true
+}
+
+func (s *Service) releaseAgentPromptSlot() {
+	s.promptBudgetMu.Lock()
+	s.promptInFlight = false
+	s.promptBudgetMu.Unlock()
 }
 
 // Close closes the pub/sub bus and isolated SQLite database cleanly.
@@ -512,9 +543,13 @@ func (s *Service) evaluateTrigger(ctx context.Context, tr Trigger, dryRun, ignor
 		promptHook := s.onAgentPrompt
 		s.promptMu.RUnlock()
 		if promptHook != nil {
-			promptCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 45*time.Second)
-			promptHook(promptCtx, tr, prompt, ev.untrusted)
-			cancel()
+			canRun := s.acquireAgentPromptSlot()
+			if canRun {
+				promptCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 45*time.Second)
+				promptHook(promptCtx, tr, prompt, ev.untrusted)
+				cancel()
+				s.releaseAgentPromptSlot()
+			}
 		}
 	}
 

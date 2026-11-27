@@ -340,6 +340,10 @@ func (h *HTTPHandler) mcpAPI(w http.ResponseWriter, r *http.Request, token strin
 				return
 			}
 			if isDraft {
+				if scopes := mcpScopesFromContext(r.Context()); scopes != nil && !scopes["draft"] {
+					writeMCPRPCError(w, req.ID, -32001, "MCP token lacks required 'draft' scope")
+					return
+				}
 				if o, _, uErr := readApplicationUpdate(r.Context(), h.store.db); uErr != nil || oneOf(o.Phase, "applying", "recovery") {
 					writeMCPRPCError(w, req.ID, -32000, "Update in progress. Draft operations are unavailable.")
 					return
@@ -381,7 +385,9 @@ func (h *HTTPHandler) mcpAPI(w http.ResponseWriter, r *http.Request, token strin
 					writeMCPRPCError(w, req.ID, -32603, "failed to queue approval: "+apErr.Error())
 					return
 				}
-				h.store.notifyApprovalRequired(callCtx, ap.ID, "Approval required: "+ap.Title, ap.Summary, allowTelegramButtonsForApproval(ap.ToolName, ap.PayloadJSON, false))
+				// Always treat external MCP drafts as tainted: never emit 1-click Telegram approve buttons.
+				h.store.MarkApprovalTainted(callCtx, ap.ID)
+				h.store.notifyApprovalRequired(callCtx, ap.ID, "Approval required: "+ap.Title, ap.Summary, allowTelegramButtonsForApproval(ap.ToolName, ap.PayloadJSON, true))
 				res := map[string]any{
 					"status":     "awaiting_approval",
 					"executed":   false,
@@ -495,6 +501,12 @@ func queueMCPToolApproval(ctx context.Context, s *Store, profileID, toolName str
 	th, err := ensureMCPApprovalThread(ctx, s, profileID)
 	if err != nil {
 		return AgentApproval{}, AgentThread{}, err
+	}
+	if v2, vErr := s.ensureAgentV2(ctx); vErr == nil {
+		var pendingCount int
+		if v2.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM approvals WHERE thread_id=? AND status='pending'`, th.ID).Scan(&pendingCount) == nil && pendingCount >= 5 {
+			return AgentApproval{}, AgentThread{}, errors.New("pending MCP approval queue full (max 5); resolve existing items in Fased UI first")
+		}
 	}
 	msg, err := s.AppendMessage(ctx, AgentV2Message{
 		ThreadID: th.ID,

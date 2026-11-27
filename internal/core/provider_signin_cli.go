@@ -176,7 +176,7 @@ func parseCLIProviderCredential(raw []byte) (cliProviderCredential, bool) {
 	c.ConfigDir = strings.TrimSpace(c.ConfigDir)
 	c.ShadowHome = strings.TrimSpace(c.ShadowHome)
 	c.LaunchArgs = strings.TrimSpace(c.LaunchArgs)
-	if c.BinaryPath != "" && !validCustomCLIBinaryPath(c.BinaryPath) {
+	if c.BinaryPath != "" && !providers.ValidCustomCLIBinaryPathForVendor(c.BinaryPath, spec.Binary) {
 		return cliProviderCredential{}, false
 	}
 	if c.ConfigDir != "" && !validCLIConfigDir(c.ConfigDir) {
@@ -870,6 +870,12 @@ func (s *Store) changeProviderCLI(ctx context.Context, c AIConnectionCommand) (A
 		}
 		if s.pilotBindingActive() {
 			return AIConnectionView{}, errors.New("pilot permits one initial OpenAI account; preserve the existing vault")
+		}
+		// Validate custom binary vendor basename BEFORE probing/invoking any binary!
+		if preSpec, okSpec := cliSpecForTarget(c.Provider, c.Binary); okSpec && c.BinaryPath != "" {
+			if !providers.ValidCustomCLIBinaryPathForVendor(c.BinaryPath, preSpec.Binary) {
+				return AIConnectionView{}, errors.New("custom CLI binary path must match the selected vendor binary")
+			}
 		}
 		spec, status, ok := resolveCLIConnectTargetWithShadow(ctx, s.cliRunner(), c.Provider, c.Binary, c.BinaryPath, c.ConfigDir, c.ShadowHome)
 		if !ok {

@@ -726,7 +726,7 @@ func TestAgentV2GetThreadPaginationAndRemoteMCPBearer(t *testing.T) {
 	}
 
 	// Dedicated scoped fased_mcp_* token succeeds on remote HTTPS /api/v1/mcp.
-	mcpRawTok, _, err := s.CreateMCPToken(t.Context(), "remote-mcp-client", 24)
+	mcpRawTok, _, err := s.CreateMCPToken(t.Context(), "remote-mcp-client", 0)
 	if err != nil {
 		t.Fatalf("CreateMCPToken: %v", err)
 	}

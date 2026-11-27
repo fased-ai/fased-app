@@ -5,6 +5,7 @@ import (
 	"crypto/ed25519"
 	"crypto/sha256"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 )
@@ -144,6 +145,12 @@ func (s *Service) Publish(ctx context.Context, req PublishRequest) (Package, err
 	}
 	if err := VerifyPackage(&pkg); err != nil {
 		return Package{}, err
+	}
+	// TOFU author-key pinning: refuse re-publishing an existing package ID under a different Ed25519 key.
+	if existing, gErr := s.store.getPackage(ctx, pkg.ID); gErr == nil {
+		if !strings.EqualFold(existing.AuthorPubKeyHex, pkg.AuthorPubKeyHex) {
+			return Package{}, fmt.Errorf("%w (hub TOFU violation)", ErrAuthorMismatch)
+		}
 	}
 	if err := s.store.savePackage(ctx, pkg); err != nil {
 		return Package{}, err

@@ -109,7 +109,7 @@ func regularExecutableFile(path string) bool {
 
 func discoverAntigravityACP(runner providerCLIRunner, customBinaryPath string) (string, error) {
 	if customBinaryPath != "" {
-		if !validCustomCLIBinaryPath(customBinaryPath) {
+		if !providers.ValidCustomCLIBinaryPathForVendor(customBinaryPath, "antigravity") {
 			return "", errors.New("invalid Antigravity ACP binary path")
 		}
 		expanded := expandCLIUserPath(customBinaryPath)

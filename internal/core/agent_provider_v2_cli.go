@@ -50,6 +50,7 @@ func cliExecArgs(provider, binary, model, sysPrompt string) ([]string, string, e
 			"--verbose",
 			"--include-partial-messages",
 			"--no-session-persistence",
+			"--strict-mcp-config",
 			"--tools", "",
 		}
 		if model != "" {

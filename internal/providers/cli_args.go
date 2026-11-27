@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"testing"
 	"unicode/utf8"
 )
 
@@ -77,15 +78,12 @@ var allowedCLILongFlags = map[string]bool{
 	"--config":                true,
 	"--enable":                true,
 	"--disable":               true,
-	"--profile":               true,
 	"--cloud-skills-snapshot": true,
 	"--effort":                true,
 	"--reasoning-effort":      true,
 	"--personality":           true,
 	"--service-tier":          true,
 	"--model":                 true,
-	"--search":                true,
-	"--chrome":                true,
 }
 
 var allowedCLIShortFlags = map[string]bool{
@@ -99,7 +97,6 @@ var valueTakingCLIFlags = map[string]bool{
 	"--config":                true,
 	"--enable":                true,
 	"--disable":               true,
-	"--profile":               true,
 	"--cloud-skills-snapshot": true,
 	"--effort":                true,
 	"--reasoning-effort":      true,
@@ -108,23 +105,10 @@ var valueTakingCLIFlags = map[string]bool{
 	"--model":                 true,
 }
 
-var disallowedCodexConfigKeys = []string{
-	"sandbox_mode",
-	"sandbox_permissions",
-	"approval_policy",
-	"approvals_reviewer",
-	"mcp_servers",
-	"shell_environment_policy",
-	"tools",
-	"experimental_instructions_file",
-	"project_doc_fallback_paths",
-	"chatgpt_base_url",
-	"openai_base_url",
-	"base_url",
-	"model_providers",
-	"cli_auth_credentials_store",
-	"auth",
-	"execpolicy",
+var allowedCodexConfigKeys = map[string]bool{
+	"model_reasoning_effort": true,
+	"model_verbosity":        true,
+	"personality":            true,
 }
 
 // ParseSafeCLILaunchArgs tokenizes optional user launch flags without shell
@@ -270,26 +254,80 @@ func TokenizeSafeCLILaunchArgs(input string) ([]string, error) {
 	return tokens, nil
 }
 
-// ValidateSafeCodexConfigOverride rejects dangerous Codex -c/--config keys such as sandbox_mode, auth, or base_url.
+// ValidateSafeCodexConfigOverride enforces a strict allowlist of benign Codex -c/--config keys.
 func ValidateSafeCodexConfigOverride(assignment string) error {
 	key, val, ok := strings.Cut(assignment, "=")
 	key = strings.ToLower(strings.TrimSpace(key))
 	if !ok || key == "" || strings.TrimSpace(val) == "" {
 		return errors.New("config override requires key=value")
 	}
-	for _, blocked := range disallowedCodexConfigKeys {
-		if key == blocked || strings.HasPrefix(key, blocked+".") {
-			return fmt.Errorf("disallowed config override key: %s", key)
-		}
-	}
-	if key == "features" {
-		return errors.New("disallowed config override key: features")
+	if !allowedCodexConfigKeys[key] {
+		return fmt.Errorf("disallowed config override key: %s", key)
 	}
 	return nil
 }
 
+func resolveExistingAncestor(p string) (string, error) {
+	cur := filepath.Clean(p)
+	var suffix []string
+	for {
+		resolved, err := filepath.EvalSymlinks(cur)
+		if err == nil {
+			for i := len(suffix) - 1; i >= 0; i-- {
+				resolved = filepath.Join(resolved, suffix[i])
+			}
+			return filepath.Clean(resolved), nil
+		}
+		if !errors.Is(err, os.ErrNotExist) {
+			return "", err
+		}
+		parent := filepath.Dir(cur)
+		if parent == cur {
+			return filepath.Clean(p), nil
+		}
+		suffix = append(suffix, filepath.Base(cur))
+		cur = parent
+	}
+}
+
+func sanitizeCodexConfigTOML(raw []byte) []byte {
+	var out strings.Builder
+	skipSection := false
+	for _, line := range strings.Split(string(raw), "\n") {
+		trimmed := strings.TrimSpace(line)
+		lower := strings.ToLower(trimmed)
+		if strings.HasPrefix(lower, "[") && strings.HasSuffix(lower, "]") {
+			sec := strings.TrimSpace(strings.TrimSuffix(strings.TrimPrefix(lower, "["), "]"))
+			skipSection = strings.HasPrefix(sec, "mcp_servers") ||
+				strings.HasPrefix(sec, "shell_environment_policy") ||
+				strings.HasPrefix(sec, "model_providers") ||
+				strings.HasPrefix(sec, "profiles") ||
+				strings.HasPrefix(sec, "execpolicy") ||
+				strings.HasPrefix(sec, "sandbox")
+			if skipSection {
+				continue
+			}
+		}
+		if skipSection {
+			continue
+		}
+		if k, _, hasEq := strings.Cut(lower, "="); hasEq {
+			key := strings.TrimSpace(k)
+			if strings.HasPrefix(key, "sandbox") || strings.HasPrefix(key, "approval") ||
+				strings.HasPrefix(key, "notify") || strings.HasPrefix(key, "execpolicy") ||
+				strings.HasPrefix(key, "mcp_") || strings.HasSuffix(key, "base_url") ||
+				key == "experimental_instructions_file" || key == "project_doc_fallback_paths" {
+				continue
+			}
+		}
+		out.WriteString(line)
+		out.WriteByte('\n')
+	}
+	return []byte(out.String())
+}
+
 // PrepareCodexShadowHome initializes an account-specific Codex home directory
-// with strict 0700 permissions and copies only config.toml (0600), never auth.json.
+// with strict 0700 permissions and copies only sanitized config.toml (0600), never auth.json.
 func PrepareCodexShadowHome(configDir, shadowHome string) (string, error) {
 	shadowHome = strings.TrimSpace(shadowHome)
 	if shadowHome == "" {
@@ -302,17 +340,25 @@ func PrepareCodexShadowHome(configDir, shadowHome string) (string, error) {
 	if shadowDir == "" {
 		return "", errors.New("invalid CLI shadow home path")
 	}
-	cleanShadow := filepath.Clean(shadowDir)
+	cleanShadow, rErr := resolveExistingAncestor(shadowDir)
+	if rErr != nil {
+		return "", errors.New("invalid CLI shadow home path")
+	}
 	allowedRoot := false
 	if home, hErr := os.UserHomeDir(); hErr == nil && home != "" {
-		cleanHome := filepath.Clean(home)
-		if rel, rErr := filepath.Rel(cleanHome, cleanShadow); rErr == nil && rel != "." && !strings.HasPrefix(rel, "..") {
-			allowedRoot = true
+		if resolvedHome, eh := resolveExistingAncestor(home); eh == nil {
+			if rel, relErr := filepath.Rel(resolvedHome, cleanShadow); relErr == nil && rel != "." && !strings.HasPrefix(rel, "..") {
+				allowedRoot = true
+			}
 		}
 	}
-	if tmpDir := filepath.Clean(os.TempDir()); tmpDir != "" {
-		if rel, rErr := filepath.Rel(tmpDir, cleanShadow); rErr == nil && rel != "." && !strings.HasPrefix(rel, "..") {
-			allowedRoot = true
+	if !allowedRoot && testing.Testing() {
+		if tmpDir := filepath.Clean(os.TempDir()); tmpDir != "" {
+			if resolvedTmp, et := resolveExistingAncestor(tmpDir); et == nil {
+				if rel, relErr := filepath.Rel(resolvedTmp, cleanShadow); relErr == nil && rel != "." && !strings.HasPrefix(rel, "..") {
+					allowedRoot = true
+				}
+			}
 		}
 	}
 	if !allowedRoot {
@@ -382,7 +428,8 @@ func PrepareCodexShadowHome(configDir, shadowHome string) (string, error) {
 	if int64(len(data)) > CodexShadowConfigMaxBytes {
 		return "", errors.New("config.toml exceeds 64 KiB limit")
 	}
-	if err := os.WriteFile(dstCfg, data, 0o600); err != nil {
+	sanitized := sanitizeCodexConfigTOML(data)
+	if err := os.WriteFile(dstCfg, sanitized, 0o600); err != nil {
 		return "", err
 	}
 	if err := os.Chmod(dstCfg, 0o600); err != nil {

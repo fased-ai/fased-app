@@ -190,7 +190,7 @@ func ExecuteCommand(ctx context.Context, hooks ControllerHooks, allowed []int64,
 				break
 			}
 			lines = append(lines, fmt.Sprintf("- %s (%s): %s", ap.ID, ap.ToolName, ap.Title))
-			if ap.ToolName != "request_secret" {
+			if ap.ToolName != "request_secret" && ap.AllowButtons {
 				rows = append(rows, []InlineKeyboardButton{
 					{Text: "Approve " + shortID(ap.ID), CallbackData: "approve:" + ap.ID},
 					{Text: "Reject " + shortID(ap.ID), CallbackData: "reject:" + ap.ID},
