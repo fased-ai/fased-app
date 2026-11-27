@@ -271,7 +271,7 @@ type parsedStreamTopic struct {
 func parseStreamTopic(raw string) (parsedStreamTopic, error) {
 	trimmed := strings.TrimSpace(raw)
 	switch trimmed {
-	case "intel", "automation", "desk", "swarm", "tasks":
+	case "intel", "automation", "desk", "swarm", "tasks", "mining":
 		return parsedStreamTopic{raw: trimmed, kind: trimmed}, nil
 	}
 	if strings.HasPrefix(trimmed, "task:") {
@@ -576,6 +576,35 @@ func (h *HTTPHandler) streamWSAPI(w http.ResponseWriter, r *http.Request, token 
 						}
 						if parsed.kind == "task" && evt.TaskID != parsed.symbol && evt.Event != "tasks.killed" {
 							continue
+						}
+						enqueue(streamOutboundFrame{
+							Type:      "event",
+							Topic:     parsed.raw,
+							Event:     evt.Event,
+							Timestamp: evt.Timestamp,
+							Payload:   evt,
+						})
+					}
+				}
+			}()
+		case "mining":
+			mEng, mErr := h.store.wenLV1XEngine()
+			if mErr != nil {
+				stopEntry()
+				return errors.New("mining engine unavailable")
+			}
+			ch, unsub := mEng.Subscribe()
+			subWG.Add(1)
+			go func() {
+				defer subWG.Done()
+				defer unsub()
+				for {
+					select {
+					case <-subCtx.Done():
+						return
+					case evt, ok := <-ch:
+						if !ok {
+							return
 						}
 						enqueue(streamOutboundFrame{
 							Type:      "event",

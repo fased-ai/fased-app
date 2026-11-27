@@ -192,6 +192,15 @@ CREATE TABLE IF NOT EXISTS daily_asset_usage (
 	PRIMARY KEY (wallet_id, asset_key, day_utc)
 );
 
+CREATE TABLE IF NOT EXISTS mining_round_usage (
+	wallet_id TEXT NOT NULL REFERENCES wallets(id) ON DELETE CASCADE,
+	cluster TEXT NOT NULL,
+	round_slot INTEGER NOT NULL,
+	spent_lamports INTEGER NOT NULL DEFAULT 0,
+	reserved_lamports INTEGER NOT NULL DEFAULT 0,
+	PRIMARY KEY (wallet_id, cluster, round_slot)
+);
+
 CREATE TABLE IF NOT EXISTS signer_meta (
 	id INTEGER PRIMARY KEY CHECK (id = 1),
 	owner_pw_salt BLOB,
@@ -269,6 +278,14 @@ func (s *Service) initSignerMetaLocked(ctx context.Context) error {
 	_, _ = s.db.ExecContext(ctx, `ALTER TABLE signer_meta ADD COLUMN global_freeze_reason TEXT NOT NULL DEFAULT ''`)
 	_, _ = s.db.ExecContext(ctx, `ALTER TABLE signer_meta ADD COLUMN global_freeze_by TEXT NOT NULL DEFAULT ''`)
 	_, _ = s.db.ExecContext(ctx, `ALTER TABLE signer_meta ADD COLUMN global_freeze_at INTEGER NOT NULL DEFAULT 0`)
+	_, _ = s.db.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS mining_round_usage (
+		wallet_id TEXT NOT NULL REFERENCES wallets(id) ON DELETE CASCADE,
+		cluster TEXT NOT NULL,
+		round_slot INTEGER NOT NULL,
+		spent_lamports INTEGER NOT NULL DEFAULT 0,
+		reserved_lamports INTEGER NOT NULL DEFAULT 0,
+		PRIMARY KEY (wallet_id, cluster, round_slot)
+	)`)
 	if _, err := s.db.ExecContext(ctx, `INSERT OR IGNORE INTO signer_meta (id) VALUES (1)`); err != nil {
 		return err
 	}
@@ -998,6 +1015,14 @@ func (s *Service) UpdatePolicy(ctx context.Context, walletID string, rawNext Wal
 			}
 		}
 	}
+	if next.Mining != nil {
+		if cur.Role != RoleMining {
+			return WalletPublic{}, fmt.Errorf("%w: MiningPolicy requires role=mining", ErrRoleDenied)
+		}
+		if mErr := ValidateMiningPolicyForUpdate(next.Mining); mErr != nil {
+			return WalletPublic{}, mErr
+		}
+	}
 
 	tightening := IsPolicyTighterOrEqual(cur.Policy, next)
 	if !tightening {
@@ -1289,7 +1314,8 @@ func (s *Service) ResolveWallet(ctx context.Context, sel WalletSelector) (Wallet
 		if w.Policy.Frozen {
 			return fmt.Errorf("%w: wallet %s is frozen", ErrPolicyDenied, w.Handle)
 		}
-		if sel.IsAutonomous && (w.Role == RoleVault || w.Role == RoleMining || !w.Connections.AllowTradeBots) {
+		isMiningVenue := strings.HasPrefix(strings.ToLower(strings.TrimSpace(sel.Venue)), "wen-mining")
+		if sel.IsAutonomous && (w.Role == RoleVault || (w.Role == RoleMining && !isMiningVenue) || (w.Role != RoleMining && !w.Connections.AllowTradeBots)) {
 			return fmt.Errorf("%w: wallet %s is not authorized for autonomous execution", ErrRoleDenied, w.Handle)
 		}
 		if sel.Venue != "" {
@@ -1410,7 +1436,7 @@ func (s *Service) fetchBlockhashOrFixture(ctx context.Context, walletID, rpcURL 
 
 func reviewSOLDebit(rev WalletReview) (uint64, error) {
 	switch rev.Operation {
-	case "solana.nativeTransfer":
+	case "solana.nativeTransfer", MiningOpCommit, MiningOpSession:
 		if rev.AmountRaw > math.MaxUint64-rev.EstimatedFeeLamports {
 			return 0, errors.New("debit overflows uint64")
 		}
@@ -1459,7 +1485,7 @@ func (s *Service) PrepareReview(ctx context.Context, req PrepareReviewRequest) (
 		op = "solana.nativeTransfer"
 	}
 	switch op {
-	case "solana.nativeTransfer", "solana.splTransferChecked", "jupiter.swap":
+	case "solana.nativeTransfer", "solana.splTransferChecked", "jupiter.swap", MiningOpCommit, MiningOpClaim, MiningOpSession:
 	default:
 		return WalletReview{}, fmt.Errorf("%w: unsupported prepare operation %q", ErrPolicyDenied, op)
 	}
@@ -1516,17 +1542,28 @@ func (s *Service) PrepareReview(ctx context.Context, req PrepareReviewRequest) (
 		}
 	}
 	if req.IsBotOrAuto {
-		if w.Role == RoleVault || w.Role == RoleMining || w.Policy.ApprovalMode == ApprovalManualReview || !w.Connections.AllowTradeBots {
-			s.mu.Unlock()
-			return WalletReview{}, fmt.Errorf("%w: wallet prohibits autonomous execution", ErrRoleDenied)
-		}
-		if reqAgentID != "" && !slices.Contains(w.Connections.AgentIDs, reqAgentID) {
-			s.mu.Unlock()
-			return WalletReview{}, fmt.Errorf("%w: agent %q is not bound to wallet %s", ErrRoleDenied, reqAgentID, w.Handle)
-		}
-		if reqVenue != "" && (len(w.Connections.AllowedVenues) == 0 || !slices.Contains(w.Connections.AllowedVenues, reqVenue)) {
-			s.mu.Unlock()
-			return WalletReview{}, fmt.Errorf("%w: venue %q is not allowed on wallet %s", ErrPolicyDenied, reqVenue, w.Handle)
+		if isMiningOperation(op) {
+			if w.Role != RoleMining || w.Policy.ApprovalMode == ApprovalManualReview || w.Policy.Mining == nil {
+				s.mu.Unlock()
+				return WalletReview{}, fmt.Errorf("%w: mining wallet requires Semi-Auto or Auto policy", ErrRoleDenied)
+			}
+			if w.Policy.ApprovalMode == ApprovalSemiAuto && (op != MiningOpClaim || !w.Policy.Mining.AutoClaim) {
+				s.mu.Unlock()
+				return WalletReview{}, fmt.Errorf("%w: Semi-Auto mining prohibits unattended commit/session operations", ErrRoleDenied)
+			}
+		} else {
+			if w.Role == RoleVault || w.Role == RoleMining || w.Policy.ApprovalMode == ApprovalManualReview || !w.Connections.AllowTradeBots {
+				s.mu.Unlock()
+				return WalletReview{}, fmt.Errorf("%w: wallet prohibits autonomous execution", ErrRoleDenied)
+			}
+			if reqAgentID != "" && !slices.Contains(w.Connections.AgentIDs, reqAgentID) {
+				s.mu.Unlock()
+				return WalletReview{}, fmt.Errorf("%w: agent %q is not bound to wallet %s", ErrRoleDenied, reqAgentID, w.Handle)
+			}
+			if reqVenue != "" && (len(w.Connections.AllowedVenues) == 0 || !slices.Contains(w.Connections.AllowedVenues, reqVenue)) {
+				s.mu.Unlock()
+				return WalletReview{}, fmt.Errorf("%w: venue %q is not allowed on wallet %s", ErrPolicyDenied, reqVenue, w.Handle)
+			}
 		}
 	}
 	if !slices.Contains(w.Policy.Operations, op) {
@@ -1554,6 +1591,7 @@ func (s *Service) PrepareReview(ctx context.Context, req PrepareReviewRequest) (
 		decimals       uint8  = 9
 		estFeeLamports uint64 = 5_000
 		programs       []string
+		miningDetails  preparedMiningDetails
 	)
 
 	switch op {
@@ -1826,6 +1864,21 @@ func (s *Service) PrepareReview(ctx context.Context, req PrepareReviewRequest) (
 			}
 		}
 		programs = progList
+
+	case MiningOpCommit, MiningOpClaim, MiningOpSession:
+		md, mErr := s.validateMiningPrepareLocked(ctx, w, op, req)
+		if mErr != nil {
+			s.mu.Unlock()
+			return WalletReview{}, mErr
+		}
+		miningDetails = md
+		destAddr = md.DestAddr
+		symbol = md.Symbol
+		amountRaw = md.AmountLamports
+		amountHuman = md.HumanAmount
+		estimatedUSD = md.EstimatedUSD
+		estFeeLamports = md.EstFeeLamports
+		programs = []string{SolanaComputeBudget, SolanaSystemProgram, md.ProgramID}
 	}
 
 	rpcCreds, err := s.unsealRPCLocked(ctx, w.ID)
@@ -1875,6 +1928,12 @@ func (s *Service) PrepareReview(ctx context.Context, req PrepareReviewRequest) (
 		}
 		q.Blockhash = Base58Encode(bh[:])
 		msgBytes, err = onchain.Message(q)
+	case MiningOpCommit, MiningOpClaim, MiningOpSession:
+		bh, bErr := s.fetchBlockhashOrFixture(ctx, w.ID, rpcCreds.PrimaryURL)
+		if bErr != nil {
+			return WalletReview{}, bErr
+		}
+		msgBytes, err = buildMiningReviewMessage(feePayerPK, bh, priorityFeeMicro, op, miningDetails)
 	}
 	if err != nil {
 		return WalletReview{}, err
@@ -1921,6 +1980,8 @@ func (s *Service) PrepareReview(ctx context.Context, req PrepareReviewRequest) (
 		AgentID:              reqAgentID,
 		SkillGrantID:         strings.TrimSpace(req.SkillGrantID),
 		Venue:                reqVenue,
+		MiningCluster:        miningDetails.Cluster,
+		MiningRoundSlot:      miningDetails.RoundSlot,
 		ExpiresAt:            nowSec + 90,
 		Status:               ReviewStatusPrepared,
 		CreatedAt:            nowSec,
@@ -2127,6 +2188,19 @@ func (s *Service) executePreparedReview(ctx context.Context, walletID, reviewID,
 		s.mu.Unlock()
 		return LedgerEntry{}, err
 	}
+	if review.Operation == MiningOpCommit && review.AmountRaw > 0 {
+		mPol := NormalizeMiningPolicy(w.Policy.Mining)
+		if mPol == nil {
+			_ = tx.Rollback()
+			s.mu.Unlock()
+			return LedgerEntry{}, fmt.Errorf("%w: missing mining policy on execution", ErrPolicyDenied)
+		}
+		if rErr := s.reserveMiningRoundTxLocked(ctx, tx, w.ID, firstStr(review.MiningCluster, mPol.Cluster), review.MiningRoundSlot, review.AmountRaw, mPol.MaxSOLPerRoundLamport); rErr != nil {
+			_ = tx.Rollback()
+			s.mu.Unlock()
+			return LedgerEntry{}, rErr
+		}
+	}
 	splMint, splDebitRaw := reviewSPLDebit(review)
 	if splMint != "" && splDebitRaw > 0 {
 		tc, ok := findTokenCap(w.Policy.TokenCaps, splMint)
@@ -2218,6 +2292,12 @@ func (s *Service) executePreparedReview(ctx context.Context, walletID, reviewID,
 			if _, err := postTx.ExecContext(ctx, `UPDATE daily_asset_usage SET reserved_raw = MAX(0, reserved_raw - ?), spent_raw = spent_raw + ? WHERE wallet_id = ? AND asset_key = ? AND day_utc = ?`, splDebitRaw, splDebitRaw, w.ID, "spl:"+splMint, day); err != nil {
 				return entry, err
 			}
+		}
+	}
+	if review.Operation == MiningOpCommit && review.AmountRaw > 0 && (nextState == LedgerConfirmed || nextState == LedgerFailed) {
+		cluster := firstStr(review.MiningCluster, "devnet")
+		if err := s.settleMiningRoundTxLocked(ctx, postTx, w.ID, cluster, review.MiningRoundSlot, review.AmountRaw, nextState == LedgerConfirmed); err != nil {
+			return entry, err
 		}
 	}
 	updatedBytes, _ := json.Marshal(entry)
