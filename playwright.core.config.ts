@@ -13,6 +13,7 @@ export default defineConfig({
     "core-news-playbooks.spec.ts",
     "core-updates-custody.spec.ts",
     "core-shell-dashboard-i18n.spec.ts",
+    "tasks-v2.spec.ts",
     "core-integrations.spec.ts",
     "core-automation-telegram.spec.ts",
     "core-a11y.spec.ts",

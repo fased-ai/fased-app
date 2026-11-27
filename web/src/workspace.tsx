@@ -118,7 +118,6 @@ function getRoute() {
   const aliases: Record<string, string> = {
     dashboard: "overview",
     chat: "agents/chat",
-    tasks: "agents/tasks",
     agents: "agents/settings",
     news: "intel",
     memory: "agents/memory",
@@ -141,7 +140,7 @@ function getRoute() {
   const route = aliases[raw] ?? raw;
   if (route === "terminals/asset" || route === "terminals/loss")
     return "terminals/satcoin";
-  return /^(overview|mine|trade|intel|lab(\/(scripts|desk|journal))?|network|activity|settings|providers|terminals(\/(satcoin|hyperliquid|jupiter))?|agents\/(chat|review|bots|tasks|news|memory|settings)|wallets\/(overview|accounts|permissions|security|activity))$/.test(
+  return /^(overview|mine|trade|tasks|intel|lab(\/(scripts|desk|journal))?|network|activity|settings|providers|terminals(\/(satcoin|hyperliquid|jupiter))?|agents\/(chat|review|bots|tasks|news|memory|settings)|wallets\/(overview|accounts|permissions|security|activity))$/.test(
     route,
   )
     ? route
@@ -524,7 +523,8 @@ function useWorkspaceState() {
           ["Dashboard", "overview"],
           ["Mine", "mine"],
           ["Chat", "agents/chat"],
-          ["Tasks", "agents/tasks"],
+          ["Tasks", "tasks"],
+          ["Legacy Schedules", "agents/tasks"],
           ["Agents", "agents/settings"],
           ["Trade", "trade"],
           ["News", "intel"],

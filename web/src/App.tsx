@@ -40,6 +40,11 @@ const NetworkWorkspace = lazy(() =>
     default: m.NetworkWorkspace,
   })),
 );
+const TasksWorkspace = lazy(() =>
+  import("./pages/TasksWorkspace").then((m) => ({
+    default: m.TasksWorkspace,
+  })),
+);
 function WorkspaceShell() {
   const { t: uiText } = useUI();
   const { t, resolvedTheme } = useUI();
@@ -78,6 +83,7 @@ function WorkspaceShell() {
       overview: t("Dashboard"),
       mine: t("Mine"),
       trade: t("Trade"),
+      tasks: t("Tasks"),
       intel: t("News"),
       lab: t("Quant Lab"),
       network: t("Network"),
@@ -148,6 +154,10 @@ function WorkspaceShell() {
             ) : section === "trade" ? (
               <Suspense fallback={<p role="status">{uiText("Loading")}</p>}>
                 <TradeWorkspace />
+              </Suspense>
+            ) : section === "tasks" ? (
+              <Suspense fallback={<p role="status">{uiText("Loading")}</p>}>
+                <TasksWorkspace />
               </Suspense>
             ) : section === "intel" ? (
               <Suspense fallback={<p role="status">{uiText("Loading")}</p>}>
