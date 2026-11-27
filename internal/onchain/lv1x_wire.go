@@ -532,6 +532,12 @@ func mustKey32(b58 string) ([32]byte, error) {
 	return out, nil
 }
 
+// lv1xIxPrefix returns a buffer initialized with the canonical 5-byte "LV1X\x01" header + 1-byte tag.
+func lv1xIxPrefix(tag uint8, payloadCap int) []byte {
+	buf := make([]byte, 0, 6+payloadCap)
+	return append(buf, 'L', 'V', '1', 'X', LV1XVersion, tag)
+}
+
 // BuildLV1XCommitMessage builds an unsharded (Tag 5) or sharded (Tag 35) LV1X Commit message.
 func BuildLV1XCommitMessage(p LV1XCommitParams) ([]byte, error) {
 	if p.Amount < LV1XMinCommitLamports {
@@ -595,12 +601,13 @@ func BuildLV1XCommitMessage(p LV1XCommitParams) ([]byte, error) {
 		iSys := addKey(sysPK, false, false)
 		_ = addKey(progPK, false, false)
 
-		data := make([]byte, 1+8+8+8+32)
-		data[0] = LV1XTagCommit
-		binary.LittleEndian.PutUint64(data[1:9], p.Slot)
-		binary.LittleEndian.PutUint64(data[9:17], p.Amount)
-		binary.LittleEndian.PutUint64(data[17:25], p.Nonce)
-		copy(data[25:57], p.Commitment[:])
+		data := make([]byte, 5+1+8+8+8+32)
+		copy(data[:5], lv1xIxPrefix(LV1XTagCommit, 0))
+		data[5] = LV1XTagCommit
+		binary.LittleEndian.PutUint64(data[6:14], p.Slot)
+		binary.LittleEndian.PutUint64(data[14:22], p.Amount)
+		binary.LittleEndian.PutUint64(data[22:30], p.Nonce)
+		copy(data[30:62], p.Commitment[:])
 
 		ixs = append(ixs, legacyIxSpec{
 			program:  progPK,
@@ -625,13 +632,14 @@ func BuildLV1XCommitMessage(p LV1XCommitParams) ([]byte, error) {
 		iSys := addKey(sysPK, false, false)
 		_ = addKey(progPK, false, false)
 
-		data := make([]byte, 1+8+1+8+8+32)
-		data[0] = LV1XTagCommitToShard
-		binary.LittleEndian.PutUint64(data[1:9], p.Slot)
-		data[9] = p.ShardID
-		binary.LittleEndian.PutUint64(data[10:18], p.Amount)
-		binary.LittleEndian.PutUint64(data[18:26], p.Nonce)
-		copy(data[26:58], p.Commitment[:])
+		data := make([]byte, 5+1+8+1+8+8+32)
+		copy(data[:5], lv1xIxPrefix(LV1XTagCommitToShard, 0))
+		data[5] = LV1XTagCommitToShard
+		binary.LittleEndian.PutUint64(data[6:14], p.Slot)
+		data[14] = p.ShardID
+		binary.LittleEndian.PutUint64(data[15:23], p.Amount)
+		binary.LittleEndian.PutUint64(data[23:31], p.Nonce)
+		copy(data[31:63], p.Commitment[:])
 
 		ixs = append(ixs, legacyIxSpec{
 			program:  progPK,
@@ -695,11 +703,10 @@ func BuildLV1XClaimSolBatchMessage(p LV1XClaimSolParams) ([]byte, error) {
 		}
 		pkPK, _ := mustKey32(pkAddr)
 		iPK := addKey(pkPK, false, true)
-		data := make([]byte, 1+8+4+1)
-		data[0] = LV1XTagClaimSolBatch
-		binary.LittleEndian.PutUint64(data[1:9], p.Slot)
-		binary.LittleEndian.PutUint32(data[9:13], p.Page)
-		data[13] = p.EntriesMask
+		data := lv1xIxPrefix(LV1XTagClaimSolBatch, 8+4+1)
+		data = append(data, u64LEBytes(p.Slot)...)
+		data = append(data, u32LEBytes(p.Page)...)
+		data = append(data, p.EntriesMask)
 		ixs = append(ixs, legacyIxSpec{
 			program:  progPK,
 			accounts: []int{iRT, iRK, iPK, iDest},
@@ -712,12 +719,11 @@ func BuildLV1XClaimSolBatchMessage(p LV1XClaimSolParams) ([]byte, error) {
 		}
 		pkPK, _ := mustKey32(pkAddr)
 		iPK := addKey(pkPK, false, true)
-		data := make([]byte, 1+8+1+4+1)
-		data[0] = LV1XTagClaimShardSolBatch
-		binary.LittleEndian.PutUint64(data[1:9], p.Slot)
-		data[9] = p.ShardID
-		binary.LittleEndian.PutUint32(data[10:14], p.Page)
-		data[14] = p.EntriesMask
+		data := lv1xIxPrefix(LV1XTagClaimShardSolBatch, 8+1+4+1)
+		data = append(data, u64LEBytes(p.Slot)...)
+		data = append(data, p.ShardID)
+		data = append(data, u32LEBytes(p.Page)...)
+		data = append(data, p.EntriesMask)
 		ixs = append(ixs, legacyIxSpec{
 			program:  progPK,
 			accounts: []int{iRT, iRK, iPK, iDest},
@@ -885,13 +891,11 @@ func BuildLV1XRevealMessage(p LV1XRevealParams) ([]byte, error) {
 
 	var data []byte
 	if p.ShardID == LV1XUnshardedShardID && p.Page == 0 {
-		data = make([]byte, 0, 1+8+1+len(p.Items)*34)
-		data = append(data, LV1XTagRevealBatch)
+		data = lv1xIxPrefix(LV1XTagRevealBatch, 8+1+len(p.Items)*34)
 		data = append(data, u64LEBytes(p.Slot)...)
 		data = append(data, byte(len(p.Items)))
 	} else {
-		data = make([]byte, 0, 1+8+1+4+1+len(p.Items)*34)
-		data = append(data, LV1XTagRevealPageBatch)
+		data = lv1xIxPrefix(LV1XTagRevealPageBatch, 8+1+4+1+len(p.Items)*34)
 		data = append(data, u64LEBytes(p.Slot)...)
 		data = append(data, p.ShardID)
 		data = append(data, u32LEBytes(p.Page)...)
@@ -977,18 +981,16 @@ func BuildLV1XClaimSatMessage(p LV1XClaimTokenParams) ([]byte, error) {
 
 	var data []byte
 	if p.ShardID == LV1XUnshardedShardID {
-		data = make([]byte, 1+8+4+1)
-		data[0] = LV1XTagClaimSat
-		binary.LittleEndian.PutUint64(data[1:9], p.Slot)
-		binary.LittleEndian.PutUint32(data[9:13], p.Page)
-		data[13] = p.EntryRow
+		data = lv1xIxPrefix(LV1XTagClaimSat, 8+4+1)
+		data = append(data, u64LEBytes(p.Slot)...)
+		data = append(data, u32LEBytes(p.Page)...)
+		data = append(data, p.EntryRow)
 	} else {
-		data = make([]byte, 1+8+1+4+1)
-		data[0] = LV1XTagClaimShardSat
-		binary.LittleEndian.PutUint64(data[1:9], p.Slot)
-		data[9] = p.ShardID
-		binary.LittleEndian.PutUint32(data[10:14], p.Page)
-		data[14] = p.EntryRow
+		data = lv1xIxPrefix(LV1XTagClaimShardSat, 8+1+4+1)
+		data = append(data, u64LEBytes(p.Slot)...)
+		data = append(data, p.ShardID)
+		data = append(data, u32LEBytes(p.Page)...)
+		data = append(data, p.EntryRow)
 	}
 	b.ixs = append(b.ixs, legacyIxSpec{
 		program:  progPK,
@@ -1068,18 +1070,16 @@ func BuildLV1XClaimBtcMessage(p LV1XClaimTokenParams) ([]byte, error) {
 
 	var data []byte
 	if p.ShardID == LV1XUnshardedShardID {
-		data = make([]byte, 1+8+4+1)
-		data[0] = LV1XTagClaimBtc
-		binary.LittleEndian.PutUint64(data[1:9], p.Slot)
-		binary.LittleEndian.PutUint32(data[9:13], p.Page)
-		data[13] = p.EntryRow
+		data = lv1xIxPrefix(LV1XTagClaimBtc, 8+4+1)
+		data = append(data, u64LEBytes(p.Slot)...)
+		data = append(data, u32LEBytes(p.Page)...)
+		data = append(data, p.EntryRow)
 	} else {
-		data = make([]byte, 1+8+1+4+1)
-		data[0] = LV1XTagClaimShardBtc
-		binary.LittleEndian.PutUint64(data[1:9], p.Slot)
-		data[9] = p.ShardID
-		binary.LittleEndian.PutUint32(data[10:14], p.Page)
-		data[14] = p.EntryRow
+		data = lv1xIxPrefix(LV1XTagClaimShardBtc, 8+1+4+1)
+		data = append(data, u64LEBytes(p.Slot)...)
+		data = append(data, p.ShardID)
+		data = append(data, u32LEBytes(p.Page)...)
+		data = append(data, p.EntryRow)
 	}
 	b.ixs = append(b.ixs, legacyIxSpec{
 		program:  progPK,
@@ -1144,9 +1144,8 @@ func BuildLV1XStakeMessage(p LV1XStakeParams) ([]byte, error) {
 		iATA := b.addKey(ataPK, false, true)
 		iSys := b.addKey(sysPK, false, false)
 		iTok := b.addKey(tokPK, false, false)
-		data := make([]byte, 9)
-		data[0] = LV1XTagStake
-		binary.LittleEndian.PutUint64(data[1:9], p.Amount)
+		data := lv1xIxPrefix(LV1XTagStake, 8)
+		data = append(data, u64LEBytes(p.Amount)...)
 		b.ixs = append(b.ixs, legacyIxSpec{
 			program:  progPK,
 			accounts: []int{iRT, iSt, iPos, iVault, iATA, iOwner, iSys, iTok},
@@ -1157,7 +1156,7 @@ func BuildLV1XStakeMessage(p LV1XStakeParams) ([]byte, error) {
 		b.ixs = append(b.ixs, legacyIxSpec{
 			program:  progPK,
 			accounts: []int{iRT, iSt, iPos},
-			data:     []byte{LV1XTagActivateStake},
+			data:     lv1xIxPrefix(LV1XTagActivateStake, 0),
 		})
 
 	case "claim_reward":
@@ -1190,7 +1189,7 @@ func BuildLV1XStakeMessage(p LV1XStakeParams) ([]byte, error) {
 		b.ixs = append(b.ixs, legacyIxSpec{
 			program:  progPK,
 			accounts: []int{iRT, iSt, iPos, iBtcVault, iATA, iOwner, iTok},
-			data:     []byte{LV1XTagClaimStakingReward},
+			data:     lv1xIxPrefix(LV1XTagClaimStakingReward, 0),
 		})
 
 	case "unstake":
@@ -1220,9 +1219,8 @@ func BuildLV1XStakeMessage(p LV1XStakeParams) ([]byte, error) {
 		iVault := b.addKey(vaultPK, false, true)
 		iATA := b.addKey(ataPK, false, true)
 		iTok := b.addKey(tokPK, false, false)
-		data := make([]byte, 9)
-		data[0] = LV1XTagUnstake
-		binary.LittleEndian.PutUint64(data[1:9], p.Amount)
+		data := lv1xIxPrefix(LV1XTagUnstake, 8)
+		data = append(data, u64LEBytes(p.Amount)...)
 		b.ixs = append(b.ixs, legacyIxSpec{
 			program:  progPK,
 			accounts: []int{iRT, iSt, iPos, iVault, iATA, iOwner, iTok},
@@ -1282,29 +1280,20 @@ func BuildLV1XSessionMessage(p LV1XSessionParams) ([]byte, error) {
 	switch strings.ToLower(strings.TrimSpace(p.Action)) {
 	case "open":
 		iSys := addKey(sysPK, false, false)
-		data := make([]byte, 1+8+32+8+8+8+8+8+1+8)
-		off := 0
-		data[off] = LV1XTagOpenSession
-		off++
-		binary.LittleEndian.PutUint64(data[off:off+8], p.Reference)
-		off += 8
-		copy(data[off:off+32], p.StrategyRoot[:])
-		off += 32
-		binary.LittleEndian.PutUint64(data[off:off+8], p.FirstSlot)
-		off += 8
-		binary.LittleEndian.PutUint64(data[off:off+8], p.LastSlot)
-		off += 8
-		binary.LittleEndian.PutUint64(data[off:off+8], uint64(p.ExpiresAt))
-		off += 8
-		binary.LittleEndian.PutUint64(data[off:off+8], p.MaxEntry)
-		off += 8
-		binary.LittleEndian.PutUint64(data[off:off+8], p.MaxTurnover)
-		off += 8
+		data := lv1xIxPrefix(LV1XTagOpenSession, 8+32+8+8+8+8+8+1+8)
+		data = append(data, u64LEBytes(p.Reference)...)
+		data = append(data, p.StrategyRoot[:]...)
+		data = append(data, u64LEBytes(p.FirstSlot)...)
+		data = append(data, u64LEBytes(p.LastSlot)...)
+		data = append(data, i64LEBytes(p.ExpiresAt)...)
+		data = append(data, u64LEBytes(p.MaxEntry)...)
+		data = append(data, u64LEBytes(p.MaxTurnover)...)
 		if p.ReturnToBudget {
-			data[off] = 1
+			data = append(data, 1)
+		} else {
+			data = append(data, 0)
 		}
-		off++
-		binary.LittleEndian.PutUint64(data[off:off+8], p.Deposit)
+		data = append(data, u64LEBytes(p.Deposit)...)
 		ixs = append(ixs, legacyIxSpec{
 			program:  progPK,
 			accounts: []int{iRT, iSK, iOwner, iSys},
@@ -1315,28 +1304,25 @@ func BuildLV1XSessionMessage(p LV1XSessionParams) ([]byte, error) {
 			return nil, errors.New("deposit amount must be positive")
 		}
 		iSys := addKey(sysPK, false, false)
-		data := make([]byte, 1+8+8)
-		data[0] = LV1XTagDepositSession
-		binary.LittleEndian.PutUint64(data[1:9], p.Reference)
-		binary.LittleEndian.PutUint64(data[9:17], p.Deposit)
+		data := lv1xIxPrefix(LV1XTagDepositSession, 8+8)
+		data = append(data, u64LEBytes(p.Reference)...)
+		data = append(data, u64LEBytes(p.Deposit)...)
 		ixs = append(ixs, legacyIxSpec{
 			program:  progPK,
 			accounts: []int{iRT, iSK, iOwner, iSys},
 			data:     data,
 		})
 	case "stop":
-		data := make([]byte, 9)
-		data[0] = LV1XTagStopSession
-		binary.LittleEndian.PutUint64(data[1:9], p.Reference)
+		data := lv1xIxPrefix(LV1XTagStopSession, 8)
+		data = append(data, u64LEBytes(p.Reference)...)
 		ixs = append(ixs, legacyIxSpec{
 			program:  progPK,
 			accounts: []int{iRT, iSK, iOwner},
 			data:     data,
 		})
 	case "close":
-		data := make([]byte, 9)
-		data[0] = LV1XTagCloseSession
-		binary.LittleEndian.PutUint64(data[1:9], p.Reference)
+		data := lv1xIxPrefix(LV1XTagCloseSession, 8)
+		data = append(data, u64LEBytes(p.Reference)...)
 		ixs = append(ixs, legacyIxSpec{
 			program:  progPK,
 			accounts: []int{iRT, iSK, iOwner},
