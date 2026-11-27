@@ -738,16 +738,7 @@ test("Phase 8B-3 in-thread secret request cards, sandboxed visual replies, and S
   await expect(metricsCard.locator(".v2-visual-metrics")).toBeVisible();
 
   // 3. Settings / Diagnostics -> MCP endpoint & Model manifest import/clear.
-  if (isMobile) {
-    await page
-      .getByRole("button", { name: "Preferences", exact: true })
-      .click();
-  } else {
-    await page
-      .locator("#shell-rail")
-      .getByRole("button", { name: "Settings", exact: true })
-      .click();
-  }
+  await page.getByRole("button", { name: "Preferences", exact: true }).click();
   const dialog = page.getByRole("dialog", { name: /Settings \// });
   await expect(dialog).toBeVisible();
 

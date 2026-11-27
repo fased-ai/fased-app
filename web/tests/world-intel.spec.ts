@@ -10,7 +10,7 @@ import {
 
 installCoreFixture();
 
-test("World Intel map, prediction arbitrage, chart event pins, Overview widgets, and Dark/Light AA contrast", async ({
+test("News 3-pane terminal, prediction arbitrage, chart event pins, Overview widgets, and Dark/Light AA contrast", async ({
   page,
   isMobile,
 }) => {
@@ -35,24 +35,24 @@ test("World Intel map, prediction arbitrage, chart event pins, Overview widgets,
     if (m.type() === "error") errors.push(m.text());
   });
 
-  // 1. Navigate #intel, verify World Map pins & MENA region filter, inspect event.
-  await page.goto(`${url}/#intel`);
+  // 1. Navigate #news, verify Sentiment Pulse, MENA region filter, and event inspector.
+  await page.goto(`${url}/#news`);
   await expect(
-    page.getByRole("heading", { name: "World Intel", exact: true, level: 1 }),
+    page.getByRole("heading", { name: "News", exact: true, level: 1 }),
   ).toBeVisible();
-  await expect(
-    page.getByRole("img", { name: "World map", exact: true }),
-  ).toBeVisible();
+  await expect(page.getByTestId("news-sentiment-pulse")).toBeVisible();
 
   const regionGroup = page.getByRole("group", {
-    name: "World map",
+    name: "Regions",
     exact: true,
   });
   await regionGroup.getByRole("button", { name: /^MENA/ }).click();
-  await regionGroup.getByRole("button", { name: "1.5×", exact: true }).click();
-  await page.getByTestId("map-pin-fix-mena-oil").click();
+  await page
+    .getByTestId("intel-events-list")
+    .getByRole("button", { name: /Hormuz/ })
+    .first()
+    .click();
   await expect(page.getByTestId("intel-inspector")).toContainText("Hormuz");
-  await regionGroup.getByRole("button", { name: "1×", exact: true }).click();
   await regionGroup.getByRole("button", { name: /^All/ }).click();
 
   // 2. Verify right-rail Prediction Markets arbitrage spread renders.
@@ -79,11 +79,11 @@ test("World Intel map, prediction arbitrage, chart event pins, Overview widgets,
   await eventsBtn.click();
   await expect(page.getByTestId("chart-pins-tile-1")).toContainText("pins");
 
-  // 5. Add World Intel & Predictions widgets to #overview and verify live summaries.
+  // 5. Add News Wire & Predictions widgets to #overview and verify live summaries.
   await page.goto(`${url}/#overview`);
   await page.getByRole("button", { name: "Add widgets", exact: true }).click();
   const dlg = page.getByRole("dialog", { name: "Widgets", exact: true });
-  await dlg.getByRole("button", { name: "World Intel", exact: true }).click();
+  await dlg.getByRole("button", { name: "News Wire", exact: true }).click();
   await dlg.getByRole("button", { name: "Predictions", exact: true }).click();
   await dlg.getByRole("button", { name: "Done", exact: true }).click();
   await expect(page.locator('[data-widget="intel"]')).toContainText(
@@ -93,7 +93,7 @@ test("World Intel map, prediction arbitrage, chart event pins, Overview widgets,
     "Arbitrage:",
   );
 
-  // 6. Dark & Light WCAG AA contrast + zero overflow across #intel and #overview.
+  // 6. Dark & Light WCAG AA contrast + zero overflow across #news and #overview.
   for (const theme of ["dark", "light"] as const) {
     await page.evaluate((chosenTheme) => {
       localStorage.setItem(
@@ -102,7 +102,7 @@ test("World Intel map, prediction arbitrage, chart event pins, Overview widgets,
       );
     }, theme);
     await page.reload();
-    for (const hash of ["#intel", "#overview"]) {
+    for (const hash of ["#news", "#overview"]) {
       await page.goto(`${url}/${hash}`);
       await expect(page.locator("html")).toHaveAttribute("data-theme", theme);
       const report = await auditPageAccessibility(page, {
@@ -121,7 +121,7 @@ test("World Intel map, prediction arbitrage, chart event pins, Overview widgets,
         overflow,
         `[${theme}] ${hash} horizontal overflow on mobile=${isMobile}`,
       ).toBeLessThanOrEqual(0);
-      if (hash === "#intel") {
+      if (hash === "#news") {
         await expect(page.locator(".intel-card-title").first()).toBeVisible();
         const wrapCheck = await page.evaluate(() => {
           const list = document.querySelector(".intel-list");

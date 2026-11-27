@@ -679,10 +679,10 @@ button {
 .avatar {
   height: 43px;
   width: 43px;
-  border: 1px solid var(--wt-accent-border);
+  border: 0;
   border-radius: 9px;
-  background: var(--wt-accent-soft);
-  color: var(--wt-coral);
+  background: var(--wt-raised);
+  color: var(--wt-text);
   font-size: 12px;
   font-weight: 500;
   display: inline-flex;
@@ -761,7 +761,7 @@ button {
   align-items: center;
   justify-content: center;
   border-radius: 8px;
-  background: var(--wt-accent-soft);
+  background: var(--wt-raised);
   color: var(--wt-coral);
 }
 .feature-icon.blue {
@@ -1058,8 +1058,8 @@ button {
   font-size: 9px;
 }
 .agent-picker > button.selected {
-  border-color: var(--wt-violet);
-  background: var(--wt-violet-soft);
+  border-color: transparent;
+  background: var(--wt-raised-2);
 }
 .agent-picker > button > svg {
   color: var(--lime);
@@ -1084,8 +1084,8 @@ button {
   display: inline-flex;
   height: 62px;
   width: 62px;
-  background: var(--wt-accent-soft);
-  border: 1px solid var(--wt-accent-border);
+  background: var(--wt-raised);
+  border: 0;
   border-radius: 17px;
   color: var(--wt-coral);
   align-items: center;
@@ -1367,9 +1367,9 @@ button {
   background: var(--wt-surface);
 }
 .terminal-switcher button.active {
-  border-color: var(--wt-coral);
+  border-color: transparent;
   color: var(--wt-text);
-  background: var(--wt-accent-soft);
+  background: var(--wt-raised-2);
 }
 .terminal-grid.full {
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -1671,9 +1671,9 @@ button {
   gap: 14px;
 }
 .choice.selected {
-  border-color: var(--wt-coral);
-  background: var(--wt-accent-soft);
-  box-shadow: inset 0 0 0 1px var(--wt-coral);
+  border-color: transparent;
+  background: var(--wt-raised-2);
+  box-shadow: none;
 }
 .choice > svg {
   color: var(--wt-coral);

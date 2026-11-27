@@ -1018,7 +1018,7 @@ export function SolanaWalletsPanel() {
                     <span>{w.name}</span>
                   </span>
                   <span
-                    className={`wt-role-pill${w.policy.frozen ? " is-frozen" : w.role === "vault" ? " is-vault" : w.role === "agent" ? " is-agent" : ""}`}
+                    className={`wt-role-pill${w.policy.frozen ? " is-frozen" : w.role === "vault" ? " is-vault" : w.role === "agent" ? " is-agent" : w.role === "mining" ? " is-mining" : ""}`}
                   >
                     {w.policy.frozen ? "FROZEN" : w.role}
                   </span>
@@ -1703,6 +1703,7 @@ export function SolanaWalletsPanel() {
                   [
                     { id: "agent", label: "Agentic Auto" },
                     { id: "trading", label: "Trading" },
+                    { id: "mining", label: "Mining" },
                     { id: "vault", label: "Vault" },
                   ] as const
                 ).map((r) => (
@@ -1782,6 +1783,7 @@ export function SolanaWalletsPanel() {
                     [
                       { id: "vault", label: "Vault" },
                       { id: "trading", label: "Trading" },
+                      { id: "mining", label: "Mining" },
                     ] as const
                   ).map((r) => (
                     <button

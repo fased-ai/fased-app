@@ -35,7 +35,7 @@ test("Event triggers, Telegram controller, Alerts widget, zero secret leakage, a
     if (m.type() === "error") errors.push(m.text());
   });
 
-  // 1. Navigate to #agents/tasks -> Event triggers tab, create World Intel & Price triggers, evaluate, toggle pause/kill.
+  // 1. Navigate to #agents/tasks -> Event triggers tab, create News & Price triggers, evaluate, toggle pause/kill.
   await page.goto(`${url}/#agents/tasks`);
   await page
     .locator(".task-views")
@@ -48,7 +48,7 @@ test("Event triggers, Telegram controller, Alerts widget, zero secret leakage, a
     "Active",
   );
 
-  // Create a World Intel news trigger (matches energy fixture event).
+  // Create a News trigger (matches energy fixture event).
   await panel
     .getByLabel("Trigger name", { exact: true })
     .fill("Energy Shock Monitor");
@@ -133,16 +133,9 @@ test("Event triggers, Telegram controller, Alerts widget, zero secret leakage, a
 
   // 2. Settings -> Notifications: save Telegram token (masked), test ping, command simulator, clear token.
   const openNotificationsTab = async () => {
-    if (isMobile) {
-      await page
-        .getByRole("button", { name: "Preferences", exact: true })
-        .click();
-    } else {
-      await page
-        .locator("#shell-rail")
-        .getByRole("button", { name: "Settings", exact: true })
-        .click();
-    }
+    await page
+      .getByRole("button", { name: "Preferences", exact: true })
+      .click();
     const dialog = page.getByRole("dialog", { name: /Settings \// });
     await expect(dialog).toBeVisible();
     await dialog

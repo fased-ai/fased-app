@@ -91,12 +91,9 @@
 }
 .wt .workspace-shell {
   display: grid;
-  grid-template-columns: 50px minmax(0, 1fr);
-  grid-template-rows: 50px minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: 56px minmax(0, 1fr);
   min-height: 100dvh;
-}
-.wt .workspace-shell.rail-hidden {
-  grid-template-columns: 0 minmax(0, 1fr);
 }
 .wt .shell-header {
   grid-column: 1/-1;
@@ -104,17 +101,16 @@
   position: sticky;
   top: 0;
   z-index: 45;
-  height: 50px;
+  height: 56px;
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 0 12px;
+  gap: 12px;
+  padding: 0 20px;
   background: var(--shell-header);
   border-bottom: 0;
   min-width: 0;
 }
-.wt .shell-header button,
-.wt .shell-rail button {
+.wt .shell-header button {
   border-color: transparent;
   box-shadow: none;
 }
@@ -281,6 +277,23 @@
   font-size: 12px;
   font-weight: 500;
 }
+.wt .shell-wallets-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 32px;
+  padding: 0 11px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: var(--wt-raised);
+  color: var(--wt-text);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.wt .shell-wallets-pill:hover {
+  background: var(--wt-raised-2);
+}
 .wt .shell-status-dot {
   width: 6px;
   height: 6px;
@@ -292,7 +305,7 @@
   background: var(--wt-ok);
 }
 .wt .shell-body {
-  grid-column: 2;
+  grid-column: 1;
   grid-row: 2;
   min-width: 0;
   display: flex;
@@ -305,56 +318,6 @@
   width: 100%;
   max-width: none;
   flex: 1 0 auto;
-}
-.wt .shell-rail {
-  grid-column: 1;
-  grid-row: 2;
-  position: sticky;
-  top: 50px;
-  height: calc(100dvh - 50px);
-  display: flex;
-  align-items: center;
-  flex-direction: column;
-  gap: 6px;
-  padding: 10px 4px;
-  background: var(--shell-header);
-  border-right: 0;
-  z-index: 30;
-}
-.wt .shell-rail > a,
-.wt .shell-rail-bottom > a,
-.wt .shell-rail-bottom > button.shell-icon {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 40px;
-  height: 40px;
-  min-height: 40px;
-  color: var(--wt-muted);
-  position: relative;
-  border-radius: 6px;
-}
-.wt .shell-rail a:hover {
-  background: var(--shell-hover);
-  color: var(--wt-text);
-}
-.wt .shell-rail a[aria-current="page"] {
-  color: var(--wt-coral);
-}
-.wt .shell-rail a[aria-current="page"]::before {
-  content: "";
-  position: absolute;
-  left: -4px;
-  height: 20px;
-  width: 2px;
-  background: var(--wt-coral);
-}
-.wt .shell-rail-bottom {
-  margin-top: auto;
-  display: flex;
-  align-items: center;
-  flex-direction: column;
-  gap: 6px;
 }
 .wt [data-tooltip]::after {
   content: attr(data-tooltip);
@@ -378,11 +341,6 @@
 .wt [data-tooltip]:is(:hover, :focus)::after {
   opacity: 1;
   visibility: visible;
-}
-.wt .shell-rail [data-tooltip]::after {
-  left: calc(100% + 8px);
-  top: 50%;
-  transform: translateY(-50%);
 }
 .wt .shell-header .shell-tools > button:last-child::after,
 .wt .agent-header-actions > button[data-tooltip]:last-child::after {
@@ -534,7 +492,7 @@
   color: var(--wt-text);
   border-color: var(--wt-border);
   z-index: 44;
-  top: 50px;
+  top: 56px;
 }
 @media (max-width: 1100px) {
   .wt .shell-header {
@@ -563,13 +521,13 @@
 }
 @media (max-width: 760px) {
   .wt .workspace-shell {
-    grid-template-columns: 46px minmax(0, 1fr);
+    grid-template-columns: minmax(0, 1fr);
     grid-template-rows: auto minmax(0, 1fr);
   }
   .wt .shell-header {
     flex-wrap: wrap;
     height: auto;
-    min-height: 50px;
+    min-height: 56px;
     padding: 4px 6px;
     gap: 3px;
   }
@@ -604,9 +562,6 @@
     font-size: 13px;
     padding: 6px;
   }
-  .wt .shell-rail {
-    padding: 8px 2px;
-  }
   .wt .shell-instance {
     padding: 5px;
     font-size: 12px;
@@ -631,9 +586,7 @@
 }
 @media (pointer: coarse) {
   .wt .shell-header button,
-  .wt .shell-header a,
-  .wt .shell-rail a,
-  .wt .shell-rail button {
+  .wt .shell-header a {
     min-height: 44px;
   }
 }
@@ -659,11 +612,6 @@
   flex: 1;
   min-height: 0;
   height: auto;
-}
-.wt .workspace-shell:has(.agent-page:not([hidden]) .agent-chat) .shell-rail {
-  min-height: 0;
-  height: 100%;
-  overflow-y: auto;
 }
 .wt .chat-thread > .chat-message-form {
   margin-top: auto;

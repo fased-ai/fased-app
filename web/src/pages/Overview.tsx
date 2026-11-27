@@ -519,7 +519,7 @@ export function Overview() {
           {!intelEvents.length && (
             <div className="dashboard-empty">
               <button className="text-button" onClick={() => open(paths.intel)}>
-                {t("World Intel")}
+                {t("News")}
                 <ArrowRight size={14} />
               </button>
             </div>

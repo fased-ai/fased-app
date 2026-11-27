@@ -160,7 +160,7 @@ export function AgentPlaybooks({ view: v }: { view: AgentView }) {
               {uiText("Fetch fixture headlines")}
             </button>
           )}
-          <a href="#intel">{uiText("News & Intel")}</a>
+          <a href="#intel">{uiText("News")}</a>
         </div>
         {books.map((p) => {
           const n = versions[p.id] ?? p.versions.length;

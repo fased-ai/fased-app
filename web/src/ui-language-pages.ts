@@ -7098,4 +7098,24 @@ export const pageCopy = {
     "使用通行密钥确认",
     "패스키로 확인",
   ],
+  Mine: ["Майнинг", "Minar", "挖矿", "채굴"],
+  Sentiment: ["Настроение", "Sentimiento", "市场情绪", "투자심리"],
+  "Sentiment Pulse": [
+    "Пульс настроений",
+    "Pulso de sentimiento",
+    "情绪脉搏",
+    "심리 펄스",
+  ],
+  "Source health": [
+    "Состояние источников",
+    "Estado de fuentes",
+    "数据源状态",
+    "소스 상태",
+  ],
+  "Legacy Host Signer": [
+    "Устаревший Host Signer",
+    "Host Signer heredado",
+    "传统主机签名器",
+    "레거시 호스트 서명기",
+  ],
 } satisfies Record<string, [string, string, string, string]>;

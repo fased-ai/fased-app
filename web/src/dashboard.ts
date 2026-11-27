@@ -2,7 +2,7 @@ export const widgetNames = {
   agents: "Agents",
   tasks: "Tasks",
   news: "News",
-  intel: "World Intel",
+  intel: "News Wire",
   predictions: "Predictions",
   alerts: "Alerts",
   desk: "Trading Desk",

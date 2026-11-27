@@ -142,9 +142,30 @@
   background: var(--wt-info-bg);
 }
 
+.wt-role-pill.is-mining {
+  color: var(--wt-text);
+  background: var(--wt-raised);
+}
+
 .wt-role-pill.is-frozen {
   color: var(--wt-danger);
   background: var(--wt-danger-bg);
+}
+
+.wt-legacy-signer {
+  margin-top: 12px;
+  border: 0;
+  border-radius: var(--radius);
+  background: var(--wt-surface);
+  padding: 10px 14px;
+}
+
+.wt-legacy-summary {
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--wt-muted);
+  user-select: none;
 }
 
 .wt-cluster-line {
