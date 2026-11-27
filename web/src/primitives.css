@@ -335,3 +335,24 @@
 .f-scroll-thin:hover {
   scrollbar-color: var(--wt-border-strong) transparent;
 }
+
+@media (max-width: 760px) {
+  .f-icon-btn,
+  .icon-button,
+  .icon-btn {
+    width: 44px;
+    height: 44px;
+    min-width: 44px;
+    min-height: 44px;
+  }
+
+  .f-btn-soft,
+  .wt-btn-soft,
+  .f-btn-primary-sm,
+  .wt-btn-rose-sm,
+  .f-seg button,
+  .wt-seg button,
+  .wt-seg-bar button {
+    min-height: 44px;
+  }
+}
