@@ -449,7 +449,7 @@ export function TasksWorkspace() {
           </button>
           <button
             type="button"
-            className="wt-btn-primary wt-compact-cta"
+            className="wt-btn-rose-sm"
             onClick={() => setComposerMode("single")}
           >
             <Plus size={14} aria-hidden="true" />
@@ -517,7 +517,7 @@ export function TasksWorkspace() {
                 </button>
                 <button
                   type="button"
-                  className="wt-btn-primary wt-compact-cta"
+                  className="wt-btn-rose-sm"
                   onClick={() => setComposerMode("single")}
                 >
                   {t("New Task")}
@@ -693,7 +693,7 @@ export function TasksWorkspace() {
               >
                 {t("Cancel")}
               </button>
-              <button type="submit" className="wt-btn-primary">
+              <button type="submit" className="wt-btn-rose-sm">
                 {t("Authorize & Activate")}
               </button>
             </div>

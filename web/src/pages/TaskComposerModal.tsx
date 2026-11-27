@@ -505,7 +505,7 @@ export function TaskComposerModal({
           </button>
           <button
             type="submit"
-            className="wt-btn-primary"
+            className="wt-btn-rose-sm"
             disabled={submitting}
           >
             {submitting
