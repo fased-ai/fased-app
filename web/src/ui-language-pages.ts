@@ -7091,4 +7091,11 @@ export const pageCopy = {
     "소유자 비밀번호 확인",
   ],
   Authorization: ["Авторизация", "Autorización", "权限验证", "권한 인증"],
+  Passkey: ["Ключ доступа", "Passkey", "通行密钥", "패스키"],
+  "Confirm with Passkey": [
+    "Подтвердить ключом доступа",
+    "Confirmar con Passkey",
+    "使用通行密钥确认",
+    "패스키로 확인",
+  ],
 } satisfies Record<string, [string, string, string, string]>;

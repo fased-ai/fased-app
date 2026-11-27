@@ -383,6 +383,105 @@ export async function requestPasskeyStepUpToken(
   });
 }
 
+export interface JupiterSwapQuoteRequest {
+  walletId?: string;
+  inputMint: string;
+  outputMint: string;
+  amountHuman?: string;
+  amountRaw?: string;
+  inputDecimals?: number;
+  outputDecimals?: number;
+  slippageBps?: number;
+  prepareReview?: boolean;
+}
+
+export interface JupiterSwapQuoteResponse {
+  walletId: string;
+  walletHandle: string;
+  cluster: string;
+  inputMint: string;
+  outputMint: string;
+  inputSymbol: string;
+  outputSymbol: string;
+  inputDecimals: number;
+  outputDecimals: number;
+  amountRaw: string;
+  amountHuman: string;
+  outAmountRaw: string;
+  outAmountHuman: string;
+  minOutAmountRaw: string;
+  minOutAmountHuman: string;
+  priceImpactPct: string;
+  slippageBps: number;
+  routeHops: string[];
+  review?: WalletReview;
+}
+
+export const SOLANA_COMMON_TOKENS: readonly {
+  symbol: string;
+  mint: string;
+  decimals: number;
+}[] = [
+  {
+    symbol: "SOL",
+    mint: "So11111111111111111111111111111111111111112",
+    decimals: 9,
+  },
+  {
+    symbol: "USDC",
+    mint: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+    decimals: 6,
+  },
+  {
+    symbol: "USDT",
+    mint: "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB",
+    decimals: 6,
+  },
+  {
+    symbol: "JUP",
+    mint: "JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN",
+    decimals: 6,
+  },
+  {
+    symbol: "WBTC",
+    mint: "3NZ9JMVBmGAqocybic2c7LQCJScmgsAZ6vQqTDzcqmJh",
+    decimals: 8,
+  },
+  {
+    symbol: "WETH",
+    mint: "7vfCXTUXx5WJV5JADk17DUJ4ksgau7utNKj4b963voxs",
+    decimals: 8,
+  },
+  {
+    symbol: "BONK",
+    mint: "DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263",
+    decimals: 5,
+  },
+];
+
+export async function quoteWalletJupiterSwap(
+  core: CoreRequestOnly,
+  walletId: string,
+  req: JupiterSwapQuoteRequest,
+): Promise<JupiterSwapQuoteResponse> {
+  return core.request<JupiterSwapQuoteResponse>(
+    `wallets/${encodeURIComponent(walletId)}/jupiter/quote`,
+    "POST",
+    req,
+  );
+}
+
+export async function quoteTradeJupiterSwap(
+  core: CoreRequestOnly,
+  req: JupiterSwapQuoteRequest,
+): Promise<JupiterSwapQuoteResponse> {
+  return core.request<JupiterSwapQuoteResponse>(
+    "trade/jupiter/quote",
+    "POST",
+    req,
+  );
+}
+
 export async function listWalletsV2(
   core: CoreRequestOnly,
 ): Promise<WalletsV2ListResponse> {

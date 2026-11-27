@@ -366,6 +366,9 @@ func (h *HTTPHandler) tradeAPI(w http.ResponseWriter, r *http.Request, token str
 		accounts := h.store.tradeAccountsView(ctx)
 		writeJSON(w, 200, map[string]any{"accounts": accounts, "count": len(accounts)})
 
+	case rel == "jupiter/quote":
+		h.handleJupiterQuoteAPI(w, r, token, "")
+
 	case rel == "bots":
 		switch r.Method {
 		case http.MethodGet:

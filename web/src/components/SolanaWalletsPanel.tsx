@@ -29,6 +29,7 @@ import {
   listWalletActivity,
   listWalletsV2,
   prepareWalletReview,
+  quoteWalletJupiterSwap,
   reconcileWalletLedger,
   registerOwnerPasskey,
   requestPasskeyStepUpToken,
@@ -36,12 +37,14 @@ import {
   restoreEncryptedBackupV2,
   setLocalOwnerPassword,
   setWalletFreeze,
+  SOLANA_COMMON_TOKENS,
   submitHardwareSignedReview,
   updateWalletConnections,
   updateWalletPolicy,
   updateWalletRPC,
   type ApprovalMode,
   type AuditEntry,
+  type JupiterSwapQuoteResponse,
   type LedgerEntry,
   type WalletBalanceResult,
   type WalletConnections,
@@ -68,6 +71,7 @@ const SYSTEM_PROG = "11111111111111111111111111111111";
 const COMPUTE_PROG = "ComputeBudget111111111111111111111111111111";
 const TOKEN_PROG = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA";
 const ATA_PROG = "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL";
+const JUPITER_V6_PROG = "JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4";
 
 function formatSolFromLamports(raw: string): string {
   const n = Number(raw || "0");
@@ -121,13 +125,25 @@ export function SolanaWalletsPanel() {
   const [hwRpc, setHwRpc] = useState("https://api.mainnet-beta.solana.com");
   const [detectedProvider, setDetectedProvider] = useState("");
 
-  // Send / Review state
-  const [sendAssetMode, setSendAssetMode] = useState<"sol" | "spl">("sol");
+  // Send / Swap / Review state
+  const [sendAssetMode, setSendAssetMode] = useState<"sol" | "spl" | "swap">(
+    "sol",
+  );
   const [sendMint, setSendMint] = useState("");
   const [sendDecimals, setSendDecimals] = useState("6");
   const [sendCreateAta, setSendCreateAta] = useState(true);
   const [sendDest, setSendDest] = useState("");
   const [sendAmount, setSendAmount] = useState("0.1");
+  const [swapInputMint, setSwapInputMint] = useState(
+    SOLANA_COMMON_TOKENS[0].mint,
+  );
+  const [swapOutputMint, setSwapOutputMint] = useState(
+    SOLANA_COMMON_TOKENS[1].mint,
+  );
+  const [swapSlippageBps, setSwapSlippageBps] = useState("50");
+  const [swapQuote, setSwapQuote] = useState<JupiterSwapQuoteResponse | null>(
+    null,
+  );
   const [activeReview, setActiveReview] = useState<WalletReview | null>(null);
 
   // Security posture & step-up authorization state
@@ -600,22 +616,59 @@ export function SolanaWalletsPanel() {
     setError("");
     setNotice("");
     try {
-      const res = await prepareWalletReview(core, selected.id, {
-        operation:
-          sendAssetMode === "spl"
-            ? "solana.splTransferChecked"
-            : "solana.nativeTransfer",
-        destination: sendDest.trim(),
-        amountHuman: sendAmount.trim(),
-        mint: sendAssetMode === "spl" ? sendMint.trim() : undefined,
-        decimals:
-          sendAssetMode === "spl" ? Number(sendDecimals || "6") : undefined,
-        createDestAta: sendAssetMode === "spl" ? sendCreateAta : undefined,
-      });
-      setActiveReview(res.review);
-      await loadActivity(selected.id);
+      if (sendAssetMode === "swap") {
+        const res = await quoteWalletJupiterSwap(core, selected.id, {
+          inputMint: swapInputMint.trim(),
+          outputMint: swapOutputMint.trim(),
+          amountHuman: sendAmount.trim(),
+          slippageBps: Number(swapSlippageBps || "50"),
+          prepareReview: true,
+        });
+        setSwapQuote(res);
+        if (res.review) {
+          setActiveReview(res.review);
+        }
+        await loadActivity(selected.id);
+      } else {
+        const res = await prepareWalletReview(core, selected.id, {
+          operation:
+            sendAssetMode === "spl"
+              ? "solana.splTransferChecked"
+              : "solana.nativeTransfer",
+          destination: sendDest.trim(),
+          amountHuman: sendAmount.trim(),
+          mint: sendAssetMode === "spl" ? sendMint.trim() : undefined,
+          decimals:
+            sendAssetMode === "spl" ? Number(sendDecimals || "6") : undefined,
+          createDestAta: sendAssetMode === "spl" ? sendCreateAta : undefined,
+        });
+        setActiveReview(res.review);
+        await loadActivity(selected.id);
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Review failed");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function onFetchSwapQuote() {
+    if (!selected) return;
+    setBusy(true);
+    setError("");
+    setNotice("");
+    try {
+      const res = await quoteWalletJupiterSwap(core, selected.id, {
+        inputMint: swapInputMint.trim(),
+        outputMint: swapOutputMint.trim(),
+        amountHuman: sendAmount.trim(),
+        slippageBps: Number(swapSlippageBps || "50"),
+        prepareReview: false,
+      });
+      setSwapQuote(res);
+    } catch (err) {
+      setSwapQuote(null);
+      setError(err instanceof Error ? err.message : "Jupiter quote failed");
     } finally {
       setBusy(false);
     }
@@ -945,6 +998,33 @@ export function SolanaWalletsPanel() {
                 </div>
               </div>
 
+              {(selBalance?.tokens ?? []).length > 0 && (
+                <div className="wt-preset-chips">
+                  {(selBalance?.tokens ?? []).map((tb) => {
+                    const known = SOLANA_COMMON_TOKENS.find(
+                      (k) => k.mint === tb.mint,
+                    );
+                    const lbl = known?.symbol ?? shortAddr(tb.mint);
+                    return (
+                      <button
+                        key={tb.mint}
+                        type="button"
+                        title={tb.mint}
+                        onClick={() => {
+                          setRightTab("send");
+                          setSendAssetMode("spl");
+                          setSendMint(tb.mint);
+                          setSendDecimals(String(tb.decimals));
+                          setSwapInputMint(tb.mint);
+                        }}
+                      >
+                        {`${lbl} ${tb.amountHuman}`}
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+
               <div className="wt-rail-btns">
                 <button
                   type="button"
@@ -1145,6 +1225,29 @@ export function SolanaWalletsPanel() {
                     }
                   >
                     + Core Solana Programs
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setProgText((prev) =>
+                        prev.includes(JUPITER_V6_PROG)
+                          ? prev
+                          : [
+                              prev ||
+                                [
+                                  SYSTEM_PROG,
+                                  COMPUTE_PROG,
+                                  TOKEN_PROG,
+                                  ATA_PROG,
+                                ].join("\n"),
+                              JUPITER_V6_PROG,
+                            ]
+                              .filter(Boolean)
+                              .join("\n"),
+                      )
+                    }
+                  >
+                    + Jupiter v6
                   </button>
                   {wallets
                     .filter((w) => w.id !== selected.id)
@@ -1385,7 +1488,7 @@ export function SolanaWalletsPanel() {
                             {new Date(rv.createdAt * 1000).toLocaleTimeString()}
                           </td>
                           <td>{shortAddr(rv.destination)}</td>
-                          <td>{`${rv.amountHuman} SOL`}</td>
+                          <td>{`${rv.amountHuman} ${rv.symbol || "SOL"}`}</td>
                           <td>{rv.status}</td>
                           <td>
                             {rv.status === "prepared" && (
@@ -1654,103 +1757,259 @@ export function SolanaWalletsPanel() {
                 >
                   SPL
                 </button>
+                <button
+                  type="button"
+                  aria-pressed={sendAssetMode === "swap"}
+                  onClick={() => {
+                    setSendAssetMode("swap");
+                    setSwapQuote(null);
+                  }}
+                >
+                  Swap
+                </button>
               </div>
               <form className="wt-form-stack" onSubmit={onPrepareSend}>
-                {sendAssetMode === "spl" && (
+                {sendAssetMode === "swap" ? (
                   <>
                     <label className="wt-field">
-                      <span>SPL Mint</span>
+                      <span>Input Mint</span>
                       <input
-                        value={sendMint}
-                        onChange={(e) => setSendMint(e.target.value)}
-                        placeholder="EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
+                        value={swapInputMint}
+                        onChange={(e) => {
+                          setSwapInputMint(e.target.value);
+                          setSwapQuote(null);
+                        }}
                         required
                       />
                     </label>
-                    {(selected?.policy.tokenCaps ?? []).length > 0 && (
-                      <div className="wt-preset-chips">
-                        {(selected?.policy.tokenCaps ?? []).map((tc) => (
-                          <button
-                            key={tc.mint || tc.asset}
-                            type="button"
-                            onClick={() => {
-                              if (tc.mint) setSendMint(tc.mint);
-                              if (tc.decimals)
-                                setSendDecimals(String(tc.decimals));
-                            }}
-                          >
-                            {tc.symbol || shortAddr(tc.mint || "")}
-                          </button>
-                        ))}
+                    <div className="wt-preset-chips">
+                      {SOLANA_COMMON_TOKENS.map((tok) => (
+                        <button
+                          key={`in-${tok.mint}`}
+                          type="button"
+                          aria-pressed={swapInputMint === tok.mint}
+                          onClick={() => {
+                            setSwapInputMint(tok.mint);
+                            setSwapQuote(null);
+                          }}
+                        >
+                          {tok.symbol}
+                        </button>
+                      ))}
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setSwapInputMint(swapOutputMint);
+                          setSwapOutputMint(swapInputMint);
+                          setSwapQuote(null);
+                        }}
+                      >
+                        ⇅
+                      </button>
+                    </div>
+
+                    <label className="wt-field">
+                      <span>Output Mint</span>
+                      <input
+                        value={swapOutputMint}
+                        onChange={(e) => {
+                          setSwapOutputMint(e.target.value);
+                          setSwapQuote(null);
+                        }}
+                        required
+                      />
+                    </label>
+                    <div className="wt-preset-chips">
+                      {SOLANA_COMMON_TOKENS.map((tok) => (
+                        <button
+                          key={`out-${tok.mint}`}
+                          type="button"
+                          aria-pressed={swapOutputMint === tok.mint}
+                          onClick={() => {
+                            setSwapOutputMint(tok.mint);
+                            setSwapQuote(null);
+                          }}
+                        >
+                          {tok.symbol}
+                        </button>
+                      ))}
+                    </div>
+
+                    <label className="wt-field">
+                      <span>{t("Amount")}</span>
+                      <div className="wt-amount-wrap">
+                        <input
+                          value={sendAmount}
+                          onChange={(e) => {
+                            setSendAmount(e.target.value);
+                            setSwapQuote(null);
+                          }}
+                          required
+                        />
+                        <span className="wt-amount-suffix">
+                          {SOLANA_COMMON_TOKENS.find(
+                            (x) => x.mint === swapInputMint,
+                          )?.symbol ?? "SPL"}
+                        </span>
+                      </div>
+                    </label>
+
+                    <div className="wt-preset-chips">
+                      {["10", "50", "100"].map((bps) => (
+                        <button
+                          key={bps}
+                          type="button"
+                          aria-pressed={swapSlippageBps === bps}
+                          onClick={() => {
+                            setSwapSlippageBps(bps);
+                            setSwapQuote(null);
+                          }}
+                        >
+                          {`${Number(bps) / 100}%`}
+                        </button>
+                      ))}
+                    </div>
+
+                    {swapQuote && (
+                      <div className="wt-review-box">
+                        <div className="wt-review-kv">
+                          <span>Out</span>
+                          <strong>{`${swapQuote.outAmountHuman} ${swapQuote.outputSymbol}`}</strong>
+                        </div>
+                        <div className="wt-review-kv">
+                          <span>Min Out</span>
+                          <code>{`${swapQuote.minOutAmountHuman} ${swapQuote.outputSymbol}`}</code>
+                        </div>
+                        <div className="wt-review-kv">
+                          <span>Impact</span>
+                          <code>{`${swapQuote.priceImpactPct}%`}</code>
+                        </div>
+                        {swapQuote.routeHops.length > 0 && (
+                          <div className="wt-review-kv">
+                            <span>Route</span>
+                            <code>{swapQuote.routeHops.join(" → ")}</code>
+                          </div>
+                        )}
                       </div>
                     )}
+
+                    <div className="wt-rail-btns">
+                      <button
+                        type="button"
+                        className="wt-btn-soft"
+                        disabled={busy || !selected}
+                        onClick={() => void onFetchSwapQuote()}
+                      >
+                        Quote
+                      </button>
+                      <button
+                        type="submit"
+                        className="wt-btn-rose"
+                        disabled={busy || !selected}
+                      >
+                        <span>{`${t("Prepare Review")} →`}</span>
+                      </button>
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    {sendAssetMode === "spl" && (
+                      <>
+                        <label className="wt-field">
+                          <span>SPL Mint</span>
+                          <input
+                            value={sendMint}
+                            onChange={(e) => setSendMint(e.target.value)}
+                            placeholder="EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
+                            required
+                          />
+                        </label>
+                        {(selected?.policy.tokenCaps ?? []).length > 0 && (
+                          <div className="wt-preset-chips">
+                            {(selected?.policy.tokenCaps ?? []).map((tc) => (
+                              <button
+                                key={tc.mint || tc.asset}
+                                type="button"
+                                onClick={() => {
+                                  if (tc.mint) setSendMint(tc.mint);
+                                  if (tc.decimals)
+                                    setSendDecimals(String(tc.decimals));
+                                }}
+                              >
+                                {tc.symbol || shortAddr(tc.mint || "")}
+                              </button>
+                            ))}
+                          </div>
+                        )}
+                        <label className="wt-field">
+                          <span>Decimals</span>
+                          <input
+                            type="number"
+                            min={0}
+                            max={18}
+                            value={sendDecimals}
+                            onChange={(e) => setSendDecimals(e.target.value)}
+                            required
+                          />
+                        </label>
+                        <label className="wt-toggle-row">
+                          <span>Create Destination ATA</span>
+                          <input
+                            type="checkbox"
+                            checked={sendCreateAta}
+                            onChange={(e) => setSendCreateAta(e.target.checked)}
+                          />
+                        </label>
+                      </>
+                    )}
+
                     <label className="wt-field">
-                      <span>Decimals</span>
+                      <span>{t("Amount")}</span>
+                      <div className="wt-amount-wrap">
+                        <input
+                          value={sendAmount}
+                          onChange={(e) => setSendAmount(e.target.value)}
+                          required
+                        />
+                        <span className="wt-amount-suffix">
+                          {sendAssetMode === "spl" ? "SPL" : "SOL"}
+                        </span>
+                      </div>
+                    </label>
+
+                    <label className="wt-field">
+                      <span>Destination (@wallet:id or Base58)</span>
                       <input
-                        type="number"
-                        min={0}
-                        max={18}
-                        value={sendDecimals}
-                        onChange={(e) => setSendDecimals(e.target.value)}
+                        value={sendDest}
+                        onChange={(e) => setSendDest(e.target.value)}
+                        placeholder="@wallet:vault"
                         required
                       />
                     </label>
-                    <label className="wt-toggle-row">
-                      <span>Create Destination ATA</span>
-                      <input
-                        type="checkbox"
-                        checked={sendCreateAta}
-                        onChange={(e) => setSendCreateAta(e.target.checked)}
-                      />
-                    </label>
+
+                    <div className="wt-preset-chips">
+                      {wallets
+                        .filter((w) => !selected || w.id !== selected.id)
+                        .map((w) => (
+                          <button
+                            key={w.id}
+                            type="button"
+                            onClick={() => setSendDest(w.handle)}
+                          >
+                            {w.handle}
+                          </button>
+                        ))}
+                    </div>
+
+                    <button
+                      type="submit"
+                      className="wt-btn-rose"
+                      disabled={busy || !selected}
+                    >
+                      <span>{`${t("Prepare Review")} →`}</span>
+                    </button>
                   </>
                 )}
-
-                <label className="wt-field">
-                  <span>{t("Amount")}</span>
-                  <div className="wt-amount-wrap">
-                    <input
-                      value={sendAmount}
-                      onChange={(e) => setSendAmount(e.target.value)}
-                      required
-                    />
-                    <span className="wt-amount-suffix">
-                      {sendAssetMode === "spl" ? "SPL" : "SOL"}
-                    </span>
-                  </div>
-                </label>
-
-                <label className="wt-field">
-                  <span>Destination (@wallet:id or Base58)</span>
-                  <input
-                    value={sendDest}
-                    onChange={(e) => setSendDest(e.target.value)}
-                    placeholder="@wallet:vault"
-                    required
-                  />
-                </label>
-
-                <div className="wt-preset-chips">
-                  {wallets
-                    .filter((w) => !selected || w.id !== selected.id)
-                    .map((w) => (
-                      <button
-                        key={w.id}
-                        type="button"
-                        onClick={() => setSendDest(w.handle)}
-                      >
-                        {w.handle}
-                      </button>
-                    ))}
-                </div>
-
-                <button
-                  type="submit"
-                  className="wt-btn-rose"
-                  disabled={busy || !selected}
-                >
-                  <span>{`${t("Prepare Review")} →`}</span>
-                </button>
               </form>
 
               {activeReview && (
