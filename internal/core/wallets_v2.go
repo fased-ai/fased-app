@@ -459,6 +459,10 @@ func (h *HTTPHandler) walletsV2API(w http.ResponseWriter, r *http.Request, token
 			"audit":   audit,
 		})
 
+	case strings.HasSuffix(rel, "/jupiter/quote"):
+		id := strings.TrimSuffix(rel, "/jupiter/quote")
+		h.handleJupiterQuoteAPI(w, r, token, id)
+
 	case strings.HasSuffix(rel, "/reviews"):
 		if r.Method != http.MethodPost {
 			writeError(w, 405, "method not allowed")

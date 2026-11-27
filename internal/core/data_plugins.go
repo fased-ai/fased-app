@@ -427,7 +427,7 @@ func toDataPluginView(rec dataPluginRecord) DataPluginView {
 		Kind:            rec.Kind,
 		Region:          rec.Region,
 		Cluster:         rec.Cluster,
-		Endpoint:        rec.Endpoint,
+		Endpoint:        redactedPluginEndpoint(rec.Endpoint),
 		Enabled:         rec.Enabled,
 		DataFeedEnabled: rec.DataFeedEnabled,
 		TradingEnabled:  rec.TradingEnabled,
@@ -445,6 +445,31 @@ func toDataPluginView(rec dataPluginRecord) DataPluginView {
 		LastLatencyMs:   rec.LastLatencyMs,
 		LastError:       rec.LastError,
 	}
+}
+
+func redactedPluginEndpoint(raw string) string {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" || !strings.Contains(trimmed, "?") {
+		return trimmed
+	}
+	u, err := url.Parse(trimmed)
+	if err != nil || u.RawQuery == "" {
+		return trimmed
+	}
+	q := u.Query()
+	changed := false
+	for k := range q {
+		lk := strings.ToLower(strings.TrimSpace(k))
+		if strings.Contains(lk, "key") || strings.Contains(lk, "token") || strings.Contains(lk, "secret") || strings.Contains(lk, "auth") || strings.Contains(lk, "pass") {
+			q.Set(k, "REDACTED")
+			changed = true
+		}
+	}
+	if !changed {
+		return trimmed
+	}
+	u.RawQuery = q.Encode()
+	return u.String()
 }
 
 func buildPluginsResponse(doc *dataPluginsDoc) DataPluginsResponse {

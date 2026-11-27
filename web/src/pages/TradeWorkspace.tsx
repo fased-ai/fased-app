@@ -1,8 +1,21 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useCore } from "../core";
+import { CoreError, useCore } from "../core";
 import { useUI } from "../ui-preferences";
 import { useWorkspace } from "../workspace";
 import { ChevronDown, Crosshair, Pin, Settings, Shield } from "../icons";
+import { Dialog } from "../components/shared";
+import { signWalletStandardTransaction } from "../wallet-standard";
+import {
+  executeNativeWalletReview,
+  isWebAuthnAvailable,
+  quoteTradeJupiterSwap,
+  requestPasskeyStepUpToken,
+  requestStepUpToken,
+  setLocalOwnerPassword,
+  submitHardwareSignedReview,
+  type JupiterSwapQuoteRequest,
+  type JupiterSwapQuoteResponse,
+} from "../wallets-v2";
 import { CrosshairBus } from "../stream-store";
 import { fetchIntelEvents, type IntelEvent } from "../world-intel";
 import { DATA_PLUGINS_CHANGED_EVENT, fetchDataPlugins } from "../data-plugins";
@@ -92,6 +105,19 @@ export function TradeWorkspace() {
   const [bots, setBots] = useState<TradeBot[]>([]);
   const [tradeBusy, setTradeBusy] = useState(false);
   const [tradeError, setTradeError] = useState("");
+  const [tradeNotice, setTradeNotice] = useState("");
+  const [jupiterQuote, setJupiterQuote] =
+    useState<JupiterSwapQuoteResponse | null>(null);
+  const [stepUpMode, setStepUpMode] = useState<
+    "" | "password_setup" | "step_up"
+  >("");
+  const [stepUpPassword, setStepUpPassword] = useState("");
+  const pendingStepUpRef = useRef<{
+    action: string;
+    walletId: string;
+    bindingDigest?: string;
+    fn: (stepUpToken?: string) => Promise<void>;
+  } | null>(null);
 
   const crosshairBusRef = useRef<CrosshairBus | null>(null);
   if (!crosshairBusRef.current) {
@@ -353,17 +379,201 @@ export function TradeWorkspace() {
     [desk],
   );
 
+  async function runTradeWithStepUp(
+    action: string,
+    walletId: string,
+    fn: (stepUpToken?: string) => Promise<void>,
+    initialToken?: string,
+    bindingDigest?: string,
+  ): Promise<void> {
+    try {
+      await fn(initialToken || undefined);
+    } catch (err) {
+      if (
+        err instanceof CoreError &&
+        (err.code === "owner_password_required" ||
+          err.code === "step_up_required")
+      ) {
+        pendingStepUpRef.current = { action, walletId, bindingDigest, fn };
+        setStepUpPassword("");
+        setStepUpMode(
+          err.code === "owner_password_required" ? "password_setup" : "step_up",
+        );
+        return;
+      }
+      throw err;
+    }
+  }
+
+  async function onSubmitTradeStepUp(e: React.FormEvent) {
+    e.preventDefault();
+    const pending = pendingStepUpRef.current;
+    setTradeBusy(true);
+    setTradeError("");
+    try {
+      if (stepUpMode === "password_setup") {
+        await setLocalOwnerPassword(core, stepUpPassword);
+      }
+      let tok = "";
+      if (pending) {
+        tok = (
+          await requestStepUpToken(
+            core,
+            stepUpPassword,
+            pending.action,
+            pending.walletId,
+          )
+        ).stepUpToken;
+      }
+      pendingStepUpRef.current = null;
+      setStepUpPassword("");
+      setStepUpMode("");
+      if (pending) {
+        await runTradeWithStepUp(
+          pending.action,
+          pending.walletId,
+          pending.fn,
+          tok,
+          pending.bindingDigest,
+        );
+      }
+    } catch (err) {
+      setTradeError(
+        err instanceof Error ? err.message : "Authorization failed",
+      );
+    } finally {
+      setTradeBusy(false);
+    }
+  }
+
+  async function onSubmitTradePasskeyStepUp() {
+    const pending = pendingStepUpRef.current;
+    if (!pending) return;
+    setTradeBusy(true);
+    setTradeError("");
+    try {
+      const res = await requestPasskeyStepUpToken(
+        core,
+        pending.action,
+        pending.walletId,
+        pending.bindingDigest ?? "",
+      );
+      pendingStepUpRef.current = null;
+      setStepUpPassword("");
+      setStepUpMode("");
+      await runTradeWithStepUp(
+        pending.action,
+        pending.walletId,
+        pending.fn,
+        res.stepUpToken,
+        pending.bindingDigest,
+      );
+    } catch (err) {
+      setTradeError(
+        err instanceof Error ? err.message : "Passkey authorization failed",
+      );
+    } finally {
+      setTradeBusy(false);
+    }
+  }
+
   async function handleSubmitTrade(req: TradeOrderRequest) {
     if (core.mode !== "ready" || tradeBusy) return;
     setTradeBusy(true);
     setTradeError("");
+    setTradeNotice("");
+    const stepTarget = req.accountId?.startsWith("@wallet:")
+      ? req.accountId.slice("@wallet:".length)
+      : `trade:${req.venue}`;
     try {
-      await submitTradeOrder(core, req);
-      await refreshTrade();
+      await runTradeWithStepUp("execute", stepTarget, async (stepUp) => {
+        await submitTradeOrder(core, req, stepUp);
+        await refreshTrade();
+      });
     } catch (err) {
       setTradeError(
         err instanceof Error ? err.message : "Trade submission failed",
       );
+    } finally {
+      setTradeBusy(false);
+    }
+  }
+
+  async function handleQuoteJupiterSwap(req: JupiterSwapQuoteRequest) {
+    if (core.mode !== "ready" || tradeBusy) return;
+    setTradeBusy(true);
+    setTradeError("");
+    setTradeNotice("");
+    try {
+      const res = await quoteTradeJupiterSwap(core, {
+        ...req,
+        prepareReview: false,
+      });
+      setJupiterQuote(res);
+    } catch (err) {
+      setJupiterQuote(null);
+      setTradeError(
+        err instanceof Error ? err.message : "Jupiter quote failed",
+      );
+    } finally {
+      setTradeBusy(false);
+    }
+  }
+
+  async function handleExecuteJupiterSwap(req: JupiterSwapQuoteRequest) {
+    if (core.mode !== "ready" || tradeBusy) return;
+    setTradeBusy(true);
+    setTradeError("");
+    setTradeNotice("");
+    try {
+      const res = await quoteTradeJupiterSwap(core, {
+        ...req,
+        prepareReview: true,
+      });
+      setJupiterQuote(res);
+      const rev = res.review;
+      if (!rev) {
+        throw new Error("Signer review unavailable for Jupiter swap");
+      }
+      if (rev.custody === "hardware_standard") {
+        const acct = accounts.find((a) => a.id === res.walletHandle);
+        const signedB64 = await signWalletStandardTransaction({
+          unsignedTxBase64: rev.unsignedTxBase64,
+          expectedAddress: acct?.address ?? "",
+          cluster: res.cluster,
+        });
+        const out = await submitHardwareSignedReview(
+          core,
+          res.walletId,
+          rev.id,
+          signedB64,
+        );
+        setTradeNotice(
+          `Swap ${out.entry.state} · sig=${out.entry.txSignature ?? ""}`,
+        );
+        await refreshTrade();
+      } else {
+        await runTradeWithStepUp(
+          "execute",
+          res.walletId,
+          async (stepUp) => {
+            const out = await executeNativeWalletReview(
+              core,
+              res.walletId,
+              rev.id,
+              stepUp,
+            );
+            setTradeNotice(
+              `Swap ${out.entry.state} · sig=${out.entry.txSignature ?? ""}`,
+            );
+            await refreshTrade();
+          },
+          undefined,
+          rev.txDigest,
+        );
+      }
+    } catch (err) {
+      setTradeError(err instanceof Error ? err.message : "Jupiter swap failed");
     } finally {
       setTradeBusy(false);
     }
@@ -848,14 +1058,67 @@ export function TradeWorkspace() {
                   accounts={accounts}
                   busy={tradeBusy}
                   error={tradeError}
+                  notice={tradeNotice}
                   initialMode={composerTab}
+                  jupiterQuote={jupiterQuote}
                   onSubmitTrade={(req) => void handleSubmitTrade(req)}
+                  onQuoteJupiterSwap={(req) => void handleQuoteJupiterSwap(req)}
+                  onExecuteJupiterSwap={(req) =>
+                    void handleExecuteJupiterSwap(req)
+                  }
                 />
               )}
             </div>
           )}
         </aside>
       </div>
+      {stepUpMode !== "" && (
+        <Dialog
+          title={t(
+            stepUpMode === "password_setup"
+              ? "Set Owner Password"
+              : "Authorization",
+          )}
+          onClose={() => {
+            pendingStepUpRef.current = null;
+            setStepUpPassword("");
+            setStepUpMode("");
+          }}
+        >
+          <form className="wt-form-stack" onSubmit={onSubmitTradeStepUp}>
+            <label className="wt-field">
+              <span>
+                {t(
+                  stepUpMode === "password_setup"
+                    ? "Set Owner Password"
+                    : "Confirm Owner Password",
+                )}
+              </span>
+              <input
+                type="password"
+                minLength={12}
+                autoComplete="current-password"
+                value={stepUpPassword}
+                onChange={(e) => setStepUpPassword(e.target.value)}
+                required
+              />
+            </label>
+            <button type="submit" className="wt-btn-rose" disabled={tradeBusy}>
+              {`${t(stepUpMode === "password_setup" ? "Save" : "Approve & Execute")} →`}
+            </button>
+            {stepUpMode === "step_up" && isWebAuthnAvailable() && (
+              <button
+                type="button"
+                className="wt-btn-soft"
+                disabled={tradeBusy}
+                onClick={() => void onSubmitTradePasskeyStepUp()}
+              >
+                {`${t("Confirm with Passkey")} →`}
+              </button>
+            )}
+          </form>
+        </Dialog>
+      )}
     </section>
   );
 }

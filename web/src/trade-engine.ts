@@ -116,8 +116,15 @@ export async function getTradeState(
 export async function submitTradeOrder(
   core: CoreRequestOnly,
   req: TradeOrderRequest,
+  stepUpToken?: string,
 ): Promise<TradeOrderPlan> {
-  return core.request<TradeOrderPlan>("trade/orders", "POST", req);
+  return core.request<TradeOrderPlan>(
+    "trade/orders",
+    "POST",
+    req,
+    undefined,
+    stepUpToken ? { "X-Fased-Step-Up": stepUpToken } : undefined,
+  );
 }
 
 export async function cancelTradeOrder(

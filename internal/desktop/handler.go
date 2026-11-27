@@ -498,6 +498,11 @@ func allowed(method, route string) bool {
 			default:
 				return false
 			}
+		case 3:
+			if validPathSegment(parts[0]) && parts[1] == "jupiter" && parts[2] == "quote" {
+				return method == http.MethodPost
+			}
+			return false
 		case 4:
 			if !validPathSegment(parts[0]) || !validPathSegment(parts[2]) {
 				return false
@@ -633,7 +638,7 @@ func allowed(method, route string) bool {
 		return method == http.MethodGet
 	case "/api/v1/trade/bots":
 		return method == http.MethodGet || method == http.MethodPost
-	case "/api/v1/trade/orders", "/api/v1/trade/evaluate", "/api/v1/trade/kill":
+	case "/api/v1/trade/orders", "/api/v1/trade/evaluate", "/api/v1/trade/kill", "/api/v1/trade/jupiter/quote":
 		return method == http.MethodPost
 	case "/api/v1/trade/policy":
 		return method == http.MethodPut

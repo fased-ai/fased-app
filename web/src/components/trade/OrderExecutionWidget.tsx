@@ -3,6 +3,11 @@ import { ChevronDown, Shield } from "../../icons";
 import { useUI } from "../../ui-preferences";
 import { formatCurrencyUSD } from "../../quantlab-desk";
 import type { Interval } from "../../market-data";
+import {
+  SOLANA_COMMON_TOKENS,
+  type JupiterSwapQuoteRequest,
+  type JupiterSwapQuoteResponse,
+} from "../../wallets-v2";
 import type {
   TradeAccountOption,
   TradeMode,
@@ -99,8 +104,12 @@ export function OrderExecutionWidget({
   accounts = [],
   busy = false,
   error = "",
+  notice = "",
   initialMode = "manual",
+  jupiterQuote = null,
   onSubmitTrade,
+  onQuoteJupiterSwap,
+  onExecuteJupiterSwap,
 }: {
   venue: string;
   symbol: string;
@@ -109,8 +118,12 @@ export function OrderExecutionWidget({
   accounts?: TradeAccountOption[];
   busy?: boolean;
   error?: string;
+  notice?: string;
   initialMode?: TradeMode;
+  jupiterQuote?: JupiterSwapQuoteResponse | null;
   onSubmitTrade: (req: TradeOrderRequest) => void;
+  onQuoteJupiterSwap?: (req: JupiterSwapQuoteRequest) => void;
+  onExecuteJupiterSwap?: (req: JupiterSwapQuoteRequest) => void;
 }) {
   const { t } = useUI();
   const [accountId, setAccountId] = useState("paper");
@@ -119,6 +132,9 @@ export function OrderExecutionWidget({
   const [strategy, setStrategy] = useState<TradeStrategy>("market");
   const [side, setSide] = useState<TradeSide>("buy");
   const [qty, setQty] = useState("1");
+  const [swapInMint, setSwapInMint] = useState(SOLANA_COMMON_TOKENS[1].mint);
+  const [swapOutMint, setSwapOutMint] = useState(SOLANA_COMMON_TOKENS[0].mint);
+  const [swapSlippageBps, setSwapSlippageBps] = useState(50);
   const [entryPrice, setEntryPrice] = useState("");
   const [stopPrice, setStopPrice] = useState("");
   const [targetPrice, setTargetPrice] = useState("");
@@ -154,9 +170,45 @@ export function OrderExecutionWidget({
   const selectedAccount =
     accountOptions.find((a) => a.id === accountId) ?? accountOptions[0];
   const execMode = selectedAccount?.executionMode === "live" ? "live" : "paper";
+  const isSolanaWallet =
+    selectedAccount?.id.startsWith("@wallet:") ||
+    selectedAccount?.kind === "solana" ||
+    selectedAccount?.kind === "hardware";
+
+  useEffect(() => {
+    const base = symbol.toUpperCase().replace(/[-/]?USD[TC]?$|[-/]?PERP$/i, "");
+    const matched = SOLANA_COMMON_TOKENS.find((tok) => tok.symbol === base);
+    const targetMint = matched?.mint ?? SOLANA_COMMON_TOKENS[0].mint;
+    const quoteMint =
+      targetMint === SOLANA_COMMON_TOKENS[1].mint
+        ? SOLANA_COMMON_TOKENS[0].mint
+        : SOLANA_COMMON_TOKENS[1].mint;
+    if (side === "buy") {
+      setSwapInMint(quoteMint);
+      setSwapOutMint(targetMint);
+    } else {
+      setSwapInMint(targetMint);
+      setSwapOutMint(quoteMint);
+    }
+  }, [symbol, side]);
+
+  function buildSwapReq(prepareReview: boolean): JupiterSwapQuoteRequest {
+    return {
+      walletId: selectedAccount.id,
+      inputMint: swapInMint,
+      outputMint: swapOutMint,
+      amountHuman: qty,
+      slippageBps: swapSlippageBps,
+      prepareReview,
+    };
+  }
 
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
+    if (isSolanaWallet && onExecuteJupiterSwap) {
+      onExecuteJupiterSwap(buildSwapReq(true));
+      return;
+    }
     const q = Number(qty);
     const req: TradeOrderRequest = {
       venue,
@@ -461,7 +513,100 @@ export function OrderExecutionWidget({
         </div>
       </div>
 
+      {isSolanaWallet && (
+        <div className="wt-amount-card" data-testid="trade-jupiter-swap">
+          <div className="wt-amount-top">
+            <span className="wt-field-label">Jupiter Swap</span>
+            <div className="wt-chip-group">
+              {[10, 50, 100].map((bps) => (
+                <button
+                  key={bps}
+                  type="button"
+                  className={`trade-mini-btn ${swapSlippageBps === bps ? "is-selected" : ""}`}
+                  onClick={() => setSwapSlippageBps(bps)}
+                >
+                  {`${bps / 100}%`}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div className="wt-chip-group">
+            {SOLANA_COMMON_TOKENS.slice(0, 5).map((tok) => (
+              <button
+                key={`tr-in-${tok.mint}`}
+                type="button"
+                className={`trade-mini-btn ${swapInMint === tok.mint ? "is-selected" : ""}`}
+                onClick={() => setSwapInMint(tok.mint)}
+              >
+                {tok.symbol}
+              </button>
+            ))}
+            <button
+              type="button"
+              className="trade-mini-btn"
+              onClick={() => {
+                setSwapInMint(swapOutMint);
+                setSwapOutMint(swapInMint);
+              }}
+            >
+              ⇅
+            </button>
+          </div>
+          <div className="wt-chip-group">
+            {SOLANA_COMMON_TOKENS.slice(0, 5).map((tok) => (
+              <button
+                key={`tr-out-${tok.mint}`}
+                type="button"
+                className={`trade-mini-btn ${swapOutMint === tok.mint ? "is-selected" : ""}`}
+                onClick={() => setSwapOutMint(tok.mint)}
+              >
+                {tok.symbol}
+              </button>
+            ))}
+          </div>
+          {jupiterQuote && (
+            <div className="wt-kv-rows">
+              <div>
+                <span>Out</span>
+                <strong className="mono">
+                  {`${jupiterQuote.outAmountHuman} ${jupiterQuote.outputSymbol}`}
+                </strong>
+              </div>
+              <div>
+                <span>Min Out</span>
+                <strong className="mono">
+                  {`${jupiterQuote.minOutAmountHuman} ${jupiterQuote.outputSymbol}`}
+                </strong>
+              </div>
+              <div>
+                <span>Impact</span>
+                <strong className="mono">{`${jupiterQuote.priceImpactPct}%`}</strong>
+              </div>
+              {jupiterQuote.routeHops.length > 0 && (
+                <div>
+                  <span>Route</span>
+                  <strong className="mono">
+                    {jupiterQuote.routeHops.join(" → ")}
+                  </strong>
+                </div>
+              )}
+            </div>
+          )}
+          {onQuoteJupiterSwap && (
+            <button
+              type="button"
+              className="trade-mini-btn"
+              disabled={busy}
+              onClick={() => onQuoteJupiterSwap(buildSwapReq(false))}
+            >
+              Quote
+            </button>
+          )}
+        </div>
+      )}
+
       {error && <p className="trade-pane-error">{error}</p>}
+      {notice && <p className="wt-notice-ok">{notice}</p>}
 
       <button
         type="submit"
@@ -473,6 +618,8 @@ export function OrderExecutionWidget({
             <Shield size={15} aria-hidden="true" />
             <span>{t("Kill switch")}</span>
           </>
+        ) : isSolanaWallet ? (
+          <span>{`Swap ${SOLANA_COMMON_TOKENS.find((x) => x.mint === swapInMint)?.symbol ?? "SPL"} → ${SOLANA_COMMON_TOKENS.find((x) => x.mint === swapOutMint)?.symbol ?? "SPL"}`}</span>
         ) : (
           <span>
             {`${t(side === "buy" ? "Buy" : "Sell")} ${symbol} · ${t("Submit order")} →`}
