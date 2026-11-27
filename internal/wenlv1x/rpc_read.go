@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/fased-ai/fased-app/internal/custody"
 	"github.com/fased-ai/fased-app/internal/onchain"
 )
 
@@ -25,8 +26,13 @@ type cachedRPCSnapshot struct {
 
 type rpcSnapshot struct {
 	Source         string
+	ProgramID      string
+	LedgerID       string
+	RoundSlot      uint64
+	EndsAt         int64
 	Runtime        *onchain.LV1XRuntimeAccount
 	Round          *onchain.LV1XRoundAccount
+	Shard          *onchain.LV1XRoundShardAccount
 	Staking        *onchain.LV1XStakingStateAccount
 	Treasury       *onchain.LV1XTreasuryStateAccount
 	StakePos       *onchain.LV1XStakePositionAccount
@@ -157,16 +163,30 @@ func (e *Engine) fetchWalletBalancesRPC(ctx context.Context, owner, satMint, btc
 	return sol, sat, btc
 }
 
+func deriveLV1XSlot(nowSec int64, rt *onchain.LV1XRuntimeAccount) (uint64, int64) {
+	if rt != nil && rt.Epoch > 0 && nowSec >= rt.Epoch {
+		slot := uint64((nowSec - rt.Epoch) / onchain.LV1XRoundIntervalSec)
+		endsAt := rt.Epoch + int64(slot+1)*onchain.LV1XRoundIntervalSec
+		return slot, endsAt
+	}
+	slot := uint64(nowSec / onchain.LV1XRoundIntervalSec)
+	endsAt := int64(slot+1) * onchain.LV1XRoundIntervalSec
+	return slot, endsAt
+}
+
 func (e *Engine) readSnapshot(ctx context.Context, cluster, walletPub string) rpcSnapshot {
 	c := normalizeCluster(cluster)
+	prog := custody.EffectiveDevnetProgramID()
+	ledger := custody.EffectiveDevnetLedgerID()
 	if c == "mainnet-beta" && onchain.LV1XMainnetProgramID == "" {
-		return rpcSnapshot{Source: "gated"}
-	}
-	if e.fixture {
-		return rpcSnapshot{Source: "simulation", ProgramLive: true}
+		return rpcSnapshot{Source: "gated", ProgramID: prog, LedgerID: ledger}
 	}
 	nowSec := e.now().UTC().Unix()
-	key := c + ":" + walletPub
+	if e.fixture {
+		slot, endsAt := deriveLV1XSlot(nowSec, nil)
+		return rpcSnapshot{Source: "simulation", ProgramID: prog, LedgerID: ledger, RoundSlot: slot, EndsAt: endsAt, ProgramLive: true}
+	}
+	key := c + ":" + prog + ":" + ledger + ":" + walletPub
 	e.cacheMu.RLock()
 	cached, hasCache := e.rpcCache[key]
 	e.cacheMu.RUnlock()
@@ -174,17 +194,12 @@ func (e *Engine) readSnapshot(ctx context.Context, cluster, walletPub string) rp
 		return cached.data
 	}
 
-	prog := onchain.LV1XDevnetProgramID
-	ledger := onchain.LV1XDevnetLedgerID
-	slot := uint64(nowSec / onchain.LV1XRoundIntervalSec)
-
 	rtAddr, _ := onchain.LV1XRuntimePDA(prog, ledger)
-	rkAddr, _ := onchain.LV1XRoundPDA(prog, ledger, slot)
 	stAddr, _ := onchain.LV1XStakingStatePDA(prog, ledger)
 	trAddr, _ := onchain.LV1XTreasuryStatePDA(prog, ledger)
 	mintAddr, _ := onchain.LV1XMintPDA(prog, ledger)
 
-	addrs := []string{prog, rtAddr, rkAddr, stAddr, trAddr}
+	addrs := []string{prog, rtAddr, stAddr, trAddr}
 	var posIdx int = -1
 	if walletPub != "" {
 		if posAddr, err := onchain.LV1XStakePositionPDA(prog, ledger, walletPub); err == nil {
@@ -193,7 +208,7 @@ func (e *Engine) readSnapshot(ctx context.Context, cluster, walletPub string) rp
 		}
 	}
 
-	rCtx, cancel := context.WithTimeout(ctx, 4*time.Second)
+	rCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	raws, err := e.getMultipleAccounts(rCtx, addrs)
 	if err != nil {
@@ -202,11 +217,14 @@ func (e *Engine) readSnapshot(ctx context.Context, cluster, walletPub string) rp
 			out.Source = "cached"
 			return out
 		}
-		return rpcSnapshot{Source: "cached"}
+		slot, endsAt := deriveLV1XSlot(nowSec, nil)
+		return rpcSnapshot{Source: "cached", ProgramID: prog, LedgerID: ledger, RoundSlot: slot, EndsAt: endsAt}
 	}
 
 	snap := rpcSnapshot{
 		Source:      "devnet-rpc",
+		ProgramID:   prog,
+		LedgerID:    ledger,
 		ProgramLive: len(raws[0]) > 0,
 	}
 	if len(raws[1]) == onchain.LV1XSpaceRuntime {
@@ -214,24 +232,43 @@ func (e *Engine) readSnapshot(ctx context.Context, cluster, walletPub string) rp
 			snap.Runtime = &rt
 		}
 	}
-	if len(raws[2]) == onchain.LV1XSpaceRound {
-		if rk, dErr := onchain.DecodeLV1XRound(raws[2]); dErr == nil {
-			snap.Round = &rk
-		}
-	}
-	if len(raws[3]) == onchain.LV1XSpaceStakingState {
-		if st, dErr := onchain.DecodeLV1XStakingState(raws[3]); dErr == nil {
+	if len(raws[2]) == onchain.LV1XSpaceStakingState {
+		if st, dErr := onchain.DecodeLV1XStakingState(raws[2]); dErr == nil {
 			snap.Staking = &st
 		}
 	}
-	if len(raws[4]) == onchain.LV1XSpaceTreasuryState {
-		if tr, dErr := onchain.DecodeLV1XTreasuryState(raws[4]); dErr == nil {
+	if len(raws[3]) == onchain.LV1XSpaceTreasuryState {
+		if tr, dErr := onchain.DecodeLV1XTreasuryState(raws[3]); dErr == nil {
 			snap.Treasury = &tr
 		}
 	}
 	if posIdx >= 0 && posIdx < len(raws) && len(raws[posIdx]) == onchain.LV1XSpaceStakePosition {
 		if pos, dErr := onchain.DecodeLV1XStakePosition(raws[posIdx]); dErr == nil {
 			snap.StakePos = &pos
+		}
+	}
+
+	slot, endsAt := deriveLV1XSlot(nowSec, snap.Runtime)
+	snap.RoundSlot = slot
+	snap.EndsAt = endsAt
+
+	if rkAddr, rkErr := onchain.LV1XRoundPDA(prog, ledger, slot); rkErr == nil {
+		sh0Addr, _ := onchain.LV1XShardPDA(prog, rkAddr, 0)
+		roundAddrs := []string{rkAddr}
+		if sh0Addr != "" {
+			roundAddrs = append(roundAddrs, sh0Addr)
+		}
+		if r2, r2Err := e.getMultipleAccounts(rCtx, roundAddrs); r2Err == nil && len(r2) > 0 {
+			if len(r2[0]) == onchain.LV1XSpaceRound {
+				if rk, dErr := onchain.DecodeLV1XRound(r2[0]); dErr == nil {
+					snap.Round = &rk
+				}
+			}
+			if len(r2) > 1 && len(r2[1]) == onchain.LV1XSpaceRoundShard {
+				if sh, dErr := onchain.DecodeLV1XRoundShard(r2[1]); dErr == nil {
+					snap.Shard = &sh
+				}
+			}
 		}
 	}
 

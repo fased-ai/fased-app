@@ -5,6 +5,7 @@ import (
 	"errors"
 	"math"
 	"testing"
+	"time"
 
 	"github.com/fased-ai/fased-app/internal/custody"
 	"github.com/fased-ai/fased-app/internal/onchain"
@@ -227,5 +228,32 @@ func TestPresetsCurveReversalAndEngineLifecycle(t *testing.T) {
 	}
 	if err := eng.DeleteStrategy(ctx, saved.ID); err != nil {
 		t.Fatalf("DeleteStrategy failed: %v", err)
+	}
+}
+
+func TestRuntimeEpochSlotAndLiveCandleSync(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	slot, endsAt := deriveLV1XSlot(1795794600+21*600+123, &onchain.LV1XRuntimeAccount{Epoch: 1795794600})
+	if slot != 21 || endsAt != 1795794600+22*600 {
+		t.Fatalf("deriveLV1XSlot got (%d,%d), want (21,%d)", slot, endsAt, 1795794600+22*600)
+	}
+
+	eng, err := NewEngine(Config{
+		DataDir: t.TempDir(),
+		Now:     func() time.Time { return time.Unix(1795794600+21*600+123, 0).UTC() },
+		CandleProvider: func(ctx context.Context, interval string, limit int) ([]CandleBar, string, error) {
+			return []CandleBar{{Time: 1795794600, Open: 59900.0, High: 59960.0, Low: 59880.0, Close: 59918.0, Volume: 10}}, "marketdata", nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer eng.Close()
+
+	rt := eng.CurrentRound(ctx, "devnet")
+	if rt.OpenPriceUSD != 59900.0 || rt.MarkPriceUSD != 59918.0 || rt.MoveBps != 3 {
+		t.Fatalf("expected live BTC candle sync in CurrentRound, got open=%.2f mark=%.2f bps=%d", rt.OpenPriceUSD, rt.MarkPriceUSD, rt.MoveBps)
 	}
 }

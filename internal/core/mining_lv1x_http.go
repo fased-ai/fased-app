@@ -635,7 +635,7 @@ func (h *HTTPHandler) miningLV1XAPI(w http.ResponseWriter, r *http.Request, toke
 				nextPol.AutoApproveMaxUSD = in.AutoApproveMaxUSD
 			}
 			nextPol.Operations = custody.AllMiningOperations()
-			prog := nonEmpty(in.Mining.ProgramID, onchain.LV1XDevnetProgramID)
+			prog := nonEmpty(in.Mining.ProgramID, custody.EffectiveDevnetProgramID())
 			nextPol.Programs = []string{custody.SolanaSystemProgram, custody.SolanaComputeBudget, custody.SolanaTokenProgram, custody.SolanaATAProgram, prog}
 			if in.MaxPerTxLamports > 0 {
 				nextPol.SOLCap.MaxPerTxRaw = in.MaxPerTxLamports

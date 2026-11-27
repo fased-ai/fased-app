@@ -8,11 +8,34 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"os"
 	"slices"
 	"strings"
 
 	"github.com/fased-ai/fased-app/internal/onchain"
 )
+
+// EffectiveDevnetProgramID returns FASED_WEN_DEVNET_PROGRAM_ID when set to a
+// valid Solana Base58 address, or the pinned Devnet LV1X program ID otherwise.
+func EffectiveDevnetProgramID() string {
+	if ov := strings.TrimSpace(os.Getenv("FASED_WEN_DEVNET_PROGRAM_ID")); ov != "" {
+		if _, _, err := ValidateSolanaPublicAddress(ov); err == nil {
+			return ov
+		}
+	}
+	return onchain.LV1XDevnetProgramID
+}
+
+// EffectiveDevnetLedgerID returns FASED_WEN_DEVNET_LEDGER_ID when set to a
+// valid Solana Base58 address, or the pinned Devnet LV1X ledger ID otherwise.
+func EffectiveDevnetLedgerID() string {
+	if ov := strings.TrimSpace(os.Getenv("FASED_WEN_DEVNET_LEDGER_ID")); ov != "" {
+		if _, _, err := ValidateSolanaPublicAddress(ov); err == nil {
+			return ov
+		}
+	}
+	return onchain.LV1XDevnetLedgerID
+}
 
 const (
 	MiningOpCommit        = "mining.lv1x.commit"
@@ -123,10 +146,10 @@ func NormalizeMiningPolicy(m *MiningPolicy) *MiningPolicy {
 	cp.AllowedStrategies = uniqueSortedTrimmed(cp.AllowedStrategies, true)
 	if cp.Cluster == "devnet" {
 		if cp.ProgramID == "" {
-			cp.ProgramID = onchain.LV1XDevnetProgramID
+			cp.ProgramID = EffectiveDevnetProgramID()
 		}
 		if cp.LedgerID == "" {
-			cp.LedgerID = onchain.LV1XDevnetLedgerID
+			cp.LedgerID = EffectiveDevnetLedgerID()
 		}
 		if cp.ExpectedELFSHA256 == "" {
 			cp.ExpectedELFSHA256 = onchain.LV1XDevnetELFSHA256
@@ -142,11 +165,13 @@ func ValidateMiningPolicyForUpdate(m *MiningPolicy) error {
 	norm := NormalizeMiningPolicy(m)
 	switch norm.Cluster {
 	case "devnet":
-		if norm.ProgramID != onchain.LV1XDevnetProgramID {
-			return fmt.Errorf("%w: devnet LV1X program must match pinned %s", ErrPolicyDenied, onchain.LV1XDevnetProgramID)
+		expProg := EffectiveDevnetProgramID()
+		expLedger := EffectiveDevnetLedgerID()
+		if norm.ProgramID != expProg && norm.ProgramID != onchain.LV1XDevnetProgramID {
+			return fmt.Errorf("%w: devnet LV1X program must match pinned %s", ErrPolicyDenied, expProg)
 		}
-		if norm.LedgerID != onchain.LV1XDevnetLedgerID {
-			return fmt.Errorf("%w: devnet LV1X ledger must match pinned %s", ErrPolicyDenied, onchain.LV1XDevnetLedgerID)
+		if norm.LedgerID != expLedger && norm.LedgerID != onchain.LV1XDevnetLedgerID {
+			return fmt.Errorf("%w: devnet LV1X ledger must match pinned %s", ErrPolicyDenied, expLedger)
 		}
 	case "mainnet-beta":
 		if onchain.LV1XMainnetProgramID == "" || !norm.AllowMainnet {
