@@ -118,6 +118,11 @@ func ExecuteCommand(ctx context.Context, hooks ControllerHooks, allowed []int64,
 				"/resume - Resume event triggers",
 				"/kill [reason] - Activate emergency kill switch",
 				"/unkill CONFIRM - Clear kill switch",
+				"/tasks - List universal tasks",
+				"/task_pause <id> - Pause a task",
+				"/task_resume <id> - Activate/resume a task",
+				"/task_logs <id> - Inspect recent task logs",
+				"/task_new <template> - Create draft task from template",
 			}, "\n"),
 		}
 
@@ -269,6 +274,70 @@ func ExecuteCommand(ctx context.Context, hooks ControllerHooks, allowed []int64,
 		text, err := bh.PositionsSummary(ctx)
 		if err != nil {
 			return CommandReply{Authorized: true, Command: cmd, Text: "Positions error: " + err.Error()}
+		}
+		return CommandReply{Authorized: true, Command: cmd, Text: text}
+
+	case "tasks":
+		th, ok := hooks.(TaskHooks)
+		if !ok {
+			return CommandReply{Authorized: true, Command: cmd, Text: "Tasks unavailable."}
+		}
+		text, err := th.ListTasksSummary(ctx)
+		if err != nil {
+			return CommandReply{Authorized: true, Command: cmd, Text: "Tasks error: " + err.Error()}
+		}
+		return CommandReply{Authorized: true, Command: cmd, Text: text}
+
+	case "task_pause", "task_resume":
+		th, ok := hooks.(TaskHooks)
+		if !ok {
+			return CommandReply{Authorized: true, Command: cmd, Text: "Tasks unavailable."}
+		}
+		parts := strings.Fields(args)
+		if len(parts) == 0 {
+			return CommandReply{Authorized: true, Command: cmd, Text: fmt.Sprintf("Usage: /%s <task-id> [reason]", cmd)}
+		}
+		action := "pause"
+		if cmd == "task_resume" {
+			action = "activate"
+		}
+		reason := ""
+		if len(parts) > 1 {
+			reason = strings.TrimSpace(strings.TrimPrefix(args, parts[0]))
+		}
+		text, err := th.ControlTask(ctx, action, parts[0], reason, actor)
+		if err != nil {
+			return CommandReply{Authorized: true, Command: cmd, Text: "Task action refused: " + err.Error()}
+		}
+		return CommandReply{Authorized: true, Command: cmd, Text: text}
+
+	case "task_logs":
+		th, ok := hooks.(TaskHooks)
+		if !ok {
+			return CommandReply{Authorized: true, Command: cmd, Text: "Tasks unavailable."}
+		}
+		id := strings.TrimSpace(args)
+		if id == "" {
+			return CommandReply{Authorized: true, Command: cmd, Text: "Usage: /task_logs <task-id>"}
+		}
+		text, err := th.TaskLogsSummary(ctx, id)
+		if err != nil {
+			return CommandReply{Authorized: true, Command: cmd, Text: "Task logs error: " + err.Error()}
+		}
+		return CommandReply{Authorized: true, Command: cmd, Text: text}
+
+	case "task_new":
+		th, ok := hooks.(TaskHooks)
+		if !ok {
+			return CommandReply{Authorized: true, Command: cmd, Text: "Tasks unavailable."}
+		}
+		tplID := strings.TrimSpace(args)
+		if tplID == "" {
+			return CommandReply{Authorized: true, Command: cmd, Text: "Usage: /task_new <template-id>"}
+		}
+		text, err := th.CreateDraftTaskFromTemplate(ctx, tplID, actor)
+		if err != nil {
+			return CommandReply{Authorized: true, Command: cmd, Text: "Task draft error: " + err.Error()}
 		}
 		return CommandReply{Authorized: true, Command: cmd, Text: text}
 

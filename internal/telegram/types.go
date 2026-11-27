@@ -156,3 +156,11 @@ type BriefHooks interface {
 	BriefSummary(ctx context.Context) (string, error)
 	PositionsSummary(ctx context.Context) (string, error)
 }
+
+// TaskHooks is optionally implemented by ControllerHooks providers to control Universal Tasks.
+type TaskHooks interface {
+	ListTasksSummary(ctx context.Context) (string, error)
+	ControlTask(ctx context.Context, action, id, reason, actor string) (string, error)
+	TaskLogsSummary(ctx context.Context, id string) (string, error)
+	CreateDraftTaskFromTemplate(ctx context.Context, templateID, actor string) (string, error)
+}

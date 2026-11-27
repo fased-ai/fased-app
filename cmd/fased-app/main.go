@@ -174,6 +174,9 @@ func run(args []string, in *os.File, out, errOut io.Writer) error {
 	if len(args) > 0 && args[0] == "agents" {
 		return agentsCommand(args[1:], in, out, errOut)
 	}
+	if len(args) > 0 && args[0] == "tasks" {
+		return tasksCommand(args[1:], in, out, errOut)
+	}
 	if len(args) > 0 && args[0] == "wallet" {
 		return walletCommand(args[1:], in, out, errOut)
 	}
