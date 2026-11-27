@@ -4,12 +4,6 @@ import type {
   SwapTaskPolicy,
   SwapExecution,
 } from "./onchain";
-import type {
-  WENMiningCommand,
-  WENMiningExecution,
-  WENMiningTaskPolicy,
-  WENMiningView,
-} from "./wen-mining";
 import type { HyperliquidCommand, HyperliquidView } from "./hyperliquid";
 export type OpenAIModelPolicy = {
   provider?: string;
@@ -384,7 +378,7 @@ export type StrategyPaperResult = {
 };
 export type AgentTask = {
   swap?: SwapTaskPolicy;
-  wenMining?: WENMiningTaskPolicy;
+  wenMining?: unknown;
   strategyPlan?: StrategyTaskPolicy;
   watch?: { rule: NewsWatchRule; seen: string[] };
   calendar?: TaskCalendar;
@@ -405,7 +399,7 @@ export type AgentTask = {
 };
 export type AgentRun = {
   swap?: SwapExecution;
-  wenMining?: WENMiningExecution;
+  wenMining?: unknown;
   paper?: StrategyPaperResult;
   analysis?: TaskAnalysisResult;
   watch?: NewsWatchResult;
@@ -579,7 +573,11 @@ export type PlaybookReview = {
 };
 export type AgentView = {
   onchain?: OnchainView;
-  wenMining?: WENMiningView;
+  wenMining?: {
+    available?: boolean;
+    recovery?: { taskId: string; status: string }[];
+    [k: string]: unknown;
+  };
   hyperliquid?: HyperliquidView;
   strategies?: AgentStrategy[];
   paperExecutionAvailable?: boolean;
@@ -722,7 +720,7 @@ export type AgentEvidenceView = {
 );
 export type AgentCommand = {
   swap?: SwapCommand;
-  wenMining?: WENMiningCommand;
+  wenMining?: unknown;
   hyperliquid?: HyperliquidCommand;
   strategy?: StrategyPlan;
   strategyId?: string;

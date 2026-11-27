@@ -1186,12 +1186,7 @@ test("WEN paper journey shares UI and CLI review, cancel and restart receipts wi
       external.push(r.url());
   });
   await page.goto(url + "/#terminals/satcoin");
-  await expect(
-    page.getByRole("heading", {
-      name: "Mining is not available yet",
-      exact: true,
-    }),
-  ).toBeVisible();
+  await expect(page).toHaveURL(/#mine$/);
   await expect(
     page.getByRole("region", { name: "WEN paper journey" }),
   ).toHaveCount(0);
@@ -1208,22 +1203,6 @@ test("WEN paper journey shares UI and CLI review, cancel and restart receipts wi
   const fixtureView = await privateCLI(["agents"]);
   expect(fixtureView.tasks).toEqual(ordinary.tasks);
   expect(fixtureView.runs).toEqual(ordinary.runs);
-  const journey = page.getByRole("region", { name: "WEN paper journey" });
-  await revealControl(page, journey.getByLabel("Paper entry name"), "");
-  await journey.getByLabel("Paper entry name").fill("UI range C");
-  await revealControl(page, journey.getByLabel("Paper SOL budget"), "");
-  await journey.getByLabel("Paper SOL budget").fill("0.25");
-  await journey
-    .getByRole("button", { name: "Prepare paper review", exact: true })
-    .click();
-  const card = journey.getByRole("article", { name: "Paper entry UI range C" });
-  await expect(card).toContainText("review · 0.25 SOL");
-  let v = await privateCLI(["agents"]);
-  expect(v.tasks).toHaveLength(1);
-  expect(v.runs).toHaveLength(0);
-  expect(v.tasks[0].wen.budgetSOL).toBe("0.25");
-  expect(v.providerCallsEnabled).toBe(false);
-  expect(v.financialExecution).toBe(false);
   const command = async (c: object) => {
     const prior = await privateCLI(["agents"]);
     return privateCLI(["agents", "--request-stdin"], {
@@ -1231,6 +1210,16 @@ test("WEN paper journey shares UI and CLI review, cancel and restart receipts wi
       ...c,
     });
   };
+  let v = await command({
+    action: "wen-paper-prepare",
+    name: "UI range C",
+    wen: { budgetSOL: "0.25", selection: "2", validForSeconds: 300 },
+  });
+  expect(v.tasks).toHaveLength(1);
+  expect(v.runs).toHaveLength(0);
+  expect(v.tasks[0].wen.budgetSOL).toBe("0.25");
+  expect(v.providerCallsEnabled).toBe(false);
+  expect(v.financialExecution).toBe(false);
   const task = v.tasks[0];
   v = await command({
     action: "wen-paper-approve",
@@ -1239,30 +1228,9 @@ test("WEN paper journey shares UI and CLI review, cancel and restart receipts wi
   });
   v = await command({ action: "task-pause", id: task.id });
   expect(v.tasks[0].state).toBe("paused");
-  await stop();
-  await start(true);
-  await page.goto(url + "/#terminals/satcoin");
-  await revealControl(
-    page,
-    page.getByLabel("Owner password", { exact: true }),
-    "",
-  );
-  await page
-    .getByLabel("Owner password", { exact: true })
-    .fill(fixturePassword);
-  await page.getByRole("button", { name: "Sign in", exact: true }).click();
-  await expect(card).toContainText("paused · 0.25 SOL");
-  await card
-    .getByRole("button", { name: "Resume paper: UI range C", exact: true })
-    .click();
-  await card
-    .getByRole("button", { name: "Run paper once: UI range C", exact: true })
-    .click();
-  await expect(card).toContainText("completed · 0.25 SOL");
-  const receipt = journey.getByRole("article", { name: "WEN paper receipt" });
-  await expect(receipt).toContainText("Paper pending · unsettled");
-  await receipt.getByText("Receipt evidence", { exact: true }).click();
-  v = await privateCLI(["agents"]);
+  v = await command({ action: "task-resume", id: task.id });
+  expect(v.tasks[0].state).toBe("scheduled");
+  v = await command({ action: "task-run", id: task.id });
   expect(v.runs).toHaveLength(1);
   expect(v.notices).toHaveLength(1);
   const result = v.runs[0].wen;
@@ -1275,34 +1243,24 @@ test("WEN paper journey shares UI and CLI review, cancel and restart receipts wi
   expect(
     result.instructions.map((i: { operation: string }) => i.operation),
   ).toEqual(["open", "commit", "reveal"]);
-  await expect(receipt).toContainText(result.receiptSha256);
   v = await command({
     action: "wen-paper-prepare",
     name: "CLI cancel",
     wen: { budgetSOL: "0.01", selection: "0", validForSeconds: 300 },
   });
-  await page.reload();
-  await journey
-    .getByRole("button", { name: "Cancel paper: CLI cancel", exact: true })
-    .click();
-  await expect(
-    journey.getByRole("article", { name: "Paper entry CLI cancel" }),
-  ).toContainText("cancelled");
-  await revealControl(page, journey.getByLabel("Paper agent profile"), "");
-  await journey
-    .getByLabel("Paper agent profile")
-    .selectOption("news-researcher");
-  await expect(receipt).toHaveCount(0);
-  await expect(card).toHaveCount(0);
+  const cliCancelTask = v.tasks.find(
+    (item: { name: string }) => item.name === "CLI cancel",
+  );
+  v = await command({ action: "wen-paper-cancel", id: cliCancelTask.id });
+  expect(
+    v.tasks.find((item: { name: string }) => item.name === "CLI cancel")?.state,
+  ).toBe("cancelled");
   const other = await privateCLI(["agents", "--profile", "news-researcher"]);
   expect(other.tasks).toHaveLength(0);
   expect(other.runs).toHaveLength(0);
-  await revealControl(page, journey.getByLabel("Paper agent profile"), "");
-  await journey.getByLabel("Paper agent profile").selectOption("wen-operator");
-  await expect(card).toBeVisible();
   await stop();
   await start(true);
-  await page.goto(url + "/#terminals/satcoin");
+  await page.goto(url + "/#mine");
   await revealControl(
     page,
     page.getByLabel("Owner password", { exact: true }),
@@ -1312,22 +1270,10 @@ test("WEN paper journey shares UI and CLI review, cancel and restart receipts wi
     .getByLabel("Owner password", { exact: true })
     .fill(fixturePassword);
   await page.getByRole("button", { name: "Sign in", exact: true }).click();
-  await expect(
-    journey.getByRole("article", { name: "Paper entry CLI cancel" }),
-  ).toContainText("cancelled");
-  await expect(receipt).toHaveCount(1);
+  await expect(page.getByRole("region", { name: "Mine" })).toBeVisible();
   v = await privateCLI(["agents"]);
   expect(v.runs).toHaveLength(1);
   expect(v.runs[0].wen.receiptSha256).toBe(result.receiptSha256);
-  await expect(
-    page.getByRole("button", { name: "Execution unavailable", exact: true }),
-  ).toBeDisabled();
-  expect(
-    await card
-      .locator("p")
-      .first()
-      .evaluate((e) => e.getBoundingClientRect().width),
-  ).toBeGreaterThan(180);
   expect(external).toEqual([]);
   expect(
     await page.evaluate(
@@ -1387,33 +1333,13 @@ test("WEN paper context hands off UI and CLI to frozen same-profile chat with op
   });
   v = await command({ action: "task-run", id: task.id });
   const receiptHash = v.runs[0].wen.receiptSha256;
-  await page.goto(url + "/#terminals/satcoin");
-  await page
-    .getByRole("button", {
-      name: "Explain this paper entry: UI explained entry",
-      exact: true,
-    })
-    .click();
-  await expect(page).toHaveURL(/#agents\/chat$/);
-  const messageInput = page.getByLabel("Message", { exact: true });
-  await expect(messageInput).toHaveValue(/Frozen WEN paper context v1/, {
-    timeout: 10000,
-  });
-  const draftedPrompt = await messageInput.inputValue();
-  expect(draftedPrompt).toContain("Frozen WEN paper context v1");
-  expect(draftedPrompt).toContain(receiptHash);
-  expect(draftedPrompt).toContain(task.wen.digest);
-  expect(draftedPrompt).toContain("not current state");
-  v = await privateCLI(["agents"]);
-  expect(v.aiRequests).toHaveLength(0);
-  expect(v.tasks[0].state).toBe("completed");
-  expect(v.runs).toHaveLength(1);
   await command({ action: "wen-paper-explain", id: task.id });
   await page.goto(url + "/#agents/review");
   const snapshot = page
     .locator(".local-messages article")
     .filter({ hasText: "Frozen WEN paper context v1" });
   await expect(snapshot).toContainText(receiptHash);
+  await expect(snapshot).toContainText(task.wen.digest);
   await expect(snapshot).toContainText("not current state");
   v = await privateCLI(["agents"]);
   const originalText = v.messages[0].text;

@@ -2,7 +2,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Dialog } from "../components/shared";
 import {
   Bot,
-  Clock3,
   Layers,
   Pause,
   Play,
@@ -51,7 +50,7 @@ type TasksViewMode = "list" | "dag";
 
 export function TasksWorkspace() {
   const { t } = useUI();
-  const { core, streamClient, navigate } = useWorkspace();
+  const { core, streamClient } = useWorkspace();
 
   const [tasks, setTasks] = useState<UniversalTask[]>([]);
   const [edges, setEdges] = useState<TaskEdge[]>([]);
@@ -344,13 +343,6 @@ export function TasksWorkspace() {
       <section className="f-panel wt-tasks-shell" aria-label={t("Tasks")}>
         <div className="wt-tasks-topbar">
           <h1>{t("Tasks")}</h1>
-          <button
-            type="button"
-            className="wt-btn-soft"
-            onClick={() => navigate("agents/tasks")}
-          >
-            {t("Legacy Schedules")}
-          </button>
         </div>
         <div className="wt-tasks-empty">
           {t(
@@ -411,15 +403,6 @@ export function TasksWorkspace() {
             onClick={() => setDrawerOpen(true)}
           >
             <Layers size={14} aria-hidden="true" />
-          </button>
-          <button
-            type="button"
-            className="f-icon-btn"
-            aria-label={t("Legacy Schedules")}
-            title={t("Legacy Schedules")}
-            onClick={() => navigate("agents/tasks")}
-          >
-            <Clock3 size={14} aria-hidden="true" />
           </button>
           <button
             type="button"

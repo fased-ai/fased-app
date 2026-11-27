@@ -371,15 +371,9 @@ test("deferred trading pages contain no imitation controls and make no remote re
   );
   for (const route of ["satcoin", "asset", "loss"]) {
     await page.goto(`/#terminals/${route}`);
-    await expect(page).toHaveURL(/#terminals\/satcoin$/);
+    await expect(page).toHaveURL(/#mine$/);
     await expect(
-      page.getByRole("heading", { name: "Mining", exact: true }),
-    ).toBeVisible();
-    await expect(
-      page.getByRole("heading", {
-        name: "Mining is not available yet",
-        exact: true,
-      }),
+      page.getByRole("region", { name: "Mine", exact: true }),
     ).toBeVisible();
     await expect(
       page.locator(
@@ -400,12 +394,12 @@ test("deferred trading pages contain no imitation controls and make no remote re
       ).toBe(true);
   }
   await page.reload();
-  await expect(page).toHaveURL(/#terminals\/satcoin$/);
+  await expect(page).toHaveURL(/#mine$/);
   // In-page hash changes use the same aliases as initial entry, without adding a redirect entry.
   await page.evaluate(() => {
     window.location.hash = "terminals/asset";
   });
-  await expect(page).toHaveURL(/#terminals\/satcoin$/);
+  await expect(page).toHaveURL(/#mine$/);
   await page.getByRole("button", { name: "More", exact: true }).click();
   await page.getByRole("link", { name: "Hyperliquid", exact: true }).click();
   await expect(page).toHaveURL(/#terminals\/hyperliquid$/);
@@ -418,7 +412,7 @@ test("deferred trading pages contain no imitation controls and make no remote re
   await expect(page.locator(".terminal-workspace,.demo-chart")).toHaveCount(0);
   await page.goBack();
   await expect(
-    page.getByRole("heading", { name: "Mining", exact: true }),
+    page.getByRole("region", { name: "Mine", exact: true }),
   ).toBeVisible();
   await page.getByRole("button", { name: "More", exact: true }).click();
   await page.getByRole("link", { name: "Onchain", exact: true }).click();
@@ -433,10 +427,10 @@ test("deferred trading pages contain no imitation controls and make no remote re
     .click();
   await page.getByRole("button", { name: "Done", exact: true }).click();
   const mining = page.locator('[data-widget="mining"]');
-  await expect(mining).toContainText("Mining is not available yet");
+  await expect(mining).toContainText("Lean V1 BTC/USD · Devnet");
   await mining.locator("button.dashboard-title").click();
-  await expect(page).toHaveURL(/#terminals\/satcoin$/);
-  await page.getByRole("heading", { name: "Mining", exact: true }).click();
+  await expect(page).toHaveURL(/#mine$/);
+  await page.getByRole("region", { name: "Mine", exact: true }).waitFor();
   await page.screenshot({
     path: `.evidence/wen-satcoin-prototype/${test.info().project.name}.png`,
     fullPage: true,

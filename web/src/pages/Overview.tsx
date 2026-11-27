@@ -87,17 +87,17 @@ const icons = {
 };
 const paths = {
   agents: "agents/settings",
-  tasks: "agents/tasks",
+  tasks: "tasks",
   news: "agents/news",
   intel: "intel",
   predictions: "intel",
-  alerts: "agents/tasks",
+  alerts: "tasks",
   desk: "lab",
   trade: "trade",
   watchlists: "trade",
   wallets: "wallets/overview",
   activity: "activity",
-  mining: "terminals/satcoin",
+  mining: "mine",
   onchain: "terminals/jupiter",
   hyperliquid: "terminals/hyperliquid",
 };
@@ -749,7 +749,7 @@ export function Overview() {
         <span>
           {t(
             id === "mining"
-              ? "Mining is not available yet"
+              ? "Lean V1 BTC/USD · Devnet"
               : "Hyperliquid is not available yet",
           )}
         </span>

@@ -212,7 +212,7 @@ export function WorldIntelWorkspace() {
     try {
       sessionStorage.setItem(TRIGGER_DRAFT_KEY, JSON.stringify(seed));
     } catch {}
-    navigate("agents/tasks");
+    navigate("tasks");
   }
 
   async function handleSync() {

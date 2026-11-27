@@ -1,11 +1,6 @@
-import { createElement } from "react";
-import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 import { languages, translate, type Language } from "./ui-language";
 import { copyKeys } from "./ui-language-catalog";
-import { WENPaperJourney } from "./pages/WENPaperJourney";
-import { WENSessionAutomatic } from "./pages/WENSessionAutomatic";
-import { WENSessionRehearsal } from "./pages/WENSessionRehearsal";
 import { previewIdentity, previewModel } from "./ui-language-preview";
 
 const display = vi.hoisted(() => ({ language: "en" as Language }));
@@ -68,21 +63,6 @@ describe("Preview display copy", () => {
       ).toContain("owner-fixture-value");
     }
     expect(translate("en", " Fixture account ")).toBe(" Test account ");
-  });
-
-  it("renders advanced paper headings and badges in all interface languages", () => {
-    for (const language of Object.keys(languages) as Language[]) {
-      display.language = language;
-      for (const component of [
-        WENPaperJourney,
-        WENSessionAutomatic,
-        WENSessionRehearsal,
-      ]) {
-        const html = renderToStaticMarkup(createElement(component));
-        expect(html).not.toMatch(/fixture/i);
-        expect(html).not.toContain("<button");
-      }
-    }
   });
 
   it("labels known test choices without changing their stored identities", () => {

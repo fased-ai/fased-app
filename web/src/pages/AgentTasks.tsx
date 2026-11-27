@@ -1,7 +1,5 @@
 import { swapState } from "../onchain";
 import { SwapRecoveryActions } from "./OnchainSwap";
-import { miningState } from "../wen-mining";
-import { WENMiningRecoveryActions } from "./WENMining";
 import { useUI } from "../ui-preferences";
 import { useEffect, useRef, useState } from "react";
 import type { AgentRun, AgentTask, AgentView, TaskCalendar } from "../agents";
@@ -213,41 +211,7 @@ export function AgentTasks({
   }
   function actions(t: AgentTask) {
     if (t.wenMining) {
-      const run = v.runs.find((r) => r.taskId === t.id);
-      const recovery = v.wenMining?.recovery?.find((r) => r.taskId === t.id);
-      return (
-        <div className="row-actions">
-          <WENMiningRecoveryActions
-            recovery={recovery}
-            disabled={agents.busy}
-            onAction={(action, id) =>
-              void agents.change({ action, wenMining: { id } })
-            }
-          />
-          {(recovery?.pause || recovery?.resume) && (
-            <button
-              className="text-button"
-              disabled={agents.busy || !v.wenMining?.available}
-              onClick={() =>
-                void agents.change({
-                  action: recovery.resume ? "task-resume" : "task-pause",
-                  id: t.id,
-                })
-              }
-            >
-              {uiText(recovery.resume ? "Resume" : "Pause")}
-            </button>
-          )}
-          <button
-            className="text-button"
-            disabled={!run}
-            aria-label={`${uiText("Result")}: ${t.name}`}
-            onClick={() => run && showRun(run.id)}
-          >
-            {uiText("Result")}
-          </button>
-        </div>
-      );
+      return null;
     }
     if (t.swap) {
       const run = v.runs.find((r) => r.taskId === t.id);
@@ -408,15 +372,6 @@ export function AgentTasks({
     );
   }
   function status(task: AgentTask) {
-    if (task.wenMining) {
-      return uiText(
-        miningState(
-          v.wenMining?.recovery?.find((r) => r.taskId === task.id)?.status ??
-            v.runs.find((r) => r.taskId === task.id)?.wenMining?.state ??
-            "",
-        ),
-      );
-    }
     return task.swap
       ? uiText(
           swapState(

@@ -1,7 +1,5 @@
 import { swapState } from "../onchain";
 import { SwapResultFacts, SwapRecoveryActions } from "./OnchainSwap";
-import { miningState } from "../wen-mining";
-import { WENMiningResultFacts, WENMiningRecoveryActions } from "./WENMining";
 import { resolveLanguage, translate } from "../ui-language";
 import { useUI } from "../ui-preferences";
 import type { AgentRun, AgentTask, AgentView } from "../agents";
@@ -79,23 +77,15 @@ export function TaskRunCard({
               ? uiText("News watch")
               : run.analysis
                 ? uiText("Analysis")
-                : run.wenMining
+                : run.swap
                   ? uiText(
-                      miningState(
-                        v.wenMining?.recovery?.find(
+                      swapState(
+                        v.onchain?.recovery?.find(
                           (x) => x.taskId === run.taskId,
-                        )?.status ?? run.wenMining.state,
+                        )?.status ?? run.swap.state,
                       ),
                     )
-                  : run.swap
-                    ? uiText(
-                        swapState(
-                          v.onchain?.recovery?.find(
-                            (x) => x.taskId === run.taskId,
-                          )?.status ?? run.swap.state,
-                        ),
-                      )
-                    : run.outcome}
+                  : run.outcome}
         </Badge>
       </header>
       <time dateTime={new Date(run.at * 1000).toISOString()}>
@@ -116,28 +106,6 @@ export function TaskRunCard({
                 uiText("Saved result")}
       </p>
       {run.paper && <PaperResultFacts result={run.paper} />}
-      {run.wenMining && (
-        <>
-          <WENMiningResultFacts
-            result={run.wenMining}
-            operation={task?.wenMining?.operation}
-            recovery={v.wenMining?.recovery?.find(
-              (x) => x.taskId === run.taskId,
-            )}
-          />
-          <div className="row-actions">
-            <WENMiningRecoveryActions
-              recovery={v.wenMining?.recovery?.find(
-                (x) => x.taskId === run.taskId,
-              )}
-              disabled={agents.busy}
-              onAction={(action, id) => {
-                void agents.change({ action, wenMining: { id } });
-              }}
-            />
-          </div>
-        </>
-      )}
       {run.swap && (
         <>
           <SwapResultFacts

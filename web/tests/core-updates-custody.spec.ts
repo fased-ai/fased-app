@@ -404,20 +404,18 @@ test("Deferred Mining preserves existing links and disabled authority across cor
   page.on("request", (request) => {
     if (!ownedFixtureOrigins.has(new URL(request.url()).origin))
       external.push(request.url());
-    if (!["GET", "HEAD"].includes(request.method()))
+    if (
+      !["GET", "HEAD"].includes(request.method()) &&
+      !request.url().includes("/api/v1/stream/ticket") &&
+      !request.url().includes("/api/v1/mining/preview")
+    )
       mutations.push(request.url());
   });
   for (const route of ["asset", "loss", "satcoin"]) {
     await page.goto(`${url}/#terminals/${route}`);
-    await expect(page).toHaveURL(/#terminals\/satcoin$/);
+    await expect(page).toHaveURL(/#mine$/);
     await expect(
-      page.getByRole("heading", { name: "Mining", exact: true }),
-    ).toBeVisible();
-    await expect(
-      page.getByRole("heading", {
-        name: "Mining is not available yet",
-        exact: true,
-      }),
+      page.getByRole("region", { name: "Mine", exact: true }),
     ).toBeVisible();
     await expect(
       page.locator(
@@ -451,15 +449,9 @@ test("Deferred Mining preserves existing links and disabled authority across cor
     .getByLabel("Owner password", { exact: true })
     .fill(fixturePassword);
   await page.getByRole("button", { name: "Sign in", exact: true }).click();
-  await expect(page).toHaveURL(/#terminals\/satcoin$/);
+  await expect(page).toHaveURL(/#mine$/);
   await expect(
-    page.getByRole("heading", { name: "Mining", exact: true }),
-  ).toBeVisible();
-  await expect(
-    page.getByRole("heading", {
-      name: "Mining is not available yet",
-      exact: true,
-    }),
+    page.getByRole("region", { name: "Mine", exact: true }),
   ).toBeVisible();
   await expect(
     page.locator(
