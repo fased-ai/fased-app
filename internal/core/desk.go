@@ -272,15 +272,26 @@ func (h *HTTPHandler) deskAPI(w http.ResponseWriter, r *http.Request, token stri
 		if !httpapi.DecodeStrictJSON(w, r, 64*1024, &in) {
 			return
 		}
-		st, err := svc.SetControl(ctx, in.Action, in.Confirm, in.Reason, "owner")
+		act := strings.ToLower(strings.TrimSpace(in.Action))
+		ctrlCtx := ctx
+		if act == "unkill" {
+			if hasPW, _ := h.store.hasPassword(ctx); hasPW {
+				var ok bool
+				ctrlCtx, ok = h.requireStepUpCtx(w, r, token, "unfreeze", "global")
+				if !ok {
+					return
+				}
+			}
+		}
+		st, err := svc.SetControl(ctrlCtx, in.Action, in.Confirm, in.Reason, "owner")
 		if err != nil {
 			writeError(w, 400, err.Error())
 			return
 		}
-		if strings.EqualFold(strings.TrimSpace(in.Action), "kill") {
-			h.store.syncTradeKill(ctx, true, in.Reason, "owner")
-		} else if strings.EqualFold(strings.TrimSpace(in.Action), "unkill") {
-			h.store.syncTradeKill(ctx, false, in.Reason, "owner")
+		if act == "kill" {
+			_, _ = h.store.syncGlobalKill(ctrlCtx, true, in.Reason, "owner")
+		} else if act == "unkill" {
+			_, _ = h.store.syncGlobalKill(ctrlCtx, false, in.Reason, "owner")
 		}
 		writeJSON(w, 200, st)
 

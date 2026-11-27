@@ -116,6 +116,8 @@ func TestWaveS1ActorBypassBlockedForManualReview(t *testing.T) {
 
 	pol := w.Policy
 	pol.ApprovalMode = ApprovalBoundedAuto
+	pol.AutoApproveMaxUSD = 50
+	pol.DailyLossCapUSD = 200
 	pol.Operations = []string{"solana.nativeTransfer"}
 	pol.Programs = []string{SolanaSystemProgram, SolanaComputeBudget}
 	pol.Destinations = []string{dest.PublicKey}

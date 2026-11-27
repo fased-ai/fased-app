@@ -299,6 +299,20 @@ func (c *SocketClient) SetFreeze(ctx context.Context, walletID string, frozen bo
 	return out, err
 }
 
+func (c *SocketClient) GetGlobalFreeze(ctx context.Context) (GlobalFreezeState, error) {
+	var out GlobalFreezeState
+	err := c.do(ctx, http.MethodGet, "/v1/global-freeze", nil, &out)
+	return out, err
+}
+
+func (c *SocketClient) SetGlobalFreeze(ctx context.Context, active bool, reason, actor string) (GlobalFreezeState, error) {
+	var out GlobalFreezeState
+	err := c.do(ctx, http.MethodPost, "/v1/global-freeze", map[string]any{
+		"active": active, "reason": reason, "actor": actor,
+	}, &out)
+	return out, err
+}
+
 func (c *SocketClient) UpdateConnections(ctx context.Context, walletID string, next WalletConnections, actor string) (WalletPublic, error) {
 	var out WalletPublic
 	err := c.do(ctx, http.MethodPut, "/v1/wallets/"+url.PathEscape(walletID)+"/connections", map[string]any{
@@ -332,6 +346,12 @@ func (c *SocketClient) FetchBalance(ctx context.Context, walletID string) (Balan
 func (c *SocketClient) PrepareReview(ctx context.Context, req PrepareReviewRequest) (WalletReview, error) {
 	var out WalletReview
 	err := c.do(ctx, http.MethodPost, "/v1/wallets/"+url.PathEscape(req.WalletID)+"/reviews/prepare", req, &out)
+	return out, err
+}
+
+func (c *SocketClient) GetReview(ctx context.Context, walletID, reviewID string) (WalletReview, error) {
+	var out WalletReview
+	err := c.do(ctx, http.MethodGet, "/v1/wallets/"+url.PathEscape(walletID)+"/reviews/"+url.PathEscape(reviewID), nil, &out)
 	return out, err
 }
 

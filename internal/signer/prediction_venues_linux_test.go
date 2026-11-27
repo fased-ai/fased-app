@@ -135,8 +135,8 @@ func TestPredictionVenuesLinuxIPCAndUIDSeparation(t *testing.T) {
 		t.Fatalf("Polymarket IPC signature verify failed: %v", err)
 	}
 
-	// App signs Kalshi Demo order via IPC + verify RSA-PSS signature.
-	kSignResp, err := hlSocketCall(t, cfg, false, Request{
+	// Detached Kalshi POST order signing over IPC must be rejected fail-closed.
+	if _, err := hlSocketCall(t, cfg, false, Request{
 		Action:       "kalshi-sign-request",
 		AgentVaultID: vaultID,
 		KalshiSign: &KalshiSignIntent{
@@ -146,9 +146,25 @@ func TestPredictionVenuesLinuxIPCAndUIDSeparation(t *testing.T) {
 			TimestampMs:       time.Now().UnixMilli(),
 			Ticker:            "KXTEST-26",
 			Asset:             "USD",
-			OperationID:       "ipc-k-1",
+			OperationID:       "ipc-k-post-blocked",
 			EstimatedMicroUSD: 1_500_000,
 			ExpiresAt:         now + 300,
+		},
+	}); err == nil {
+		t.Fatal("expected detached Kalshi POST order signing over IPC to be rejected")
+	}
+
+	// App signs read-only Kalshi Demo balance query via IPC + verify RSA-PSS signature.
+	kSignResp, err := hlSocketCall(t, cfg, false, Request{
+		Action:       "kalshi-sign-request",
+		AgentVaultID: vaultID,
+		KalshiSign: &KalshiSignIntent{
+			Environment: "demo",
+			Method:      "GET",
+			Path:        "/trade-api/v2/portfolio/balance",
+			TimestampMs: time.Now().UnixMilli(),
+			OperationID: "ipc-k-1",
+			ExpiresAt:   now + 300,
 		},
 	})
 	if err != nil || kSignResp.KalshiSigned == nil {

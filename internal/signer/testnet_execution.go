@@ -18,16 +18,21 @@ const (
 	ExecutionProfileTestnet = "testnet"
 )
 
-// SolanaDevnetSignIntent describes an instruction-constrained Solana Devnet
-// legacy message submitted to fased-signer under a typed AgentVaultPolicy.
+// SolanaDevnetSignIntent describes a typed Solana Devnet compute+memo intent
+// constructed inside fased-signer under a typed AgentVaultPolicy.
+// Raw caller-supplied MessageBase64 is unconditionally rejected.
 type SolanaDevnetSignIntent struct {
-	Network           string `json:"network"`
-	GenesisHash       string `json:"genesisHash"`
-	OperationID       string `json:"operationId"`
-	Asset             string `json:"asset"`
-	EstimatedMicroUSD uint64 `json:"estimatedMicroUsd"`
-	MessageBase64     string `json:"messageBase64"`
-	ExpiresAt         int64  `json:"expiresAt"`
+	Network                  string `json:"network"`
+	GenesisHash              string `json:"genesisHash"`
+	OperationID              string `json:"operationId"`
+	Asset                    string `json:"asset"`
+	EstimatedMicroUSD        uint64 `json:"estimatedMicroUsd"`
+	Blockhash                string `json:"blockhash"`
+	ComputeUnitLimit         uint32 `json:"computeUnitLimit,omitempty"`
+	PriorityFeeMicroLamports uint64 `json:"priorityFeeMicroLamports,omitempty"`
+	Memo                     string `json:"memo"`
+	MessageBase64            string `json:"messageBase64,omitempty"` // deprecated: always rejected fail-closed
+	ExpiresAt                int64  `json:"expiresAt"`
 }
 
 // SolanaDevnetSignedTx is returned after verifying Devnet message instructions
@@ -103,14 +108,37 @@ func (v *Vault) SignSolanaDevnetIPC(intent SolanaDevnetSignIntent, agentVaultID 
 	if intent.ExpiresAt <= nowTime.Unix() {
 		return nil, errors.New("solana devnet sign intent expired")
 	}
-	msgBytes, err := base64.StdEncoding.DecodeString(strings.TrimSpace(intent.MessageBase64))
+	if strings.TrimSpace(intent.MessageBase64) != "" {
+		return nil, errors.New("raw messageBase64 signing is disabled in signer; use typed memo fields or Custody V2 typed intents")
+	}
+	bhRaw, err := onchain.Key(strings.TrimSpace(intent.Blockhash))
 	if err != nil {
-		return nil, errors.New("invalid base64 devnet transaction message")
+		return nil, errors.New("valid base58 recent blockhash required")
+	}
+	var bh [32]byte
+	copy(bh[:], bhRaw)
+	cuLimit := intent.ComputeUnitLimit
+	if cuLimit == 0 {
+		cuLimit = 50_000
+	}
+	if cuLimit > 200_000 {
+		return nil, errors.New("solana devnet compute unit limit exceeds 200000")
+	}
+	if intent.PriorityFeeMicroLamports > 100_000 {
+		return nil, errors.New("solana devnet priority fee exceeds 100000 micro-lamports/CU")
+	}
+	memo := strings.TrimSpace(intent.Memo)
+	if memo == "" || len(memo) > 256 {
+		return nil, errors.New("solana devnet typed memo required (1..256 bytes)")
 	}
 	priv := ed25519.NewKeyFromSeed(v.seed)
 	defer wipe(priv)
 	var feePayer [32]byte
 	copy(feePayer[:], priv[ed25519.SeedSize:])
+	msgBytes, err := onchain.BuildDevnetComputeMemoMessage(feePayer, bh, cuLimit, intent.PriorityFeeMicroLamports, memo)
+	if err != nil {
+		return nil, err
+	}
 	if err := onchain.ValidateDevnetMessage(msgBytes, feePayer); err != nil {
 		return nil, err
 	}

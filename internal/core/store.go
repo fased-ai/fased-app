@@ -92,6 +92,7 @@ type Store struct {
 	custodySock                   *custody.SocketServer
 	custodySocketPath             string
 	custodyClient                 *custody.SocketClient
+	allowLiveCustody              bool
 	dir                           string
 	instanceID                    string
 	pauseFault                    func(string) error // Test-only interruption injection, never configuration or IPC.

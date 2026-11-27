@@ -326,10 +326,14 @@ func TestLiveExecutionRoutingAndPersistentBots(t *testing.T) {
 		t.Fatalf("expected bot order plan in trade snapshot, got %+v", snap.Plans)
 	}
 
-	// Kill switch must pause running bots cleanly.
+	// Kill switch must immediately pause running bots on activation and keep EvaluateBots halted.
 	_, _ = svc.SetKillSwitch(t.Context(), true, "risk stop", "owner")
+	botsAfterKill, err := svc.ListBots(t.Context())
+	if err != nil || len(botsAfterKill) != 1 || botsAfterKill[0].Status != BotStatusPaused {
+		t.Fatalf("expected kill switch to immediately pause running bot, got %+v err=%v", botsAfterKill, err)
+	}
 	sumKill, err := svc.EvaluateBots(t.Context())
-	if err != nil || !sumKill.Halted || sumKill.Paused != 1 {
-		t.Fatalf("expected kill switch to pause running bot, got %+v err=%v", sumKill, err)
+	if err != nil || !sumKill.Halted {
+		t.Fatalf("expected EvaluateBots to report halted under kill switch, got %+v err=%v", sumKill, err)
 	}
 }

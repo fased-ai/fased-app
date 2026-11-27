@@ -469,6 +469,8 @@ func BuildCreateOrderIntent(draft OrderDraft, meta OrderBookMeta, now int64) (si
 		ClientOrderIndex:  clientOrderIdx,
 		BaseAmount:        int64(baseU),
 		Price:             uint32(priceU),
+		SizeDecimals:      uint8(meta.SupportedSizeDecimals),
+		PriceDecimals:     uint8(meta.SupportedPriceDecimals),
 		IsAsk:             isAsk,
 		OrderType:         orderType,
 		TimeInForce:       tif,

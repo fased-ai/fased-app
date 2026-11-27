@@ -155,11 +155,33 @@ func (s *Store) isExternalKillActiveForTrade(ctx context.Context) bool {
 	return false
 }
 
+func (s *Store) isCustodyGlobalFrozen(ctx context.Context) bool {
+	if s == nil {
+		return false
+	}
+	s.custodyMu.Lock()
+	sockPath := strings.TrimSpace(s.custodySocketPath)
+	loaded := s.custodySvc != nil || s.custodyClient != nil
+	s.custodyMu.Unlock()
+	if !loaded && sockPath == "" {
+		return false
+	}
+	cs, err := s.custodyBackend()
+	if err != nil || cs == nil {
+		return false
+	}
+	gf, err := cs.GetGlobalFreeze(ctx)
+	return err == nil && gf.Active
+}
+
 func (s *Store) isGlobalKillActive(ctx context.Context) bool {
 	if s == nil {
 		return false
 	}
 	if s.isExternalKillActiveForTrade(ctx) {
+		return true
+	}
+	if s.isCustodyGlobalFrozen(ctx) {
 		return true
 	}
 	if ts := s.loadedOrExistingTradeService(); ts != nil {
@@ -168,6 +190,28 @@ func (s *Store) isGlobalKillActive(ctx context.Context) bool {
 		}
 	}
 	return false
+}
+
+func (s *Store) syncCustodyGlobalFreeze(ctx context.Context, active bool, reason, actor string) error {
+	if s == nil {
+		return nil
+	}
+	s.custodyMu.Lock()
+	sockPath := strings.TrimSpace(s.custodySocketPath)
+	loaded := s.custodySvc != nil || s.custodyClient != nil
+	s.custodyMu.Unlock()
+	if !loaded && sockPath == "" {
+		return nil
+	}
+	cs, err := s.custodyBackend()
+	if err != nil || cs == nil {
+		if !active {
+			return errors.New("custody signer unavailable; cannot clear global freeze")
+		}
+		return nil
+	}
+	_, err = cs.SetGlobalFreeze(ctx, active, reason, actor)
+	return err
 }
 
 func (s *Store) syncTradeKill(ctx context.Context, active bool, reason, actor string) {
@@ -194,11 +238,15 @@ func (s *Store) syncGlobalKill(ctx context.Context, active bool, reason, actor s
 		return trade.KillState{}, err
 	}
 	if active {
+		_ = s.syncCustodyGlobalFreeze(ctx, true, reason, actor)
 		s.syncDeskKill(ctx, reason, actor)
 		if autoSvc, aErr := s.automationService(); aErr == nil {
 			_, _ = autoSvc.SetState(ctx, automation.StateActionKill, reason, actor)
 		}
 		return ts.SetKillSwitch(ctx, true, reason, actor)
+	}
+	if err := s.syncCustodyGlobalFreeze(ctx, false, reason, actor); err != nil {
+		return trade.KillState{}, err
 	}
 	if autoSvc := s.loadedOrExistingAutomationService(); autoSvc != nil {
 		_, _ = autoSvc.SetState(ctx, automation.StateActionUnkill, reason, actor)
@@ -351,7 +399,18 @@ func (h *HTTPHandler) tradeAPI(w http.ResponseWriter, r *http.Request, token str
 		if !httpapi.DecodeStrictJSON(w, r, 64*1024, &in) {
 			return
 		}
-		ks, err := h.store.syncGlobalKill(ctx, in.Active, in.Reason, "owner")
+		killCtx := ctx
+		if !in.Active {
+			// Clearing global emergency freeze/kill switch requires owner step-up when owner auth is configured.
+			if hasPW, _ := h.store.hasPassword(ctx); hasPW {
+				var ok bool
+				killCtx, ok = h.requireStepUpCtx(w, r, token, "unfreeze", "global")
+				if !ok {
+					return
+				}
+			}
+		}
+		ks, err := h.store.syncGlobalKill(killCtx, in.Active, in.Reason, "owner")
 		if err != nil {
 			writeError(w, 400, err.Error())
 			return

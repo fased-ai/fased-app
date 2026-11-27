@@ -142,6 +142,14 @@ type WalletPublic struct {
 	UpdatedAt             int64                      `json:"updatedAt"`
 }
 
+// GlobalFreezeState tracks the signer-authoritative global emergency freeze latch.
+type GlobalFreezeState struct {
+	Active    bool   `json:"active"`
+	Reason    string `json:"reason,omitempty"`
+	UpdatedBy string `json:"updatedBy,omitempty"`
+	UpdatedAt int64  `json:"updatedAt,omitempty"`
+}
+
 // WalletReview is an immutable prepared & simulated transaction authorization request.
 type WalletReview struct {
 	ID                   string   `json:"id"`
@@ -152,12 +160,18 @@ type WalletReview struct {
 	Programs             []string `json:"programs"`
 	Destination          string   `json:"destination"`
 	Mint                 string   `json:"mint,omitempty"`
+	OutputMint           string   `json:"outputMint,omitempty"`
 	Symbol               string   `json:"symbol"`
 	AmountRaw            uint64   `json:"amountRaw,string"`
 	AmountHuman          string   `json:"amountHuman"`
+	QuotedOutRaw         uint64   `json:"quotedOutRaw,string,omitempty"`
+	MinOutRaw            uint64   `json:"minOutRaw,string,omitempty"`
+	SlippageBps          uint32   `json:"slippageBps,omitempty"`
+	EstimatedUSD         float64  `json:"estimatedUsd,omitempty"`
 	EstimatedFeeLamports uint64   `json:"estimatedFeeLamports,string"`
 	PolicyVersion        int      `json:"policyVersion"`
 	PolicyHash           string   `json:"policyHash"`
+	ConnectionsHash      string   `json:"connectionsHash,omitempty"`
 	TxDigest             string   `json:"txDigest"`
 	UnsignedTxBase64     string   `json:"unsignedTxBase64"`
 	UnsignedMsgBase64    string   `json:"unsignedMsgBase64"`
@@ -235,6 +249,7 @@ type PrepareReviewRequest struct {
 	CreateDestATA bool           `json:"createDestAta,omitempty"`
 	AmountHuman   string         `json:"amountHuman,omitempty"`
 	AmountRaw     uint64         `json:"amountRaw,string,omitempty"`
+	MinOutputRaw  uint64         `json:"minOutputRaw,string,omitempty"`
 	IsBotOrAuto   bool           `json:"isBotOrAuto,omitempty"`
 	AgentID       string         `json:"agentId,omitempty"`
 	SkillGrantID  string         `json:"skillGrantId,omitempty"`
@@ -339,6 +354,21 @@ func ComputePolicyHash(p WalletPolicy) string {
 	norm.PolicyHash = ""
 	raw, _ := json.Marshal(norm)
 	sum := sha256.Sum256(append([]byte("fased-custody-policy:v1\x00"), raw...))
+	return hex.EncodeToString(sum[:])
+}
+
+// ComputeConnectionsHash computes a canonical SHA-256 digest of WalletConnections so
+// post-prepare revocations of venues, agents, or skill grants invalidate in-flight reviews.
+func ComputeConnectionsHash(c WalletConnections) string {
+	norm := c
+	norm.AgentIDs = uniqueSortedTrimmed(norm.AgentIDs, false)
+	norm.AllowedVenues = uniqueSortedTrimmed(norm.AllowedVenues, true)
+	if norm.SkillGrants == nil {
+		norm.SkillGrants = []SkillGrant{}
+	}
+	norm.SweepToWalletID = strings.TrimSpace(norm.SweepToWalletID)
+	raw, _ := json.Marshal(norm)
+	sum := sha256.Sum256(append([]byte("fased-custody-connections:v1\x00"), raw...))
 	return hex.EncodeToString(sum[:])
 }
 

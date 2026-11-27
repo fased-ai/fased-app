@@ -227,6 +227,7 @@ func run(args []string, in *os.File, out, errOut io.Writer) error {
 	installationRoot := flags.String("installation-root", "", "immutable installed application directory")
 	custodyConfig := flags.String("custody-config", "", "root-owned managed fixture identity; never enables real wallets")
 	custodySocket := flags.String("custody-socket", "", "Unix socket path of isolated out-of-process fased-signer daemon")
+	allowLiveCustody := flags.Bool("allow-live-custody", false, "explicitly enable Mainnet-Beta native Custody V2 signing & broadcast (default false)")
 	passwordStdin := flags.Bool("password-stdin", false, "read password from stdin instead of a terminal")
 	privateProofStdin := flags.Bool("private-proof-stdin", false, "verify a private Tailscale connection through owner IPC")
 	aiFixture := flags.Bool("ai-fixture", false, "development-only in-process provider fixtures; test credentials only, no live API")
@@ -371,7 +372,7 @@ func run(args []string, in *os.File, out, errOut io.Writer) error {
 		if *requireSandbox && *installationRoot != "" && *custodyConfig == "" {
 			source = "local"
 		}
-		return serveInstalledRuntimeWithStage4(*installationRoot, *dir, *listen, *publicOrigin, *researchOrigin, *instanceLocation, *remoteTransport, source, ownerUID, installedProviderFixture, *requirePassword, *custodySocket, out, core.TestnetExecutionConfig{
+		return serveInstalledRuntimeWithStage4(*installationRoot, *dir, *listen, *publicOrigin, *researchOrigin, *instanceLocation, *remoteTransport, source, ownerUID, installedProviderFixture, *requirePassword, *allowLiveCustody, *custodySocket, out, core.TestnetExecutionConfig{
 			Profile:          *executionProfile,
 			MainnetPolicy:    mainnetPolicy,
 			AgentVaultID:     *agentVaultID,
@@ -561,10 +562,10 @@ func serveInstalledRuntimeWithOptions(installationRoot, dir, listen, publicOrigi
 	return serveInstalledRuntimeWithTransport(installationRoot, dir, listen, publicOrigin, researchOrigin, location, "", source, ownerUID, fixture, requirePassword, out, custodyConfig...)
 }
 func serveInstalledRuntimeWithTransport(installationRoot, dir, listen, publicOrigin, researchOrigin, location, remoteTransport, source string, ownerUID int, fixture, requirePassword bool, out io.Writer, custodyConfig ...string) error {
-	return serveInstalledRuntimeWithStage4(installationRoot, dir, listen, publicOrigin, researchOrigin, location, remoteTransport, source, ownerUID, fixture, requirePassword, "", out, core.TestnetExecutionConfig{}, custodyConfig...)
+	return serveInstalledRuntimeWithStage4(installationRoot, dir, listen, publicOrigin, researchOrigin, location, remoteTransport, source, ownerUID, fixture, requirePassword, false, "", out, core.TestnetExecutionConfig{}, custodyConfig...)
 }
 
-func serveInstalledRuntimeWithStage4(installationRoot, dir, listen, publicOrigin, researchOrigin, location, remoteTransport, source string, ownerUID int, fixture, requirePassword bool, custodySocket string, out io.Writer, stage4Cfg core.TestnetExecutionConfig, custodyConfig ...string) error {
+func serveInstalledRuntimeWithStage4(installationRoot, dir, listen, publicOrigin, researchOrigin, location, remoteTransport, source string, ownerUID int, fixture, requirePassword, allowLiveCustody bool, custodySocket string, out io.Writer, stage4Cfg core.TestnetExecutionConfig, custodyConfig ...string) error {
 	start := core.Start
 	if fixture {
 		if installationRoot == "" || source != location || (source != "local" && source != "remote") || researchOrigin != "" || len(custodyConfig) > 1 || len(custodyConfig) == 1 && custodyConfig[0] != "" {
@@ -579,6 +580,9 @@ func serveInstalledRuntimeWithStage4(installationRoot, dir, listen, publicOrigin
 	}
 	if strings.TrimSpace(custodySocket) != "" {
 		server.ConfigureCustodySocket(custodySocket)
+	}
+	if allowLiveCustody || stage4Cfg.Profile == signer.ExecutionProfileMainnetCapped {
+		server.Store.ConfigureLiveCustody(true)
 	}
 	if err = server.ConfigureConnectionWithTransport(location, remoteTransport, ownerUID); err == nil {
 		server.ConfigureRequirePassword(requirePassword)

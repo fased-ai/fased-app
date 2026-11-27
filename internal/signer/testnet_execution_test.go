@@ -167,6 +167,11 @@ func TestSignSolanaDevnetIPCAndAgentVaultEnforcement(t *testing.T) {
 				t.Fatalf("SetAgentVaultPolicy failed: %v", err)
 			}
 
+			var bh [32]byte
+			for i := range bh {
+				bh[i] = byte(i + 11)
+			}
+			bhB58 := onchain.Base58(bh[:])
 			msgB64 := buildValidDevnetTestMessage(t, v, "fased-rehearsal-1")
 
 			// Wrong network or mainnet rejected.
@@ -176,14 +181,15 @@ func TestSignSolanaDevnetIPCAndAgentVaultEnforcement(t *testing.T) {
 				OperationID:       "sol-mainnet-reject",
 				Asset:             "SOL",
 				EstimatedMicroUSD: 1_000_000,
-				MessageBase64:     msgB64,
+				Blockhash:         bhB58,
+				Memo:              "fased-rehearsal-1",
 				ExpiresAt:         now + 300,
 			}, vaultID); !errors.Is(err, ErrUnavailable) {
 				_ = v.Close()
 				t.Fatalf("expected ErrUnavailable for mainnet-beta intent, got %v", err)
 			}
 
-			// Arbitrary non-System/Compute/Memo program rejected.
+			// Raw caller-supplied MessageBase64 (including arbitrary program) is unconditionally rejected.
 			if _, err := v.SignSolanaDevnetIPC(SolanaDevnetSignIntent{
 				Network:           "devnet",
 				GenesisHash:       onchain.SolanaDevnetGenesisHash,
@@ -192,10 +198,11 @@ func TestSignSolanaDevnetIPCAndAgentVaultEnforcement(t *testing.T) {
 				EstimatedMicroUSD: 1_000_000,
 				MessageBase64:     buildArbitraryProgramTestMessage(t, v),
 				ExpiresAt:         now + 300,
-			}, vaultID); err == nil || !strings.Contains(err.Error(), "program not permitted on devnet executor") {
+			}, vaultID); err == nil || !strings.Contains(err.Error(), "raw messageBase64 signing is disabled") {
 				_ = v.Close()
-				t.Fatalf("expected program not permitted on devnet executor error, got %v", err)
+				t.Fatalf("expected raw messageBase64 rejection, got %v", err)
 			}
+			_ = msgB64
 
 			// Disallowed asset rejected.
 			if _, err := v.SignSolanaDevnetIPC(SolanaDevnetSignIntent{
@@ -204,7 +211,8 @@ func TestSignSolanaDevnetIPCAndAgentVaultEnforcement(t *testing.T) {
 				OperationID:       "sol-bad-asset",
 				Asset:             "BONK",
 				EstimatedMicroUSD: 1_000_000,
-				MessageBase64:     msgB64,
+				Blockhash:         bhB58,
+				Memo:              "fased-rehearsal-1",
 				ExpiresAt:         now + 300,
 			}, vaultID); err == nil || !strings.Contains(err.Error(), "forbids asset") {
 				_ = v.Close()
@@ -218,7 +226,8 @@ func TestSignSolanaDevnetIPCAndAgentVaultEnforcement(t *testing.T) {
 				OperationID:       "sol-over-order",
 				Asset:             "SOL",
 				EstimatedMicroUSD: 6_000_000,
-				MessageBase64:     msgB64,
+				Blockhash:         bhB58,
+				Memo:              "fased-rehearsal-1",
 				ExpiresAt:         now + 300,
 			}, vaultID); err == nil || !strings.Contains(err.Error(), "per-order spend limit") {
 				_ = v.Close()
@@ -227,13 +236,16 @@ func TestSignSolanaDevnetIPCAndAgentVaultEnforcement(t *testing.T) {
 
 			// Valid small-cap Devnet sign succeeds and journals spend.
 			signed, err := v.SignSolanaDevnetIPC(SolanaDevnetSignIntent{
-				Network:           "devnet",
-				GenesisHash:       onchain.SolanaDevnetGenesisHash,
-				OperationID:       "sol-dev-1",
-				Asset:             "SOL",
-				EstimatedMicroUSD: 4_500_000,
-				MessageBase64:     msgB64,
-				ExpiresAt:         now + 300,
+				Network:                  "devnet",
+				GenesisHash:              onchain.SolanaDevnetGenesisHash,
+				OperationID:              "sol-dev-1",
+				Asset:                    "SOL",
+				EstimatedMicroUSD:        4_500_000,
+				Blockhash:                bhB58,
+				ComputeUnitLimit:         50_000,
+				PriorityFeeMicroLamports: 1_000,
+				Memo:                     "fased-rehearsal-1",
+				ExpiresAt:                now + 300,
 			}, vaultID)
 			if err != nil {
 				_ = v.Close()
@@ -245,8 +257,7 @@ func TestSignSolanaDevnetIPCAndAgentVaultEnforcement(t *testing.T) {
 				t.Fatalf("unexpected signed tx bytes: len=%d err=%v", len(rawTx), err)
 			}
 			priv := ed25519.NewKeyFromSeed(v.seed)
-			msgBytes, _ := base64.StdEncoding.DecodeString(msgB64)
-			if !ed25519.Verify(ed25519.PublicKey(priv[ed25519.SeedSize:]), msgBytes, rawTx[1:65]) {
+			if !ed25519.Verify(ed25519.PublicKey(priv[ed25519.SeedSize:]), rawTx[65:], rawTx[1:65]) {
 				wipe(priv)
 				_ = v.Close()
 				t.Fatal("ed25519.Verify failed on signed Devnet transaction")
@@ -260,7 +271,8 @@ func TestSignSolanaDevnetIPCAndAgentVaultEnforcement(t *testing.T) {
 				OperationID:       "sol-dev-1",
 				Asset:             "SOL",
 				EstimatedMicroUSD: 1_000_000,
-				MessageBase64:     msgB64,
+				Blockhash:         bhB58,
+				Memo:              "fased-rehearsal-1",
 				ExpiresAt:         now + 300,
 			}, vaultID); err == nil || !strings.Contains(err.Error(), "duplicate agent vault operation") {
 				_ = v.Close()
@@ -284,14 +296,14 @@ func TestSignSolanaDevnetIPCAndAgentVaultEnforcement(t *testing.T) {
 			if err := v.ConfigureTestnetExecution(true); err != nil {
 				t.Fatal(err)
 			}
-			msgB642 := buildValidDevnetTestMessage(t, v, "fased-rehearsal-2")
 			if _, err := v.SignSolanaDevnetIPC(SolanaDevnetSignIntent{
 				Network:           "devnet",
 				GenesisHash:       onchain.SolanaDevnetGenesisHash,
 				OperationID:       "sol-dev-2",
 				Asset:             "SOL",
 				EstimatedMicroUSD: 4_000_000, // 4.5M + 4.0M = 8.5M > 8.0M daily cap
-				MessageBase64:     msgB642,
+				Blockhash:         bhB58,
+				Memo:              "fased-rehearsal-2",
 				ExpiresAt:         now + 300,
 			}, vaultID); err == nil || !strings.Contains(err.Error(), "daily spend limit exceeded") {
 				t.Fatalf("expected daily spend limit error across reopen, got %v", err)
@@ -319,7 +331,8 @@ func TestSignSolanaDevnetIPCAndAgentVaultEnforcement(t *testing.T) {
 				OperationID:       "sol-wrong-venue",
 				Asset:             "SOL",
 				EstimatedMicroUSD: 1_000_000,
-				MessageBase64:     msgB642,
+				Blockhash:         bhB58,
+				Memo:              "fased-rehearsal-2",
 				ExpiresAt:         now + 300,
 			}, hlOnlyID); err == nil || !strings.Contains(err.Error(), "agent vault forbids solana venue") {
 				t.Fatalf("expected forbids solana venue error, got %v", err)

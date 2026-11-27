@@ -415,15 +415,13 @@ func (h *coreTelegramHooks) PositionsSummary(ctx context.Context) (string, error
 }
 
 func (h *coreTelegramHooks) SetAutomationState(ctx context.Context, action, reason, actor string) (automation.ControlState, error) {
+	act := strings.ToLower(strings.TrimSpace(action))
+	if act == automation.StateActionUnkill {
+		return automation.ControlState{}, errors.New("clearing global emergency kill switch requires owner step-up in the local UI")
+	}
 	st, err := h.autoSvc.SetState(ctx, action, reason, actor)
-	if err == nil {
-		act := strings.ToLower(strings.TrimSpace(action))
-		if act == automation.StateActionKill {
-			h.store.syncDeskKill(ctx, reason, actor)
-			h.store.syncTradeKill(ctx, true, reason, actor)
-		} else if act == automation.StateActionUnkill {
-			h.store.syncTradeKill(ctx, false, reason, actor)
-		}
+	if err == nil && act == automation.StateActionKill {
+		_, _ = h.store.syncGlobalKill(ctx, true, reason, actor)
 	}
 	return st, err
 }
@@ -470,17 +468,26 @@ func (h *HTTPHandler) automationAPI(w http.ResponseWriter, r *http.Request, toke
 			if !httpapi.DecodeStrictJSON(w, r, 64*1024, &in) {
 				return
 			}
-			st, err := autoSvc.SetState(ctx, in.Action, in.Reason, "owner")
+			act := strings.ToLower(strings.TrimSpace(in.Action))
+			autoCtx := ctx
+			if act == automation.StateActionUnkill {
+				if hasPW, _ := h.store.hasPassword(ctx); hasPW {
+					var ok bool
+					autoCtx, ok = h.requireStepUpCtx(w, r, token, "unfreeze", "global")
+					if !ok {
+						return
+					}
+				}
+			}
+			st, err := autoSvc.SetState(autoCtx, in.Action, in.Reason, "owner")
 			if err != nil {
 				writeError(w, 400, err.Error())
 				return
 			}
-			act := strings.ToLower(strings.TrimSpace(in.Action))
 			if act == automation.StateActionKill {
-				h.store.syncDeskKill(ctx, in.Reason, "owner")
-				h.store.syncTradeKill(ctx, true, in.Reason, "owner")
+				_, _ = h.store.syncGlobalKill(autoCtx, true, in.Reason, "owner")
 			} else if act == automation.StateActionUnkill {
-				h.store.syncTradeKill(ctx, false, in.Reason, "owner")
+				_, _ = h.store.syncGlobalKill(autoCtx, false, in.Reason, "owner")
 			}
 			writeJSON(w, 200, st)
 		default:

@@ -72,6 +72,11 @@ func TestVaultMainnetCappedSolanaSigningAndLimits(t *testing.T) {
 		t.Fatalf("SetAgentVaultPolicy failed: %v", err)
 	}
 
+	var bh [32]byte
+	for i := range bh {
+		bh[i] = byte(i + 21)
+	}
+	bhB58 := onchain.Base58(bh[:])
 	memoB64 := buildValidDevnetTestMessage(t, v, "capped-mainnet-proof")
 	exp := time.Now().Add(2 * time.Minute).Unix()
 
@@ -82,7 +87,8 @@ func TestVaultMainnetCappedSolanaSigningAndLimits(t *testing.T) {
 		OperationID:       "op-bad-gen",
 		Asset:             "SOL",
 		EstimatedMicroUSD: 10_000_000,
-		MessageBase64:     memoB64,
+		Blockhash:         bhB58,
+		Memo:              "capped-mainnet-proof",
 		ExpiresAt:         exp,
 	}, vaultID); err == nil {
 		t.Fatal("expected devnet genesis hash mismatch to fail")
@@ -95,21 +101,38 @@ func TestVaultMainnetCappedSolanaSigningAndLimits(t *testing.T) {
 		OperationID:       "op-wen-held",
 		Asset:             "SAT",
 		EstimatedMicroUSD: 10_000_000,
-		MessageBase64:     memoB64,
+		Blockhash:         bhB58,
+		Memo:              "capped-mainnet-proof",
 		ExpiresAt:         exp,
 	}, vaultID); err == nil {
 		t.Fatal("expected SAT/WEN asset to remain held")
 	}
 
-	// Valid $45 mainnet-beta sign passes.
-	signed, err := v.SignSolanaMainnetCappedIPC(SolanaMainnetCappedSignIntent{
+	// Raw caller-supplied MessageBase64 MUST be rejected fail-closed in signer.
+	if _, err := v.SignSolanaMainnetCappedIPC(SolanaMainnetCappedSignIntent{
 		Network:           "mainnet-beta",
 		GenesisHash:       onchain.SolanaMainnetGenesisHash,
-		OperationID:       "op-main-1",
+		OperationID:       "op-raw-blocked",
 		Asset:             "SOL",
-		EstimatedMicroUSD: 45_000_000,
+		EstimatedMicroUSD: 1_000_000,
 		MessageBase64:     memoB64,
 		ExpiresAt:         exp,
+	}, vaultID); err == nil {
+		t.Fatal("expected raw MessageBase64 to be rejected fail-closed")
+	}
+
+	// Valid $45 mainnet-beta typed memo sign passes.
+	signed, err := v.SignSolanaMainnetCappedIPC(SolanaMainnetCappedSignIntent{
+		Network:                  "mainnet-beta",
+		GenesisHash:              onchain.SolanaMainnetGenesisHash,
+		OperationID:              "op-main-1",
+		Asset:                    "SOL",
+		EstimatedMicroUSD:        45_000_000,
+		Blockhash:                bhB58,
+		ComputeUnitLimit:         50_000,
+		PriorityFeeMicroLamports: 1_000,
+		Memo:                     "capped-mainnet-proof",
+		ExpiresAt:                exp,
 	}, vaultID)
 	if err != nil {
 		t.Fatalf("SignSolanaMainnetCappedIPC valid failed: %v", err)
@@ -118,7 +141,7 @@ func TestVaultMainnetCappedSolanaSigningAndLimits(t *testing.T) {
 		t.Fatalf("unexpected signed tx receipt: %+v", signed)
 	}
 
-	// Valid v0/ALT message passes mainnet-capped signer validation.
+	// Raw v0/ALT MessageBase64 MUST also be rejected fail-closed (swaps must use Custody V2).
 	pubRaw, err := onchain.Key(signed.PublicKeyBase58)
 	if err != nil {
 		t.Fatal(err)
@@ -150,7 +173,7 @@ func TestVaultMainnetCappedSolanaSigningAndLimits(t *testing.T) {
 	v0Msg = append(v0Msg, altKey...)
 	v0Msg = append(v0Msg, 1, 0, 0) // 1 writable index (0), 0 readonly
 	v0B64 := base64.StdEncoding.EncodeToString(v0Msg)
-	v0Signed, err := v.SignSolanaMainnetCappedIPC(SolanaMainnetCappedSignIntent{
+	if _, err := v.SignSolanaMainnetCappedIPC(SolanaMainnetCappedSignIntent{
 		Network:           "mainnet-beta",
 		GenesisHash:       onchain.SolanaMainnetGenesisHash,
 		OperationID:       "op-main-v0",
@@ -158,9 +181,8 @@ func TestVaultMainnetCappedSolanaSigningAndLimits(t *testing.T) {
 		EstimatedMicroUSD: 5_000_000,
 		MessageBase64:     v0B64,
 		ExpiresAt:         exp,
-	}, vaultID)
-	if err != nil || v0Signed.Signature == "" {
-		t.Fatalf("expected v0/ALT mainnet-capped sign to pass, got err=%v", err)
+	}, vaultID); err == nil {
+		t.Fatal("expected raw v0/ALT MessageBase64 to be rejected fail-closed")
 	}
 
 	// Over $50 per-order cap rejected.
@@ -170,7 +192,8 @@ func TestVaultMainnetCappedSolanaSigningAndLimits(t *testing.T) {
 		OperationID:       "op-over-order",
 		Asset:             "SOL",
 		EstimatedMicroUSD: 55_000_000,
-		MessageBase64:     memoB64,
+		Blockhash:         bhB58,
+		Memo:              "capped-mainnet-proof",
 		ExpiresAt:         exp,
 	}, vaultID); err == nil {
 		t.Fatal("expected over-order cap spend to fail")
@@ -183,7 +206,8 @@ func TestVaultMainnetCappedSolanaSigningAndLimits(t *testing.T) {
 		OperationID:       "op-main-2",
 		Asset:             "SOL",
 		EstimatedMicroUSD: 45_000_000,
-		MessageBase64:     memoB64,
+		Blockhash:         bhB58,
+		Memo:              "capped-mainnet-proof-2",
 		ExpiresAt:         exp,
 	}, vaultID); err != nil {
 		t.Fatalf("second $45 order failed: %v", err)
@@ -196,7 +220,8 @@ func TestVaultMainnetCappedSolanaSigningAndLimits(t *testing.T) {
 		OperationID:       "op-over-daily",
 		Asset:             "SOL",
 		EstimatedMicroUSD: 20_000_000,
-		MessageBase64:     memoB64,
+		Blockhash:         bhB58,
+		Memo:              "capped-mainnet-proof-3",
 		ExpiresAt:         exp,
 	}, vaultID); err == nil {
 		t.Fatal("expected >$100 daily spend to fail")
@@ -258,7 +283,11 @@ func TestVaultV3MainnetCappedPolicyReplay(t *testing.T) {
 		t.Fatalf("SetAgentVaultPolicy failed on v3 mainnet-beta vault: %v", err)
 	}
 
-	memoB64 := buildValidDevnetTestMessage(t, v, "v3-mainnet-capped-proof")
+	var bh3 [32]byte
+	for i := range bh3 {
+		bh3[i] = byte(i + 51)
+	}
+	bh3B58 := onchain.Base58(bh3[:])
 	exp := time.Now().Add(2 * time.Minute).Unix()
 	signed, err := v.SignSolanaMainnetCappedIPC(SolanaMainnetCappedSignIntent{
 		Network:           "mainnet-beta",
@@ -266,7 +295,8 @@ func TestVaultV3MainnetCappedPolicyReplay(t *testing.T) {
 		OperationID:       "op-v3-main-1",
 		Asset:             "SOL",
 		EstimatedMicroUSD: 20_000_000,
-		MessageBase64:     memoB64,
+		Blockhash:         bh3B58,
+		Memo:              "v3-mainnet-capped-proof",
 		ExpiresAt:         exp,
 	}, vaultID)
 	if err != nil {
@@ -311,7 +341,8 @@ func TestVaultV3MainnetCappedPolicyReplay(t *testing.T) {
 		OperationID:       "op-v3-main-1",
 		Asset:             "SOL",
 		EstimatedMicroUSD: 10_000_000,
-		MessageBase64:     memoB64,
+		Blockhash:         bh3B58,
+		Memo:              "v3-mainnet-capped-proof",
 		ExpiresAt:         exp,
 	}, vaultID); err == nil {
 		t.Fatal("expected duplicate operationId to be rejected after v3 journal replay")
