@@ -856,7 +856,7 @@ test("joined agent workspace preserves news chat reminder run memory and reviewe
     path: `.evidence/joined-agent/${isMobile ? "mobile" : "desktop"}.png`,
     fullPage: true,
   });
-  await open("News");
+  await open("Data & Feeds");
   const agentsRead = "**/api/v1/agents?*";
   let captured = false,
     release!: () => void;
