@@ -336,23 +336,23 @@
   scrollbar-color: var(--wt-border-strong) transparent;
 }
 
-@media (max-width: 760px) {
-  .f-icon-btn,
-  .icon-button,
-  .icon-btn {
+@media (max-width: 760px), (pointer: coarse) {
+  :root.wt .f-icon-btn,
+  :root.wt .icon-button,
+  :root.wt .icon-btn {
     width: 44px;
     height: 44px;
     min-width: 44px;
     min-height: 44px;
   }
 
-  .f-btn-soft,
-  .wt-btn-soft,
-  .f-btn-primary-sm,
-  .wt-btn-rose-sm,
-  .f-seg button,
-  .wt-seg button,
-  .wt-seg-bar button {
+  :root.wt button.f-btn-soft,
+  :root.wt button.wt-btn-soft,
+  :root.wt button.f-btn-primary-sm,
+  :root.wt button.wt-btn-rose-sm,
+  :root.wt .f-seg button,
+  :root.wt .wt-seg button,
+  :root.wt .wt-seg-bar button {
     min-height: 44px;
   }
 }
