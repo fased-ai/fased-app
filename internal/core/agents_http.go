@@ -194,9 +194,9 @@ func (h *HTTPHandler) agentsAPI(w http.ResponseWriter, r *http.Request, token st
 		}
 	}
 	execCtx := r.Context()
-	if c.Action == "hyperliquid-submit" {
+	if c.Action == "hyperliquid-submit" && h.store.hyperliquidRequiresStepUp() {
 		var ok bool
-		execCtx, ok = h.requireStepUpIfOwnerAuthConfigured(w, r, token, "execute", "hyperliquid", false)
+		execCtx, ok = h.requireStepUpIfOwnerAuthConfigured(w, r, token, "execute", "hyperliquid", true)
 		if !ok {
 			return
 		}

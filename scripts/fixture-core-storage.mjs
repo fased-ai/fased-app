@@ -551,7 +551,7 @@ func ValidManagedAccountRef(r AccountRef) bool {
     );
   }
   storage["update/manifest.go"] = sha(await readFile(updateManifest));
-  for (const dir of ["internal/onchain"]) {
+  for (const dir of ["internal/onchain", "internal/netguard"]) {
     await mkdir(path.join(archivedRoot, dir), { recursive: true });
     for (const name of await readdir(dir)) {
       if (!name.endsWith(".go") || name.endsWith("_test.go")) continue;

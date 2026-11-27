@@ -37,6 +37,7 @@ type Client struct {
 	Token           string
 	CSRF            string
 	cookie          string
+	cookieName      string
 	localOwner      bool
 	remote          bool
 	custodyAccounts bool
@@ -123,7 +124,11 @@ func (c *Client) Do(ctx context.Context, method, route string, input, output any
 		req.Header.Set(custodyOnchainHeader, c.Endpoint.InstanceID)
 	}
 	if c.cookie != "" {
-		req.AddCookie(&http.Cookie{Name: sessionCookie, Value: c.cookie})
+		name := c.cookieName
+		if name == "" {
+			name = sessionCookie
+		}
+		req.AddCookie(&http.Cookie{Name: name, Value: c.cookie})
 	} else if c.Token != "" {
 		req.Header.Set("Authorization", "Bearer "+c.Token)
 	}
@@ -202,10 +207,12 @@ func (c *Client) authenticate(ctx context.Context, route string, credentials any
 	}
 	c.Token = result.SessionToken
 	c.cookie = ""
+	c.cookieName = ""
 	if c.Token == "" {
 		for _, ck := range response.Cookies() {
-			if ck.Name == sessionCookie && ck.Value != "" {
+			if (ck.Name == hostSessionCookie || ck.Name == sessionCookie) && ck.Value != "" {
 				c.cookie = ck.Value
+				c.cookieName = ck.Name
 				break
 			}
 		}

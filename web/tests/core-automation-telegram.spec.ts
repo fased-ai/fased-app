@@ -212,7 +212,7 @@ test("Event triggers, Telegram controller, Alerts widget, zero secret leakage, a
     .getByRole("button", { name: "Run command", exact: true })
     .click();
   await expect(tgCard.getByTestId("telegram-sim-result")).toContainText(
-    "Kill switch cleared",
+    "requires owner step-up in the local UI",
   );
 
   await tgCard

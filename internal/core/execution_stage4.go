@@ -395,6 +395,14 @@ func (server *Server) ConfigureTestnetExecution(ctx context.Context, cfg Testnet
 	return server.Store.ConfigureTestnetExecution(ctx, cfg)
 }
 
+func (s *Store) hyperliquidRequiresStepUp() bool {
+	if hyperliquidActivationEnabled || signer.HyperliquidActivationEnabled {
+		return true
+	}
+	rt := s.stage4Runtime()
+	return rt != nil && rt.profile == signer.ExecutionProfileMainnetCapped
+}
+
 func (s *Store) executionStatus(ctx context.Context) ExecutionStatusView {
 	view := ExecutionStatusView{
 		Profile:       signer.ExecutionProfileOff,

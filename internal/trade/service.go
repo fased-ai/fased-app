@@ -179,9 +179,9 @@ func (s *Service) SubmitOrder(ctx context.Context, rawReq OrderRequest) (OrderPl
 	if markPrice <= 0 {
 		markPrice = refPrice
 	}
-	// Never allow a caller-supplied low entryPrice to understate order notional relative to markPrice.
+	// Never allow a caller-supplied low entryPrice to understate live order notional relative to markPrice.
 	riskPrice := refPrice
-	if markPrice > riskPrice {
+	if req.ExecutionMode == ExecutionModeLive && markPrice > riskPrice {
 		riskPrice = markPrice
 	}
 	if req.Strategy == StrategyMarket && isFinitePositive(markPrice) {
