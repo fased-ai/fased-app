@@ -19,7 +19,7 @@ test("WCAG 2.1 AA, ARIA landmarks, contrast, and keyboard Escape focus return ho
   const routes = [
     { hash: "#overview", name: "Dashboard" },
     { hash: "#trade", name: "Trade" },
-    { hash: "#intel", name: "World Intel" },
+    { hash: "#news", name: "News" },
     { hash: "#lab", name: "Quant Lab" },
     { hash: "#agents/chat", name: "Chat" },
     { hash: "#agents/tasks", name: "Tasks" },

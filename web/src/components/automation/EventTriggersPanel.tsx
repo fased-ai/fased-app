@@ -416,7 +416,7 @@ export function EventTriggersPanel() {
                     }
                   }}
                 >
-                  <option value="news">{t("World Intel")}</option>
+                  <option value="news">{t("News")}</option>
                   <option value="price">{t("Price")}</option>
                   <option value="indicator">{t("Indicator")}</option>
                   <option value="drawing_breach">{t("Drawing breach")}</option>

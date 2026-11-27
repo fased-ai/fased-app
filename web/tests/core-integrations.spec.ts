@@ -36,16 +36,9 @@ test("Settings Diagnostics TypeSafe Jev & External MCP client flows, zero secret
   });
 
   const openDiagnostics = async () => {
-    if (isMobile) {
-      await page
-        .getByRole("button", { name: "Preferences", exact: true })
-        .click();
-    } else {
-      await page
-        .locator("#shell-rail")
-        .getByRole("button", { name: "Settings", exact: true })
-        .click();
-    }
+    await page
+      .getByRole("button", { name: "Preferences", exact: true })
+      .click();
     const dialog = page.getByRole("dialog", { name: /Settings \// });
     await expect(dialog).toBeVisible();
     await dialog

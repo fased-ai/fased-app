@@ -43,8 +43,8 @@
 }
 
 .wt .wen-toggle-pill.is-active {
-  background: var(--wt-accent-soft);
-  color: var(--wt-coral);
+  background: var(--wt-raised-2);
+  color: var(--wt-text);
 }
 
 .wt .wen-chart-panel {
@@ -122,6 +122,6 @@
 }
 
 .wt .wen-phase-pill.is-active {
-  background: var(--wt-accent-soft);
-  color: var(--wt-coral);
+  background: var(--wt-raised-2);
+  color: var(--wt-text);
 }

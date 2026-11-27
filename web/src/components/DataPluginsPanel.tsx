@@ -16,7 +16,7 @@ import { ToggleSwitch } from "./shared";
 
 const CATEGORIES: { id: PluginCategory; label: string }[] = [
   { id: "exchanges", label: "Exchanges" },
-  { id: "news", label: "News & Intel" },
+  { id: "news", label: "News" },
   { id: "predictions", label: "Predictions" },
   { id: "rpcs", label: "Chain RPCs" },
 ];

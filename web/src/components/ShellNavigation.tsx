@@ -15,14 +15,11 @@ import {
   Monitor,
   Moon,
   Newspaper,
-  PanelLeftClose,
-  PanelLeftOpen,
   PanelRightOpen,
   Pickaxe,
   Plug,
   Search,
   Server,
-  Settings,
   Settings2,
   Sun,
   TrendingUp,
@@ -34,18 +31,22 @@ import { useUI } from "../ui-preferences";
 import { Dialog } from "./shared";
 
 export const shellPages = [
-  { name: "Chat", path: "agents/chat", icon: MessageSquare },
-  { name: "Tasks", path: "agents/tasks", icon: Clock3 },
-  { name: "Agents", path: "agents/settings", icon: Bot },
+  { name: "Mine", path: "mine", icon: Pickaxe },
   { name: "Trade", path: "trade", icon: CandlestickChart },
-  { name: "News & Intel", path: "intel", icon: Globe2 },
+  { name: "Tasks", path: "agents/tasks", icon: Clock3 },
+  { name: "News", path: "intel", icon: Newspaper },
+  { name: "Chat", path: "agents/chat", icon: MessageSquare },
+  { name: "Dashboard", path: "overview", icon: Globe2 },
   { name: "Lab", path: "lab", icon: FlaskConical },
+  { name: "Agents", path: "agents/settings", icon: Bot },
+  { name: "Network", path: "network", icon: Globe2 },
   { name: "Memory", path: "agents/memory", icon: BookOpen },
-  { name: "News", path: "agents/news", icon: Newspaper },
+  { name: "Data & Feeds", path: "agents/news", icon: Newspaper },
   { name: "Mining", path: "terminals/satcoin", icon: Pickaxe },
   { name: "Onchain", path: "terminals/jupiter", icon: ArrowLeftRight },
   { name: "Hyperliquid", path: "terminals/hyperliquid", icon: TrendingUp },
 ] as const;
+
 export function visibleShellPaths(
   coreMode: string,
   capabilities:
@@ -80,15 +81,17 @@ export function ShellNavigation() {
     setProvidersOpen,
     openSettingsModal,
   } = useWorkspace();
-  const { preferences, resolvedTheme, update, t } = useUI();
+  const { resolvedTheme, update, t } = useUI();
   const [more, setMore] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
   const moreButton = useRef<HTMLButtonElement>(null),
     moreBox = useRef<HTMLDivElement>(null);
+
   useEffect(() => {
     setMore(false);
     setSearchOpen(false);
   }, [route]);
+
   useEffect(() => {
     if (!more) return;
     const pointer = (e: PointerEvent) => {
@@ -107,80 +110,67 @@ export function ShellNavigation() {
       document.removeEventListener("keydown", key);
     };
   }, [more]);
+
   function closeMore() {
     setMore(false);
     if (more) moreButton.current?.focus();
   }
+
   const visiblePages = visibleShellPaths(
     core.mode,
     core.capabilities,
     Boolean(agents.view?.wenMining),
   );
-  const railPages = visiblePages.filter(
-    (p) => p.path !== "agents/news" && p.path !== "agents/memory",
-  );
-  const links = (items: readonly (typeof shellPages)[number][], rail = false) =>
+
+  const links = (items: readonly (typeof shellPages)[number][]) =>
     items.map((p) => (
       <a
         key={p.path}
         href={`#${p.path}`}
         aria-current={route === p.path ? "page" : undefined}
-        aria-label={rail ? t(p.name) : undefined}
-        data-tooltip={rail ? t(p.name) : undefined}
         onClick={closeMore}
         className={
-          !rail
-            ? p.name === "Tasks" || p.name === "Agents"
-              ? "shell-overflow-route"
-              : ["Trade", "News & Intel", "Lab"].includes(p.name)
-                ? "shell-wide-overflow-route"
-                : undefined
-            : undefined
+          p.path === "agents/tasks"
+            ? "shell-overflow-route"
+            : ["mine", "trade", "intel"].includes(p.path)
+              ? "shell-wide-overflow-route"
+              : undefined
         }
       >
         <p.icon size={18} aria-hidden="true" />
-        {!rail && <span>{t(p.name)}</span>}
+        <span>{t(p.name)}</span>
       </a>
     ));
+
   const utility = (name: string, Icon: typeof Search, action: () => void) => (
     <button
       type="button"
       className="shell-icon"
       aria-label={t(name)}
-      aria-expanded={
-        name.endsWith("navigation rail") ? preferences.rail : undefined
-      }
-      aria-controls={
-        name.endsWith("navigation rail") ? "shell-rail" : undefined
-      }
       data-tooltip={t(name)}
       onClick={action}
     >
       <Icon size={18} aria-hidden="true" />
     </button>
   );
+
   return (
     <>
       <header className="shell-header">
-        {utility(
-          preferences.rail ? "Hide navigation rail" : "Show navigation rail",
-          preferences.rail ? PanelLeftClose : PanelLeftOpen,
-          () => update({ rail: !preferences.rail }),
-        )}
         <a className="shell-brand" href="#overview" aria-label="Fased">
-          <img src={logo} alt="" width="25" height="25" />
+          <img src={logo} alt="" width="24" height="24" />
           Fased
         </a>
         <nav className="shell-top-nav" aria-label={t("Main navigation")}>
-          {shellPages.slice(0, 6).map((p) => (
+          {shellPages.slice(0, 5).map((p) => (
             <a
               key={p.path}
               href={`#${p.path}`}
               aria-current={route === p.path ? "page" : undefined}
               className={
-                p.name === "Tasks" || p.name === "Agents"
+                p.path === "agents/tasks"
                   ? "shell-top-extra"
-                  : ["Trade", "News & Intel", "Lab"].includes(p.name)
+                  : ["mine", "trade", "intel"].includes(p.path)
                     ? "shell-top-extra shell-top-wide"
                     : undefined
               }
@@ -196,10 +186,8 @@ export function ShellNavigation() {
               aria-controls="shell-more"
               className="shell-more-toggle"
               data-active={
-                shellPages.slice(6).some((p) => p.path === route) ||
-                ["activity", "network", "settings", "providers"].includes(
-                  route,
-                ) ||
+                visiblePages.slice(5).some((p) => p.path === route) ||
+                ["activity", "settings", "providers"].includes(route) ||
                 route.startsWith("wallets/")
               }
               onClick={() => setMore(!more)}
@@ -213,12 +201,8 @@ export function ShellNavigation() {
                 className="shell-more"
                 aria-label={t("More pages")}
               >
-                {links(visiblePages.slice(1))}
+                {links(visiblePages.filter((p) => p.path !== "agents/chat"))}
                 <hr />
-                <a href="#network" onClick={closeMore}>
-                  <Globe2 size={18} />
-                  {t("Network")}
-                </a>
                 <a href="#activity" onClick={closeMore}>
                   <History size={18} />
                   {t("Activity")}
@@ -270,16 +254,23 @@ export function ShellNavigation() {
             )}
           </div>
         </nav>
-        <button className="shell-search" onClick={() => setSearchOpen(true)}>
-          <Search size={16} />
-          {t("Search Fased")}
-        </button>
         <div className="shell-tools">
           {(core.mode !== "ready" || agents.view?.aiFixtureAvailable) && (
             <span className="shell-demo">{t("Demo")}</span>
           )}
           <span className="shell-desktop-utility">
-            {utility("Wallets", Wallet, () => navigate("wallets/overview"))}
+            <button
+              type="button"
+              className="shell-wallets-pill"
+              aria-label={t("Wallets")}
+              onClick={() => navigate("wallets/overview")}
+            >
+              <Wallet size={15} aria-hidden="true" />
+              <span>{t("Wallets")}</span>
+            </button>
+          </span>
+          <span className="shell-desktop-utility">
+            {utility("Search Fased", Search, () => setSearchOpen(true))}
           </span>
           <span className="shell-desktop-utility">
             {utility(
@@ -299,6 +290,11 @@ export function ShellNavigation() {
             resolvedTheme === "dark" ? Sun : Moon,
             () =>
               update({ theme: resolvedTheme === "dark" ? "light" : "dark" }),
+          )}
+          {utility(
+            contextOpen ? "Close context panel" : "Open context panel",
+            PanelRightOpen,
+            () => setContextOpen(!contextOpen),
           )}
           {utility("Preferences", Settings2, () =>
             openSettingsModal("general"),
@@ -341,29 +337,6 @@ export function ShellNavigation() {
           )}
         </div>
       </header>
-      <nav
-        id="shell-rail"
-        className="shell-rail"
-        hidden={!preferences.rail}
-        aria-label={t("Page shortcuts")}
-      >
-        {links(railPages, true)}
-        <div className="shell-rail-bottom">
-          {utility(
-            contextOpen ? "Close context panel" : "Open context panel",
-            PanelRightOpen,
-            () => setContextOpen(!contextOpen),
-          )}
-          <a
-            href="#activity"
-            aria-label={t("Activity")}
-            data-tooltip={t("Activity")}
-          >
-            <History size={19} />
-          </a>
-          {utility("Settings", Settings, () => openSettingsModal("general"))}
-        </div>
-      </nav>
       {searchOpen && (
         <Dialog title={t("Search Fased")} onClose={() => setSearchOpen(false)}>
           <label className="shell-search-field">

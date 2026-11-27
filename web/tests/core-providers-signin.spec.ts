@@ -4699,16 +4699,7 @@ test("unified Settings Providers inline toggle and 3-step Add provider wizard wo
     await route.fulfill({ json: rootPayload() });
   });
 
-  if (isMobile) {
-    await page
-      .getByRole("button", { name: "Preferences", exact: true })
-      .click();
-  } else {
-    await page
-      .locator("#shell-rail")
-      .getByRole("button", { name: "Settings", exact: true })
-      .click();
-  }
+  await page.getByRole("button", { name: "Preferences", exact: true }).click();
 
   const settingsDialog = page.getByRole("dialog", { name: /Settings \// });
   await settingsDialog
@@ -4877,16 +4868,7 @@ test("Add provider wizard Step 3 renders Codex shadowHome and launchArgs and sho
     await route.fulfill({ json: rootPayload() });
   });
 
-  if (isMobile) {
-    await page
-      .getByRole("button", { name: "Preferences", exact: true })
-      .click();
-  } else {
-    await page
-      .locator("#shell-rail")
-      .getByRole("button", { name: "Settings", exact: true })
-      .click();
-  }
+  await page.getByRole("button", { name: "Preferences", exact: true }).click();
 
   const settingsDialog = page.getByRole("dialog", { name: /Settings \// });
   await settingsDialog
@@ -5019,16 +5001,7 @@ test("AddProviderWizard sends remote:true and accentColor on Remote OAuth sign-i
     });
   });
 
-  if (isMobile) {
-    await page
-      .getByRole("button", { name: "Preferences", exact: true })
-      .click();
-  } else {
-    await page
-      .locator("#shell-rail")
-      .getByRole("button", { name: "Settings", exact: true })
-      .click();
-  }
+  await page.getByRole("button", { name: "Preferences", exact: true }).click();
 
   const settingsDialog = page.getByRole("dialog", { name: /Settings \// });
   await settingsDialog

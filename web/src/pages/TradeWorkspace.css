@@ -216,9 +216,9 @@
   padding: 1px 6px;
   border-radius: 999px;
   font-size: 0.68rem;
-  background: color-mix(in srgb, var(--shell-primary) 18%, transparent);
-  border: 1px solid color-mix(in srgb, var(--shell-primary) 45%, transparent);
-  color: var(--wt-text);
+  background: var(--wt-raised);
+  border: 0;
+  color: var(--wt-text-2);
 }
 
 .wt-account-popover {
@@ -563,7 +563,7 @@
 }
 
 .trade-watchlist-items li.is-active {
-  background: color-mix(in srgb, var(--shell-primary) 12%, transparent);
+  background: var(--wt-raised);
   border-radius: var(--radius-xs);
 }
 
@@ -925,7 +925,7 @@
 
 .trade-tile-popover.is-list button.is-selected,
 .trade-tile-popover.is-list button:hover {
-  background: color-mix(in srgb, var(--shell-primary) 16%, transparent);
+  background: var(--wt-raised);
 }
 
 .trade-empty-cta {

@@ -42,7 +42,7 @@ const NetworkWorkspace = lazy(() =>
 );
 function WorkspaceShell() {
   const { t: uiText } = useUI();
-  const { preferences, t } = useUI();
+  const { t, resolvedTheme } = useUI();
   const {
     state,
     core,
@@ -76,8 +76,9 @@ function WorkspaceShell() {
   useEffect(() => {
     const labels: Record<string, string> = {
       overview: t("Dashboard"),
+      mine: t("Mine"),
       trade: t("Trade"),
-      intel: t("News & Intel"),
+      intel: t("News"),
       lab: t("Quant Lab"),
       network: t("Network"),
       agents: t("Agents"),
@@ -103,7 +104,8 @@ function WorkspaceShell() {
         {t("Skip to workspace")}
       </a>
       <div
-        className={`workspace-shell ${preferences.rail ? "rail-visible" : "rail-hidden"} ${contextOpen ? "context-visible" : ""}`}
+        className={`workspace-shell ${contextOpen ? "context-visible" : ""}`}
+        data-theme-mode={resolvedTheme}
       >
         <ShellNavigation />
         <div className="shell-body">
@@ -132,6 +134,17 @@ function WorkspaceShell() {
             )}
             {section === "overview" ? (
               <Overview />
+            ) : section === "mine" ? (
+              <section className="panel" aria-label={uiText("Mine")}>
+                <SectionHead
+                  title={uiText("Mine")}
+                  action={
+                    <a className="wt-btn-soft" href="#wallets/overview">
+                      {uiText("Wallets")}
+                    </a>
+                  }
+                />
+              </section>
             ) : section === "trade" ? (
               <Suspense fallback={<p role="status">{uiText("Loading")}</p>}>
                 <TradeWorkspace />

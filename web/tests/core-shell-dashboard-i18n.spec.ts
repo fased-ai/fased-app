@@ -162,7 +162,7 @@ test("existing pages localize controls and keep owner drafts records and Meteora
     expect(health.capabilities[key]).toBe(false);
   if (!isMobile)
     expect((await page.locator(".shell-header").boundingBox())!.height).toBe(
-      50,
+      56,
     );
 });
 
@@ -199,42 +199,19 @@ test("Meteora shell preserves drafts and records through navigation theme langua
   const message = page.getByLabel("Message", { exact: true });
   await message.fill("Do not translate or discard this unsent draft.");
   const before = await privateCLI(["agents"]);
-  const rail = page.getByRole("navigation", {
-    name: "Page shortcuts",
-    exact: true,
-  });
-  expect((await rail.textContent())?.trim()).toBe("");
-  for (const hidden of ["News", "Memory", "Mining", "Onchain", "Hyperliquid"]) {
-    await expect(
-      rail.getByRole("link", {
-        name: hidden,
-        exact: true,
-        includeHidden: true,
-      }),
-    ).toHaveCount(0);
-  }
-  await rail.getByRole("link", { name: "Agents", exact: true }).focus();
-  expect(
-    await rail
-      .getByRole("link", { name: "Agents", exact: true })
-      .evaluate((el) => getComputedStyle(el, "::after").opacity),
-  ).toBe("1");
-  await page
-    .getByRole("button", { name: "Hide navigation rail", exact: true })
-    .click();
-  await expect(rail).toBeHidden();
+  await expect(page.locator("#shell-rail")).toHaveCount(0);
   await page.getByRole("button", { name: "More", exact: true }).click();
   const more = page.getByRole("navigation", {
     name: "More pages",
     exact: true,
   });
-  for (const hidden of ["Mining", "Onchain", "Hyperliquid"]) {
+  for (const hidden of ["Onchain", "Hyperliquid"]) {
     await expect(
       more.getByRole("link", { name: hidden, exact: true }),
     ).toHaveCount(0);
   }
   await expect(
-    more.getByRole("link", { name: "News", exact: true }),
+    more.getByRole("link", { name: "Data & Feeds", exact: true }),
   ).toBeVisible();
   await expect(
     more.getByRole("link", { name: "Memory", exact: true }),
@@ -255,7 +232,7 @@ test("Meteora shell preserves drafts and records through navigation theme langua
     page.getByRole("button", { name: "More", exact: true }),
   ).toBeFocused();
   await page.getByRole("button", { name: "More", exact: true }).click();
-  await more.getByRole("link", { name: "News", exact: true }).click();
+  await more.getByRole("link", { name: "Data & Feeds", exact: true }).click();
   await page
     .getByRole("navigation", { name: "Main navigation", exact: true })
     .getByRole("link", { name: "Chat", exact: true })
@@ -325,10 +302,7 @@ test("Meteora shell preserves drafts and records through navigation theme langua
   await expect(message).toHaveValue(
     "Do not translate or discard this unsent draft.",
   );
-  await page
-    .getByRole("button", { name: "Show navigation rail", exact: true })
-    .click();
-  await expect(rail).toBeVisible();
+  await expect(page.locator("#shell-rail")).toHaveCount(0);
   await captureScreenshot(page, {
     path: `.evidence/shell-dark-${test.info().project.name}.png`,
     fullPage: false,
@@ -344,14 +318,14 @@ test("Meteora shell preserves drafts and records through navigation theme langua
   await start(false, address.host);
   await page.reload();
   await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
-  await expect(rail).toBeVisible();
+  await expect(page.locator("#shell-rail")).toHaveCount(0);
   await expect(page.getByLabel("Agent", { exact: true })).toHaveValue(
     before.profileId,
   );
   expect(await privateCLI(["agents"])).toEqual(before);
   if (!isMobile)
     expect((await page.locator(".shell-header").boundingBox())!.height).toBe(
-      50,
+      56,
     );
   const health = await (await page.request.get(url + "/api/v1/health")).json();
   expect(health.capabilities.aiConnections).toBe(true);
@@ -557,7 +531,7 @@ test("R1 workspace uses a compact branded shell and on-demand chat task memory c
   if (!isMobile)
     expect(
       (await page.locator(".shell-header").boundingBox())!.height,
-    ).toBeLessThanOrEqual(52);
+    ).toBeLessThanOrEqual(56);
   const health = await (await page.request.get(url + "/api/v1/health")).json();
   for (const key of [
     "aiConnections",
@@ -1146,14 +1120,7 @@ test("Dashboard drag and resize autosave without a duplicate home rail shortcut"
   );
   await expect(tasks).toHaveClass(/size-tall/);
   expect((await privateCLI(["agents"])).revision).toBe(original.revision);
-  const rail = page.locator("#shell-rail");
-  await expect(
-    rail.getByRole("link", {
-      name: "Dashboard",
-      exact: true,
-      includeHidden: true,
-    }),
-  ).toHaveCount(0);
+  await expect(page.locator("#shell-rail")).toHaveCount(0);
   await page
     .getByRole("navigation", { name: "Main navigation", exact: true })
     .getByRole("link", { name: "Chat", exact: true })
@@ -1185,7 +1152,7 @@ test("Dashboard drag and resize autosave without a duplicate home rail shortcut"
   expect(geometry.surface).toBe("rgb(15, 18, 24)");
   expect(geometry.borderWidth).toBe("0px");
   if (!isMobile) {
-    expect(geometry.headerHeight).toBe(50);
+    expect(geometry.headerHeight).toBe(56);
     expect(geometry.navFontSize).toBe("14px");
   }
   await mkdir(resolve(".evidence/b02-workspace"), { recursive: true });
@@ -1988,15 +1955,7 @@ test("unified bottom-left Settings modal switches tabs cleanly without overflow"
     "rgb(10, 12, 16)",
   );
 
-  if (isMobile) {
-    await page
-      .getByRole("button", { name: "Preferences", exact: true })
-      .click();
-  } else {
-    const rail = page.locator("#shell-rail");
-    expect((await rail.textContent())?.trim()).toBe("");
-    await rail.getByRole("button", { name: "Settings", exact: true }).click();
-  }
+  await page.getByRole("button", { name: "Preferences", exact: true }).click();
 
   const dialog = page.getByRole("dialog", {
     name: /Settings \//,

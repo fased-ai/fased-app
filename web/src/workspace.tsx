@@ -120,10 +120,11 @@ function getRoute() {
     chat: "agents/chat",
     tasks: "agents/tasks",
     agents: "agents/settings",
-    news: "agents/news",
+    news: "intel",
     memory: "agents/memory",
     "agents/bots": "agents/tasks",
     terminals: "terminals/jupiter",
+    mine: "mine",
     mining: "terminals/satcoin",
     onchain: "terminals/jupiter",
     hyperliquid: "terminals/hyperliquid",
@@ -140,7 +141,7 @@ function getRoute() {
   const route = aliases[raw] ?? raw;
   if (route === "terminals/asset" || route === "terminals/loss")
     return "terminals/satcoin";
-  return /^(overview|trade|intel|lab(\/(scripts|desk|journal))?|network|activity|settings|providers|terminals(\/(satcoin|hyperliquid|jupiter))?|agents\/(chat|review|bots|tasks|news|memory|settings)|wallets\/(overview|accounts|permissions|security|activity))$/.test(
+  return /^(overview|mine|trade|intel|lab(\/(scripts|desk|journal))?|network|activity|settings|providers|terminals(\/(satcoin|hyperliquid|jupiter))?|agents\/(chat|review|bots|tasks|news|memory|settings)|wallets\/(overview|accounts|permissions|security|activity))$/.test(
     route,
   )
     ? route
@@ -521,21 +522,19 @@ function useWorkspaceState() {
       [
         ...[
           ["Dashboard", "overview"],
+          ["Mine", "mine"],
           ["Chat", "agents/chat"],
           ["Tasks", "agents/tasks"],
           ["Agents", "agents/settings"],
           ["Trade", "trade"],
-          ["News & Intel", "intel"],
+          ["News", "intel"],
           ["Lab", "lab"],
           ["Trading Desk", "lab/desk"],
-          ["News", "agents/news"],
+          ["Data & Feeds", "agents/news"],
           ["Wallets", "wallets/overview"],
           ["Settings", "settings"],
           ["Activity", "activity"],
         ].map(([title, path]) => ({ title, path })),
-        ...(core.mode !== "ready" || Boolean(agents.view?.wenMining)
-          ? [{ title: "Mining", path: "terminals/satcoin" }]
-          : []),
         { title: "Onchain", path: "terminals/jupiter" },
         { title: "Hyperliquid", path: "terminals/hyperliquid" },
         { title: "Memory", path: "agents/memory" },

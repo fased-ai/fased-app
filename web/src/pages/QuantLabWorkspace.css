@@ -174,7 +174,7 @@
 }
 
 .lab-row-card.is-selected {
-  box-shadow: inset 0 0 0 1px var(--wt-accent-border);
+  box-shadow: none;
   background: var(--wt-raised-2);
 }
 
@@ -389,7 +389,7 @@
 }
 
 .lab-seat-card.has-artifact {
-  box-shadow: inset 0 0 0 1px var(--wt-accent-border);
+  box-shadow: none;
   background: var(--wt-raised-2);
 }
 

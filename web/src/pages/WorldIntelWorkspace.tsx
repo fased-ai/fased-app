@@ -1,5 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
-import { WorldMapView } from "../components/intel/WorldMapView";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   CandlestickChart,
   ExternalLink,
@@ -21,6 +20,7 @@ import {
   formatCompactUSD,
   formatProbPct,
   INTEL_CATEGORIES,
+  INTEL_REGIONS,
   syncIntelSources,
   type IntelEvent,
   type IntelMapSummary,
@@ -75,7 +75,7 @@ export function WorldIntelWorkspace() {
         (plugRes.summary?.activePredictions ?? 0);
       setActiveFeedCount(count);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to load intel");
+      setError(err instanceof Error ? err.message : "Failed to load news");
     }
   }, [core.mode, core.request, category, debouncedQuery]);
 
@@ -132,20 +132,48 @@ export function WorldIntelWorkspace() {
     return t("Neutral");
   }
 
-  const filteredEvents = rawEvents.filter((ev) => {
-    if (region && ev.region !== region) return false;
-    if (query.trim()) {
-      const qLower = query.trim().toLowerCase();
-      const hay =
-        `${ev.title} ${ev.summary ?? ""} ${ev.sourceName} ${(ev.tickers ?? []).join(" ")}`.toLowerCase();
-      if (!hay.includes(qLower)) return false;
-    }
-    return true;
-  });
-
-  const macroAndFilings = filteredEvents.filter(
-    (ev) => ev.category === "macro" || ev.category === "policy",
+  const filteredEvents = useMemo(
+    () =>
+      rawEvents.filter((ev) => {
+        if (region && ev.region !== region) return false;
+        if (query.trim()) {
+          const qLower = query.trim().toLowerCase();
+          const hay =
+            `${ev.title} ${ev.summary ?? ""} ${ev.sourceName} ${(ev.tickers ?? []).join(" ")}`.toLowerCase();
+          if (!hay.includes(qLower)) return false;
+        }
+        return true;
+      }),
+    [rawEvents, region, query],
   );
+
+  const macroAndFilings = useMemo(
+    () =>
+      filteredEvents.filter(
+        (ev) => ev.category === "macro" || ev.category === "policy",
+      ),
+    [filteredEvents],
+  );
+
+  const sentimentPulse = useMemo(() => {
+    let bullish = 0;
+    let bearish = 0;
+    let neutral = 0;
+    for (const ev of filteredEvents) {
+      if (ev.sentiment === "bullish") bullish += 1;
+      else if (ev.sentiment === "bearish") bearish += 1;
+      else neutral += 1;
+    }
+    const total = Math.max(1, filteredEvents.length);
+    return {
+      bullish,
+      neutral,
+      bearish,
+      bullPct: Math.round((bullish / total) * 100),
+      neutPct: Math.round((neutral / total) * 100),
+      bearPct: Math.round((bearish / total) * 100),
+    };
+  }, [filteredEvents]);
 
   function openTickerChart(symbol: string) {
     try {
@@ -210,9 +238,9 @@ export function WorldIntelWorkspace() {
     return (
       <section
         className="intel-workspace wt-intel-shell"
-        aria-label={t("World Intel")}
+        aria-label={t("News")}
       >
-        <h1 className="sr-only">{t("World Intel")}</h1>
+        <h1 className="sr-only">{t("News")}</h1>
         <div className="intel-empty-cta">
           <button
             type="button"
@@ -231,17 +259,14 @@ export function WorldIntelWorkspace() {
   const regionEntries = Object.entries(mapSummary?.regionCounts ?? {});
 
   return (
-    <section
-      className="intel-workspace wt-intel-shell"
-      aria-label={t("World Intel")}
-    >
+    <section className="intel-workspace wt-intel-shell" aria-label={t("News")}>
       {error && <p role="alert">{error}</p>}
 
       <div className="wt-intel-grid">
         <aside className="wt-intel-left">
           <div className="wt-wpanel">
             <div className="wt-intel-head">
-              <h1>{t("World Intel")}</h1>
+              <h1>{t("News")}</h1>
               <div className="wt-intel-head-actions">
                 <button
                   type="button"
@@ -309,28 +334,59 @@ export function WorldIntelWorkspace() {
                   key={c.id || "all"}
                   type="button"
                   className={`intel-filter-pill ${category === c.id ? "is-selected" : ""}`}
+                  aria-pressed={category === c.id}
                   onClick={() => setCategory(c.id)}
                 >
                   {t(c.label)}
                 </button>
               ))}
             </div>
+
+            <div className="wt-news-rail-section">
+              <div className="wt-news-rail-label">{t("Regions")}</div>
+              <div
+                className="wt-chip-group"
+                role="group"
+                aria-label={t("Regions")}
+              >
+                {INTEL_REGIONS.map((r) => {
+                  const count =
+                    r.id === ""
+                      ? rawEvents.length
+                      : (mapSummary?.regionCounts?.[r.id] ?? 0);
+                  return (
+                    <button
+                      key={r.id || "all-regions"}
+                      type="button"
+                      className={`intel-filter-pill ${region === r.id ? "is-selected" : ""}`}
+                      aria-pressed={region === r.id}
+                      onClick={() => setRegion(r.id)}
+                    >
+                      <span>{r.id === "" ? t(r.label) : r.label}</span>
+                      {count > 0 && (
+                        <span className="intel-pill-count mono">{count}</span>
+                      )}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            <div className="wt-news-rail-section wt-source-health">
+              <span className="wt-news-rail-label">{t("Source health")}</span>
+              <button
+                type="button"
+                className="wt-btn-soft"
+                onClick={() => openSettingsModal("data")}
+              >
+                <span className="mono">{activeFeedCount ?? 0}</span>
+                <span>{t("Sources")}</span>
+              </button>
+            </div>
           </div>
         </aside>
 
         <div className="wt-intel-center">
-          <div className="wt-wpanel">
-            <WorldMapView
-              events={filteredEvents}
-              clusters={mapSummary?.clusters ?? []}
-              regionCounts={mapSummary?.regionCounts ?? {}}
-              selectedRegion={region}
-              selectedEventId={selectedEvent?.id ?? ""}
-              onSelectRegion={setRegion}
-              onSelectEvent={setSelectedEvent}
-            />
-          </div>
-
           <div className="wt-wpanel">
             <div className="wt-tabs-underline" role="tablist">
               <button
@@ -363,6 +419,24 @@ export function WorldIntelWorkspace() {
               </button>
             </div>
 
+            {(mapSummary?.clusters?.length ?? 0) > 0 && (
+              <div className="intel-clusters-strip">
+                {mapSummary!.clusters.slice(0, 6).map((c) => (
+                  <button
+                    key={c.id}
+                    type="button"
+                    className="intel-cluster-chip"
+                    onClick={() => setQuery(c.tickers?.[0] ?? c.topic)}
+                  >
+                    <span>{c.topic}</span>
+                    <span className="mono intel-pill-count">
+                      {c.eventCount}
+                    </span>
+                  </button>
+                ))}
+              </div>
+            )}
+
             <div className="wt-hairline-table" data-testid="intel-events-list">
               {shownRows.slice(0, 40).map((ev) => (
                 <div
@@ -384,6 +458,11 @@ export function WorldIntelWorkspace() {
                         {`${Math.round(ev.urgency * 100)}%`}
                       </span>
                       <span className="pill">{ev.sourceName}</span>
+                      {ev.region && (
+                        <span className="pill mono">
+                          {ev.region.toUpperCase()}
+                        </span>
+                      )}
                       {ev.tickers?.map((tk) => (
                         <span key={tk} className="pill mono">
                           {tk}
@@ -396,6 +475,7 @@ export function WorldIntelWorkspace() {
                       type="button"
                       className="icon-button"
                       title={t("Ask in Chat")}
+                      aria-label={t("Ask in Chat")}
                       onClick={() => askAgent(ev)}
                     >
                       <MessageSquare size={13} aria-hidden="true" />
@@ -404,6 +484,7 @@ export function WorldIntelWorkspace() {
                       type="button"
                       className="icon-button"
                       title={t("Create trigger")}
+                      aria-label={t("Create trigger")}
                       onClick={() => createTriggerFromEvent(ev)}
                     >
                       <Zap size={13} aria-hidden="true" />
@@ -413,6 +494,7 @@ export function WorldIntelWorkspace() {
                         type="button"
                         className="icon-button"
                         title={t("Open chart")}
+                        aria-label={t("Open chart")}
                         onClick={() => openTickerChart(ev.tickers![0])}
                       >
                         <CandlestickChart size={13} aria-hidden="true" />
@@ -425,6 +507,7 @@ export function WorldIntelWorkspace() {
                         rel="noopener noreferrer"
                         className="icon-button"
                         title={t("Open")}
+                        aria-label={t("Open")}
                       >
                         <ExternalLink size={13} aria-hidden="true" />
                       </a>
@@ -454,6 +537,9 @@ export function WorldIntelWorkspace() {
                   </span>
                 </div>
               </div>
+              {selectedEvent.summary && (
+                <p className="wt-news-summary">{selectedEvent.summary}</p>
+              )}
               <div className="wt-inspector-actions">
                 <button
                   type="button"
@@ -467,7 +553,7 @@ export function WorldIntelWorkspace() {
                   {selectedEvent.tickers?.[0] && (
                     <button
                       type="button"
-                      className="trade-mini-btn"
+                      className="wt-btn-soft"
                       onClick={() => openTickerChart(selectedEvent.tickers![0])}
                     >
                       <CandlestickChart size={13} aria-hidden="true" />
@@ -476,7 +562,7 @@ export function WorldIntelWorkspace() {
                   )}
                   <button
                     type="button"
-                    className="trade-mini-btn"
+                    className="wt-btn-soft"
                     onClick={() => createTriggerFromEvent(selectedEvent)}
                   >
                     <Zap size={13} aria-hidden="true" />
@@ -486,6 +572,42 @@ export function WorldIntelWorkspace() {
               </div>
             </article>
           )}
+
+          <div className="wt-wpanel" data-testid="news-sentiment-pulse">
+            <h2 className="wt-rail-title">{t("Sentiment Pulse")}</h2>
+            <div className="wt-sentiment-bars">
+              <div className="wt-sentiment-row">
+                <span>{t("Bullish")}</span>
+                <div className="intel-prob-bar">
+                  <div
+                    className="intel-prob-fill is-bull"
+                    style={{ width: `${sentimentPulse.bullPct}%` }}
+                  />
+                </div>
+                <strong className="mono">{sentimentPulse.bullish}</strong>
+              </div>
+              <div className="wt-sentiment-row">
+                <span>{t("Neutral")}</span>
+                <div className="intel-prob-bar">
+                  <div
+                    className="intel-prob-fill is-neutral"
+                    style={{ width: `${sentimentPulse.neutPct}%` }}
+                  />
+                </div>
+                <strong className="mono">{sentimentPulse.neutral}</strong>
+              </div>
+              <div className="wt-sentiment-row">
+                <span>{t("Bearish")}</span>
+                <div className="intel-prob-bar">
+                  <div
+                    className="intel-prob-fill is-bear"
+                    style={{ width: `${sentimentPulse.bearPct}%` }}
+                  />
+                </div>
+                <strong className="mono">{sentimentPulse.bearish}</strong>
+              </div>
+            </div>
+          </div>
 
           <div className="wt-wpanel">
             <h2 className="wt-rail-title">{t("Prediction Markets")}</h2>

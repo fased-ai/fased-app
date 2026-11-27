@@ -406,6 +406,7 @@ test("deferred trading pages contain no imitation controls and make no remote re
     window.location.hash = "terminals/asset";
   });
   await expect(page).toHaveURL(/#terminals\/satcoin$/);
+  await page.getByRole("button", { name: "More", exact: true }).click();
   await page.getByRole("link", { name: "Hyperliquid", exact: true }).click();
   await expect(page).toHaveURL(/#terminals\/hyperliquid$/);
   await expect(
@@ -419,6 +420,7 @@ test("deferred trading pages contain no imitation controls and make no remote re
   await expect(
     page.getByRole("heading", { name: "Mining", exact: true }),
   ).toBeVisible();
+  await page.getByRole("button", { name: "More", exact: true }).click();
   await page.getByRole("link", { name: "Onchain", exact: true }).click();
   await expect(
     page.getByRole("button", { name: "Quote", exact: true }),
