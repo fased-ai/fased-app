@@ -577,6 +577,7 @@ export function MineWorkspace() {
           walletId: selectedWalletId,
           maxPerTxLamports: perRoundLamports,
           maxDailyLamports: dailyLamports,
+          confirmLoosen: true,
           expectedPolicyHash: currentWallet?.policy.policyHash,
           mining: {
             cluster: "devnet",

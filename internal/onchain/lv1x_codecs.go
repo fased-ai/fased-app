@@ -595,6 +595,74 @@ func DecodeLV1XRound(data []byte) (LV1XRoundAccount, error) {
 	return out, r.done()
 }
 
+// LV1XRoundShardAccount represents a sharded round shard PDA (192 bytes, magic "LV1SHRD!").
+type LV1XRoundShardAccount struct {
+	Ledger         string
+	RentPayer      string
+	Round          string
+	Slot           uint64
+	ShardID        uint8
+	Count          uint32
+	AcceptedStake  uint64
+	Merged         bool
+	ScannedPages   uint32
+	AllocatedPages uint32
+	ClosedPages    uint32
+}
+
+// DecodeLV1XRoundShard decodes a canonical LV1X RoundShard frame.
+func DecodeLV1XRoundShard(data []byte) (LV1XRoundShardAccount, error) {
+	r, err := readLV1XFrame(data, LV1XMagicRoundShard, LV1XSpaceRoundShard)
+	if err != nil {
+		return LV1XRoundShardAccount{}, err
+	}
+	var out LV1XRoundShardAccount
+	readKey := func() (string, error) {
+		k, e := r.key()
+		if e != nil {
+			return "", e
+		}
+		return Base58(k[:]), nil
+	}
+	if out.Ledger, err = readKey(); err != nil {
+		return out, err
+	}
+	if out.RentPayer, err = readKey(); err != nil {
+		return out, err
+	}
+	if out.Round, err = readKey(); err != nil {
+		return out, err
+	}
+	if out.Slot, err = r.u64(); err != nil {
+		return out, err
+	}
+	if out.ShardID, err = r.u8(); err != nil {
+		return out, err
+	}
+	if int(out.ShardID) >= LV1XMaxShards {
+		return out, errors.New("invalid RoundShard shardId")
+	}
+	if out.Count, err = r.u32(); err != nil {
+		return out, err
+	}
+	if out.AcceptedStake, err = r.u64(); err != nil {
+		return out, err
+	}
+	if out.Merged, err = r.bool(); err != nil {
+		return out, err
+	}
+	if out.ScannedPages, err = r.u32(); err != nil {
+		return out, err
+	}
+	if out.AllocatedPages, err = r.u32(); err != nil {
+		return out, err
+	}
+	if out.ClosedPages, err = r.u32(); err != nil {
+		return out, err
+	}
+	return out, r.done()
+}
+
 type LV1XPageRow struct {
 	Owner             string
 	Nonce             uint64

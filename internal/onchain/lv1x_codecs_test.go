@@ -104,4 +104,23 @@ func TestLV1XAccountCodecsAndBootstrapVesting(t *testing.T) {
 	if got := LV1XVestedBootstrapSat(10_000, 3, 1000, 1000, 1000, 2500); got != 10_000 {
 		t.Fatalf("draining phase vesting expected 10000, got %d", got)
 	}
+
+	// 5. RoundShard round-trip decoding.
+	var shBody []byte
+	shBody = append(shBody, k1[:]...)
+	shBody = append(shBody, k2[:]...)
+	shBody = append(shBody, k3[:]...)
+	shBody = append(shBody, u64LEBytes(21)...)
+	shBody = append(shBody, 2)
+	shBody = append(shBody, u32LEBytes(7)...)
+	shBody = append(shBody, u64LEBytes(50_000_000)...)
+	shBody = append(shBody, 0)
+	shBody = append(shBody, u32LEBytes(0)...)
+	shBody = append(shBody, u32LEBytes(0)...)
+	shBody = append(shBody, u32LEBytes(0)...)
+	shFrame, _ := writeLV1XFrame(LV1XMagicRoundShard, shBody, LV1XSpaceRoundShard)
+	shDec, err := DecodeLV1XRoundShard(shFrame)
+	if err != nil || shDec.Slot != 21 || shDec.ShardID != 2 || shDec.Count != 7 || shDec.AcceptedStake != 50_000_000 {
+		t.Fatalf("DecodeLV1XRoundShard: %+v err=%v", shDec, err)
+	}
 }

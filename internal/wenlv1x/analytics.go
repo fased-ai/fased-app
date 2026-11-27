@@ -5,6 +5,7 @@ import (
 	"math"
 	"strings"
 
+	"github.com/fased-ai/fased-app/internal/custody"
 	"github.com/fased-ai/fased-app/internal/onchain"
 )
 
@@ -38,8 +39,8 @@ func (e *Engine) resolveWalletPublicKey(ctx context.Context, walletID string) st
 func (e *Engine) ProtocolStats(ctx context.Context, cluster string) (ProtocolStats, error) {
 	c := normalizeCluster(cluster)
 	nowSec := e.now().UTC().Unix()
-	prog := onchain.LV1XDevnetProgramID
-	ledger := onchain.LV1XDevnetLedgerID
+	prog := custody.EffectiveDevnetProgramID()
+	ledger := custody.EffectiveDevnetLedgerID()
 	rtAddr, _ := onchain.LV1XRuntimePDA(prog, ledger)
 	mintAddr, _ := onchain.LV1XMintPDA(prog, ledger)
 	stAddr, _ := onchain.LV1XStakingStatePDA(prog, ledger)
@@ -301,8 +302,8 @@ func (e *Engine) Portfolio(ctx context.Context, cluster, walletID string) (Portf
 func (e *Engine) StakingOverview(ctx context.Context, cluster, walletID string) (StakingOverviewResponse, error) {
 	c := normalizeCluster(cluster)
 	nowSec := e.now().UTC().Unix()
-	prog := onchain.LV1XDevnetProgramID
-	ledger := onchain.LV1XDevnetLedgerID
+	prog := custody.EffectiveDevnetProgramID()
+	ledger := custody.EffectiveDevnetLedgerID()
 	stAddr, _ := onchain.LV1XStakingStatePDA(prog, ledger)
 	pub := e.resolveWalletPublicKey(ctx, walletID)
 	var posAddr string

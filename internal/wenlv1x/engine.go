@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -234,11 +235,39 @@ func (e *Engine) seedInitialStreakIfEmpty(ctx context.Context) {
 	}
 }
 
+func (e *Engine) liveBTCPrices(ctx context.Context) (openPrice float64, markPrice float64, moveBps int, ok bool) {
+	if e.candleProvider == nil || e.fixture {
+		return 0, 0, 0, false
+	}
+	bars, _, err := e.candleProvider(ctx, "10m", 2)
+	if err != nil || len(bars) == 0 {
+		bars, _, err = e.candleProvider(ctx, "1m", 10)
+	}
+	if err != nil || len(bars) == 0 {
+		return 0, 0, 0, false
+	}
+	latest := bars[len(bars)-1]
+	openP := latest.Open
+	markP := latest.Close
+	if openP <= 0 || markP <= 0 {
+		return 0, 0, 0, false
+	}
+	bps := int(math.Round(((markP - openP) / openP) * 10000.0))
+	return math.Round(openP*100) / 100, math.Round(markP*100) / 100, bps, true
+}
+
 func (e *Engine) CurrentRound(ctx context.Context, cluster string) RoundTelemetry {
 	c := normalizeCluster(cluster)
 	now := e.now().UTC().Unix()
-	slot := uint64(now / onchain.LV1XRoundIntervalSec)
-	endsAt := int64(slot+1) * onchain.LV1XRoundIntervalSec
+
+	snap := e.readSnapshot(ctx, c, "")
+	prog := nonEmptyStr(snap.ProgramID, custody.EffectiveDevnetProgramID())
+	ledger := nonEmptyStr(snap.LedgerID, custody.EffectiveDevnetLedgerID())
+	slot := snap.RoundSlot
+	endsAt := snap.EndsAt
+	if endsAt == 0 {
+		slot, endsAt = deriveLV1XSlot(now, snap.Runtime)
+	}
 	rem := max(0, endsAt-now)
 
 	phase := "commit"
@@ -246,12 +275,20 @@ func (e *Engine) CurrentRound(ctx context.Context, cluster string) RoundTelemetr
 		phase = "reveal"
 	}
 
-	snap := e.readSnapshot(ctx, c, "")
 	source := snap.Source
 	if source == "" {
 		source = "simulation"
 	}
 	bpfVerified := snap.ProgramLive && c == "devnet"
+
+	openPrice := 94250.0
+	markPrice := 94265.0
+	moveBps := 2
+	if liveOpen, liveMark, liveBps, ok := e.liveBTCPrices(ctx); ok {
+		openPrice = liveOpen
+		markPrice = liveMark
+		moveBps = liveBps
+	}
 
 	crowdPool := [5]float64{0.34, 0.58, 0.92, 0.64, 0.38}
 	modelProb := [5]float64{0.14, 0.22, 0.30, 0.21, 0.13}
@@ -304,15 +341,15 @@ func (e *Engine) CurrentRound(ctx context.Context, cluster string) RoundTelemetr
 
 	return RoundTelemetry{
 		Cluster:        c,
-		ProgramID:      onchain.LV1XDevnetProgramID,
-		LedgerID:       onchain.LV1XDevnetLedgerID,
+		ProgramID:      prog,
+		LedgerID:       ledger,
 		RoundSlot:      slot,
 		Phase:          phase,
 		EndsAt:         endsAt,
 		RemainingSec:   rem,
-		OpenPriceUSD:   94250.0,
-		MarkPriceUSD:   94265.0,
-		MoveBps:        2,
+		OpenPriceUSD:   openPrice,
+		MarkPriceUSD:   markPrice,
+		MoveBps:        moveBps,
 		InnerBps:       innerBps,
 		OuterBps:       outerBps,
 		TotalPoolSOL:   totalPool,
@@ -530,7 +567,34 @@ func (e *Engine) SubmitCommit(ctx context.Context, req CommitRequest) (custody.W
 		return custody.WalletReview{}, nil, errors.New("custody backend unavailable")
 	}
 	round := e.CurrentRound(ctx, c)
+	snap := e.readSnapshot(ctx, c, "")
 	preview := e.PreviewCommit(ctx, req)
+
+	shardID := req.ShardID
+	var entryIndex uint32
+	if snap.Round != nil {
+		if snap.Round.ShardCount == 0 {
+			shardID = onchain.LV1XUnshardedShardID
+			entryIndex = snap.Round.Count
+		} else {
+			if shardID >= snap.Round.ShardCount {
+				shardID = shardID % snap.Round.ShardCount
+			}
+			if snap.Shard != nil && snap.Shard.ShardID == shardID {
+				entryIndex = snap.Shard.Count
+			}
+		}
+	}
+	nonce := req.Nonce
+	if nonce == 0 {
+		var seq int64
+		_ = e.db.QueryRowContext(
+			ctx,
+			`SELECT COUNT(*) FROM lv1x_entries WHERE wallet_id = ? AND round_slot = ? AND kind = 'commit'`,
+			req.WalletID, int64(round.RoundSlot),
+		).Scan(&seq)
+		nonce = uint64(seq + 1)
+	}
 
 	saltHex := strings.TrimSpace(req.SaltHex)
 	if saltHex == "" {
@@ -547,11 +611,14 @@ func (e *Engine) SubmitCommit(ctx context.Context, req CommitRequest) (custody.W
 		Venue:       "wen-mining",
 		MiningLV1X: &custody.MiningLV1XRequest{
 			Cluster:        c,
-			ProgramID:      onchain.LV1XDevnetProgramID,
-			LedgerID:       onchain.LV1XDevnetLedgerID,
+			ProgramID:      round.ProgramID,
+			LedgerID:       round.LedgerID,
 			RoundSlot:      round.RoundSlot,
-			ShardID:        req.ShardID,
-			Nonce:          req.Nonce,
+			ShardID:        shardID,
+			EntryIndex:     entryIndex,
+			Page:           entryIndex / onchain.LV1XPageEntries,
+			EntryRow:       uint8(entryIndex % onchain.LV1XPageEntries),
+			Nonce:          nonce,
 			Selection:      preview.DominantBucket,
 			AmountLamports: preview.AmountLamports,
 			SaltHex:        saltHex,
@@ -570,7 +637,7 @@ func (e *Engine) SubmitCommit(ctx context.Context, req CommitRequest) (custody.W
 	}
 	_, _ = e.db.ExecContext(ctx, `UPDATE lv1x_streak SET user_staked = 1 WHERE round_slot = ?`, int64(round.RoundSlot))
 	sel := preview.DominantBucket
-	e.recordEntry(ctx, req.WalletID, c, round.RoundSlot, req.ShardID, 0, 0, "commit", &sel, CanonicalPresetID(req.StrategyID), preview.AmountSOL, 0, 0, saltHex, entry.TxSignature, entry.State)
+	e.recordEntry(ctx, req.WalletID, c, round.RoundSlot, shardID, entryIndex/onchain.LV1XPageEntries, uint8(entryIndex%onchain.LV1XPageEntries), "commit", &sel, CanonicalPresetID(req.StrategyID), preview.AmountSOL, 0, 0, saltHex, entry.TxSignature, entry.State)
 	e.publish(MiningEvent{Event: "commit.submitted", Cluster: c, RoundSlot: round.RoundSlot})
 	return rev, &entry, nil
 }
@@ -591,8 +658,8 @@ func (e *Engine) SubmitReveal(ctx context.Context, req RevealRequest) (custody.W
 		Venue:       "wen-mining",
 		MiningLV1X: &custody.MiningLV1XRequest{
 			Cluster:   c,
-			ProgramID: onchain.LV1XDevnetProgramID,
-			LedgerID:  onchain.LV1XDevnetLedgerID,
+			ProgramID: custody.EffectiveDevnetProgramID(),
+			LedgerID:  custody.EffectiveDevnetLedgerID(),
 			RoundSlot: req.RoundSlot,
 			ShardID:   req.ShardID,
 			Page:      req.Page,
@@ -640,8 +707,8 @@ func (e *Engine) SubmitClaim(ctx context.Context, req ClaimRequest) (custody.Wal
 		Venue:       "wen-mining",
 		MiningLV1X: &custody.MiningLV1XRequest{
 			Cluster:     c,
-			ProgramID:   onchain.LV1XDevnetProgramID,
-			LedgerID:    onchain.LV1XDevnetLedgerID,
+			ProgramID:   custody.EffectiveDevnetProgramID(),
+			LedgerID:    custody.EffectiveDevnetLedgerID(),
 			RoundSlot:   req.RoundSlot,
 			ShardID:     req.ShardID,
 			Page:        req.Page,
@@ -740,8 +807,8 @@ func (e *Engine) submitStakingOp(ctx context.Context, req StakeActionRequest, op
 		Venue:     "wen-mining",
 		MiningLV1X: &custody.MiningLV1XRequest{
 			Cluster:        c,
-			ProgramID:      onchain.LV1XDevnetProgramID,
-			LedgerID:       onchain.LV1XDevnetLedgerID,
+			ProgramID:      custody.EffectiveDevnetProgramID(),
+			LedgerID:       custody.EffectiveDevnetLedgerID(),
 			SatAmountAtoms: atoms,
 			BtcMint:        onchain.LV1XDevnetBTCMint,
 			CreateATA:      req.CreateATA,

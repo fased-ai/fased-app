@@ -1207,13 +1207,27 @@ export function SolanaWalletsPanel() {
             ) : centerTopTab === "policy" ? (
               <div className="wt-form-stack">
                 <div className="wt-preset-chips">
-                  {[
-                    "solana.nativeTransfer",
-                    "solana.splTransferChecked",
-                    "jupiter.swap",
-                    "jupiter.trigger",
-                    "trade.order",
-                  ].map((op) => {
+                  {(selected.role === "mining"
+                    ? [
+                        "mining.lv1x.commit",
+                        "mining.lv1x.reveal",
+                        "mining.lv1x.claim",
+                        "mining.lv1x.claim_sat",
+                        "mining.lv1x.claim_btc",
+                        "mining.lv1x.session",
+                        "mining.lv1x.stake",
+                        "mining.lv1x.activate_stake",
+                        "mining.lv1x.unstake",
+                        "mining.lv1x.claim_staking",
+                      ]
+                    : [
+                        "solana.nativeTransfer",
+                        "solana.splTransferChecked",
+                        "jupiter.swap",
+                        "jupiter.trigger",
+                        "trade.order",
+                      ]
+                  ).map((op) => {
                     const on = polDraft.operations.includes(op);
                     return (
                       <button
