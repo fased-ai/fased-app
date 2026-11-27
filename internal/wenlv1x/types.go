@@ -352,34 +352,39 @@ type CommitRequest struct {
 	Autonomous    bool      `json:"autonomous,omitempty"`
 	TaskID        string    `json:"taskId,omitempty"`
 	DryRunPreview bool      `json:"dryRunPreview,omitempty"`
+	ReviewID      string    `json:"reviewId,omitempty"`
 }
 
 // RevealRequest submits an LV1X RevealBatch / RevealPageBatch tx.
 type RevealRequest struct {
-	WalletID   string `json:"walletId"`
-	Cluster    string `json:"cluster,omitempty"`
-	RoundSlot  uint64 `json:"roundSlot"`
-	ShardID    uint8  `json:"shardId"`
-	Page       uint32 `json:"page"`
-	EntryRow   uint8  `json:"entryRow"`
-	Selection  uint8  `json:"selection"`
-	SaltHex    string `json:"saltHex"`
-	Autonomous bool   `json:"autonomous,omitempty"`
-	TaskID     string `json:"taskId,omitempty"`
+	WalletID      string `json:"walletId"`
+	Cluster       string `json:"cluster,omitempty"`
+	RoundSlot     uint64 `json:"roundSlot"`
+	ShardID       uint8  `json:"shardId"`
+	Page          uint32 `json:"page"`
+	EntryRow      uint8  `json:"entryRow"`
+	Selection     uint8  `json:"selection"`
+	SaltHex       string `json:"saltHex"`
+	Autonomous    bool   `json:"autonomous,omitempty"`
+	TaskID        string `json:"taskId,omitempty"`
+	DryRunPreview bool   `json:"dryRunPreview,omitempty"`
+	ReviewID      string `json:"reviewId,omitempty"`
 }
 
 // ClaimRequest claims settled SOL, SAT, or cbBTC rewards for a wallet & round.
 type ClaimRequest struct {
-	WalletID   string `json:"walletId"`
-	Cluster    string `json:"cluster,omitempty"`
-	Asset      string `json:"asset,omitempty"` // sol | sat | btc (default sol)
-	RoundSlot  uint64 `json:"roundSlot"`
-	ShardID    uint8  `json:"shardId"`
-	Page       uint32 `json:"page"`
-	EntryRow   uint8  `json:"entryRow"`
-	CreateATA  bool   `json:"createAta,omitempty"`
-	Autonomous bool   `json:"autonomous,omitempty"`
-	TaskID     string `json:"taskId,omitempty"`
+	WalletID      string `json:"walletId"`
+	Cluster       string `json:"cluster,omitempty"`
+	Asset         string `json:"asset,omitempty"` // sol | sat | btc (default sol)
+	RoundSlot     uint64 `json:"roundSlot"`
+	ShardID       uint8  `json:"shardId"`
+	Page          uint32 `json:"page"`
+	EntryRow      uint8  `json:"entryRow"`
+	CreateATA     bool   `json:"createAta,omitempty"`
+	Autonomous    bool   `json:"autonomous,omitempty"`
+	TaskID        string `json:"taskId,omitempty"`
+	DryRunPreview bool   `json:"dryRunPreview,omitempty"`
+	ReviewID      string `json:"reviewId,omitempty"`
 }
 
 // ClaimAllRequest claims across SOL/SAT/BTC for the wallet's claimable rounds.
@@ -391,10 +396,12 @@ type ClaimAllRequest struct {
 
 // StakeActionRequest parameterizes Stake, ActivateStake, Unstake, or ClaimStakingReward.
 type StakeActionRequest struct {
-	WalletID  string  `json:"walletId"`
-	Cluster   string  `json:"cluster,omitempty"`
-	AmountSAT float64 `json:"amountSat,omitempty"`
-	CreateATA bool    `json:"createAta,omitempty"`
+	WalletID      string  `json:"walletId"`
+	Cluster       string  `json:"cluster,omitempty"`
+	AmountSAT     float64 `json:"amountSat,omitempty"`
+	CreateATA     bool    `json:"createAta,omitempty"`
+	DryRunPreview bool    `json:"dryRunPreview,omitempty"`
+	ReviewID      string  `json:"reviewId,omitempty"`
 }
 
 // CommitPreview estimates bucket weights, expected EV, and policy compliance before signing.

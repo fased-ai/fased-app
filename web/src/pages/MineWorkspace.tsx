@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { CoreError } from "../core";
 import { Dialog } from "../components/shared";
+import { setLocalOwnerPassword } from "../wallets-v2";
 import {
   BookOpen,
   Clock3,
@@ -175,15 +177,13 @@ export function MineWorkspace() {
   const [policyAutoClaim, setPolicyAutoClaim] = useState(true);
 
   const [stepUpPending, setStepUpPending] = useState<{
-    action:
-      | "mining-commit"
-      | "mining-session"
-      | "mining-policy"
-      | "mining-stake"
-      | "mining-unstake";
-    retry: (token: string) => Promise<void>;
+    action: "policy" | "execute" | "mining-session" | "wallet";
+    mode: "step_up" | "password_setup";
+    bindingDigest?: string;
+    retry: (token?: string) => Promise<void>;
   } | null>(null);
   const [stepUpPassword, setStepUpPassword] = useState("");
+  const [stepUpPasswordConfirm, setStepUpPasswordConfirm] = useState("");
   const [stepUpError, setStepUpError] = useState("");
 
   const presets: StrategyPreset[] = useMemo(
@@ -339,23 +339,37 @@ export function MineWorkspace() {
 
   function maybeHandleStepUp(
     err: unknown,
-    action:
-      | "mining-commit"
-      | "mining-session"
-      | "mining-policy"
-      | "mining-stake"
-      | "mining-unstake",
-    retry: (tok: string) => Promise<void>,
+    action: "policy" | "execute" | "mining-session" | "wallet",
+    retry: (tok?: string) => Promise<void>,
     existingToken?: string,
   ): boolean {
+    const code = err instanceof CoreError ? err.code : undefined;
+    const bindingDigest =
+      err instanceof CoreError ? err.bindingDigest : undefined;
     const msg = err instanceof Error ? err.message : String(err);
+    if (code === "owner_password_required") {
+      setStepUpError("");
+      setStepUpPending({
+        action,
+        mode: "password_setup",
+        bindingDigest,
+        retry,
+      });
+      return true;
+    }
     if (
       !existingToken &&
-      (msg.toLowerCase().includes("step-up") ||
+      (code === "step_up_required" ||
+        msg.toLowerCase().includes("step-up") ||
         msg.toLowerCase().includes("step_up"))
     ) {
       setStepUpError("");
-      setStepUpPending({ action, retry });
+      setStepUpPending({
+        action,
+        mode: "step_up",
+        bindingDigest,
+        retry,
+      });
       return true;
     }
     setError(msg);
@@ -434,11 +448,12 @@ export function MineWorkspace() {
       }
       setStepUpPending(null);
       setStepUpPassword("");
+      setStepUpPasswordConfirm("");
       await loadState();
     } catch (err) {
       maybeHandleStepUp(
         err,
-        mode === "manual" ? "mining-commit" : "mining-session",
+        mode === "manual" ? "execute" : "mining-session",
         (tok) => runPrimaryAction(tok),
         stepUpToken,
       );
@@ -450,6 +465,7 @@ export function MineWorkspace() {
   async function handleClaimAsset(
     asset: "sol" | "sat" | "btc",
     item?: ClaimableRoundItem,
+    stepUpToken?: string,
   ) {
     if (!selectedWalletId) {
       setError(t("Select a Mining role wallet first."));
@@ -465,20 +481,32 @@ export function MineWorkspace() {
         status?.streak?.[0]?.roundSlot ??
         status?.round.roundSlot ??
         0;
-      await submitMiningClaim(core, {
-        walletId: selectedWalletId,
-        cluster,
-        asset,
-        roundSlot: slot,
-        shardId: item?.shardId ?? 0,
-        page: item?.page ?? 0,
-        entryRow: item?.entryRow ?? 0,
-        createAta: asset !== "sol",
-      });
+      await submitMiningClaim(
+        core,
+        {
+          walletId: selectedWalletId,
+          cluster,
+          asset,
+          roundSlot: slot,
+          shardId: item?.shardId ?? 0,
+          page: item?.page ?? 0,
+          entryRow: item?.entryRow ?? 0,
+          createAta: asset !== "sol",
+        },
+        stepUpToken,
+      );
       setNotice(`Submitted ${asset.toUpperCase()} claim for round #${slot}.`);
+      setStepUpPending(null);
+      setStepUpPassword("");
+      setStepUpPasswordConfirm("");
       await loadState();
     } catch (err) {
-      setError(err instanceof Error ? err.message : t("Claim refused"));
+      maybeHandleStepUp(
+        err,
+        "execute",
+        (tok) => handleClaimAsset(asset, item, tok),
+        stepUpToken,
+      );
     } finally {
       setBusy(false);
     }
@@ -527,33 +555,38 @@ export function MineWorkspace() {
         );
         setNotice(`Unstaked ${amountSat} WENSAT.`);
       } else if (kind === "activate") {
-        await submitMiningActivateStake(core, {
-          walletId: selectedWalletId,
-          cluster,
-        });
+        await submitMiningActivateStake(
+          core,
+          {
+            walletId: selectedWalletId,
+            cluster,
+          },
+          stepUpToken,
+        );
         setNotice("Activated matured stake position.");
       } else {
-        await submitMiningClaimStaking(core, {
-          walletId: selectedWalletId,
-          cluster,
-          createAta: true,
-        });
+        await submitMiningClaimStaking(
+          core,
+          {
+            walletId: selectedWalletId,
+            cluster,
+            createAta: true,
+          },
+          stepUpToken,
+        );
         setNotice("Claimed staking cbBTC rewards.");
       }
       setStepUpPending(null);
       setStepUpPassword("");
+      setStepUpPasswordConfirm("");
       await loadState();
     } catch (err) {
-      if (kind === "stake" || kind === "unstake") {
-        maybeHandleStepUp(
-          err,
-          kind === "stake" ? "mining-stake" : "mining-unstake",
-          (tok) => handleStakeAction(kind, amountSat, tok),
-          stepUpToken,
-        );
-      } else {
-        setError(err instanceof Error ? err.message : "Staking action failed");
-      }
+      maybeHandleStepUp(
+        err,
+        "execute",
+        (tok) => handleStakeAction(kind, amountSat, tok),
+        stepUpToken,
+      );
     } finally {
       setBusy(false);
     }
@@ -592,15 +625,11 @@ export function MineWorkspace() {
       setPolicyOpen(false);
       setStepUpPending(null);
       setStepUpPassword("");
+      setStepUpPasswordConfirm("");
       setNotice(t("Updated Mining wallet policy."));
       await loadState();
     } catch (err) {
-      maybeHandleStepUp(
-        err,
-        "mining-policy",
-        (tok) => savePolicy(tok),
-        stepUpToken,
-      );
+      maybeHandleStepUp(err, "policy", (tok) => savePolicy(tok), stepUpToken);
     } finally {
       setBusy(false);
     }
@@ -611,15 +640,33 @@ export function MineWorkspace() {
       setStepUpError(t("Owner password is required."));
       return;
     }
+    if (
+      stepUpPending.mode === "password_setup" &&
+      stepUpPassword !== stepUpPasswordConfirm
+    ) {
+      setStepUpError(t("Passwords do not match."));
+      return;
+    }
     setStepUpError("");
     try {
-      const token = await requestMiningStepUpToken(
-        core,
-        stepUpPassword,
-        stepUpPending.action,
-        selectedWalletId,
-      );
-      await stepUpPending.retry(token);
+      if (stepUpPending.mode === "password_setup") {
+        await setLocalOwnerPassword(core, stepUpPassword);
+      }
+      if (
+        stepUpPending.bindingDigest !== undefined ||
+        stepUpPending.mode === "step_up"
+      ) {
+        const token = await requestMiningStepUpToken(
+          core,
+          stepUpPassword,
+          stepUpPending.action,
+          selectedWalletId,
+          stepUpPending.bindingDigest ?? "",
+        );
+        await stepUpPending.retry(token);
+      } else {
+        await stepUpPending.retry(undefined);
+      }
     } catch (err) {
       setStepUpError(
         err instanceof Error ? err.message : t("Step-up verification failed"),
@@ -1127,10 +1174,22 @@ export function MineWorkspace() {
 
       {stepUpPending && (
         <Dialog
-          title="Owner Step-Up Confirmation"
+          title={
+            stepUpPending.mode === "password_setup"
+              ? "Set Owner Password"
+              : "Owner Step-Up Confirmation"
+          }
           onClose={() => setStepUpPending(null)}
         >
           <div className="mine-modal-form">
+            {stepUpPending.bindingDigest && (
+              <div className="mine-field">
+                <span>Digest</span>
+                <code className="mine-mono">
+                  {stepUpPending.bindingDigest.slice(0, 16)}…
+                </code>
+              </div>
+            )}
             <div className="mine-field">
               <label htmlFor="mine-stepup-pass">Owner Password</label>
               <input
@@ -1141,6 +1200,20 @@ export function MineWorkspace() {
                 onChange={(e) => setStepUpPassword(e.target.value)}
               />
             </div>
+            {stepUpPending.mode === "password_setup" && (
+              <div className="mine-field">
+                <label htmlFor="mine-stepup-pass-confirm">
+                  Confirm Password
+                </label>
+                <input
+                  id="mine-stepup-pass-confirm"
+                  type="password"
+                  className="mine-modal-input"
+                  value={stepUpPasswordConfirm}
+                  onChange={(e) => setStepUpPasswordConfirm(e.target.value)}
+                />
+              </div>
+            )}
             {stepUpError && <p className="mine-error">{stepUpError}</p>}
             <div className="mine-modal-actions">
               <button

@@ -78,4 +78,13 @@ func TestLV1XMiningCoreRoutesAndMainnetGate(t *testing.T) {
 	if p, err := parseStreamTopic("mining"); err != nil || p.kind != "mining" {
 		t.Fatalf("parseStreamTopic(mining) failed: %+v err=%v", p, err)
 	}
+
+	// 6. Unbound policy update fails closed with 403 step_up_required/owner_password_required when loosening policy.
+	crW := stage4Req(h, http.MethodPost, srv.URL, "/api/v1/wallets/create", `{"name":"Test Miner","role":"mining","rpcUrl":"https://api.devnet.solana.com"}`, token, srv.URL, csrf)
+	if crW.Code == http.StatusOK || crW.Code == http.StatusCreated {
+		polNoStep := stage4Req(h, http.MethodPut, srv.URL, "/api/v1/mining/policy", `{"walletId":"test-miner","confirmLoosen":true,"maxPerTxLamports":"50000000","maxDailyLamports":"150000000","mining":{"cluster":"devnet"}}`, token, srv.URL, csrf)
+		if polNoStep.Code != http.StatusForbidden {
+			t.Fatalf("expected 403 on policy update without owner step-up, got %d: %s", polNoStep.Code, polNoStep.Body.String())
+		}
+	}
 }
