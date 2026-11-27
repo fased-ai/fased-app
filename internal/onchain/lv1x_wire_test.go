@@ -1,6 +1,7 @@
 package onchain
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
@@ -69,6 +70,30 @@ func TestLV1XPDACommitmentWireAndBPFLoader(t *testing.T) {
 	})
 	if err != nil || len(msg) < 100 || len(msg)+65 > 1232 {
 		t.Fatalf("BuildLV1XCommitMessage failed: len=%d err=%v", len(msg), err)
+	}
+	if !bytes.Contains(msg, []byte{'L', 'V', '1', 'X', LV1XVersion, LV1XTagCommit}) {
+		t.Fatalf("expected LV1X wire prefix on unsharded Commit message")
+	}
+
+	// Sharded CommitToShard wire message starts with "LV1X\x01" + tag 35 and has exact 63-byte ix payload.
+	shardMsg, err := BuildLV1XCommitMessage(LV1XCommitParams{
+		ProgramID:  LV1XDevnetProgramID,
+		LedgerID:   LV1XDevnetLedgerID,
+		Owner:      owner,
+		Blockhash:  blockhash,
+		Slot:       42,
+		ShardID:    0,
+		EntryIndex: 0,
+		Amount:     LV1XMinCommitLamports,
+		Nonce:      1,
+		Commitment: commit,
+	})
+	if err != nil {
+		t.Fatalf("BuildLV1XCommitMessage sharded failed: %v", err)
+	}
+	wantCommitToShardHdr := []byte{63, 'L', 'V', '1', 'X', LV1XVersion, LV1XTagCommitToShard}
+	if !bytes.Contains(shardMsg, wantCommitToShardHdr) {
+		t.Fatalf("expected sharded CommitToShard length+header %x in message", wantCommitToShardHdr)
 	}
 
 	// Below minimum commit rejected.
@@ -230,5 +255,21 @@ func TestLV1XPDACommitmentWireAndBPFLoader(t *testing.T) {
 	}
 	if err := VerifyBPFLoaderProgramData(LV1XDevnetProgramID, loaderKey, progAcctData, loaderKey, pdAcctData, "0000000000000000000000000000000000000000000000000000000000000000"); err == nil {
 		t.Fatal("expected ELF SHA-256 mismatch failure")
+	}
+
+	// All remaining builders emit canonical "LV1X\x01" + tag prefix.
+	for _, tc := range []struct {
+		name string
+		raw  []byte
+		tag  uint8
+	}{
+		{"ClaimShardSolBatch", claimMsg, LV1XTagClaimShardSolBatch},
+		{"RevealBatch", revMsg, LV1XTagRevealBatch},
+		{"ClaimSat", satMsg, LV1XTagClaimSat},
+		{"ClaimShardBtc", btcMsg, LV1XTagClaimShardBtc},
+	} {
+		if !bytes.Contains(tc.raw, []byte{'L', 'V', '1', 'X', LV1XVersion, tc.tag}) {
+			t.Fatalf("%s missing LV1X\\x01 prefix with tag %d", tc.name, tc.tag)
+		}
 	}
 }
