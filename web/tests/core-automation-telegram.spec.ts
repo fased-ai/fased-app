@@ -231,10 +231,13 @@ test("Event triggers, Telegram controller, Alerts widget, zero secret leakage, a
     .getByRole("button", { name: "Alerts", exact: true })
     .click();
   await widgetDialog.getByRole("button", { name: "Done", exact: true }).click();
-  await expect(page.getByTestId("overview-alerts-widget")).toBeVisible();
-  await expect(page.getByTestId("overview-alerts-widget")).toContainText(
-    "Active",
-  );
+  const alertsWidget = page.getByTestId("overview-alerts-widget");
+  await expect(alertsWidget).toBeVisible();
+  await expect(alertsWidget).toContainText("Kill switch");
+  await alertsWidget
+    .getByRole("button", { name: "Clear kill switch", exact: true })
+    .click();
+  await expect(alertsWidget).toContainText("Active");
 
   // 4. Dark + Light WCAG AA audit & zero overflow across Event triggers & Notifications tabs.
   for (const theme of ["dark", "light"] as const) {

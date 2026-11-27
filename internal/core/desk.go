@@ -275,6 +275,10 @@ func (h *HTTPHandler) deskAPI(w http.ResponseWriter, r *http.Request, token stri
 		act := strings.ToLower(strings.TrimSpace(in.Action))
 		ctrlCtx := ctx
 		if act == "unkill" {
+			if strings.TrimSpace(in.Confirm) != "CONFIRM" {
+				writeError(w, 400, "clearing desk kill switch requires exact confirmation string CONFIRM")
+				return
+			}
 			if hasPW, _ := h.store.hasPassword(ctx); hasPW {
 				var ok bool
 				ctrlCtx, ok = h.requireStepUpCtx(w, r, token, "unfreeze", "global")
@@ -282,6 +286,17 @@ func (h *HTTPHandler) deskAPI(w http.ResponseWriter, r *http.Request, token stri
 					return
 				}
 			}
+			if _, err := h.store.syncGlobalKill(ctrlCtx, false, in.Reason, "owner"); err != nil {
+				writeError(w, 400, err.Error())
+				return
+			}
+			snap, err := svc.GetSnapshot(ctx)
+			if err != nil {
+				writeError(w, 500, "desk state unavailable")
+				return
+			}
+			writeJSON(w, 200, snap.Control)
+			return
 		}
 		st, err := svc.SetControl(ctrlCtx, in.Action, in.Confirm, in.Reason, "owner")
 		if err != nil {
@@ -290,8 +305,9 @@ func (h *HTTPHandler) deskAPI(w http.ResponseWriter, r *http.Request, token stri
 		}
 		if act == "kill" {
 			_, _ = h.store.syncGlobalKill(ctrlCtx, true, in.Reason, "owner")
-		} else if act == "unkill" {
-			_, _ = h.store.syncGlobalKill(ctrlCtx, false, in.Reason, "owner")
+			if snap, sErr := svc.GetSnapshot(ctx); sErr == nil {
+				st = snap.Control
+			}
 		}
 		writeJSON(w, 200, st)
 

@@ -291,9 +291,14 @@ func resolveExistingAncestor(p string) (string, error) {
 }
 
 func sanitizeCodexConfigTOML(raw []byte) []byte {
-	var out strings.Builder
+	if len(raw) == 0 {
+		return nil
+	}
+	text := strings.ReplaceAll(string(raw), "\r\n", "\n")
+	lines := strings.Split(strings.TrimSuffix(text, "\n"), "\n")
+	kept := make([]string, 0, len(lines))
 	skipSection := false
-	for _, line := range strings.Split(string(raw), "\n") {
+	for _, line := range lines {
 		trimmed := strings.TrimSpace(line)
 		lower := strings.ToLower(trimmed)
 		if strings.HasPrefix(lower, "[") && strings.HasSuffix(lower, "]") {
@@ -320,10 +325,12 @@ func sanitizeCodexConfigTOML(raw []byte) []byte {
 				continue
 			}
 		}
-		out.WriteString(line)
-		out.WriteByte('\n')
+		kept = append(kept, line)
 	}
-	return []byte(out.String())
+	if len(kept) == 0 {
+		return nil
+	}
+	return []byte(strings.Join(kept, "\n") + "\n")
 }
 
 // PrepareCodexShadowHome initializes an account-specific Codex home directory
