@@ -1171,7 +1171,9 @@ export function TradeWorkspace() {
                   <div key={row.label} className="wt-review-kv">
                     <span>{row.label}</span>
                     {row.mono ? (
-                      <code style={{ wordBreak: "break-all" }}>{row.value}</code>
+                      <code style={{ wordBreak: "break-all" }}>
+                        {row.value}
+                      </code>
                     ) : (
                       <strong>{row.value}</strong>
                     )}

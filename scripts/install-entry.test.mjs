@@ -1241,11 +1241,19 @@ test("install.ps1 enforces fail-closed TLS, SHA-256 pre-extraction verification,
     "Get-FileHash -LiteralPath $ZipPath -Algorithm SHA256",
   );
   const expandIdx = windowsTemplate.indexOf(
-    "Expand-Archive -LiteralPath $ZipPath",
+    "[System.IO.Compression.ZipFile]::OpenRead($ZipPath)",
   );
   assert.ok(
     hashIdx > 0 && expandIdx > hashIdx,
-    "SHA-256 verification must precede Expand-Archive",
+    "SHA-256 verification must precede entry-validated ZipFile extraction",
+  );
+  assert.ok(
+    !windowsTemplate.includes("Expand-Archive"),
+    "install.ps1 must not use unsafe Expand-Archive",
+  );
+  assert.ok(
+    windowsTemplate.includes("Archive entry escapes destination directory"),
+    "install.ps1 must validate ZipFile entry paths against traversal",
   );
 
   for (const required of [

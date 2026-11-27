@@ -15,6 +15,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"time"
 
@@ -31,6 +32,7 @@ type Options struct {
 	Signer, SignerSHA256                            string
 	Start, Autostart                                bool
 	Upgrade                                         bool
+	AllowDowngrade                                  bool
 	ProviderFixture                                 bool // Controlled installer harness only; never a wizard choice.
 }
 type Manifest struct {
@@ -197,6 +199,43 @@ func checkProviderFixture(paths Paths, requested bool, image string) error {
 	}
 	return verify(m)
 }
+func parseSemverTriple(v string) ([3]int, bool) {
+	v = strings.TrimPrefix(strings.TrimSpace(v), "v")
+	if idx := strings.IndexAny(v, "-+"); idx >= 0 {
+		v = v[:idx]
+	}
+	parts := strings.Split(v, ".")
+	if len(parts) != 3 {
+		return [3]int{}, false
+	}
+	var out [3]int
+	for i := 0; i < 3; i++ {
+		n, err := strconv.Atoi(parts[i])
+		if err != nil || n < 0 {
+			return [3]int{}, false
+		}
+		out[i] = n
+	}
+	if out == ([3]int{0, 0, 0}) {
+		return [3]int{}, false
+	}
+	return out, true
+}
+
+func isSemverDowngrade(current, next string) bool {
+	cur, okCur := parseSemverTriple(current)
+	nxt, okNxt := parseSemverTriple(next)
+	if !okCur || !okNxt {
+		return false
+	}
+	for i := 0; i < 3; i++ {
+		if nxt[i] != cur[i] {
+			return nxt[i] < cur[i]
+		}
+	}
+	return false
+}
+
 func Install(ctx context.Context, paths Paths, options Options) (Manifest, error) {
 	if err := validateProviderFixtureOptions(options); err != nil {
 		return Manifest{}, err
@@ -292,6 +331,14 @@ func Install(ctx context.Context, paths Paths, options Options) (Manifest, error
 			}
 			if m.Location != options.Location {
 				return m, errors.New("installation location differs; preserve the existing installation")
+			}
+			if !options.AllowDowngrade {
+				if isSemverDowngrade(m.Version, core.Version) {
+					return m, fmt.Errorf("refusing downgrade from %s to %s without explicit downgrade authorization", m.Version, core.Version)
+				}
+				if options.ApplicationSequence != 0 && m.ApplicationSequence != 0 && options.ApplicationSequence < m.ApplicationSequence {
+					return m, fmt.Errorf("refusing application sequence rollback from %d to %d", m.ApplicationSequence, options.ApplicationSequence)
+				}
 			}
 			if err = verify(m); err != nil {
 				return m, err

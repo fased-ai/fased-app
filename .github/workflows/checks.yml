@@ -13,8 +13,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 3
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "24"
       - name: Verify documentation validator failure cases
@@ -34,10 +36,11 @@ jobs:
       vm: ${{ steps.route.outputs.vm }}
       scope: ${{ steps.route.outputs.scope }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          persist-credentials: false
           fetch-depth: 0
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "24"
       - run: |
@@ -79,13 +82,15 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 8
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "24"
           cache: npm
       - run: npm ci
-      - uses: actions/setup-go@v7
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version: "1.26.x"
           cache: true
@@ -93,7 +98,7 @@ jobs:
       - run: npm run build:core
       - run: go build -trimpath -o .evidence/bin/fased-signer ./cmd/fased-signer
       - run: go build -trimpath -o .evidence/bin/fased-unhealthy-core ./internal/custodyinstall/testdata/unhealthy-core
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ci-built-binaries
           include-hidden-files: true
@@ -109,13 +114,15 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "24"
           cache: npm
       - run: npm ci
-      - uses: actions/setup-go@v7
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version: "1.26.x"
           cache: true
@@ -135,12 +142,14 @@ jobs:
       - run: test -z "$(gofmt -l cmd internal desktop ui.go)"
       - run: go vet ./...
       - run: go -C desktop vet ./...
-      - run: go -C desktop test ./...
+      - run: go -C desktop test -race ./...
+      - name: Production npm dependency audit
+        run: npm audit --omit=dev --audit-level=high
       - run: node --test scripts/build-core.test.mjs
       - name: Go fuzz seed corpus regression
         env:
           FASED_FAST_TEST_KDF: "1"
-        run: go test -run='^Fuzz' ./internal/core ./internal/decision ./internal/marketdata ./internal/mcpclient ./internal/signer ./internal/update ./internal/wenpm1 ./internal/worldintel ./internal/automation ./internal/telegram ./internal/fasedscript ./internal/quantlab ./internal/desk ./internal/cex ./internal/equities ./internal/hub ./internal/swarm
+        run: go test -run='^Fuzz' ./internal/core ./internal/custody ./internal/onchain ./internal/auth ./internal/polymarket ./internal/kalshi ./internal/lighter ./internal/decision ./internal/marketdata ./internal/mcpclient ./internal/signer ./internal/update ./internal/wenpm1 ./internal/worldintel ./internal/automation ./internal/telegram ./internal/fasedscript ./internal/quantlab ./internal/desk ./internal/cex ./internal/equities ./internal/hub ./internal/swarm
       - name: Full race coverage in bounded core groups
         if: needs.classify.outputs.scope == 'full'
         env:
@@ -173,7 +182,7 @@ jobs:
           cat .evidence/p4-trust-rehearsal/trust-cli.log
       - name: Retain selected recovery evidence
         if: always() && needs.classify.outputs.signer == 'true'
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: core-recovery-evidence
           include-hidden-files: true
@@ -187,7 +196,7 @@ jobs:
             .evidence/native-provider-secret/result.json
             .evidence/native-provider-secret/service-starts.log
           retention-days: 7
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: failure() || cancelled()
         with:
           name: core-failure-evidence
@@ -204,15 +213,17 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "24"
-      - uses: actions/setup-go@v7
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version: "1.26.x"
           cache: true
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: ci-built-binaries
           path: .
@@ -245,7 +256,7 @@ jobs:
         run: go test -race ./internal/core -run '^Test(SwapRecovery|VenueCredential|.*WEN)'
       - name: Retain ordinary admission evidence
         if: always() && needs.classify.outputs.signer == 'true'
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: core-scenarios-evidence
           include-hidden-files: true
@@ -265,15 +276,17 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "24"
-      - uses: actions/setup-go@v7
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version: "1.26.x"
           cache: true
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: ci-built-binaries
           path: .
@@ -303,23 +316,25 @@ jobs:
       matrix:
         shard: [1, 2]
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "24"
           cache: npm
-      - uses: actions/setup-go@v7
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version: "1.26.x"
           cache: true
       - run: npm ci
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: ci-built-binaries
           path: .
       - run: chmod +x .evidence/bin/*
       - id: pw-cache
-        uses: actions/cache@v6
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: ~/.cache/ms-playwright
           key: ${{ runner.os }}-playwright-${{ hashFiles('package-lock.json') }}
@@ -345,7 +360,7 @@ jobs:
       - name: Affected RPC browser and CLI journey
         if: needs.classify.outputs.scope == 'rpc' && matrix.shard == 1
         run: npm run test:core-ui -- --grep 'public account records share UI/CLI state without wallet authority'
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: failure() || cancelled()
         with:
           name: browser-failure-evidence-${{ matrix.shard }}
@@ -363,16 +378,18 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "24"
           cache: npm
-      - uses: actions/setup-go@v7
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version: "1.26.x"
           cache: true
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: ci-built-binaries
           path: .
@@ -382,7 +399,7 @@ jobs:
       - run: npm ci --prefer-offline --no-audit --no-fund
       - name: Managed account UI browser prerequisite
         id: pw-cache
-        uses: actions/cache@v6
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: ~/.cache/ms-playwright
           key: ${{ runner.os }}-playwright-${{ hashFiles('package-lock.json') }}
@@ -403,7 +420,7 @@ jobs:
           FASED_MANAGED_SIGNER: .evidence/p4-bootstrap/fased-signer-lifecycle3
           FASED_MANAGED_EVIDENCE: .evidence/p4-bootstrap/managed
         run: node scripts/check-managed-custody.mjs
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
           name: signer-isolation
@@ -465,11 +482,13 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "24"
-      - uses: actions/setup-go@v7
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version: "1.26.x"
           cache: true
@@ -482,7 +501,7 @@ jobs:
         env:
           FASED_HANDOFF_EVIDENCE: .evidence/p4-handoff-model
         run: node scripts/check-update-handoff.mjs
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
           name: handoff-model
@@ -500,11 +519,13 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "24"
-      - uses: actions/setup-go@v7
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version: "1.26.x"
           cache: true
@@ -516,7 +537,7 @@ jobs:
         env:
           FASED_HANDOFF_UID_CI: "1"
         run: node scripts/check-update-handoff-uid.mjs
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
           name: handoff-transport-uid
@@ -539,16 +560,18 @@ jobs:
       matrix:
         leg: [fixture, network]
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "24"
           cache: npm
-      - uses: actions/setup-go@v7
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version: "1.26.x"
           cache: true
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: ci-built-binaries
           path: .
@@ -559,7 +582,7 @@ jobs:
       - if: matrix.leg == 'fixture'
         run: node scripts/build-inspection-predecessor.mjs
       - id: pw-cache
-        uses: actions/cache@v6
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: ~/.cache/ms-playwright
           key: ${{ runner.os }}-playwright-${{ hashFiles('package-lock.json') }}
@@ -582,7 +605,7 @@ jobs:
           FASED_MANAGED_NETWORK: "devnet"
           FASED_MANAGED_EVIDENCE: .evidence/p3-network-managed
         run: node scripts/check-managed-custody.mjs
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
           name: installed-inspection-fixture-${{ matrix.leg }}
@@ -616,8 +639,10 @@ jobs:
       ]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "24"
       - name: Required aggregate check

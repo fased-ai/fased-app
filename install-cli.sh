@@ -209,6 +209,10 @@ else
   read -r actual _ < <(sha256sum "$archive_path")
 fi
 [[ $actual == "$archive_sha256" ]] || die 'Archive checksum differs; nothing was executed.'
+if [[ $development_only == 0 && ${FASED_REQUIRE_ATTESTATION:-0} == 1 ]]; then
+  command -v gh >/dev/null 2>&1 || die 'FASED_REQUIRE_ATTESTATION=1 requires GitHub CLI (gh).'
+  gh attestation verify "$archive_path" --repo fased-ai/fased-app >/dev/null || die 'GitHub build provenance attestation verification failed.'
+fi
 
 mkdir -p -m 0700 "$work/extract"
 if [[ $archive_ext == zip ]]; then

@@ -12,11 +12,15 @@ if [[ "${EUID}" -ne 0 ]]; then
 fi
 
 groupadd --system fased-ipc || true
-id -u fased-signer >/dev/null 2>&1 || useradd --system --home /var/lib/fased-signer --shell /usr/sbin/nologin --gid fased-ipc fased-signer
-id -u fased-app >/dev/null 2>&1 || useradd --system --home /var/lib/fased-app --shell /usr/sbin/nologin --gid fased-ipc fased-app
+groupadd --system fased-signer || true
+groupadd --system fased-app || true
+id -u fased-signer >/dev/null 2>&1 || useradd --system --home /var/lib/fased-signer --shell /usr/sbin/nologin --gid fased-signer --groups fased-ipc fased-signer
+id -u fased-app >/dev/null 2>&1 || useradd --system --home /var/lib/fased-app --shell /usr/sbin/nologin --gid fased-app --groups fased-ipc fased-app
+usermod --gid fased-signer --append --groups fased-ipc fased-signer
+usermod --gid fased-app --append --groups fased-ipc fased-app
 
-install -d -m 0700 -o fased-signer -g fased-ipc /var/lib/fased-signer
-install -d -m 0700 -o fased-app -g fased-ipc /var/lib/fased-app
+install -d -m 0700 -o fased-signer -g fased-signer /var/lib/fased-signer
+install -d -m 0700 -o fased-app -g fased-app /var/lib/fased-app
 install -d -m 0750 -o root -g root /etc/credstore.encrypted /etc/fased
 
 provision_sealed_cred() {

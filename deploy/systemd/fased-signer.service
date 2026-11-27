@@ -6,7 +6,8 @@ Wants=network-online.target
 [Service]
 Type=simple
 User=fased-signer
-Group=fased-ipc
+Group=fased-signer
+SupplementaryGroups=fased-ipc
 UMask=0077
 RuntimeDirectory=fased-signer
 RuntimeDirectoryMode=0750
@@ -35,11 +36,15 @@ RestrictRealtime=yes
 RestrictSUIDSGID=yes
 LockPersonality=yes
 MemoryDenyWriteExecute=yes
+RemoveIPC=yes
+KeyringMode=private
 LimitCORE=0
 SystemCallArchitectures=native
-SystemCallFilter=@system-service
+SystemCallFilter=@system-service ~@privileged @resources @obsolete @debug @mount @reboot @swap @cpu-emulation @raw-io
 CapabilityBoundingSet=
+AmbientCapabilities=
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+IPAddressDeny=10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 169.254.0.0/16 100.64.0.0/10 127.0.0.0/8 ::1/128 fc00::/7 fe80::/10
 ReadWritePaths=/var/lib/fased-signer /run/fased-signer
 
 [Install]

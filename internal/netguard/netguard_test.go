@@ -33,17 +33,17 @@ func TestIsPublicUnicastIPBlocksSpecialAndTransitionRanges(t *testing.T) {
 		"::ffff:127.0.0.1",
 		"::ffff:169.254.169.254",
 		"::ffff:100.100.100.200",
-		"64:ff9b::169.254.169.254",   // NAT64 well-known
-		"64:ff9b:1::10.0.0.1",        // NAT64 local-use
-		"100::1",                     // Discard-only
-		"2001::1",                    // Teredo
-		"2001:db8::1",                // Documentation
-		"2002:a9fe:a9fe::1",          // 6to4
-		"fc00::1",                    // ULA
-		"fd7a:115c:a1e0::1",          // Tailscale ULA
-		"fe80::1",                    // Link-local
-		"ff02::1",                    // Multicast
-		"4000::1",                    // Non-2000::/3 global
+		"64:ff9b::169.254.169.254", // NAT64 well-known
+		"64:ff9b:1::10.0.0.1",      // NAT64 local-use
+		"100::1",                   // Discard-only
+		"2001::1",                  // Teredo
+		"2001:db8::1",              // Documentation
+		"2002:a9fe:a9fe::1",        // 6to4
+		"fc00::1",                  // ULA
+		"fd7a:115c:a1e0::1",        // Tailscale ULA
+		"fe80::1",                  // Link-local
+		"ff02::1",                  // Multicast
+		"4000::1",                  // Non-2000::/3 global
 	}
 	for _, s := range blocked {
 		ip := netip.MustParseAddr(s)

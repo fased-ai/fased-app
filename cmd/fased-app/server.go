@@ -389,7 +389,7 @@ func isFasedWindowsShim(b []byte) bool {
 }
 
 func formatServerUnit(transport, execLine, absData string, protectHome bool, wantedBy string, encryptedCredPath string) string {
-	extra := "UMask=0077\n"
+	extra := "UMask=0077\nLimitCORE=0\nLockPersonality=yes\nRestrictSUIDSGID=yes\n"
 	if protectHome {
 		extra += "ProtectHome=read-only\n"
 	}
@@ -397,7 +397,7 @@ func formatServerUnit(transport, execLine, absData string, protectHome bool, wan
 		extra += fmt.Sprintf("LoadCredentialEncrypted=%s:%s\n", providersecrets.CredentialName, encryptedCredPath)
 	}
 	if wantedBy == "multi-user.target" {
-		extra += "PrivateDevices=yes\nProtectKernelTunables=yes\nProtectKernelModules=yes\nProtectKernelLogs=yes\nProtectControlGroups=yes\nProtectClock=yes\nProtectHostname=yes\nProtectProc=invisible\nLockPersonality=yes\nLimitCORE=0\nSystemCallArchitectures=native\nSystemCallFilter=@system-service\nRestrictSUIDSGID=yes\nCapabilityBoundingSet=\n"
+		extra += "PrivateDevices=yes\nProtectKernelTunables=yes\nProtectKernelModules=yes\nProtectKernelLogs=yes\nProtectControlGroups=yes\nProtectClock=yes\nProtectHostname=yes\nProtectProc=invisible\nRemoveIPC=yes\nKeyringMode=private\nSystemCallArchitectures=native\nSystemCallFilter=@system-service ~@privileged @resources @obsolete @debug @mount @reboot @swap @cpu-emulation @raw-io\nCapabilityBoundingSet=\nAmbientCapabilities=\n"
 	}
 	return fmt.Sprintf(`[Unit]
 Description=Fased Remote Server (%s)
@@ -826,10 +826,21 @@ func serverUninstallCommand(args []string, defaultDataDir string, out, errOut io
 
 	removedUnit := false
 	if unitPath != "" {
-		if err = os.Remove(unitPath); err == nil {
+		expectedBase := serverServiceFileName(manager)
+		cleanUnit := filepath.Clean(unitPath)
+		if expectedBase == "" || filepath.Base(cleanUnit) != expectedBase {
+			return fmt.Errorf("refusing to remove unexpected service unit path %q", unitPath)
+		}
+		if fi, statErr := os.Lstat(cleanUnit); statErr == nil {
+			if fi.Mode()&os.ModeSymlink != 0 {
+				return fmt.Errorf("refusing to remove symlinked service unit path %q", cleanUnit)
+			}
+			if err = os.Remove(cleanUnit); err != nil && !errors.Is(err, os.ErrNotExist) {
+				return err
+			}
 			removedUnit = true
-		} else if !errors.Is(err, os.ErrNotExist) {
-			return err
+		} else if !errors.Is(statErr, os.ErrNotExist) {
+			return statErr
 		}
 	}
 	_ = os.RemoveAll(filepath.Join(absData, "server"))
@@ -837,7 +848,12 @@ func serverUninstallCommand(args []string, defaultDataDir string, out, errOut io
 
 	purged := false
 	if *purge {
-		if err = os.RemoveAll(absData); err != nil {
+		home, _ := os.UserHomeDir()
+		cleanData := filepath.Clean(absData)
+		if cleanData == string(filepath.Separator) || (home != "" && cleanData == filepath.Clean(home)) || len(cleanData) < 5 {
+			return fmt.Errorf("refusing to purge unsafe data directory %q", cleanData)
+		}
+		if err = os.RemoveAll(cleanData); err != nil {
 			return err
 		}
 		cleanupPurgedServerArtifacts(cfg.BinaryPath)

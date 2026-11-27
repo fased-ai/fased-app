@@ -108,15 +108,17 @@ func main() {
 								signerPath = filepath.Join(packageDir, "fased-signer")
 							}
 							if _, upErr := localinstall.Install(ctx, paths, localinstall.Options{
-								Engine:       filepath.Join(packageDir, localinstall.EngineName()),
-								Desktop:      filepath.Join(packageDir, localinstall.DesktopName()),
-								Signer:       signerPath,
-								SignerSHA256: signerSHA,
-								Listen:       installed.Listen,
-								Autostart:    installed.Autostart,
-								Start:        true,
-								Upgrade:      true,
-								Location:     installed.Location,
+								Engine:        filepath.Join(packageDir, localinstall.EngineName()),
+								EngineSHA256:  pkgEngine,
+								Desktop:       filepath.Join(packageDir, localinstall.DesktopName()),
+								DesktopSHA256: m.Files[localinstall.DesktopName()].SHA256,
+								Signer:        signerPath,
+								SignerSHA256:  signerSHA,
+								Listen:        installed.Listen,
+								Autostart:     installed.Autostart,
+								Start:         true,
+								Upgrade:       true,
+								Location:      installed.Location,
 							}); upErr != nil {
 								fmt.Fprintln(os.Stderr, "Local desktop core upgrade failed:", upErr)
 							} else {
@@ -166,7 +168,17 @@ func main() {
 							signerPath = filepath.Join(firstPackage, "fased-signer")
 						}
 						var installed localinstall.Manifest
-						installed, e = localinstall.Install(ctx, paths, localinstall.Options{Engine: filepath.Join(firstPackage, localinstall.EngineName()), Desktop: filepath.Join(firstPackage, localinstall.DesktopName()), Signer: signerPath, SignerSHA256: verified.Files["fased-signer"].SHA256, Listen: "127.0.0.1:7331", Start: true, Location: "local"})
+						installed, e = localinstall.Install(ctx, paths, localinstall.Options{
+							Engine:        filepath.Join(firstPackage, localinstall.EngineName()),
+							EngineSHA256:  verified.Files[localinstall.EngineName()].SHA256,
+							Desktop:       filepath.Join(firstPackage, localinstall.DesktopName()),
+							DesktopSHA256: verified.Files[localinstall.DesktopName()].SHA256,
+							Signer:        signerPath,
+							SignerSHA256:  verified.Files["fased-signer"].SHA256,
+							Listen:        "127.0.0.1:7331",
+							Start:         true,
+							Location:      "local",
+						})
 						if e == nil {
 							localinstall.PrepareInstallationMaintenance(ctx, installed, true, os.Stderr)
 						}

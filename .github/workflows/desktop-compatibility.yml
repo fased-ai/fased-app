@@ -15,12 +15,14 @@ jobs:
     runs-on: ${{ matrix.os }}
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "24"
           cache: npm
-      - uses: actions/setup-go@v7
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version: "1.26.x"
           cache-dependency-path: |
@@ -133,7 +135,7 @@ jobs:
       - name: Remove owned Ubuntu acceptance policy after native window
         if: always() && runner.os == 'Linux'
         run: node --input-type=module -e "const m = await import('./scripts/ubuntu-preparation.mjs'); await m.cleanupUbuntuPreparation();"
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always() && runner.os == 'Linux'
         with:
           name: ubuntu-native-first-launch
@@ -144,7 +146,7 @@ jobs:
             .evidence/native-first-consent.png
             .evidence/native-first-launch.log
           retention-days: 7
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: failure() || cancelled()
         with:
           name: desktop-failure-${{ matrix.os }}

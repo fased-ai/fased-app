@@ -43,14 +43,14 @@ type Config struct {
 // Service manages event-driven triggers, pause/kill-switch controls, bounded
 // notifications, encrypted webhook/telegram KV storage, and live SSE broadcasts.
 type Service struct {
-	store         *store
-	bus           *Bus
-	webhookClient *http.Client
-	fixtureMode   bool
-	now           func() time.Time
-	cfg           Config
-	notifyMu      sync.RWMutex
-	onNotify      func(ctx context.Context, n Notification) string
+	store            *store
+	bus              *Bus
+	webhookClient    *http.Client
+	fixtureMode      bool
+	now              func() time.Time
+	cfg              Config
+	notifyMu         sync.RWMutex
+	onNotify         func(ctx context.Context, n Notification) string
 	promptMu         sync.RWMutex
 	onAgentPrompt    func(ctx context.Context, tr Trigger, prompt string, untrusted bool)
 	promptBudgetMu   sync.Mutex

@@ -302,12 +302,51 @@ try {
   $ZipPath = Join-Path $WorkDir "fased-app-windows-$TargetArch.zip"
   $ExtractDir = Join-Path $WorkDir 'extract'
   Write-Host 'Downloading and verifying Fased for Windows...'
-  Invoke-WebRequest -UseBasicParsing -Uri $ArchiveUrl -OutFile $ZipPath
+  $req = Invoke-WebRequest -UseBasicParsing -MaximumRedirection 5 -TimeoutSec 180 -Uri $ArchiveUrl -OutFile $ZipPath -PassThru
+  $zipInfo = Get-Item -LiteralPath $ZipPath
+  if ($zipInfo.Length -le 0 -or $zipInfo.Length -gt 268435456) {
+    Fail 'Downloaded Windows archive size is outside safe bounds.'
+  }
   $ActualHash = (Get-FileHash -LiteralPath $ZipPath -Algorithm SHA256).Hash.ToLowerInvariant()
   if ($ActualHash -ne $ArchiveSha256) {
     Fail 'Windows archive checksum differs; nothing was executed.'
   }
-  Expand-Archive -LiteralPath $ZipPath -DestinationPath $ExtractDir -Force
+  if ($DevelopmentOnly -eq '0' -and ($env:FASED_REQUIRE_ATTESTATION -eq '1') -and (Get-Command gh -ErrorAction SilentlyContinue)) {
+    & gh attestation verify $ZipPath --repo 'fased-ai/fased-app'
+    if ($LASTEXITCODE -ne 0) {
+      Fail 'GitHub build provenance attestation verification failed.'
+    }
+  }
+  Add-Type -AssemblyName System.IO.Compression.FileSystem
+  New-Item -ItemType Directory -Path $ExtractDir -Force | Out-Null
+  $extractFull = [System.IO.Path]::GetFullPath($ExtractDir)
+  if (-not $extractFull.EndsWith([System.IO.Path]::DirectorySeparatorChar)) {
+    $extractFull += [System.IO.Path]::DirectorySeparatorChar
+  }
+  $zip = [System.IO.Compression.ZipFile]::OpenRead($ZipPath)
+  try {
+    foreach ($entry in $zip.Entries) {
+      $normName = $entry.FullName.Replace('\', '/')
+      if ($normName.StartsWith('/') -or $normName -match '(^|/)\.\.(/|$)' -or $normName -match '^[A-Za-z]:') {
+        Fail "Unsafe archive entry path rejected: $($entry.FullName)"
+      }
+      $destPath = [System.IO.Path]::GetFullPath((Join-Path $ExtractDir $entry.FullName))
+      if (-not $destPath.StartsWith($extractFull, [System.StringComparison]::OrdinalIgnoreCase)) {
+        Fail "Archive entry escapes destination directory: $($entry.FullName)"
+      }
+      if ([string]::IsNullOrEmpty($entry.Name)) {
+        New-Item -ItemType Directory -Path $destPath -Force | Out-Null
+      } else {
+        $parentDir = Split-Path -Parent $destPath
+        if (-not [string]::IsNullOrEmpty($parentDir)) {
+          New-Item -ItemType Directory -Path $parentDir -Force | Out-Null
+        }
+        [System.IO.Compression.ZipFileExtensions]::ExtractToFile($entry, $destPath, $true)
+      }
+    }
+  } finally {
+    $zip.Dispose()
+  }
 
   $BundleDir = Join-Path $ExtractDir "fased-app-windows-$TargetArch"
   if (-not (Test-Path -LiteralPath (Join-Path $BundleDir 'bundle.json'))) {

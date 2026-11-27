@@ -736,7 +736,11 @@ export function SolanaWalletsPanel() {
     setError("");
     setNotice("");
     const summary: { label: string; value: string; mono?: boolean }[] = [
-      { label: "Wallet", value: `${selected.handle} (${selected.publicKey})`, mono: true },
+      {
+        label: "Wallet",
+        value: `${selected.handle} (${selected.publicKey})`,
+        mono: true,
+      },
       { label: "Operation", value: rev.operation, mono: true },
       { label: "Destination", value: rev.destination, mono: true },
       {
@@ -744,7 +748,11 @@ export function SolanaWalletsPanel() {
         value: `${rev.amountHuman} ${rev.symbol || "SOL"} (${rev.amountRaw} atomic)`,
         mono: true,
       },
-      { label: "Est. Fee", value: `${rev.estimatedFeeLamports} lamports`, mono: true },
+      {
+        label: "Est. Fee",
+        value: `${rev.estimatedFeeLamports} lamports`,
+        mono: true,
+      },
       ...(rev.mint ? [{ label: "Mint", value: rev.mint, mono: true }] : []),
       { label: "Programs", value: (rev.programs ?? []).join(", "), mono: true },
       { label: "Tx Digest", value: rev.txDigest, mono: true },
@@ -2101,7 +2109,9 @@ export function SolanaWalletsPanel() {
                   <div className="wt-review-kv">
                     <span>Wallet</span>
                     <code style={{ wordBreak: "break-all" }}>
-                      {selected ? `${selected.handle} · ${selected.publicKey}` : activeReview.walletId}
+                      {selected
+                        ? `${selected.handle} · ${selected.publicKey}`
+                        : activeReview.walletId}
                     </code>
                   </div>
                   <div className="wt-review-kv">
@@ -2117,7 +2127,9 @@ export function SolanaWalletsPanel() {
                   {activeReview.mint && (
                     <div className="wt-review-kv">
                       <span>Mint</span>
-                      <code style={{ wordBreak: "break-all" }}>{activeReview.mint}</code>
+                      <code style={{ wordBreak: "break-all" }}>
+                        {activeReview.mint}
+                      </code>
                     </div>
                   )}
                   <div className="wt-review-kv">
@@ -2132,7 +2144,9 @@ export function SolanaWalletsPanel() {
                   </div>
                   <div className="wt-review-kv">
                     <span>Tx Digest</span>
-                    <code style={{ wordBreak: "break-all" }}>{activeReview.txDigest}</code>
+                    <code style={{ wordBreak: "break-all" }}>
+                      {activeReview.txDigest}
+                    </code>
                   </div>
                   <div className="wt-review-kv">
                     <span>Policy Hash</span>
@@ -2140,7 +2154,11 @@ export function SolanaWalletsPanel() {
                   </div>
                   <div className="wt-review-kv">
                     <span>Expires</span>
-                    <code>{new Date(activeReview.expiresAt * 1000).toLocaleTimeString()}</code>
+                    <code>
+                      {new Date(
+                        activeReview.expiresAt * 1000,
+                      ).toLocaleTimeString()}
+                    </code>
                   </div>
                   <div className="wt-review-kv">
                     <span>Simulation</span>
@@ -2335,7 +2353,9 @@ export function SolanaWalletsPanel() {
                   <div key={row.label} className="wt-review-kv">
                     <span>{row.label}</span>
                     {row.mono ? (
-                      <code style={{ wordBreak: "break-all" }}>{row.value}</code>
+                      <code style={{ wordBreak: "break-all" }}>
+                        {row.value}
+                      </code>
                     ) : (
                       <strong>{row.value}</strong>
                     )}

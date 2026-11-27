@@ -6,7 +6,8 @@ Requires=fased-signer.service
 [Service]
 Type=simple
 User=fased-app
-Group=fased-ipc
+Group=fased-app
+SupplementaryGroups=fased-ipc
 UMask=0077
 StateDirectory=fased-app
 StateDirectoryMode=0700
@@ -34,10 +35,13 @@ RestrictRealtime=yes
 RestrictSUIDSGID=yes
 LockPersonality=yes
 MemoryDenyWriteExecute=yes
+RemoveIPC=yes
+KeyringMode=private
 LimitCORE=0
 SystemCallArchitectures=native
-SystemCallFilter=@system-service
+SystemCallFilter=@system-service ~@privileged @resources @obsolete @debug @mount @reboot @swap @cpu-emulation @raw-io
 CapabilityBoundingSet=
+AmbientCapabilities=
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
 ReadWritePaths=/var/lib/fased-app
 
