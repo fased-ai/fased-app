@@ -75,12 +75,17 @@ func TestServerInitAllTransportsAndValidation(t *testing.T) {
 			for _, directive := range []string{
 				"ProtectProc=invisible",
 				"LimitCORE=0",
+				"DevicePolicy=closed",
 				"SystemCallArchitectures=native",
-				"SystemCallFilter=@system-service",
+				"SystemCallFilter=@system-service\n",
+				"SystemCallFilter=~@privileged ",
 			} {
 				if !strings.Contains(plan.ServiceUnit, directive) {
-					t.Fatalf("server init unit for %s missing %s:\n%s", tc.name, directive, plan.ServiceUnit)
+					t.Fatalf("server init unit for %s missing %q:\n%s", tc.name, directive, plan.ServiceUnit)
 				}
+			}
+			if strings.Contains(plan.ServiceUnit, "SystemCallFilter=@system-service ~") {
+				t.Fatalf("server init unit for %s must split SystemCallFilter allow and deny onto separate lines:\n%s", tc.name, plan.ServiceUnit)
 			}
 			joined := strings.Join(plan.Commands, "\n")
 			if !strings.Contains(joined, tc.wantCmd) || !strings.Contains(joined, "/usr/local/bin/fased-app pair --data-dir") {
@@ -718,5 +723,51 @@ func TestServerInstallLinuxEncryptedCredentialAndWindowsRestart(t *testing.T) {
 	}
 	if len(schCalls) != 4 || schCalls[0][0] != "/End" || schCalls[1][0] != "/End" || schCalls[2][0] != "/Create" || schCalls[3][0] != "/Run" {
 		t.Fatalf("unexpected windows upgrade schtasks sequence: %+v", schCalls)
+	}
+}
+
+func TestDeploySystemdUnitsHardening(t *testing.T) {
+	for _, tc := range []struct {
+		rel  string
+		want []string
+	}{
+		{
+			rel: filepath.Join("..", "..", "deploy", "systemd", "fased-signer.service"),
+			want: []string{
+				"Group=fased-signer\n",
+				"SupplementaryGroups=fased-ipc\n",
+				"ExecStartPost=+",
+				"chgrp fased-ipc /run/fased-signer /run/fased-signer/app.sock",
+				"DevicePolicy=closed\n",
+				"LimitCORE=0\n",
+				"SystemCallFilter=@system-service\n",
+				"SystemCallFilter=~@privileged @resources @obsolete @debug @mount @reboot @swap @cpu-emulation @raw-io\n",
+			},
+		},
+		{
+			rel: filepath.Join("..", "..", "deploy", "systemd", "fased-app.service"),
+			want: []string{
+				"Group=fased-app\n",
+				"SupplementaryGroups=fased-ipc\n",
+				"DevicePolicy=closed\n",
+				"LimitCORE=0\n",
+				"SystemCallFilter=@system-service\n",
+				"SystemCallFilter=~@privileged @resources @obsolete @debug @mount @reboot @swap @cpu-emulation @raw-io\n",
+			},
+		},
+	} {
+		raw, err := os.ReadFile(tc.rel)
+		if err != nil {
+			t.Fatalf("read %s: %v", tc.rel, err)
+		}
+		text := strings.ReplaceAll(string(raw), "\r\n", "\n")
+		if strings.Contains(text, "SystemCallFilter=@system-service ~") {
+			t.Fatalf("%s must keep allow and deny SystemCallFilter directives on separate lines", tc.rel)
+		}
+		for _, want := range tc.want {
+			if !strings.Contains(text, want) {
+				t.Fatalf("%s missing required hardening directive %q", tc.rel, want)
+			}
+		}
 	}
 }

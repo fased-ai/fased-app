@@ -397,7 +397,7 @@ func formatServerUnit(transport, execLine, absData string, protectHome bool, wan
 		extra += fmt.Sprintf("LoadCredentialEncrypted=%s:%s\n", providersecrets.CredentialName, encryptedCredPath)
 	}
 	if wantedBy == "multi-user.target" {
-		extra += "PrivateDevices=yes\nProtectKernelTunables=yes\nProtectKernelModules=yes\nProtectKernelLogs=yes\nProtectControlGroups=yes\nProtectClock=yes\nProtectHostname=yes\nProtectProc=invisible\nRemoveIPC=yes\nKeyringMode=private\nSystemCallArchitectures=native\nSystemCallFilter=@system-service ~@privileged @resources @obsolete @debug @mount @reboot @swap @cpu-emulation @raw-io\nCapabilityBoundingSet=\nAmbientCapabilities=\n"
+		extra += "PrivateDevices=yes\nDevicePolicy=closed\nProtectKernelTunables=yes\nProtectKernelModules=yes\nProtectKernelLogs=yes\nProtectControlGroups=yes\nProtectClock=yes\nProtectHostname=yes\nProtectProc=invisible\nRemoveIPC=yes\nKeyringMode=private\nSystemCallArchitectures=native\nSystemCallFilter=@system-service\nSystemCallFilter=~@privileged @resources @obsolete @debug @mount @reboot @swap @cpu-emulation @raw-io\nCapabilityBoundingSet=\nAmbientCapabilities=\n"
 	}
 	return fmt.Sprintf(`[Unit]
 Description=Fased Remote Server (%s)
