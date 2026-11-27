@@ -10,17 +10,12 @@ import {
 import { Badge, SectionHead, Empty, DemoChart } from "../components/shared";
 import { terminalData } from "../fixtures";
 import { useWorkspace } from "../workspace";
-import { WENPaperJourney } from "./WENPaperJourney";
-import { WENSessionRehearsal } from "./WENSessionRehearsal";
-import { WENSessionAutomatic } from "./WENSessionAutomatic";
-import { WENMining } from "./WENMining";
 import { HyperliquidTerminal } from "./HyperliquidTerminal";
 import { OnchainSwap } from "./OnchainSwap";
 function FixtureTerminals() {
   const { t: uiText } = useUI();
   const { tab, navigate } = useWorkspace();
   const active = terminalData.find((t) => t.id === tab);
-  const mining = active?.id === "satcoin";
   if (active?.id === "jupiter") return <OnchainSwap />;
   return (
     <>
@@ -92,33 +87,20 @@ function FixtureTerminals() {
                 {uiText(" is a design prototype.")}
               </strong>
               <span>
-                {mining
-                  ? uiText(
-                      "The local paper journey uses public fixtures. Live WEN integration awaits independent contract acceptance.",
-                    )
-                  : uiText(
-                      "Venue integration, market data and financial execution have not been implemented.",
-                    )}{" "}
+                {uiText(
+                  "Venue integration, market data and financial execution have not been implemented.",
+                )}{" "}
                 {uiText("All values below are illustrative.")}
               </span>
             </div>
           </div>
-          {mining && <WENPaperJourney />}
-          {mining && <WENSessionRehearsal />}
-          {mining && <WENSessionAutomatic />}
           <div className="terminal-workspace">
             <section className="panel">
               <div className="panel-heading">
                 <div>
-                  <h2>
-                    {mining
-                      ? uiText("BTC context & ranges")
-                      : uiText("BTC / USD")}
-                  </h2>
+                  <h2>{uiText("BTC / USD")}</h2>
                   <small className="subtle">
-                    {mining
-                      ? uiText("Illustrative layout · no live BTC data")
-                      : uiText("Illustrative market · no live price")}
+                    {uiText("Illustrative market · no live price")}
                   </small>
                 </div>
                 <Badge>{uiText("DEMO DATA")}</Badge>
@@ -141,32 +123,18 @@ function FixtureTerminals() {
             </section>
             <section className="panel ticket">
               <div className="panel-heading">
-                <h2>
-                  {mining
-                    ? uiText("Mining session preview")
-                    : uiText("Order preview")}
-                </h2>
+                <h2>{uiText("Order preview")}</h2>
               </div>
               <label>{uiText("Account")}</label>
               <div className="fake-input">
                 {uiText("No account connected ")}
                 <ChevronDown size={15} />
               </div>
-              <label>
-                {mining ? uiText("SOL budget") : uiText("Operating budget")}
-              </label>
+              <label>{uiText("Operating budget")}</label>
               <div className="fake-input">
                 {uiText("Not assigned ")}
                 <span>—</span>
               </div>
-              {mining && (
-                <>
-                  <label>{uiText("BTC range")}</label>
-                  <div className="fake-input">{uiText("Not selected")}</div>
-                  <label>{uiText("Commitment deadline")}</label>
-                  <div className="fake-input">{uiText("Unavailable")}</div>
-                </>
-              )}
               <label>{uiText("Owner mandate")}</label>
               <div className="fake-input">
                 {uiText("Not created ")}
@@ -194,28 +162,16 @@ function FixtureTerminals() {
           </div>
           <section className="panel">
             <div className="panel-heading">
-              <h2>
-                {mining
-                  ? uiText("Results & claims")
-                  : uiText("Positions & orders")}
-              </h2>
+              <h2>{uiText("Positions & orders")}</h2>
               <Badge>{uiText("PROTOTYPE")}</Badge>
             </div>
             <Empty
               icon={<TerminalSquare size={24} />}
-              title={
-                mining
-                  ? uiText("No mining session or claim loaded")
-                  : uiText("No live positions or orders")
-              }
+              title={uiText("No live positions or orders")}
             >
-              {mining
-                ? uiText(
-                    "Pending states, settled results and SAT/BTC claims require the accepted WEN integration. No rewards or claimable amounts are loaded.",
-                  )
-                : uiText(
-                    "This layout reserves space for verified state, pending outcomes and recovery. It is not a connected account.",
-                  )}
+              {uiText(
+                "This layout reserves space for verified state, pending outcomes and recovery. It is not a connected account.",
+              )}
             </Empty>
           </section>
         </>
@@ -228,34 +184,26 @@ export function Terminals() {
   const { t } = useUI();
   const { tab, agents, navigate } = useWorkspace();
   if (tab === "jupiter") return <OnchainSwap />;
-  if (tab === "satcoin" && agents.view?.wenMining) return <WENMining />;
   if (tab === "hyperliquid" && agents.view?.hyperliquid)
     return <HyperliquidTerminal />;
   // Fixture constructors retain their dedicated regression journeys. Ordinary
   // installations never mount sample charts, test runners or imitation orders.
   if (agents.view?.aiFixtureAvailable || agents.view?.sessionFixtureAvailable)
     return <FixtureTerminals />;
-  const mining = tab === "satcoin";
   return (
     <section
       className="panel deferred-workspace"
-      aria-label={t(
-        mining ? "Mining" : tab === "hyperliquid" ? "Hyperliquid" : "Trading",
-      )}
+      aria-label={t(tab === "hyperliquid" ? "Hyperliquid" : "Trading")}
     >
       <SectionHead
-        title={t(
-          mining ? "Mining" : tab === "hyperliquid" ? "Hyperliquid" : "Trading",
-        )}
+        title={t(tab === "hyperliquid" ? "Hyperliquid" : "Trading")}
       />
       <Empty
         icon={<TerminalSquare size={24} />}
         title={t(
-          mining
-            ? "Mining is not available yet"
-            : tab === "hyperliquid"
-              ? "Hyperliquid is not available yet"
-              : "Choose a workspace",
+          tab === "hyperliquid"
+            ? "Hyperliquid is not available yet"
+            : "Choose a workspace",
         )}
       >
         {tab === "" && (

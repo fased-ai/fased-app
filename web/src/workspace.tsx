@@ -140,9 +140,13 @@ function getRoute() {
     swarm: "network",
   };
   const route = aliases[raw] ?? raw;
-  if (route === "terminals/asset" || route === "terminals/loss")
-    return "terminals/satcoin";
-  return /^(overview|mine(\/(assets|strategies|portfolio|stake))?|trade|tasks|intel|lab(\/(scripts|desk|journal))?|network|activity|settings|providers|terminals(\/(satcoin|hyperliquid|jupiter))?|agents\/(chat|review|bots|tasks|news|memory|settings)|wallets\/(overview|accounts|permissions|security|activity))$/.test(
+  if (
+    route === "terminals/satcoin" ||
+    route === "terminals/asset" ||
+    route === "terminals/loss"
+  )
+    return "mine";
+  return /^(overview|mine(\/(assets|strategies|portfolio|stake))?|trade|tasks|intel|lab(\/(scripts|desk|journal))?|network|activity|settings|providers|terminals(\/(hyperliquid|jupiter))?|agents\/(chat|review|bots|tasks|news|memory|settings)|wallets\/(overview|accounts|permissions|security|activity))$/.test(
     route,
   )
     ? route
@@ -418,7 +422,11 @@ function useWorkspaceState() {
         setFocusedTask("strategies");
         window.history.replaceState(window.history.state, "", `#${next}`);
       }
-      if (next === "terminals/satcoin" && window.location.hash !== `#${next}`)
+      if (
+        next === "mine" &&
+        window.location.hash !== "#mine" &&
+        /^#terminals\/(satcoin|asset|loss)$/.test(window.location.hash)
+      )
         window.history.replaceState(window.history.state, "", `#${next}`);
       setRoute(next);
       setQuery("");
@@ -526,7 +534,6 @@ function useWorkspaceState() {
           ["Mine", "mine"],
           ["Chat", "agents/chat"],
           ["Tasks", "tasks"],
-          ["Legacy Schedules", "agents/tasks"],
           ["Agents", "agents/settings"],
           ["Trade", "trade"],
           ["News", "intel"],
@@ -547,7 +554,7 @@ function useWorkspaceState() {
           item.title &&
           t(item.title).toLowerCase().includes(query.toLowerCase()),
       ),
-    [query, t, core.mode, agents.view?.wenMining],
+    [query, t, core.mode],
   );
 
   return useMemo(

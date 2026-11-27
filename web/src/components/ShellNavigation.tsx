@@ -42,7 +42,6 @@ export const shellPages = [
   { name: "Network", path: "network", icon: Globe2 },
   { name: "Memory", path: "agents/memory", icon: BookOpen },
   { name: "Data & Feeds", path: "agents/news", icon: Newspaper },
-  { name: "Mining", path: "terminals/satcoin", icon: Pickaxe },
   { name: "Onchain", path: "terminals/jupiter", icon: ArrowLeftRight },
   { name: "Hyperliquid", path: "terminals/hyperliquid", icon: TrendingUp },
 ] as const;
@@ -51,15 +50,13 @@ export function visibleShellPaths(
   coreMode: string,
   capabilities:
     { walletSigner?: boolean; financialExecution?: boolean } | null | undefined,
-  hasWENMining: boolean,
+  _hasWENMining = false,
 ) {
   const showCryptoTerminals =
     coreMode !== "ready" ||
     capabilities?.walletSigner === true ||
     capabilities?.financialExecution === true;
-  const showMiningTerminal = coreMode !== "ready" || hasWENMining;
   return shellPages.filter((p) => {
-    if (p.path === "terminals/satcoin") return showMiningTerminal;
     if (p.path.startsWith("terminals/")) return showCryptoTerminals;
     return true;
   });

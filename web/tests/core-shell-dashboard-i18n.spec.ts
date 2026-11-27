@@ -1823,18 +1823,26 @@ test("ordinary customer pages exclude test tools and connect Dashboard accounts"
   ).toBeVisible();
   await expect(page.locator(".scheduled-ai")).toHaveCount(0);
   await page.getByRole("button", { name: "Cancel task", exact: true }).click();
-  for (const route of ["terminals/satcoin", "terminals/hyperliquid"]) {
-    await page.goto(url + "/#" + route);
-    await expect(page.locator(".deferred-workspace")).toBeVisible();
-    await expect(
-      page.locator(
-        ".terminal-card,.terminal-workspace,.wen-paper-journey,.session-rehearsal,.session-automatic",
-      ),
-    ).toHaveCount(0);
-    await expect(
-      page.getByRole("button", { name: /mine|claim|run now/i }),
-    ).toHaveCount(0);
-  }
+  await page.goto(url + "/#terminals/satcoin");
+  await expect(page).toHaveURL(/#mine$/);
+  await expect(
+    page.getByRole("region", { name: "Mine", exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.locator(
+      ".terminal-card,.terminal-workspace,.wen-paper-journey,.session-rehearsal,.session-automatic",
+    ),
+  ).toHaveCount(0);
+  await page.goto(url + "/#terminals/hyperliquid");
+  await expect(page.locator(".deferred-workspace")).toBeVisible();
+  await expect(
+    page.locator(
+      ".terminal-card,.terminal-workspace,.wen-paper-journey,.session-rehearsal,.session-automatic",
+    ),
+  ).toHaveCount(0);
+  await expect(
+    page.getByRole("button", { name: /mine|claim|run now/i }),
+  ).toHaveCount(0);
   await page.goto(url + "/#terminals");
   await expect(page).toHaveURL(/#terminals\/jupiter$/);
   await expect(
@@ -1905,7 +1913,7 @@ test("ordinary customer pages exclude test tools and connect Dashboard accounts"
     ["news", "agents/news"],
     ["wallets", "wallets/overview"],
     ["onchain", "terminals/jupiter"],
-    ["mining", "terminals/satcoin"],
+    ["mining", "mine"],
     ["hyperliquid", "terminals/hyperliquid"],
     ["activity", "activity"],
     ["settings", "settings"],

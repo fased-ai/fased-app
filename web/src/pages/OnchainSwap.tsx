@@ -322,10 +322,7 @@ export function OnchainSwap() {
           <div className="task-list">
             <div className="panel-heading">
               <h2>{t("Orders")}</h2>
-              <button
-                className="text-button"
-                onClick={() => navigate("agents/tasks")}
-              >
+              <button className="text-button" onClick={() => navigate("tasks")}>
                 {t("Tasks")}
               </button>
             </div>
