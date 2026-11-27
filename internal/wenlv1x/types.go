@@ -249,19 +249,19 @@ type ClaimableRoundItem struct {
 
 // EntryHistoryItem records one commit/claim/stake action in local mining history.
 type EntryHistoryItem struct {
-	ID           string  `json:"id"`
-	WalletID     string  `json:"walletId"`
-	Cluster      string  `json:"cluster"`
-	RoundSlot    uint64  `json:"roundSlot"`
-	Kind         string  `json:"kind"` // commit | reveal | claim_sol | claim_sat | claim_btc | stake | unstake | claim_staking
-	Selection    *uint8  `json:"selection,omitempty"`
-	StrategyID   string  `json:"strategyId,omitempty"`
-	AmountSOL    float64 `json:"amountSol,omitempty"`
-	AmountSAT    float64 `json:"amountSat,omitempty"`
-	AmountBTC    float64 `json:"amountBtc,omitempty"`
-	TxSignature  string  `json:"txSignature,omitempty"`
-	Status       string  `json:"status"`
-	CreatedAt    int64   `json:"createdAt"`
+	ID          string  `json:"id"`
+	WalletID    string  `json:"walletId"`
+	Cluster     string  `json:"cluster"`
+	RoundSlot   uint64  `json:"roundSlot"`
+	Kind        string  `json:"kind"` // commit | reveal | claim_sol | claim_sat | claim_btc | stake | unstake | claim_staking
+	Selection   *uint8  `json:"selection,omitempty"`
+	StrategyID  string  `json:"strategyId,omitempty"`
+	AmountSOL   float64 `json:"amountSol,omitempty"`
+	AmountSAT   float64 `json:"amountSat,omitempty"`
+	AmountBTC   float64 `json:"amountBtc,omitempty"`
+	TxSignature string  `json:"txSignature,omitempty"`
+	Status      string  `json:"status"`
+	CreatedAt   int64   `json:"createdAt"`
 }
 
 // PortfolioResponse aggregates claimable assets, vesting, balances, history, sessions, and policy.

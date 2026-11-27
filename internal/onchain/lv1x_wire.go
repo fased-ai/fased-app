@@ -14,20 +14,20 @@ import (
 
 const (
 	// Canonical Lean V1 (LV1X) protocol constants matching wen/vendor/satcoin-mining-v2/lean-v1-pda.mjs.
-	LV1XMagic                = "LV1X"
-	LV1XVersion              = 1
-	LV1XMinCommitLamports    = uint64(10_000_000)
-	LV1XMinStakeAtoms        = uint64(10_000_000_000) // 10 SAT (9 decimals)
-	LV1XLifetimeSatAtoms     = uint64(30_000_000_000_000_000)
-	LV1XBootstrapVestingSec  = uint32(604_800)
-	LV1XDefaultTGEBps        = uint16(2500)
-	LV1XRoundIntervalSec     = int64(600)
-	LV1XMaxShards            = 32
-	LV1XUnshardedShardID     = uint8(255)
-	LV1XPageEntries          = 8
-	BPFLoaderUpgradeableID   = "BPFLoaderUpgradeab1e11111111111111111111111"
-	SolanaTokenProgramID     = Token
-	SolanaAssociatedTokenID  = AssociatedToken
+	LV1XMagic               = "LV1X"
+	LV1XVersion             = 1
+	LV1XMinCommitLamports   = uint64(10_000_000)
+	LV1XMinStakeAtoms       = uint64(10_000_000_000) // 10 SAT (9 decimals)
+	LV1XLifetimeSatAtoms    = uint64(30_000_000_000_000_000)
+	LV1XBootstrapVestingSec = uint32(604_800)
+	LV1XDefaultTGEBps       = uint16(2500)
+	LV1XRoundIntervalSec    = int64(600)
+	LV1XMaxShards           = 32
+	LV1XUnshardedShardID    = uint8(255)
+	LV1XPageEntries         = 8
+	BPFLoaderUpgradeableID  = "BPFLoaderUpgradeab1e11111111111111111111111"
+	SolanaTokenProgramID    = Token
+	SolanaAssociatedTokenID = AssociatedToken
 
 	// Pinned Devnet Lean V1 deployment (wen-lean-v1-devnet-manifest/1).
 	LV1XDevnetProgramID        = "WAcbznz9veHLEU4qup2eqvwQcGzLeV7hYvAtfaQTrVY"

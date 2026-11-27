@@ -735,9 +735,9 @@ func (e *Engine) submitStakingOp(ctx context.Context, req StakeActionRequest, op
 	}
 	atoms := uint64(req.AmountSAT * 1e9)
 	rev, err := e.custody.PrepareReview(ctx, custody.PrepareReviewRequest{
-		WalletID: req.WalletID,
+		WalletID:  req.WalletID,
 		Operation: op,
-		Venue:    "wen-mining",
+		Venue:     "wen-mining",
 		MiningLV1X: &custody.MiningLV1XRequest{
 			Cluster:        c,
 			ProgramID:      onchain.LV1XDevnetProgramID,

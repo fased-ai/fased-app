@@ -482,7 +482,7 @@ func (h *HTTPHandler) miningLV1XAPI(w http.ResponseWriter, r *http.Request, toke
 			writeError(w, 400, "walletId is required")
 			return
 		}
-		if (rel == "stake" || rel == "unstake") {
+		if rel == "stake" || rel == "unstake" {
 			if hasPW, _ := h.store.hasPassword(ctx); hasPW {
 				if _, ok := h.requireStepUpCtx(w, r, token, "mining-"+rel, in.WalletID); !ok {
 					return
