@@ -243,7 +243,7 @@ test("Meteora shell preserves drafts and records through navigation theme langua
     await more.getByRole("link", { name: "Tasks", exact: true }).click();
     await expect(page.locator(".shell-more-toggle")).toHaveCSS(
       "color",
-      "rgb(240, 100, 132)",
+      "rgb(229, 71, 106)",
     );
     await page.getByRole("button", { name: "More", exact: true }).click();
   }

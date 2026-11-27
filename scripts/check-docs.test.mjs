@@ -219,7 +219,7 @@ test("Mintlify title support retains malformed title, private-link and traversal
   );
 });
 
-test("anti-drift checks reject stale PM1 math, missing NOT READY hold, and wrong Ember hex", () => {
+test("anti-drift checks reject stale PM1 math, missing NOT READY hold, stale CSS hexes, and News & Intel naming", () => {
   const staleSat = foundation({
     "docs/satcoin-mining.md":
       "# Satcoin\n\n8× boost is limited to 60,000 gross SAT and 74/1/10/10/5 split.\n",
@@ -234,15 +234,30 @@ test("anti-drift checks reject stale PM1 math, missing NOT READY hold, and wrong
   });
   assert.deepEqual(validateDocumentation(validSat), []);
 
-  const staleDesign = foundation({
-    "docs/design-language.md": "# Design\n\nEmber `#FF5A36` accent.\n",
+  for (const hex of ["#FF5A36", "#ff4f7c", "#0d0d12", "#15141C"]) {
+    const staleDesign = foundation({
+      "docs/design-language.md": `# Design\n\nAccent ${hex}.\n`,
+    });
+    assert.ok(
+      validateDocumentation(staleDesign).some((e) =>
+        e.includes("WEN Muted Pro #0A0C10 / #E5476A"),
+      ),
+      hex,
+    );
+  }
+
+  const staleNews = foundation({
+    "docs/README.md": "# Guide\n\nCovers News & Intel workspace.\n",
   });
   assert.ok(
-    validateDocumentation(staleDesign).some((e) => e.includes("stale #FF5A36")),
+    validateDocumentation(staleNews).some((e) =>
+      e.includes("canonical 'News' label"),
+    ),
   );
 
   const validDesign = foundation({
-    "docs/design-language.md": "# Design\n\nCoral `#ff4f7c` accent.\n",
+    "docs/design-language.md":
+      "# Design\n\nWEN Muted Pro `#0A0C10` canvas and `#E5476A` accent.\n",
   });
   assert.deepEqual(validateDocumentation(validDesign), []);
 });

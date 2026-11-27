@@ -1144,8 +1144,13 @@
   .wt .has-conversation:not(.rail-open) {
     grid-template-rows: auto minmax(0, 1fr);
   }
+  .wt .chat-thread-heading {
+    flex-wrap: wrap;
+    gap: 6px;
+  }
   .wt .chat-thread-heading h3 {
     font-size: 12px;
+    min-width: 120px;
   }
   .wt .chat-context-button {
     font-size: 10px;

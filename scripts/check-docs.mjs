@@ -207,9 +207,26 @@ function validate(files, documentationOnly) {
   }
   if (files.has("docs/design-language.md")) {
     const dl = files.get("docs/design-language.md");
-    if (/#FF5A36/i.test(dl) || !/#ff4f7c/i.test(dl)) {
+    if (
+      /#FF5A36|#ff4f7c|#15141C|#0d0d12/i.test(dl) ||
+      !/#E5476A/i.test(dl) ||
+      !/#0A0C10/i.test(dl)
+    ) {
       errors.push(
-        "docs/design-language.md: must cite actual #ff4f7c CSS accent rather than stale #FF5A36",
+        "docs/design-language.md: must cite WEN Muted Pro #0A0C10 / #E5476A tokens rather than stale #FF5A36/#ff4f7c/#0d0d12/#15141C",
+      );
+    }
+    if (/News & Intel|World Intel/i.test(dl)) {
+      errors.push(
+        "docs/design-language.md: must use canonical 'News' label rather than News & Intel / World Intel",
+      );
+    }
+  }
+  if (files.has("docs/README.md")) {
+    const readme = files.get("docs/README.md");
+    if (/News & Intel|World Intel/i.test(readme)) {
+      errors.push(
+        "docs/README.md: must use canonical 'News' label rather than News & Intel / World Intel",
       );
     }
   }

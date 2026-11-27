@@ -874,7 +874,7 @@ export function TradeWorkspace() {
                 </span>
               </div>
 
-              <div className="wt-kpi-box">
+              <div className="wt-kpi-grid">
                 <div>
                   <span>{t("Equity")}</span>
                   <strong className="mono">

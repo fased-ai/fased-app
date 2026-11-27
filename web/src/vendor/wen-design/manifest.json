@@ -1,14 +1,14 @@
 {
-  "schema": "wen-design-artifact/1",
-  "version": "0.1.0",
-  "source": "wen/packages/strategy-terminal/src/style.css",
-  "sourceRevision": "191b3efc6f6ccd3cee2b2b2e6a26c2ab427828b8",
+  "schema": "wen-design-artifact/2",
+  "version": "0.2.0",
+  "source": "wen/src/features/mining/retail-theme.css",
+  "sourceRevision": "a8990c913ff4a52b2cd8a29595979995b7d40f9e",
   "sourceWorkingTree": true,
-  "sourceSHA256": "7c3ef8bf94c8a26a07d67680bf5a8d0007a656800b5eb8d841a5f18350a0f817",
+  "sourceSHA256": "f83b7883964cfe9d0d11926056885f5d81e51ba9f64629db9c687ed97e2724cb",
   "files": {
-    "style.css": "7c3ef8bf94c8a26a07d67680bf5a8d0007a656800b5eb8d841a5f18350a0f817"
+    "style.css": "f83b7883964cfe9d0d11926056885f5d81e51ba9f64629db9c687ed97e2724cb"
   },
-  "scope": "Canonical shared WEN presentation only; no terminal JavaScript, data, scheduler or execution adapter",
+  "scope": "Canonical shared WEN Muted Pro presentation tokens; no terminal JavaScript, data, scheduler or execution adapter",
   "license": "Private owner-controlled WEN source, reused with owner authorization; no new distribution grant. Fased PolyForm Perimeter terms remain unchanged.",
-  "generation": "Exact byte copy of canonical source; regenerate by copying that file and refreshing both SHA-256 fields. Never edit the imported copy."
+  "generation": "Derived directly from wen/src/features/mining/retail-theme.css WEN Muted Pro tokens under .wt; refresh both SHA-256 fields whenever updating."
 }
