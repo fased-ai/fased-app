@@ -1,0 +1,546 @@
+/* WEN Muted Pro Mine Terminal (#mine) — zero hardcoded hex/rgb values */
+
+.mine-shell {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+.mine-topbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.mine-title-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.mine-title-row h1 {
+  margin: 0;
+  font-size: 1.05rem;
+  font-weight: 600;
+  color: var(--wt-text);
+}
+
+.mine-cluster-seg {
+  min-width: 156px;
+}
+
+.mine-meta-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.mine-stat-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 28px;
+  padding: 4px 10px;
+  border-radius: 7px;
+  background: var(--wt-surface);
+  color: var(--wt-text-2);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.mine-stat-pill strong {
+  color: var(--wt-text);
+  font-weight: 600;
+}
+
+.mine-stat-pill.is-up {
+  color: var(--wt-ok);
+}
+
+.mine-stat-pill.is-down {
+  color: var(--wt-danger);
+}
+
+.mine-stat-pill.is-locked {
+  color: var(--wt-warn);
+}
+
+.mine-top-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.mine-wallet-select {
+  min-height: 30px;
+  max-width: 190px;
+  padding: 4px 8px;
+  border: 0;
+  border-radius: var(--radius-xs);
+  background: var(--wt-raised);
+  color: var(--wt-text);
+  font-size: 12px;
+}
+
+.mine-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 348px;
+  gap: 10px;
+  align-items: start;
+  min-width: 0;
+}
+
+.mine-canvas {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+}
+
+.mine-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.mine-section-head h2 {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--wt-text);
+}
+
+.mine-muted-note {
+  font-size: 11px;
+  color: var(--wt-muted);
+}
+
+/* 24-round neutral streak strip matching WEN's calm micro-chips */
+.mine-streak-grid {
+  display: grid;
+  grid-template-columns: repeat(12, minmax(0, 1fr));
+  gap: 4px;
+}
+
+.mine-streak-chip {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 1px;
+  padding: 5px 2px 6px;
+  border-radius: 5px;
+  background: var(--wt-raised);
+  color: var(--wt-text);
+  font-size: 11px;
+  font-weight: 600;
+  overflow: hidden;
+  min-width: 0;
+}
+
+.mine-streak-chip small {
+  font-size: 9px;
+  font-weight: 500;
+  color: var(--wt-muted);
+}
+
+.mine-streak-chip::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 2px;
+  background: var(--wt-muted);
+}
+
+.mine-streak-chip.range-0::after {
+  background: var(--wt-range-a);
+}
+
+.mine-streak-chip.range-1::after {
+  background: var(--wt-range-b);
+}
+
+.mine-streak-chip.range-2::after {
+  background: var(--wt-range-c);
+}
+
+.mine-streak-chip.range-3::after {
+  background: var(--wt-range-d);
+}
+
+.mine-streak-chip.range-4::after {
+  background: var(--wt-range-e);
+}
+
+/* 80-bar WEN Allocation Curve */
+.mine-allocation-chart {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 6px;
+  height: 158px;
+  padding: 18px 4px 0;
+  align-items: end;
+  border-bottom: 1px solid var(--wt-border);
+  user-select: none;
+  touch-action: none;
+}
+
+.mine-allocation-chart.is-interactive {
+  cursor: crosshair;
+}
+
+.mine-bar {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  justify-content: flex-end;
+  gap: 4px;
+  height: 100%;
+  min-width: 0;
+}
+
+.mine-bar:not(:last-child)::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  right: -3.5px;
+  bottom: 0;
+  width: 1px;
+  background: var(--wt-border);
+  pointer-events: none;
+}
+
+.mine-bound-tick {
+  position: absolute;
+  top: -15px;
+  right: -3px;
+  transform: translateX(50%);
+  font-style: normal;
+  font-size: 9px;
+  font-weight: 600;
+  color: var(--wt-muted);
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+.mine-bin-group {
+  display: flex;
+  align-items: end;
+  gap: 1px;
+  width: 100%;
+  height: calc(100% - 18px);
+  min-height: 0;
+}
+
+.mine-bin-group i {
+  display: block;
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 2px;
+  max-height: 100%;
+  height: var(--microbar-height);
+  background: var(--wt-raised-2);
+  border-radius: 1px 1px 0 0;
+}
+
+.mine-bin-group i.has-fill {
+  background: var(--microbar-color);
+}
+
+.mine-bar-code {
+  height: 14px;
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--wt-muted);
+  text-align: center;
+}
+
+.mine-bucket-strip {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 4px;
+}
+
+.mine-bucket-cell {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: 6px 4px;
+  border: 0;
+  border-radius: var(--radius-xs);
+  background: var(--wt-raised);
+  color: var(--wt-text);
+  cursor: pointer;
+  min-width: 0;
+}
+
+.mine-bucket-cell:hover,
+.mine-bucket-cell.is-selected {
+  background: var(--wt-raised-2);
+}
+
+.mine-bucket-cell span {
+  font-size: 11px;
+  color: var(--wt-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
+
+.mine-bucket-cell strong {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.mine-bucket-cell small {
+  font-size: 10px;
+  color: var(--wt-cyan-text);
+}
+
+.mine-table-scroll {
+  overflow-x: auto;
+  min-width: 0;
+}
+
+.mine-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.mine-table th,
+.mine-table td {
+  padding: 8px 6px;
+  border-bottom: 1px solid var(--wt-border);
+  text-align: right;
+  font-weight: 400;
+}
+
+.mine-table th {
+  color: var(--wt-muted);
+  font-weight: 600;
+  font-size: 11px;
+}
+
+.mine-table th:first-child,
+.mine-table td:first-child {
+  text-align: left;
+}
+
+/* Right Composer */
+.mine-composer {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+}
+
+.mine-presets-grid {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 4px;
+  padding: 4px;
+  border-radius: 7px;
+  background: var(--wt-raised);
+}
+
+:root.wt button.mine-preset-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  min-width: 0;
+  min-height: 52px;
+  padding: 6px 2px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--wt-muted);
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1.15;
+  cursor: pointer;
+}
+
+:root.wt button.mine-preset-btn:hover {
+  color: var(--wt-text);
+  background: var(--wt-surface);
+}
+
+:root.wt button.mine-preset-btn[aria-pressed="true"] {
+  background: var(--wt-raised-2);
+  color: var(--wt-text);
+}
+
+.mine-preset-btn svg {
+  width: 22px;
+  height: 14px;
+  flex: none;
+}
+
+.mine-field {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.mine-field label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--wt-muted);
+}
+
+.mine-amount-input {
+  width: 100%;
+  height: 40px;
+  padding: 6px 10px;
+  border: 0;
+  border-radius: var(--radius-xs);
+  background: var(--wt-raised);
+  color: var(--wt-text);
+  font-size: 18px;
+  font-weight: 600;
+}
+
+.mine-quick-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+:root.wt button.mine-chip {
+  min-height: 26px;
+  padding: 3px 8px;
+  border: 0;
+  border-radius: 5px;
+  background: var(--wt-raised);
+  color: var(--wt-muted);
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+:root.wt button.mine-chip:hover,
+:root.wt button.mine-chip[aria-pressed="true"] {
+  background: var(--wt-raised-2);
+  color: var(--wt-text);
+}
+
+.mine-toggle-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--wt-text-2);
+  cursor: pointer;
+}
+
+.mine-gate-note {
+  padding: 8px 10px;
+  border-radius: var(--radius-xs);
+  background: var(--wt-raised);
+  color: var(--wt-warn);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.mine-composer-footer {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--wt-border);
+}
+
+.mine-secondary-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.mine-secondary-actions > button {
+  flex: 1 1 0;
+}
+
+.mine-notice {
+  font-size: 12px;
+  color: var(--wt-ok);
+  margin: 0;
+}
+
+.mine-error {
+  font-size: 12px;
+  color: var(--wt-danger);
+  margin: 0;
+}
+
+.mine-modal-form {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.mine-modal-input {
+  width: 100%;
+  min-height: 36px;
+  padding: 6px 10px;
+  border: 0;
+  border-radius: var(--radius-xs);
+  background: var(--wt-raised);
+  color: var(--wt-text);
+  font-size: 13px;
+}
+
+.mine-modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+@media (max-width: 960px) {
+  .mine-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 760px) {
+  .mine-streak-grid {
+    grid-template-columns: repeat(6, minmax(0, 1fr));
+  }
+
+  .mine-presets-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  :root.wt button.mine-preset-btn {
+    min-height: 48px;
+  }
+
+  .mine-wallet-select {
+    max-width: 100%;
+    min-height: 44px;
+  }
+
+  :root.wt button.mine-chip {
+    min-height: 44px;
+    padding: 6px 10px;
+  }
+}

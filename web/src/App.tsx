@@ -45,6 +45,11 @@ const TasksWorkspace = lazy(() =>
     default: m.TasksWorkspace,
   })),
 );
+const MineWorkspace = lazy(() =>
+  import("./pages/MineWorkspace").then((m) => ({
+    default: m.MineWorkspace,
+  })),
+);
 function WorkspaceShell() {
   const { t: uiText } = useUI();
   const { t, resolvedTheme } = useUI();
@@ -141,16 +146,9 @@ function WorkspaceShell() {
             {section === "overview" ? (
               <Overview />
             ) : section === "mine" ? (
-              <section className="panel" aria-label={uiText("Mine")}>
-                <SectionHead
-                  title={uiText("Mine")}
-                  action={
-                    <a className="wt-btn-soft" href="#wallets/overview">
-                      {uiText("Wallets")}
-                    </a>
-                  }
-                />
-              </section>
+              <Suspense fallback={<p role="status">{uiText("Loading")}</p>}>
+                <MineWorkspace />
+              </Suspense>
             ) : section === "trade" ? (
               <Suspense fallback={<p role="status">{uiText("Loading")}</p>}>
                 <TradeWorkspace />
