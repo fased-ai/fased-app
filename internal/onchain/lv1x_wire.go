@@ -14,14 +14,20 @@ import (
 
 const (
 	// Canonical Lean V1 (LV1X) protocol constants matching wen/vendor/satcoin-mining-v2/lean-v1-pda.mjs.
-	LV1XMagic              = "LV1X"
-	LV1XVersion            = 1
-	LV1XMinCommitLamports  = uint64(10_000_000)
-	LV1XRoundIntervalSec   = int64(600)
-	LV1XMaxShards          = 32
-	LV1XUnshardedShardID   = uint8(255)
-	LV1XPageEntries        = 8
-	BPFLoaderUpgradeableID = "BPFLoaderUpgradeab1e11111111111111111111111"
+	LV1XMagic                = "LV1X"
+	LV1XVersion              = 1
+	LV1XMinCommitLamports    = uint64(10_000_000)
+	LV1XMinStakeAtoms        = uint64(10_000_000_000) // 10 SAT (9 decimals)
+	LV1XLifetimeSatAtoms     = uint64(30_000_000_000_000_000)
+	LV1XBootstrapVestingSec  = uint32(604_800)
+	LV1XDefaultTGEBps        = uint16(2500)
+	LV1XRoundIntervalSec     = int64(600)
+	LV1XMaxShards            = 32
+	LV1XUnshardedShardID     = uint8(255)
+	LV1XPageEntries          = 8
+	BPFLoaderUpgradeableID   = "BPFLoaderUpgradeab1e11111111111111111111111"
+	SolanaTokenProgramID     = Token
+	SolanaAssociatedTokenID  = AssociatedToken
 
 	// Pinned Devnet Lean V1 deployment (wen-lean-v1-devnet-manifest/1).
 	LV1XDevnetProgramID        = "WAcbznz9veHLEU4qup2eqvwQcGzLeV7hYvAtfaQTrVY"
@@ -41,18 +47,26 @@ const (
 	LV1XTagInitialize               uint8 = 0
 	LV1XTagCommit                   uint8 = 5
 	LV1XTagCommitFromSession        uint8 = 6
+	LV1XTagRevealBatch              uint8 = 7
 	LV1XTagClaimSolBatch            uint8 = 13
 	LV1XTagClaimSat                 uint8 = 14
 	LV1XTagClaimBtc                 uint8 = 16
+	LV1XTagStake                    uint8 = 21
+	LV1XTagActivateStake            uint8 = 22
+	LV1XTagClaimStakingReward       uint8 = 25
+	LV1XTagUnstake                  uint8 = 26
 	LV1XTagOpenSession              uint8 = 30
 	LV1XTagDepositSession           uint8 = 31
 	LV1XTagStopSession              uint8 = 32
 	LV1XTagCloseSession             uint8 = 33
 	LV1XTagCommitToShard            uint8 = 35
 	LV1XTagCommitFromSessionToShard uint8 = 36
+	LV1XTagRevealPageBatch          uint8 = 37
 	LV1XTagClaimShardSolBatch       uint8 = 42
 	LV1XTagClaimShardSat            uint8 = 43
 	LV1XTagClaimShardBtc            uint8 = 44
+	LV1XTagClaimSatBatch            uint8 = 52
+	LV1XTagClaimBtcBatch            uint8 = 53
 )
 
 // FindProgramAddress derives a canonical Solana off-curve PDA from seeds.
@@ -216,6 +230,75 @@ func LV1XMinerBTCVaultPDA(programID, ledgerID string) (string, error) {
 	}
 	addr, _, err := FindProgramAddress(programID, []byte("lv1-miner-btc"), l)
 	return addr, err
+}
+
+// LV1XStakingStatePDA derives findProgramAddress(["lv1-staking", ledger], program).
+func LV1XStakingStatePDA(programID, ledgerID string) (string, error) {
+	l, err := Key(ledgerID)
+	if err != nil {
+		return "", err
+	}
+	addr, _, err := FindProgramAddress(programID, []byte("lv1-staking"), l)
+	return addr, err
+}
+
+// LV1XStakingVaultPDA derives findProgramAddress(["lv1-stake-vault", ledger], program).
+func LV1XStakingVaultPDA(programID, ledgerID string) (string, error) {
+	l, err := Key(ledgerID)
+	if err != nil {
+		return "", err
+	}
+	addr, _, err := FindProgramAddress(programID, []byte("lv1-stake-vault"), l)
+	return addr, err
+}
+
+// LV1XStakingBTCVaultPDA derives findProgramAddress(["lv1-stake-btc-vault", ledger], program).
+func LV1XStakingBTCVaultPDA(programID, ledgerID string) (string, error) {
+	l, err := Key(ledgerID)
+	if err != nil {
+		return "", err
+	}
+	addr, _, err := FindProgramAddress(programID, []byte("lv1-stake-btc-vault"), l)
+	return addr, err
+}
+
+// LV1XStakePositionPDA derives findProgramAddress(["lv1-stake-pos", ledger, owner], program).
+func LV1XStakePositionPDA(programID, ledgerID, owner string) (string, error) {
+	l, err := Key(ledgerID)
+	if err != nil {
+		return "", err
+	}
+	ok, err := Key(owner)
+	if err != nil {
+		return "", err
+	}
+	addr, _, err := FindProgramAddress(programID, []byte("lv1-stake-pos"), l, ok)
+	return addr, err
+}
+
+// LV1XTreasuryStatePDA derives findProgramAddress(["lv1-treasury", ledger], program).
+func LV1XTreasuryStatePDA(programID, ledgerID string) (string, error) {
+	l, err := Key(ledgerID)
+	if err != nil {
+		return "", err
+	}
+	addr, _, err := FindProgramAddress(programID, []byte("lv1-treasury"), l)
+	return addr, err
+}
+
+// LV1XTreasuryBTCVaultPDA derives findProgramAddress(["lv1-treasury-btc", ledger], program).
+func LV1XTreasuryBTCVaultPDA(programID, ledgerID string) (string, error) {
+	l, err := Key(ledgerID)
+	if err != nil {
+		return "", err
+	}
+	addr, _, err := FindProgramAddress(programID, []byte("lv1-treasury-btc"), l)
+	return addr, err
+}
+
+// LV1XAssociatedTokenAddress derives the SPL Associated Token Account PDA for (owner, mint).
+func LV1XAssociatedTokenAddress(owner, mint string) (string, error) {
+	return TokenAccount(owner, mint)
 }
 
 // BPFLoaderProgramDataPDA derives the Upgradeable BPF Loader ProgramData address for programID.
@@ -623,17 +706,11 @@ func BuildLV1XClaimSolBatchMessage(p LV1XClaimSolParams) ([]byte, error) {
 			data:     data,
 		})
 	} else {
-		skAddr, err := LV1XShardPDA(p.ProgramID, rkAddr, p.ShardID)
-		if err != nil {
-			return nil, err
-		}
 		pkAddr, err := LV1XShardPagePDA(p.ProgramID, rkAddr, p.ShardID, p.Page)
 		if err != nil {
 			return nil, err
 		}
-		skPK, _ := mustKey32(skAddr)
 		pkPK, _ := mustKey32(pkAddr)
-		iSK := addKey(skPK, false, true)
 		iPK := addKey(pkPK, false, true)
 		data := make([]byte, 1+8+1+4+1)
 		data[0] = LV1XTagClaimShardSolBatch
@@ -643,11 +720,519 @@ func BuildLV1XClaimSolBatchMessage(p LV1XClaimSolParams) ([]byte, error) {
 		data[14] = p.EntriesMask
 		ixs = append(ixs, legacyIxSpec{
 			program:  progPK,
-			accounts: []int{iRT, iRK, iSK, iPK, iDest},
+			accounts: []int{iRT, iRK, iPK, iDest},
 			data:     data,
 		})
 	}
 	return encodeLegacyMessage(p.FeePayer, p.Blockhash, specs, ixs)
+}
+
+// LV1XRevealItem describes one entry reveal payload inside a page.
+type LV1XRevealItem struct {
+	EntryRow  uint8
+	Selection uint8
+	Salt      [32]byte
+}
+
+// LV1XRevealParams builds RevealBatch (Tag 7) or RevealPageBatch (Tag 37).
+type LV1XRevealParams struct {
+	ProgramID string
+	LedgerID  string
+	FeePayer  [32]byte
+	Blockhash [32]byte
+	Slot      uint64
+	ShardID   uint8
+	Page      uint32
+	Items     []LV1XRevealItem
+	ComputeCU uint32
+	MicroLam  uint64
+}
+
+// LV1XClaimTokenParams builds ClaimSat / ClaimShardSat or ClaimBtc / ClaimShardBtc.
+type LV1XClaimTokenParams struct {
+	ProgramID string
+	LedgerID  string
+	Owner     [32]byte
+	Blockhash [32]byte
+	Slot      uint64
+	ShardID   uint8
+	Page      uint32
+	EntryRow  uint8
+	BTCMint   string // Required when Claiming BTC
+	CreateATA bool
+	ComputeCU uint32
+	MicroLam  uint64
+}
+
+// LV1XStakeParams builds Stake (Tag 21), ActivateStake (Tag 22), ClaimStakingReward (Tag 25), or Unstake (Tag 26).
+type LV1XStakeParams struct {
+	ProgramID string
+	LedgerID  string
+	Owner     [32]byte
+	Blockhash [32]byte
+	Action    string // stake | activate | claim_reward | unstake
+	Amount    uint64 // SAT atoms (9 decimals)
+	BTCMint   string // Required for claim_reward
+	CreateATA bool
+	ComputeCU uint32
+	MicroLam  uint64
+}
+
+type lv1xMsgBuilder struct {
+	specs  []legacyAccountSpec
+	posMap map[[32]byte]int
+	ixs    []legacyIxSpec
+}
+
+func newLV1XMsgBuilder(feePayer [32]byte, cu uint32, microLam uint64) (*lv1xMsgBuilder, int) {
+	b := &lv1xMsgBuilder{posMap: make(map[[32]byte]int)}
+	iPayer := b.addKey(feePayer, true, true)
+	appendComputeBudgetIxs(&b.ixs, b.addKey, cu, microLam)
+	return b, iPayer
+}
+
+func (b *lv1xMsgBuilder) addKey(k [32]byte, signer, writable bool) int {
+	if idx, ok := b.posMap[k]; ok {
+		if signer {
+			b.specs[idx].isSigner = true
+		}
+		if writable {
+			b.specs[idx].isWritable = true
+		}
+		return idx
+	}
+	b.posMap[k] = len(b.specs)
+	b.specs = append(b.specs, legacyAccountSpec{key: k, isSigner: signer, isWritable: writable})
+	return len(b.specs) - 1
+}
+
+func (b *lv1xMsgBuilder) appendCreateATAIdempotent(iPayer int, ataPK, ownerPK, mintPK [32]byte) error {
+	ataProgPK, err := mustKey32(AssociatedToken)
+	if err != nil {
+		return err
+	}
+	sysPK, err := mustKey32(System)
+	if err != nil {
+		return err
+	}
+	tokPK, err := mustKey32(Token)
+	if err != nil {
+		return err
+	}
+	iATA := b.addKey(ataPK, false, true)
+	iOwner := b.addKey(ownerPK, false, false)
+	iMint := b.addKey(mintPK, false, false)
+	iSys := b.addKey(sysPK, false, false)
+	iTok := b.addKey(tokPK, false, false)
+	_ = b.addKey(ataProgPK, false, false)
+	b.ixs = append(b.ixs, legacyIxSpec{
+		program:  ataProgPK,
+		accounts: []int{iPayer, iATA, iOwner, iMint, iSys, iTok},
+		data:     []byte{1}, // CreateIdempotent
+	})
+	return nil
+}
+
+// BuildLV1XRevealMessage builds RevealBatch (Tag 7) or RevealPageBatch (Tag 37).
+func BuildLV1XRevealMessage(p LV1XRevealParams) ([]byte, error) {
+	if len(p.Items) == 0 || len(p.Items) > LV1XPageEntries {
+		return nil, errors.New("reveal batch requires 1..8 items")
+	}
+	for i, it := range p.Items {
+		if int(it.EntryRow) >= LV1XPageEntries {
+			return nil, errors.New("reveal entry row must be 0..7")
+		}
+		if it.Selection > 4 {
+			return nil, errors.New("reveal selection must be 0..4")
+		}
+		if i > 0 && it.EntryRow <= p.Items[i-1].EntryRow {
+			return nil, errors.New("reveal entry rows must be strictly ascending")
+		}
+	}
+	if p.ShardID != LV1XUnshardedShardID && int(p.ShardID) >= LV1XMaxShards {
+		return nil, errors.New("invalid LV1X shard id")
+	}
+	progPK, err := mustKey32(p.ProgramID)
+	if err != nil {
+		return nil, err
+	}
+	rtAddr, err := LV1XRuntimePDA(p.ProgramID, p.LedgerID)
+	if err != nil {
+		return nil, err
+	}
+	rkAddr, err := LV1XRoundPDA(p.ProgramID, p.LedgerID, p.Slot)
+	if err != nil {
+		return nil, err
+	}
+	var pkAddr string
+	if p.ShardID == LV1XUnshardedShardID {
+		pkAddr, err = LV1XPagePDA(p.ProgramID, rkAddr, p.Page)
+	} else {
+		pkAddr, err = LV1XShardPagePDA(p.ProgramID, rkAddr, p.ShardID, p.Page)
+	}
+	if err != nil {
+		return nil, err
+	}
+	rtPK, _ := mustKey32(rtAddr)
+	rkPK, _ := mustKey32(rkAddr)
+	pkPK, _ := mustKey32(pkAddr)
+
+	b, _ := newLV1XMsgBuilder(p.FeePayer, p.ComputeCU, p.MicroLam)
+	iRT := b.addKey(rtPK, false, false)
+	iRK := b.addKey(rkPK, false, false)
+	iPK := b.addKey(pkPK, false, true)
+	_ = b.addKey(progPK, false, false)
+
+	var data []byte
+	if p.ShardID == LV1XUnshardedShardID && p.Page == 0 {
+		data = make([]byte, 0, 1+8+1+len(p.Items)*34)
+		data = append(data, LV1XTagRevealBatch)
+		data = append(data, u64LEBytes(p.Slot)...)
+		data = append(data, byte(len(p.Items)))
+	} else {
+		data = make([]byte, 0, 1+8+1+4+1+len(p.Items)*34)
+		data = append(data, LV1XTagRevealPageBatch)
+		data = append(data, u64LEBytes(p.Slot)...)
+		data = append(data, p.ShardID)
+		data = append(data, u32LEBytes(p.Page)...)
+		data = append(data, byte(len(p.Items)))
+	}
+	for _, it := range p.Items {
+		data = append(data, it.EntryRow, it.Selection)
+		data = append(data, it.Salt[:]...)
+	}
+	b.ixs = append(b.ixs, legacyIxSpec{
+		program:  progPK,
+		accounts: []int{iRT, iRK, iPK},
+		data:     data,
+	})
+	return encodeLegacyMessage(p.FeePayer, p.Blockhash, b.specs, b.ixs)
+}
+
+// BuildLV1XClaimSatMessage builds ClaimSat (Tag 14) or ClaimShardSat (Tag 43) with optional ATA creation.
+func BuildLV1XClaimSatMessage(p LV1XClaimTokenParams) ([]byte, error) {
+	if int(p.EntryRow) >= LV1XPageEntries {
+		return nil, errors.New("entry row must be 0..7")
+	}
+	if p.ShardID != LV1XUnshardedShardID && int(p.ShardID) >= LV1XMaxShards {
+		return nil, errors.New("invalid LV1X shard id")
+	}
+	progPK, err := mustKey32(p.ProgramID)
+	if err != nil {
+		return nil, err
+	}
+	rtAddr, err := LV1XRuntimePDA(p.ProgramID, p.LedgerID)
+	if err != nil {
+		return nil, err
+	}
+	rkAddr, err := LV1XRoundPDA(p.ProgramID, p.LedgerID, p.Slot)
+	if err != nil {
+		return nil, err
+	}
+	mintAddr, err := LV1XMintPDA(p.ProgramID, p.LedgerID)
+	if err != nil {
+		return nil, err
+	}
+	issAddr, err := LV1XIssuancePDA(p.ProgramID, p.LedgerID)
+	if err != nil {
+		return nil, err
+	}
+	ownerB58 := Base58(p.Owner[:])
+	ataAddr, err := LV1XAssociatedTokenAddress(ownerB58, mintAddr)
+	if err != nil {
+		return nil, err
+	}
+	var pkAddr string
+	if p.ShardID == LV1XUnshardedShardID {
+		pkAddr, err = LV1XPagePDA(p.ProgramID, rkAddr, p.Page)
+	} else {
+		pkAddr, err = LV1XShardPagePDA(p.ProgramID, rkAddr, p.ShardID, p.Page)
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	rtPK, _ := mustKey32(rtAddr)
+	rkPK, _ := mustKey32(rkAddr)
+	pkPK, _ := mustKey32(pkAddr)
+	mintPK, _ := mustKey32(mintAddr)
+	issPK, _ := mustKey32(issAddr)
+	ataPK, _ := mustKey32(ataAddr)
+	tokPK, _ := mustKey32(Token)
+
+	b, iPayer := newLV1XMsgBuilder(p.Owner, p.ComputeCU, p.MicroLam)
+	if p.CreateATA {
+		if err := b.appendCreateATAIdempotent(iPayer, ataPK, p.Owner, mintPK); err != nil {
+			return nil, err
+		}
+	}
+	iRT := b.addKey(rtPK, false, false)
+	iRK := b.addKey(rkPK, false, false)
+	iPK := b.addKey(pkPK, false, true)
+	iMint := b.addKey(mintPK, false, true)
+	iIss := b.addKey(issPK, false, false)
+	iATA := b.addKey(ataPK, false, true)
+	iTok := b.addKey(tokPK, false, false)
+	_ = b.addKey(progPK, false, false)
+
+	var data []byte
+	if p.ShardID == LV1XUnshardedShardID {
+		data = make([]byte, 1+8+4+1)
+		data[0] = LV1XTagClaimSat
+		binary.LittleEndian.PutUint64(data[1:9], p.Slot)
+		binary.LittleEndian.PutUint32(data[9:13], p.Page)
+		data[13] = p.EntryRow
+	} else {
+		data = make([]byte, 1+8+1+4+1)
+		data[0] = LV1XTagClaimShardSat
+		binary.LittleEndian.PutUint64(data[1:9], p.Slot)
+		data[9] = p.ShardID
+		binary.LittleEndian.PutUint32(data[10:14], p.Page)
+		data[14] = p.EntryRow
+	}
+	b.ixs = append(b.ixs, legacyIxSpec{
+		program:  progPK,
+		accounts: []int{iRT, iRK, iPK, iMint, iIss, iATA, iTok},
+		data:     data,
+	})
+	return encodeLegacyMessage(p.Owner, p.Blockhash, b.specs, b.ixs)
+}
+
+// BuildLV1XClaimBtcMessage builds ClaimBtc (Tag 16) or ClaimShardBtc (Tag 44).
+func BuildLV1XClaimBtcMessage(p LV1XClaimTokenParams) ([]byte, error) {
+	if int(p.EntryRow) >= LV1XPageEntries {
+		return nil, errors.New("entry row must be 0..7")
+	}
+	if p.ShardID != LV1XUnshardedShardID && int(p.ShardID) >= LV1XMaxShards {
+		return nil, errors.New("invalid LV1X shard id")
+	}
+	btcMint := strings.TrimSpace(p.BTCMint)
+	if btcMint == "" {
+		return nil, errors.New("btcMint required")
+	}
+	btcMintPK, err := mustKey32(btcMint)
+	if err != nil {
+		return nil, err
+	}
+	progPK, err := mustKey32(p.ProgramID)
+	if err != nil {
+		return nil, err
+	}
+	rtAddr, err := LV1XRuntimePDA(p.ProgramID, p.LedgerID)
+	if err != nil {
+		return nil, err
+	}
+	rkAddr, err := LV1XRoundPDA(p.ProgramID, p.LedgerID, p.Slot)
+	if err != nil {
+		return nil, err
+	}
+	vaultAddr, err := LV1XMinerBTCVaultPDA(p.ProgramID, p.LedgerID)
+	if err != nil {
+		return nil, err
+	}
+	ownerB58 := Base58(p.Owner[:])
+	ataAddr, err := LV1XAssociatedTokenAddress(ownerB58, btcMint)
+	if err != nil {
+		return nil, err
+	}
+	var pkAddr string
+	if p.ShardID == LV1XUnshardedShardID {
+		pkAddr, err = LV1XPagePDA(p.ProgramID, rkAddr, p.Page)
+	} else {
+		pkAddr, err = LV1XShardPagePDA(p.ProgramID, rkAddr, p.ShardID, p.Page)
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	rtPK, _ := mustKey32(rtAddr)
+	rkPK, _ := mustKey32(rkAddr)
+	pkPK, _ := mustKey32(pkAddr)
+	vaultPK, _ := mustKey32(vaultAddr)
+	ataPK, _ := mustKey32(ataAddr)
+	tokPK, _ := mustKey32(Token)
+
+	b, iPayer := newLV1XMsgBuilder(p.Owner, p.ComputeCU, p.MicroLam)
+	if p.CreateATA {
+		if err := b.appendCreateATAIdempotent(iPayer, ataPK, p.Owner, btcMintPK); err != nil {
+			return nil, err
+		}
+	}
+	iRT := b.addKey(rtPK, false, false)
+	iRK := b.addKey(rkPK, false, true)
+	iPK := b.addKey(pkPK, false, true)
+	iVault := b.addKey(vaultPK, false, true)
+	iATA := b.addKey(ataPK, false, true)
+	iTok := b.addKey(tokPK, false, false)
+	_ = b.addKey(progPK, false, false)
+
+	var data []byte
+	if p.ShardID == LV1XUnshardedShardID {
+		data = make([]byte, 1+8+4+1)
+		data[0] = LV1XTagClaimBtc
+		binary.LittleEndian.PutUint64(data[1:9], p.Slot)
+		binary.LittleEndian.PutUint32(data[9:13], p.Page)
+		data[13] = p.EntryRow
+	} else {
+		data = make([]byte, 1+8+1+4+1)
+		data[0] = LV1XTagClaimShardBtc
+		binary.LittleEndian.PutUint64(data[1:9], p.Slot)
+		data[9] = p.ShardID
+		binary.LittleEndian.PutUint32(data[10:14], p.Page)
+		data[14] = p.EntryRow
+	}
+	b.ixs = append(b.ixs, legacyIxSpec{
+		program:  progPK,
+		accounts: []int{iRT, iRK, iPK, iVault, iATA, iTok},
+		data:     data,
+	})
+	return encodeLegacyMessage(p.Owner, p.Blockhash, b.specs, b.ixs)
+}
+
+// BuildLV1XStakeMessage builds Stake (21), ActivateStake (22), ClaimStakingReward (25), or Unstake (26).
+func BuildLV1XStakeMessage(p LV1XStakeParams) ([]byte, error) {
+	progPK, err := mustKey32(p.ProgramID)
+	if err != nil {
+		return nil, err
+	}
+	ownerB58 := Base58(p.Owner[:])
+	rtAddr, err := LV1XRuntimePDA(p.ProgramID, p.LedgerID)
+	if err != nil {
+		return nil, err
+	}
+	stAddr, err := LV1XStakingStatePDA(p.ProgramID, p.LedgerID)
+	if err != nil {
+		return nil, err
+	}
+	posAddr, err := LV1XStakePositionPDA(p.ProgramID, p.LedgerID, ownerB58)
+	if err != nil {
+		return nil, err
+	}
+	rtPK, _ := mustKey32(rtAddr)
+	stPK, _ := mustKey32(stAddr)
+	posPK, _ := mustKey32(posAddr)
+	sysPK, _ := mustKey32(System)
+	tokPK, _ := mustKey32(Token)
+
+	b, iOwner := newLV1XMsgBuilder(p.Owner, p.ComputeCU, p.MicroLam)
+	iRT := b.addKey(rtPK, false, false)
+	iSt := b.addKey(stPK, false, true)
+	iPos := b.addKey(posPK, false, true)
+	_ = b.addKey(progPK, false, false)
+
+	act := strings.ToLower(strings.TrimSpace(p.Action))
+	switch act {
+	case "stake":
+		if p.Amount < LV1XMinStakeAtoms {
+			return nil, fmt.Errorf("stake below minimum %d SAT atoms", LV1XMinStakeAtoms)
+		}
+		vaultAddr, err := LV1XStakingVaultPDA(p.ProgramID, p.LedgerID)
+		if err != nil {
+			return nil, err
+		}
+		mintAddr, err := LV1XMintPDA(p.ProgramID, p.LedgerID)
+		if err != nil {
+			return nil, err
+		}
+		ataAddr, err := LV1XAssociatedTokenAddress(ownerB58, mintAddr)
+		if err != nil {
+			return nil, err
+		}
+		vaultPK, _ := mustKey32(vaultAddr)
+		ataPK, _ := mustKey32(ataAddr)
+		iVault := b.addKey(vaultPK, false, true)
+		iATA := b.addKey(ataPK, false, true)
+		iSys := b.addKey(sysPK, false, false)
+		iTok := b.addKey(tokPK, false, false)
+		data := make([]byte, 9)
+		data[0] = LV1XTagStake
+		binary.LittleEndian.PutUint64(data[1:9], p.Amount)
+		b.ixs = append(b.ixs, legacyIxSpec{
+			program:  progPK,
+			accounts: []int{iRT, iSt, iPos, iVault, iATA, iOwner, iSys, iTok},
+			data:     data,
+		})
+
+	case "activate":
+		b.ixs = append(b.ixs, legacyIxSpec{
+			program:  progPK,
+			accounts: []int{iRT, iSt, iPos},
+			data:     []byte{LV1XTagActivateStake},
+		})
+
+	case "claim_reward":
+		btcMint := strings.TrimSpace(p.BTCMint)
+		if btcMint == "" {
+			return nil, errors.New("btcMint required for claim_reward")
+		}
+		btcMintPK, err := mustKey32(btcMint)
+		if err != nil {
+			return nil, err
+		}
+		btcVaultAddr, err := LV1XStakingBTCVaultPDA(p.ProgramID, p.LedgerID)
+		if err != nil {
+			return nil, err
+		}
+		ataAddr, err := LV1XAssociatedTokenAddress(ownerB58, btcMint)
+		if err != nil {
+			return nil, err
+		}
+		btcVaultPK, _ := mustKey32(btcVaultAddr)
+		ataPK, _ := mustKey32(ataAddr)
+		if p.CreateATA {
+			if err := b.appendCreateATAIdempotent(iOwner, ataPK, p.Owner, btcMintPK); err != nil {
+				return nil, err
+			}
+		}
+		iBtcVault := b.addKey(btcVaultPK, false, true)
+		iATA := b.addKey(ataPK, false, true)
+		iTok := b.addKey(tokPK, false, false)
+		b.ixs = append(b.ixs, legacyIxSpec{
+			program:  progPK,
+			accounts: []int{iRT, iSt, iPos, iBtcVault, iATA, iOwner, iTok},
+			data:     []byte{LV1XTagClaimStakingReward},
+		})
+
+	case "unstake":
+		if p.Amount == 0 {
+			return nil, errors.New("unstake amount must be non-zero")
+		}
+		vaultAddr, err := LV1XStakingVaultPDA(p.ProgramID, p.LedgerID)
+		if err != nil {
+			return nil, err
+		}
+		mintAddr, err := LV1XMintPDA(p.ProgramID, p.LedgerID)
+		if err != nil {
+			return nil, err
+		}
+		mintPK, _ := mustKey32(mintAddr)
+		ataAddr, err := LV1XAssociatedTokenAddress(ownerB58, mintAddr)
+		if err != nil {
+			return nil, err
+		}
+		vaultPK, _ := mustKey32(vaultAddr)
+		ataPK, _ := mustKey32(ataAddr)
+		if p.CreateATA {
+			if err := b.appendCreateATAIdempotent(iOwner, ataPK, p.Owner, mintPK); err != nil {
+				return nil, err
+			}
+		}
+		iVault := b.addKey(vaultPK, false, true)
+		iATA := b.addKey(ataPK, false, true)
+		iTok := b.addKey(tokPK, false, false)
+		data := make([]byte, 9)
+		data[0] = LV1XTagUnstake
+		binary.LittleEndian.PutUint64(data[1:9], p.Amount)
+		b.ixs = append(b.ixs, legacyIxSpec{
+			program:  progPK,
+			accounts: []int{iRT, iSt, iPos, iVault, iATA, iOwner, iTok},
+			data:     data,
+		})
+
+	default:
+		return nil, fmt.Errorf("unsupported LV1X stake action %q", p.Action)
+	}
+	return encodeLegacyMessage(p.Owner, p.Blockhash, b.specs, b.ixs)
 }
 
 // BuildLV1XSessionMessage builds OpenSession (Tag 30), StopSession (Tag 32), or CloseSession (Tag 33).
@@ -720,6 +1305,20 @@ func BuildLV1XSessionMessage(p LV1XSessionParams) ([]byte, error) {
 		}
 		off++
 		binary.LittleEndian.PutUint64(data[off:off+8], p.Deposit)
+		ixs = append(ixs, legacyIxSpec{
+			program:  progPK,
+			accounts: []int{iRT, iSK, iOwner, iSys},
+			data:     data,
+		})
+	case "deposit":
+		if p.Deposit == 0 {
+			return nil, errors.New("deposit amount must be positive")
+		}
+		iSys := addKey(sysPK, false, false)
+		data := make([]byte, 1+8+8)
+		data[0] = LV1XTagDepositSession
+		binary.LittleEndian.PutUint64(data[1:9], p.Reference)
+		binary.LittleEndian.PutUint64(data[9:17], p.Deposit)
 		ixs = append(ixs, legacyIxSpec{
 			program:  progPK,
 			accounts: []int{iRT, iSK, iOwner, iSys},

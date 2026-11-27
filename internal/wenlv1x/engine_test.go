@@ -73,8 +73,8 @@ func TestPresetsCurveReversalAndEngineLifecycle(t *testing.T) {
 		Role:              custody.RoleMining,
 		ApprovalMode:      custody.ApprovalBoundedAuto,
 		AutoApproveMaxUSD: 25.0,
-		Operations:        []string{custody.MiningOpCommit, custody.MiningOpClaim, custody.MiningOpSession},
-		Programs:          []string{custody.SolanaSystemProgram, custody.SolanaComputeBudget, onchain.LV1XDevnetProgramID},
+		Operations:        custody.AllMiningOperations(),
+		Programs:          []string{custody.SolanaSystemProgram, custody.SolanaComputeBudget, custody.SolanaTokenProgram, custody.SolanaATAProgram, onchain.LV1XDevnetProgramID},
 		SOLCap: custody.AssetCap{
 			Asset:       "solana:native",
 			Symbol:      "SOL",
@@ -156,5 +156,76 @@ func TestPresetsCurveReversalAndEngineLifecycle(t *testing.T) {
 	stopped, err := eng.SetSessionStatus(ctx, sess.ID, "stopped")
 	if err != nil || stopped.Status != "stopped" {
 		t.Fatalf("SetSessionStatus failed: %+v err=%v", stopped, err)
+	}
+	topped, err := eng.DepositSession(ctx, sess.ID, 0.25)
+	if err != nil || topped.DepositSOL < 0.25 {
+		t.Fatalf("DepositSession failed: %+v err=%v", topped, err)
+	}
+
+	// 4. Candles, ProtocolStats, Leaderboard, Portfolio, StakingOverview, SavedStrategies + SimulateStrategy.
+	candles, err := eng.GetCandles(ctx, "10m", 60)
+	if err != nil || len(candles.Candles) != 60 || candles.Interval != "10m" {
+		t.Fatalf("GetCandles failed: len=%d err=%v", len(candles.Candles), err)
+	}
+	pStats, err := eng.ProtocolStats(ctx, "devnet")
+	if err != nil || pStats.ProgramID != onchain.LV1XDevnetProgramID {
+		t.Fatalf("ProtocolStats failed: %+v err=%v", pStats, err)
+	}
+	lb, err := eng.Leaderboard(ctx, "devnet", "24h")
+	if err != nil || len(lb.Rounds) == 0 {
+		t.Fatalf("Leaderboard failed: rounds=%d err=%v", len(lb.Rounds), err)
+	}
+	pf, err := eng.Portfolio(ctx, "devnet", mineW.ID)
+	if err != nil || pf.WalletPublicKey != mineW.PublicKey || len(pf.ClaimItems) == 0 {
+		t.Fatalf("Portfolio failed: pub=%s claims=%d err=%v", pf.WalletPublicKey, len(pf.ClaimItems), err)
+	}
+	stk, err := eng.StakingOverview(ctx, "devnet", mineW.ID)
+	if err != nil || stk.MinStakeSat != 10 {
+		t.Fatalf("StakingOverview failed: %+v err=%v", stk, err)
+	}
+
+	// Reveal + Claim SAT/BTC + Stake/Activate/ClaimStaking/Unstake + ClaimAll.
+	saltHex := "0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20"
+	if _, _, err := eng.SubmitReveal(ctx, RevealRequest{WalletID: mineW.ID, RoundSlot: st.Round.RoundSlot, Selection: 2, SaltHex: saltHex}); err != nil {
+		t.Fatalf("SubmitReveal failed: %v", err)
+	}
+	if _, _, err := eng.SubmitClaim(ctx, ClaimRequest{WalletID: mineW.ID, Asset: "sat", RoundSlot: st.Round.RoundSlot, CreateATA: true}); err != nil {
+		t.Fatalf("SubmitClaim(sat) failed: %v", err)
+	}
+	if _, _, err := eng.SubmitClaim(ctx, ClaimRequest{WalletID: mineW.ID, Asset: "btc", RoundSlot: st.Round.RoundSlot, CreateATA: true}); err != nil {
+		t.Fatalf("SubmitClaim(btc) failed: %v", err)
+	}
+	if _, _, err := eng.SubmitStake(ctx, StakeActionRequest{WalletID: mineW.ID, AmountSAT: 25}); err != nil {
+		t.Fatalf("SubmitStake failed: %v", err)
+	}
+	if _, _, err := eng.SubmitActivateStake(ctx, StakeActionRequest{WalletID: mineW.ID}); err != nil {
+		t.Fatalf("SubmitActivateStake failed: %v", err)
+	}
+	if _, _, err := eng.SubmitClaimStaking(ctx, StakeActionRequest{WalletID: mineW.ID, CreateATA: true}); err != nil {
+		t.Fatalf("SubmitClaimStaking failed: %v", err)
+	}
+	if _, _, err := eng.SubmitUnstake(ctx, StakeActionRequest{WalletID: mineW.ID, AmountSAT: 10, CreateATA: true}); err != nil {
+		t.Fatalf("SubmitUnstake failed: %v", err)
+	}
+
+	saved, err := eng.SaveStrategy(ctx, SavedStrategy{
+		Name:        "My Center Edge",
+		Description: "Custom 80-bar test",
+		Mode:        "neutral",
+		Buckets:     [5]uint16{1000, 2000, 4000, 2000, 1000},
+	})
+	if err != nil || saved.ID == "" {
+		t.Fatalf("SaveStrategy failed: %+v err=%v", saved, err)
+	}
+	listS, err := eng.ListSavedStrategies(ctx)
+	if err != nil || len(listS) != 1 {
+		t.Fatalf("ListSavedStrategies failed: %d err=%v", len(listS), err)
+	}
+	sim, err := eng.SimulateStrategy(ctx, SimulateRequest{BucketsBps: saved.Buckets, PerRoundSOL: 0.05, Limit: 24})
+	if err != nil || sim.Rounds != 24 || sim.TotalCommitted <= 0 {
+		t.Fatalf("SimulateStrategy failed: %+v err=%v", sim, err)
+	}
+	if err := eng.DeleteStrategy(ctx, saved.ID); err != nil {
+		t.Fatalf("DeleteStrategy failed: %v", err)
 	}
 }

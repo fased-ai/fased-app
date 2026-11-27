@@ -1484,9 +1484,7 @@ func (s *Service) PrepareReview(ctx context.Context, req PrepareReviewRequest) (
 	if op == "" {
 		op = "solana.nativeTransfer"
 	}
-	switch op {
-	case "solana.nativeTransfer", "solana.splTransferChecked", "jupiter.swap", MiningOpCommit, MiningOpClaim, MiningOpSession:
-	default:
+	if op != "solana.nativeTransfer" && op != "solana.splTransferChecked" && op != "jupiter.swap" && !isMiningOperation(op) {
 		return WalletReview{}, fmt.Errorf("%w: unsupported prepare operation %q", ErrPolicyDenied, op)
 	}
 
@@ -1547,9 +1545,9 @@ func (s *Service) PrepareReview(ctx context.Context, req PrepareReviewRequest) (
 				s.mu.Unlock()
 				return WalletReview{}, fmt.Errorf("%w: mining wallet requires Semi-Auto or Auto policy", ErrRoleDenied)
 			}
-			if w.Policy.ApprovalMode == ApprovalSemiAuto && (op != MiningOpClaim || !w.Policy.Mining.AutoClaim) {
+			if w.Policy.ApprovalMode == ApprovalSemiAuto && (!isMiningClaimOrRevealOp(op) || !w.Policy.Mining.AutoClaim) {
 				s.mu.Unlock()
-				return WalletReview{}, fmt.Errorf("%w: Semi-Auto mining prohibits unattended commit/session operations", ErrRoleDenied)
+				return WalletReview{}, fmt.Errorf("%w: Semi-Auto mining prohibits unattended commit, stake, or session operations", ErrRoleDenied)
 			}
 		} else {
 			if w.Role == RoleVault || w.Role == RoleMining || w.Policy.ApprovalMode == ApprovalManualReview || !w.Connections.AllowTradeBots {
@@ -1865,7 +1863,10 @@ func (s *Service) PrepareReview(ctx context.Context, req PrepareReviewRequest) (
 		}
 		programs = progList
 
-	case MiningOpCommit, MiningOpClaim, MiningOpSession:
+	default:
+		if !isMiningOperation(op) {
+			break
+		}
 		md, mErr := s.validateMiningPrepareLocked(ctx, w, op, req)
 		if mErr != nil {
 			s.mu.Unlock()
@@ -1878,7 +1879,7 @@ func (s *Service) PrepareReview(ctx context.Context, req PrepareReviewRequest) (
 		amountHuman = md.HumanAmount
 		estimatedUSD = md.EstimatedUSD
 		estFeeLamports = md.EstFeeLamports
-		programs = []string{SolanaComputeBudget, SolanaSystemProgram, md.ProgramID}
+		programs = md.Programs
 	}
 
 	rpcCreds, err := s.unsealRPCLocked(ctx, w.ID)
@@ -1928,12 +1929,14 @@ func (s *Service) PrepareReview(ctx context.Context, req PrepareReviewRequest) (
 		}
 		q.Blockhash = Base58Encode(bh[:])
 		msgBytes, err = onchain.Message(q)
-	case MiningOpCommit, MiningOpClaim, MiningOpSession:
-		bh, bErr := s.fetchBlockhashOrFixture(ctx, w.ID, rpcCreds.PrimaryURL)
-		if bErr != nil {
-			return WalletReview{}, bErr
+	default:
+		if isMiningOperation(op) {
+			bh, bErr := s.fetchBlockhashOrFixture(ctx, w.ID, rpcCreds.PrimaryURL)
+			if bErr != nil {
+				return WalletReview{}, bErr
+			}
+			msgBytes, err = buildMiningReviewMessage(feePayerPK, bh, priorityFeeMicro, op, miningDetails)
 		}
-		msgBytes, err = buildMiningReviewMessage(feePayerPK, bh, priorityFeeMicro, op, miningDetails)
 	}
 	if err != nil {
 		return WalletReview{}, err

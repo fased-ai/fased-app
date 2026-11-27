@@ -537,17 +537,22 @@ func allowed(method, route string) bool {
 		rel := strings.TrimPrefix(route, "/api/v1/mining")
 		rel = strings.TrimPrefix(rel, "/")
 		switch rel {
-		case "", "status", "round", "presets", "history":
+		case "", "status", "round", "presets", "history", "candles", "protocol-stats", "leaderboard", "portfolio", "staking":
 			return method == http.MethodGet
-		case "preview", "commit", "claim":
+		case "preview", "commit", "reveal", "claim", "claim-all", "stake", "activate-stake", "unstake", "claim-staking", "strategies/simulate":
 			return method == http.MethodPost
+		case "strategies":
+			return method == http.MethodGet || method == http.MethodPost
 		case "sessions":
 			return method == http.MethodGet || method == http.MethodPost
 		case "policy":
 			return method == http.MethodGet || method == http.MethodPut
 		default:
 			parts := strings.Split(rel, "/")
-			if len(parts) == 3 && parts[0] == "sessions" && validPathSegment(parts[1]) && (parts[2] == "stop" || parts[2] == "close") {
+			if len(parts) == 2 && parts[0] == "strategies" && validPathSegment(parts[1]) {
+				return method == http.MethodDelete
+			}
+			if len(parts) == 3 && parts[0] == "sessions" && validPathSegment(parts[1]) && (parts[2] == "stop" || parts[2] == "close" || parts[2] == "deposit") {
 				return method == http.MethodPost
 			}
 			return false
@@ -1014,9 +1019,30 @@ func allowedQuery(r *http.Request) bool {
 			}
 		}
 		return true
-	case r.Method == http.MethodGet && (r.URL.Path == "/api/v1/mining/status" || r.URL.Path == "/api/v1/mining/round"):
+	case r.Method == http.MethodGet && (r.URL.Path == "/api/v1/mining/status" || r.URL.Path == "/api/v1/mining/round" || r.URL.Path == "/api/v1/mining/protocol-stats"):
 		for key := range q {
 			if key != "cluster" {
+				return false
+			}
+		}
+		return true
+	case r.Method == http.MethodGet && r.URL.Path == "/api/v1/mining/candles":
+		for key := range q {
+			if key != "interval" && key != "limit" {
+				return false
+			}
+		}
+		return true
+	case r.Method == http.MethodGet && r.URL.Path == "/api/v1/mining/leaderboard":
+		for key := range q {
+			if key != "cluster" && key != "window" {
+				return false
+			}
+		}
+		return true
+	case r.Method == http.MethodGet && (r.URL.Path == "/api/v1/mining/portfolio" || r.URL.Path == "/api/v1/mining/staking"):
+		for key := range q {
+			if key != "cluster" && key != "walletId" {
 				return false
 			}
 		}
