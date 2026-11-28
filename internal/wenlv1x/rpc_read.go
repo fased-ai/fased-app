@@ -197,7 +197,7 @@ func (e *Engine) resolveMiningWallet(ctx context.Context, cluster, preferredID s
 	}
 	c := normalizeCluster(cluster)
 	if clean := strings.TrimSpace(preferredID); clean != "" {
-		if w, err := e.custody.GetWallet(ctx, clean); err == nil && w.Role == custody.RoleMining {
+		if w, err := e.custody.GetWallet(ctx, clean); err == nil && w.Role == custody.RoleMining && w.Custody == custody.CustodyNativeSigner {
 			return &w
 		}
 	}
@@ -208,7 +208,7 @@ func (e *Engine) resolveMiningWallet(ctx context.Context, cluster, preferredID s
 	var firstMining *custody.WalletPublic
 	for i := range wallets {
 		w := wallets[i]
-		if w.Role != custody.RoleMining {
+		if w.Role != custody.RoleMining || w.Custody != custody.CustodyNativeSigner {
 			continue
 		}
 		if firstMining == nil {

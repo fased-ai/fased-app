@@ -785,7 +785,9 @@ export async function listRoleMiningWallets(
   core: CoreReq,
 ): Promise<WalletV2[]> {
   const res = await listWalletsV2(core);
-  return (res.wallets ?? []).filter((w) => w.role === "mining");
+  return (res.wallets ?? []).filter(
+    (w) => w.role === "mining" && w.custody === "native_signer",
+  );
 }
 
 export async function requestMiningStepUpToken(

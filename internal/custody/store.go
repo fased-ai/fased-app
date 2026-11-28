@@ -884,8 +884,8 @@ func (s *Service) AttachExternalWallet(ctx context.Context, custodyType, name, r
 	if !ValidRole(cleanRole) {
 		return WalletPublic{}, errors.New("unsupported external wallet role")
 	}
-	if cleanCustody == CustodyHardware && (cleanRole == RoleAgent || cleanRole == RoleMining) {
-		return WalletPublic{}, errors.New("hardware wallets require manual/trading review; assign vault or trading role")
+	if cleanCustody == CustodyHardware && cleanRole != RoleVault {
+		return WalletPublic{}, errors.New("external hardware wallets are restricted to vault custody; create an internal signer wallet for mining, trading, or agent automation")
 	}
 	cleanName := strings.TrimSpace(name)
 	if cleanName == "" {

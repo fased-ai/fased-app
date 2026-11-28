@@ -5,6 +5,7 @@ import (
 	"math"
 	"strings"
 
+	"github.com/fased-ai/fased-app/internal/custody"
 	"github.com/fased-ai/fased-app/internal/onchain"
 )
 
@@ -177,7 +178,7 @@ func (e *Engine) Leaderboard(ctx context.Context, cluster, rawWindow string) (Le
 	if e.custody != nil {
 		if wallets, wErr := e.custody.ListWallets(ctx); wErr == nil {
 			for _, w := range wallets {
-				if w.Role != "mining" {
+				if w.Role != custody.RoleMining || w.Custody != custody.CustodyNativeSigner {
 					continue
 				}
 				var committed, returned, sat, btc float64

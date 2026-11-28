@@ -13,18 +13,21 @@ import type {
   UniversalTask,
 } from "../tasks-v2";
 import { useUI } from "../ui-preferences";
+import type { WalletV2 } from "../wallets-v2";
 
 export type ComposerMode = "single" | "swarm";
 
 export function TaskComposerModal({
   initialMode = "single",
   libraries,
+  internalWallets = [],
   onClose,
   onCreateTask,
   onCreateSwarm,
 }: {
   initialMode?: ComposerMode;
   libraries: TaskLibraries | null;
+  internalWallets?: WalletV2[];
   onClose: () => void;
   onCreateTask: (input: Partial<UniversalTask>) => Promise<void>;
   onCreateSwarm: (input: SwarmRequest) => Promise<void>;
@@ -329,12 +332,36 @@ export function TaskComposerModal({
 
           <label className="wt-field">
             <span>{t("Wallet handle")}</span>
-            <input
-              type="text"
-              value={walletHandle}
-              onChange={(e) => setWalletHandle(e.target.value)}
-              placeholder="@wallet:wlt_..."
-            />
+            {(() => {
+              const eligible = internalWallets.filter((w) =>
+                goalDomain === "mining"
+                  ? w.role === "mining"
+                  : w.role === "trading" || w.role === "agent",
+              );
+              if (eligible.length > 0) {
+                return (
+                  <select
+                    value={walletHandle}
+                    onChange={(e) => setWalletHandle(e.target.value)}
+                  >
+                    <option value="">Default internal wallet</option>
+                    {eligible.map((w) => (
+                      <option key={w.id} value={w.handle}>
+                        {w.name} ({w.role} · Internal)
+                      </option>
+                    ))}
+                  </select>
+                );
+              }
+              return (
+                <input
+                  type="text"
+                  value={walletHandle}
+                  onChange={(e) => setWalletHandle(e.target.value)}
+                  placeholder="@wallet:wlt_..."
+                />
+              );
+            })()}
           </label>
 
           <label className="wt-field">
