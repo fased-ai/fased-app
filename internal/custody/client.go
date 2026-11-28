@@ -12,6 +12,8 @@ import (
 	"net/url"
 	"strings"
 	"time"
+
+	"github.com/fased-ai/fased-app/internal/onchain"
 )
 
 // SocketClient implements Backend against an isolated out-of-process fased-signer daemon over Unix socket.
@@ -348,6 +350,30 @@ func (c *SocketClient) FetchBalance(ctx context.Context, walletID string) (Balan
 	var out BalanceResult
 	err := c.do(ctx, http.MethodGet, "/v1/wallets/"+url.PathEscape(walletID)+"/balance", nil, &out)
 	return out, err
+}
+
+func (c *SocketClient) ReadWalletAccountsRPC(ctx context.Context, walletID string, addrs []string) (WalletAccountsRPCResult, error) {
+	var out WalletAccountsRPCResult
+	err := c.do(ctx, http.MethodPost, "/v1/wallets/"+url.PathEscape(walletID)+"/rpc-accounts", map[string]any{
+		"addrs": addrs,
+	}, &out)
+	return out, err
+}
+
+func (c *SocketClient) SetVerifiedMiningManifest(ctx context.Context, rawEnvelope []byte) (onchain.LV1XVerifiedManifest, error) {
+	var out onchain.LV1XVerifiedManifest
+	err := c.do(ctx, http.MethodPost, "/v1/mining/manifest", map[string]any{
+		"rawEnvelope": json.RawMessage(rawEnvelope),
+	}, &out)
+	return out, err
+}
+
+func (c *SocketClient) GetVerifiedMiningManifest(ctx context.Context) (*onchain.LV1XVerifiedManifest, error) {
+	var resp struct {
+		Manifest *onchain.LV1XVerifiedManifest `json:"manifest"`
+	}
+	err := c.do(ctx, http.MethodGet, "/v1/mining/manifest", nil, &resp)
+	return resp.Manifest, err
 }
 
 func (c *SocketClient) PrepareReview(ctx context.Context, req PrepareReviewRequest) (WalletReview, error) {

@@ -230,6 +230,16 @@ type SecurityStatus struct {
 	AllowedPeerUID    int    `json:"allowedPeerUid,omitempty"`
 }
 
+// WalletAccountsRPCResult returns read-only account state decoded via the wallet's encrypted RPC.
+type WalletAccountsRPCResult struct {
+	Cluster     string   `json:"cluster"`
+	RPCHost     string   `json:"rpcHost"`
+	GenesisHash string   `json:"genesisHash,omitempty"`
+	Accounts    [][]byte `json:"accounts"`
+	Owners      []string `json:"owners,omitempty"`
+	Lamports    []uint64 `json:"lamports,omitempty"`
+}
+
 // WalletSelector resolves a wallet deterministically according to the selection contract.
 type WalletSelector struct {
 	WalletHandle string `json:"walletHandle,omitempty"`

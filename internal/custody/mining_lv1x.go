@@ -4,10 +4,12 @@ import (
 	"context"
 	"crypto/rand"
 	"database/sql"
+	"encoding/base64"
 	"encoding/hex"
 	"errors"
 	"fmt"
 	"math"
+	"net/http"
 	"os"
 	"slices"
 	"strings"
@@ -38,16 +40,23 @@ func EffectiveDevnetLedgerID() string {
 }
 
 const (
-	MiningOpCommit        = "mining.lv1x.commit"
-	MiningOpReveal        = "mining.lv1x.reveal"
-	MiningOpClaim         = "mining.lv1x.claim"
-	MiningOpClaimSat      = "mining.lv1x.claim_sat"
-	MiningOpClaimBtc      = "mining.lv1x.claim_btc"
-	MiningOpSession       = "mining.lv1x.session"
-	MiningOpStake         = "mining.lv1x.stake"
-	MiningOpActivateStake = "mining.lv1x.activate_stake"
-	MiningOpUnstake       = "mining.lv1x.unstake"
-	MiningOpClaimStaking  = "mining.lv1x.claim_staking"
+	MiningOpCommit         = "mining.lv1x.commit"
+	MiningOpReveal         = "mining.lv1x.reveal"
+	MiningOpClaim          = "mining.lv1x.claim"
+	MiningOpClaimSat       = "mining.lv1x.claim_sat"
+	MiningOpClaimBtc       = "mining.lv1x.claim_btc"
+	MiningOpClaimSatBatch  = "mining.lv1x.claim_sat_batch"
+	MiningOpClaimBtcBatch  = "mining.lv1x.claim_btc_batch"
+	MiningOpCloseNonce     = "mining.lv1x.close_nonce"
+	MiningOpSession        = "mining.lv1x.session"
+	MiningOpStake          = "mining.lv1x.stake"
+	MiningOpActivateStake  = "mining.lv1x.activate_stake"
+	MiningOpUnstake        = "mining.lv1x.unstake"
+	MiningOpClaimStaking   = "mining.lv1x.claim_staking"
+	MiningOpFallbackSettle = "mining.lv1x.fallback_settle"
+
+	// MaxDailyFallbackGasLamports enforces the 0.005 SOL/day Tier 2 crank ceiling inside fased-signer.
+	MaxDailyFallbackGasLamports = uint64(5_000_000)
 )
 
 // AllMiningOperations returns all LV1X native RoleMining custody operations.
@@ -58,17 +67,21 @@ func AllMiningOperations() []string {
 		MiningOpClaim,
 		MiningOpClaimSat,
 		MiningOpClaimBtc,
+		MiningOpClaimSatBatch,
+		MiningOpClaimBtcBatch,
+		MiningOpCloseNonce,
 		MiningOpSession,
 		MiningOpStake,
 		MiningOpActivateStake,
 		MiningOpUnstake,
 		MiningOpClaimStaking,
+		MiningOpFallbackSettle,
 	}
 }
 
 // MiningPolicy bounds Lean V1 (LV1X) mining authority on RoleMining wallets.
 // Devnet uses the pinned LV1X program/ledger by default; Mainnet stays strictly
-// gated behind AllowMainnet && non-empty ProgramID && ExpectedELFSHA256 verification.
+// gated behind signed manifest verification + live BPF ELF check + AllowMainnet owner step-up.
 type MiningPolicy struct {
 	Cluster               string   `json:"cluster"` // devnet | mainnet-beta
 	ProgramID             string   `json:"programId"`
@@ -78,44 +91,53 @@ type MiningPolicy struct {
 	MaxDailySOLLamports   uint64   `json:"maxDailySolLamports,string"`
 	AllowedStrategies     []string `json:"allowedStrategies"`
 	AutoClaim             bool     `json:"autoClaim"`
+	AutoStakeWensat       bool     `json:"autoStakeWensat,omitempty"`
+	AllowFallbackCrank    bool     `json:"allowFallbackCrank,omitempty"`
 	AllowMainnet          bool     `json:"allowMainnet,omitempty"`
 }
 
 // MiningLV1XRequest parameterizes a mining.lv1x.* review.
 type MiningLV1XRequest struct {
-	Cluster         string `json:"cluster,omitempty"`
-	ProgramID       string `json:"programId,omitempty"`
-	LedgerID        string `json:"ledgerId,omitempty"`
-	RoundSlot       uint64 `json:"roundSlot,string"`
-	ShardID         uint8  `json:"shardId"`
-	Page            uint32 `json:"page"`
-	EntryIndex      uint32 `json:"entryIndex"`
-	EntryRow        uint8  `json:"entryRow"`
-	Nonce           uint64 `json:"nonce,string"`
-	Selection       uint8  `json:"selection"` // 0..4 (A..E bucket)
-	AmountLamports  uint64 `json:"amountLamports,string"`
-	SatAmountAtoms  uint64 `json:"satAmountAtoms,string,omitempty"`
-	SaltHex         string `json:"saltHex,omitempty"`
-	EntriesMask     uint8  `json:"entriesMask,omitempty"`
-	BtcMint         string `json:"btcMint,omitempty"`
-	CreateATA       bool   `json:"createAta,omitempty"`
-	SessionAction   string `json:"sessionAction,omitempty"` // open | deposit | stop | close
-	SessionRef      uint64 `json:"sessionRef,string,omitempty"`
-	MaxEntry        uint64 `json:"maxEntry,string,omitempty"`
-	MaxTurnover     uint64 `json:"maxTurnover,string,omitempty"`
-	FirstSlot       uint64 `json:"firstSlot,string,omitempty"`
-	LastSlot        uint64 `json:"lastSlot,string,omitempty"`
-	ExpiresAt       int64  `json:"expiresAt,omitempty"`
-	ReturnToBudget  *bool  `json:"returnToBudget,omitempty"`
-	StrategyRootHex string `json:"strategyRootHex,omitempty"`
-	StrategyID      string `json:"strategyId,omitempty"`
+	Cluster         string  `json:"cluster,omitempty"`
+	ProgramID       string  `json:"programId,omitempty"`
+	LedgerID        string  `json:"ledgerId,omitempty"`
+	RoundSlot       uint64  `json:"roundSlot,string"`
+	ShardID         uint8   `json:"shardId"`
+	Page            uint32  `json:"page"`
+	EntryIndex      uint32  `json:"entryIndex"`
+	EntryRow        uint8   `json:"entryRow"`
+	Nonce           uint64  `json:"nonce,string"`
+	Selection       uint8   `json:"selection"` // 0..4 (A..E bucket)
+	AmountLamports  uint64  `json:"amountLamports,string"`
+	SatAmountAtoms  uint64  `json:"satAmountAtoms,string,omitempty"`
+	SaltHex         string  `json:"saltHex,omitempty"`
+	EntriesMask     uint8   `json:"entriesMask,omitempty"`
+	BtcMint         string  `json:"btcMint,omitempty"`
+	CreateATA       bool    `json:"createAta,omitempty"`
+	SolEscape       bool    `json:"solEscape,omitempty"`
+	FallbackStep    string  `json:"fallbackStep,omitempty"` // merge_shards | begin | scan_pages | allocate_pages | finish
+	ShardIDs        []uint8 `json:"shardIds,omitempty"`
+	StartPage       uint32  `json:"startPage,omitempty"`
+	PageCount       uint8   `json:"pageCount,omitempty"`
+	SessionAction   string  `json:"sessionAction,omitempty"` // open | deposit | stop | close
+	SessionRef      uint64  `json:"sessionRef,string,omitempty"`
+	MaxEntry        uint64  `json:"maxEntry,string,omitempty"`
+	MaxTurnover     uint64  `json:"maxTurnover,string,omitempty"`
+	FirstSlot       uint64  `json:"firstSlot,string,omitempty"`
+	LastSlot        uint64  `json:"lastSlot,string,omitempty"`
+	ExpiresAt       int64   `json:"expiresAt,omitempty"`
+	ReturnToBudget  *bool   `json:"returnToBudget,omitempty"`
+	StrategyRootHex string  `json:"strategyRootHex,omitempty"`
+	StrategyID      string  `json:"strategyId,omitempty"`
 }
 
 // isMiningOperation returns true when op is one of the LV1X native mining actions.
 func isMiningOperation(op string) bool {
 	switch op {
 	case MiningOpCommit, MiningOpReveal, MiningOpClaim, MiningOpClaimSat, MiningOpClaimBtc,
-		MiningOpSession, MiningOpStake, MiningOpActivateStake, MiningOpUnstake, MiningOpClaimStaking:
+		MiningOpClaimSatBatch, MiningOpClaimBtcBatch, MiningOpCloseNonce,
+		MiningOpSession, MiningOpStake, MiningOpActivateStake, MiningOpUnstake, MiningOpClaimStaking,
+		MiningOpFallbackSettle:
 		return true
 	default:
 		return false
@@ -124,7 +146,9 @@ func isMiningOperation(op string) bool {
 
 func isMiningClaimOrRevealOp(op string) bool {
 	switch op {
-	case MiningOpReveal, MiningOpClaim, MiningOpClaimSat, MiningOpClaimBtc, MiningOpClaimStaking:
+	case MiningOpReveal, MiningOpClaim, MiningOpClaimSat, MiningOpClaimBtc,
+		MiningOpClaimSatBatch, MiningOpClaimBtcBatch, MiningOpCloseNonce,
+		MiningOpActivateStake, MiningOpClaimStaking:
 		return true
 	default:
 		return false
@@ -159,6 +183,10 @@ func NormalizeMiningPolicy(m *MiningPolicy) *MiningPolicy {
 }
 
 func ValidateMiningPolicyForUpdate(m *MiningPolicy) error {
+	return ValidateMiningPolicyWithManifest(m, nil)
+}
+
+func ValidateMiningPolicyWithManifest(m *MiningPolicy, manifest *onchain.LV1XVerifiedManifest) error {
 	if m == nil {
 		return nil
 	}
@@ -167,6 +195,12 @@ func ValidateMiningPolicyForUpdate(m *MiningPolicy) error {
 	case "devnet":
 		expProg := EffectiveDevnetProgramID()
 		expLedger := EffectiveDevnetLedgerID()
+		if manifest != nil && manifest.Compatible {
+			if dc, ok := manifest.Payload.Clusters["devnet"]; ok && dc.Status == "active" && dc.ProgramID != "" {
+				expProg = dc.ProgramID
+				expLedger = dc.LedgerID
+			}
+		}
 		if norm.ProgramID != expProg && norm.ProgramID != onchain.LV1XDevnetProgramID {
 			return fmt.Errorf("%w: devnet LV1X program must match pinned %s", ErrPolicyDenied, expProg)
 		}
@@ -174,11 +208,21 @@ func ValidateMiningPolicyForUpdate(m *MiningPolicy) error {
 			return fmt.Errorf("%w: devnet LV1X ledger must match pinned %s", ErrPolicyDenied, expLedger)
 		}
 	case "mainnet-beta":
-		if onchain.LV1XMainnetProgramID == "" || !norm.AllowMainnet {
-			return fmt.Errorf("%w: mainnet LV1X mining is disabled until official Mainnet deployment pins are published", ErrPolicyDenied)
+		if manifest == nil {
+			return fmt.Errorf("%w: mainnet LV1X mining requires a verified signed WEN manifest in signer", ErrPolicyDenied)
 		}
-		if norm.ProgramID != onchain.LV1XMainnetProgramID || norm.ExpectedELFSHA256 == "" {
-			return fmt.Errorf("%w: mainnet LV1X requires pinned program ID and expected ELF SHA-256", ErrPolicyDenied)
+		if !manifest.Compatible {
+			return fmt.Errorf("%w: %s", ErrPolicyDenied, firstStr(manifest.CompatibilityError, "manifest incompatible with this Fased build"))
+		}
+		cl, ok := manifest.Payload.Clusters["mainnet-beta"]
+		if !ok || cl.Status != "active" || cl.ProgramID == "" || cl.LedgerID == "" {
+			return fmt.Errorf("%w: mainnet LV1X deployment is still pending in signed manifest", ErrPolicyDenied)
+		}
+		if !norm.AllowMainnet {
+			return fmt.Errorf("%w: owner must explicitly opt into AllowMainnet via step-up approval", ErrPolicyDenied)
+		}
+		if norm.ProgramID != cl.ProgramID || norm.LedgerID != cl.LedgerID || !strings.EqualFold(norm.ExpectedELFSHA256, cl.ExpectedELFSHA256) {
+			return fmt.Errorf("%w: mainnet LV1X policy pins must match signed manifest", ErrPolicyDenied)
 		}
 	default:
 		return fmt.Errorf("%w: unsupported LV1X mining cluster %q", ErrPolicyDenied, norm.Cluster)
@@ -223,6 +267,12 @@ func IsMiningPolicyTighterOrEqual(prev, next *MiningPolicy) bool {
 	if !p.AutoClaim && n.AutoClaim {
 		return false
 	}
+	if !p.AutoStakeWensat && n.AutoStakeWensat {
+		return false
+	}
+	if !p.AllowFallbackCrank && n.AllowFallbackCrank {
+		return false
+	}
 	if n.MaxSOLPerRoundLamport > p.MaxSOLPerRoundLamport || n.MaxDailySOLLamports > p.MaxDailySOLLamports {
 		return false
 	}
@@ -246,17 +296,24 @@ func allowMiningAutonomousExecution(w WalletPublic, rev WalletReview, actor stri
 	if normM == nil {
 		return false
 	}
-	if normM.Cluster == "mainnet-beta" && (onchain.LV1XMainnetProgramID == "" || !normM.AllowMainnet) {
+	if normM.Cluster == "mainnet-beta" && (!normM.AllowMainnet || normM.ProgramID == "" || rev.MiningCluster != "mainnet-beta") {
 		return false
 	}
 	actorClean := strings.TrimSpace(actor)
 	if actorClean != "mining-engine" && !strings.HasPrefix(actorClean, "task:") {
 		return false
 	}
-	// Semi-Auto permits unattended reveal/claim transactions when AutoClaim is enabled;
-	// BoundedAuto allows bounded commits and reveal/claims within SOL + USD ceilings.
+	// Semi-Auto permits unattended zero-principal reveal/claim/close-nonce/activate-stake txs
+	// when AutoClaim is enabled; BoundedAuto adds bounded commits, optional AutoStakeWensat,
+	// and optional Tier 2 fallback cranks within strict daily caps. Unstake stays manual-only.
 	if w.Policy.ApprovalMode == ApprovalManualReview {
 		return false
+	}
+	if rev.Operation == MiningOpUnstake {
+		return false
+	}
+	if rev.Operation == MiningOpFallbackSettle {
+		return (w.Policy.ApprovalMode == ApprovalSemiAuto || w.Policy.ApprovalMode == ApprovalBoundedAuto) && normM.AllowFallbackCrank
 	}
 	if w.Policy.ApprovalMode == ApprovalSemiAuto {
 		return isMiningClaimOrRevealOp(rev.Operation) && normM.AutoClaim
@@ -267,8 +324,8 @@ func allowMiningAutonomousExecution(w WalletPublic, rev WalletReview, actor stri
 	if isMiningClaimOrRevealOp(rev.Operation) {
 		return normM.AutoClaim
 	}
-	if rev.Operation == MiningOpStake || rev.Operation == MiningOpActivateStake || rev.Operation == MiningOpUnstake {
-		return false
+	if rev.Operation == MiningOpStake {
+		return normM.AutoStakeWensat
 	}
 	if w.Policy.AutoApproveMaxUSD <= 0 || rev.EstimatedUSD <= 0 || rev.EstimatedUSD > w.Policy.AutoApproveMaxUSD {
 		return false
@@ -367,6 +424,11 @@ type preparedMiningDetails struct {
 	EntriesMask    uint8
 	BTCMint        string
 	CreateATA      bool
+	SolEscape      bool
+	FallbackStep   string
+	ShardIDs       []uint8
+	StartPage      uint32
+	PageCount      uint8
 	SessionAction  string
 	SessionRef     uint64
 	FirstSlot      uint64
@@ -392,7 +454,11 @@ func (s *Service) validateMiningPrepareLocked(ctx context.Context, w WalletPubli
 		return out, fmt.Errorf("%w: wallet %s lacks MiningPolicy configuration", ErrPolicyDenied, w.Handle)
 	}
 	mPol := NormalizeMiningPolicy(w.Policy.Mining)
-	if err := ValidateMiningPolicyForUpdate(mPol); err != nil {
+	var vm *onchain.LV1XVerifiedManifest
+	if m, mErr := s.getVerifiedMiningManifestLocked(ctx); mErr == nil {
+		vm = m
+	}
+	if err := ValidateMiningPolicyWithManifest(mPol, vm); err != nil {
 		return out, err
 	}
 	if req.MiningLV1X == nil {
@@ -404,8 +470,14 @@ func (s *Service) validateMiningPrepareLocked(ctx context.Context, w WalletPubli
 	if cluster != mPol.Cluster {
 		return out, fmt.Errorf("%w: cluster %q does not match pinned wallet mining cluster %q", ErrPolicyDenied, cluster, mPol.Cluster)
 	}
-	if cluster == "mainnet-beta" && (onchain.LV1XMainnetProgramID == "" || !mPol.AllowMainnet) {
-		return out, fmt.Errorf("%w: Mainnet LV1X mining is gated off", ErrPolicyDenied)
+	if cluster == "mainnet-beta" {
+		if vm == nil || !vm.Compatible {
+			return out, fmt.Errorf("%w: signed compatible manifest required for Mainnet LV1X", ErrPolicyDenied)
+		}
+		cl, ok := vm.Payload.Clusters["mainnet-beta"]
+		if !ok || cl.Status != "active" || !mPol.AllowMainnet || cl.ProgramID == "" {
+			return out, fmt.Errorf("%w: Mainnet LV1X mining is gated off", ErrPolicyDenied)
+		}
 	}
 	progID := firstStr(strings.TrimSpace(m.ProgramID), mPol.ProgramID)
 	ledgerID := firstStr(strings.TrimSpace(m.LedgerID), mPol.LedgerID)
@@ -442,6 +514,11 @@ func (s *Service) validateMiningPrepareLocked(ctx context.Context, w WalletPubli
 	out.Selection = m.Selection
 	out.EntriesMask = m.EntriesMask
 	out.CreateATA = m.CreateATA
+	out.SolEscape = m.SolEscape
+	out.FallbackStep = strings.ToLower(strings.TrimSpace(m.FallbackStep))
+	out.ShardIDs = slices.Clone(m.ShardIDs)
+	out.StartPage = m.StartPage
+	out.PageCount = m.PageCount
 	out.ReturnToBudget = true
 	if m.ReturnToBudget != nil {
 		out.ReturnToBudget = *m.ReturnToBudget
@@ -536,9 +613,12 @@ func (s *Service) validateMiningPrepareLocked(ctx context.Context, w WalletPubli
 		out.HumanAmount = FormatLamportsToSOL(out.EstFeeLamports)
 		out.DestAddr = w.PublicKey
 
-	case MiningOpClaimSat:
+	case MiningOpClaimSat, MiningOpClaimSatBatch:
 		if err := requireTokenProgram(out.CreateATA); err != nil {
 			return out, err
+		}
+		if op == MiningOpClaimSatBatch && out.EntriesMask == 0 {
+			out.EntriesMask = 0x01
 		}
 		out.AmountLamports = 0
 		out.EstimatedUSD = (float64(out.EstFeeLamports) / 1e9) * 250.0
@@ -546,20 +626,70 @@ func (s *Service) validateMiningPrepareLocked(ctx context.Context, w WalletPubli
 		out.HumanAmount = FormatLamportsToSOL(out.EstFeeLamports)
 		out.DestAddr = w.PublicKey
 
-	case MiningOpClaimBtc, MiningOpClaimStaking:
-		if err := requireTokenProgram(out.CreateATA); err != nil {
+	case MiningOpClaimBtc, MiningOpClaimBtcBatch, MiningOpClaimStaking:
+		if err := requireTokenProgram(out.CreateATA && !out.SolEscape); err != nil {
 			return out, err
 		}
-		btcMint := firstStr(strings.TrimSpace(m.BtcMint), onchain.LV1XDevnetBTCMint)
-		if _, _, err := ValidateSolanaPublicAddress(btcMint); err != nil {
-			return out, fmt.Errorf("invalid BTC mint: %w", err)
+		if op == MiningOpClaimBtcBatch && out.EntriesMask == 0 {
+			out.EntriesMask = 0x01
+		}
+		defaultBtcMint := onchain.LV1XDevnetBTCMint
+		if cluster == "mainnet-beta" {
+			defaultBtcMint = onchain.LV1XMainnetBTCMint
+			if vm != nil {
+				if cl, ok := vm.Payload.Clusters["mainnet-beta"]; ok && strings.TrimSpace(cl.BTCMint) != "" {
+					defaultBtcMint = strings.TrimSpace(cl.BTCMint)
+				}
+			}
+		}
+		btcMint := strings.TrimSpace(m.BtcMint)
+		if btcMint == "" && (!out.SolEscape || op == MiningOpClaimBtc || op == MiningOpClaimStaking) {
+			btcMint = defaultBtcMint
+		}
+		if btcMint != "" {
+			if _, _, err := ValidateSolanaPublicAddress(btcMint); err != nil {
+				return out, fmt.Errorf("invalid BTC mint: %w", err)
+			}
 		}
 		out.BTCMint = btcMint
 		out.AmountLamports = 0
 		out.EstimatedUSD = (float64(out.EstFeeLamports) / 1e9) * 250.0
-		out.Symbol = "cbBTC"
+		if out.SolEscape {
+			out.Symbol = "SOL"
+		} else {
+			out.Symbol = "cbBTC"
+		}
 		out.HumanAmount = FormatLamportsToSOL(out.EstFeeLamports)
 		out.DestAddr = w.PublicKey
+
+	case MiningOpCloseNonce:
+		out.AmountLamports = 0
+		out.EstimatedUSD = (float64(out.EstFeeLamports) / 1e9) * 250.0
+		out.Symbol = "SOL"
+		out.HumanAmount = FormatLamportsToSOL(out.EstFeeLamports)
+		rkAddr, _ := onchain.LV1XRoundPDA(progID, ledgerID, m.RoundSlot)
+		nkAddr, _ := onchain.LV1XNoncePDA(progID, rkAddr, w.PublicKey, m.Nonce/64)
+		out.DestAddr = nkAddr
+
+	case MiningOpFallbackSettle:
+		if !mPol.AllowFallbackCrank {
+			return out, fmt.Errorf("%w: fallback settlement crank is disabled on MiningPolicy", ErrPolicyDenied)
+		}
+		switch out.FallbackStep {
+		case "merge_shards", "begin", "scan_pages", "allocate_pages", "finish":
+		default:
+			return out, fmt.Errorf("%w: invalid fallbackStep %q", ErrPolicyDenied, out.FallbackStep)
+		}
+		dayUTC := s.now().UTC().Format("2006-01-02")
+		if err := s.checkFallbackGasCapLocked(ctx, w.ID, dayUTC, out.EstFeeLamports); err != nil {
+			return out, err
+		}
+		out.AmountLamports = 0
+		out.EstimatedUSD = (float64(out.EstFeeLamports) / 1e9) * 250.0
+		out.Symbol = "SOL"
+		out.HumanAmount = FormatLamportsToSOL(out.EstFeeLamports)
+		rkAddr, _ := onchain.LV1XRoundPDA(progID, ledgerID, m.RoundSlot)
+		out.DestAddr = rkAddr
 
 	case MiningOpStake, MiningOpUnstake:
 		if err := requireTokenProgram(op == MiningOpUnstake && out.CreateATA); err != nil {
@@ -570,7 +700,7 @@ func (s *Service) validateMiningPrepareLocked(ctx context.Context, w WalletPubli
 			atoms = m.AmountLamports
 		}
 		if op == MiningOpStake && atoms < onchain.LV1XMinStakeAtoms {
-			return out, fmt.Errorf("%w: stake below minimum %d SAT atoms (10 WENSAT)", ErrPolicyDenied, onchain.LV1XMinStakeAtoms)
+			return out, fmt.Errorf("%w: stake below minimum %d SAT atoms (1 WENSAT)", ErrPolicyDenied, onchain.LV1XMinStakeAtoms)
 		}
 		if atoms == 0 {
 			return out, fmt.Errorf("%w: SAT amount must be positive", ErrPolicyDenied)
@@ -705,8 +835,75 @@ func buildMiningReviewMessage(feePayer [32]byte, bh [32]byte, priorityFee uint64
 			EntryRow:  md.EntryRow,
 			BTCMint:   md.BTCMint,
 			CreateATA: md.CreateATA,
+			SolEscape: md.SolEscape,
 			MicroLam:  priorityFee,
 		})
+	case MiningOpClaimSatBatch:
+		return onchain.BuildLV1XClaimSatBatchMessage(onchain.LV1XClaimTokenParams{
+			ProgramID:   md.ProgramID,
+			LedgerID:    md.LedgerID,
+			Owner:       feePayer,
+			Blockhash:   bh,
+			Slot:        md.RoundSlot,
+			ShardID:     md.ShardID,
+			Page:        md.Page,
+			EntriesMask: md.EntriesMask,
+			CreateATA:   md.CreateATA,
+			MicroLam:    priorityFee,
+		})
+	case MiningOpClaimBtcBatch:
+		return onchain.BuildLV1XClaimBtcBatchMessage(onchain.LV1XClaimTokenParams{
+			ProgramID:   md.ProgramID,
+			LedgerID:    md.LedgerID,
+			Owner:       feePayer,
+			Blockhash:   bh,
+			Slot:        md.RoundSlot,
+			ShardID:     md.ShardID,
+			Page:        md.Page,
+			EntriesMask: md.EntriesMask,
+			BTCMint:     md.BTCMint,
+			CreateATA:   md.CreateATA,
+			SolEscape:   md.SolEscape,
+			MicroLam:    priorityFee,
+		})
+	case MiningOpCloseNonce:
+		return onchain.BuildLV1XCloseNonceMessage(onchain.LV1XCloseNonceParams{
+			ProgramID: md.ProgramID,
+			LedgerID:  md.LedgerID,
+			FeePayer:  feePayer,
+			Owner:     feePayer,
+			Blockhash: bh,
+			Slot:      md.RoundSlot,
+			Nonce:     md.Nonce,
+			MicroLam:  priorityFee,
+		})
+	case MiningOpFallbackSettle:
+		fb := onchain.LV1XFallbackSettleParams{
+			ProgramID: md.ProgramID,
+			LedgerID:  md.LedgerID,
+			FeePayer:  feePayer,
+			Blockhash: bh,
+			Slot:      md.RoundSlot,
+			ShardID:   md.ShardID,
+			ShardIDs:  md.ShardIDs,
+			StartPage: md.StartPage,
+			PageCount: md.PageCount,
+			MicroLam:  priorityFee,
+		}
+		switch md.FallbackStep {
+		case "merge_shards":
+			return onchain.BuildLV1XMergeShardsBatchMessage(fb)
+		case "begin":
+			return onchain.BuildLV1XBeginSettlementMessage(fb)
+		case "scan_pages":
+			return onchain.BuildLV1XScanPagesBatchMessage(fb)
+		case "allocate_pages":
+			return onchain.BuildLV1XAllocatePagesBatchMessage(fb)
+		case "finish":
+			return onchain.BuildLV1XFinishSettlementMessage(fb)
+		default:
+			return nil, fmt.Errorf("unsupported fallbackStep %q", md.FallbackStep)
+		}
 	case MiningOpStake:
 		return onchain.BuildLV1XStakeMessage(onchain.LV1XStakeParams{
 			ProgramID: md.ProgramID,
@@ -769,4 +966,277 @@ func buildMiningReviewMessage(feePayer [32]byte, bh [32]byte, priorityFee uint64
 	default:
 		return nil, errors.New("unsupported mining operation")
 	}
+}
+
+func (s *Service) checkFallbackGasCapLocked(ctx context.Context, walletID, dayUTC string, estFee uint64) error {
+	var spent, reserved uint64
+	err := s.db.QueryRowContext(
+		ctx,
+		`SELECT spent_lamports, reserved_lamports FROM mining_fallback_gas WHERE wallet_id = ? AND day_utc = ?`,
+		walletID, dayUTC,
+	).Scan(&spent, &reserved)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return err
+	}
+	if spent > math.MaxUint64-reserved || spent+reserved > math.MaxUint64-estFee || spent+reserved+estFee > MaxDailyFallbackGasLamports {
+		return fmt.Errorf("%w: fallback settlement daily gas cap (0.005 SOL) exhausted", ErrPolicyDenied)
+	}
+	return nil
+}
+
+func (s *Service) reserveFallbackGasTxLocked(ctx context.Context, tx *sql.Tx, walletID, dayUTC string, gasLamports uint64) error {
+	if _, err := tx.ExecContext(
+		ctx,
+		`INSERT OR IGNORE INTO mining_fallback_gas(wallet_id, day_utc, spent_lamports, reserved_lamports) VALUES (?, ?, 0, 0)`,
+		walletID, dayUTC,
+	); err != nil {
+		return err
+	}
+	res, err := tx.ExecContext(
+		ctx,
+		`UPDATE mining_fallback_gas SET reserved_lamports = reserved_lamports + ? WHERE wallet_id = ? AND day_utc = ? AND spent_lamports + reserved_lamports + ? <= ?`,
+		gasLamports, walletID, dayUTC, gasLamports, MaxDailyFallbackGasLamports,
+	)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return fmt.Errorf("%w: fallback settlement daily gas cap (0.005 SOL) exhausted", ErrPolicyDenied)
+	}
+	return nil
+}
+
+func (s *Service) settleFallbackGasTxLocked(ctx context.Context, tx *sql.Tx, walletID, dayUTC string, gasLamports uint64, confirmed bool) error {
+	if confirmed {
+		_, err := tx.ExecContext(
+			ctx,
+			`UPDATE mining_fallback_gas SET reserved_lamports = MAX(0, reserved_lamports - ?), spent_lamports = spent_lamports + ? WHERE wallet_id = ? AND day_utc = ?`,
+			gasLamports, gasLamports, walletID, dayUTC,
+		)
+		return err
+	}
+	_, err := tx.ExecContext(
+		ctx,
+		`UPDATE mining_fallback_gas SET reserved_lamports = MAX(0, reserved_lamports - ?) WHERE wallet_id = ? AND day_utc = ?`,
+		gasLamports, walletID, dayUTC,
+	)
+	return err
+}
+
+func (s *Service) getVerifiedMiningManifestLocked(ctx context.Context) (*onchain.LV1XVerifiedManifest, error) {
+	if s.db == nil {
+		return nil, errors.New("custody store closed")
+	}
+	var raw string
+	var seq int64
+	var verAt int64
+	if err := s.db.QueryRowContext(ctx, `SELECT lv1x_manifest_json, lv1x_manifest_seq, lv1x_manifest_verified_at FROM signer_meta WHERE id = 1`).Scan(&raw, &seq, &verAt); err != nil {
+		return nil, err
+	}
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil, nil
+	}
+	vm, err := onchain.VerifyLV1XManifest([]byte(raw), onchain.LV1XManifestVerifyOptions{
+		NowUnix:      s.now().UTC().Unix(),
+		MinSequence:  uint64(max(0, seq)),
+		ExtraKeysHex: s.cfg.ManifestVerifyKeys,
+	})
+	if err != nil {
+		return nil, err
+	}
+	if verAt > 0 {
+		vm.VerifiedAt = verAt
+	}
+	return &vm, nil
+}
+
+// GetVerifiedMiningManifest returns the currently pinned & verified WEN LV1X manifest inside custody, or nil.
+func (s *Service) GetVerifiedMiningManifest(ctx context.Context) (*onchain.LV1XVerifiedManifest, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed || s.db == nil {
+		return nil, errors.New("custody store closed")
+	}
+	return s.getVerifiedMiningManifestLocked(ctx)
+}
+
+// SetVerifiedMiningManifest verifies Ed25519 signature, anti-rollback sequence, and timestamps
+// inside fased-signer and persists the signed envelope into signer_meta.
+func (s *Service) SetVerifiedMiningManifest(ctx context.Context, rawEnvelope []byte) (onchain.LV1XVerifiedManifest, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed || s.db == nil {
+		return onchain.LV1XVerifiedManifest{}, errors.New("custody store closed")
+	}
+	var minSeq uint64
+	if cur, err := s.getVerifiedMiningManifestLocked(ctx); err == nil && cur != nil {
+		minSeq = cur.SequenceNum
+	}
+	nowUnix := s.now().UTC().Unix()
+	vm, err := onchain.VerifyLV1XManifest(rawEnvelope, onchain.LV1XManifestVerifyOptions{
+		NowUnix:      nowUnix,
+		MinSequence:  minSeq,
+		ExtraKeysHex: s.cfg.ManifestVerifyKeys,
+	})
+	if err != nil {
+		return onchain.LV1XVerifiedManifest{}, fmt.Errorf("%w: manifest verification rejected: %v", ErrPolicyDenied, err)
+	}
+	if _, err := s.db.ExecContext(
+		ctx,
+		`UPDATE signer_meta SET lv1x_manifest_json = ?, lv1x_manifest_seq = ?, lv1x_manifest_verified_at = ? WHERE id = 1`,
+		string(vm.RawEnvelope), int64(vm.SequenceNum), nowUnix,
+	); err != nil {
+		return onchain.LV1XVerifiedManifest{}, err
+	}
+	return vm, nil
+}
+
+func (s *Service) verifyMiningProgramOnChain(ctx context.Context, rpcURL string, pol *MiningPolicy, cl onchain.LV1XManifestCluster) error {
+	if s.cfg.FixtureMode && s.cfg.RPCTransport == nil {
+		return errors.New("live RPC transport required to verify Mainnet LV1X program on-chain")
+	}
+	if strings.TrimSpace(rpcURL) == "" {
+		return errors.New("wallet RPC URL required for live BPF verification")
+	}
+	progDataAddr, err := onchain.BPFLoaderProgramDataPDA(pol.ProgramID)
+	if err != nil {
+		return err
+	}
+	rtAddr, err := onchain.LV1XRuntimePDA(pol.ProgramID, pol.LedgerID)
+	if err != nil {
+		return err
+	}
+	var genesisHash string
+	if _, err := rpcJSONCall(ctx, s.cfg.RPCTransport, rpcURL, "getGenesisHash", []any{}, &genesisHash); err != nil {
+		return fmt.Errorf("getGenesisHash failed: %w", err)
+	}
+	if strings.TrimSpace(genesisHash) != strings.TrimSpace(cl.GenesisHash) {
+		return fmt.Errorf("genesisHash mismatch: got %s want %s", genesisHash, cl.GenesisHash)
+	}
+	accts, owners, _, err := fetchMultipleAccountsRPC(ctx, s.cfg.RPCTransport, rpcURL, []string{pol.ProgramID, progDataAddr, rtAddr})
+	if err != nil {
+		return err
+	}
+	if len(accts) != 3 || len(accts[0]) == 0 || len(accts[1]) == 0 || len(accts[2]) == 0 {
+		return errors.New("missing on-chain LV1X program/programdata/runtime account")
+	}
+	progOwner, _ := ValidateSolanaPublicAddressOnly(owners[0])
+	pdOwner, _ := ValidateSolanaPublicAddressOnly(owners[1])
+	slot, _, err := onchain.VerifyBPFLoaderProgramDataPrefix(
+		pol.ProgramID, progOwner, accts[0], pdOwner, accts[1],
+		cl.ExpectedELFBytes, cl.ExpectedELFSHA256, cl.AllowedUpgradeAuthorities, cl.AllowImmutable,
+	)
+	if err != nil {
+		return err
+	}
+	rt, err := onchain.DecodeLV1XRuntime(accts[2])
+	if err != nil {
+		return fmt.Errorf("runtime PDA decode failed: %w", err)
+	}
+	if rt.Ledger != pol.LedgerID {
+		return fmt.Errorf("runtime ledger mismatch: got %s want %s", rt.Ledger, pol.LedgerID)
+	}
+	if cl.Mint != "" && rt.Mint != cl.Mint {
+		return fmt.Errorf("runtime mint mismatch: got %s want %s", rt.Mint, cl.Mint)
+	}
+	if cl.BTCMint != "" && rt.BTCMint != cl.BTCMint {
+		return fmt.Errorf("runtime btcMint mismatch: got %s want %s", rt.BTCMint, cl.BTCMint)
+	}
+	cacheKey := fmt.Sprintf("%s:%s:%d:%s", pol.Cluster, pol.ProgramID, slot, strings.ToLower(cl.ExpectedELFSHA256))
+	s.bpfVerifiedMu.Lock()
+	if s.bpfVerified == nil {
+		s.bpfVerified = make(map[string]int64)
+	}
+	s.bpfVerified[cacheKey] = s.now().UTC().Unix()
+	s.bpfVerifiedMu.Unlock()
+	return nil
+}
+
+// ValidateSolanaPublicAddressOnly decodes a Base58 32-byte key cleanly for owner checks.
+func ValidateSolanaPublicAddressOnly(raw string) ([]byte, error) {
+	_, pk, err := ValidateSolanaPublicAddress(raw)
+	if err != nil {
+		return nil, err
+	}
+	return pk[:], nil
+}
+
+func fetchMultipleAccountsRPC(ctx context.Context, tr http.RoundTripper, rpcURL string, addrs []string) ([][]byte, []string, []uint64, error) {
+	var rpcOut struct {
+		Value []*struct {
+			Owner    string   `json:"owner"`
+			Lamports uint64   `json:"lamports"`
+			Data     []string `json:"data"`
+		} `json:"value"`
+	}
+	if _, err := rpcJSONCall(ctx, tr, rpcURL, "getMultipleAccounts", []any{addrs, map[string]any{"encoding": "base64", "commitment": "confirmed"}}, &rpcOut); err != nil {
+		return nil, nil, nil, err
+	}
+	accts := make([][]byte, len(addrs))
+	owners := make([]string, len(addrs))
+	lamps := make([]uint64, len(addrs))
+	for i := range addrs {
+		if i >= len(rpcOut.Value) || rpcOut.Value[i] == nil {
+			continue
+		}
+		v := rpcOut.Value[i]
+		owners[i] = strings.TrimSpace(v.Owner)
+		lamps[i] = v.Lamports
+		if len(v.Data) > 0 && v.Data[0] != "" {
+			if raw, dErr := base64.StdEncoding.DecodeString(v.Data[0]); dErr == nil {
+				accts[i] = raw
+			}
+		}
+	}
+	return accts, owners, lamps, nil
+}
+
+// ReadWalletAccountsRPC reads read-only Solana account frames through the specified wallet's
+// encrypted Primary/Fallback RPC without ever exposing RPC credentials to callers.
+func (s *Service) ReadWalletAccountsRPC(ctx context.Context, walletID string, addrs []string) (WalletAccountsRPCResult, error) {
+	if len(addrs) == 0 || len(addrs) > 100 {
+		return WalletAccountsRPCResult{}, errors.New("addrs must contain 1..100 public keys")
+	}
+	clean := make([]string, len(addrs))
+	for i, a := range addrs {
+		c, _, err := ValidateSolanaPublicAddress(a)
+		if err != nil {
+			return WalletAccountsRPCResult{}, fmt.Errorf("invalid address[%d]: %w", i, err)
+		}
+		clean[i] = c
+	}
+	s.mu.Lock()
+	w, err := s.getWalletLocked(ctx, walletID)
+	var rpcCreds sealedRPCPayload
+	if err == nil {
+		rpcCreds, err = s.unsealRPCLocked(ctx, w.ID)
+	}
+	s.mu.Unlock()
+	if err != nil {
+		return WalletAccountsRPCResult{}, err
+	}
+	if s.cfg.FixtureMode && s.cfg.RPCTransport == nil {
+		return WalletAccountsRPCResult{
+			Cluster:  w.RPC.Cluster,
+			RPCHost:  w.RPC.Host,
+			Accounts: make([][]byte, len(clean)),
+			Owners:   make([]string, len(clean)),
+			Lamports: make([]uint64, len(clean)),
+		}, nil
+	}
+	accts, owners, lamps, err := fetchMultipleAccountsRPC(ctx, s.cfg.RPCTransport, rpcCreds.PrimaryURL, clean)
+	if err != nil && strings.TrimSpace(rpcCreds.FallbackURL) != "" {
+		accts, owners, lamps, err = fetchMultipleAccountsRPC(ctx, s.cfg.RPCTransport, rpcCreds.FallbackURL, clean)
+	}
+	if err != nil {
+		return WalletAccountsRPCResult{}, err
+	}
+	return WalletAccountsRPCResult{
+		Cluster:  w.RPC.Cluster,
+		RPCHost:  w.RPC.Host,
+		Accounts: accts,
+		Owners:   owners,
+		Lamports: lamps,
+	}, nil
 }
