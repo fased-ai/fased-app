@@ -431,7 +431,9 @@ export function MineWorkspace() {
     try {
       if (!isMultiRound) {
         if (!selectedWalletId) {
-          setError(t("Attach a Mining wallet first (+ Add Wallet)."));
+          setError(
+            t("Create an internal Mining role wallet in Wallets first."),
+          );
           return;
         }
         await submitMiningCommit(
@@ -1042,12 +1044,12 @@ export function MineWorkspace() {
               type="button"
               className="mine-wallet-pill"
               aria-label="Attached mining wallet"
-              title="Attached Mining wallet & policy"
+              title={`Internal Mining wallet (${shortAddr(currentWallet.publicKey)}) · Policy`}
               onClick={openWalletPolicyModal}
             >
               <Wallet size={13} aria-hidden="true" />
               <span className="mine-wallet-addr">
-                {shortAddr(currentWallet.publicKey)}
+                {currentWallet.name || currentWallet.handle}
               </span>
               <span className="mine-wallet-bal">
                 {(portfolio?.solBalanceSol ?? 0).toFixed(2)} SOL
@@ -1058,11 +1060,16 @@ export function MineWorkspace() {
               type="button"
               className="mine-add-wallet-btn"
               aria-label="Add mining wallet"
-              title="Attach a Mining wallet"
-              onClick={() => navigate("wallets/accounts")}
+              title="Create an internal Mining role wallet in Wallets"
+              onClick={() => {
+                try {
+                  sessionStorage.setItem("fased:wallets:presetRole", "mining");
+                } catch {}
+                navigate("wallets/accounts");
+              }}
             >
               <Plus size={13} aria-hidden="true" />
-              <span>Add Wallet</span>
+              <span>Add Mining Wallet</span>
             </button>
           )}
 
@@ -1473,7 +1480,13 @@ export function MineWorkspace() {
             {currentWallet && (
               <div className="wt-hairline-table">
                 <div className="wt-hairline-row">
-                  <span>Attached Wallet</span>
+                  <span>Mining Wallet</span>
+                  <strong>
+                    {currentWallet.name || currentWallet.handle} (Internal)
+                  </strong>
+                </div>
+                <div className="wt-hairline-row">
+                  <span>Address</span>
                   <span className="f-mono">
                     {shortAddr(currentWallet.publicKey)}
                   </span>

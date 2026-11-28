@@ -51,17 +51,13 @@ func (s *Store) tradeAccountsView(ctx context.Context) []TradeAccountOption {
 	if cs, err := s.custodyBackend(); err == nil && cs != nil {
 		if wallets, wErr := cs.ListWallets(ctx); wErr == nil {
 			for _, w := range wallets {
-				if w.Custody == custody.CustodyWatch || w.Role == custody.RoleWatch || w.Role == custody.RoleMining || w.Policy.Frozen {
+				if w.Custody != custody.CustodyNativeSigner || w.Role == custody.RoleVault || w.Role == custody.RoleWatch || w.Role == custody.RoleMining || w.Policy.Frozen {
 					continue
-				}
-				kind := "solana"
-				if w.Custody == custody.CustodyHardware {
-					kind = "hardware"
 				}
 				out = append(out, TradeAccountOption{
 					ID:            w.Handle,
 					Label:         w.Name,
-					Kind:          kind,
+					Kind:          "solana",
 					Role:          w.Role,
 					Custody:       w.Custody,
 					Cluster:       w.RPC.Cluster,

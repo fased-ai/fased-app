@@ -109,17 +109,32 @@ export function SolanaWalletsPanel() {
   const [copiedId, setCopiedId] = useState("");
 
   // Create form state (Native Signer)
-  const [createRole, setCreateRole] = useState<WalletRole>("agent");
+  const [createRole, setCreateRole] = useState<WalletRole>(() => {
+    try {
+      const preset = sessionStorage.getItem("fased:wallets:presetRole");
+      if (preset) sessionStorage.removeItem("fased:wallets:presetRole");
+      if (
+        preset === "mining" ||
+        preset === "trading" ||
+        preset === "vault" ||
+        preset === "agent"
+      ) {
+        return preset;
+      }
+    } catch {
+      // ignore storage errors
+    }
+    return "agent";
+  });
   const [createName, setCreateName] = useState("");
   const [createRpc, setCreateRpc] = useState(
     "https://api.mainnet-beta.solana.com",
   );
 
-  // Hardware / Watch attach state
+  // Hardware / Watch attach state (external custody is restricted to Vault or Watch Only)
   const [hwCustody, setHwCustody] = useState<
     "hardware_standard" | "watch_only"
   >("hardware_standard");
-  const [hwRole, setHwRole] = useState<WalletRole>("vault");
   const [hwName, setHwName] = useState("");
   const [hwPubKey, setHwPubKey] = useState("");
   const [hwRpc, setHwRpc] = useState("https://api.mainnet-beta.solana.com");
@@ -349,7 +364,7 @@ export function SolanaWalletsPanel() {
         name:
           hwName.trim() ||
           (hwCustody === "watch_only" ? "Watch Wallet" : "Hardware Vault"),
-        role: hwCustody === "watch_only" ? "watch" : hwRole,
+        role: hwCustody === "watch_only" ? "watch" : "vault",
         publicKey: hwPubKey.trim(),
         rpcUrl: hwRpc.trim(),
       });
@@ -1036,10 +1051,10 @@ export function SolanaWalletsPanel() {
                 <span>
                   {selected.rpc.cluster || "unverified"} ·{" "}
                   {selected.custody === "hardware_standard"
-                    ? "Hardware"
+                    ? "Hardware Vault"
                     : selected.custody === "watch_only"
-                      ? "Watch"
-                      : "Signer"}
+                      ? "Watch Only"
+                      : "Internal Signer"}
                 </span>
               </div>
 
@@ -1688,13 +1703,13 @@ export function SolanaWalletsPanel() {
           </div>
         </section>
 
-        {/* RIGHT RAIL (334px) — WEN Action Composer (Create / Hardware / Send & Review) */}
+        {/* RIGHT RAIL (334px) — WEN Action Composer (Create / External Vault / Send & Review) */}
         <aside className="wt-wpanel">
           <div className="wt-wtabs" role="tablist">
             {(
               [
                 { id: "create", label: "Create" },
-                { id: "hardware", label: "Hardware" },
+                { id: "hardware", label: "External Vault" },
                 { id: "send", label: "Send" },
               ] as const
             ).map((tb) => (
@@ -1777,7 +1792,7 @@ export function SolanaWalletsPanel() {
                   aria-pressed={hwCustody === "hardware_standard"}
                   onClick={() => setHwCustody("hardware_standard")}
                 >
-                  {t("Hardware")}
+                  {t("Hardware Vault")}
                 </button>
                 <button
                   type="button"
@@ -1790,27 +1805,6 @@ export function SolanaWalletsPanel() {
                   Detect
                 </button>
               </div>
-
-              {hwCustody === "hardware_standard" && (
-                <div className="wt-tile-grid">
-                  {(
-                    [
-                      { id: "vault", label: "Vault" },
-                      { id: "trading", label: "Trading" },
-                      { id: "mining", label: "Mining" },
-                    ] as const
-                  ).map((r) => (
-                    <button
-                      key={r.id}
-                      type="button"
-                      aria-pressed={hwRole === r.id}
-                      onClick={() => setHwRole(r.id)}
-                    >
-                      {t(r.label)}
-                    </button>
-                  ))}
-                </div>
-              )}
 
               <label className="wt-field">
                 <span>{t("Wallet name")}</span>

@@ -39,6 +39,7 @@ import {
   type UniversalTask,
 } from "../tasks-v2";
 import { useUI } from "../ui-preferences";
+import { listWalletsV2, type WalletV2 } from "../wallets-v2";
 import { useWorkspace } from "../workspace";
 import { TaskComposerModal, type ComposerMode } from "./TaskComposerModal";
 import { TaskDAGView } from "./TaskDAGView";
@@ -55,6 +56,7 @@ export function TasksWorkspace() {
   const [tasks, setTasks] = useState<UniversalTask[]>([]);
   const [edges, setEdges] = useState<TaskEdge[]>([]);
   const [libraries, setLibraries] = useState<TaskLibraries | null>(null);
+  const [internalWallets, setInternalWallets] = useState<WalletV2[]>([]);
   const [selectedId, setSelectedId] = useState<string>("");
   const [detail, setDetail] = useState<TaskDetail | null>(null);
 
@@ -96,6 +98,21 @@ export function TasksWorkspace() {
     void listTaskLibraries(core)
       .then((libs) => {
         if (!cancelled) setLibraries(libs);
+      })
+      .catch(() => {});
+    void listWalletsV2(core)
+      .then((res) => {
+        if (!cancelled) {
+          setInternalWallets(
+            (res.wallets ?? []).filter(
+              (w) =>
+                w.custody === "native_signer" &&
+                w.role !== "vault" &&
+                w.role !== "watch" &&
+                !w.policy.frozen,
+            ),
+          );
+        }
       })
       .catch(() => {});
     return () => {
@@ -624,6 +641,7 @@ export function TasksWorkspace() {
         <TaskComposerModal
           initialMode={composerMode}
           libraries={libraries}
+          internalWallets={internalWallets}
           onClose={() => setComposerMode(null)}
           onCreateTask={handleCreateTask}
           onCreateSwarm={handleCreateSwarm}

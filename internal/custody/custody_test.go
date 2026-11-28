@@ -189,9 +189,14 @@ func TestCustodyPoliciesRolesAtomicCapsRecoveryAndHardwareSigning(t *testing.T) 
 		t.Fatalf("expected RPC genesis mismatch error when swapping mainnet wallet to devnet")
 	}
 
-	// 9. Hardware wallet attachment + byte-for-byte tamper check.
+	// 9. Hardware wallet attachment + role restriction (vault-only) + byte-for-byte tamper check.
 	hwPub, hwPriv, _ := ed25519.GenerateKey(rand.Reader)
 	hwPubB58 := Base58Encode(hwPub)
+	for _, forbiddenRole := range []string{RoleMining, RoleTrading, RoleAgent} {
+		if _, err := svc.AttachExternalWallet(ctx, CustodyHardware, "Bad "+forbiddenRole, forbiddenRole, hwPubB58, "https://mainnet.helius-rpc.com"); err == nil {
+			t.Fatalf("expected AttachExternalWallet to reject hardware role %q", forbiddenRole)
+		}
+	}
 	hwW, err := svc.AttachExternalWallet(ctx, CustodyHardware, "Ledger Vault", RoleVault, hwPubB58, "https://mainnet.helius-rpc.com")
 	if err != nil {
 		t.Fatalf("AttachExternalWallet: %v", err)
