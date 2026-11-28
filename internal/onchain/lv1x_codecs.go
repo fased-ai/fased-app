@@ -235,8 +235,8 @@ func DecodeLV1XRuntime(data []byte) (LV1XRuntimeAccount, error) {
 	out := LV1XRuntimeAccount{
 		TGEBps:          LV1XDefaultTGEBps,
 		VestingDuration: LV1XBootstrapVestingSec,
-		BoostBudgetSat:  60_000,
-		BoostMultiplier: 8,
+		BoostBudgetSat:  uint32(LV1XDefaultBoostBudget),
+		BoostMultiplier: uint8(LV1XDefaultBoostMult),
 	}
 	readKey := func() (string, error) {
 		k, e := r.key()

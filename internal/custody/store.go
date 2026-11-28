@@ -40,16 +40,17 @@ const (
 
 // Config configures the isolated custody signer vault.
 type Config struct {
-	DataDir          string
-	FixtureMode      bool
-	FastKDF          bool
-	RequireOSKEK     bool
-	RequireOwnerAuth bool
-	AllowLoopbackRPC bool
-	KEKSource        providersecrets.Source // Optional override in tests
-	SocketPath       string                 // Optional explicit socket path reported in status
-	RPCTransport     http.RoundTripper      // Tests only
-	Now              func() time.Time
+	DataDir            string
+	FixtureMode        bool
+	FastKDF            bool
+	RequireOSKEK       bool
+	RequireOwnerAuth   bool
+	AllowLoopbackRPC   bool
+	KEKSource          providersecrets.Source // Optional override in tests
+	SocketPath         string                 // Optional explicit socket path reported in status
+	RPCTransport       http.RoundTripper      // Tests only
+	ManifestVerifyKeys map[string]string      // Optional test-only manifest trust key overrides
+	Now                func() time.Time
 }
 
 // Service owns private wallet keys, encrypted execution RPCs, fail-closed policies,
@@ -71,6 +72,8 @@ type Service struct {
 	authFailTimes     []time.Time
 	authConsecFails   int
 	authLockUntil     time.Time
+	bpfVerifiedMu     sync.Mutex
+	bpfVerified       map[string]int64
 	closed            bool
 	kdfTime           uint32
 	kdfMemory         uint32
@@ -257,6 +260,7 @@ CREATE INDEX IF NOT EXISTS idx_audit_wallet ON audit_log (wallet_id, timestamp D
 		now:               nowFn,
 		ownerProofs:       make(map[string]ownerProofEntry),
 		passkeyChallenges: make(map[string]passkeyChallengeEntry),
+		bpfVerified:       make(map[string]int64),
 		kdfSlots:          make(chan struct{}, 2),
 		kdfTime:           kdfT,
 		kdfMemory:         kdfM,
@@ -278,6 +282,9 @@ func (s *Service) initSignerMetaLocked(ctx context.Context) error {
 	_, _ = s.db.ExecContext(ctx, `ALTER TABLE signer_meta ADD COLUMN global_freeze_reason TEXT NOT NULL DEFAULT ''`)
 	_, _ = s.db.ExecContext(ctx, `ALTER TABLE signer_meta ADD COLUMN global_freeze_by TEXT NOT NULL DEFAULT ''`)
 	_, _ = s.db.ExecContext(ctx, `ALTER TABLE signer_meta ADD COLUMN global_freeze_at INTEGER NOT NULL DEFAULT 0`)
+	_, _ = s.db.ExecContext(ctx, `ALTER TABLE signer_meta ADD COLUMN lv1x_manifest_json TEXT NOT NULL DEFAULT ''`)
+	_, _ = s.db.ExecContext(ctx, `ALTER TABLE signer_meta ADD COLUMN lv1x_manifest_seq INTEGER NOT NULL DEFAULT 0`)
+	_, _ = s.db.ExecContext(ctx, `ALTER TABLE signer_meta ADD COLUMN lv1x_manifest_verified_at INTEGER NOT NULL DEFAULT 0`)
 	_, _ = s.db.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS mining_round_usage (
 		wallet_id TEXT NOT NULL REFERENCES wallets(id) ON DELETE CASCADE,
 		cluster TEXT NOT NULL,
@@ -285,6 +292,13 @@ func (s *Service) initSignerMetaLocked(ctx context.Context) error {
 		spent_lamports INTEGER NOT NULL DEFAULT 0,
 		reserved_lamports INTEGER NOT NULL DEFAULT 0,
 		PRIMARY KEY (wallet_id, cluster, round_slot)
+	)`)
+	_, _ = s.db.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS mining_fallback_gas (
+		wallet_id TEXT NOT NULL REFERENCES wallets(id) ON DELETE CASCADE,
+		day_utc TEXT NOT NULL,
+		spent_lamports INTEGER NOT NULL DEFAULT 0,
+		reserved_lamports INTEGER NOT NULL DEFAULT 0,
+		PRIMARY KEY (wallet_id, day_utc)
 	)`)
 	if _, err := s.db.ExecContext(ctx, `INSERT OR IGNORE INTO signer_meta (id) VALUES (1)`); err != nil {
 		return err
@@ -1019,8 +1033,22 @@ func (s *Service) UpdatePolicy(ctx context.Context, walletID string, rawNext Wal
 		if cur.Role != RoleMining {
 			return WalletPublic{}, fmt.Errorf("%w: MiningPolicy requires role=mining", ErrRoleDenied)
 		}
-		if mErr := ValidateMiningPolicyForUpdate(next.Mining); mErr != nil {
+		var vm *onchain.LV1XVerifiedManifest
+		if m, mErr := s.getVerifiedMiningManifestLocked(ctx); mErr == nil {
+			vm = m
+		}
+		if mErr := ValidateMiningPolicyWithManifest(next.Mining, vm); mErr != nil {
 			return WalletPublic{}, mErr
+		}
+		if next.Mining.Cluster == "mainnet-beta" && next.Mining.AllowMainnet {
+			rpcCreds, rErr := s.unsealRPCLocked(ctx, cur.ID)
+			if rErr != nil {
+				return WalletPublic{}, rErr
+			}
+			cl := vm.Payload.Clusters["mainnet-beta"]
+			if bErr := s.verifyMiningProgramOnChain(ctx, rpcCreds.PrimaryURL, next.Mining, cl); bErr != nil {
+				return WalletPublic{}, fmt.Errorf("%w: Mainnet LV1X on-chain verification failed: %v", ErrPolicyDenied, bErr)
+			}
 		}
 	}
 
@@ -1545,9 +1573,17 @@ func (s *Service) PrepareReview(ctx context.Context, req PrepareReviewRequest) (
 				s.mu.Unlock()
 				return WalletReview{}, fmt.Errorf("%w: mining wallet requires Semi-Auto or Auto policy", ErrRoleDenied)
 			}
-			if w.Policy.ApprovalMode == ApprovalSemiAuto && (!isMiningClaimOrRevealOp(op) || !w.Policy.Mining.AutoClaim) {
+			if w.Policy.ApprovalMode == ApprovalSemiAuto && !((isMiningClaimOrRevealOp(op) && w.Policy.Mining.AutoClaim) || (op == MiningOpFallbackSettle && w.Policy.Mining.AllowFallbackCrank)) {
 				s.mu.Unlock()
 				return WalletReview{}, fmt.Errorf("%w: Semi-Auto mining prohibits unattended commit, stake, or session operations", ErrRoleDenied)
+			}
+			if op == MiningOpStake && !w.Policy.Mining.AutoStakeWensat {
+				s.mu.Unlock()
+				return WalletReview{}, fmt.Errorf("%w: unattended stake requires AutoStakeWensat enabled on MiningPolicy", ErrRoleDenied)
+			}
+			if op == MiningOpUnstake {
+				s.mu.Unlock()
+				return WalletReview{}, fmt.Errorf("%w: unstake requires manual owner authorization", ErrRoleDenied)
 			}
 		} else {
 			if w.Role == RoleVault || w.Role == RoleMining || w.Policy.ApprovalMode == ApprovalManualReview || !w.Connections.AllowTradeBots {
@@ -2085,6 +2121,46 @@ func (s *Service) executePreparedReview(ctx context.Context, walletID, reviewID,
 		s.mu.Unlock()
 		return LedgerEntry{}, fmt.Errorf("%w: simulation failed: %s", ErrPolicyDenied, firstStr(review.SimulationError, "unknown error"))
 	}
+	if isMiningOperation(review.Operation) && review.MiningCluster == "mainnet-beta" {
+		mPol := NormalizeMiningPolicy(w.Policy.Mining)
+		vm, vmErr := s.getVerifiedMiningManifestLocked(ctx)
+		if vmErr != nil || vm == nil || !vm.Compatible || mPol == nil || !mPol.AllowMainnet {
+			s.mu.Unlock()
+			return LedgerEntry{}, fmt.Errorf("%w: Mainnet LV1X execution requires verified compatible manifest and AllowMainnet policy", ErrPolicyDenied)
+		}
+		cl, ok := vm.Payload.Clusters["mainnet-beta"]
+		if !ok || cl.Status != "active" || mPol.ProgramID != cl.ProgramID || mPol.LedgerID != cl.LedgerID {
+			s.mu.Unlock()
+			return LedgerEntry{}, fmt.Errorf("%w: Mainnet LV1X execution rejected by manifest gate", ErrPolicyDenied)
+		}
+		rpcCredsCheck, rErr := s.unsealRPCLocked(ctx, w.ID)
+		if rErr != nil {
+			s.mu.Unlock()
+			return LedgerEntry{}, rErr
+		}
+		cachePrefix := fmt.Sprintf("mainnet-beta:%s:", mPol.ProgramID)
+		cachedFresh := false
+		nowSec := s.now().UTC().Unix()
+		s.bpfVerifiedMu.Lock()
+		for k, ts := range s.bpfVerified {
+			if strings.HasPrefix(k, cachePrefix) && strings.HasSuffix(k, ":"+strings.ToLower(cl.ExpectedELFSHA256)) && nowSec-ts < 300 {
+				cachedFresh = true
+				break
+			}
+		}
+		s.bpfVerifiedMu.Unlock()
+		if !cachedFresh {
+			s.mu.Unlock()
+			if bErr := s.verifyMiningProgramOnChain(ctx, rpcCredsCheck.PrimaryURL, mPol, cl); bErr != nil {
+				return LedgerEntry{}, fmt.Errorf("%w: live Mainnet BPF verification failed: %v", ErrPolicyDenied, bErr)
+			}
+			s.mu.Lock()
+			if s.closed || s.db == nil {
+				s.mu.Unlock()
+				return LedgerEntry{}, errors.New("custody store closed")
+			}
+		}
+	}
 
 	msgBytes, err := base64.StdEncoding.DecodeString(review.UnsignedMsgBase64)
 	if err != nil {
@@ -2204,6 +2280,17 @@ func (s *Service) executePreparedReview(ctx context.Context, walletID, reviewID,
 			return LedgerEntry{}, rErr
 		}
 	}
+	if review.Operation == MiningOpFallbackSettle {
+		gasFee := review.EstimatedFeeLamports
+		if gasFee == 0 {
+			gasFee = 10_000
+		}
+		if fErr := s.reserveFallbackGasTxLocked(ctx, tx, w.ID, day, gasFee); fErr != nil {
+			_ = tx.Rollback()
+			s.mu.Unlock()
+			return LedgerEntry{}, fErr
+		}
+	}
 	splMint, splDebitRaw := reviewSPLDebit(review)
 	if splMint != "" && splDebitRaw > 0 {
 		tc, ok := findTokenCap(w.Policy.TokenCaps, splMint)
@@ -2300,6 +2387,15 @@ func (s *Service) executePreparedReview(ctx context.Context, walletID, reviewID,
 	if review.Operation == MiningOpCommit && review.AmountRaw > 0 && (nextState == LedgerConfirmed || nextState == LedgerFailed) {
 		cluster := firstStr(review.MiningCluster, "devnet")
 		if err := s.settleMiningRoundTxLocked(ctx, postTx, w.ID, cluster, review.MiningRoundSlot, review.AmountRaw, nextState == LedgerConfirmed); err != nil {
+			return entry, err
+		}
+	}
+	if review.Operation == MiningOpFallbackSettle && (nextState == LedgerConfirmed || nextState == LedgerFailed) {
+		gasFee := review.EstimatedFeeLamports
+		if gasFee == 0 {
+			gasFee = 10_000
+		}
+		if err := s.settleFallbackGasTxLocked(ctx, postTx, w.ID, day, gasFee, nextState == LedgerConfirmed); err != nil {
 			return entry, err
 		}
 	}
@@ -2449,6 +2545,18 @@ func (s *Service) ReconcileLedgerEntry(ctx context.Context, walletID, entryID st
 			if _, err := tx.ExecContext(ctx, `UPDATE daily_asset_usage SET reserved_raw = MAX(0, reserved_raw - ?) WHERE wallet_id = ? AND asset_key = ? AND day_utc = ?`, splReservedAmount, w.ID, "spl:"+splMint, day); err != nil {
 				return entry, err
 			}
+		}
+	}
+	if entry.Operation == MiningOpFallbackSettle && (nextState == LedgerConfirmed || nextState == LedgerFailed) {
+		var fallbackGas uint64 = 10_000
+		if revPayloadRaw != "" {
+			var rev WalletReview
+			if json.Unmarshal([]byte(revPayloadRaw), &rev) == nil && rev.EstimatedFeeLamports > 0 {
+				fallbackGas = rev.EstimatedFeeLamports
+			}
+		}
+		if err := s.settleFallbackGasTxLocked(ctx, tx, w.ID, day, fallbackGas, nextState == LedgerConfirmed); err != nil {
+			return entry, err
 		}
 	}
 	if err := s.appendAuditExecLocked(ctx, tx, w.ID, "tx_reconciled", "owner", fmt.Sprintf("Reconciled %s -> %s", entry.ID, entry.State), entry.PolicyHash); err != nil {

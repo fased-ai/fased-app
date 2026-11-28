@@ -13,32 +13,42 @@ import (
 )
 
 const (
-	// Canonical Lean V1 (LV1X) protocol constants matching wen/vendor/satcoin-mining-v2/lean-v1-pda.mjs.
+	// Canonical Lean V1 (LV1X) protocol constants matching token/sat freeze/mainnet-v1-rc1.
 	LV1XMagic               = "LV1X"
 	LV1XVersion             = 1
+	LV1XProtocolSchemaHash  = "76d3a86010f7e22a02006fdce70b79b7773dd2cd0f0462bef28548bbcb7d5d72"
 	LV1XMinCommitLamports   = uint64(10_000_000)
-	LV1XMinStakeAtoms       = uint64(10_000_000_000) // 10 SAT (9 decimals)
+	LV1XMinStakeAtoms       = uint64(1_000_000_000) // 1 SAT (9 decimals)
 	LV1XLifetimeSatAtoms    = uint64(30_000_000_000_000_000)
-	LV1XBootstrapVestingSec = uint32(604_800)
-	LV1XDefaultTGEBps       = uint16(2500)
+	LV1XDefaultLPSolMin     = uint64(200_000_000_000)     // 200 SOL Balanced-A
+	LV1XDefaultLPSatMin     = uint64(200_000_000_000_000) // 200,000 WENSAT Balanced-A
+	LV1XDefaultBoostBudget  = uint64(400_000)             // 400,000 WENSAT boost pool
+	LV1XDefaultBoostMult    = uint16(24)                  // 24x bootstrap multiplier
+	LV1XBootstrapVestingSec = uint32(2_592_000)           // 30d vest
+	LV1XDefaultTGEBps       = uint16(1000)                // 10% TGE
 	LV1XRoundIntervalSec    = int64(600)
+	LV1XSlotsPerYear        = uint64(52_560)
 	LV1XMaxShards           = 32
 	LV1XUnshardedShardID    = uint8(255)
 	LV1XPageEntries         = 8
 	BPFLoaderUpgradeableID  = "BPFLoaderUpgradeab1e11111111111111111111111"
 	SolanaTokenProgramID    = Token
 	SolanaAssociatedTokenID = AssociatedToken
+	LV1XDevnetELFBytes      = 648_416
+	LV1XMainnetELFBytes     = 650_592
 
-	// Pinned Devnet Lean V1 deployment (wen-lean-v1-devnet-manifest/1).
+	// Pinned Devnet & Frozen RC1 Mainnet ELF metadata (Mainnet addresses come from signed manifest).
 	LV1XDevnetProgramID        = "WAcbznz9veHLEU4qup2eqvwQcGzLeV7hYvAtfaQTrVY"
 	LV1XDevnetProgramDataID    = "6YHn2R8rauQs5JT1ACd6oyrZ5PsJ2SKEP6oZLdvx1S7z"
 	LV1XDevnetLedgerID         = "DXYmEs4veeHR5sFXMdnsfmrjL3gEuGhuawcQwxgb5V46"
 	LV1XDevnetBTCMint          = "2bBh5wMSYniLm8jpH9JtR4sxw4BCx7Q2q2AkX2FmGsd9"
-	LV1XDevnetELFSHA256        = "635a46e23c0524ee9189b4c9eb69b7e3ca8bb2b29f1ae522128bf4381d7c8d1f"
-	LV1XDevnetVendorELFSHA256  = "c438d5cbf43a053697af2ce7270719a4be22f6a47b53e651457789046ecc9069"
-	LV1XMainnetVendorELFSHA256 = "9227e38f35a795b1f4b151251757a358cd80197a17a72db0a5f0061f1fa5389f"
+	LV1XDevnetELFSHA256        = "32056042a15a228fe94ac3fc8e0d315d98ce4657576abd787fe186301581b245"
+	LV1XDevnetVendorELFSHA256  = "32056042a15a228fe94ac3fc8e0d315d98ce4657576abd787fe186301581b245"
+	LV1XMainnetELFSHA256       = "2d9a48f6ecc4114e11c03c1744b291033f39f11445d3292fa9f8caf12999ffc7"
+	LV1XMainnetVendorELFSHA256 = "2d9a48f6ecc4114e11c03c1744b291033f39f11445d3292fa9f8caf12999ffc7"
+	LV1XMainnetBTCMint         = "cbbtcf3aa214zXHbiAZQwf4122FBYbraNdFqgw4iMij"
 
-	// Mainnet remains intentionally empty until official Mainnet LV1X program IDs are published.
+	// Mainnet remains intentionally empty until unlocked via signed manifest + BPF check + owner step-up.
 	LV1XMainnetProgramID = ""
 )
 
@@ -48,9 +58,12 @@ const (
 	LV1XTagCommit                   uint8 = 5
 	LV1XTagCommitFromSession        uint8 = 6
 	LV1XTagRevealBatch              uint8 = 7
+	LV1XTagBeginSettlement          uint8 = 9
+	LV1XTagFinishSettlement         uint8 = 12
 	LV1XTagClaimSolBatch            uint8 = 13
 	LV1XTagClaimSat                 uint8 = 14
 	LV1XTagClaimBtc                 uint8 = 16
+	LV1XTagCloseNonce               uint8 = 18
 	LV1XTagStake                    uint8 = 21
 	LV1XTagActivateStake            uint8 = 22
 	LV1XTagClaimStakingReward       uint8 = 25
@@ -62,6 +75,9 @@ const (
 	LV1XTagCommitToShard            uint8 = 35
 	LV1XTagCommitFromSessionToShard uint8 = 36
 	LV1XTagRevealPageBatch          uint8 = 37
+	LV1XTagMergeShardsBatch         uint8 = 38
+	LV1XTagScanPagesBatch           uint8 = 40
+	LV1XTagAllocatePagesBatch       uint8 = 41
 	LV1XTagClaimShardSolBatch       uint8 = 42
 	LV1XTagClaimShardSat            uint8 = 43
 	LV1XTagClaimShardBtc            uint8 = 44
@@ -296,6 +312,36 @@ func LV1XTreasuryBTCVaultPDA(programID, ledgerID string) (string, error) {
 	return addr, err
 }
 
+// LV1XYearPDA derives findProgramAddress(["lv1-year", ledger, u64le(year)], program).
+func LV1XYearPDA(programID, ledgerID string, year uint64) (string, error) {
+	l, err := Key(ledgerID)
+	if err != nil {
+		return "", err
+	}
+	addr, _, err := FindProgramAddress(programID, []byte("lv1-year"), l, u64LEBytes(year))
+	return addr, err
+}
+
+// LV1XLPSolPDA derives findProgramAddress(["lv1-lp-sol", ledger], program).
+func LV1XLPSolPDA(programID, ledgerID string) (string, error) {
+	l, err := Key(ledgerID)
+	if err != nil {
+		return "", err
+	}
+	addr, _, err := FindProgramAddress(programID, []byte("lv1-lp-sol"), l)
+	return addr, err
+}
+
+// LV1XLPSatPDA derives findProgramAddress(["lv1-lp-sat", ledger], program).
+func LV1XLPSatPDA(programID, ledgerID string) (string, error) {
+	l, err := Key(ledgerID)
+	if err != nil {
+		return "", err
+	}
+	addr, _, err := FindProgramAddress(programID, []byte("lv1-lp-sat"), l)
+	return addr, err
+}
+
 // LV1XAssociatedTokenAddress derives the SPL Associated Token Account PDA for (owner, mint).
 func LV1XAssociatedTokenAddress(owner, mint string) (string, error) {
 	return TokenAccount(owner, mint)
@@ -311,31 +357,85 @@ func BPFLoaderProgramDataPDA(programID string) (string, error) {
 	return addr, err
 }
 
-// VerifyBPFLoaderProgramData validates BPF Loader Upgradeable account state and deployed ELF SHA-256
-// matching wen/vendor/satcoin-mining-v2/program.mjs (data[45:] holds the ELF bytes).
-func VerifyBPFLoaderProgramData(programID string, progAcctOwner, progAcctData, progDataAcctOwner, progDataAcctData []byte, expectedSHA256 string) error {
+// VerifyBPFLoaderProgramDataPrefix validates BPF Loader Upgradeable account state,
+// upgrade authority, zero-padded executable ELF prefix [45 : 45+expectedBytes] SHA-256,
+// and trailing zero bytes. When expectedBytes <= 0, hashes the full data[45:] slice.
+func VerifyBPFLoaderProgramDataPrefix(
+	programID string,
+	progAcctOwner, progAcctData, progDataAcctOwner, progDataAcctData []byte,
+	expectedBytes int,
+	expectedSHA256 string,
+	allowedAuthorities []string,
+	allowImmutable bool,
+) (uint64, string, error) {
 	loaderKey, _ := Key(BPFLoaderUpgradeableID)
 	expectedDataAddr, err := BPFLoaderProgramDataPDA(programID)
 	if err != nil {
-		return err
+		return 0, "", err
 	}
 	expectedDataKey, _ := Key(expectedDataAddr)
 	if !bytes.Equal(progAcctOwner, loaderKey) || !bytes.Equal(progDataAcctOwner, loaderKey) {
-		return errors.New("BPF loader owner mismatch")
+		return 0, "", errors.New("BPF loader owner mismatch")
 	}
 	if len(progAcctData) != 36 || binary.LittleEndian.Uint32(progAcctData[:4]) != 2 || !bytes.Equal(progAcctData[4:36], expectedDataKey) {
-		return errors.New("BPF loader program account pointer mismatch")
+		return 0, "", errors.New("BPF loader program account pointer mismatch")
 	}
 	if len(progDataAcctData) <= 45 || len(progDataAcctData) > 10*1024*1024 || binary.LittleEndian.Uint32(progDataAcctData[:4]) != 3 {
-		return errors.New("BPF loader programdata account invalid")
+		return 0, "", errors.New("BPF loader programdata account invalid")
 	}
-	sum := sha256.Sum256(progDataAcctData[45:])
+	deploymentSlot := binary.LittleEndian.Uint64(progDataAcctData[4:12])
+	hasAuth := progDataAcctData[12]
+	upgradeAuthority := ""
+	switch hasAuth {
+	case 0:
+		if !allowImmutable {
+			return 0, "", errors.New("immutable BPF program forbidden by policy")
+		}
+	case 1:
+		upgradeAuthority = Base58(progDataAcctData[13:45])
+		if len(allowedAuthorities) > 0 {
+			matched := false
+			for _, a := range allowedAuthorities {
+				if strings.TrimSpace(a) == upgradeAuthority {
+					matched = true
+					break
+				}
+			}
+			if !matched {
+				return 0, "", fmt.Errorf("BPF upgrade authority %s not in allowlist", upgradeAuthority)
+			}
+		}
+	default:
+		return 0, "", fmt.Errorf("invalid BPF upgrade authority option byte %d", hasAuth)
+	}
+	elfSlice := progDataAcctData[45:]
+	if expectedBytes > 0 {
+		if len(elfSlice) < expectedBytes {
+			return 0, "", fmt.Errorf("BPF ELF truncated: have %d need >= %d bytes", len(elfSlice), expectedBytes)
+		}
+		for _, tailByte := range elfSlice[expectedBytes:] {
+			if tailByte != 0 {
+				return 0, "", errors.New("BPF ELF trailing bytes are not zero-padded")
+			}
+		}
+		elfSlice = elfSlice[:expectedBytes]
+	}
+	sum := sha256.Sum256(elfSlice)
 	got := hex.EncodeToString(sum[:])
 	want := strings.ToLower(strings.TrimSpace(expectedSHA256))
 	if want == "" || got != want {
-		return fmt.Errorf("BPF ELF SHA-256 mismatch: got %s want %s", got, want)
+		return 0, "", fmt.Errorf("BPF ELF SHA-256 mismatch: got %s want %s", got, want)
 	}
-	return nil
+	return deploymentSlot, upgradeAuthority, nil
+}
+
+// VerifyBPFLoaderProgramData validates BPF Loader Upgradeable account state and deployed ELF SHA-256.
+func VerifyBPFLoaderProgramData(programID string, progAcctOwner, progAcctData, progDataAcctOwner, progDataAcctData []byte, expectedSHA256 string) error {
+	_, _, err := VerifyBPFLoaderProgramDataPrefix(
+		programID, progAcctOwner, progAcctData, progDataAcctOwner, progDataAcctData,
+		0, expectedSHA256, nil, true,
+	)
+	return err
 }
 
 // LV1XCommitmentHash computes SHA-256("lv1-commit-v1"||program||ledger||slot||owner||amount||nonce||selection||salt).
@@ -754,18 +854,50 @@ type LV1XRevealParams struct {
 	MicroLam  uint64
 }
 
-// LV1XClaimTokenParams builds ClaimSat / ClaimShardSat or ClaimBtc / ClaimShardBtc.
+// LV1XClaimTokenParams builds ClaimSat / ClaimShardSat or ClaimBtc / ClaimShardBtc (or Batch variants).
 type LV1XClaimTokenParams struct {
+	ProgramID   string
+	LedgerID    string
+	Owner       [32]byte
+	Blockhash   [32]byte
+	Slot        uint64
+	ShardID     uint8
+	Page        uint32
+	EntryRow    uint8
+	EntriesMask uint8
+	BTCMint     string // Required when Claiming BTC
+	CreateATA   bool
+	SolEscape   bool // Escape BTC claim directly to owner SOL lamports when frozen
+	ComputeCU   uint32
+	MicroLam    uint64
+}
+
+// LV1XCloseNonceParams builds CloseNonce (Tag 18) to reclaim owner's nonce PDA rent.
+type LV1XCloseNonceParams struct {
 	ProgramID string
 	LedgerID  string
+	FeePayer  [32]byte
 	Owner     [32]byte
 	Blockhash [32]byte
 	Slot      uint64
+	Nonce     uint64 // Group is derived as Nonce / 64 unless Group is set explicitly via SetGroup
+	Group     uint64
+	UseGroup  bool
+	ComputeCU uint32
+	MicroLam  uint64
+}
+
+// LV1XFallbackSettleParams parameterizes Tier 2 permissionless fallback settlement builders.
+type LV1XFallbackSettleParams struct {
+	ProgramID string
+	LedgerID  string
+	FeePayer  [32]byte
+	Blockhash [32]byte
+	Slot      uint64
 	ShardID   uint8
-	Page      uint32
-	EntryRow  uint8
-	BTCMint   string // Required when Claiming BTC
-	CreateATA bool
+	ShardIDs  []uint8
+	StartPage uint32
+	PageCount uint8
 	ComputeCU uint32
 	MicroLam  uint64
 }
@@ -1066,6 +1198,11 @@ func BuildLV1XClaimBtcMessage(p LV1XClaimTokenParams) ([]byte, error) {
 	iVault := b.addKey(vaultPK, false, true)
 	iATA := b.addKey(ataPK, false, true)
 	iTok := b.addKey(tokPK, false, false)
+	accounts := []int{iRT, iRK, iPK, iVault, iATA, iTok}
+	if p.SolEscape {
+		iEscape := b.addKey(p.Owner, false, true)
+		accounts = append(accounts, iEscape)
+	}
 	_ = b.addKey(progPK, false, false)
 
 	var data []byte
@@ -1083,10 +1220,419 @@ func BuildLV1XClaimBtcMessage(p LV1XClaimTokenParams) ([]byte, error) {
 	}
 	b.ixs = append(b.ixs, legacyIxSpec{
 		program:  progPK,
-		accounts: []int{iRT, iRK, iPK, iVault, iATA, iTok},
+		accounts: accounts,
 		data:     data,
 	})
 	return encodeLegacyMessage(p.Owner, p.Blockhash, b.specs, b.ixs)
+}
+
+// BuildLV1XClaimSatBatchMessage builds ClaimSatBatch (Tag 52) across <= 8 page rows.
+func BuildLV1XClaimSatBatchMessage(p LV1XClaimTokenParams) ([]byte, error) {
+	if p.EntriesMask == 0 {
+		return nil, errors.New("non-zero 8-bit entries mask required")
+	}
+	if p.ShardID != LV1XUnshardedShardID && int(p.ShardID) >= LV1XMaxShards {
+		return nil, errors.New("invalid LV1X shard id")
+	}
+	progPK, err := mustKey32(p.ProgramID)
+	if err != nil {
+		return nil, err
+	}
+	rtAddr, err := LV1XRuntimePDA(p.ProgramID, p.LedgerID)
+	if err != nil {
+		return nil, err
+	}
+	rkAddr, err := LV1XRoundPDA(p.ProgramID, p.LedgerID, p.Slot)
+	if err != nil {
+		return nil, err
+	}
+	mintAddr, err := LV1XMintPDA(p.ProgramID, p.LedgerID)
+	if err != nil {
+		return nil, err
+	}
+	issAddr, err := LV1XIssuancePDA(p.ProgramID, p.LedgerID)
+	if err != nil {
+		return nil, err
+	}
+	ownerB58 := Base58(p.Owner[:])
+	ataAddr, err := LV1XAssociatedTokenAddress(ownerB58, mintAddr)
+	if err != nil {
+		return nil, err
+	}
+	var pkAddr string
+	if p.ShardID == LV1XUnshardedShardID {
+		pkAddr, err = LV1XPagePDA(p.ProgramID, rkAddr, p.Page)
+	} else {
+		pkAddr, err = LV1XShardPagePDA(p.ProgramID, rkAddr, p.ShardID, p.Page)
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	rtPK, _ := mustKey32(rtAddr)
+	rkPK, _ := mustKey32(rkAddr)
+	pkPK, _ := mustKey32(pkAddr)
+	mintPK, _ := mustKey32(mintAddr)
+	issPK, _ := mustKey32(issAddr)
+	ataPK, _ := mustKey32(ataAddr)
+	tokPK, _ := mustKey32(Token)
+
+	b, iPayer := newLV1XMsgBuilder(p.Owner, p.ComputeCU, p.MicroLam)
+	if p.CreateATA {
+		if err := b.appendCreateATAIdempotent(iPayer, ataPK, p.Owner, mintPK); err != nil {
+			return nil, err
+		}
+	}
+	iRT := b.addKey(rtPK, false, false)
+	iRK := b.addKey(rkPK, false, false)
+	iPK := b.addKey(pkPK, false, true)
+	iMint := b.addKey(mintPK, false, true)
+	iIss := b.addKey(issPK, false, false)
+	iATA := b.addKey(ataPK, false, true)
+	iTok := b.addKey(tokPK, false, false)
+	_ = b.addKey(progPK, false, false)
+
+	data := lv1xIxPrefix(LV1XTagClaimSatBatch, 8+1+4+1)
+	data = append(data, u64LEBytes(p.Slot)...)
+	data = append(data, p.ShardID)
+	data = append(data, u32LEBytes(p.Page)...)
+	data = append(data, p.EntriesMask)
+	b.ixs = append(b.ixs, legacyIxSpec{
+		program:  progPK,
+		accounts: []int{iRT, iRK, iPK, iMint, iIss, iATA, iTok},
+		data:     data,
+	})
+	return encodeLegacyMessage(p.Owner, p.Blockhash, b.specs, b.ixs)
+}
+
+// BuildLV1XClaimBtcBatchMessage builds ClaimBtcBatch (Tag 53), routing to owner SOL when SolEscape is true.
+func BuildLV1XClaimBtcBatchMessage(p LV1XClaimTokenParams) ([]byte, error) {
+	if p.EntriesMask == 0 {
+		return nil, errors.New("non-zero 8-bit entries mask required")
+	}
+	if p.ShardID != LV1XUnshardedShardID && int(p.ShardID) >= LV1XMaxShards {
+		return nil, errors.New("invalid LV1X shard id")
+	}
+	progPK, err := mustKey32(p.ProgramID)
+	if err != nil {
+		return nil, err
+	}
+	rtAddr, err := LV1XRuntimePDA(p.ProgramID, p.LedgerID)
+	if err != nil {
+		return nil, err
+	}
+	rkAddr, err := LV1XRoundPDA(p.ProgramID, p.LedgerID, p.Slot)
+	if err != nil {
+		return nil, err
+	}
+	vaultAddr, err := LV1XMinerBTCVaultPDA(p.ProgramID, p.LedgerID)
+	if err != nil {
+		return nil, err
+	}
+	var pkAddr string
+	if p.ShardID == LV1XUnshardedShardID {
+		pkAddr, err = LV1XPagePDA(p.ProgramID, rkAddr, p.Page)
+	} else {
+		pkAddr, err = LV1XShardPagePDA(p.ProgramID, rkAddr, p.ShardID, p.Page)
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	b, iPayer := newLV1XMsgBuilder(p.Owner, p.ComputeCU, p.MicroLam)
+	var destPK [32]byte
+	if p.SolEscape {
+		destPK = p.Owner
+	} else {
+		btcMint := strings.TrimSpace(p.BTCMint)
+		if btcMint == "" {
+			return nil, errors.New("btcMint required unless solEscape is set")
+		}
+		btcMintPK, mErr := mustKey32(btcMint)
+		if mErr != nil {
+			return nil, mErr
+		}
+		ataAddr, aErr := LV1XAssociatedTokenAddress(Base58(p.Owner[:]), btcMint)
+		if aErr != nil {
+			return nil, aErr
+		}
+		destPK, _ = mustKey32(ataAddr)
+		if p.CreateATA {
+			if err := b.appendCreateATAIdempotent(iPayer, destPK, p.Owner, btcMintPK); err != nil {
+				return nil, err
+			}
+		}
+	}
+
+	rtPK, _ := mustKey32(rtAddr)
+	rkPK, _ := mustKey32(rkAddr)
+	pkPK, _ := mustKey32(pkAddr)
+	vaultPK, _ := mustKey32(vaultAddr)
+	tokPK, _ := mustKey32(Token)
+
+	iRT := b.addKey(rtPK, false, false)
+	iRK := b.addKey(rkPK, false, true)
+	iPK := b.addKey(pkPK, false, true)
+	iVault := b.addKey(vaultPK, false, true)
+	iDest := b.addKey(destPK, false, true)
+	iTok := b.addKey(tokPK, false, false)
+	_ = b.addKey(progPK, false, false)
+
+	data := lv1xIxPrefix(LV1XTagClaimBtcBatch, 8+1+4+1)
+	data = append(data, u64LEBytes(p.Slot)...)
+	data = append(data, p.ShardID)
+	data = append(data, u32LEBytes(p.Page)...)
+	data = append(data, p.EntriesMask)
+	b.ixs = append(b.ixs, legacyIxSpec{
+		program:  progPK,
+		accounts: []int{iRT, iRK, iPK, iVault, iDest, iTok},
+		data:     data,
+	})
+	return encodeLegacyMessage(p.Owner, p.Blockhash, b.specs, b.ixs)
+}
+
+// BuildLV1XCloseNonceMessage builds CloseNonce (Tag 18), refunding nonce PDA rent to FeePayer.
+func BuildLV1XCloseNonceMessage(p LV1XCloseNonceParams) ([]byte, error) {
+	progPK, err := mustKey32(p.ProgramID)
+	if err != nil {
+		return nil, err
+	}
+	group := p.Nonce / 64
+	if p.UseGroup {
+		group = p.Group
+	}
+	rtAddr, err := LV1XRuntimePDA(p.ProgramID, p.LedgerID)
+	if err != nil {
+		return nil, err
+	}
+	rkAddr, err := LV1XRoundPDA(p.ProgramID, p.LedgerID, p.Slot)
+	if err != nil {
+		return nil, err
+	}
+	ownerB58 := Base58(p.Owner[:])
+	nkAddr, err := LV1XNoncePDA(p.ProgramID, rkAddr, ownerB58, group)
+	if err != nil {
+		return nil, err
+	}
+	rtPK, _ := mustKey32(rtAddr)
+	rkPK, _ := mustKey32(rkAddr)
+	nkPK, _ := mustKey32(nkAddr)
+
+	b, iPayer := newLV1XMsgBuilder(p.FeePayer, p.ComputeCU, p.MicroLam)
+	iRT := b.addKey(rtPK, false, false)
+	iRK := b.addKey(rkPK, false, false)
+	iNK := b.addKey(nkPK, false, true)
+	_ = b.addKey(progPK, false, false)
+
+	data := lv1xIxPrefix(LV1XTagCloseNonce, 8+32+8)
+	data = append(data, u64LEBytes(p.Slot)...)
+	data = append(data, p.Owner[:]...)
+	data = append(data, u64LEBytes(group)...)
+	b.ixs = append(b.ixs, legacyIxSpec{
+		program:  progPK,
+		accounts: []int{iRT, iRK, iNK, iPayer},
+		data:     data,
+	})
+	return encodeLegacyMessage(p.FeePayer, p.Blockhash, b.specs, b.ixs)
+}
+
+// BuildLV1XMergeShardsBatchMessage builds MergeShardsBatch (Tag 38).
+func BuildLV1XMergeShardsBatchMessage(p LV1XFallbackSettleParams) ([]byte, error) {
+	if len(p.ShardIDs) == 0 || len(p.ShardIDs) > 16 {
+		return nil, errors.New("MergeShardsBatch requires 1..16 unique shard IDs")
+	}
+	seen := make(map[uint8]bool, len(p.ShardIDs))
+	for _, sid := range p.ShardIDs {
+		if int(sid) >= LV1XMaxShards || seen[sid] {
+			return nil, fmt.Errorf("invalid or duplicate shardId %d", sid)
+		}
+		seen[sid] = true
+	}
+	progPK, err := mustKey32(p.ProgramID)
+	if err != nil {
+		return nil, err
+	}
+	rtAddr, err := LV1XRuntimePDA(p.ProgramID, p.LedgerID)
+	if err != nil {
+		return nil, err
+	}
+	rkAddr, err := LV1XRoundPDA(p.ProgramID, p.LedgerID, p.Slot)
+	if err != nil {
+		return nil, err
+	}
+	rtPK, _ := mustKey32(rtAddr)
+	rkPK, _ := mustKey32(rkAddr)
+
+	b, _ := newLV1XMsgBuilder(p.FeePayer, p.ComputeCU, p.MicroLam)
+	iRT := b.addKey(rtPK, false, false)
+	iRK := b.addKey(rkPK, false, true)
+	accts := []int{iRT, iRK}
+	data := lv1xIxPrefix(LV1XTagMergeShardsBatch, 8+1+len(p.ShardIDs))
+	data = append(data, u64LEBytes(p.Slot)...)
+	data = append(data, uint8(len(p.ShardIDs)))
+	for _, sid := range p.ShardIDs {
+		shAddr, sErr := LV1XShardPDA(p.ProgramID, rkAddr, sid)
+		if sErr != nil {
+			return nil, sErr
+		}
+		shPK, _ := mustKey32(shAddr)
+		accts = append(accts, b.addKey(shPK, false, true))
+		data = append(data, sid)
+	}
+	_ = b.addKey(progPK, false, false)
+	b.ixs = append(b.ixs, legacyIxSpec{program: progPK, accounts: accts, data: data})
+	return encodeLegacyMessage(p.FeePayer, p.Blockhash, b.specs, b.ixs)
+}
+
+// BuildLV1XBeginSettlementMessage builds BeginSettlement (Tag 9).
+func BuildLV1XBeginSettlementMessage(p LV1XFallbackSettleParams) ([]byte, error) {
+	progPK, err := mustKey32(p.ProgramID)
+	if err != nil {
+		return nil, err
+	}
+	rtAddr, err := LV1XRuntimePDA(p.ProgramID, p.LedgerID)
+	if err != nil {
+		return nil, err
+	}
+	rkAddr, err := LV1XRoundPDA(p.ProgramID, p.LedgerID, p.Slot)
+	if err != nil {
+		return nil, err
+	}
+	rtPK, _ := mustKey32(rtAddr)
+	rkPK, _ := mustKey32(rkAddr)
+
+	b, _ := newLV1XMsgBuilder(p.FeePayer, p.ComputeCU, p.MicroLam)
+	iRT := b.addKey(rtPK, false, false)
+	iRK := b.addKey(rkPK, false, true)
+	_ = b.addKey(progPK, false, false)
+	data := lv1xIxPrefix(LV1XTagBeginSettlement, 8)
+	data = append(data, u64LEBytes(p.Slot)...)
+	b.ixs = append(b.ixs, legacyIxSpec{program: progPK, accounts: []int{iRT, iRK}, data: data})
+	return encodeLegacyMessage(p.FeePayer, p.Blockhash, b.specs, b.ixs)
+}
+
+func buildLV1XPagesBatchSettlementMessage(tag uint8, p LV1XFallbackSettleParams) ([]byte, error) {
+	if p.PageCount < 1 || p.PageCount > 8 {
+		return nil, errors.New("pageCount must be 1..8")
+	}
+	if p.ShardID != LV1XUnshardedShardID && int(p.ShardID) >= LV1XMaxShards {
+		return nil, errors.New("invalid LV1X shard id")
+	}
+	progPK, err := mustKey32(p.ProgramID)
+	if err != nil {
+		return nil, err
+	}
+	rtAddr, err := LV1XRuntimePDA(p.ProgramID, p.LedgerID)
+	if err != nil {
+		return nil, err
+	}
+	rkAddr, err := LV1XRoundPDA(p.ProgramID, p.LedgerID, p.Slot)
+	if err != nil {
+		return nil, err
+	}
+	rtPK, _ := mustKey32(rtAddr)
+	rkPK, _ := mustKey32(rkAddr)
+
+	b, _ := newLV1XMsgBuilder(p.FeePayer, p.ComputeCU, p.MicroLam)
+	iRT := b.addKey(rtPK, false, false)
+	iRK := b.addKey(rkPK, false, true)
+	accts := []int{iRT, iRK}
+	if p.ShardID != LV1XUnshardedShardID {
+		shAddr, sErr := LV1XShardPDA(p.ProgramID, rkAddr, p.ShardID)
+		if sErr != nil {
+			return nil, sErr
+		}
+		shPK, _ := mustKey32(shAddr)
+		accts = append(accts, b.addKey(shPK, false, true))
+	}
+	for i := uint32(0); i < uint32(p.PageCount); i++ {
+		var pgAddr string
+		if p.ShardID == LV1XUnshardedShardID {
+			pgAddr, err = LV1XPagePDA(p.ProgramID, rkAddr, p.StartPage+i)
+		} else {
+			pgAddr, err = LV1XShardPagePDA(p.ProgramID, rkAddr, p.ShardID, p.StartPage+i)
+		}
+		if err != nil {
+			return nil, err
+		}
+		pgPK, _ := mustKey32(pgAddr)
+		accts = append(accts, b.addKey(pgPK, false, true))
+	}
+	_ = b.addKey(progPK, false, false)
+	data := lv1xIxPrefix(tag, 8+1+4+1)
+	data = append(data, u64LEBytes(p.Slot)...)
+	data = append(data, p.ShardID)
+	data = append(data, u32LEBytes(p.StartPage)...)
+	data = append(data, p.PageCount)
+	b.ixs = append(b.ixs, legacyIxSpec{program: progPK, accounts: accts, data: data})
+	return encodeLegacyMessage(p.FeePayer, p.Blockhash, b.specs, b.ixs)
+}
+
+// BuildLV1XScanPagesBatchMessage builds ScanPagesBatch (Tag 40).
+func BuildLV1XScanPagesBatchMessage(p LV1XFallbackSettleParams) ([]byte, error) {
+	return buildLV1XPagesBatchSettlementMessage(LV1XTagScanPagesBatch, p)
+}
+
+// BuildLV1XAllocatePagesBatchMessage builds AllocatePagesBatch (Tag 41).
+func BuildLV1XAllocatePagesBatchMessage(p LV1XFallbackSettleParams) ([]byte, error) {
+	return buildLV1XPagesBatchSettlementMessage(LV1XTagAllocatePagesBatch, p)
+}
+
+// BuildLV1XFinishSettlementMessage builds FinishSettlement (Tag 12).
+func BuildLV1XFinishSettlementMessage(p LV1XFallbackSettleParams) ([]byte, error) {
+	progPK, err := mustKey32(p.ProgramID)
+	if err != nil {
+		return nil, err
+	}
+	year := p.Slot / LV1XSlotsPerYear
+	rtAddr, err := LV1XRuntimePDA(p.ProgramID, p.LedgerID)
+	if err != nil {
+		return nil, err
+	}
+	ykAddr, err := LV1XYearPDA(p.ProgramID, p.LedgerID, year)
+	if err != nil {
+		return nil, err
+	}
+	rkAddr, err := LV1XRoundPDA(p.ProgramID, p.LedgerID, p.Slot)
+	if err != nil {
+		return nil, err
+	}
+	lpSolAddr, _ := LV1XLPSolPDA(p.ProgramID, p.LedgerID)
+	lpSatAddr, _ := LV1XLPSatPDA(p.ProgramID, p.LedgerID)
+	mintAddr, _ := LV1XMintPDA(p.ProgramID, p.LedgerID)
+	issAddr, _ := LV1XIssuancePDA(p.ProgramID, p.LedgerID)
+	stAddr, _ := LV1XStakingStatePDA(p.ProgramID, p.LedgerID)
+	trAddr, _ := LV1XTreasuryStatePDA(p.ProgramID, p.LedgerID)
+
+	rtPK, _ := mustKey32(rtAddr)
+	ykPK, _ := mustKey32(ykAddr)
+	rkPK, _ := mustKey32(rkAddr)
+	lpSolPK, _ := mustKey32(lpSolAddr)
+	lpSatPK, _ := mustKey32(lpSatAddr)
+	mintPK, _ := mustKey32(mintAddr)
+	issPK, _ := mustKey32(issAddr)
+	stPK, _ := mustKey32(stAddr)
+	trPK, _ := mustKey32(trAddr)
+	tokPK, _ := mustKey32(Token)
+
+	b, _ := newLV1XMsgBuilder(p.FeePayer, p.ComputeCU, p.MicroLam)
+	accts := []int{
+		b.addKey(rtPK, false, true),
+		b.addKey(ykPK, false, true),
+		b.addKey(rkPK, false, true),
+		b.addKey(lpSolPK, false, true),
+		b.addKey(lpSatPK, false, true),
+		b.addKey(mintPK, false, true),
+		b.addKey(issPK, false, false),
+		b.addKey(stPK, false, true),
+		b.addKey(trPK, false, true),
+		b.addKey(tokPK, false, false),
+	}
+	_ = b.addKey(progPK, false, false)
+	data := lv1xIxPrefix(LV1XTagFinishSettlement, 8)
+	data = append(data, u64LEBytes(p.Slot)...)
+	b.ixs = append(b.ixs, legacyIxSpec{program: progPK, accounts: accts, data: data})
+	return encodeLegacyMessage(p.FeePayer, p.Blockhash, b.specs, b.ixs)
 }
 
 // BuildLV1XStakeMessage builds Stake (21), ActivateStake (22), ClaimStakingReward (25), or Unstake (26).

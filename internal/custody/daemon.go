@@ -118,6 +118,7 @@ func startSocketServer(svc *Service, sockPath string, allowedPeerUID int, mode o
 	mux.HandleFunc("/v1/wallets/resolve", ss.handleResolveWallet)
 	mux.HandleFunc("/v1/wallets/restore", ss.handleRestoreWallet)
 	mux.HandleFunc("/v1/wallets/", ss.handleWalletSubroute)
+	mux.HandleFunc("/v1/mining/manifest", ss.handleMiningManifest)
 
 	srv := &http.Server{
 		Handler:           mux,
@@ -839,6 +840,24 @@ func (s *SocketServer) handleWalletSubroute(w http.ResponseWriter, r *http.Reque
 			return
 		}
 		writeSockJSON(w, http.StatusOK, bal)
+	case "rpc-accounts":
+		if r.Method != http.MethodPost {
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
+		var req struct {
+			Addrs []string `json:"addrs"`
+		}
+		if err := decodeSockBody(r, &req); err != nil {
+			writeSockErr(w, err)
+			return
+		}
+		out, err := s.svc.ReadWalletAccountsRPC(r.Context(), walletID, req.Addrs)
+		if err != nil {
+			writeSockErr(w, err)
+			return
+		}
+		writeSockJSON(w, http.StatusOK, out)
 	case "activity":
 		if r.Method != http.MethodGet {
 			w.WriteHeader(http.StatusMethodNotAllowed)
@@ -1005,5 +1024,33 @@ func (s *SocketServer) handleWalletSubroute(w http.ResponseWriter, r *http.Reque
 		w.WriteHeader(http.StatusNotFound)
 	default:
 		w.WriteHeader(http.StatusNotFound)
+	}
+}
+
+func (s *SocketServer) handleMiningManifest(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		vm, err := s.svc.GetVerifiedMiningManifest(r.Context())
+		if err != nil {
+			writeSockErr(w, err)
+			return
+		}
+		writeSockJSON(w, http.StatusOK, map[string]any{"manifest": vm})
+	case http.MethodPost:
+		var req struct {
+			RawEnvelope json.RawMessage `json:"rawEnvelope"`
+		}
+		if err := decodeSockBody(r, &req); err != nil {
+			writeSockErr(w, err)
+			return
+		}
+		vm, err := s.svc.SetVerifiedMiningManifest(r.Context(), req.RawEnvelope)
+		if err != nil {
+			writeSockErr(w, err)
+			return
+		}
+		writeSockJSON(w, http.StatusOK, vm)
+	default:
+		w.WriteHeader(http.StatusMethodNotAllowed)
 	}
 }

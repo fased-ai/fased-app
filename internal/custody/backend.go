@@ -3,6 +3,8 @@ package custody
 import (
 	"context"
 	"time"
+
+	"github.com/fased-ai/fased-app/internal/onchain"
 )
 
 // Backend defines the typed boundary implemented both by the in-process custody *Service
@@ -34,6 +36,9 @@ type Backend interface {
 	SetWalletRPC(ctx context.Context, walletID, primaryURL, fallbackURL, actor string) (WalletPublic, error)
 	DeleteWallet(ctx context.Context, walletID string) (bool, error)
 	FetchBalance(ctx context.Context, walletID string) (BalanceResult, error)
+	ReadWalletAccountsRPC(ctx context.Context, walletID string, addrs []string) (WalletAccountsRPCResult, error)
+	SetVerifiedMiningManifest(ctx context.Context, rawEnvelope []byte) (onchain.LV1XVerifiedManifest, error)
+	GetVerifiedMiningManifest(ctx context.Context) (*onchain.LV1XVerifiedManifest, error)
 	PrepareReview(ctx context.Context, req PrepareReviewRequest) (WalletReview, error)
 	GetReview(ctx context.Context, walletID, reviewID string) (WalletReview, error)
 	ExecuteNativeReview(ctx context.Context, walletID, reviewID, actor string) (LedgerEntry, error)

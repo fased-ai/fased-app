@@ -56,7 +56,7 @@ func TestLV1XMiningCoreRoutesAndMainnetGate(t *testing.T) {
 		{"/api/v1/mining/protocol-stats?cluster=devnet", `"maxSupplySat":30000000`},
 		{"/api/v1/mining/leaderboard?cluster=devnet&window=24h", `"window":"24h"`},
 		{"/api/v1/mining/portfolio?cluster=devnet", `"cluster":"devnet"`},
-		{"/api/v1/mining/staking?cluster=devnet", `"minStakeSat":10`},
+		{"/api/v1/mining/staking?cluster=devnet", `"minStakeSat":1`},
 		{"/api/v1/mining/strategies", `"presets"`},
 	} {
 		resp := stage4Req(h, http.MethodGet, srv.URL, tc.path, "", token, "", "")
