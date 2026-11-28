@@ -43,6 +43,7 @@ interface MineRecordsPanelProps {
     item?: ClaimableRoundItem,
   ) => void;
   onClaimAll: () => void;
+  onCloseNonce?: (item: ClaimableRoundItem) => void;
   onLoadCurveFromSlot: (selection: number) => void;
 }
 
@@ -86,6 +87,7 @@ export function MineRecordsPanel({
   onCloseSession,
   onClaimAsset,
   onClaimAll,
+  onCloseNonce,
   onLoadCurveFromSlot,
 }: MineRecordsPanelProps) {
   const [protoWindow, setProtoWindow] = useState<"24h" | "all">("24h");
@@ -344,8 +346,20 @@ export function MineRecordsPanel({
                           disabled={busy || it.solClaimed}
                           onClick={() => onClaimAsset("sol", it)}
                         >
-                          SOL
+                          {it.solEscape ? "Escape" : "SOL"}
                         </button>
+                        {onCloseNonce &&
+                          !it.nonceClosed &&
+                          (it.nonce ?? 0) > 0 && (
+                            <button
+                              type="button"
+                              className="mine-link-btn"
+                              disabled={busy}
+                              onClick={() => onCloseNonce(it)}
+                            >
+                              Close Nonce
+                            </button>
+                          )}
                         <button
                           type="button"
                           className="mine-link-btn"

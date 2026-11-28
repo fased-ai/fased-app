@@ -156,6 +156,30 @@ test("Native Lean V1 Mine Workspace (#mine/*): 100% WEN parity (BTC chart, 80 mi
   await subnav.getByRole("button", { name: "Mine", exact: true }).click();
   await expect(page.locator(".mine-bin-group i")).toHaveCount(80);
 
+  await page.getByRole("button", { name: "Self-Keeper and Manifest" }).click();
+  await expect(
+    page.getByRole("heading", {
+      name: "Personal Self-Keeper & Signed Manifest",
+      exact: true,
+    }),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "Close dialog" }).click();
+
+  const policyBtn = page.getByRole("button", { name: "Policy", exact: true });
+  if (await policyBtn.isEnabled()) {
+    await policyBtn.click();
+    await expect(
+      page.getByRole("heading", { name: "Mining Wallet Policy", exact: true }),
+    ).toBeVisible();
+    await expect(
+      page.getByText(/Auto-stake newly claimed WENSAT/),
+    ).toBeVisible();
+    await expect(
+      page.getByText(/Allow Tier 2 fallback settlement crank/),
+    ).toBeVisible();
+    await page.getByRole("button", { name: "Close dialog" }).click();
+  }
+
   await page.getByRole("button", { name: "Automate mining task" }).click();
   await expect(
     page.getByRole("heading", { name: "Automate Mining Task", exact: true }),

@@ -278,13 +278,24 @@ export function MineComposer({
             <label htmlFor="mine-amount-input">
               Deposit SOL {mode !== "manual" ? "(per round)" : ""}
             </label>
-            <input
-              id="mine-amount-input"
-              className="mine-amount-input"
-              inputMode="decimal"
-              value={amountStr}
-              onChange={(e) => onAmountChange(e.target.value)}
-            />
+            <div className="mine-amount-box">
+              <img
+                src="/wen/sol-icon.svg"
+                alt=""
+                width={18}
+                height={18}
+                className="mine-amount-icon"
+                aria-hidden="true"
+              />
+              <input
+                id="mine-amount-input"
+                className="mine-amount-input"
+                inputMode="decimal"
+                value={amountStr}
+                onChange={(e) => onAmountChange(e.target.value)}
+              />
+              <span className="mine-amount-unit">SOL</span>
+            </div>
             <div className="mine-quick-chips">
               {QUICK_AMOUNTS.map((v) => (
                 <button

@@ -40,6 +40,19 @@ export interface WalletPolicy {
   maxSlippageBps: number;
   dailyLossCapUsd?: number;
   expiresAt?: number;
+  mining?: {
+    cluster: string;
+    programId?: string;
+    ledgerId?: string;
+    expectedElfSha256?: string;
+    maxSolPerRoundLamports: string;
+    maxDailySolLamports: string;
+    allowedStrategies: string[];
+    autoClaim: boolean;
+    autoStakeWensat?: boolean;
+    allowFallbackCrank?: boolean;
+    allowMainnet?: boolean;
+  };
 }
 
 export interface WalletConnections {

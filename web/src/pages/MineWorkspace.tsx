@@ -36,10 +36,12 @@ import {
   depositMiningSession,
   fetchMiningCandles,
   fetchMiningLeaderboard,
+  fetchMiningManifest,
   fetchMiningPortfolio,
   fetchMiningProtocolStats,
   fetchMiningStaking,
   fetchMiningStatus,
+  fetchSelfKeeperStatus,
   listRoleMiningWallets,
   listSavedMiningStrategies,
   previewMiningCommit,
@@ -51,19 +53,24 @@ import {
   submitMiningClaim,
   submitMiningClaimAll,
   submitMiningClaimStaking,
+  submitMiningCloseNonce,
   submitMiningCommit,
   submitMiningStake,
   submitMiningUnstake,
+  syncMiningManifest,
+  triggerSelfKeeperSweep,
   updateMiningPolicy,
   type CandleBar,
   type ClaimableRoundItem,
   type CommitPreview,
   type LeaderboardResponse,
+  type ManifestStatus,
   type MiningMode,
   type MiningStatus,
   type PortfolioResponse,
   type ProtocolStats,
   type SavedStrategy,
+  type SelfKeeperStatus,
   type StakingOverviewResponse,
   type StrategyPreset,
 } from "../mining-lv1x";
@@ -87,16 +94,16 @@ import {
 } from "./mine/MineScheduleGrid";
 import { MineStakePage } from "./mine/MineStakePage";
 import { MineStrategiesPage } from "./mine/MineStrategiesPage";
+import "../vendor/wen-mining/wen-retail-scoped.css";
 import "./MineWorkspace.css";
 
 type ClusterChoice = "devnet" | "mainnet-beta";
 type MineSubRoute = "mine" | "assets" | "strategies" | "portfolio" | "stake";
 
-function formatCountdown(remainingSec: number): string {
-  const safe = Math.max(0, Math.floor(remainingSec));
-  const m = Math.floor(safe / 60);
-  const s = safe % 60;
-  return `${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
+function formatRevealTime(unixSec?: number): string {
+  if (!unixSec || unixSec <= 0) return "";
+  const d = new Date(unixSec * 1000);
+  return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
 }
 
 function shortId(id: string): string {
@@ -193,6 +200,13 @@ export function MineWorkspace() {
   const [policyMaxRoundSol, setPolicyMaxRoundSol] = useState("0.5");
   const [policyMaxDailySol, setPolicyMaxDailySol] = useState("5");
   const [policyAutoClaim, setPolicyAutoClaim] = useState(true);
+  const [policyAutoStakeWensat, setPolicyAutoStakeWensat] = useState(false);
+  const [policyAllowFallbackCrank, setPolicyAllowFallbackCrank] =
+    useState(false);
+  const [policyAllowMainnet, setPolicyAllowMainnet] = useState(false);
+  const [manifest, setManifest] = useState<ManifestStatus | null>(null);
+  const [selfKeeper, setSelfKeeper] = useState<SelfKeeperStatus | null>(null);
+  const [keeperModalOpen, setKeeperModalOpen] = useState(false);
   const [miningTasks, setMiningTasks] = useState<UniversalTask[]>([]);
   const [tasksDrawerOpen, setTasksDrawerOpen] = useState(false);
   const [automateOpen, setAutomateOpen] = useState(false);
@@ -264,16 +278,20 @@ export function MineWorkspace() {
           : (miningWallets[0]?.id ?? "");
       setSelectedWalletId(activeWalletId);
 
-      const [pf, stk, lb, ss] = await Promise.all([
+      const [pf, stk, lb, ss, mf, sk] = await Promise.all([
         fetchMiningPortfolio(core, cluster, activeWalletId).catch(() => null),
         fetchMiningStaking(core, cluster, activeWalletId).catch(() => null),
         fetchMiningLeaderboard(core, cluster, lbWindow).catch(() => null),
         listSavedMiningStrategies(core).catch(() => null),
+        fetchMiningManifest(core).catch(() => null),
+        fetchSelfKeeperStatus(core).catch(() => null),
       ]);
       if (pf) setPortfolio(pf);
       if (stk) setStaking(stk);
       if (lb) setLeaderboard(lb);
       if (ss?.strategies) setSavedStrategies(ss.strategies);
+      if (mf) setManifest(mf);
+      if (sk) setSelfKeeper(sk);
     } catch (err) {
       setError(
         err instanceof Error ? err.message : t("Failed to load mining status"),
@@ -446,6 +464,7 @@ export function MineWorkspace() {
             amountSol: parsedAmount,
             selection: selectedBucket ?? preview?.dominantBucket ?? 2,
             strategyId: presetId,
+            bucketWeightsBps: weightsBps,
             curve: weightsBpsToCurve80(weightsBps),
           },
           stepUpToken,
@@ -632,6 +651,97 @@ export function MineWorkspace() {
     }
   }
 
+  function openPolicyModal() {
+    const mp = currentWallet?.policy.mining;
+    if (mp) {
+      setPolicyMaxRoundSol(
+        (Math.max(1e7, Number(mp.maxSolPerRoundLamports) || 5e8) / 1e9).toFixed(
+          2,
+        ),
+      );
+      setPolicyMaxDailySol(
+        (Math.max(5e7, Number(mp.maxDailySolLamports) || 5e9) / 1e9).toFixed(2),
+      );
+      setPolicyAutoClaim(mp.autoClaim ?? true);
+      setPolicyAutoStakeWensat(mp.autoStakeWensat ?? false);
+      setPolicyAllowFallbackCrank(mp.allowFallbackCrank ?? false);
+      setPolicyAllowMainnet(mp.allowMainnet ?? false);
+    }
+    setPolicyOpen(true);
+  }
+
+  async function handleCloseNonce(
+    item: ClaimableRoundItem,
+    stepUpToken?: string,
+  ) {
+    if (!selectedWalletId) return;
+    setBusy(true);
+    setError("");
+    setNotice("");
+    try {
+      await submitMiningCloseNonce(
+        core,
+        {
+          walletId: selectedWalletId,
+          cluster,
+          roundSlot: item.roundSlot,
+          nonce: item.nonce,
+        },
+        stepUpToken,
+      );
+      setNotice(
+        `Closed nonce PDA and reclaimed rent for round #${item.roundSlot}.`,
+      );
+      setStepUpPending(null);
+      await loadState();
+    } catch (err) {
+      maybeHandleStepUp(
+        err,
+        "execute",
+        (tok) => handleCloseNonce(item, tok),
+        stepUpToken,
+      );
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleTriggerSweep() {
+    if (core.mode !== "ready") return;
+    setBusy(true);
+    setError("");
+    try {
+      const sk = await triggerSelfKeeperSweep(core);
+      setSelfKeeper(sk);
+      setNotice(sk.lastSweepSummary || "Completed Personal Self-Keeper sweep.");
+      await loadState();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Self-Keeper sweep failed");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleSyncManifest() {
+    if (core.mode !== "ready") return;
+    setBusy(true);
+    setError("");
+    try {
+      const res = await syncMiningManifest(core);
+      setManifest(res.manifest);
+      setNotice(
+        res.synced
+          ? `Manifest seq #${res.manifest.sequence} verified.`
+          : res.error || "Manifest pinned without remote change.",
+      );
+      await loadState();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Manifest sync failed");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function savePolicy(stepUpToken?: string) {
     if (!selectedWalletId) return;
     setBusy(true);
@@ -643,7 +753,7 @@ export function MineWorkspace() {
       const dailyLamports = String(
         Math.round(Math.max(0.05, Number(policyMaxDailySol) || 5) * 1e9),
       );
-      const currentWallet = wallets.find((w) => w.id === selectedWalletId);
+      const activeWallet = wallets.find((w) => w.id === selectedWalletId);
       await updateMiningPolicy(
         core,
         {
@@ -651,13 +761,16 @@ export function MineWorkspace() {
           maxPerTxLamports: perRoundLamports,
           maxDailyLamports: dailyLamports,
           confirmLoosen: true,
-          expectedPolicyHash: currentWallet?.policy.policyHash,
+          expectedPolicyHash: activeWallet?.policy.policyHash,
           mining: {
-            cluster: "devnet",
+            cluster: policyAllowMainnet ? "mainnet-beta" : cluster,
             maxSolPerRoundLamports: perRoundLamports,
             maxDailySolLamports: dailyLamports,
             allowedStrategies: presets.map((p) => p.id),
             autoClaim: policyAutoClaim,
+            autoStakeWensat: policyAutoStakeWensat,
+            allowFallbackCrank: policyAllowFallbackCrank,
+            allowMainnet: policyAllowMainnet,
           },
         },
         stepUpToken,
@@ -884,8 +997,8 @@ export function MineWorkspace() {
     (tk) => tk.status === "active",
   ).length;
   const round = status?.round;
-  const moveBps = round?.moveBps ?? 0;
   const currentWallet = wallets.find((w) => w.id === selectedWalletId);
+  const revealUntilStr = formatRevealTime(selfKeeper?.nextRevealAt);
 
   const navSubTabs: Array<{ id: MineSubRoute; label: string }> = [
     { id: "mine", label: "Mine" },
@@ -896,10 +1009,10 @@ export function MineWorkspace() {
   ];
 
   return (
-    <section className="mine-shell" aria-label={t("Mine")}>
+    <section className="wrx fased-mine-root mine-shell" aria-label={t("Mine")}>
       <header className="mine-topbar">
         <div className="mine-title-row">
-          <Pickaxe size={18} aria-hidden="true" />
+          <Pickaxe size={16} aria-hidden="true" />
           <h1>{t("Mine")}</h1>
 
           <nav className="mine-subnav" aria-label="Mining workspace tabs">
@@ -939,38 +1052,34 @@ export function MineWorkspace() {
             </button>
           </div>
 
-          <div className="mine-meta-row">
-            <span className="mine-stat-pill">
-              <Clock3 size={13} aria-hidden="true" />
-              <strong>#{round?.roundSlot ?? "—"}</strong>
-              <span>{formatCountdown(countdownSec)}</span>
+          {mainnetLocked && (
+            <span className="mine-stat-pill is-locked">
+              <LockKeyhole size={12} aria-hidden="true" />
+              <span>Mainnet Gated</span>
             </span>
-            <span
-              className={`mine-stat-pill ${moveBps >= 0 ? "is-up" : "is-down"}`}
-            >
-              <span>BTC</span>
-              <strong>
-                ${round ? round.markPriceUsd.toLocaleString("en-US") : "—"}
-              </strong>
-              <span>
-                {moveBps >= 0 ? "+" : ""}
-                {moveBps} bps
-              </span>
-            </span>
-            <span className="mine-stat-pill">
-              <ShieldCheck size={13} aria-hidden="true" />
-              <span>{round?.bpfVerified ? "BPF Verified" : "Cached"}</span>
-            </span>
-            {mainnetLocked && (
-              <span className="mine-stat-pill is-locked">
-                <LockKeyhole size={13} aria-hidden="true" />
-                <span>Mainnet Gated</span>
-              </span>
-            )}
-          </div>
+          )}
         </div>
 
         <div className="mine-top-actions">
+          {revealUntilStr && (
+            <span
+              className="mine-awake-pill"
+              title="Keep machine awake until Auto-Reveal window closes"
+            >
+              <Clock3 size={12} aria-hidden="true" />
+              <span>Keep awake until {revealUntilStr}</span>
+            </span>
+          )}
+          <button
+            type="button"
+            className={`mine-chip mine-keeper-pill${selfKeeper?.running ? " is-running" : ""}`}
+            aria-label="Self-Keeper and Manifest"
+            title="Self-Keeper & Signed Manifest"
+            onClick={() => setKeeperModalOpen(true)}
+          >
+            <ShieldCheck size={13} aria-hidden="true" />
+            <span>Keeper{selfKeeper?.running ? " · Live" : ""}</span>
+          </button>
           <button
             type="button"
             className="mine-chip mine-tasks-pill"
@@ -1181,6 +1290,7 @@ export function MineWorkspace() {
               }
               onClaimAsset={(asset, item) => void handleClaimAsset(asset, item)}
               onClaimAll={() => void handleClaimAll()}
+              onCloseNonce={(it) => void handleCloseNonce(it)}
               onLoadCurveFromSlot={(sel) => {
                 const next = [500, 500, 500, 500, 500];
                 next[Math.max(0, Math.min(4, sel))] = 8000;
@@ -1224,7 +1334,7 @@ export function MineWorkspace() {
             onSelectBucket={handleBucketClick}
             onShareCurve={handleShareCurve}
             onOpenSaveStrategy={() => setSaveStratOpen(true)}
-            onOpenPolicy={() => setPolicyOpen(true)}
+            onOpenPolicy={openPolicyModal}
             onCreateTask={openAutomateDialog}
             onPrimarySubmit={() => void runPrimaryAction()}
             onClaimAsset={(asset) => void handleClaimAsset(asset)}
@@ -1293,7 +1403,7 @@ export function MineWorkspace() {
           wallet={currentWallet}
           busy={busy}
           onClaimAll={() => void handleClaimAll()}
-          onOpenPolicy={() => setPolicyOpen(true)}
+          onOpenPolicy={openPolicyModal}
         />
       )}
 
@@ -1437,6 +1547,38 @@ export function MineWorkspace() {
               />
               <span>Permit Semi-Auto unattended claims</span>
             </label>
+            <label className="mine-toggle-row">
+              <input
+                type="checkbox"
+                checked={policyAutoStakeWensat}
+                onChange={(e) => setPolicyAutoStakeWensat(e.target.checked)}
+              />
+              <span>
+                Auto-stake newly claimed WENSAT (&ge; 1 SAT; unstake stays
+                manual-only)
+              </span>
+            </label>
+            <label className="mine-toggle-row">
+              <input
+                type="checkbox"
+                checked={policyAllowFallbackCrank}
+                onChange={(e) => setPolicyAllowFallbackCrank(e.target.checked)}
+              />
+              <span>
+                Allow Tier 2 fallback settlement crank (&gt;180s stalled, &le;
+                0.005 SOL/day)
+              </span>
+            </label>
+            <label className="mine-toggle-row">
+              <input
+                type="checkbox"
+                checked={policyAllowMainnet}
+                onChange={(e) => setPolicyAllowMainnet(e.target.checked)}
+              />
+              <span>
+                Allow Mainnet LV1X (requires verified manifest + BPF ELF pin)
+              </span>
+            </label>
             <div className="mine-modal-actions">
               <button
                 type="button"
@@ -1452,6 +1594,87 @@ export function MineWorkspace() {
                 onClick={() => void savePolicy()}
               >
                 Save Policy
+              </button>
+            </div>
+          </div>
+        </Dialog>
+      )}
+
+      {keeperModalOpen && (
+        <Dialog
+          title="Personal Self-Keeper &amp; Signed Manifest"
+          onClose={() => setKeeperModalOpen(false)}
+        >
+          <div className="mine-modal-form">
+            <div className="wt-hairline-table">
+              <div className="wt-hairline-row">
+                <span>Keeper Status</span>
+                <strong>
+                  {selfKeeper?.running ? "Running (Personal Only)" : "Standby"}
+                </strong>
+              </div>
+              <div className="wt-hairline-row">
+                <span>Pending Reveal / Claims</span>
+                <span>
+                  {selfKeeper?.activeRoundCommits ?? 0} reveals ·{" "}
+                  {selfKeeper?.pendingClaimsCount ?? 0} claims
+                </span>
+              </div>
+              <div className="wt-hairline-row">
+                <span>Next Auto-Reveal</span>
+                <span>
+                  {revealUntilStr
+                    ? `Until ${revealUntilStr} (Keep machine awake)`
+                    : "No open reveal"}
+                </span>
+              </div>
+              <div className="wt-hairline-row">
+                <span>Fallback Crank Gas Today</span>
+                <span>
+                  {(
+                    Number(selfKeeper?.fallbackGasUsedLamports ?? "0") / 1e9
+                  ).toFixed(5)}{" "}
+                  / 0.00500 SOL
+                </span>
+              </div>
+              <div className="wt-hairline-row">
+                <span>Pinned Manifest</span>
+                <span>
+                  seq #{manifest?.sequence ?? selfKeeper?.manifestSequence ?? 0}{" "}
+                  · {manifest?.status || selfKeeper?.manifestStatus || "pinned"}
+                </span>
+              </div>
+              <div className="wt-hairline-row">
+                <span>Devnet Program ID</span>
+                <span className="f-mono">
+                  {manifest?.devnetProgramId
+                    ? shortId(manifest.devnetProgramId)
+                    : "Pinned"}
+                </span>
+              </div>
+              {selfKeeper?.lastSweepSummary && (
+                <div className="wt-hairline-row">
+                  <span>Last Sweep</span>
+                  <span>{selfKeeper.lastSweepSummary}</span>
+                </div>
+              )}
+            </div>
+            <div className="mine-modal-actions">
+              <button
+                type="button"
+                className="wt-btn-soft"
+                disabled={busy}
+                onClick={() => void handleSyncManifest()}
+              >
+                Sync Manifest
+              </button>
+              <button
+                type="button"
+                className="wt-btn-rose-sm"
+                disabled={busy}
+                onClick={() => void handleTriggerSweep()}
+              >
+                Sweep Now
               </button>
             </div>
           </div>

@@ -30,7 +30,7 @@ export function MineStakePage({
   const userPending = staking?.userPendingSat ?? 0;
   const poolActive = staking?.totalActiveSat ?? 0;
   const walletSat = staking?.walletSatBalance ?? 0;
-  const minStake = staking?.minStakeSat ?? 10;
+  const minStake = staking?.minStakeSat ?? 1;
 
   const projectedShare =
     mode === "stake"

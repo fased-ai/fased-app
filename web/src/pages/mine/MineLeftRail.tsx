@@ -89,9 +89,14 @@ export function MineLeftRail({
             className="mine-asset-btn"
             onClick={onOpenMarkets}
           >
-            <span className="mine-asset-badge" aria-hidden="true">
-              S
-            </span>
+            <img
+              src="/wen/sat-icon-small.svg"
+              alt=""
+              width={22}
+              height={22}
+              className="mine-asset-icon"
+              aria-hidden="true"
+            />
             <span className="mine-asset-copy">
               <strong>WEN Satcoin</strong>
               <small>BTC/USD · 10m</small>
@@ -189,6 +194,20 @@ export function MineLeftRail({
             <span>24H Volume</span>
             <strong>{formatCompactNum(stats?.volume24hSol ?? 0, 2)} SOL</strong>
           </div>
+          {stats?.feeSplit && stats.feeSplit.length === 4 && (
+            <div className="mine-kv-item">
+              <span>Fee Split</span>
+              <strong>{stats.feeSplit.join("/")}</strong>
+            </div>
+          )}
+          {(stats?.lpBurnedSol ?? 0) > 0 && (
+            <div className="mine-kv-item">
+              <span>LP Burned</span>
+              <strong>
+                {formatCompactNum(stats?.lpBurnedSol ?? 0, 2)} SOL
+              </strong>
+            </div>
+          )}
         </div>
       </div>
 

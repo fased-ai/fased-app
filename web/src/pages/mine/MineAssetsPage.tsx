@@ -152,6 +152,12 @@ export function MineAssetsPage({
               <span>SAT Awarded</span>
               <strong>{(leaderboard?.satAwarded ?? 0).toFixed(1)} SAT</strong>
             </div>
+            {(stats?.lpBurnedSol ?? 0) > 0 && (
+              <div className="wt-kpi-box">
+                <span>LP Burned SOL</span>
+                <strong>{(stats?.lpBurnedSol ?? 0).toFixed(3)} SOL</strong>
+              </div>
+            )}
           </div>
 
           <div className="wt-wpanel mine-vol-chart-panel">

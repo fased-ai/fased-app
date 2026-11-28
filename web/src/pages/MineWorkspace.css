@@ -81,6 +81,64 @@
   color: var(--wt-warn);
 }
 
+.mine-awake-pill,
+.mine-keeper-pill.is-running {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 28px;
+  padding: 3px 9px;
+  border-radius: 7px;
+  background: var(--wt-surface);
+  color: var(--wt-ok);
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.mine-asset-icon {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  flex: none;
+}
+
+.mine-amount-box {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border-radius: var(--radius-xs);
+  background: var(--wt-raised);
+}
+
+.mine-amount-box:focus-within {
+  box-shadow: 0 0 0 1.5px var(--wt-accent);
+}
+
+.mine-amount-icon {
+  width: 18px;
+  height: 18px;
+  flex: none;
+}
+
+.mine-amount-box .mine-amount-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 2px 0;
+  background: transparent;
+  font-size: 24px;
+  font-weight: 650;
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+}
+
+.mine-amount-unit {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--wt-muted);
+}
+
 .mine-top-actions {
   display: flex;
   flex-wrap: wrap;
