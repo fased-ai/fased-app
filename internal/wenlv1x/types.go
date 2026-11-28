@@ -2,8 +2,10 @@ package wenlv1x
 
 import (
 	"context"
+	"time"
 
 	"github.com/fased-ai/fased-app/internal/custody"
+	"github.com/fased-ai/fased-app/internal/providersecrets"
 )
 
 // CandleProvider supplies external BTC OHLCV candles from Fased's marketdata engine.
@@ -11,13 +13,17 @@ type CandleProvider func(ctx context.Context, interval string, limit int) ([]Can
 
 // Config initializes the Lean V1 (LV1X) mining engine.
 type Config struct {
-	DataDir        string
-	Custody        custody.Backend
-	DevnetRPCURL   string
-	CandleProvider CandleProvider
-	FixtureMode    bool
-	HTTPClient     any // optional *http.Client
-	Now            any // optional func() time.Time
+	DataDir              string
+	Custody              custody.Backend
+	DevnetRPCURL         string
+	CandleProvider       CandleProvider
+	KEKSource            providersecrets.Source // optional protected key source for commit salt sealing
+	ManifestURLs         []string               // optional manifest endpoint override list (tests)
+	KeeperInterval       time.Duration          // optional self-keeper poll cadence (defaults to 10s)
+	ManifestSyncInterval time.Duration          // optional manifest sync interval (defaults to 6h)
+	FixtureMode          bool
+	HTTPClient           any // optional *http.Client
+	Now                  any // optional func() time.Time
 }
 
 // StrategyPreset defines a named 80-range distribution shape matching WEN's allocation curve.
@@ -152,38 +158,42 @@ type SessionRecord struct {
 
 // ProtocolStats summarizes global Lean V1 protocol state and lifecycle phase.
 type ProtocolStats struct {
-	Cluster            string  `json:"cluster"`
-	ProgramID          string  `json:"programId"`
-	LedgerID           string  `json:"ledgerId"`
-	RuntimeAddress     string  `json:"runtimeAddress"`
-	MintAddress        string  `json:"mintAddress"`
-	BTCMintAddress     string  `json:"btcMintAddress"`
-	PoolAddress        string  `json:"poolAddress,omitempty"`
-	StakingAddress     string  `json:"stakingAddress"`
-	TreasuryAddress    string  `json:"treasuryAddress"`
-	Phase              uint8   `json:"phase"`     // 0=bootstrap,1=normal,2=draining,3=winddown
-	PhaseName          string  `json:"phaseName"` // Bootstrap | Graduated | Draining | Wind-down
-	Paused             bool    `json:"paused"`
-	BootstrapWinddown  bool    `json:"bootstrapWinddown"`
-	MintedSat          float64 `json:"mintedSat"`
-	MaxSupplySat       float64 `json:"maxSupplySat"`
-	BTCTreasurySat     uint64  `json:"btcTreasurySat"`
-	TotalStakedSat     float64 `json:"totalStakedSat"`
-	StakedPct          float64 `json:"stakedPct"`
-	Volume24hSOL       float64 `json:"volume24hSol"`
-	LPSol              float64 `json:"lpSol"`
-	LPSolMin           float64 `json:"lpSolMin"`
-	LPSat              float64 `json:"lpSat"`
-	LPSatMin           float64 `json:"lpSatMin"`
-	BoostMultiplier    uint8   `json:"boostMultiplier"`
-	BoostBudgetSat     uint32  `json:"boostBudgetSat"`
-	BoostAwardedSat    float64 `json:"boostAwardedSat"`
-	TGEBps             uint16  `json:"tgeBps"`
-	VestingDurationSec uint32  `json:"vestingDurationSec"`
-	GraduatedAt        int64   `json:"graduatedAt"`
-	RoundIntervalSec   int64   `json:"roundIntervalSec"`
-	Source             string  `json:"source"`
-	ObservedAt         int64   `json:"observedAt"`
+	Cluster               string  `json:"cluster"`
+	ProgramID             string  `json:"programId"`
+	LedgerID              string  `json:"ledgerId"`
+	RuntimeAddress        string  `json:"runtimeAddress"`
+	MintAddress           string  `json:"mintAddress"`
+	BTCMintAddress        string  `json:"btcMintAddress"`
+	PoolAddress           string  `json:"poolAddress,omitempty"`
+	StakingAddress        string  `json:"stakingAddress"`
+	TreasuryAddress       string  `json:"treasuryAddress"`
+	Phase                 uint8   `json:"phase"`     // 0=bootstrap,1=normal,2=draining,3=winddown
+	PhaseName             string  `json:"phaseName"` // Bootstrap | Graduated | Draining | Wind-down
+	Paused                bool    `json:"paused"`
+	BootstrapWinddown     bool    `json:"bootstrapWinddown"`
+	MintedSat             float64 `json:"mintedSat"`
+	MaxSupplySat          float64 `json:"maxSupplySat"`
+	BTCTreasurySat        uint64  `json:"btcTreasurySat"`
+	TotalStakedSat        float64 `json:"totalStakedSat"`
+	StakedPct             float64 `json:"stakedPct"`
+	Volume24hSOL          float64 `json:"volume24hSol"`
+	LPSol                 float64 `json:"lpSol"`
+	LPSolMin              float64 `json:"lpSolMin"`
+	LPSat                 float64 `json:"lpSat"`
+	LPSatMin              float64 `json:"lpSatMin"`
+	BoostMultiplier       uint8   `json:"boostMultiplier"`
+	BoostBudgetSat        uint32  `json:"boostBudgetSat"`
+	BoostAwardedSat       float64 `json:"boostAwardedSat"`
+	TGEBps                uint16  `json:"tgeBps"`
+	VestingDurationSec    uint32  `json:"vestingDurationSec"`
+	GraduatedAt           int64   `json:"graduatedAt"`
+	RoundIntervalSec      int64   `json:"roundIntervalSec"`
+	LPBurnedSOL           float64 `json:"lpBurnedSol"`
+	TreasuryBtcSolPending float64 `json:"treasuryBtcSolPending"`
+	TreasuryLpSolPending  float64 `json:"treasuryLpSolPending"`
+	FeeSplit              [4]int  `json:"feeSplit"`
+	Source                string  `json:"source"`
+	ObservedAt            int64   `json:"observedAt"`
 }
 
 // LeaderboardMiner represents a single ranked miner entry.
@@ -245,6 +255,10 @@ type ClaimableRoundItem struct {
 	SolClaimed   bool    `json:"solClaimed"`
 	BtcClaimed   bool    `json:"btcClaimed"`
 	StakedSOL    float64 `json:"stakedSol"`
+	Nonce        uint64  `json:"nonce,omitempty"`
+	SolEscape    bool    `json:"solEscape,omitempty"`
+	Revealed     bool    `json:"revealed,omitempty"`
+	NonceClosed  bool    `json:"nonceClosed,omitempty"`
 }
 
 // EntryHistoryItem records one commit/claim/stake action in local mining history.
@@ -340,19 +354,22 @@ type SimulateResponse struct {
 
 // CommitRequest submits or simulates a commit into the active LV1X round.
 type CommitRequest struct {
-	WalletID      string    `json:"walletId"`
-	Cluster       string    `json:"cluster,omitempty"`
-	AmountSOL     float64   `json:"amountSol"`
-	Selection     *uint8    `json:"selection,omitempty"` // explicit single bucket 0..4
-	StrategyID    string    `json:"strategyId,omitempty"`
-	Curve         []float64 `json:"curve,omitempty"` // 80-bar curve if customized
-	ShardID       uint8     `json:"shardId"`
-	Nonce         uint64    `json:"nonce,omitempty"`
-	SaltHex       string    `json:"saltHex,omitempty"`
-	Autonomous    bool      `json:"autonomous,omitempty"`
-	TaskID        string    `json:"taskId,omitempty"`
-	DryRunPreview bool      `json:"dryRunPreview,omitempty"`
-	ReviewID      string    `json:"reviewId,omitempty"`
+	WalletID      string     `json:"walletId"`
+	Cluster       string     `json:"cluster,omitempty"`
+	AmountSOL     float64    `json:"amountSol"`
+	Selection     *uint8     `json:"selection,omitempty"` // explicit single bucket 0..4
+	BucketWeights *[5]uint16 `json:"bucketWeightsBps,omitempty"`
+	StrategyID    string     `json:"strategyId,omitempty"`
+	Curve         []float64  `json:"curve,omitempty"` // 80-bar curve if customized
+	ShardID       uint8      `json:"shardId"`
+	Nonce         uint64     `json:"nonce,omitempty"`
+	SaltHex       string     `json:"saltHex,omitempty"`
+	SessionRef    uint64     `json:"sessionRef,omitempty"`
+	UseSession    bool       `json:"useSession,omitempty"`
+	Autonomous    bool       `json:"autonomous,omitempty"`
+	TaskID        string     `json:"taskId,omitempty"`
+	DryRunPreview bool       `json:"dryRunPreview,omitempty"`
+	ReviewID      string     `json:"reviewId,omitempty"`
 }
 
 // RevealRequest submits an LV1X RevealBatch / RevealPageBatch tx.
@@ -380,11 +397,80 @@ type ClaimRequest struct {
 	ShardID       uint8  `json:"shardId"`
 	Page          uint32 `json:"page"`
 	EntryRow      uint8  `json:"entryRow"`
+	EntriesMask   uint8  `json:"entriesMask,omitempty"`
+	Batch         bool   `json:"batch,omitempty"`
+	SolEscape     bool   `json:"solEscape,omitempty"`
 	CreateATA     bool   `json:"createAta,omitempty"`
 	Autonomous    bool   `json:"autonomous,omitempty"`
 	TaskID        string `json:"taskId,omitempty"`
 	DryRunPreview bool   `json:"dryRunPreview,omitempty"`
 	ReviewID      string `json:"reviewId,omitempty"`
+}
+
+// CloseNonceRequest reclaims SOL rent from a settled round's nonce PDA via CloseNonce (Tag 18).
+type CloseNonceRequest struct {
+	WalletID   string `json:"walletId"`
+	Cluster    string `json:"cluster,omitempty"`
+	RoundSlot  uint64 `json:"roundSlot"`
+	Nonce      uint64 `json:"nonce"`
+	Autonomous bool   `json:"autonomous,omitempty"`
+	TaskID     string `json:"taskId,omitempty"`
+}
+
+// FallbackSettleRequest advances Tier 2 fallback settlement for a stalled round (>180s past end).
+type FallbackSettleRequest struct {
+	WalletID     string  `json:"walletId"`
+	Cluster      string  `json:"cluster,omitempty"`
+	RoundSlot    uint64  `json:"roundSlot"`
+	FallbackStep string  `json:"fallbackStep"` // merge_shards | begin | scan_pages | allocate_pages | finish
+	ShardID      uint8   `json:"shardId,omitempty"`
+	ShardIDs     []uint8 `json:"shardIds,omitempty"`
+	StartPage    uint32  `json:"startPage,omitempty"`
+	PageCount    uint32  `json:"pageCount,omitempty"`
+	Autonomous   bool    `json:"autonomous,omitempty"`
+	TaskID       string  `json:"taskId,omitempty"`
+}
+
+// ManifestStatus summarizes the pinned offline-signed WEN LV1X manifest inside fased-signer.
+type ManifestStatus struct {
+	Pinned             bool   `json:"pinned"`
+	KeyID              string `json:"keyId,omitempty"`
+	Sequence           uint64 `json:"sequence"`
+	Status             string `json:"status,omitempty"`
+	Compatible         bool   `json:"compatible"`
+	CompatibilityError string `json:"compatibilityError,omitempty"`
+	IssuedAt           int64  `json:"issuedAt,omitempty"`
+	ExpiresAt          int64  `json:"expiresAt,omitempty"`
+	VerifiedAt         int64  `json:"verifiedAt,omitempty"`
+	LastSyncAt         int64  `json:"lastSyncAt,omitempty"`
+	LastSyncError      string `json:"lastSyncError,omitempty"`
+	MainnetStatus      string `json:"mainnetStatus,omitempty"`
+	MainnetProgramID   string `json:"mainnetProgramId,omitempty"`
+	DevnetProgramID    string `json:"devnetProgramId"`
+}
+
+// SelfKeeperStatus reports live state for Fased's autonomous personal LV1X Self-Keeper.
+type SelfKeeperStatus struct {
+	Running                 bool   `json:"running"`
+	Cluster                 string `json:"cluster"`
+	WalletID                string `json:"walletId,omitempty"`
+	WalletPublicKey         string `json:"walletPublicKey,omitempty"`
+	AutoClaim               bool   `json:"autoClaim"`
+	AutoStakeWensat         bool   `json:"autoStakeWensat"`
+	AllowFallbackCrank      bool   `json:"allowFallbackCrank"`
+	NextRevealAt            int64  `json:"nextRevealAt,omitempty"`
+	ActiveRoundCommits      int    `json:"activeRoundCommits"`
+	PendingClaimsCount      int    `json:"pendingClaimsCount"`
+	LastSweepAt             int64  `json:"lastSweepAt,omitempty"`
+	LastSweepSummary        string `json:"lastSweepSummary,omitempty"`
+	FallbackGasUsedLamports uint64 `json:"fallbackGasUsedLamports,string"`
+	ManifestSequence        uint64 `json:"manifestSequence"`
+	ManifestStatus          string `json:"manifestStatus,omitempty"`
+	ManifestVerifiedAt      int64  `json:"manifestVerifiedAt,omitempty"`
+	ManifestCompatible      bool   `json:"manifestCompatible"`
+	ManifestError           string `json:"manifestError,omitempty"`
+	LastManifestSyncAt      int64  `json:"lastManifestSyncAt,omitempty"`
+	LastError               string `json:"lastError,omitempty"`
 }
 
 // ClaimAllRequest claims across SOL/SAT/BTC for the wallet's claimable rounds.

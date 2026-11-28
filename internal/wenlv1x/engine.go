@@ -18,34 +18,49 @@ import (
 
 	"github.com/fased-ai/fased-app/internal/custody"
 	"github.com/fased-ai/fased-app/internal/onchain"
+	"github.com/fased-ai/fased-app/internal/providersecrets"
 	_ "modernc.org/sqlite"
 )
 
-const MainnetGateMessage = "Mainnet LV1X mining is strictly gated off until official Mainnet LV1X program/mint IDs are published, BPF Loader ELF SHA-256 verified, and explicitly enabled by owner policy."
+const MainnetGateMessage = "Mainnet LV1X mining is strictly gated off until official Mainnet LV1X program/mint IDs are published, signed manifest is verified active, BPF Loader ELF SHA-256 verified, and explicitly enabled by owner policy."
 
 // Engine manages LV1X round telemetry, streak history, local/managed sessions,
-// staking, saved strategies, candles, and Custody RoleMining execution.
+// staking, saved strategies, candles, autonomous Self-Keeper, and Custody RoleMining execution.
 type Engine struct {
-	dir            string
-	db             *sql.DB
-	custody        custody.Backend
-	devnetRPC      string
-	candleProvider CandleProvider
-	fixture        bool
-	httpClient     *http.Client
-	now            func() time.Time
+	dir                  string
+	db                   *sql.DB
+	custody              custody.Backend
+	devnetRPC            string
+	candleProvider       CandleProvider
+	saltKey              []byte
+	manifestURLs         []string
+	keeperInterval       time.Duration
+	manifestSyncInterval time.Duration
+	fixture              bool
+	httpClient           *http.Client
+	now                  func() time.Time
 
-	cacheMu  sync.RWMutex
-	rpcCache map[string]cachedRPCSnapshot
+	cacheMu      sync.RWMutex
+	rpcCache     map[string]cachedRPCSnapshot
+	streakSyncAt map[string]int64
+
+	keeperMu         sync.Mutex
+	keeperStarted    bool
+	keeperStop       context.CancelFunc
+	keeperWG         sync.WaitGroup
+	lastKeeperStatus SelfKeeperStatus
+	lastManifestSync int64
+	lastSyncErr      string
+	emittedEvents    map[string]int64
 
 	mu     sync.RWMutex
 	subs   map[chan MiningEvent]struct{}
 	closed bool
 }
 
-// MiningEvent is fanned out to WebSocket "mining" listeners on state changes.
+// MiningEvent is fanned out to WebSocket "mining" listeners and the Tasks Engine event bus.
 type MiningEvent struct {
-	Event     string `json:"event"` // round.updated | commit.submitted | reveal.submitted | claim.submitted | stake.updated | session.updated
+	Event     string `json:"event"` // round.opened | round.reveal_window | round.settled | stake.matured | manifest.updated | round.updated | commit.submitted | reveal.submitted | claim.submitted | stake.updated | session.updated
 	Cluster   string `json:"cluster"`
 	RoundSlot uint64 `json:"roundSlot,omitempty"`
 	SessionID string `json:"sessionId,omitempty"`
@@ -115,8 +130,13 @@ CREATE TABLE IF NOT EXISTS lv1x_entries (
 	amount_sat REAL NOT NULL DEFAULT 0,
 	amount_btc REAL NOT NULL DEFAULT 0,
 	salt_hex TEXT NOT NULL DEFAULT '',
+	nonce INTEGER NOT NULL DEFAULT 0,
+	revealed INTEGER NOT NULL DEFAULT 0,
+	nonce_closed INTEGER NOT NULL DEFAULT 0,
 	sol_claimed INTEGER NOT NULL DEFAULT 0,
+	sat_claimed INTEGER NOT NULL DEFAULT 0,
 	btc_claimed INTEGER NOT NULL DEFAULT 0,
+	sol_escape INTEGER NOT NULL DEFAULT 0,
 	tx_signature TEXT NOT NULL DEFAULT '',
 	status TEXT NOT NULL,
 	created_at INTEGER NOT NULL
@@ -125,7 +145,34 @@ CREATE TABLE IF NOT EXISTS lv1x_entries (
 		_ = db.Close()
 		return nil, err
 	}
+	for _, ddl := range []string{
+		`ALTER TABLE lv1x_entries ADD COLUMN nonce INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE lv1x_entries ADD COLUMN revealed INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE lv1x_entries ADD COLUMN nonce_closed INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE lv1x_entries ADD COLUMN sat_claimed INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE lv1x_entries ADD COLUMN sol_escape INTEGER NOT NULL DEFAULT 0`,
+	} {
+		if _, aErr := db.Exec(ddl); aErr != nil && !strings.Contains(strings.ToLower(aErr.Error()), "duplicate column") {
+			_ = db.Close()
+			return nil, aErr
+		}
+	}
 	_ = os.Chmod(dbPath, 0o600)
+	kekSrc := cfg.KEKSource
+	if kekSrc == nil {
+		kekSrc = providersecrets.Native{}
+	}
+	saltKey, _, kErr := providersecrets.LoadOrCreateSealedKey(
+		context.Background(),
+		kekSrc,
+		filepath.Join(dir, "salt-master.key"),
+		"fased-wen-lv1x-salts:v1",
+		false,
+	)
+	if kErr != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("init commit salt key: %w", kErr)
+	}
 	nowFn := time.Now
 	if fn, ok := cfg.Now.(func() time.Time); ok && fn != nil {
 		nowFn = fn
@@ -141,23 +188,40 @@ CREATE TABLE IF NOT EXISTS lv1x_entries (
 	if rpcURL == "" {
 		rpcURL = "https://api.devnet.solana.com"
 	}
-	eng := &Engine{
-		dir:            dir,
-		db:             db,
-		custody:        cfg.Custody,
-		devnetRPC:      rpcURL,
-		candleProvider: cfg.CandleProvider,
-		fixture:        cfg.FixtureMode,
-		httpClient:     hc,
-		now:            nowFn,
-		rpcCache:       make(map[string]cachedRPCSnapshot),
-		subs:           make(map[chan MiningEvent]struct{}),
+	kInterval := cfg.KeeperInterval
+	if kInterval <= 0 {
+		kInterval = 10 * time.Second
 	}
-	eng.seedInitialStreakIfEmpty(context.Background())
+	mInterval := cfg.ManifestSyncInterval
+	if mInterval <= 0 {
+		mInterval = 6 * time.Hour
+	}
+	eng := &Engine{
+		dir:                  dir,
+		db:                   db,
+		custody:              cfg.Custody,
+		devnetRPC:            rpcURL,
+		candleProvider:       cfg.CandleProvider,
+		saltKey:              saltKey,
+		manifestURLs:         append([]string(nil), cfg.ManifestURLs...),
+		keeperInterval:       kInterval,
+		manifestSyncInterval: mInterval,
+		fixture:              cfg.FixtureMode,
+		httpClient:           hc,
+		now:                  nowFn,
+		rpcCache:             make(map[string]cachedRPCSnapshot),
+		streakSyncAt:         make(map[string]int64),
+		emittedEvents:        make(map[string]int64),
+		subs:                 make(map[chan MiningEvent]struct{}),
+	}
+	if eng.fixture {
+		eng.seedInitialStreakIfEmpty(context.Background())
+	}
 	return eng, nil
 }
 
 func (e *Engine) Close() error {
+	e.StopKeeper()
 	e.mu.Lock()
 	e.closed = true
 	for ch := range e.subs {
@@ -165,6 +229,10 @@ func (e *Engine) Close() error {
 		delete(e.subs, ch)
 	}
 	e.mu.Unlock()
+	if e.saltKey != nil {
+		clear(e.saltKey)
+		e.saltKey = nil
+	}
 	if e.db != nil {
 		return e.db.Close()
 	}
@@ -283,30 +351,39 @@ func (e *Engine) CurrentRound(ctx context.Context, cluster string) RoundTelemetr
 	}
 	bpfVerified := snap.ProgramLive && c == "devnet"
 
-	openPrice := 94250.0
-	markPrice := 94265.0
-	moveBps := 2
+	openPrice := 0.0
+	markPrice := 0.0
+	moveBps := 0
+	if e.fixture {
+		openPrice = 94250.0
+		markPrice = 94265.0
+		moveBps = 2
+	}
 	if liveOpen, liveMark, liveBps, ok := e.liveBTCPrices(ctx); ok {
 		openPrice = liveOpen
 		markPrice = liveMark
 		moveBps = liveBps
 	}
 
-	crowdPool := [5]float64{0.34, 0.58, 0.92, 0.64, 0.38}
+	var crowdPool [5]float64
 	modelProb := [5]float64{0.14, 0.22, 0.30, 0.21, 0.13}
-	totalPool := 0.0
-	for _, p := range crowdPool {
-		totalPool += p
-	}
-	minerCount := uint32(18)
+	var totalPool float64
+	var minerCount uint32
 	innerBps := 5
 	outerBps := 20
-	btcVaultSat := uint64(125_000)
+	var btcVaultSat uint64
+	if e.fixture {
+		crowdPool = [5]float64{0.34, 0.58, 0.92, 0.64, 0.38}
+		for _, p := range crowdPool {
+			totalPool += p
+		}
+		minerCount = 18
+		btcVaultSat = 125_000
+	}
 
 	if snap.Round != nil {
 		if snap.Round.ActiveStake > 0 {
 			totalPool = float64(snap.Round.ActiveStake) / 1e9
-			// Proportional bucket distribution aligned to pool size when on-chain round is populated.
 			for i := range 5 {
 				crowdPool[i] = modelProb[i] * totalPool
 			}
@@ -321,6 +398,12 @@ func (e *Engine) CurrentRound(ctx context.Context, cluster string) RoundTelemetr
 		if snap.Round.MinerBtcTotal > 0 {
 			btcVaultSat = snap.Round.MinerBtcTotal
 		}
+	}
+
+	bpfVerified = snap.ProgramLive && (c == "devnet" || snap.MainnetActive)
+	deployedSHA := onchain.LV1XDevnetELFSHA256
+	if c == "mainnet-beta" {
+		deployedSHA = onchain.LV1XMainnetELFSHA256
 	}
 
 	buckets := make([]RoundBucket, 5)
@@ -360,7 +443,7 @@ func (e *Engine) CurrentRound(ctx context.Context, cluster string) RoundTelemetr
 		Buckets:        buckets,
 		Source:         source,
 		BPFVerified:    bpfVerified,
-		DeployedSHA256: onchain.LV1XDevnetELFSHA256,
+		DeployedSHA256: deployedSHA,
 	}
 }
 
@@ -397,6 +480,14 @@ func (e *Engine) ListStreak(ctx context.Context, limit int) ([]StreakEntry, erro
 	return out, rows.Err()
 }
 
+// IsMainnetEnabled reports whether signed manifest + policy gates permit Mainnet LV1X mining.
+func (e *Engine) IsMainnetEnabled(ctx context.Context) bool {
+	if onchain.LV1XMainnetProgramID != "" {
+		return true
+	}
+	return e.resolveClusterBinding(ctx, "mainnet-beta").Enabled
+}
+
 func (e *Engine) Status(ctx context.Context, cluster string) (MiningStatus, error) {
 	c := normalizeCluster(cluster)
 	round := e.CurrentRound(ctx, c)
@@ -411,7 +502,7 @@ func (e *Engine) Status(ctx context.Context, cluster string) (MiningStatus, erro
 	saved, _ := e.ListSavedStrategies(ctx)
 	return MiningStatus{
 		Cluster:         c,
-		MainnetEnabled:  onchain.LV1XMainnetProgramID != "",
+		MainnetEnabled:  e.IsMainnetEnabled(ctx),
 		MainnetGateNote: MainnetGateMessage,
 		Round:           round,
 		Streak:          streak,
@@ -425,7 +516,9 @@ func (e *Engine) PreviewCommit(ctx context.Context, req CommitRequest) CommitPre
 	c := normalizeCluster(req.Cluster)
 	round := e.CurrentRound(ctx, c)
 	weights := BuiltInPresetWeights[CanonicalPresetID(req.StrategyID)]
-	if len(req.Curve) == CurveBarCount {
+	if req.BucketWeights != nil {
+		weights = *req.BucketWeights
+	} else if len(req.Curve) == CurveBarCount {
 		weights = BucketsFromCurve(req.Curve)
 	}
 	dom := DominantBucket(weights)
@@ -446,7 +539,7 @@ func (e *Engine) PreviewCommit(ctx context.Context, req CommitRequest) CommitPre
 		BucketWeights:  weights,
 		ExpectedEVMult: ExpectedEVMultiple(weights, round.Buckets),
 	}
-	if c == "mainnet-beta" && onchain.LV1XMainnetProgramID == "" {
+	if c == "mainnet-beta" && !e.IsMainnetEnabled(ctx) {
 		prev.MainnetBlocked = true
 		prev.MainnetReason = MainnetGateMessage
 	}
@@ -463,7 +556,7 @@ func actorForAutonomous(auto bool, taskID string) string {
 	return "mining-engine"
 }
 
-func (e *Engine) recordEntry(ctx context.Context, walletID, cluster string, slot uint64, shardID uint8, page uint32, row uint8, kind string, sel *uint8, strat string, sol, sat, btc float64, saltHex, sig, status string) {
+func (e *Engine) recordEntry(ctx context.Context, walletID, cluster string, slot uint64, shardID uint8, page uint32, row uint8, nonce uint64, revealed, solEscape bool, kind string, sel *uint8, strat string, sol, sat, btc float64, saltHex, sig, status string) {
 	var b [6]byte
 	_, _ = rand.Read(b[:])
 	id := "ment-" + hex.EncodeToString(b[:])
@@ -472,10 +565,26 @@ func (e *Engine) recordEntry(ctx context.Context, walletID, cluster string, slot
 	if sel != nil {
 		selVal = int(*sel)
 	}
+	sealedSalt := ""
+	if strings.TrimSpace(saltHex) != "" {
+		var err error
+		sealedSalt, err = e.sealSalt(walletID, cluster, slot, nonce, saltHex)
+		if err != nil {
+			// Never silently store unsealed plaintext salt hex on seal error.
+			sealedSalt = ""
+		}
+	}
+	revInt, escInt := 0, 0
+	if revealed {
+		revInt = 1
+	}
+	if solEscape {
+		escInt = 1
+	}
 	_, _ = e.db.ExecContext(ctx, `
-INSERT INTO lv1x_entries(id, wallet_id, cluster, round_slot, shard_id, page, entry_row, kind, selection, strategy_id, amount_sol, amount_sat, amount_btc, salt_hex, tx_signature, status, created_at)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		id, walletID, cluster, int64(slot), int(shardID), int(page), int(row), kind, selVal, strat, sol, sat, btc, saltHex, sig, status, nowSec,
+INSERT INTO lv1x_entries(id, wallet_id, cluster, round_slot, shard_id, page, entry_row, nonce, revealed, sol_escape, kind, selection, strategy_id, amount_sol, amount_sat, amount_btc, salt_hex, tx_signature, status, created_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		id, walletID, cluster, int64(slot), int(shardID), int(page), int(row), int64(nonce), revInt, escInt, kind, selVal, strat, sol, sat, btc, sealedSalt, sig, status, nowSec,
 	)
 }
 
@@ -513,83 +622,319 @@ func (e *Engine) ListEntries(ctx context.Context, walletID string, limit int) ([
 }
 
 func (e *Engine) ListClaimableItems(ctx context.Context, walletID string) ([]ClaimableRoundItem, error) {
-	query := `SELECT round_slot, shard_id, page, entry_row, COALESCE(selection, 2), amount_sol, sol_claimed, btc_claimed FROM lv1x_entries WHERE kind = 'commit'`
+	return e.ListClaimableItemsForCluster(ctx, "devnet", walletID)
+}
+
+func (e *Engine) ListClaimableItemsForCluster(ctx context.Context, cluster, walletID string) ([]ClaimableRoundItem, error) {
+	c := normalizeCluster(cluster)
+	query := `SELECT round_slot, shard_id, page, entry_row, nonce, COALESCE(selection, 2), amount_sol, revealed, sol_claimed, sat_claimed, btc_claimed, nonce_closed FROM lv1x_entries WHERE kind = 'commit'`
 	var args []any
 	if clean := strings.TrimSpace(walletID); clean != "" {
 		query += ` AND wallet_id = ?`
 		args = append(args, clean)
 	}
-	query += ` AND (sol_claimed = 0 OR btc_claimed = 0) ORDER BY round_slot DESC LIMIT 25`
+	query += ` AND (sol_claimed = 0 OR sat_claimed = 0 OR btc_claimed = 0) ORDER BY round_slot DESC LIMIT 25`
 	rows, err := e.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	out := make([]ClaimableRoundItem, 0)
+	type localCommitRow struct {
+		slot       uint64
+		shardID    uint8
+		page       uint32
+		entryRow   uint8
+		nonce      uint64
+		selection  uint8
+		amountSOL  float64
+		revealed   bool
+		solClaimed bool
+		satClaimed bool
+		btcClaimed bool
+		nonceClose bool
+	}
+	var locals []localCommitRow
 	for rows.Next() {
-		var slot uint64
-		var shardID, row, sel uint8
-		var page uint32
-		var amtSOL float64
-		var solC, btcC int
-		if err := rows.Scan(&slot, &shardID, &page, &row, &sel, &amtSOL, &solC, &btcC); err != nil {
+		var r localCommitRow
+		var rev, solC, satC, btcC, nc int
+		if err := rows.Scan(&r.slot, &r.shardID, &r.page, &r.entryRow, &r.nonce, &r.selection, &r.amountSOL, &rev, &solC, &satC, &btcC, &nc); err != nil {
 			return nil, err
 		}
-		mask := uint8(1 << (row % 8))
-		lamports := uint64(amtSOL * 0.90 * 1e9)
-		satAtoms := uint64(amtSOL * 200.0 * 1e9)
-		btcAtoms := uint64(amtSOL * 1200.0)
+		r.revealed = rev == 1
+		r.solClaimed = solC == 1
+		r.satClaimed = satC == 1
+		r.btcClaimed = btcC == 1
+		r.nonceClose = nc == 1
+		locals = append(locals, r)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	if e.fixture {
+		out := make([]ClaimableRoundItem, 0, len(locals))
+		for _, r := range locals {
+			mask := uint8(1 << (r.entryRow % 8))
+			lamports := uint64(r.amountSOL * 0.90 * 1e9)
+			satAtoms := uint64(r.amountSOL * 200.0 * 1e9)
+			btcAtoms := uint64(r.amountSOL * 1200.0)
+			out = append(out, ClaimableRoundItem{
+				RoundSlot:    r.slot,
+				ShardID:      r.shardID,
+				Page:         r.page,
+				EntryRow:     r.entryRow,
+				EntriesMask:  mask,
+				Selection:    r.selection,
+				SelectionCod: BucketCodes[r.selection%5],
+				SolLamports:  lamports,
+				SatAtoms:     satAtoms,
+				VestedAtoms:  satAtoms,
+				BtcAtoms:     btcAtoms,
+				SolClaimed:   r.solClaimed,
+				BtcClaimed:   r.btcClaimed,
+				StakedSOL:    r.amountSOL,
+				Nonce:        r.nonce,
+				Revealed:     r.revealed,
+				NonceClosed:  r.nonceClose,
+			})
+		}
+		return out, nil
+	}
+
+	pub := e.resolveWalletPublicKey(ctx, walletID)
+	if pub == "" || len(locals) == 0 {
+		return []ClaimableRoundItem{}, nil
+	}
+	bind := e.resolveClusterBinding(ctx, c)
+	nowSec := e.now().UTC().Unix()
+	snap := e.readSnapshot(ctx, c, walletID)
+
+	roundSet := make(map[uint64]string)
+	pageSet := make(map[string]string)
+	var fetchAddrs []string
+	addAddr := func(a string) {
+		if a != "" {
+			fetchAddrs = append(fetchAddrs, a)
+		}
+	}
+	pageKey := func(slot uint64, shard uint8, pg uint32) string {
+		return fmt.Sprintf("%d:%d:%d", slot, shard, pg)
+	}
+	for _, r := range locals {
+		rkAddr, rkErr := onchain.LV1XRoundPDA(bind.ProgramID, bind.LedgerID, r.slot)
+		if rkErr != nil {
+			continue
+		}
+		if _, ok := roundSet[r.slot]; !ok {
+			roundSet[r.slot] = rkAddr
+			addAddr(rkAddr)
+		}
+		pk := pageKey(r.slot, r.shardID, r.page)
+		if _, ok := pageSet[pk]; !ok {
+			var pAddr string
+			var pErr error
+			if r.shardID == onchain.LV1XUnshardedShardID {
+				pAddr, pErr = onchain.LV1XPagePDA(bind.ProgramID, rkAddr, r.page)
+			} else {
+				pAddr, pErr = onchain.LV1XShardPagePDA(bind.ProgramID, rkAddr, r.shardID, r.page)
+			}
+			if pErr == nil && pAddr != "" {
+				pageSet[pk] = pAddr
+				addAddr(pAddr)
+			}
+		}
+	}
+
+	acctData := make(map[string][]byte, len(fetchAddrs))
+	for start := 0; start < len(fetchAddrs); start += 100 {
+		end := min(len(fetchAddrs), start+100)
+		chunk := fetchAddrs[start:end]
+		raws, _, _, fErr := e.fetchAccounts(ctx, c, walletID, chunk)
+		if fErr != nil {
+			continue
+		}
+		for i, a := range chunk {
+			if i < len(raws) && len(raws[i]) > 0 {
+				acctData[a] = raws[i]
+			}
+		}
+	}
+
+	roundsBySlot := make(map[uint64]onchain.LV1XRoundAccount, len(roundSet))
+	for slot, addr := range roundSet {
+		if raw, ok := acctData[addr]; ok && len(raw) == onchain.LV1XSpaceRound {
+			if rk, dErr := onchain.DecodeLV1XRound(raw); dErr == nil {
+				roundsBySlot[slot] = rk
+			}
+		}
+	}
+	pagesByKey := make(map[string]onchain.LV1XPageAccount, len(pageSet))
+	for pk, addr := range pageSet {
+		if raw, ok := acctData[addr]; ok && len(raw) == onchain.LV1XSpacePage {
+			if pg, dErr := onchain.DecodeLV1XPage(raw); dErr == nil {
+				pagesByKey[pk] = pg
+			}
+		}
+	}
+
+	out := make([]ClaimableRoundItem, 0, len(locals))
+	for _, r := range locals {
+		rk, hasRound := roundsBySlot[r.slot]
+		if !hasRound || rk.Stage < 3 {
+			continue
+		}
+		pg, hasPage := pagesByKey[pageKey(r.slot, r.shardID, r.page)]
+		if !hasPage {
+			continue
+		}
+		var matched *onchain.LV1XPageRow
+		var rowIdx uint8
+		if int(r.entryRow) < len(pg.Rows) && pg.Rows[r.entryRow].Owner == pub && (r.nonce == 0 || pg.Rows[r.entryRow].Nonce == r.nonce) {
+			matched = &pg.Rows[r.entryRow]
+			rowIdx = r.entryRow
+		} else {
+			for j := range pg.Rows {
+				if pg.Rows[j].Owner == pub && (r.nonce == 0 || pg.Rows[j].Nonce == r.nonce) {
+					matched = &pg.Rows[j]
+					rowIdx = uint8(j)
+					break
+				}
+			}
+		}
+		if matched == nil {
+			continue
+		}
+		solClaimed := matched.SolClaimed || r.solClaimed
+		btcClaimed := matched.BtcClaimed || r.btcClaimed
+		var satTotal uint64
+		if matched.Sat > matched.SatClaimedAmount {
+			satTotal = matched.Sat - matched.SatClaimedAmount
+		}
+		vestedAtoms := satTotal
+		if rk.OriginalPhase == 0 && snap.Runtime != nil {
+			vestedTotal := onchain.LV1XVestedBootstrapSat(matched.Sat, snap.Runtime.Phase, snap.Runtime.GraduatedAt, nowSec, snap.Runtime.VestingDuration, snap.Runtime.TGEBps)
+			if vestedTotal > matched.SatClaimedAmount {
+				vestedAtoms = vestedTotal - matched.SatClaimedAmount
+			} else {
+				vestedAtoms = 0
+			}
+		}
+		solEscape := rk.MinerBtcTotal == 0 && rk.MinerBtcSol > 0
+		var btcAtoms uint64
+		if !btcClaimed && rk.MinerBtcTotal > 0 && rk.TotalStake > 0 {
+			btcAtoms = (matched.Amount * rk.MinerBtcTotal) / rk.TotalStake
+		}
+		solLamps := matched.Principal + matched.StakingRefund
+		if solClaimed && btcClaimed && vestedAtoms == 0 && r.nonceClose {
+			continue
+		}
+		sel := r.selection
+		if matched.Selection != nil && *matched.Selection <= 4 {
+			sel = *matched.Selection
+		}
 		out = append(out, ClaimableRoundItem{
-			RoundSlot:    slot,
-			ShardID:      shardID,
-			Page:         page,
-			EntryRow:     row,
-			EntriesMask:  mask,
+			RoundSlot:    r.slot,
+			ShardID:      r.shardID,
+			Page:         r.page,
+			EntryRow:     rowIdx,
+			EntriesMask:  uint8(1 << (rowIdx % 8)),
 			Selection:    sel,
 			SelectionCod: BucketCodes[sel%5],
-			SolLamports:  lamports,
-			SatAtoms:     satAtoms,
-			VestedAtoms:  satAtoms,
+			SolLamports:  solLamps,
+			SatAtoms:     satTotal,
+			VestedAtoms:  vestedAtoms,
 			BtcAtoms:     btcAtoms,
-			SolClaimed:   solC == 1,
-			BtcClaimed:   btcC == 1,
-			StakedSOL:    amtSOL,
+			SolClaimed:   solClaimed,
+			BtcClaimed:   btcClaimed,
+			StakedSOL:    float64(matched.Amount) / 1e9,
+			Nonce:        matched.Nonce,
+			SolEscape:    solEscape,
+			Revealed:     matched.Selection != nil,
+			NonceClosed:  r.nonceClose,
 		})
 	}
-	return out, rows.Err()
+	return out, nil
 }
 
-// SubmitCommit prepares and (when owner/auto-authorized) executes a RoleMining LV1X commit.
+type commitLeg struct {
+	Selection      uint8
+	AmountLamports uint64
+}
+
+func computeCommitLegs(req CommitRequest, preview CommitPreview) []commitLeg {
+	if req.Selection != nil && *req.Selection <= 4 {
+		return []commitLeg{{Selection: *req.Selection, AmountLamports: preview.AmountLamports}}
+	}
+	weights := preview.BucketWeights
+	if req.BucketWeights != nil {
+		weights = *req.BucketWeights
+	}
+	total := preview.AmountLamports
+	if total < 2*onchain.LV1XMinCommitLamports {
+		return []commitLeg{{Selection: preview.DominantBucket, AmountLamports: total}}
+	}
+	legs := make([]commitLeg, 0, 5)
+	var allocated uint64
+	maxWeightIdx := -1
+	var maxWeight uint16
+	for b := range uint8(5) {
+		w := weights[b]
+		if w == 0 {
+			continue
+		}
+		amt := (total * uint64(w)) / 10_000
+		if amt < onchain.LV1XMinCommitLamports {
+			continue
+		}
+		if maxWeightIdx == -1 || w > maxWeight {
+			maxWeightIdx = len(legs)
+			maxWeight = w
+		}
+		legs = append(legs, commitLeg{Selection: b, AmountLamports: amt})
+		allocated += amt
+	}
+	if len(legs) == 0 {
+		return []commitLeg{{Selection: preview.DominantBucket, AmountLamports: total}}
+	}
+	if total > allocated && maxWeightIdx >= 0 {
+		legs[maxWeightIdx].AmountLamports += total - allocated
+	}
+	return legs
+}
+
+// SubmitCommit prepares and (when owner/auto-authorized) executes a RoleMining LV1X commit,
+// splitting multi-bucket strategy distributions cleanly into per-bucket commits with sealed salts.
 func (e *Engine) SubmitCommit(ctx context.Context, req CommitRequest) (custody.WalletReview, *custody.LedgerEntry, error) {
 	c := normalizeCluster(req.Cluster)
-	if c == "mainnet-beta" && onchain.LV1XMainnetProgramID == "" {
+	bind := e.resolveClusterBinding(ctx, c)
+	if c == "mainnet-beta" && !bind.Enabled {
 		return custody.WalletReview{}, nil, fmt.Errorf("%w: %s", custody.ErrPolicyDenied, MainnetGateMessage)
 	}
 	if e.custody == nil {
 		return custody.WalletReview{}, nil, errors.New("custody backend unavailable")
 	}
 	round := e.CurrentRound(ctx, c)
-	snap := e.readSnapshot(ctx, c, "")
+	snap := e.readSnapshot(ctx, c, req.WalletID)
 	preview := e.PreviewCommit(ctx, req)
 
 	shardID := req.ShardID
-	var entryIndex uint32
+	var baseEntryIndex uint32
 	if snap.Round != nil {
 		if snap.Round.ShardCount == 0 {
 			shardID = onchain.LV1XUnshardedShardID
-			entryIndex = snap.Round.Count
+			baseEntryIndex = snap.Round.Count
 		} else {
 			if shardID >= snap.Round.ShardCount {
 				shardID = shardID % snap.Round.ShardCount
 			}
 			if snap.Shard != nil && snap.Shard.ShardID == shardID {
-				entryIndex = snap.Shard.Count
+				baseEntryIndex = snap.Shard.Count
 			} else if !e.fixture && shardID != 0 {
 				if rkAddr, rkErr := onchain.LV1XRoundPDA(round.ProgramID, round.LedgerID, round.RoundSlot); rkErr == nil {
 					if shAddr, shErr := onchain.LV1XShardPDA(round.ProgramID, rkAddr, shardID); shErr == nil {
-						if raws, rErr := e.getMultipleAccounts(ctx, []string{shAddr}); rErr == nil && len(raws) > 0 && len(raws[0]) == onchain.LV1XSpaceRoundShard {
+						if raws, _, _, rErr := e.fetchAccounts(ctx, c, req.WalletID, []string{shAddr}); rErr == nil && len(raws) > 0 && len(raws[0]) == onchain.LV1XSpaceRoundShard {
 							if sh, dErr := onchain.DecodeLV1XRoundShard(raws[0]); dErr == nil && sh.ShardID == shardID {
-								entryIndex = sh.Count
+								baseEntryIndex = sh.Count
 							}
 						}
 					}
@@ -597,33 +942,55 @@ func (e *Engine) SubmitCommit(ctx context.Context, req CommitRequest) (custody.W
 			}
 		}
 	}
-	nonce := req.Nonce
-	if nonce == 0 {
+
+	baseNonce := req.Nonce
+	if baseNonce == 0 {
 		var seq int64
 		_ = e.db.QueryRowContext(
 			ctx,
 			`SELECT COUNT(*) FROM lv1x_entries WHERE wallet_id = ? AND round_slot = ? AND kind = 'commit'`,
 			req.WalletID, int64(round.RoundSlot),
 		).Scan(&seq)
-		nonce = uint64(seq + 1)
+		baseNonce = uint64(seq + 1)
 	}
 
-	saltHex := strings.TrimSpace(req.SaltHex)
-	if saltHex == "" {
-		var salt [32]byte
-		_, _ = rand.Read(salt[:])
-		saltHex = hex.EncodeToString(salt[:])
-	}
-
-	var rev custody.WalletReview
-	var err error
 	if strings.TrimSpace(req.ReviewID) != "" {
-		rev, err = e.custody.GetReview(ctx, req.WalletID, strings.TrimSpace(req.ReviewID))
-	} else {
-		rev, err = e.custody.PrepareReview(ctx, custody.PrepareReviewRequest{
+		rev, err := e.custody.GetReview(ctx, req.WalletID, strings.TrimSpace(req.ReviewID))
+		if err != nil {
+			return custody.WalletReview{}, nil, err
+		}
+		if req.DryRunPreview {
+			return rev, nil, nil
+		}
+		entry, execErr := e.custody.ExecuteNativeReview(ctx, req.WalletID, rev.ID, actorForAutonomous(req.Autonomous, req.TaskID))
+		if execErr != nil {
+			return rev, nil, execErr
+		}
+		_, _ = e.db.ExecContext(ctx, `UPDATE lv1x_streak SET user_staked = 1 WHERE round_slot = ?`, int64(round.RoundSlot))
+		sel := preview.DominantBucket
+		e.recordEntry(ctx, req.WalletID, c, round.RoundSlot, shardID, baseEntryIndex/onchain.LV1XPageEntries, uint8(baseEntryIndex%onchain.LV1XPageEntries), baseNonce, false, false, "commit", &sel, CanonicalPresetID(req.StrategyID), preview.AmountSOL, 0, 0, req.SaltHex, entry.TxSignature, entry.State)
+		e.publish(MiningEvent{Event: "commit.submitted", Cluster: c, RoundSlot: round.RoundSlot})
+		return rev, &entry, nil
+	}
+
+	legs := computeCommitLegs(req, preview)
+	var firstRev custody.WalletReview
+	var lastEntry *custody.LedgerEntry
+	for idx, leg := range legs {
+		entryIndex := baseEntryIndex + uint32(idx)
+		nonce := baseNonce + uint64(idx)
+		saltHex := ""
+		if idx == 0 && len(legs) == 1 && strings.TrimSpace(req.SaltHex) != "" {
+			saltHex = strings.TrimSpace(req.SaltHex)
+		} else {
+			var salt [32]byte
+			_, _ = rand.Read(salt[:])
+			saltHex = hex.EncodeToString(salt[:])
+		}
+		rev, err := e.custody.PrepareReview(ctx, custody.PrepareReviewRequest{
 			WalletID:    req.WalletID,
 			Operation:   custody.MiningOpCommit,
-			AmountRaw:   preview.AmountLamports,
+			AmountRaw:   leg.AmountLamports,
 			IsBotOrAuto: req.Autonomous,
 			Venue:       "wen-mining",
 			MiningLV1X: &custody.MiningLV1XRequest{
@@ -636,34 +1003,45 @@ func (e *Engine) SubmitCommit(ctx context.Context, req CommitRequest) (custody.W
 				Page:           entryIndex / onchain.LV1XPageEntries,
 				EntryRow:       uint8(entryIndex % onchain.LV1XPageEntries),
 				Nonce:          nonce,
-				Selection:      preview.DominantBucket,
-				AmountLamports: preview.AmountLamports,
+				Selection:      leg.Selection,
+				AmountLamports: leg.AmountLamports,
 				SaltHex:        saltHex,
 				StrategyID:     CanonicalPresetID(req.StrategyID),
 			},
 		})
+		if err != nil {
+			if idx == 0 {
+				return custody.WalletReview{}, nil, err
+			}
+			return firstRev, lastEntry, err
+		}
+		if idx == 0 {
+			firstRev = rev
+		}
+		if req.DryRunPreview {
+			return rev, nil, nil
+		}
+		entry, execErr := e.custody.ExecuteNativeReview(ctx, req.WalletID, rev.ID, actorForAutonomous(req.Autonomous, req.TaskID))
+		if execErr != nil {
+			return rev, lastEntry, execErr
+		}
+		lastEntry = &entry
+		_, _ = e.db.ExecContext(ctx, `UPDATE lv1x_streak SET user_staked = 1 WHERE round_slot = ?`, int64(round.RoundSlot))
+		sel := leg.Selection
+		e.recordEntry(ctx, req.WalletID, c, round.RoundSlot, shardID, entryIndex/onchain.LV1XPageEntries, uint8(entryIndex%onchain.LV1XPageEntries), nonce, false, false, "commit", &sel, CanonicalPresetID(req.StrategyID), float64(leg.AmountLamports)/1e9, 0, 0, saltHex, entry.TxSignature, entry.State)
+		if !e.fixture && entry.State == custody.LedgerBroadcast {
+			_, _ = e.custody.ReconcileLedgerEntry(ctx, req.WalletID, entry.ID)
+		}
 	}
-	if err != nil {
-		return custody.WalletReview{}, nil, err
-	}
-	if req.DryRunPreview {
-		return rev, nil, nil
-	}
-	entry, execErr := e.custody.ExecuteNativeReview(ctx, req.WalletID, rev.ID, actorForAutonomous(req.Autonomous, req.TaskID))
-	if execErr != nil {
-		return rev, nil, execErr
-	}
-	_, _ = e.db.ExecContext(ctx, `UPDATE lv1x_streak SET user_staked = 1 WHERE round_slot = ?`, int64(round.RoundSlot))
-	sel := preview.DominantBucket
-	e.recordEntry(ctx, req.WalletID, c, round.RoundSlot, shardID, entryIndex/onchain.LV1XPageEntries, uint8(entryIndex%onchain.LV1XPageEntries), "commit", &sel, CanonicalPresetID(req.StrategyID), preview.AmountSOL, 0, 0, saltHex, entry.TxSignature, entry.State)
 	e.publish(MiningEvent{Event: "commit.submitted", Cluster: c, RoundSlot: round.RoundSlot})
-	return rev, &entry, nil
+	return firstRev, lastEntry, nil
 }
 
 // SubmitReveal prepares and executes an LV1X reveal transaction.
 func (e *Engine) SubmitReveal(ctx context.Context, req RevealRequest) (custody.WalletReview, *custody.LedgerEntry, error) {
 	c := normalizeCluster(req.Cluster)
-	if c == "mainnet-beta" && onchain.LV1XMainnetProgramID == "" {
+	bind := e.resolveClusterBinding(ctx, c)
+	if c == "mainnet-beta" && !bind.Enabled {
 		return custody.WalletReview{}, nil, fmt.Errorf("%w: %s", custody.ErrPolicyDenied, MainnetGateMessage)
 	}
 	if e.custody == nil {
@@ -681,8 +1059,8 @@ func (e *Engine) SubmitReveal(ctx context.Context, req RevealRequest) (custody.W
 			Venue:       "wen-mining",
 			MiningLV1X: &custody.MiningLV1XRequest{
 				Cluster:   c,
-				ProgramID: custody.EffectiveDevnetProgramID(),
-				LedgerID:  custody.EffectiveDevnetLedgerID(),
+				ProgramID: bind.ProgramID,
+				LedgerID:  bind.LedgerID,
 				RoundSlot: req.RoundSlot,
 				ShardID:   req.ShardID,
 				Page:      req.Page,
@@ -702,8 +1080,9 @@ func (e *Engine) SubmitReveal(ctx context.Context, req RevealRequest) (custody.W
 	if execErr != nil {
 		return rev, nil, execErr
 	}
+	_, _ = e.db.ExecContext(ctx, `UPDATE lv1x_entries SET revealed = 1 WHERE wallet_id = ? AND round_slot = ? AND entry_row = ?`, req.WalletID, int64(req.RoundSlot), int(req.EntryRow))
 	sel := req.Selection
-	e.recordEntry(ctx, req.WalletID, c, req.RoundSlot, req.ShardID, req.Page, req.EntryRow, "reveal", &sel, "", 0, 0, 0, req.SaltHex, entry.TxSignature, entry.State)
+	e.recordEntry(ctx, req.WalletID, c, req.RoundSlot, req.ShardID, req.Page, req.EntryRow, 0, true, false, "reveal", &sel, "", 0, 0, 0, "", entry.TxSignature, entry.State)
 	e.publish(MiningEvent{Event: "reveal.submitted", Cluster: c, RoundSlot: req.RoundSlot})
 	return rev, &entry, nil
 }
@@ -711,7 +1090,8 @@ func (e *Engine) SubmitReveal(ctx context.Context, req RevealRequest) (custody.W
 // SubmitClaim prepares and executes an LV1X SOL, SAT, or cbBTC claim transaction via Custody V2.
 func (e *Engine) SubmitClaim(ctx context.Context, req ClaimRequest) (custody.WalletReview, *custody.LedgerEntry, error) {
 	c := normalizeCluster(req.Cluster)
-	if c == "mainnet-beta" && onchain.LV1XMainnetProgramID == "" {
+	bind := e.resolveClusterBinding(ctx, c)
+	if c == "mainnet-beta" && !bind.Enabled {
 		return custody.WalletReview{}, nil, fmt.Errorf("%w: %s", custody.ErrPolicyDenied, MainnetGateMessage)
 	}
 	if e.custody == nil {
@@ -719,13 +1099,26 @@ func (e *Engine) SubmitClaim(ctx context.Context, req ClaimRequest) (custody.Wal
 	}
 	op := custody.MiningOpClaim
 	kind := "claim_sol"
+	useBatch := req.Batch || req.EntriesMask != 0
 	switch strings.ToLower(strings.TrimSpace(req.Asset)) {
 	case "sat":
-		op = custody.MiningOpClaimSat
+		if useBatch {
+			op = custody.MiningOpClaimSatBatch
+		} else {
+			op = custody.MiningOpClaimSat
+		}
 		kind = "claim_sat"
 	case "btc", "cbbtc":
-		op = custody.MiningOpClaimBtc
+		if useBatch {
+			op = custody.MiningOpClaimBtcBatch
+		} else {
+			op = custody.MiningOpClaimBtc
+		}
 		kind = "claim_btc"
+	}
+	mask := req.EntriesMask
+	if mask == 0 {
+		mask = uint8(1 << (req.EntryRow % 8))
 	}
 	var rev custody.WalletReview
 	var err error
@@ -739,15 +1132,16 @@ func (e *Engine) SubmitClaim(ctx context.Context, req ClaimRequest) (custody.Wal
 			Venue:       "wen-mining",
 			MiningLV1X: &custody.MiningLV1XRequest{
 				Cluster:     c,
-				ProgramID:   custody.EffectiveDevnetProgramID(),
-				LedgerID:    custody.EffectiveDevnetLedgerID(),
+				ProgramID:   bind.ProgramID,
+				LedgerID:    bind.LedgerID,
 				RoundSlot:   req.RoundSlot,
 				ShardID:     req.ShardID,
 				Page:        req.Page,
 				EntryRow:    req.EntryRow,
-				EntriesMask: uint8(1 << (req.EntryRow % 8)),
-				BtcMint:     onchain.LV1XDevnetBTCMint,
-				CreateATA:   req.CreateATA,
+				EntriesMask: mask,
+				BtcMint:     bind.BTCMint,
+				CreateATA:   req.CreateATA && !req.SolEscape,
+				SolEscape:   req.SolEscape,
 			},
 		})
 	}
@@ -761,19 +1155,95 @@ func (e *Engine) SubmitClaim(ctx context.Context, req ClaimRequest) (custody.Wal
 	if execErr != nil {
 		return rev, nil, execErr
 	}
-	if kind == "claim_sol" {
+	switch kind {
+	case "claim_sol":
 		_, _ = e.db.ExecContext(ctx, `UPDATE lv1x_entries SET sol_claimed = 1 WHERE wallet_id = ? AND round_slot = ?`, req.WalletID, int64(req.RoundSlot))
-	} else if kind == "claim_btc" {
+	case "claim_sat":
+		_, _ = e.db.ExecContext(ctx, `UPDATE lv1x_entries SET sat_claimed = 1 WHERE wallet_id = ? AND round_slot = ?`, req.WalletID, int64(req.RoundSlot))
+	case "claim_btc":
 		_, _ = e.db.ExecContext(ctx, `UPDATE lv1x_entries SET btc_claimed = 1 WHERE wallet_id = ? AND round_slot = ?`, req.WalletID, int64(req.RoundSlot))
 	}
-	e.recordEntry(ctx, req.WalletID, c, req.RoundSlot, req.ShardID, req.Page, req.EntryRow, kind, nil, "", 0, 0, 0, "", entry.TxSignature, entry.State)
+	e.recordEntry(ctx, req.WalletID, c, req.RoundSlot, req.ShardID, req.Page, req.EntryRow, 0, false, req.SolEscape, kind, nil, "", 0, 0, 0, "", entry.TxSignature, entry.State)
 	e.publish(MiningEvent{Event: "claim.submitted", Cluster: c, RoundSlot: req.RoundSlot})
+	return rev, &entry, nil
+}
+
+// SubmitCloseNonce reclaims SOL rent from a settled round's nonce PDA via CloseNonce (Tag 18).
+func (e *Engine) SubmitCloseNonce(ctx context.Context, req CloseNonceRequest) (custody.WalletReview, *custody.LedgerEntry, error) {
+	c := normalizeCluster(req.Cluster)
+	bind := e.resolveClusterBinding(ctx, c)
+	if c == "mainnet-beta" && !bind.Enabled {
+		return custody.WalletReview{}, nil, fmt.Errorf("%w: %s", custody.ErrPolicyDenied, MainnetGateMessage)
+	}
+	if e.custody == nil {
+		return custody.WalletReview{}, nil, errors.New("custody backend unavailable")
+	}
+	rev, err := e.custody.PrepareReview(ctx, custody.PrepareReviewRequest{
+		WalletID:    req.WalletID,
+		Operation:   custody.MiningOpCloseNonce,
+		IsBotOrAuto: req.Autonomous,
+		Venue:       "wen-mining",
+		MiningLV1X: &custody.MiningLV1XRequest{
+			Cluster:   c,
+			ProgramID: bind.ProgramID,
+			LedgerID:  bind.LedgerID,
+			RoundSlot: req.RoundSlot,
+			Nonce:     req.Nonce,
+		},
+	})
+	if err != nil {
+		return custody.WalletReview{}, nil, err
+	}
+	entry, execErr := e.custody.ExecuteNativeReview(ctx, req.WalletID, rev.ID, actorForAutonomous(req.Autonomous, req.TaskID))
+	if execErr != nil {
+		return rev, nil, execErr
+	}
+	_, _ = e.db.ExecContext(ctx, `UPDATE lv1x_entries SET nonce_closed = 1 WHERE wallet_id = ? AND round_slot = ? AND nonce = ?`, req.WalletID, int64(req.RoundSlot), int64(req.Nonce))
+	e.recordEntry(ctx, req.WalletID, c, req.RoundSlot, 0, 0, 0, req.Nonce, false, false, "close_nonce", nil, "", 0, 0, 0, "", entry.TxSignature, entry.State)
+	return rev, &entry, nil
+}
+
+// SubmitFallbackSettle advances Tier 2 stalled-round settlement strictly within custody's daily cap.
+func (e *Engine) SubmitFallbackSettle(ctx context.Context, req FallbackSettleRequest) (custody.WalletReview, *custody.LedgerEntry, error) {
+	c := normalizeCluster(req.Cluster)
+	bind := e.resolveClusterBinding(ctx, c)
+	if c == "mainnet-beta" && !bind.Enabled {
+		return custody.WalletReview{}, nil, fmt.Errorf("%w: %s", custody.ErrPolicyDenied, MainnetGateMessage)
+	}
+	if e.custody == nil {
+		return custody.WalletReview{}, nil, errors.New("custody backend unavailable")
+	}
+	rev, err := e.custody.PrepareReview(ctx, custody.PrepareReviewRequest{
+		WalletID:    req.WalletID,
+		Operation:   custody.MiningOpFallbackSettle,
+		IsBotOrAuto: req.Autonomous,
+		Venue:       "wen-mining",
+		MiningLV1X: &custody.MiningLV1XRequest{
+			Cluster:      c,
+			ProgramID:    bind.ProgramID,
+			LedgerID:     bind.LedgerID,
+			RoundSlot:    req.RoundSlot,
+			FallbackStep: req.FallbackStep,
+			ShardID:      req.ShardID,
+			ShardIDs:     req.ShardIDs,
+			StartPage:    req.StartPage,
+			PageCount:    uint8(req.PageCount),
+		},
+	})
+	if err != nil {
+		return custody.WalletReview{}, nil, err
+	}
+	entry, execErr := e.custody.ExecuteNativeReview(ctx, req.WalletID, rev.ID, actorForAutonomous(req.Autonomous, req.TaskID))
+	if execErr != nil {
+		return rev, nil, execErr
+	}
 	return rev, &entry, nil
 }
 
 // SubmitClaimAll claims across claimable rounds for requested assets (default SOL, SAT, BTC).
 func (e *Engine) SubmitClaimAll(ctx context.Context, req ClaimAllRequest) ([]custody.LedgerEntry, error) {
-	items, err := e.ListClaimableItems(ctx, req.WalletID)
+	c := normalizeCluster(req.Cluster)
+	items, err := e.ListClaimableItemsForCluster(ctx, c, req.WalletID)
 	if err != nil {
 		return nil, err
 	}
@@ -792,14 +1262,17 @@ func (e *Engine) SubmitClaimAll(ctx context.Context, req ClaimAllRequest) ([]cus
 				continue
 			}
 			_, led, err := e.SubmitClaim(ctx, ClaimRequest{
-				WalletID:  req.WalletID,
-				Cluster:   req.Cluster,
-				Asset:     norm,
-				RoundSlot: it.RoundSlot,
-				ShardID:   it.ShardID,
-				Page:      it.Page,
-				EntryRow:  it.EntryRow,
-				CreateATA: true,
+				WalletID:    req.WalletID,
+				Cluster:     c,
+				Asset:       norm,
+				RoundSlot:   it.RoundSlot,
+				ShardID:     it.ShardID,
+				Page:        it.Page,
+				EntryRow:    it.EntryRow,
+				EntriesMask: it.EntriesMask,
+				Batch:       true,
+				SolEscape:   norm == "btc" && it.SolEscape,
+				CreateATA:   !it.SolEscape,
 			})
 			if err != nil {
 				return out, err
@@ -829,8 +1302,13 @@ func (e *Engine) SubmitClaimStaking(ctx context.Context, req StakeActionRequest)
 }
 
 func (e *Engine) submitStakingOp(ctx context.Context, req StakeActionRequest, op, kind string) (custody.WalletReview, *custody.LedgerEntry, error) {
+	return e.submitStakingOpWithAuth(ctx, req, op, kind, false, "")
+}
+
+func (e *Engine) submitStakingOpWithAuth(ctx context.Context, req StakeActionRequest, op, kind string, autonomous bool, taskID string) (custody.WalletReview, *custody.LedgerEntry, error) {
 	c := normalizeCluster(req.Cluster)
-	if c == "mainnet-beta" && onchain.LV1XMainnetProgramID == "" {
+	bind := e.resolveClusterBinding(ctx, c)
+	if c == "mainnet-beta" && !bind.Enabled {
 		return custody.WalletReview{}, nil, fmt.Errorf("%w: %s", custody.ErrPolicyDenied, MainnetGateMessage)
 	}
 	if e.custody == nil {
@@ -843,15 +1321,16 @@ func (e *Engine) submitStakingOp(ctx context.Context, req StakeActionRequest, op
 		rev, err = e.custody.GetReview(ctx, req.WalletID, strings.TrimSpace(req.ReviewID))
 	} else {
 		rev, err = e.custody.PrepareReview(ctx, custody.PrepareReviewRequest{
-			WalletID:  req.WalletID,
-			Operation: op,
-			Venue:     "wen-mining",
+			WalletID:    req.WalletID,
+			Operation:   op,
+			IsBotOrAuto: autonomous,
+			Venue:       "wen-mining",
 			MiningLV1X: &custody.MiningLV1XRequest{
 				Cluster:        c,
-				ProgramID:      custody.EffectiveDevnetProgramID(),
-				LedgerID:       custody.EffectiveDevnetLedgerID(),
+				ProgramID:      bind.ProgramID,
+				LedgerID:       bind.LedgerID,
 				SatAmountAtoms: atoms,
-				BtcMint:        onchain.LV1XDevnetBTCMint,
+				BtcMint:        bind.BTCMint,
 				CreateATA:      req.CreateATA,
 			},
 		})
@@ -862,11 +1341,11 @@ func (e *Engine) submitStakingOp(ctx context.Context, req StakeActionRequest, op
 	if req.DryRunPreview {
 		return rev, nil, nil
 	}
-	entry, execErr := e.custody.ExecuteNativeReview(ctx, req.WalletID, rev.ID, "owner")
+	entry, execErr := e.custody.ExecuteNativeReview(ctx, req.WalletID, rev.ID, actorForAutonomous(autonomous, taskID))
 	if execErr != nil {
 		return rev, nil, execErr
 	}
-	e.recordEntry(ctx, req.WalletID, c, 0, 0, 0, 0, kind, nil, "", 0, req.AmountSAT, 0, "", entry.TxSignature, entry.State)
+	e.recordEntry(ctx, req.WalletID, c, 0, 0, 0, 0, 0, false, false, kind, nil, "", 0, req.AmountSAT, 0, "", entry.TxSignature, entry.State)
 	e.publish(MiningEvent{Event: "stake.updated", Cluster: c})
 	return rev, &entry, nil
 }
@@ -874,7 +1353,7 @@ func (e *Engine) submitStakingOp(ctx context.Context, req StakeActionRequest, op
 // CreateSession opens and persists a local or managed LV1X mining session.
 func (e *Engine) CreateSession(ctx context.Context, in SessionRecord) (SessionRecord, error) {
 	c := normalizeCluster(in.Cluster)
-	if c == "mainnet-beta" && onchain.LV1XMainnetProgramID == "" {
+	if c == "mainnet-beta" && !e.IsMainnetEnabled(ctx) {
 		return SessionRecord{}, fmt.Errorf("%w: %s", custody.ErrPolicyDenied, MainnetGateMessage)
 	}
 	now := e.now().UTC().Unix()
@@ -994,6 +1473,51 @@ func (e *Engine) SetSessionStatus(ctx context.Context, id, nextStatus string) (S
 	}
 	e.publish(MiningEvent{Event: "session.updated", Cluster: rec.Cluster, SessionID: rec.ID})
 	return rec, nil
+}
+
+// SubmitSessionOp prepares and executes an on-chain LV1X SessionState lifecycle tx
+// (open, deposit, stop, or close) through Custody V2 RoleMining enforcement.
+func (e *Engine) SubmitSessionOp(ctx context.Context, walletID, cluster, action string, ref, firstSlot, lastSlot uint64, expiresAt int64, maxEntry, maxTurnover, depositLamports uint64, strategyRootHex string, returnToBudget, autonomous bool) (custody.WalletReview, *custody.LedgerEntry, error) {
+	c := normalizeCluster(cluster)
+	bind := e.resolveClusterBinding(ctx, c)
+	if c == "mainnet-beta" && !bind.Enabled {
+		return custody.WalletReview{}, nil, fmt.Errorf("%w: %s", custody.ErrPolicyDenied, MainnetGateMessage)
+	}
+	if e.custody == nil {
+		return custody.WalletReview{}, nil, errors.New("custody backend unavailable")
+	}
+	rtb := returnToBudget
+	rev, err := e.custody.PrepareReview(ctx, custody.PrepareReviewRequest{
+		WalletID:    walletID,
+		Operation:   custody.MiningOpSession,
+		AmountRaw:   depositLamports,
+		IsBotOrAuto: autonomous,
+		Venue:       "wen-mining",
+		MiningLV1X: &custody.MiningLV1XRequest{
+			Cluster:         c,
+			ProgramID:       bind.ProgramID,
+			LedgerID:        bind.LedgerID,
+			SessionAction:   action,
+			SessionRef:      ref,
+			FirstSlot:       firstSlot,
+			LastSlot:        lastSlot,
+			ExpiresAt:       expiresAt,
+			MaxEntry:        maxEntry,
+			MaxTurnover:     maxTurnover,
+			StrategyRootHex: strategyRootHex,
+			ReturnToBudget:  &rtb,
+			AmountLamports:  depositLamports,
+		},
+	})
+	if err != nil {
+		return custody.WalletReview{}, nil, err
+	}
+	entry, execErr := e.custody.ExecuteNativeReview(ctx, walletID, rev.ID, actorForAutonomous(autonomous, ""))
+	if execErr != nil {
+		return rev, nil, execErr
+	}
+	e.publish(MiningEvent{Event: "session.updated", Cluster: c})
+	return rev, &entry, nil
 }
 
 func normalizeCluster(raw string) string {

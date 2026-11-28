@@ -5,7 +5,6 @@ import (
 	"math"
 	"strings"
 
-	"github.com/fased-ai/fased-app/internal/custody"
 	"github.com/fased-ai/fased-app/internal/onchain"
 )
 
@@ -39,33 +38,34 @@ func (e *Engine) resolveWalletPublicKey(ctx context.Context, walletID string) st
 func (e *Engine) ProtocolStats(ctx context.Context, cluster string) (ProtocolStats, error) {
 	c := normalizeCluster(cluster)
 	nowSec := e.now().UTC().Unix()
-	prog := custody.EffectiveDevnetProgramID()
-	ledger := custody.EffectiveDevnetLedgerID()
+	snap := e.readSnapshot(ctx, c, "")
+	prog := snap.ProgramID
+	ledger := snap.LedgerID
 	rtAddr, _ := onchain.LV1XRuntimePDA(prog, ledger)
-	mintAddr, _ := onchain.LV1XMintPDA(prog, ledger)
+	mintAddr := nonEmptyStr(snap.Mint, func() string { m, _ := onchain.LV1XMintPDA(prog, ledger); return m }())
 	stAddr, _ := onchain.LV1XStakingStatePDA(prog, ledger)
 	trAddr, _ := onchain.LV1XTreasuryStatePDA(prog, ledger)
 
-	snap := e.readSnapshot(ctx, c, "")
 	out := ProtocolStats{
 		Cluster:            c,
 		ProgramID:          prog,
 		LedgerID:           ledger,
 		RuntimeAddress:     rtAddr,
 		MintAddress:        mintAddr,
-		BTCMintAddress:     onchain.LV1XDevnetBTCMint,
+		BTCMintAddress:     nonEmptyStr(snap.BTCMint, onchain.LV1XDevnetBTCMint),
 		StakingAddress:     stAddr,
 		TreasuryAddress:    trAddr,
 		Phase:              0,
 		PhaseName:          phaseLabel(0),
 		MaxSupplySat:       float64(onchain.LV1XLifetimeSatAtoms) / 1e9,
-		LPSolMin:           50.0,
-		LPSatMin:           15_000.0,
-		BoostMultiplier:    8,
-		BoostBudgetSat:     60_000,
+		LPSolMin:           float64(onchain.LV1XDefaultLPSolMin) / 1e9,
+		LPSatMin:           float64(onchain.LV1XDefaultLPSatMin) / 1e9,
+		BoostMultiplier:    uint8(onchain.LV1XDefaultBoostMult),
+		BoostBudgetSat:     uint32(onchain.LV1XDefaultBoostBudget),
 		TGEBps:             onchain.LV1XDefaultTGEBps,
 		VestingDurationSec: onchain.LV1XBootstrapVestingSec,
 		RoundIntervalSec:   onchain.LV1XRoundIntervalSec,
+		FeeSplit:           [4]int{72, 13, 10, 5},
 		Source:             snap.Source,
 		ObservedAt:         nowSec,
 	}
@@ -91,8 +91,7 @@ func (e *Engine) ProtocolStats(ctx context.Context, cluster string) (ProtocolSta
 		out.VestingDurationSec = rt.VestingDuration
 		out.BoostBudgetSat = rt.BoostBudgetSat
 		out.BoostMultiplier = rt.BoostMultiplier
-	} else {
-		// Offline/cached baseline when Devnet runtime is not reachable or in fixture tests.
+	} else if e.fixture {
 		out.MintedSat = 148_250.0
 		out.BoostAwardedSat = 18_420.0
 		out.LPSol = 18.45
@@ -101,13 +100,16 @@ func (e *Engine) ProtocolStats(ctx context.Context, cluster string) (ProtocolSta
 
 	if snap.Treasury != nil {
 		out.BTCTreasurySat = snap.Treasury.TotalBtcBought
-	} else {
+		out.LPBurnedSOL = float64(snap.Treasury.TotalLpBurned) / 1e9
+		out.TreasuryBtcSolPending = float64(snap.Treasury.BtcSolPending) / 1e9
+		out.TreasuryLpSolPending = float64(snap.Treasury.LpSolPending) / 1e9
+	} else if e.fixture {
 		out.BTCTreasurySat = 125_000
 	}
 
 	if snap.Staking != nil {
 		out.TotalStakedSat = float64(snap.Staking.TotalActiveStake+snap.Staking.TotalPendingStake) / 1e9
-	} else {
+	} else if e.fixture {
 		out.TotalStakedSat = 42_500.0
 	}
 	if out.MintedSat > 0 {
@@ -147,11 +149,11 @@ func (e *Engine) Leaderboard(ctx context.Context, cluster, rawWindow string) (Le
 		w := s.WinningRange
 		vol += s.PoolSOL
 		msat := s.MinerSat
-		if msat <= 0 {
+		if msat <= 0 && e.fixture {
 			msat = 115.0 + float64(i%5)*12.5
 		}
 		satTotal += msat
-		shares := [5]float64{0.12, 0.20, 0.34, 0.21, 0.13}
+		shares := [5]float64{0.2, 0.2, 0.2, 0.2, 0.2}
 		rounds = append(rounds, LeaderboardRound{
 			RoundSlot:    s.RoundSlot,
 			Phase:        "settled",
@@ -159,14 +161,14 @@ func (e *Engine) Leaderboard(ctx context.Context, cluster, rawWindow string) (Le
 			Code:         s.Code,
 			MoveBps:      s.MoveBps,
 			PoolSOL:      s.PoolSOL,
-			MinerCount:   uint32(14 + (s.RoundSlot % 9)),
+			MinerCount:   0,
 			MinerSat:     msat,
 			CrowdShares:  shares,
 			SettledAt:    s.SettledAt,
 		})
 	}
 
-	// Build miner leaderboard combining real Custody RoleMining wallets with recent protocol activity.
+	// Build miner leaderboard combining real Custody RoleMining wallets with real claim activity.
 	miners := make([]LeaderboardMiner, 0, 8)
 	var latestSlot uint64
 	if len(rounds) > 0 {
@@ -178,15 +180,15 @@ func (e *Engine) Leaderboard(ctx context.Context, cluster, rawWindow string) (Le
 				if w.Role != "mining" {
 					continue
 				}
-				var committed, sat float64
+				var committed, returned, sat, btc float64
 				var cnt, wins int
-				rows, qErr := e.db.QueryContext(ctx, `SELECT kind, COALESCE(amount_sol,0), COALESCE(amount_sat,0), COALESCE(round_slot,0) FROM lv1x_entries WHERE wallet_id = ?`, w.ID)
+				rows, qErr := e.db.QueryContext(ctx, `SELECT kind, COALESCE(amount_sol,0), COALESCE(amount_sat,0), COALESCE(amount_btc,0), COALESCE(round_slot,0) FROM lv1x_entries WHERE wallet_id = ?`, w.ID)
 				if qErr == nil {
 					for rows.Next() {
 						var kind string
-						var aSol, aSat float64
+						var aSol, aSat, aBtc float64
 						var sl uint64
-						if rows.Scan(&kind, &aSol, &aSat, &sl) == nil {
+						if rows.Scan(&kind, &aSol, &aSat, &aBtc, &sl) == nil {
 							switch kind {
 							case "commit":
 								committed += aSol
@@ -194,9 +196,15 @@ func (e *Engine) Leaderboard(ctx context.Context, cluster, rawWindow string) (Le
 								if sl > latestSlot {
 									latestSlot = sl
 								}
+							case "claim_sol":
+								returned += aSol
 							case "claim_sat":
 								sat += aSat
-								wins++
+								if aSat > 0 {
+									wins++
+								}
+							case "claim_btc":
+								btc += aBtc
 							}
 						}
 					}
@@ -214,9 +222,10 @@ func (e *Engine) Leaderboard(ctx context.Context, cluster, rawWindow string) (Le
 						Rounds:        cnt,
 						Wins:          wins,
 						CommittedSOL:  math.Round(committed*1e4) / 1e4,
-						ReturnedSOL:   math.Round(committed*0.97*1e4) / 1e4,
-						NetSOL:        math.Round((committed*-0.03)*1e4) / 1e4,
+						ReturnedSOL:   math.Round(returned*1e4) / 1e4,
+						NetSOL:        math.Round((returned-committed)*1e4) / 1e4,
 						EarnedSAT:     math.Round(sat*100) / 100,
+						EarnedBTC:     math.Round(btc*1e8) / 1e8,
 						LastRoundSlot: latestSlot,
 					})
 				}
@@ -224,16 +233,20 @@ func (e *Engine) Leaderboard(ctx context.Context, cluster, rawWindow string) (Le
 		}
 	}
 
+	minersCnt := len(miners)
+	if e.fixture {
+		minersCnt = max(18, len(miners))
+	}
 	return LeaderboardResponse{
 		Cluster:    c,
 		Window:     window,
 		VolumeSOL:  math.Round(vol*1000) / 1000,
 		RoundsCnt:  len(rounds),
-		MinersCnt:  max(18, len(miners)),
+		MinersCnt:  minersCnt,
 		SatAwarded: math.Round(satTotal*100) / 100,
 		Miners:     miners,
 		Rounds:     rounds,
-		Source:     "local-ledger+streak",
+		Source:     "onchain+ledger",
 		ObservedAt: nowSec,
 	}, nil
 }
@@ -242,13 +255,13 @@ func (e *Engine) Leaderboard(ctx context.Context, cluster, rawWindow string) (Le
 func (e *Engine) Portfolio(ctx context.Context, cluster, walletID string) (PortfolioResponse, error) {
 	c := normalizeCluster(cluster)
 	nowSec := e.now().UTC().Unix()
+	snap := e.readSnapshot(ctx, c, walletID)
 	pub := e.resolveWalletPublicKey(ctx, walletID)
-	snap := e.readSnapshot(ctx, c, pub)
 
 	pStats, _ := e.ProtocolStats(ctx, c)
 	sessions, _ := e.ListSessions(ctx)
 	history, _ := e.ListEntries(ctx, walletID, 50)
-	claimItems, _ := e.ListClaimableItems(ctx, walletID)
+	claimItems, _ := e.ListClaimableItemsForCluster(ctx, c, walletID)
 
 	var claimSOL, claimSAT, vestedSAT, claimBTC float64
 	for i := range claimItems {
@@ -302,15 +315,15 @@ func (e *Engine) Portfolio(ctx context.Context, cluster, walletID string) (Portf
 func (e *Engine) StakingOverview(ctx context.Context, cluster, walletID string) (StakingOverviewResponse, error) {
 	c := normalizeCluster(cluster)
 	nowSec := e.now().UTC().Unix()
-	prog := custody.EffectiveDevnetProgramID()
-	ledger := custody.EffectiveDevnetLedgerID()
+	snap := e.readSnapshot(ctx, c, walletID)
+	prog := snap.ProgramID
+	ledger := snap.LedgerID
 	stAddr, _ := onchain.LV1XStakingStatePDA(prog, ledger)
 	pub := e.resolveWalletPublicKey(ctx, walletID)
 	var posAddr string
 	if pub != "" {
 		posAddr, _ = onchain.LV1XStakePositionPDA(prog, ledger, pub)
 	}
-	snap := e.readSnapshot(ctx, c, pub)
 
 	out := StakingOverviewResponse{
 		Cluster:          c,
@@ -332,7 +345,7 @@ func (e *Engine) StakingOverview(ctx context.Context, cluster, walletID string) 
 		out.TotalBtcDistributed = float64(snap.Staking.TotalBtcDistributed) / 1e8
 		out.StreamRemainingBtc = float64(snap.Staking.StreamRemainingBtc) / 1e8
 		out.StreamEndTs = snap.Staking.StreamEndTs
-	} else {
+	} else if e.fixture {
 		out.TotalActiveSat = 38_400.0
 		out.TotalPendingSat = 4_100.0
 		out.TotalBtcDistributed = 0.0842
