@@ -154,6 +154,36 @@ func (e *Engine) SimulateStrategy(ctx context.Context, req SimulateRequest) (Sim
 	if err != nil {
 		return SimulateResponse{}, err
 	}
+	if len(rounds) == 0 {
+		if cResp, cErr := e.GetCandles(ctx, "10m", limit); cErr == nil && len(cResp.Candles) > 0 {
+			for _, bar := range cResp.Candles {
+				if bar.Open <= 0 {
+					continue
+				}
+				moveBps := bar.MoveBps
+				if moveBps == 0 {
+					moveBps = int(math.Round(((bar.Close - bar.Open) / bar.Open) * 10000.0))
+				}
+				win := winningBucketFromMoveBps(moveBps, 5, 20)
+				if bar.WinningRange != nil && *bar.WinningRange <= 4 {
+					win = *bar.WinningRange
+				}
+				slot := bar.RoundSlot
+				if slot == 0 {
+					slot = uint64(bar.Time / 600)
+				}
+				rounds = append(rounds, StreakEntry{
+					RoundSlot:    slot,
+					WinningRange: win,
+					Code:         BucketCodes[win],
+					MoveBps:      moveBps,
+					PoolSOL:      2.0,
+					InnerBps:     5,
+					OuterBps:     20,
+				})
+			}
+		}
+	}
 	var weights [5]float64
 	for i := range 5 {
 		weights[i] = float64(weightsBps[i]) / 10000.0
