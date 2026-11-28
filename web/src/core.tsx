@@ -78,6 +78,9 @@ function useCoreState() {
     }
   });
   const [passwordAvailable, setPasswordAvailable] = useState(false);
+  const [localPasswordRequired, setLocalPasswordRequired] = useState(false);
+  const [signerPasswordConfigured, setSignerPasswordConfigured] =
+    useState(false);
   const connectedID = useRef(
     new URL(location.href).searchParams.get("instance") ?? "",
   );
@@ -321,6 +324,8 @@ function useCoreState() {
         remoteTransport?: string;
         legacyAuthenticated?: boolean;
         passwordAvailable?: boolean;
+        localPasswordRequired?: boolean;
+        signerPasswordConfigured?: boolean;
       }>("auth/state");
       if (epoch !== authGeneration.current) return;
       setLocalAccess(auth.localAccess === true);
@@ -334,6 +339,8 @@ function useCoreState() {
       );
       if (auth.legacyAuthenticated) csrf.current = auth.csrfToken ?? "";
       setPasswordAvailable(auth.passwordAvailable === true);
+      setLocalPasswordRequired(auth.localPasswordRequired === true);
+      setSignerPasswordConfigured(auth.signerPasswordConfigured === true);
       if (
         auth.remoteAccess &&
         !auth.remoteEnrolled &&
@@ -407,6 +414,52 @@ function useCoreState() {
       active = false;
     };
   }, [refresh]);
+  const unlockLocalWalletPassword = useCallback(
+    async (password: string) => {
+      const epoch = ++authGeneration.current;
+      setError("");
+      changePending(epoch, 1);
+      try {
+        await inspect();
+        const session = await request<{
+          csrfToken: string;
+          sessionToken?: string;
+          sessionMode?: "bearer" | "cookie";
+        }>(
+          "auth/local",
+          "POST",
+          { action: "unlock-password", password },
+          undefined,
+          { "X-Fased-Local": "1" },
+        );
+        if (epoch !== authGeneration.current) return;
+        try {
+          sessionStorage.removeItem("fased.local.signed-out");
+        } catch {}
+        csrf.current = session.csrfToken;
+        const cookieMode = session.sessionMode
+          ? session.sessionMode === "cookie"
+          : location.protocol === "https:";
+        token.current = cookieMode ? "" : (session.sessionToken ?? "");
+        try {
+          if (token.current) sessionStorage.setItem(sessionKey, token.current);
+          else sessionStorage.removeItem(sessionKey);
+        } catch {
+          /* current-tab memory still works */
+        }
+        await refresh();
+        if (epoch === authGeneration.current) setLocalSignedOut(false);
+      } catch (e) {
+        if (epoch === authGeneration.current) {
+          setError(e instanceof Error ? e.message : "Authentication failed");
+          throw e;
+        }
+      } finally {
+        changePending(epoch, -1);
+      }
+    },
+    [request, inspect, refresh, changePending],
+  );
   const authenticate = useCallback(
     async (
       password: string,
@@ -646,6 +699,8 @@ function useCoreState() {
       localAutoEnter,
       localSignedOut,
       passwordAvailable,
+      localPasswordRequired,
+      signerPasswordConfigured,
       mode,
       request,
       stream,
@@ -658,6 +713,7 @@ function useCoreState() {
       capabilities,
       connection,
       authenticate,
+      unlockLocalWalletPassword,
       pair,
       updateSetup,
       logout,
@@ -673,6 +729,8 @@ function useCoreState() {
       localAutoEnter,
       localSignedOut,
       passwordAvailable,
+      localPasswordRequired,
+      signerPasswordConfigured,
       mode,
       request,
       stream,
@@ -685,6 +743,7 @@ function useCoreState() {
       capabilities,
       connection,
       authenticate,
+      unlockLocalWalletPassword,
       pair,
       updateSetup,
       logout,

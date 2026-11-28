@@ -63,16 +63,30 @@ test("Native Lean V1 Mine Workspace (#mine/*): 100% WEN parity (BTC chart, 80 mi
   });
   await expect(streakList.getByRole("listitem")).toHaveCount(24);
 
-  // Toggle BTC chart timeframe & Technicals style.
+  // Toggle BTC chart timeframe & Technicals style via compact dropdown triggers.
   await page
-    .getByRole("group", { name: "Chart timeframe", exact: true })
+    .getByRole("button", { name: "Chart timeframe", exact: true })
+    .click();
+  await page
+    .getByRole("group", { name: "Chart timeframe options", exact: true })
     .getByRole("button", { name: "1h", exact: true })
     .click();
+  await page.getByRole("button", { name: "Chart style", exact: true }).click();
   await page
-    .getByRole("group", { name: "Chart style", exact: true })
+    .getByRole("group", { name: "Chart style options", exact: true })
     .getByRole("button", { name: "Technicals", exact: true })
     .click();
-  await expect(page.getByText("RSI (14)")).toBeVisible();
+  await expect(
+    page.getByText(/Relative Strength Index \(14\)|Collecting 1h bars/),
+  ).toBeVisible();
+
+  // Verify Target Start Round (Now | Next | +2) controls in Composer.
+  const startGroup = page.getByRole("group", {
+    name: "Target start round",
+    exact: true,
+  });
+  await startGroup.getByRole("button", { name: "Next", exact: true }).click();
+  await startGroup.getByRole("button", { name: "Now", exact: true }).click();
 
   // 3. Verify Mainnet hard-gate disables Commit CTA.
   const clusterGroup = page.getByRole("group", {
@@ -138,6 +152,7 @@ test("Native Lean V1 Mine Workspace (#mine/*): 100% WEN parity (BTC chart, 80 mi
   });
   await subnav.getByRole("button", { name: "Assets", exact: true }).click();
   await expect(page.getByText(/Per-Round Volume/)).toBeVisible();
+  await expect(page.getByText("Personal vs. Crowd Benchmark")).toBeVisible();
 
   await subnav.getByRole("button", { name: "Strategies", exact: true }).click();
   await page
@@ -151,6 +166,7 @@ test("Native Lean V1 Mine Workspace (#mine/*): 100% WEN parity (BTC chart, 80 mi
 
   await subnav.getByRole("button", { name: "Stake", exact: true }).click();
   await expect(page.getByText("Active Staked Pool")).toBeVisible();
+  await expect(page.getByText("BTC Yield / 1k SAT (24h)")).toBeVisible();
 
   // Back to main Mine view, create & control a GoalMining task from #mine Automate overlay, and run contrast audit.
   await subnav.getByRole("button", { name: "Mine", exact: true }).click();

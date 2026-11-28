@@ -26,6 +26,7 @@ export function CoreGate({ children }: { children: ReactNode }) {
   const { t: uiText } = useUI();
   const core = useCore();
   const [password, setPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
   const [code, setCode] = useState(ownerSetup?.code ?? "");
   const [pairInput, setPairInput] = useState("");
   const [claimError, setClaimError] = useState("");
@@ -390,40 +391,139 @@ export function CoreGate({ children }: { children: ReactNode }) {
             {uiText("Opening your workspace")}
           </div>
         ) : core.localAccess && !passwordSignIn && !code ? (
-          <div className="settings-body">
-            <h1>{uiText("Open Fased")}</h1>
-            {(native || core.localAutoEnter) && (
-              <button
-                className="primary"
-                disabled={core.saving}
-                onClick={() => {
-                  localBrowserAttempt = undefined;
-                  setClaimError("");
-                  void core
-                    .authenticate("", undefined, true)
-                    .catch(() =>
-                      setClaimError(
-                        native
-                          ? "Reopen Fased to connect."
-                          : "Could not connect automatically. Click Open Fased to try again.",
-                      ),
+          !native &&
+          !core.localAutoEnter &&
+          !core.passwordAvailable &&
+          core.localPasswordRequired ? (
+            <form
+              onSubmit={(event: FormEvent) => {
+                event.preventDefault();
+                setClaimError("");
+                if (
+                  !core.signerPasswordConfigured &&
+                  password !== confirmPassword
+                ) {
+                  setClaimError("Passwords do not match.");
+                  return;
+                }
+                void core
+                  .unlockLocalWalletPassword(password)
+                  .then(() => {
+                    setPassword("");
+                    setConfirmPassword("");
+                  })
+                  .catch((err) => {
+                    setClaimError(
+                      err instanceof Error
+                        ? err.message
+                        : "Incorrect owner password.",
                     );
-                }}
-              >
-                {uiText("Open Fased")}
-              </button>
-            )}
-            {(claimError || !(native || core.localAutoEnter)) && (
-              <p role={claimError ? "alert" : "status"}>
-                {uiText(claimError || "Open Fased on this computer.")}
-              </p>
-            )}
-            {core.passwordAvailable && (
-              <button onClick={() => setPasswordSignIn(true)}>
-                {uiText("Use password")}
-              </button>
-            )}
-          </div>
+                  });
+              }}
+            >
+              <div className="settings-body">
+                <h1>
+                  {core.signerPasswordConfigured
+                    ? uiText("Unlock Local Fased")
+                    : uiText("Set Local Owner Password")}
+                </h1>
+                <p role="status">
+                  {uiText(
+                    "A local signing wallet is active on this computer. Enter your owner password to unlock.",
+                  )}
+                </p>
+                <label htmlFor="local-owner-password">
+                  {uiText("Owner password")}
+                </label>
+                <input
+                  id="local-owner-password"
+                  type="password"
+                  autoFocus
+                  autoComplete={
+                    core.signerPasswordConfigured
+                      ? "current-password"
+                      : "new-password"
+                  }
+                  required
+                  minLength={12}
+                  maxLength={1024}
+                  value={password}
+                  onChange={(e) => {
+                    setPassword(e.target.value);
+                    setClaimError("");
+                  }}
+                />
+                {!core.signerPasswordConfigured && (
+                  <>
+                    <label htmlFor="local-owner-password-confirm">
+                      {uiText("Confirm Owner Password")}
+                    </label>
+                    <input
+                      id="local-owner-password-confirm"
+                      type="password"
+                      autoComplete="new-password"
+                      required
+                      minLength={12}
+                      maxLength={1024}
+                      value={confirmPassword}
+                      onChange={(e) => {
+                        setConfirmPassword(e.target.value);
+                        setClaimError("");
+                      }}
+                    />
+                  </>
+                )}
+                {(claimError || core.error) && (
+                  <p className="core-error" role="alert">
+                    {claimError || core.error}
+                  </p>
+                )}
+                <button className="primary" disabled={core.saving}>
+                  {core.saving
+                    ? uiText("Checking…")
+                    : core.signerPasswordConfigured
+                      ? uiText("Unlock Local")
+                      : uiText("Set Password & Open")}
+                  <ArrowRight size={15} />
+                </button>
+              </div>
+            </form>
+          ) : (
+            <div className="settings-body">
+              <h1>{uiText("Open Fased")}</h1>
+              {(native || core.localAutoEnter) && (
+                <button
+                  className="primary"
+                  disabled={core.saving}
+                  onClick={() => {
+                    localBrowserAttempt = undefined;
+                    setClaimError("");
+                    void core
+                      .authenticate("", undefined, true)
+                      .catch(() =>
+                        setClaimError(
+                          native
+                            ? "Reopen Fased to connect."
+                            : "Could not connect automatically. Click Open Fased to try again.",
+                        ),
+                      );
+                  }}
+                >
+                  {uiText("Open Fased")}
+                </button>
+              )}
+              {(claimError || !(native || core.localAutoEnter)) && (
+                <p role={claimError ? "alert" : "status"}>
+                  {uiText(claimError || "Open Fased on this computer.")}
+                </p>
+              )}
+              {core.passwordAvailable && (
+                <button onClick={() => setPasswordSignIn(true)}>
+                  {uiText("Use password")}
+                </button>
+              )}
+            </div>
+          )
         ) : core.remoteAccess &&
           !passwordSignIn &&
           (core.mode === "unclaimed" ||

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/subtle"
+	"errors"
 	"net"
 	"net/http"
 	"path/filepath"
@@ -161,17 +162,18 @@ func (h *HTTPHandler) localOwnerAPI(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var request struct {
-		Action string `json:"action"`
-		Code   string `json:"code"`
+		Action   string `json:"action"`
+		Code     string `json:"code"`
+		Password string `json:"password"`
 	}
 	if !decodeJSON(w, r, &request) {
 		return
 	}
-	if !ordinary && request.Action != "exchange" && request.Action != "browser" {
+	if !ordinary && request.Action != "exchange" && request.Action != "browser" && request.Action != "unlock-password" {
 		writeError(w, 403, "protected Local owner access required")
 		return
 	}
-	if request.Action != "exchange" && request.Action != "browser" && r.Context().Value(privateIPCKey{}) != true {
+	if request.Action != "exchange" && request.Action != "browser" && request.Action != "unlock-password" && r.Context().Value(privateIPCKey{}) != true {
 		writeError(w, 403, "Local OS owner access required")
 		return
 	}
@@ -228,6 +230,94 @@ func (h *HTTPHandler) localOwnerAPI(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		token, err = h.store.localOwnerSession(r.Context())
+	case "unlock-password":
+		if !(ordinary || h.protectedLocalOwnerAllowed()) {
+			writeError(w, 403, "Local OS owner access required")
+			return
+		}
+		if r.Header.Get("X-Fased-Local") != "1" {
+			writeError(w, 403, "Local browser confirmation required")
+			return
+		}
+		if r.Context().Value(privateIPCKey{}) != true && !h.localPeerVerifiable() && !h.validLocalNonce(r) {
+			writeError(w, 403, "Local OS owner launch proof required")
+			return
+		}
+		if sfs := r.Header.Get("Sec-Fetch-Site"); sfs != "" && sfs != "same-origin" {
+			writeError(w, 403, "same-origin request required")
+			return
+		}
+		if !h.allowRate(r, "auth-login", 8) {
+			writeError(w, 429, ErrRateLimited.Error())
+			return
+		}
+		if r.Context().Value(privateIPCKey{}) != true && !h.loginBackoff.Allow(h.store.now()) {
+			writeError(w, 429, ErrRateLimited.Error())
+			return
+		}
+		select {
+		case h.authSlots <- struct{}{}:
+			defer func() { <-h.authSlots }()
+		default:
+			writeError(w, 429, "authentication is busy; retry shortly")
+			return
+		}
+		hasPW, pwErr := h.store.hasPassword(r.Context())
+		if pwErr != nil {
+			writeError(w, 500, "state unavailable")
+			return
+		}
+		if hasPW {
+			writeError(w, 409, "Owner password already configured; sign in normally.")
+			return
+		}
+		if !h.store.hasNativeSigningWallet(r.Context()) {
+			writeError(w, 403, "Local wallet unlock not required.")
+			return
+		}
+		if !validPassword(request.Password) {
+			writeError(w, 400, "use a password of at least 12 characters and at most 1024 bytes")
+			return
+		}
+		cs, cErr := h.store.custodyBackend()
+		if cErr != nil || cs == nil {
+			writeError(w, 503, "Custody signer unavailable")
+			return
+		}
+		hasSignerAuth, hErr := cs.HasOwnerAuth(r.Context())
+		if hErr != nil {
+			writeError(w, 503, "Custody signer unavailable")
+			return
+		}
+		if hasSignerAuth {
+			if _, _, authErr := cs.AuthorizeOwnerAction(r.Context(), request.Password, "unlock", "local"); authErr != nil {
+				h.loginBackoff.RecordFailure(h.store.now())
+				h.store.RecordSecurityAudit(r.Context(), "auth.local_unlock.failed", h.ratePeerKey(r), r.URL.Path, "denied", "")
+				writeError(w, 401, "Incorrect owner password.")
+				return
+			}
+		} else {
+			if cfgErr := cs.ConfigureOwnerAuth(r.Context(), request.Password); cfgErr != nil {
+				writeError(w, 500, "failed to enroll signer owner authorization")
+				return
+			}
+		}
+		if setErr := h.store.setLocalOwnerPasswordKeeping(r.Context(), request.Password, ""); setErr != nil {
+			if errors.Is(setErr, ErrClaimed) {
+				writeError(w, 409, "Owner password already configured; sign in normally.")
+				return
+			}
+			writeError(w, 400, setErr.Error())
+			return
+		}
+		token, err = h.store.Login(r.Context(), request.Password)
+		if err != nil {
+			h.loginBackoff.RecordFailure(h.store.now())
+			writeError(w, 401, "Incorrect owner password.")
+			return
+		}
+		h.loginBackoff.Reset()
+		h.store.RecordSecurityAudit(r.Context(), "auth.local_unlock.succeeded", h.ratePeerKey(r), r.URL.Path, "ok", "")
 	default:
 		writeError(w, 400, "unsupported Local access request")
 		return
