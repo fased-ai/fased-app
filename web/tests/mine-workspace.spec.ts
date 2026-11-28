@@ -10,7 +10,7 @@ import {
 
 installCoreFixture();
 
-test("Native Lean V1 Mine Workspace (#mine/*): 100% WEN parity (BTC chart, 80 microbars, Schedule Grid, Claims, Assets, Strategies, Portfolio, Stake)", async ({
+test("Native Lean V1 Mine Workspace (#mine/*): 1:1 WEN terminal parity (3-col scroll, sticky bar, BTC chart, 80 microbars, Allocation modal, Claims, Tasks modal, Assets/Stake/Portfolio/Strategies)", async ({
   page,
   isMobile,
 }) => {
@@ -35,10 +35,13 @@ test("Native Lean V1 Mine Workspace (#mine/*): 100% WEN parity (BTC chart, 80 mi
     if (m.type() === "error") errors.push(m.text());
   });
 
-  // 1. Navigate to #mine and verify 3-column WEN terminal + 0 overflow.
+  // 1. Navigate to #mine and verify 3-column WEN terminal, sticky telemetry bar, & 0 overflow.
   await page.goto(`${url}/#mine`);
   await expect(
-    page.getByRole("heading", { name: "Mine", exact: true, level: 1 }),
+    page.getByLabel("BTC USD mining chart", { exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("region", { name: "Mining status bar", exact: true }),
   ).toBeVisible();
   expect(
     await page.evaluate(
@@ -47,23 +50,25 @@ test("Native Lean V1 Mine Workspace (#mine/*): 100% WEN parity (BTC chart, 80 mi
     "initial #mine fits viewport without horizontal scroll",
   ).toBe(true);
 
-  // 2. Verify BTC market chart, 80 microbars, 6 strategy presets, and 24 streak chips.
-  await expect(
-    page.getByLabel("BTC USD mining chart", { exact: true }),
-  ).toBeVisible();
+  // Ensure banned clutter copy is absent from #mine terminal.
+  await expect(page.getByText("24-Round Streak")).toHaveCount(0);
+  await expect(page.getByText("Pinned LV1X Deployment")).toHaveCount(0);
+  await expect(page.getByText("Personal Self-Keeper")).toHaveCount(0);
+
+  // 2. Verify 80 microbars, 6 strategy presets, and single-row streak cells.
   await expect(page.locator(".mine-bin-group i")).toHaveCount(80);
   const presetsGroup = page.getByRole("group", {
     name: "Strategy presets",
     exact: true,
   });
   await expect(presetsGroup.locator("button")).toHaveCount(6);
-  const streakList = page.getByRole("list", {
-    name: "24-round streak",
+  const streakGroup = page.getByRole("group", {
+    name: "Recent round outcomes",
     exact: true,
   });
-  await expect(streakList.getByRole("listitem")).toHaveCount(24);
+  await expect(streakGroup.locator("button")).toHaveCount(24);
 
-  // Toggle BTC chart timeframe & Technicals style via compact dropdown triggers.
+  // Verify icon-first chart triggers (Timeframe + Style + Indicators + Reset).
   await page
     .getByRole("button", { name: "Chart timeframe", exact: true })
     .click();
@@ -79,8 +84,22 @@ test("Native Lean V1 Mine Workspace (#mine/*): 100% WEN parity (BTC chart, 80 mi
   await expect(
     page.getByText(/Relative Strength Index \(14\)|Collecting 1h bars/),
   ).toBeVisible();
+  await page.getByRole("button", { name: "Chart style", exact: true }).click();
+  await page
+    .getByRole("group", { name: "Chart style options", exact: true })
+    .getByRole("button", { name: "Candles", exact: true })
+    .click();
 
-  // Verify Target Start Round (Now | Next | +2) controls in Composer.
+  // Verify Allocation fine-tune modal opens via Sliders icon.
+  await page
+    .getByRole("button", { name: "Fine-tune allocation", exact: true })
+    .click();
+  await expect(
+    page.getByRole("heading", { name: "Fine-Tune Allocation", exact: true }),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "Done", exact: true }).click();
+
+  // Verify Target Start Round (Now | Next | +2) & multi-round session creation.
   const startGroup = page.getByRole("group", {
     name: "Target start round",
     exact: true,
@@ -88,23 +107,6 @@ test("Native Lean V1 Mine Workspace (#mine/*): 100% WEN parity (BTC chart, 80 mi
   await startGroup.getByRole("button", { name: "Next", exact: true }).click();
   await startGroup.getByRole("button", { name: "Now", exact: true }).click();
 
-  // 3. Verify Mainnet hard-gate disables Commit CTA.
-  const clusterGroup = page.getByRole("group", {
-    name: "Mining cluster",
-    exact: true,
-  });
-  await clusterGroup
-    .getByRole("button", { name: "Mainnet", exact: true })
-    .click();
-  await expect(page.getByText("Mainnet Gated")).toBeVisible();
-  await expect(
-    page.getByRole("button", { name: "Commit Round", exact: true }),
-  ).toBeDisabled();
-
-  // Switch back to Devnet, test Schedule Grid modal and Semi-Auto session runner.
-  await clusterGroup
-    .getByRole("button", { name: "Devnet", exact: true })
-    .click();
   await presetsGroup
     .getByRole("button", { name: "Tails", exact: true })
     .click();
@@ -114,45 +116,44 @@ test("Native Lean V1 Mine Workspace (#mine/*): 100% WEN parity (BTC chart, 80 mi
   ).toBeVisible();
   await page.getByRole("button", { name: /Apply Schedule/ }).click();
 
-  const modeGroup = page.getByRole("group", {
-    name: "Execution mode",
+  // Clicking 2r + Deposit 0.2 -> Mine · 2r · 0.2 SOL → creates a session cleanly.
+  const roundsGroup = page.getByRole("group", {
+    name: "Round count",
     exact: true,
   });
-  await modeGroup
-    .getByRole("button", { name: "Semi-Auto", exact: true })
-    .click();
-  await page
-    .getByRole("button", { name: "Start Session", exact: true })
-    .click();
+  await roundsGroup.getByRole("button", { name: "2r", exact: true }).click();
+  await page.getByRole("button", { name: "0.2", exact: true }).click();
+  await page.getByRole("button", { name: /^Mine · 2r · 0\.2 SOL/ }).click();
 
   const sessionsTable = page.getByRole("table", {
     name: "Mining sessions",
     exact: true,
   });
   await expect(sessionsTable).toContainText("tails");
-  await expect(sessionsTable).toContainText("semi_auto");
   await sessionsTable
     .getByRole("button", { name: /^Stop session / })
     .first()
     .click();
   await expect(sessionsTable).toContainText("stopped");
 
-  // 4. Check Claims breakdown tab and Swap tab.
+  // 3. Check WEN 6-tab Round panel: Entries | Sessions | Rounds | Claims | Activity | Protocol.
   const recordsTabs = page.getByRole("tablist", {
     name: "Mining records and claims",
     exact: true,
   });
   await recordsTabs.getByRole("tab", { name: /^Claims/ }).click();
-  await expect(page.getByText("Bootstrap Vesting Schedule")).toBeVisible();
+  await expect(page.getByText("SOL ready")).toBeVisible();
+  await expect(page.getByText("Staking BTC")).toBeVisible();
+  await recordsTabs.getByRole("tab", { name: /^Protocol/ }).click();
+  await expect(page.getByText("Crowd Win Rate")).toBeVisible();
 
-  // 5. Navigate Assets (#mine/assets), Strategies (#mine/strategies + near-miss sim), Portfolio (#mine/portfolio), Stake (#mine/stake).
+  // 4. Navigate Assets, Stake, Portfolio, Strategies subpages.
   const subnav = page.getByRole("navigation", {
     name: "Mining workspace tabs",
     exact: true,
   });
   await subnav.getByRole("button", { name: "Assets", exact: true }).click();
   await expect(page.getByText(/Per-Round Volume/)).toBeVisible();
-  await expect(page.getByText("Personal vs. Crowd Benchmark")).toBeVisible();
 
   await subnav.getByRole("button", { name: "Strategies", exact: true }).click();
   await page
@@ -166,55 +167,59 @@ test("Native Lean V1 Mine Workspace (#mine/*): 100% WEN parity (BTC chart, 80 mi
 
   await subnav.getByRole("button", { name: "Stake", exact: true }).click();
   await expect(page.getByText("Active Staked Pool")).toBeVisible();
-  await expect(page.getByText("BTC Yield / 1k SAT (24h)")).toBeVisible();
 
-  // Back to main Mine view, create & control a GoalMining task from #mine Automate overlay, and run contrast audit.
+  // 5. Back to #mine: verify Tasks & Automation icon modal (no "Personal Self-Keeper" label) & Single Wallet Policy modal.
   await subnav.getByRole("button", { name: "Mine", exact: true }).click();
   await expect(page.locator(".mine-bin-group i")).toHaveCount(80);
 
-  await page.getByRole("button", { name: "Self-Keeper and Manifest" }).click();
+  await page
+    .getByRole("button", { name: "Mining tasks and automation", exact: true })
+    .click();
   await expect(
     page.getByRole("heading", {
-      name: "Personal Self-Keeper & Signed Manifest",
+      name: "Mining Tasks & Automation",
       exact: true,
     }),
   ).toBeVisible();
-  await page.getByRole("button", { name: "Close dialog" }).click();
-
-  const policyBtn = page.getByRole("button", { name: "Policy", exact: true });
-  if (await policyBtn.isEnabled()) {
-    await policyBtn.click();
-    await expect(
-      page.getByRole("heading", { name: "Mining Wallet Policy", exact: true }),
-    ).toBeVisible();
-    await expect(
-      page.getByText(/Auto-stake newly claimed WENSAT/),
-    ).toBeVisible();
-    await expect(
-      page.getByText(/Allow Tier 2 fallback settlement crank/),
-    ).toBeVisible();
-    await page.getByRole("button", { name: "Close dialog" }).click();
-  }
-
-  await page.getByRole("button", { name: "Automate mining task" }).click();
+  await page.getByRole("button", { name: "+ New Task", exact: true }).click();
   await expect(
-    page.getByRole("heading", { name: "Automate Mining Task", exact: true }),
+    page.getByRole("heading", { name: "New Mining Task", exact: true }),
   ).toBeVisible();
   await page.getByLabel("Task Name").fill("Cert Auto Tails");
   await page.getByRole("button", { name: "Create & Activate" }).click();
 
-  const tasksDrawer = page.getByRole("region", {
-    name: "Mining tasks",
-    exact: true,
+  const tasksDialog = page.getByRole("dialog", {
+    name: "Mining Tasks & Automation",
   });
-  await expect(tasksDrawer).toContainText("Cert Auto Tails");
-  await tasksDrawer
+  await expect(
+    tasksDialog.getByText("Cert Auto Tails", { exact: true }),
+  ).toBeVisible();
+  await tasksDialog
     .getByRole("button", { name: "Run task Cert Auto Tails", exact: true })
     .click();
-  await tasksDrawer
+  await tasksDialog
     .getByRole("button", { name: "Pause task Cert Auto Tails", exact: true })
     .click();
-  await expect(tasksDrawer).toContainText("paused");
+  await expect(tasksDialog.getByText("paused", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Close dialog" }).click();
+
+  const walletPill = page.getByRole("button", {
+    name: "Attached mining wallet",
+    exact: true,
+  });
+  if ((await walletPill.count()) > 0) {
+    await walletPill.click();
+    await expect(
+      page.getByRole("heading", {
+        name: "Mining Wallet & Policy",
+        exact: true,
+      }),
+    ).toBeVisible();
+    await expect(
+      page.getByText(/Auto-stake newly claimed WENSAT/),
+    ).toBeVisible();
+    await page.getByRole("button", { name: "Close dialog" }).click();
+  }
 
   // 6. Dark mode WCAG AA + zero errors / zero external requests / zero overflow.
   const report = await auditPageAccessibility(page, { checkContrast: true });

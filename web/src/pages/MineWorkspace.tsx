@@ -4,15 +4,12 @@ import { Dialog } from "../components/shared";
 import { setLocalOwnerPassword } from "../wallets-v2";
 import {
   ArrowUpRight,
-  BookOpen,
-  Bot,
   Clock3,
-  LockKeyhole,
   Pause,
-  Pickaxe,
   Play,
+  Plus,
   RefreshCw,
-  ShieldCheck,
+  Wallet,
   Zap,
 } from "../icons";
 import {
@@ -44,7 +41,6 @@ import {
   fetchSelfKeeperStatus,
   listRoleMiningWallets,
   listSavedMiningStrategies,
-  previewMiningCommit,
   requestMiningStepUpToken,
   saveMiningStrategy,
   simulateMiningStrategy,
@@ -62,10 +58,8 @@ import {
   updateMiningPolicy,
   type CandleBar,
   type ClaimableRoundItem,
-  type CommitPreview,
   type LeaderboardResponse,
   type ManifestStatus,
-  type MiningMode,
   type MiningStatus,
   type PortfolioResponse,
   type ProtocolStats,
@@ -78,6 +72,8 @@ import { useUI } from "../ui-preferences";
 import type { WalletV2 } from "../wallets-v2";
 import { useWorkspace } from "../workspace";
 import {
+  RANGE_LABELS,
+  RANGE_NAMES,
   rebalanceBucketsBps,
   weightsBpsToCurve80,
 } from "./MineAllocationCurve";
@@ -106,9 +102,9 @@ function formatRevealTime(unixSec?: number): string {
   return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
 }
 
-function shortId(id: string): string {
-  if (!id || id.length <= 14) return id;
-  return `${id.slice(0, 6)}...${id.slice(-6)}`;
+function shortAddr(addr: string): string {
+  if (!addr || addr.length <= 10) return addr;
+  return `${addr.slice(0, 4)}…${addr.slice(-4)}`;
 }
 
 function parseSharedCurveFromHash(): number[] | null {
@@ -145,11 +141,11 @@ export function MineWorkspace() {
       ? tab
       : "mine";
 
-  const [cluster, setCluster] = useState<ClusterChoice>("devnet");
+  const [cluster] = useState<ClusterChoice>("devnet");
   const [status, setStatus] = useState<MiningStatus | null>(null);
   const [protoStats, setProtoStats] = useState<ProtocolStats | null>(null);
   const [candles, setCandles] = useState<CandleBar[]>([]);
-  const [candleInterval, setCandleInterval] = useState<ChartInterval>("10m");
+  const [candleInterval, setCandleInterval] = useState<ChartInterval>("1m");
   const [leaderboard, setLeaderboard] = useState<LeaderboardResponse | null>(
     null,
   );
@@ -161,14 +157,13 @@ export function MineWorkspace() {
   const [wallets, setWallets] = useState<WalletV2[]>([]);
   const [selectedWalletId, setSelectedWalletId] = useState("");
   const [composerTab, setComposerTab] = useState<ComposerTab>("mine");
-  const [recordsTab, setRecordsTab] = useState<RecordsTab>("current");
-  const [mode, setMode] = useState<MiningMode>("manual");
+  const [recordsTab, setRecordsTab] = useState<RecordsTab>("entries");
   const [presetId, setPresetId] = useState<string>("wide");
   const [weightsBps, setWeightsBps] = useState<number[]>(
     () => parseSharedCurveFromHash() ?? [2000, 2000, 2000, 2000, 2000],
   );
   const [selectedBucket, setSelectedBucket] = useState<number | null>(null);
-  const [amountStr, setAmountStr] = useState("0.05");
+  const [amountStr, setAmountStr] = useState("0.1");
   const [roundsCount, setRoundsCount] = useState(1);
   const [scheduleDraft, setScheduleDraft] = useState<ScheduleDraft>({
     horizonLabel: "4h",
@@ -181,9 +176,6 @@ export function MineWorkspace() {
     randomCount: 6,
     rollingBudget: true,
   });
-  const [autoClaim, setAutoClaim] = useState(true);
-  const [stopOnReversal, setStopOnReversal] = useState(true);
-  const [preview, setPreview] = useState<CommitPreview | null>(null);
   const [countdownSec, setCountdownSec] = useState(0);
 
   const [busy, setBusy] = useState(false);
@@ -194,9 +186,10 @@ export function MineWorkspace() {
   const [marketsOpen, setMarketsOpen] = useState(false);
   const [rulesOpen, setRulesOpen] = useState(false);
   const [scheduleOpen, setScheduleOpen] = useState(false);
+  const [allocModalOpen, setAllocModalOpen] = useState(false);
   const [saveStratOpen, setSaveStratOpen] = useState(false);
   const [saveStratName, setSaveStratName] = useState("My Custom Curve");
-  const [policyOpen, setPolicyOpen] = useState(false);
+  const [walletPolicyOpen, setWalletPolicyOpen] = useState(false);
   const [policyMaxRoundSol, setPolicyMaxRoundSol] = useState("0.5");
   const [policyMaxDailySol, setPolicyMaxDailySol] = useState("5");
   const [policyAutoClaim, setPolicyAutoClaim] = useState(true);
@@ -206,11 +199,10 @@ export function MineWorkspace() {
   const [policyAllowMainnet, setPolicyAllowMainnet] = useState(false);
   const [manifest, setManifest] = useState<ManifestStatus | null>(null);
   const [selfKeeper, setSelfKeeper] = useState<SelfKeeperStatus | null>(null);
-  const [keeperModalOpen, setKeeperModalOpen] = useState(false);
+  const [automationModalOpen, setAutomationModalOpen] = useState(false);
   const [miningTasks, setMiningTasks] = useState<UniversalTask[]>([]);
-  const [tasksDrawerOpen, setTasksDrawerOpen] = useState(false);
   const [automateOpen, setAutomateOpen] = useState(false);
-  const [autoName, setAutoName] = useState("Mining: Wide Range");
+  const [autoName, setAutoName] = useState("Mining · Wide");
   const [autoExecMode, setAutoExecMode] = useState<ExecMode>("hybrid");
   const [autoApproval, setAutoApproval] = useState<ApprovalPolicy>("semi_auto");
   const [autoSchedule, setAutoSchedule] = useState<ScheduleKind>("interval");
@@ -250,6 +242,24 @@ export function MineWorkspace() {
     if (sum !== 10000) raw[2] = Math.max(0, raw[2] + (10000 - sum));
     return raw;
   }, [status]);
+
+  const plannedSlots = useMemo(() => {
+    const cur = status?.round?.roundSlot ?? 0;
+    if (cur <= 0) return [];
+    const offset =
+      scheduleDraft.startMode === "now"
+        ? 0
+        : scheduleDraft.startMode === "next"
+          ? 1
+          : 2;
+    if (roundsCount <= 1) {
+      return offset > 0 ? [cur + offset] : [cur];
+    }
+    return computeScheduledSlots(scheduleDraft, cur).slice(
+      0,
+      Math.max(1, roundsCount),
+    );
+  }, [status?.round?.roundSlot, scheduleDraft, roundsCount]);
 
   const loadState = useCallback(async () => {
     if (core.mode !== "ready") return;
@@ -332,37 +342,6 @@ export function MineWorkspace() {
     return () => window.clearInterval(id);
   }, []);
 
-  useEffect(() => {
-    if (core.mode !== "ready") return;
-    let cancelled = false;
-    const handle = window.setTimeout(() => {
-      void previewMiningCommit(core, {
-        walletId: selectedWalletId,
-        cluster,
-        amountSol: parsedAmount,
-        selection: selectedBucket ?? undefined,
-        strategyId: presetId,
-        curve: weightsBpsToCurve80(weightsBps),
-      })
-        .then((res) => {
-          if (!cancelled) setPreview(res);
-        })
-        .catch(() => {});
-    }, 120);
-    return () => {
-      cancelled = true;
-      window.clearTimeout(handle);
-    };
-  }, [
-    core,
-    cluster,
-    selectedWalletId,
-    parsedAmount,
-    selectedBucket,
-    presetId,
-    weightsBps,
-  ]);
-
   function applyPreset(p: StrategyPreset) {
     setPresetId(p.id);
     setSelectedBucket(null);
@@ -377,18 +356,16 @@ export function MineWorkspace() {
     setWeightsBps((prev) => rebalanceBucketsBps(prev, rangeIndex, nextBps));
   }
 
-  function handleBucketClick(index: number) {
-    if (selectedBucket === index) {
-      setSelectedBucket(null);
-      const found = presets.find((p) => p.id === presetId) ?? presets[0];
-      setWeightsBps([...found.bucketsBps]);
-      return;
+  function dominantBucketFromWeights(bps: number[]): number {
+    let best = 2;
+    let bestVal = -1;
+    for (let i = 0; i < bps.length; i++) {
+      if ((bps[i] ?? 0) > bestVal) {
+        bestVal = bps[i] ?? 0;
+        best = i;
+      }
     }
-    setSelectedBucket(index);
-    setPresetId("custom");
-    const next = [0, 0, 0, 0, 0];
-    next[index] = 10000;
-    setWeightsBps(next);
+    return best;
   }
 
   function maybeHandleStepUp(
@@ -450,10 +427,11 @@ export function MineWorkspace() {
     setBusy(true);
     setError("");
     setNotice("");
+    const isMultiRound = roundsCount > 1;
     try {
-      if (mode === "manual") {
+      if (!isMultiRound) {
         if (!selectedWalletId) {
-          setError(t("Create a Mining role wallet in Wallets to commit."));
+          setError(t("Attach a Mining wallet first (+ Add Wallet)."));
           return;
         }
         await submitMiningCommit(
@@ -462,7 +440,7 @@ export function MineWorkspace() {
             walletId: selectedWalletId,
             cluster,
             amountSol: parsedAmount,
-            selection: selectedBucket ?? preview?.dominantBucket ?? 2,
+            selection: selectedBucket ?? dominantBucketFromWeights(weightsBps),
             strategyId: presetId,
             bucketWeightsBps: weightsBps,
             curve: weightsBpsToCurve80(weightsBps),
@@ -474,10 +452,7 @@ export function MineWorkspace() {
         );
       } else {
         const wallet = wallets.find((w) => w.id === selectedWalletId);
-        const plannedSlots = computeScheduledSlots(
-          scheduleDraft,
-          status?.round.roundSlot ?? 0,
-        ).slice(0, Math.max(1, roundsCount));
+        const perRound = parsedAmount / Math.max(1, roundsCount);
         await createMiningSession(
           core,
           {
@@ -485,23 +460,23 @@ export function MineWorkspace() {
             walletHandle: wallet?.handle ?? "",
             cluster,
             strategyId: presetId,
-            mode,
+            mode: "semi_auto",
             scheduleMode: scheduleDraft.scheduleMode,
             horizonLabel: scheduleDraft.horizonLabel,
             startMode: scheduleDraft.startMode,
             selectedSlots: plannedSlots,
             roundsCount,
-            perRoundSol: parsedAmount,
-            depositSol: parsedAmount * Math.max(1, roundsCount),
+            perRoundSol: perRound,
+            depositSol: parsedAmount,
             rollingBudget: scheduleDraft.rollingBudget,
-            autoClaim,
-            stopOnReversal,
+            autoClaim: policyAutoClaim,
+            stopOnReversal: false,
             curve: weightsBpsToCurve80(weightsBps),
           },
           stepUpToken,
         );
         setNotice(
-          `Started ${mode === "auto" ? "Auto" : "Semi-Auto"} session (${presetId}, ${amountStr} SOL/round × ${roundsCount}r).`,
+          `Started ${roundsCount}r session (${presetId}, ${perRound.toFixed(3)} SOL/r).`,
         );
         setRecordsTab("sessions");
       }
@@ -512,7 +487,7 @@ export function MineWorkspace() {
     } catch (err) {
       maybeHandleStepUp(
         err,
-        mode === "manual" ? "execute" : "mining-session",
+        isMultiRound ? "mining-session" : "execute",
         (tok) => runPrimaryAction(tok),
         stepUpToken,
       );
@@ -527,7 +502,7 @@ export function MineWorkspace() {
     stepUpToken?: string,
   ) {
     if (!selectedWalletId) {
-      setError(t("Select a Mining role wallet first."));
+      setError(t("Attach a Mining wallet first."));
       return;
     }
     setBusy(true);
@@ -579,7 +554,7 @@ export function MineWorkspace() {
     try {
       const res = await submitMiningClaimAll(core, selectedWalletId, cluster);
       setNotice(
-        `Submitted ${res.count} claim transactions across SOL/SAT/cbBTC.`,
+        `Submitted ${res.count} claim transactions across SOL/SAT/BTC.`,
       );
       await loadState();
     } catch (err) {
@@ -616,24 +591,17 @@ export function MineWorkspace() {
       } else if (kind === "activate") {
         await submitMiningActivateStake(
           core,
-          {
-            walletId: selectedWalletId,
-            cluster,
-          },
+          { walletId: selectedWalletId, cluster },
           stepUpToken,
         );
         setNotice("Activated matured stake position.");
       } else {
         await submitMiningClaimStaking(
           core,
-          {
-            walletId: selectedWalletId,
-            cluster,
-            createAta: true,
-          },
+          { walletId: selectedWalletId, cluster, createAta: true },
           stepUpToken,
         );
-        setNotice("Claimed staking cbBTC rewards.");
+        setNotice("Claimed staking BTC rewards.");
       }
       setStepUpPending(null);
       setStepUpPassword("");
@@ -651,7 +619,7 @@ export function MineWorkspace() {
     }
   }
 
-  function openPolicyModal() {
+  function openWalletPolicyModal() {
     const mp = currentWallet?.policy.mining;
     if (mp) {
       setPolicyMaxRoundSol(
@@ -667,7 +635,7 @@ export function MineWorkspace() {
       setPolicyAllowFallbackCrank(mp.allowFallbackCrank ?? false);
       setPolicyAllowMainnet(mp.allowMainnet ?? false);
     }
-    setPolicyOpen(true);
+    setWalletPolicyOpen(true);
   }
 
   async function handleCloseNonce(
@@ -713,10 +681,12 @@ export function MineWorkspace() {
     try {
       const sk = await triggerSelfKeeperSweep(core);
       setSelfKeeper(sk);
-      setNotice(sk.lastSweepSummary || "Completed Personal Self-Keeper sweep.");
+      setNotice(
+        sk.lastSweepSummary || "Completed background mining task sweep.",
+      );
       await loadState();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Self-Keeper sweep failed");
+      setError(err instanceof Error ? err.message : "Task sweep failed");
     } finally {
       setBusy(false);
     }
@@ -775,7 +745,7 @@ export function MineWorkspace() {
         },
         stepUpToken,
       );
-      setPolicyOpen(false);
+      setWalletPolicyOpen(false);
       setStepUpPending(null);
       setStepUpPassword("");
       setStepUpPasswordConfirm("");
@@ -863,8 +833,8 @@ export function MineWorkspace() {
     const presetLabel =
       presets.find((p) => p.id === presetId)?.name ?? presetId;
     setAutoName(`Mining · ${presetLabel}`);
-    setAutoExecMode(mode === "auto" ? "hybrid" : "standalone");
-    setAutoApproval(mode === "auto" ? "auto" : "semi_auto");
+    setAutoExecMode("hybrid");
+    setAutoApproval("semi_auto");
     setAutoSchedule("interval");
     setAutoIntervalSec("300");
     setAutoEventFilter("mining.round.opened");
@@ -889,7 +859,7 @@ export function MineWorkspace() {
         {
           name: autoName.trim() || `Mining · ${presetId}`,
           goalDomain: "mining",
-          goalObjective: `Automate ${presetId} LV1X mining (${amountStr} SOL/round on ${cluster})`,
+          goalObjective: `Automate ${presetId} LV1X mining (${amountStr} SOL on ${cluster})`,
           scheduleKind: autoSchedule,
           scheduleSpec,
           execMode: autoExecMode,
@@ -910,7 +880,7 @@ export function MineWorkspace() {
             strategyId: presetId,
           },
           constraints: {
-            stopOnReversal,
+            stopOnReversal: false,
             cooldownSec: 30,
           },
           status: "active",
@@ -919,12 +889,12 @@ export function MineWorkspace() {
         stepUpToken,
       );
       setAutomateOpen(false);
-      setTasksDrawerOpen(true);
       setStepUpPending(null);
       setStepUpPassword("");
       setStepUpPasswordConfirm("");
       setNotice(`Created mining task: ${created.name}`);
       await loadState();
+      setAutomationModalOpen(true);
     } catch (err) {
       maybeHandleStepUp(
         err,
@@ -948,7 +918,7 @@ export function MineWorkspace() {
     setNotice("");
     try {
       if (task.status === "active") {
-        await pauseUniversalTask(core, task.id, "Paused from #mine drawer");
+        await pauseUniversalTask(core, task.id, "Paused from #mine");
         setNotice(`Paused task: ${task.name}`);
       } else {
         await activateUniversalTask(core, task.id, stepUpToken);
@@ -997,31 +967,35 @@ export function MineWorkspace() {
     (tk) => tk.status === "active",
   ).length;
   const round = status?.round;
-  const currentWallet = wallets.find((w) => w.id === selectedWalletId);
+  const currentWallet = wallets.find((w) => w.id === selectedWalletId) ?? null;
   const revealUntilStr = formatRevealTime(selfKeeper?.nextRevealAt);
+  const stakedSat =
+    (staking?.userActiveSat ?? 0) + (staking?.userPendingSat ?? 0);
 
   const navSubTabs: Array<{ id: MineSubRoute; label: string }> = [
     { id: "mine", label: "Mine" },
     { id: "assets", label: "Assets" },
-    { id: "strategies", label: "Strategies" },
-    { id: "portfolio", label: "Portfolio" },
     { id: "stake", label: "Stake" },
+    { id: "portfolio", label: "Portfolio" },
+    { id: "strategies", label: "Strategies" },
   ];
 
   return (
-    <section className="wrx fased-mine-root mine-shell" aria-label={t("Mine")}>
+    <section
+      className={`wrx fased-mine-root mine-shell${subRoute === "mine" ? " is-mine-terminal" : ""}`}
+      aria-label={t("Mine")}
+    >
+      <h1 className="sr-only">{t("Mine")}</h1>
+
       <header className="mine-topbar">
         <div className="mine-title-row">
-          <Pickaxe size={16} aria-hidden="true" />
-          <h1>{t("Mine")}</h1>
-
           <nav className="mine-subnav" aria-label="Mining workspace tabs">
             {navSubTabs.map((item) => (
               <button
                 key={item.id}
                 type="button"
-                className="mine-chip"
-                aria-pressed={subRoute === item.id}
+                className={`mine-subnav-tab${subRoute === item.id ? " is-active" : ""}`}
+                aria-current={subRoute === item.id ? "page" : undefined}
                 onClick={() =>
                   navigate(item.id === "mine" ? "mine" : `mine/${item.id}`)
                 }
@@ -1031,32 +1005,8 @@ export function MineWorkspace() {
             ))}
           </nav>
 
-          <div
-            className="wt-seg mine-cluster-seg"
-            role="group"
-            aria-label="Mining cluster"
-          >
-            <button
-              type="button"
-              aria-pressed={cluster === "devnet"}
-              onClick={() => setCluster("devnet")}
-            >
-              Devnet
-            </button>
-            <button
-              type="button"
-              aria-pressed={cluster === "mainnet-beta"}
-              onClick={() => setCluster("mainnet-beta")}
-            >
-              Mainnet
-            </button>
-          </div>
-
-          {mainnetLocked && (
-            <span className="mine-stat-pill is-locked">
-              <LockKeyhole size={12} aria-hidden="true" />
-              <span>Mainnet Gated</span>
-            </span>
+          {cluster !== "mainnet-beta" && (
+            <span className="mine-devnet-badge">DEVNET</span>
           )}
         </div>
 
@@ -1070,68 +1020,52 @@ export function MineWorkspace() {
               <span>Keep awake until {revealUntilStr}</span>
             </span>
           )}
+
           <button
             type="button"
-            className={`mine-chip mine-keeper-pill${selfKeeper?.running ? " is-running" : ""}`}
-            aria-label="Self-Keeper and Manifest"
-            title="Self-Keeper & Signed Manifest"
-            onClick={() => setKeeperModalOpen(true)}
+            className={`mine-icon-pill${selfKeeper?.running || activeMiningTaskCount > 0 ? " is-active" : ""}`}
+            aria-label="Mining tasks and automation"
+            title="Mining Tasks & Automation"
+            onClick={() => setAutomationModalOpen(true)}
           >
-            <ShieldCheck size={13} aria-hidden="true" />
-            <span>Keeper{selfKeeper?.running ? " · Live" : ""}</span>
-          </button>
-          <button
-            type="button"
-            className="mine-chip mine-tasks-pill"
-            aria-expanded={tasksDrawerOpen}
-            aria-label="Mining tasks drawer"
-            onClick={() => setTasksDrawerOpen((v) => !v)}
-          >
-            <Zap size={13} aria-hidden="true" />
-            <span>Tasks · {activeMiningTaskCount}</span>
-          </button>
-          <button
-            type="button"
-            className="mine-chip"
-            aria-label="Automate mining task"
-            onClick={openAutomateDialog}
-          >
-            <Bot size={13} aria-hidden="true" />
-            <span>Automate</span>
-          </button>
-          <select
-            className="mine-wallet-select"
-            aria-label="Mining wallet"
-            value={selectedWalletId}
-            onChange={(e) => setSelectedWalletId(e.target.value)}
-          >
-            {wallets.length === 0 ? (
-              <option value="">No Mining wallet</option>
-            ) : (
-              wallets.map((w) => (
-                <option key={w.id} value={w.id}>
-                  {w.name || w.handle} ({shortId(w.publicKey)})
-                </option>
-              ))
+            <Zap size={14} aria-hidden="true" />
+            {(selfKeeper?.running || activeMiningTaskCount > 0) && (
+              <i className="mine-icon-dot" aria-hidden="true" />
             )}
-          </select>
-          <button
-            type="button"
-            className="wt-btn-soft"
-            title="Manage Mining wallets"
-            onClick={() => navigate("wallets/accounts")}
-          >
-            Wallets
+            {activeMiningTaskCount > 0 && (
+              <em className="mine-icon-count">{activeMiningTaskCount}</em>
+            )}
           </button>
-          <button
-            type="button"
-            className="icon-btn"
-            aria-label="Open mining rules"
-            title="Mining rules"
-            onClick={() => setRulesOpen(true)}
-          >
-            <BookOpen size={14} aria-hidden="true" />
-          </button>
+
+          {currentWallet ? (
+            <button
+              type="button"
+              className="mine-wallet-pill"
+              aria-label="Attached mining wallet"
+              title="Attached Mining wallet & policy"
+              onClick={openWalletPolicyModal}
+            >
+              <Wallet size={13} aria-hidden="true" />
+              <span className="mine-wallet-addr">
+                {shortAddr(currentWallet.publicKey)}
+              </span>
+              <span className="mine-wallet-bal">
+                {(portfolio?.solBalanceSol ?? 0).toFixed(2)} SOL
+              </span>
+            </button>
+          ) : (
+            <button
+              type="button"
+              className="mine-add-wallet-btn"
+              aria-label="Add mining wallet"
+              title="Attach a Mining wallet"
+              onClick={() => navigate("wallets/accounts")}
+            >
+              <Plus size={13} aria-hidden="true" />
+              <span>Add Wallet</span>
+            </button>
+          )}
+
           <button
             type="button"
             className="icon-btn"
@@ -1144,97 +1078,13 @@ export function MineWorkspace() {
         </div>
       </header>
 
-      {tasksDrawerOpen && (
-        <div
-          className="wt-panel mine-tasks-drawer"
-          role="region"
-          aria-label="Mining tasks"
-        >
-          <div className="mine-tasks-drawer-head">
-            <strong>
-              Mining Tasks ({activeMiningTaskCount}/{miningTasks.length} active)
-            </strong>
-            <div className="mine-task-actions">
-              <button
-                type="button"
-                className="wt-btn-soft"
-                onClick={openAutomateDialog}
-              >
-                + Automate
-              </button>
-              <button
-                type="button"
-                className="icon-btn"
-                aria-label="Open Tasks workspace"
-                title="Open #tasks"
-                onClick={() => navigate("tasks")}
-              >
-                <ArrowUpRight size={14} aria-hidden="true" />
-              </button>
-            </div>
-          </div>
-          {miningTasks.length === 0 ? (
-            <p className="mine-muted-note">
-              No mining tasks configured yet. Use Automate to create one from
-              your active curve.
-            </p>
-          ) : (
-            <div className="wt-hairline-table">
-              {miningTasks.map((tk) => (
-                <div key={tk.id} className="wt-hairline-row mine-task-row">
-                  <div className="mine-task-meta">
-                    <span className="mine-task-title">{tk.name}</span>
-                    <span className="mine-muted-note">
-                      {tk.execMode} · {tk.scheduleKind} · {tk.approvalPolicy} ·{" "}
-                      {tk.runCount} runs
-                    </span>
-                  </div>
-                  <div className="mine-task-actions">
-                    <span className={`wt-pill ${statusPillTone(tk.status)}`}>
-                      {tk.status}
-                    </span>
-                    <button
-                      type="button"
-                      className="icon-btn"
-                      aria-label={
-                        tk.status === "active"
-                          ? `Pause task ${tk.name}`
-                          : `Activate task ${tk.name}`
-                      }
-                      title={tk.status === "active" ? "Pause" : "Activate"}
-                      disabled={busy}
-                      onClick={() => void handleToggleMiningTask(tk)}
-                    >
-                      {tk.status === "active" ? (
-                        <Pause size={13} aria-hidden="true" />
-                      ) : (
-                        <Play size={13} aria-hidden="true" />
-                      )}
-                    </button>
-                    <button
-                      type="button"
-                      className="icon-btn"
-                      aria-label={`Run task ${tk.name}`}
-                      title="Run once"
-                      disabled={busy}
-                      onClick={() => void handleRunMiningTask(tk)}
-                    >
-                      <Zap size={13} aria-hidden="true" />
-                    </button>
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-      )}
-
       {subRoute === "mine" && (
         <div className="mine-grid-3col">
           <MineLeftRail
             round={round}
             stats={protoStats}
             portfolio={portfolio}
+            stakedSat={stakedSat}
             selectedWalletId={selectedWalletId}
             onOpenMarkets={() => setMarketsOpen(true)}
             onOpenRules={() => setRulesOpen(true)}
@@ -1260,10 +1110,11 @@ export function MineWorkspace() {
               streak={status?.streak ?? []}
               crowdWeights={crowdWeightsBps}
               userWeightsBps={weightsBps}
+              plannedSlots={plannedSlots}
               onApplyPresetFromTechnicals={(w) => {
                 setPresetId("custom");
                 setWeightsBps(w);
-                setNotice("Applied technical bias curve.");
+                setNotice("Applied distribution curve.");
               }}
             />
 
@@ -1271,13 +1122,13 @@ export function MineWorkspace() {
               activeTab={recordsTab}
               onTabChange={setRecordsTab}
               round={round}
-              weightsBps={weightsBps}
+              stats={protoStats}
+              staking={staking}
               sessions={status?.sessions ?? []}
               portfolio={portfolio}
               protocolRounds={leaderboard?.rounds ?? []}
               streak={status?.streak ?? []}
               cluster={cluster}
-              mainnetGateNote={status?.mainnetGateNote}
               selectedWalletId={selectedWalletId}
               busy={busy}
               onDepositSession={(id, sol) =>
@@ -1291,6 +1142,7 @@ export function MineWorkspace() {
               }
               onClaimAsset={(asset, item) => void handleClaimAsset(asset, item)}
               onClaimAll={() => void handleClaimAll()}
+              onClaimStakingBtc={() => void handleStakeAction("claim_btc")}
               onCloseNonce={(it) => void handleCloseNonce(it)}
               onLoadCurveFromSlot={(sel) => {
                 const next = [500, 500, 500, 500, 500];
@@ -1301,14 +1153,13 @@ export function MineWorkspace() {
                   `Loaded Range ${String.fromCharCode(65 + sel)} bias.`,
                 );
               }}
+              onNavigateSub={(sub) => navigate(`mine/${sub}`)}
             />
           </div>
 
           <MineComposer
             composerTab={composerTab}
             onComposerTabChange={setComposerTab}
-            mode={mode}
-            onModeChange={setMode}
             presets={presets}
             presetId={presetId}
             weightsBps={weightsBps}
@@ -1319,28 +1170,21 @@ export function MineWorkspace() {
             onStartModeChange={(m) =>
               setScheduleDraft((d) => ({ ...d, startMode: m }))
             }
-            onQuickRounds={(n) => {
-              setRoundsCount(n);
-              if (n > 1 && mode === "manual") setMode("semi_auto");
-            }}
+            onQuickRounds={(n) => setRoundsCount(n)}
             onOpenScheduleGrid={() => setScheduleOpen(true)}
             amountStr={amountStr}
             onAmountChange={setAmountStr}
             walletSolBalance={portfolio?.solBalanceSol ?? 0}
-            rollingBudget={scheduleDraft.rollingBudget}
-            autoClaim={autoClaim}
-            onAutoClaimChange={setAutoClaim}
-            stopOnReversal={stopOnReversal}
-            onStopOnReversalChange={setStopOnReversal}
-            wallets={wallets}
             selectedWalletId={selectedWalletId}
             onSelectPreset={applyPreset}
             onCurveRebalance={handleCurveRebalance}
-            onSelectBucket={handleBucketClick}
+            onOpenAllocationModal={(idx) => {
+              if (typeof idx === "number") setSelectedBucket(idx);
+              setAllocModalOpen(true);
+            }}
             onShareCurve={handleShareCurve}
             onOpenSaveStrategy={() => setSaveStratOpen(true)}
-            onOpenPolicy={openPolicyModal}
-            onCreateTask={openAutomateDialog}
+            onOpenRules={() => setRulesOpen(true)}
             onPrimarySubmit={() => void runPrimaryAction()}
             onClaimAsset={(asset) => void handleClaimAsset(asset)}
             onClaimAll={() => void handleClaimAll()}
@@ -1350,12 +1194,10 @@ export function MineWorkspace() {
             }}
             onOpenJupiter={() => navigate("terminals/jupiter")}
             portfolio={portfolio}
-            preview={preview}
             countdownSec={countdownSec}
             mainnetLocked={mainnetLocked}
             mainnetGateNote={status?.mainnetGateNote}
             mintAddress={protoStats?.mintAddress ?? round?.ledgerId ?? ""}
-            btcMintAddress={protoStats?.btcMintAddress ?? ""}
             busy={busy}
             notice={notice}
             error={error}
@@ -1363,77 +1205,128 @@ export function MineWorkspace() {
         </div>
       )}
 
+      {subRoute === "mine" && (
+        <footer
+          className="mine-telemetry-bar"
+          role="region"
+          aria-label="Mining status bar"
+        >
+          <div className="mine-telemetry-left">
+            <span className="mine-telemetry-live">
+              <i aria-hidden="true" />
+              <span>Live</span>
+            </span>
+            <button
+              type="button"
+              className="mine-telemetry-link"
+              onClick={() => setRulesOpen(true)}
+            >
+              Rules
+            </button>
+            <button
+              type="button"
+              className="mine-telemetry-link"
+              onClick={() => setAutomationModalOpen(true)}
+            >
+              Tasks
+            </button>
+            {currentWallet && (
+              <button
+                type="button"
+                className="mine-telemetry-link"
+                onClick={openWalletPolicyModal}
+              >
+                Policy
+              </button>
+            )}
+          </div>
+          <div className="mine-telemetry-right">
+            <span>{cluster === "mainnet-beta" ? "Mainnet" : "Devnet"}</span>
+            <span>·</span>
+            <span>Round #{round?.roundSlot ?? "—"}</span>
+          </div>
+        </footer>
+      )}
+
       {subRoute === "assets" && (
-        <MineAssetsPage
-          leaderboard={leaderboard}
-          stats={protoStats}
-          portfolio={portfolio}
-          windowChoice={lbWindow}
-          onWindowChange={setLbWindow}
-        />
+        <div className="mine-subpage-scroll">
+          <MineAssetsPage
+            leaderboard={leaderboard}
+            stats={protoStats}
+            portfolio={portfolio}
+            windowChoice={lbWindow}
+            onWindowChange={setLbWindow}
+          />
+        </div>
       )}
 
       {subRoute === "strategies" && (
-        <MineStrategiesPage
-          presets={presets}
-          savedStrategies={savedStrategies}
-          onSaveStrategy={async (inp) => {
-            await saveMiningStrategy(core, inp);
-            await loadState();
-          }}
-          onDeleteStrategy={async (id) => {
-            await deleteMiningStrategy(core, id);
-            await loadState();
-          }}
-          onSimulate={(b, sol) =>
-            simulateMiningStrategy(core, {
-              bucketsBps: b,
-              perRoundSol: sol,
-              limit: 24,
-            })
-          }
-          onUseInMine={(id, weights) => {
-            const matched = presets.some((p) => p.id === id);
-            setPresetId(matched ? id : "custom");
-            setSelectedBucket(null);
-            setWeightsBps([...weights]);
-            navigate("mine");
-          }}
-          onLaunchTask={openAutomateDialog}
-        />
+        <div className="mine-subpage-scroll">
+          <MineStrategiesPage
+            presets={presets}
+            savedStrategies={savedStrategies}
+            onSaveStrategy={async (inp) => {
+              await saveMiningStrategy(core, inp);
+              await loadState();
+            }}
+            onDeleteStrategy={async (id) => {
+              await deleteMiningStrategy(core, id);
+              await loadState();
+            }}
+            onSimulate={(b, sol) =>
+              simulateMiningStrategy(core, {
+                bucketsBps: b,
+                perRoundSol: sol,
+                limit: 24,
+              })
+            }
+            onUseInMine={(id, weights) => {
+              const matched = presets.some((p) => p.id === id);
+              setPresetId(matched ? id : "custom");
+              setSelectedBucket(null);
+              setWeightsBps([...weights]);
+              navigate("mine");
+            }}
+            onLaunchTask={openAutomateDialog}
+          />
+        </div>
       )}
 
       {subRoute === "portfolio" && (
-        <MinePortfolioPage
-          portfolio={portfolio}
-          wallet={currentWallet}
-          busy={busy}
-          onClaimAll={() => void handleClaimAll()}
-          onOpenPolicy={openPolicyModal}
-        />
+        <div className="mine-subpage-scroll">
+          <MinePortfolioPage
+            portfolio={portfolio}
+            wallet={currentWallet ?? undefined}
+            busy={busy}
+            onClaimAll={() => void handleClaimAll()}
+            onOpenPolicy={openWalletPolicyModal}
+          />
+        </div>
       )}
 
       {subRoute === "stake" && (
-        <MineStakePage
-          staking={staking}
-          rounds={leaderboard?.rounds ?? []}
-          btcUsd={round?.markPriceUsd}
-          selectedWalletId={selectedWalletId}
-          mainnetLocked={mainnetLocked}
-          busy={busy}
-          onStake={(sat) => void handleStakeAction("stake", sat)}
-          onUnstake={(sat) => void handleStakeAction("unstake", sat)}
-          onActivate={() => void handleStakeAction("activate")}
-          onClaimBtc={() => void handleStakeAction("claim_btc")}
-        />
+        <div className="mine-subpage-scroll">
+          <MineStakePage
+            staking={staking}
+            rounds={leaderboard?.rounds ?? []}
+            btcUsd={round?.markPriceUsd}
+            selectedWalletId={selectedWalletId}
+            mainnetLocked={mainnetLocked}
+            busy={busy}
+            onStake={(sat) => void handleStakeAction("stake", sat)}
+            onUnstake={(sat) => void handleStakeAction("unstake", sat)}
+            onActivate={() => void handleStakeAction("activate")}
+            onClaimBtc={() => void handleStakeAction("claim_btc")}
+          />
+        </div>
       )}
 
       {scheduleOpen && (
         <MineScheduleGrid
           draft={scheduleDraft}
           currentSlot={round?.roundSlot ?? 0}
-          perRoundSol={parsedAmount}
-          depositSol={parsedAmount * roundsCount}
+          perRoundSol={parsedAmount / Math.max(1, roundsCount)}
+          depositSol={parsedAmount}
           onChange={(next) => {
             setScheduleDraft(next);
             const cnt = computeScheduledSlots(
@@ -1441,10 +1334,58 @@ export function MineWorkspace() {
               round?.roundSlot ?? 0,
             ).length;
             setRoundsCount(Math.max(1, cnt));
-            if (cnt > 1 && mode === "manual") setMode("semi_auto");
           }}
           onClose={() => setScheduleOpen(false)}
         />
+      )}
+
+      {allocModalOpen && (
+        <Dialog
+          title="Fine-Tune Allocation"
+          onClose={() => setAllocModalOpen(false)}
+        >
+          <div className="mine-modal-form">
+            {RANGE_LABELS.map((code, idx) => {
+              const pct = Math.round((weightsBps[idx] ?? 0) / 100);
+              return (
+                <div key={code} className="mine-alloc-slider-row">
+                  <div className="mine-alloc-slider-label">
+                    <strong>{code}</strong>
+                    <span className="mine-muted-note">{RANGE_NAMES[idx]}</span>
+                  </div>
+                  <input
+                    type="range"
+                    min={0}
+                    max={100}
+                    step={2}
+                    aria-label={`Range ${code} allocation percent`}
+                    value={pct}
+                    onChange={(e) =>
+                      handleCurveRebalance(idx, Number(e.target.value) * 100)
+                    }
+                  />
+                  <span className="mine-alloc-slider-pct">{pct}%</span>
+                </div>
+              );
+            })}
+            <div className="mine-modal-actions">
+              <button
+                type="button"
+                className="wt-btn-soft"
+                onClick={() => applyPreset(presets[0])}
+              >
+                Reset Wide
+              </button>
+              <button
+                type="button"
+                className="wt-btn-rose-sm"
+                onClick={() => setAllocModalOpen(false)}
+              >
+                Done
+              </button>
+            </div>
+          </div>
+        </Dialog>
       )}
 
       {marketsOpen && (
@@ -1465,13 +1406,13 @@ export function MineWorkspace() {
       )}
 
       {rulesOpen && (
-        <Dialog title="LV1X Mining Rules" onClose={() => setRulesOpen(false)}>
+        <Dialog title="WEN Mining Rules" onClose={() => setRulesOpen(false)}>
           <div className="mine-modal-form">
             <p className="mine-muted-note">
               Each 10-minute round settles BTC/USD move into five buckets (A–E)
               at ±{round?.innerBps ?? 5} / ±{round?.outerBps ?? 20} bps. Exact
               hits retain 99.5% SOL and earn max credit weight toward WENSAT and
-              cbBTC yield; adjacent near-misses earn pro-rata credit; misses
+              BTC yield; adjacent near-misses earn pro-rata credit; misses
               return 90% SOL and fund winner forfeitures.
             </p>
             <div className="mine-modal-actions">
@@ -1523,37 +1464,75 @@ export function MineWorkspace() {
         </Dialog>
       )}
 
-      {policyOpen && (
+      {walletPolicyOpen && (
         <Dialog
-          title="Mining Wallet Policy"
-          onClose={() => setPolicyOpen(false)}
+          title="Mining Wallet & Policy"
+          onClose={() => setWalletPolicyOpen(false)}
         >
           <div className="mine-modal-form">
-            <div className="mine-field">
-              <label htmlFor="pol-round-cap">Max SOL Per Round</label>
-              <input
-                id="pol-round-cap"
-                className="mine-modal-input"
-                value={policyMaxRoundSol}
-                onChange={(e) => setPolicyMaxRoundSol(e.target.value)}
-              />
+            {currentWallet && (
+              <div className="wt-hairline-table">
+                <div className="wt-hairline-row">
+                  <span>Attached Wallet</span>
+                  <span className="f-mono">
+                    {shortAddr(currentWallet.publicKey)}
+                  </span>
+                </div>
+                <div className="wt-hairline-row">
+                  <span>Balance</span>
+                  <span>{(portfolio?.solBalanceSol ?? 0).toFixed(4)} SOL</span>
+                </div>
+              </div>
+            )}
+
+            {wallets.length > 1 && (
+              <div className="mine-field">
+                <label htmlFor="mine-attached-wallet-sel">
+                  Active Mining Wallet (1 attached)
+                </label>
+                <select
+                  id="mine-attached-wallet-sel"
+                  className="mine-modal-input"
+                  value={selectedWalletId}
+                  onChange={(e) => setSelectedWalletId(e.target.value)}
+                >
+                  {wallets.map((w) => (
+                    <option key={w.id} value={w.id}>
+                      {w.name || w.handle} ({shortAddr(w.publicKey)})
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
+
+            <div className="mine-automate-grid">
+              <div className="mine-field">
+                <label htmlFor="pol-round-cap">Max SOL Per Round</label>
+                <input
+                  id="pol-round-cap"
+                  className="mine-modal-input"
+                  value={policyMaxRoundSol}
+                  onChange={(e) => setPolicyMaxRoundSol(e.target.value)}
+                />
+              </div>
+              <div className="mine-field">
+                <label htmlFor="pol-daily-cap">Max Daily Mining SOL</label>
+                <input
+                  id="pol-daily-cap"
+                  className="mine-modal-input"
+                  value={policyMaxDailySol}
+                  onChange={(e) => setPolicyMaxDailySol(e.target.value)}
+                />
+              </div>
             </div>
-            <div className="mine-field">
-              <label htmlFor="pol-daily-cap">Max Daily Mining SOL</label>
-              <input
-                id="pol-daily-cap"
-                className="mine-modal-input"
-                value={policyMaxDailySol}
-                onChange={(e) => setPolicyMaxDailySol(e.target.value)}
-              />
-            </div>
+
             <label className="mine-toggle-row">
               <input
                 type="checkbox"
                 checked={policyAutoClaim}
                 onChange={(e) => setPolicyAutoClaim(e.target.checked)}
               />
-              <span>Permit Semi-Auto unattended claims</span>
+              <span>Auto-reveal &amp; auto-claim rewards</span>
             </label>
             <label className="mine-toggle-row">
               <input
@@ -1573,8 +1552,8 @@ export function MineWorkspace() {
                 onChange={(e) => setPolicyAllowFallbackCrank(e.target.checked)}
               />
               <span>
-                Allow Tier 2 fallback settlement crank (&gt;180s stalled, &le;
-                0.005 SOL/day)
+                Allow fallback settlement crank (&gt;180s stalled, &le; 0.005
+                SOL/day)
               </span>
             </label>
             <label className="mine-toggle-row">
@@ -1587,18 +1566,22 @@ export function MineWorkspace() {
                 Allow Mainnet LV1X (requires verified manifest + BPF ELF pin)
               </span>
             </label>
+
             <div className="mine-modal-actions">
               <button
                 type="button"
                 className="wt-btn-soft"
-                onClick={() => setPolicyOpen(false)}
+                onClick={() => {
+                  setWalletPolicyOpen(false);
+                  navigate("wallets/accounts");
+                }}
               >
-                Cancel
+                Manage Wallets
               </button>
               <button
                 type="button"
                 className="wt-btn-rose-sm"
-                disabled={busy}
+                disabled={busy || !selectedWalletId}
                 onClick={() => void savePolicy()}
               >
                 Save Policy
@@ -1608,18 +1591,16 @@ export function MineWorkspace() {
         </Dialog>
       )}
 
-      {keeperModalOpen && (
+      {automationModalOpen && (
         <Dialog
-          title="Personal Self-Keeper &amp; Signed Manifest"
-          onClose={() => setKeeperModalOpen(false)}
+          title="Mining Tasks & Automation"
+          onClose={() => setAutomationModalOpen(false)}
         >
           <div className="mine-modal-form">
             <div className="wt-hairline-table">
               <div className="wt-hairline-row">
-                <span>Keeper Status</span>
-                <strong>
-                  {selfKeeper?.running ? "Running (Personal Only)" : "Standby"}
-                </strong>
+                <span>Background Automation</span>
+                <strong>{selfKeeper?.running ? "Running" : "Standby"}</strong>
               </div>
               <div className="wt-hairline-row">
                 <span>Pending Reveal / Claims</span>
@@ -1637,36 +1618,102 @@ export function MineWorkspace() {
                 </span>
               </div>
               <div className="wt-hairline-row">
-                <span>Fallback Crank Gas Today</span>
-                <span>
-                  {(
-                    Number(selfKeeper?.fallbackGasUsedLamports ?? "0") / 1e9
-                  ).toFixed(5)}{" "}
-                  / 0.00500 SOL
-                </span>
-              </div>
-              <div className="wt-hairline-row">
-                <span>Pinned Manifest</span>
+                <span>Manifest Pin</span>
                 <span>
                   seq #{manifest?.sequence ?? selfKeeper?.manifestSequence ?? 0}{" "}
                   · {manifest?.status || selfKeeper?.manifestStatus || "pinned"}
                 </span>
               </div>
               <div className="wt-hairline-row">
-                <span>Devnet Program ID</span>
-                <span className="f-mono">
-                  {manifest?.devnetProgramId
-                    ? shortId(manifest.devnetProgramId)
-                    : "Pinned"}
-                </span>
+                <span>Last Run</span>
+                <span>{selfKeeper?.lastSweepSummary || "—"}</span>
               </div>
-              {selfKeeper?.lastSweepSummary && (
-                <div className="wt-hairline-row">
-                  <span>Last Sweep</span>
-                  <span>{selfKeeper.lastSweepSummary}</span>
-                </div>
-              )}
             </div>
+
+            <div className="mine-tasks-drawer-head">
+              <strong>
+                Scheduled Mining Tasks ({activeMiningTaskCount}/
+                {miningTasks.length} active)
+              </strong>
+              <div className="mine-task-actions">
+                <button
+                  type="button"
+                  className="wt-btn-soft"
+                  onClick={() => {
+                    setAutomationModalOpen(false);
+                    openAutomateDialog();
+                  }}
+                >
+                  + New Task
+                </button>
+                <button
+                  type="button"
+                  className="icon-btn"
+                  aria-label="Open Tasks workspace"
+                  title="Open Tasks"
+                  onClick={() => {
+                    setAutomationModalOpen(false);
+                    navigate("tasks");
+                  }}
+                >
+                  <ArrowUpRight size={14} aria-hidden="true" />
+                </button>
+              </div>
+            </div>
+
+            {miningTasks.length === 0 ? (
+              <p className="mine-muted-note">
+                No scheduled mining tasks yet. Create one from your active
+                curve.
+              </p>
+            ) : (
+              <div className="wt-hairline-table">
+                {miningTasks.map((tk) => (
+                  <div key={tk.id} className="wt-hairline-row mine-task-row">
+                    <div className="mine-task-meta">
+                      <span className="mine-task-title">{tk.name}</span>
+                      <span className="mine-muted-note">
+                        {tk.execMode} · {tk.scheduleKind} · {tk.runCount} runs
+                      </span>
+                    </div>
+                    <div className="mine-task-actions">
+                      <span className={`wt-pill ${statusPillTone(tk.status)}`}>
+                        {tk.status}
+                      </span>
+                      <button
+                        type="button"
+                        className="icon-btn"
+                        aria-label={
+                          tk.status === "active"
+                            ? `Pause task ${tk.name}`
+                            : `Activate task ${tk.name}`
+                        }
+                        title={tk.status === "active" ? "Pause" : "Activate"}
+                        disabled={busy}
+                        onClick={() => void handleToggleMiningTask(tk)}
+                      >
+                        {tk.status === "active" ? (
+                          <Pause size={13} aria-hidden="true" />
+                        ) : (
+                          <Play size={13} aria-hidden="true" />
+                        )}
+                      </button>
+                      <button
+                        type="button"
+                        className="icon-btn"
+                        aria-label={`Run task ${tk.name}`}
+                        title="Run once"
+                        disabled={busy}
+                        onClick={() => void handleRunMiningTask(tk)}
+                      >
+                        <Zap size={13} aria-hidden="true" />
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+
             <div className="mine-modal-actions">
               <button
                 type="button"
@@ -1682,7 +1729,7 @@ export function MineWorkspace() {
                 disabled={busy}
                 onClick={() => void handleTriggerSweep()}
               >
-                Sweep Now
+                Run Sweep Now
               </button>
             </div>
           </div>
@@ -1690,10 +1737,7 @@ export function MineWorkspace() {
       )}
 
       {automateOpen && (
-        <Dialog
-          title="Automate Mining Task"
-          onClose={() => setAutomateOpen(false)}
-        >
+        <Dialog title="New Mining Task" onClose={() => setAutomateOpen(false)}>
           <div className="mine-modal-form">
             <div className="mine-field">
               <label htmlFor="mine-auto-name">Task Name</label>

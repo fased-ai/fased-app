@@ -10,13 +10,15 @@ import {
   LineSeries,
   LineStyle,
   createChart,
+  createSeriesMarkers,
   type IChartApi,
   type IPriceLine,
   type ISeriesApi,
+  type SeriesMarker,
+  type Time,
   type UTCTimestamp,
 } from "lightweight-charts";
 import type { CandleBar, RoundTelemetry, StreakEntry } from "../../mining-lv1x";
-import { RotateCcw } from "../../icons";
 import { MineTechnicalsView } from "./MineTechnicalsView";
 
 export type ChartInterval = "10s" | "1m" | "5m" | "10m" | "1h" | "1d";
@@ -40,17 +42,28 @@ interface MineMarketChartProps {
   streak: StreakEntry[];
   crowdWeights: number[];
   userWeightsBps?: number[];
+  plannedSlots?: number[];
   onApplyPresetFromTechnicals?: (weightsBps: number[]) => void;
 }
 
-const INTERVALS: readonly ChartInterval[] = [
-  "10s",
-  "1m",
-  "5m",
-  "10m",
-  "1h",
-  "1d",
+const INTERVALS: readonly [ChartInterval, string][] = [
+  ["10s", "10s"],
+  ["1m", "1m"],
+  ["5m", "5m"],
+  ["10m", "10m"],
+  ["1h", "1h"],
+  ["1d", "1D"],
 ];
+
+const INTERVAL_SECONDS: Record<ChartInterval, number> = {
+  "10s": 10,
+  "1m": 60,
+  "5m": 300,
+  "10m": 600,
+  "1h": 3600,
+  "1d": 86400,
+};
+
 const CHART_MODES: readonly { id: ChartStyleMode; label: string }[] = [
   { id: "candles", label: "Candles" },
   { id: "ha", label: "Heikin Ashi" },
@@ -71,6 +84,367 @@ const RANGE_COLORS = [
   "#2FB88C",
   "#33A9B8",
 ] as const;
+
+const RANGE_TEXT_COLORS = [
+  "var(--wt-danger)",
+  "var(--wt-warn)",
+  "var(--wt-muted)",
+  "var(--wt-ok)",
+  "var(--wt-cyan-text)",
+] as const;
+
+const RANGE_LETTERS = ["A", "B", "C", "D", "E"] as const;
+
+function formatClockTime(ms: number): string {
+  const hm = new Intl.DateTimeFormat(undefined, {
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  }).format(ms);
+  let tz = "";
+  try {
+    tz =
+      new Intl.DateTimeFormat("en-US", { timeZoneName: "short" })
+        .formatToParts(ms)
+        .find((p) => p.type === "timeZoneName")?.value ?? "";
+  } catch {
+    tz = "";
+  }
+  return tz ? `${hm} ${tz}` : hm;
+}
+
+function formatHm(ms: number): string {
+  return new Intl.DateTimeFormat(undefined, {
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  }).format(ms);
+}
+
+function formatPriceUsd(v: number): string {
+  return new Intl.NumberFormat("en-US", {
+    style: "currency",
+    currency: "USD",
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  }).format(v);
+}
+
+function formatVol(v: number): string {
+  if (!Number.isFinite(v) || v <= 0) return "0";
+  if (v >= 1000) return `${(v / 1000).toFixed(2)}k`;
+  if (v >= 10) return v.toFixed(2);
+  if (v >= 1) return v.toFixed(3);
+  return v.toFixed(4);
+}
+
+function formatBarCountdown(sec: number): string {
+  const s = Math.max(0, Math.floor(sec));
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const rem = s % 60;
+  if (h > 0)
+    return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}:${String(rem).padStart(2, "0")}`;
+  return `${String(m).padStart(2, "0")}:${String(rem).padStart(2, "0")}`;
+}
+
+function ChartIcon({
+  kind,
+}: {
+  kind: "clock" | "fx" | "reset" | ChartStyleMode;
+}) {
+  if (kind === "clock") {
+    return (
+      <svg
+        className="rmc-ico"
+        viewBox="0 0 16 16"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        aria-hidden="true"
+      >
+        <circle cx="8" cy="8" r="6" />
+        <path d="M8 4.8V8l2.2 1.4" />
+      </svg>
+    );
+  }
+  if (kind === "fx") {
+    return (
+      <svg
+        className="rmc-ico"
+        viewBox="0 0 16 16"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        aria-hidden="true"
+      >
+        <path d="M2.5 11.5L6 7.5l3 2.5 4.5-5.5" />
+        <path d="M10.5 4.5h3v3" />
+      </svg>
+    );
+  }
+  if (kind === "reset") {
+    return (
+      <svg
+        className="rmc-ico"
+        viewBox="0 0 16 16"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        aria-hidden="true"
+      >
+        <path d="M3 8a5 5 0 1 1 1.4 3.5" />
+        <path d="M3 4.5V8h3.5" />
+      </svg>
+    );
+  }
+  if (kind === "line") {
+    return (
+      <svg
+        className="rmc-ico"
+        viewBox="0 0 16 16"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.6"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        aria-hidden="true"
+      >
+        <path d="M2 11.5l3.5-4 3 2.5L14 4" />
+      </svg>
+    );
+  }
+  if (kind === "baseline") {
+    return (
+      <svg
+        className="rmc-ico"
+        viewBox="0 0 16 16"
+        fill="none"
+        strokeWidth="1.5"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        aria-hidden="true"
+      >
+        <line
+          x1="2"
+          y1="8.5"
+          x2="14"
+          y2="8.5"
+          stroke="currentColor"
+          strokeDasharray="2 2"
+          opacity="0.65"
+        />
+        <path d="M2 11l3-4 2.5 2L11 4.5 14 7" stroke="#2FB88C" />
+      </svg>
+    );
+  }
+  if (kind === "bars") {
+    return (
+      <svg
+        className="rmc-ico"
+        viewBox="0 0 16 16"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.4"
+        strokeLinecap="round"
+        aria-hidden="true"
+      >
+        <path d="M5 3v10M3.2 6H5M5 10h1.8M11 2.5v11M9.2 9.5H11M11 5.5h1.8" />
+      </svg>
+    );
+  }
+  if (kind === "renko") {
+    return (
+      <svg
+        className="rmc-ico"
+        viewBox="0 0 16 16"
+        fill="none"
+        strokeWidth="1.2"
+        aria-hidden="true"
+      >
+        <rect x="2" y="9" width="3.5" height="3.5" rx="0.5" fill="#E0566F" />
+        <rect x="6" y="6" width="3.5" height="3.5" rx="0.5" fill="#2FB88C" />
+        <rect x="10" y="3" width="3.5" height="3.5" rx="0.5" fill="#33A9B8" />
+      </svg>
+    );
+  }
+  if (kind === "pulse") {
+    return (
+      <svg
+        className="rmc-ico"
+        viewBox="0 0 16 16"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.6"
+        strokeLinecap="round"
+        aria-hidden="true"
+      >
+        <path d="M3 13V9M6.3 13V5.5M9.7 13V3.5M13 13V7.5" />
+      </svg>
+    );
+  }
+  if (kind === "technicals") {
+    return (
+      <svg
+        className="rmc-ico"
+        viewBox="0 0 16 16"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinecap="round"
+        aria-hidden="true"
+      >
+        <path d="M2.5 11.5a5.5 5.5 0 0 1 11 0" />
+        <path d="M8 11.5L10.8 7" />
+        <circle cx="8" cy="11.5" r="1.1" fill="currentColor" stroke="none" />
+      </svg>
+    );
+  }
+  if (kind === "hollow") {
+    return (
+      <svg
+        className="rmc-ico"
+        viewBox="0 0 16 16"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.4"
+        strokeLinecap="round"
+        aria-hidden="true"
+      >
+        <path d="M5 2.5v2M5 10.5v3M11 3.5v2M11 11.5v2" />
+        <rect x="3.5" y="4.5" width="3" height="6" rx="0.5" />
+        <rect
+          x="9.5"
+          y="5.5"
+          width="3"
+          height="6"
+          rx="0.5"
+          fill="currentColor"
+        />
+      </svg>
+    );
+  }
+  if (kind === "rounds") {
+    return (
+      <svg
+        className="rmc-ico"
+        viewBox="0 0 16 16"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.4"
+        strokeLinecap="round"
+        aria-hidden="true"
+      >
+        <rect
+          x="2.5"
+          y="4"
+          width="3"
+          height="8"
+          rx="0.7"
+          fill="#E0566F"
+          stroke="#E0566F"
+        />
+        <rect
+          x="6.5"
+          y="6"
+          width="3"
+          height="5"
+          rx="0.7"
+          fill="#6F7889"
+          stroke="#6F7889"
+        />
+        <rect
+          x="10.5"
+          y="3"
+          width="3"
+          height="9"
+          rx="0.7"
+          fill="#2FB88C"
+          stroke="#2FB88C"
+        />
+      </svg>
+    );
+  }
+  return (
+    <svg
+      className="rmc-ico"
+      viewBox="0 0 16 16"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.4"
+      strokeLinecap="round"
+      aria-hidden="true"
+    >
+      <path d="M5 2v2.5M5 10.5V14M11 3v2M11 11v3" />
+      <rect x="3.5" y="4.5" width="3" height="6" rx="0.5" fill="currentColor" />
+      <rect
+        x="9.5"
+        y="5.5"
+        width="3"
+        height="6"
+        rx="0.5"
+        fill={kind === "ha" ? "#2FB88C" : "none"}
+      />
+    </svg>
+  );
+}
+
+function SkewIcon({ skew }: { skew: string }) {
+  const k = skew.toLowerCase();
+  if (k === "bullish") {
+    return (
+      <svg
+        className="rmc-ico"
+        viewBox="0 0 16 16"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.7"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        aria-hidden="true"
+      >
+        <path d="M2.5 11.5 6.5 7.5 9 10l4.5-5" />
+        <path d="M10 5h3.5v3.5" />
+      </svg>
+    );
+  }
+  if (k === "bearish") {
+    return (
+      <svg
+        className="rmc-ico"
+        viewBox="0 0 16 16"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.7"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        aria-hidden="true"
+      >
+        <path d="M2.5 4.5 6.5 8.5 9 6l4.5 5" />
+        <path d="M10 11h3.5V7.5" />
+      </svg>
+    );
+  }
+  return (
+    <svg
+      className="rmc-ico"
+      viewBox="0 0 16 16"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.7"
+      strokeLinecap="round"
+      aria-hidden="true"
+    >
+      <path d="M3 6h10M3 10h10" />
+    </svg>
+  );
+}
 
 function toHeikinAshi(bars: readonly CandleBar[]): CandleBar[] {
   const out: CandleBar[] = [];
@@ -206,15 +580,18 @@ export function MineMarketChart({
   streak,
   crowdWeights,
   userWeightsBps,
+  plannedSlots = [],
   onApplyPresetFromTechnicals,
 }: MineMarketChartProps) {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const topbarRef = useRef<HTMLDivElement | null>(null);
+  const streakStripRef = useRef<HTMLDivElement | null>(null);
   const [styleMode, setStyleMode] = useState<ChartStyleMode>("candles");
   const [openMenu, setOpenMenu] = useState<
     "interval" | "style" | "indicators" | null
   >(null);
   const [showRanges, setShowRanges] = useState(true);
+  const [showOutcomes, setShowOutcomes] = useState(true);
   const [showVolume, setShowVolume] = useState(true);
   const [showEmaCross, setShowEmaCross] = useState(false);
   const [showBollinger, setShowBollinger] = useState(false);
@@ -222,98 +599,167 @@ export function MineMarketChart({
   const [showAtr, setShowAtr] = useState(false);
   const [showRsi, setShowRsi] = useState(false);
   const [themeTick, setThemeTick] = useState(0);
+  const [hoverBar, setHoverBar] = useState<CandleBar | null>(null);
+  const [nowMs, setNowMs] = useState(() => Date.now());
+  const [selectedStreakSlot, setSelectedStreakSlot] = useState<number | null>(
+    null,
+  );
+  const [streakTip, setStreakTip] = useState<{
+    entry: StreakEntry;
+    x: number;
+  } | null>(null);
+
+  useEffect(() => {
+    const id = window.setInterval(() => setNowMs(Date.now()), 1000);
+    return () => window.clearInterval(id);
+  }, []);
 
   useEffect(() => {
     if (!openMenu) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setOpenMenu(null);
-    };
-    const onPointerDown = (e: PointerEvent) => {
+    const onDown = (e: MouseEvent) => {
       if (topbarRef.current && !topbarRef.current.contains(e.target as Node)) {
         setOpenMenu(null);
       }
     };
-    window.addEventListener("keydown", onKey);
-    window.addEventListener("pointerdown", onPointerDown);
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setOpenMenu(null);
+    };
+    document.addEventListener("mousedown", onDown);
+    document.addEventListener("keydown", onKey);
     return () => {
-      window.removeEventListener("keydown", onKey);
-      window.removeEventListener("pointerdown", onPointerDown);
+      document.removeEventListener("mousedown", onDown);
+      document.removeEventListener("keydown", onKey);
     };
   }, [openMenu]);
 
   useEffect(() => {
-    const obs = new MutationObserver(() => setThemeTick((v) => v + 1));
+    const obs = new MutationObserver(() => setThemeTick((t) => t + 1));
     obs.observe(document.documentElement, {
       attributes: true,
-      attributeFilter: ["data-theme", "class"],
+      attributeFilter: ["data-theme"],
     });
     return () => obs.disconnect();
   }, []);
 
   const prepared = useMemo(() => {
-    const dedup = new Map<number, CandleBar>();
-    for (const c of candles) {
-      if (Number.isFinite(c.time) && c.close > 0) {
-        dedup.set(Math.floor(c.time), c);
+    const sorted = [...candles]
+      .filter((c) => Number.isFinite(c.time) && c.close > 0)
+      .sort((a, b) => a.time - b.time);
+    const dedup: CandleBar[] = [];
+    for (const c of sorted) {
+      if (dedup.length === 0 || dedup[dedup.length - 1].time !== c.time) {
+        dedup.push(c);
+      } else {
+        dedup[dedup.length - 1] = c;
       }
     }
-    const base = [...dedup.values()].sort((a, b) => a.time - b.time);
-    if (styleMode === "ha") return toHeikinAshi(base);
-    if (styleMode === "renko") return toRenko(base);
-    return base;
-  }, [candles, styleMode]);
+    return dedup;
+  }, [candles]);
 
   const rsi14 = useMemo(() => computeRSI14(prepared), [prepared]);
   const atrBps = useMemo(() => computeATR10mBps(prepared), [prepared]);
 
   useEffect(() => {
+    if (styleMode === "pulse" || styleMode === "technicals") return;
     const host = hostRef.current;
-    if (
-      !host ||
-      styleMode === "pulse" ||
-      styleMode === "technicals" ||
-      prepared.length === 0
-    ) {
-      return;
-    }
+    if (!host || prepared.length === 0) return;
 
-    const css = getComputedStyle(document.documentElement);
-    const val = (k: string, fb: string) => css.getPropertyValue(k).trim() || fb;
-    const bg = val("--wt-surface", "#0F1218");
-    const text = val("--wt-muted", "#868FA2");
-    const grid = "rgba(148, 163, 184, 0.06)";
+    const isLight =
+      document.documentElement.getAttribute("data-theme") === "light";
+    const bg = isLight ? "#FFFFFF" : "#0F1218";
+    const textCol = isLight ? "#505A6B" : "#868FA2";
+    const gridCol = isLight
+      ? "rgba(16, 24, 40, 0.05)"
+      : "rgba(148, 163, 184, 0.05)";
+    const borderCol = isLight
+      ? "rgba(16, 24, 40, 0.08)"
+      : "rgba(255, 255, 255, 0.06)";
 
     let chart: IChartApi | null = null;
+    const lines: IPriceLine[] = [];
+    let mainSeries: ISeriesApi<any> | null = null;
+
     try {
       chart = createChart(host, {
-        width: Math.max(300, host.clientWidth || 640),
-        height: 290,
+        width: Math.max(260, host.clientWidth || 640),
+        height: Math.max(260, host.clientHeight || 360),
         layout: {
-          background: { type: ColorType.Solid, color: bg },
-          textColor: text,
           attributionLogo: false,
+          background: { type: ColorType.Solid, color: bg },
+          textColor: textCol,
+          fontFamily: "Inter, ui-sans-serif, system-ui, sans-serif",
+          fontSize: 11,
         },
-        grid: { vertLines: { color: grid }, horzLines: { color: grid } },
-        crosshair: { mode: CrosshairMode.Normal },
-        rightPriceScale: { borderColor: grid },
-        timeScale: { borderColor: grid, timeVisible: true },
+        grid: {
+          vertLines: { color: gridCol },
+          horzLines: { color: gridCol },
+        },
+        crosshair: {
+          mode: CrosshairMode.Normal,
+          vertLine: {
+            color: "rgba(134, 143, 162, 0.4)",
+            style: LineStyle.Dashed,
+          },
+          horzLine: {
+            color: "rgba(134, 143, 162, 0.4)",
+            style: LineStyle.Dashed,
+          },
+        },
+        rightPriceScale: { borderColor: borderCol },
+        timeScale: {
+          borderColor: borderCol,
+          timeVisible: true,
+          secondsVisible: interval === "10s",
+        },
       });
 
-      const lines: IPriceLine[] = [];
-      let mainSeries:
-        | ISeriesApi<"Candlestick">
-        | ISeriesApi<"Bar">
-        | ISeriesApi<"Area">
-        | ISeriesApi<"Baseline">
-        | null = null;
+      const barByTime = new Map<number, CandleBar>();
+      for (const b of prepared) barByTime.set(b.time, b);
 
-      if (styleMode === "bars") {
-        const s = chart.addSeries(BarSeries, {
+      const srcBars =
+        styleMode === "ha"
+          ? toHeikinAshi(prepared)
+          : styleMode === "renko"
+            ? toRenko(prepared)
+            : prepared;
+
+      if (styleMode === "line") {
+        mainSeries = chart.addSeries(AreaSeries, {
+          lineColor: "#2FB88C",
+          topColor: "rgba(47, 184, 140, 0.24)",
+          bottomColor: "rgba(47, 184, 140, 0.0)",
+          lineWidth: 2,
+        });
+        mainSeries.setData(
+          srcBars.map((b) => ({
+            time: b.time as UTCTimestamp,
+            value: b.close,
+          })),
+        );
+      } else if (styleMode === "baseline") {
+        const base = round?.openPriceUsd || srcBars[0].open;
+        mainSeries = chart.addSeries(BaselineSeries, {
+          baseValue: { type: "price", price: base },
+          topLineColor: "#2FB88C",
+          topFillColor1: "rgba(47, 184, 140, 0.25)",
+          topFillColor2: "rgba(47, 184, 140, 0.0)",
+          bottomLineColor: "#E0566F",
+          bottomFillColor1: "rgba(224, 86, 111, 0.0)",
+          bottomFillColor2: "rgba(224, 86, 111, 0.25)",
+        });
+        mainSeries.setData(
+          srcBars.map((b) => ({
+            time: b.time as UTCTimestamp,
+            value: b.close,
+          })),
+        );
+      } else if (styleMode === "bars") {
+        mainSeries = chart.addSeries(BarSeries, {
           upColor: "#2FB88C",
           downColor: "#E0566F",
         });
-        s.setData(
-          prepared.map((b) => ({
+        mainSeries.setData(
+          srcBars.map((b) => ({
             time: b.time as UTCTimestamp,
             open: b.open,
             high: b.high,
@@ -321,104 +767,156 @@ export function MineMarketChart({
             close: b.close,
           })),
         );
-        mainSeries = s;
-      } else if (styleMode === "line") {
-        const s = chart.addSeries(AreaSeries, {
-          lineColor: "#33A9B8",
-          topColor: "rgba(51, 169, 184, 0.24)",
-          bottomColor: "rgba(51, 169, 184, 0.0)",
-        });
-        s.setData(
-          prepared.map((b) => ({
-            time: b.time as UTCTimestamp,
-            value: b.close,
-          })),
-        );
-        mainSeries = s;
-      } else if (styleMode === "baseline") {
-        const openRef = round?.openPriceUsd ?? prepared[0].open;
-        const s = chart.addSeries(BaselineSeries, {
-          baseValue: { type: "price", price: openRef },
-          topLineColor: "#2FB88C",
-          bottomLineColor: "#E0566F",
-        });
-        s.setData(
-          prepared.map((b) => ({
-            time: b.time as UTCTimestamp,
-            value: b.close,
-          })),
-        );
-        mainSeries = s;
       } else {
-        const hollow = styleMode === "hollow";
-        const s = chart.addSeries(CandlestickSeries, {
-          upColor: hollow ? "transparent" : "#2FB88C",
+        mainSeries = chart.addSeries(CandlestickSeries, {
+          upColor: styleMode === "hollow" ? "transparent" : "#2FB88C",
           downColor: "#E0566F",
           borderUpColor: "#2FB88C",
           borderDownColor: "#E0566F",
           wickUpColor: "#2FB88C",
           wickDownColor: "#E0566F",
         });
-        s.setData(
-          prepared.map((b) => ({
-            time: b.time as UTCTimestamp,
-            open: b.open,
-            high: b.high,
-            low: b.low,
-            close: b.close,
-          })),
+        mainSeries.setData(
+          srcBars.map((b) => {
+            if (styleMode === "rounds" && typeof b.winningRange === "number") {
+              const col = RANGE_COLORS[b.winningRange] ?? "#6F7889";
+              return {
+                time: b.time as UTCTimestamp,
+                open: b.open,
+                high: b.high,
+                low: b.low,
+                close: b.close,
+                color: col,
+                borderColor: col,
+                wickColor: col,
+              };
+            }
+            return {
+              time: b.time as UTCTimestamp,
+              open: b.open,
+              high: b.high,
+              low: b.low,
+              close: b.close,
+            };
+          }),
         );
-        mainSeries = s;
       }
 
-      if (showRanges && mainSeries && (round?.openPriceUsd ?? 0) > 0) {
-        const open = round!.openPriceUsd;
+      if (showOutcomes && mainSeries && srcBars.length > 4) {
+        const markers: SeriesMarker<Time>[] = [];
+        const step = Math.max(1, Math.floor(srcBars.length / 10));
+        for (let i = step; i < srcBars.length; i += step) {
+          const b = srcBars[i];
+          const prev = srcBars[Math.max(0, i - step)];
+          const bps =
+            prev.open > 0 ? ((b.close - prev.open) / prev.open) * 10_000 : 0;
+          const rIdx =
+            typeof b.winningRange === "number"
+              ? b.winningRange
+              : bps < -(round?.outerBps ?? 20)
+                ? 0
+                : bps < -(round?.innerBps ?? 5)
+                  ? 1
+                  : bps < (round?.innerBps ?? 5)
+                    ? 2
+                    : bps < (round?.outerBps ?? 20)
+                      ? 3
+                      : 4;
+          markers.push({
+            time: b.time as UTCTimestamp,
+            position: "aboveBar",
+            color: RANGE_COLORS[rIdx] ?? "#6F7889",
+            shape: "circle",
+            text: RANGE_LETTERS[rIdx] ?? "C",
+          });
+        }
+        if (markers.length > 0) {
+          try {
+            createSeriesMarkers(mainSeries, markers);
+          } catch {}
+        }
+      }
+
+      if (showRanges && mainSeries) {
+        const openPx = round?.openPriceUsd || srcBars[srcBars.length - 1].open;
         const inner = (round?.innerBps ?? 5) / 10_000;
         const outer = (round?.outerBps ?? 20) / 10_000;
-        const defs: Array<[number, string, string]> = [
-          [open * (1 + outer), `#33A9B8`, `+${round?.outerBps ?? 20}bps`],
-          [open * (1 + inner), `#2FB88C`, `+${round?.innerBps ?? 5}bps`],
-          [open, text, "Open"],
-          [open * (1 - inner), `#D98466`, `-${round?.innerBps ?? 5}bps`],
-          [open * (1 - outer), `#E0566F`, `-${round?.outerBps ?? 20}bps`],
+        const defs: Array<{
+          price: number;
+          color: string;
+          title: string;
+          showLabel: boolean;
+        }> = [
+          {
+            price: openPx * (1 + outer),
+            color: "rgba(51, 169, 184, 0.55)",
+            title: "",
+            showLabel: false,
+          },
+          {
+            price: openPx * (1 + inner),
+            color: "rgba(47, 184, 140, 0.55)",
+            title: "",
+            showLabel: false,
+          },
+          {
+            price: openPx,
+            color: "#868FA2",
+            title: "Open",
+            showLabel: true,
+          },
+          {
+            price: openPx * (1 - inner),
+            color: "rgba(217, 132, 102, 0.55)",
+            title: "",
+            showLabel: false,
+          },
+          {
+            price: openPx * (1 - outer),
+            color: "rgba(224, 86, 111, 0.55)",
+            title: "",
+            showLabel: false,
+          },
         ];
-        for (const [priceVal, col, title] of defs) {
+        for (const d of defs) {
           lines.push(
             mainSeries.createPriceLine({
-              price: priceVal,
-              color: col,
+              price: d.price,
+              color: d.color,
               lineWidth: 1,
-              lineStyle: LineStyle.Dashed,
-              axisLabelVisible: true,
-              title,
+              lineStyle: LineStyle.Dotted,
+              axisLabelVisible: d.showLabel,
+              title: d.title,
             }),
           );
         }
       }
 
       if (showVolume) {
-        const vs = chart.addSeries(HistogramSeries, {
+        const volSeries = chart.addSeries(HistogramSeries, {
           priceFormat: { type: "volume" },
-          priceScaleId: "",
+          priceScaleId: "vol",
+          lastValueVisible: false,
+          priceLineVisible: false,
         });
-        vs.priceScale().applyOptions({
+        chart.priceScale("vol").applyOptions({
           scaleMargins: { top: 0.82, bottom: 0 },
         });
-        vs.setData(
+        volSeries.setData(
           prepared.map((b) => ({
             time: b.time as UTCTimestamp,
-            value: b.volume,
+            value: b.volume || 1,
             color:
               b.close >= b.open
-                ? "rgba(47, 184, 140, 0.28)"
-                : "rgba(224, 86, 111, 0.28)",
+                ? "rgba(47, 184, 140, 0.25)"
+                : "rgba(224, 86, 111, 0.25)",
           })),
         );
       }
 
       if (showEmaCross) {
         const f = chart.addSeries(LineSeries, {
-          color: "#33A9B8",
+          color: "#2FB88C",
           lineWidth: 1,
         });
         f.setData(computeEMA(prepared, 9));
@@ -447,11 +945,20 @@ export function MineMarketChart({
 
       if (showVwap) {
         const vw = chart.addSeries(LineSeries, {
-          color: "#D98466",
+          color: "#D4A24C",
           lineWidth: 1,
         });
         vw.setData(computeVWAP(prepared));
       }
+
+      chart.subscribeCrosshairMove((param) => {
+        if (!param.time || typeof param.time !== "number") {
+          setHoverBar(null);
+          return;
+        }
+        const hit = barByTime.get(param.time);
+        setHoverBar(hit ?? null);
+      });
 
       chart.timeScale().fitContent();
 
@@ -481,7 +988,9 @@ export function MineMarketChart({
   }, [
     prepared,
     styleMode,
+    interval,
     showRanges,
+    showOutcomes,
     showVolume,
     showEmaCross,
     showBollinger,
@@ -493,56 +1002,69 @@ export function MineMarketChart({
   ]);
 
   const lastBar = prepared[prepared.length - 1];
-  const openUsd = round?.openPriceUsd ?? lastBar?.open ?? 94250;
-  const markUsd = round?.markPriceUsd ?? lastBar?.close ?? 94265;
+  const legendBar = hoverBar ?? lastBar;
+  const markUsd =
+    hoverBar?.close ?? round?.markPriceUsd ?? lastBar?.close ?? 94265;
   const moveBps = round?.moveBps ?? 0;
   const activeStyleLabel =
     CHART_MODES.find((m) => m.id === styleMode)?.label ?? "Candles";
-  const indicatorList: Array<{
-    key: string;
-    label: string;
-    active: boolean;
-    toggle: () => void;
-  }> = [
+  const activeIntervalLabel =
+    INTERVALS.find(([k]) => k === interval)?.[1] ?? interval;
+
+  const indicatorList = [
     {
       key: "ranges",
-      label: "Ranges",
+      label: "Range Lines",
+      color: "#2FB88C",
       active: showRanges,
       toggle: () => setShowRanges((v) => !v),
     },
     {
+      key: "outcomes",
+      label: "Round Outcomes",
+      color: "#33A9B8",
+      active: showOutcomes,
+      toggle: () => setShowOutcomes((v) => !v),
+    },
+    {
       key: "volume",
       label: "Volume",
+      color: "#6F7889",
       active: showVolume,
       toggle: () => setShowVolume((v) => !v),
     },
     {
       key: "ema",
-      label: "EMA 9/21",
+      label: "EMA 9 / 21",
+      color: "#2FB88C",
       active: showEmaCross,
       toggle: () => setShowEmaCross((v) => !v),
     },
     {
       key: "bb",
-      label: "Bollinger",
+      label: "Bollinger Bands",
+      color: "#868FA2",
       active: showBollinger,
       toggle: () => setShowBollinger((v) => !v),
     },
     {
       key: "vwap",
       label: "VWAP",
+      color: "#D4A24C",
       active: showVwap,
       toggle: () => setShowVwap((v) => !v),
     },
     {
       key: "atr",
-      label: "ATR 10m",
+      label: "Avg 10m Move",
+      color: "#D4A24C",
       active: showAtr,
       toggle: () => setShowAtr((v) => !v),
     },
     {
       key: "rsi",
       label: "RSI (14)",
+      color: "#33A9B8",
       active: showRsi,
       toggle: () => setShowRsi((v) => !v),
     },
@@ -565,21 +1087,77 @@ export function MineMarketChart({
             : 4;
   const pulseNeedlePct = ((winIdx + 0.5) / 5) * 100;
 
+  // Derive historical range hit distribution from streak (fallback to crowdWeights).
+  const pulseBucketPcts = useMemo(() => {
+    if (streak.length >= 5) {
+      const counts = [0, 0, 0, 0, 0];
+      for (const s of streak.slice(0, 24)) {
+        if (s.winningRange >= 0 && s.winningRange < 5) {
+          counts[s.winningRange]++;
+        }
+      }
+      const total = counts.reduce((a, b) => a + b, 0);
+      if (total > 0) return counts.map((c) => (c / total) * 100);
+    }
+    return crowdWeights.map((w) => w / 100);
+  }, [streak, crowdWeights]);
+
+  const pulseSkew = useMemo(() => {
+    const bull = pulseBucketPcts[3] + pulseBucketPcts[4];
+    const bear = pulseBucketPcts[0] + pulseBucketPcts[1];
+    if (bull - bear > 6) return "Bullish";
+    if (bear - bull > 6) return "Bearish";
+    return "Balanced";
+  }, [pulseBucketPcts]);
+
+  const pulseToWeights = () => {
+    const total = pulseBucketPcts.reduce((a, b) => a + b, 0);
+    if (total <= 0) return [2000, 2000, 2000, 2000, 2000];
+    const raw = pulseBucketPcts.map((p) => Math.round((p / total) * 100) * 100);
+    const diff = 10000 - raw.reduce((a, b) => a + b, 0);
+    raw[2] = Math.max(0, raw[2] + diff);
+    return raw;
+  };
+
+  const ivSec = INTERVAL_SECONDS[interval] ?? 60;
+  const barSecLeft = ivSec - (Math.floor(nowMs / 1000) % ivSec);
+  const clockLabel = formatClockTime(nowMs);
+
+  const showTip = (entry: StreakEntry, el: HTMLElement) => {
+    const strip = streakStripRef.current;
+    if (!strip) return;
+    const sRect = strip.getBoundingClientRect();
+    const cRect = el.getBoundingClientRect();
+    const rawX = cRect.left - sRect.left + cRect.width / 2;
+    const x = Math.max(76, Math.min(Math.max(76, sRect.width - 76), rawX));
+    setStreakTip({ entry, x });
+  };
+
   return (
-    <div className="wt-wpanel retail-market-chart mine-chart-card">
+    <section
+      className="retail-market-chart mine-chart-card"
+      aria-label="BTC USD chart"
+    >
       <div className="rmc-tv-topbar" ref={topbarRef}>
-        <div className="rmc-tv-tools">
+        <div
+          className="rmc-tv-tools"
+          role="toolbar"
+          aria-label="Chart controls"
+        >
           <div className="rmc-dd-wrap">
             <button
               type="button"
               className={`rmc-dd-trigger${openMenu === "interval" ? " is-open" : ""}`}
               aria-label="Chart timeframe"
+              aria-haspopup="menu"
               aria-expanded={openMenu === "interval"}
+              title={`Timeframe: ${activeIntervalLabel}`}
               onClick={() =>
                 setOpenMenu((v) => (v === "interval" ? null : "interval"))
               }
             >
-              <span>{interval}</span>
+              <ChartIcon kind="clock" />
+              <span>{activeIntervalLabel}</span>
               <i className="rmc-dd-caret" aria-hidden="true">
                 ▾
               </i>
@@ -590,7 +1168,7 @@ export function MineMarketChart({
                 role="group"
                 aria-label="Chart timeframe options"
               >
-                {INTERVALS.map((iv) => (
+                {INTERVALS.map(([iv, lbl]) => (
                   <button
                     key={iv}
                     type="button"
@@ -601,7 +1179,7 @@ export function MineMarketChart({
                       setOpenMenu(null);
                     }}
                   >
-                    {iv}
+                    {lbl}
                   </button>
                 ))}
               </div>
@@ -613,12 +1191,14 @@ export function MineMarketChart({
               type="button"
               className={`rmc-dd-trigger${openMenu === "style" ? " is-open" : ""}`}
               aria-label="Chart style"
+              aria-haspopup="menu"
               aria-expanded={openMenu === "style"}
+              title={`Chart style: ${activeStyleLabel}`}
               onClick={() =>
                 setOpenMenu((v) => (v === "style" ? null : "style"))
               }
             >
-              <span>{activeStyleLabel}</span>
+              <ChartIcon kind={styleMode} />
               <i className="rmc-dd-caret" aria-hidden="true">
                 ▾
               </i>
@@ -640,6 +1220,7 @@ export function MineMarketChart({
                       setOpenMenu(null);
                     }}
                   >
+                    <ChartIcon kind={m.id} />
                     <span className="rmc-dd-label">{m.label}</span>
                   </button>
                 ))}
@@ -647,94 +1228,94 @@ export function MineMarketChart({
             )}
           </div>
 
-          <div className="rmc-dd-wrap">
-            <button
-              type="button"
-              className={`rmc-dd-trigger${activeIndicatorCount > 0 ? " has-active" : ""}${openMenu === "indicators" ? " is-open" : ""}`}
-              aria-label="Chart indicators"
-              aria-expanded={openMenu === "indicators"}
-              onClick={() =>
-                setOpenMenu((v) => (v === "indicators" ? null : "indicators"))
-              }
-            >
-              <span>Indicators</span>
-              {activeIndicatorCount > 0 && (
-                <i className="rmc-dd-badge">{activeIndicatorCount}</i>
-              )}
-              <i className="rmc-dd-caret" aria-hidden="true">
-                ▾
-              </i>
-            </button>
-            {openMenu === "indicators" && (
-              <div
-                className="rmc-dd-menu"
-                role="group"
-                aria-label="Chart indicator toggles"
-              >
-                {indicatorList.map((ind) => (
-                  <button
-                    key={ind.key}
-                    type="button"
-                    className={`rmc-dd-item${ind.active ? " is-selected" : ""}`}
-                    aria-pressed={ind.active}
-                    onClick={ind.toggle}
+          {styleMode !== "pulse" && styleMode !== "technicals" && (
+            <>
+              <div className="rmc-dd-wrap">
+                <button
+                  type="button"
+                  className={`rmc-dd-trigger${activeIndicatorCount > 0 ? " has-active" : ""}${openMenu === "indicators" ? " is-open" : ""}`}
+                  aria-label="Chart indicators"
+                  aria-haspopup="menu"
+                  aria-expanded={openMenu === "indicators"}
+                  title={`Indicators (${activeIndicatorCount})`}
+                  onClick={() =>
+                    setOpenMenu((v) =>
+                      v === "indicators" ? null : "indicators",
+                    )
+                  }
+                >
+                  <ChartIcon kind="fx" />
+                  {activeIndicatorCount > 0 && (
+                    <em className="rmc-dd-badge">{activeIndicatorCount}</em>
+                  )}
+                  <i className="rmc-dd-caret" aria-hidden="true">
+                    ▾
+                  </i>
+                </button>
+                {openMenu === "indicators" && (
+                  <div
+                    className="rmc-dd-menu"
+                    role="group"
+                    aria-label="Chart indicator toggles"
                   >
-                    <span className="rmc-dd-check">
-                      {ind.active ? "✓" : ""}
-                    </span>
-                    <span className="rmc-dd-label">{ind.label}</span>
-                  </button>
-                ))}
+                    {indicatorList.map((ind) => (
+                      <button
+                        key={ind.key}
+                        type="button"
+                        className={`rmc-dd-item${ind.active ? " is-selected" : ""}`}
+                        aria-pressed={ind.active}
+                        onClick={ind.toggle}
+                      >
+                        <span
+                          className="rmc-dd-check"
+                          style={{
+                            borderColor: ind.active ? ind.color : undefined,
+                            color: ind.active ? ind.color : undefined,
+                          }}
+                        >
+                          {ind.active ? "✓" : ""}
+                        </span>
+                        <span className="rmc-dd-label">{ind.label}</span>
+                      </button>
+                    ))}
+                  </div>
+                )}
               </div>
-            )}
-          </div>
 
-          <button
-            type="button"
-            className="rmc-dd-trigger rmc-reset-btn"
-            aria-label="Reset chart"
-            title="Reset chart defaults"
-            onClick={() => {
-              setStyleMode("candles");
-              setShowRanges(true);
-              setShowVolume(true);
-              setShowEmaCross(false);
-              setShowBollinger(false);
-              setShowVwap(false);
-              setShowAtr(false);
-              setShowRsi(false);
-              setOpenMenu(null);
-            }}
-          >
-            <RotateCcw size={13} aria-hidden="true" />
-          </button>
+              <button
+                type="button"
+                className="rmc-dd-trigger rmc-reset-btn"
+                aria-label="Reset chart"
+                title="Reset chart defaults"
+                onClick={() => {
+                  setStyleMode("candles");
+                  setShowRanges(true);
+                  setShowOutcomes(true);
+                  setShowVolume(true);
+                  setShowEmaCross(false);
+                  setShowBollinger(false);
+                  setShowVwap(false);
+                  setShowAtr(false);
+                  setShowRsi(false);
+                  setOpenMenu(null);
+                }}
+              >
+                <ChartIcon kind="reset" />
+              </button>
+            </>
+          )}
         </div>
 
         <div className="rmc-tv-head-right">
-          {showAtr && atrBps !== null && (
-            <span className="mine-ind-readout">
-              ATR {atrBps.toFixed(1)} bps
-            </span>
-          )}
-          {showRsi && rsi14 !== null && (
-            <span className="mine-ind-readout">RSI(14) {rsi14.toFixed(1)}</span>
-          )}
           <div className="rmc-quote">
-            <span className="rmc-price">
-              ${markUsd.toLocaleString("en-US", { maximumFractionDigits: 2 })}
-            </span>
-            <span className={moveBps >= 0 ? "rmc-positive" : "rmc-negative"}>
-              {moveBps >= 0 ? "+" : ""}
-              {moveBps} bps
+            <strong className="rmc-price">{formatPriceUsd(markUsd)}</strong>
+          </div>
+          <div className="rmc-meta">
+            <span className="rmc-live">
+              <i aria-hidden="true" />
+              <span>{clockLabel}</span>
             </span>
           </div>
-          <span className="rmc-live">
-            <i aria-hidden="true" />
-            <span>
-              Open $
-              {openUsd.toLocaleString("en-US", { maximumFractionDigits: 0 })}
-            </span>
-          </span>
         </div>
       </div>
 
@@ -742,29 +1323,23 @@ export function MineMarketChart({
         <div className="rmc-pulse" aria-label="Range pulse histogram">
           <div className="rmc-pulse-head">
             <div className="rmc-pulse-badges">
-              <span
-                className={`rmc-regime ${moveBps > 5 ? "is-bullish" : moveBps < -5 ? "is-bearish" : "is-balanced"}`}
-              >
-                {moveBps > 5
-                  ? "Bullish"
-                  : moveBps < -5
-                    ? "Bearish"
-                    : "Balanced"}
+              <span className={`rmc-regime is-${pulseSkew.toLowerCase()}`}>
+                {pulseSkew}
               </span>
               <span className="rmc-edge-legend">
                 <i className="is-hit" aria-hidden="true" />
-                <span>Crowd %</span>
+                <span>Hit rate</span>
                 <i className="is-curve" aria-hidden="true" />
-                <span>Your curve %</span>
+                <span>Your curve</span>
               </span>
             </div>
             {onApplyPresetFromTechnicals && (
               <button
                 type="button"
                 className="rmc-pulse-apply"
-                onClick={() => onApplyPresetFromTechnicals(crowdWeights)}
+                onClick={() => onApplyPresetFromTechnicals(pulseToWeights())}
               >
-                Apply Crowd Curve
+                Apply
               </button>
             )}
           </div>
@@ -780,15 +1355,15 @@ export function MineMarketChart({
             >
               <span className="rmc-meter-tag">
                 {moveBps >= 0 ? "+" : ""}
-                {moveBps} bps
+                {(moveBps / 100).toFixed(2)}% · {RANGE_LETTERS[winIdx]}
               </span>
               <span className="rmc-meter-line" />
             </div>
             <div className="rmc-meter-bars">
-              {["A", "B", "C", "D", "E"].map((code, rIdx) => {
-                const crowdPct = (crowdWeights[rIdx] ?? 2000) / 100;
+              {RANGE_LETTERS.map((code, rIdx) => {
+                const hitPct = pulseBucketPcts[rIdx] ?? 20;
                 const userPct = (pulseWeights[rIdx] ?? 2000) / 100;
-                const fillH = Math.min(100, Math.max(6, crowdPct * 2.2));
+                const fillH = Math.min(100, Math.max(6, hitPct * 2.2));
                 const ghostH = Math.min(100, Math.max(4, userPct * 2.2));
                 return (
                   <div
@@ -822,24 +1397,31 @@ export function MineMarketChart({
             </div>
           </div>
           <div className="rmc-meter-axis">
-            {["A", "B", "C", "D", "E"].map((code, idx) => {
-              const b = round?.buckets?.[idx];
-              const crowdPct = (crowdWeights[idx] ?? 2000) / 100;
+            {RANGE_LETTERS.map((code, idx) => {
+              const hitPct = pulseBucketPcts[idx] ?? 20;
+              const userPct = (pulseWeights[idx] ?? 2000) / 100;
+              const delta = Math.round(hitPct - userPct);
               return (
                 <div
                   key={code}
                   className={`rmc-meter-col${idx === winIdx ? " is-current" : ""}`}
                 >
                   <div className="rmc-meter-col-top">
-                    <strong style={{ color: RANGE_COLORS[idx] }}>{code}</strong>
+                    <strong style={{ color: RANGE_TEXT_COLORS[idx] }}>
+                      {code}
+                    </strong>
                     <span className="rmc-pulse-pct">
-                      {crowdPct.toFixed(0)}%{" "}
-                      <em>{b ? `${b.evMultiple.toFixed(2)}×` : "—"}</em>
+                      {hitPct.toFixed(0)}%{" "}
+                      <em
+                        className={
+                          delta > 3 ? "is-pos" : delta < -3 ? "is-neg" : ""
+                        }
+                      >
+                        {delta > 0 ? `+${delta}` : `${delta}`}
+                      </em>
                     </span>
                   </div>
-                  <small>
-                    Your {((pulseWeights[idx] ?? 2000) / 100).toFixed(0)}%
-                  </small>
+                  <small>Your {userPct.toFixed(0)}%</small>
                 </div>
               );
             })}
@@ -848,46 +1430,234 @@ export function MineMarketChart({
       ) : styleMode === "technicals" ? (
         <MineTechnicalsView
           bars={prepared}
-          intervalLabel={interval}
+          intervalLabel={activeIntervalLabel}
           onApplyCurve={onApplyPresetFromTechnicals}
         />
       ) : (
-        <div
-          ref={hostRef}
-          className="mine-tv-host"
-          aria-label="BTC USD mining chart"
-        />
+        <div className="rmc-tv-wrap">
+          {legendBar && (
+            <div className="rmc-tv-ohlc" aria-hidden="true">
+              <span>
+                O <em>{formatPriceUsd(legendBar.open)}</em>
+              </span>
+              <span>
+                H <em>{formatPriceUsd(legendBar.high)}</em>
+              </span>
+              <span>
+                L <em>{formatPriceUsd(legendBar.low)}</em>
+              </span>
+              <span>
+                C <em>{formatPriceUsd(legendBar.close)}</em>
+              </span>
+              {showVolume && legendBar.volume > 0 && (
+                <span className="rmc-vol-stat">
+                  Vol <em>{formatVol(legendBar.volume)} BTC</em>
+                </span>
+              )}
+              {showEmaCross && (
+                <span className="rmc-ind-tag" style={{ color: "#2FB88C" }}>
+                  EMA 9/21
+                </span>
+              )}
+              {showBollinger && (
+                <span className="rmc-ind-tag" style={{ color: "#868FA2" }}>
+                  BB
+                </span>
+              )}
+              {showVwap && (
+                <span className="rmc-ind-tag" style={{ color: "#D4A24C" }}>
+                  VWAP
+                </span>
+              )}
+              {showAtr && atrBps !== null && (
+                <span className="rmc-ind-tag" style={{ color: "#D4A24C" }}>
+                  Avg 10m {(atrBps / 100).toFixed(2)}%
+                </span>
+              )}
+              {showRsi && rsi14 !== null && (
+                <span className="rmc-ind-tag" style={{ color: "#33A9B8" }}>
+                  RSI {rsi14.toFixed(1)}
+                </span>
+              )}
+            </div>
+          )}
+          <div
+            ref={hostRef}
+            className="rmc-tv-canvas"
+            aria-label="BTC USD mining chart"
+          />
+          {plannedSlots.length > 0 && (
+            <div className="rmc-tv-bottom-pills">
+              <span className="rmc-planned-pill">
+                <i>•</i> Planned: #{plannedSlots[0]}
+                {plannedSlots.length > 1
+                  ? ` (+${plannedSlots.length - 1})`
+                  : ""}
+              </span>
+            </div>
+          )}
+          <div className="rmc-tv-countdown" aria-hidden="true">
+            <small>{activeIntervalLabel.toUpperCase()}</small>
+            <b>{formatBarCountdown(barSecLeft)}</b>
+          </div>
+        </div>
       )}
 
-      <div className="mine-streak-foot">
-        <div className="mine-section-head">
-          <h2>24-Round Streak</h2>
-          <span className="mine-muted-note">
-            Pool {round ? `${round.totalPoolSol.toFixed(2)} SOL` : "0.00 SOL"} ·{" "}
-            {round?.minerCount ?? 0} miners
-          </span>
-        </div>
+      {styleMode !== "pulse" && styleMode !== "technicals" && (
         <div
-          className="mine-streak-grid"
-          role="list"
-          aria-label="24-round streak"
+          className="rmc-sentiment-footer"
+          aria-label="Recent round distribution and outcomes"
         >
-          {streak.slice(0, 24).map((entry) => (
-            <div
-              key={entry.roundSlot}
-              role="listitem"
-              className={`mine-streak-chip range-${entry.winningRange}`}
-              title={`#${entry.roundSlot} · Range ${entry.code} · ${entry.moveBps >= 0 ? "+" : ""}${entry.moveBps} bps`}
-            >
-              <span>{entry.code}</span>
-              <small>
-                {entry.moveBps >= 0 ? "+" : ""}
-                {entry.moveBps}
-              </small>
+          <div className="rmc-sentiment-row">
+            <div className="rmc-sentiment-tags">
+              <span
+                className={`rmc-regime rmc-regime-icon is-${pulseSkew.toLowerCase()}`}
+                role="img"
+                aria-label={pulseSkew}
+                title={pulseSkew}
+              >
+                <SkewIcon skew={pulseSkew} />
+              </span>
             </div>
-          ))}
+            <div
+              className="rmc-inline-meter"
+              role="img"
+              aria-label={RANGE_LETTERS.map(
+                (l, i) => `${l} ${Math.round(pulseBucketPcts[i] ?? 0)}%`,
+              ).join(", ")}
+            >
+              <div className="rmc-inline-bars">
+                {RANGE_LETTERS.map((letter, rIdx) => {
+                  const pct = pulseBucketPcts[rIdx] ?? 0;
+                  const maxP = Math.max(...pulseBucketPcts, 1);
+                  const baseH = (pct / maxP) * 100;
+                  return (
+                    <div
+                      key={letter}
+                      className={`rmc-inline-group${winIdx === rIdx ? " is-current" : ""}`}
+                      title={`${letter} ${pct.toFixed(1)}%`}
+                    >
+                      {Array.from({ length: 6 }, (_, bIdx) => {
+                        const taper =
+                          0.78 + 0.32 * Math.sin(((bIdx + 0.5) / 6) * Math.PI);
+                        const h = Math.min(100, baseH * taper);
+                        return (
+                          <i
+                            key={bIdx}
+                            style={{
+                              height: `${Math.max(h > 0 ? 10 : 0, h)}%`,
+                              background: RANGE_COLORS[rIdx],
+                            }}
+                          />
+                        );
+                      })}
+                    </div>
+                  );
+                })}
+              </div>
+              <i
+                className="rmc-inline-needle"
+                style={{
+                  left: `${Math.max(2, Math.min(98, pulseNeedlePct))}%`,
+                }}
+                aria-hidden="true"
+              />
+            </div>
+            <div className="rmc-inline-stats">
+              {RANGE_LETTERS.map((letter, rIdx) => (
+                <span
+                  key={letter}
+                  className={winIdx === rIdx ? "is-current" : undefined}
+                >
+                  <b style={{ color: RANGE_TEXT_COLORS[rIdx] }}>{letter}</b>{" "}
+                  {Math.round(pulseBucketPcts[rIdx] ?? 0)}%
+                </span>
+              ))}
+            </div>
+            {onApplyPresetFromTechnicals && (
+              <button
+                type="button"
+                className="rmc-sentiment-apply"
+                title="Match curve to recent round distribution"
+                onClick={() => onApplyPresetFromTechnicals(pulseToWeights())}
+              >
+                Apply
+              </button>
+            )}
+          </div>
+
+          {streak.length > 0 && (
+            <div className="rmc-streak-strip" ref={streakStripRef}>
+              {streakTip && (
+                <div
+                  className="rmc-streak-tip"
+                  role="tooltip"
+                  style={{ left: `${streakTip.x}px` }}
+                >
+                  <span className="rmc-muted">
+                    #{streakTip.entry.roundSlot}
+                    {streakTip.entry.settledAt > 0
+                      ? ` · ${formatHm((streakTip.entry.settledAt - 600) * 1000)}–${formatHm(streakTip.entry.settledAt * 1000)}`
+                      : ""}
+                  </span>
+                  <b
+                    style={{
+                      color:
+                        RANGE_TEXT_COLORS[streakTip.entry.winningRange] ??
+                        "var(--wt-muted)",
+                    }}
+                  >
+                    {streakTip.entry.code} (
+                    {streakTip.entry.moveBps >= 0 ? "+" : ""}
+                    {(streakTip.entry.moveBps / 100).toFixed(2)}%)
+                  </b>
+                </div>
+              )}
+              <div
+                className="rmc-streak-cells"
+                role="group"
+                aria-label="Recent round outcomes"
+              >
+                {streak.slice(0, 24).map((entry) => {
+                  const isSelected = selectedStreakSlot === entry.roundSlot;
+                  const accent =
+                    RANGE_TEXT_COLORS[entry.winningRange] ?? "var(--wt-muted)";
+                  return (
+                    <button
+                      key={entry.roundSlot}
+                      type="button"
+                      className={`rmc-streak-cell${isSelected ? " is-selected" : ""}${entry.userStaked ? " is-user" : ""}`}
+                      aria-pressed={isSelected}
+                      style={{ color: accent }}
+                      aria-label={`Round #${entry.roundSlot} ${entry.code} (${entry.moveBps >= 0 ? "+" : ""}${(entry.moveBps / 100).toFixed(2)}%)`}
+                      onMouseEnter={(e) => showTip(entry, e.currentTarget)}
+                      onFocus={(e) => showTip(entry, e.currentTarget)}
+                      onMouseLeave={() => setStreakTip(null)}
+                      onBlur={() => setStreakTip(null)}
+                      onClick={() =>
+                        setSelectedStreakSlot((cur) =>
+                          cur === entry.roundSlot ? null : entry.roundSlot,
+                        )
+                      }
+                    >
+                      {entry.code}
+                    </button>
+                  );
+                })}
+              </div>
+              {selectedStreakSlot !== null && (
+                <button
+                  type="button"
+                  className="rmc-streak-clear"
+                  onClick={() => setSelectedStreakSlot(null)}
+                >
+                  Live
+                </button>
+              )}
+            </div>
+          )}
         </div>
-      </div>
-    </div>
+      )}
+    </section>
   );
 }

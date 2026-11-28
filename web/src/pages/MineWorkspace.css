@@ -1,88 +1,91 @@
-/* WEN Muted Pro Mine Terminal (#mine/*) — zero hardcoded hex/rgb values */
+/* WEN Muted Pro Mine Terminal (#mine/*) — 1:1 WEN parity, zero hardcoded hex/rgb values */
 
 .mine-shell {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 8px;
   min-width: 0;
   font-variant-numeric: tabular-nums;
 }
 
+.mine-shell.is-mine-terminal {
+  gap: 0;
+  flex: 1 1 auto;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* Compact borderless subheader */
 .mine-topbar {
+  flex: none;
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
+  min-height: 38px;
+  padding: 4px 12px;
+  border-bottom: 1px solid var(--wt-border);
+  background: var(--wt-bg);
 }
 
 .mine-title-row {
   display: flex;
-  flex-wrap: wrap;
   align-items: center;
-  gap: 8px;
+  gap: 10px;
   min-width: 0;
-}
-
-.mine-title-row h1 {
-  margin: 0;
-  font-size: 1.05rem;
-  font-weight: 600;
-  color: var(--wt-text);
 }
 
 .mine-subnav {
   display: flex;
-  flex-wrap: wrap;
   align-items: center;
-  gap: 4px;
+  gap: 2px;
 }
 
-.mine-cluster-seg {
-  min-width: 148px;
-}
-
-.mine-meta-row {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 6px;
-}
-
-.mine-stat-pill {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
+:root.wt button.mine-subnav-tab {
   min-height: 28px;
-  padding: 4px 9px;
-  border-radius: 7px;
-  background: var(--wt-surface);
-  color: var(--wt-text-2);
-  font-size: 12px;
-  white-space: nowrap;
+  padding: 4px 10px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--wt-muted);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
 }
 
-.mine-stat-pill strong {
+:root.wt button.mine-subnav-tab:hover {
+  color: var(--wt-text);
+  background: var(--wt-raised);
+}
+
+:root.wt button.mine-subnav-tab.is-active {
   color: var(--wt-text);
   font-weight: 600;
+  background: var(--wt-raised);
 }
 
-.mine-stat-pill.is-up,
-.is-pos {
-  color: var(--wt-ok);
-}
-
-.mine-stat-pill.is-down,
-.is-neg {
-  color: var(--wt-danger);
-}
-
-.mine-stat-pill.is-locked {
+.mine-devnet-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--wt-warn-fill) 16%, transparent);
   color: var(--wt-warn);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
 }
 
-.mine-awake-pill,
-.mine-keeper-pill.is-running {
+.mine-top-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.mine-awake-pill {
   display: inline-flex;
   align-items: center;
   gap: 5px;
@@ -96,346 +99,426 @@
   white-space: nowrap;
 }
 
-.mine-asset-icon {
-  width: 22px;
-  height: 22px;
+:root.wt button.mine-icon-pill {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  min-width: 30px;
+  height: 28px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 7px;
+  background: var(--wt-surface);
+  color: var(--wt-muted);
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+:root.wt button.mine-icon-pill:hover {
+  background: var(--wt-raised);
+  color: var(--wt-text);
+}
+
+:root.wt button.mine-icon-pill.is-active {
+  color: var(--wt-text);
+}
+
+.mine-icon-dot {
+  width: 6px;
+  height: 6px;
   border-radius: 50%;
+  background: var(--wt-ok-fill);
   flex: none;
 }
 
-.mine-amount-box {
-  display: flex;
+.mine-icon-count {
+  font-style: normal;
+  font-size: 11px;
+  color: var(--wt-text-2);
+}
+
+:root.wt button.mine-wallet-pill {
+  display: inline-flex;
   align-items: center;
-  gap: 8px;
-  padding: 6px 10px;
-  border-radius: var(--radius-xs);
+  gap: 6px;
+  height: 28px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 7px;
+  background: var(--wt-surface);
+  color: var(--wt-text);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+:root.wt button.mine-wallet-pill:hover {
   background: var(--wt-raised);
 }
 
-.mine-amount-box:focus-within {
-  box-shadow: 0 0 0 1.5px var(--wt-accent);
+.mine-wallet-addr {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11.5px;
+  color: var(--wt-text);
 }
 
-.mine-amount-icon {
-  width: 18px;
-  height: 18px;
-  flex: none;
-}
-
-.mine-amount-box .mine-amount-input {
-  flex: 1 1 auto;
-  min-width: 0;
-  padding: 2px 0;
-  background: transparent;
-  font-size: 24px;
-  font-weight: 650;
-  letter-spacing: -0.02em;
-  font-variant-numeric: tabular-nums;
-}
-
-.mine-amount-unit {
-  font-size: 12px;
-  font-weight: 600;
+.mine-wallet-bal {
   color: var(--wt-muted);
+  font-size: 11.5px;
 }
 
-.mine-top-actions {
-  display: flex;
-  flex-wrap: wrap;
+:root.wt button.mine-add-wallet-btn {
+  display: inline-flex;
   align-items: center;
-  gap: 6px;
-}
-
-.mine-wallet-select {
-  min-height: 30px;
-  max-width: 184px;
-  padding: 4px 8px;
+  gap: 5px;
+  height: 28px;
+  padding: 0 10px;
   border: 0;
-  border-radius: var(--radius-xs);
+  border-radius: 7px;
   background: var(--wt-raised);
   color: var(--wt-text);
   font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
 }
 
-/* 3-Column WEN Desktop Grid */
+:root.wt button.mine-add-wallet-btn:hover {
+  background: var(--wt-raised-2);
+}
+
+/* 3-Column WEN Desktop Viewport-Locked Grid */
 .mine-grid-3col {
+  flex: 1 1 auto;
+  min-height: 0;
   display: grid;
-  grid-template-columns: 240px minmax(0, 1fr) 348px;
-  gap: 10px;
-  align-items: start;
-  min-width: 0;
-}
-
-.mine-rail-unified {
-  display: flex;
-  flex-direction: column;
-  gap: 0;
-  padding: 0;
+  grid-template-columns: 232px minmax(0, 1fr) 334px;
+  gap: 8px;
+  padding: 8px;
+  align-items: stretch;
   min-width: 0;
   overflow: hidden;
 }
 
-.mine-rail-sec {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  padding: 12px 14px;
+@media (min-width: 1600px) {
+  .mine-grid-3col {
+    grid-template-columns: 250px minmax(0, 1fr) 360px;
+  }
+}
+
+.mine-left-rail,
+.mine-center-col,
+.mine-composer {
   min-width: 0;
+  min-height: 0;
 }
 
-.mine-rail-sec + .mine-rail-sec {
-  border-top: 1px solid var(--wt-border);
+.mine-left-rail,
+.mine-center-col {
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  scrollbar-color: var(--wt-raised-2) transparent;
 }
 
-.mine-rail-price {
-  display: flex;
-  align-items: baseline;
-  gap: 8px;
-}
-
-.mine-rail-price strong {
-  font-size: 22px;
-  font-weight: 650;
-  letter-spacing: -0.025em;
-  color: var(--wt-text);
-}
-
-.mine-rail-dl {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 10px 8px;
-  margin: 0;
-}
-
-.mine-rail-dl > div {
-  display: grid;
-  gap: 2px;
-  min-width: 0;
-}
-
-.mine-rail-dl dt {
-  font-size: 11px;
-  color: var(--wt-muted);
-}
-
-.mine-rail-dl dd {
-  margin: 0;
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--wt-text);
-}
-
-.mine-start-row {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  margin-top: 4px;
-}
-
-.mine-bucket-sol {
-  display: inline-flex;
-  align-items: center;
-  gap: 3px;
-  color: var(--wt-text-2);
-  font-size: 10px;
-}
-
-.mine-benchmark-strip {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(135px, 1fr));
-  gap: 8px;
-}
-
-.mine-yield-strip {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 8px;
-}
-
+/* =========================================================
+   LEFT RAIL — 1:1 WEN Rail Sidebar
+   ========================================================= */
 .mine-left-rail {
   display: flex;
   flex-direction: column;
   gap: 10px;
-  min-width: 0;
+  padding: 12px;
+  border-radius: 10px;
+  background: var(--wt-surface);
 }
 
-.mine-rail-card {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  min-width: 0;
-}
-
-.mine-asset-row {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-
-:root.wt button.mine-asset-btn {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex: 1 1 auto;
-  min-width: 0;
-  padding: 6px 8px;
-  border: 0;
-  border-radius: var(--radius-xs);
-  background: var(--wt-raised);
-  color: var(--wt-text);
-  text-align: left;
-  cursor: pointer;
-}
-
-:root.wt button.mine-asset-btn:hover {
-  background: var(--wt-raised-2);
-}
-
-.mine-asset-badge {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 24px;
-  height: 24px;
-  border-radius: 50%;
-  background: var(--wt-coral);
-  color: var(--wt-on-accent);
-  font-size: 12px;
-  font-weight: 700;
-  flex: none;
-}
-
-.mine-asset-copy {
-  display: flex;
-  flex-direction: column;
-  flex: 1 1 auto;
-  min-width: 0;
-}
-
-.mine-asset-copy strong {
-  font-size: 12px;
-  font-weight: 600;
-}
-
-.mine-asset-copy small {
-  font-size: 10px;
-  color: var(--wt-muted);
-}
-
-.mine-phase-head {
+.mine-rail-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 6px;
 }
 
-.mine-phase-pill {
-  padding: 2px 7px;
-  border-radius: 5px;
-  background: var(--wt-raised);
-  color: var(--wt-cyan-text);
-  font-size: 11px;
-  font-weight: 600;
-}
-
-:root.wt button.mine-link-btn {
+:root.wt button.mine-rail-asset-select {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
   padding: 0;
   border: 0;
   background: transparent;
+  color: var(--wt-text);
+  font-size: 15px;
+  font-weight: 650;
+  letter-spacing: -0.015em;
+  cursor: pointer;
+}
+
+.mine-rail-asset-logo {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  flex: none;
+}
+
+.mine-rail-caret {
+  font-size: 11px;
+  color: var(--wt-muted);
+}
+
+:root.wt button.mine-rail-info-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--wt-muted);
+  cursor: pointer;
+}
+
+:root.wt button.mine-rail-info-btn:hover {
+  color: var(--wt-text);
+  background: var(--wt-raised);
+}
+
+.wrx.fased-mine-root .mine-rail-price-dl {
+  display: block;
+  margin: 0;
+}
+
+.wrx.fased-mine-root .mine-rail-price-dl > div {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  padding: 0;
+  border: 0;
+}
+
+.wrx.fased-mine-root .mine-rail-price-dl dt {
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: var(--wt-muted);
+  text-align: left;
+  margin: 0;
+}
+
+.wrx.fased-mine-root .mine-rail-price-dl dd {
+  margin: 0;
+  font-size: 24px;
+  font-weight: 700;
+  letter-spacing: -0.025em;
+  line-height: 1.15;
+  color: var(--wt-text);
+  text-align: left;
+}
+
+.mine-rail-status-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  font-size: 12px;
+}
+
+.mine-rail-phase {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 600;
+}
+
+.mine-rail-phase.is-graduated {
+  color: var(--wt-ok);
+}
+
+.mine-rail-phase.is-bootstrap {
   color: var(--wt-cyan-text);
+}
+
+.mine-rail-status-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+:root.wt button.mine-rail-analytics-link {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--wt-muted);
+  font-size: 11.5px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+:root.wt button.mine-rail-analytics-link:hover {
+  color: var(--wt-text);
+}
+
+.mine-rail-bootstrap-card,
+.mine-rail-box-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+  border-radius: 10px;
+  background: var(--wt-raised);
+}
+
+.mine-rail-prog-line {
+  display: flex;
+  justify-content: space-between;
+  font-size: 11px;
+  color: var(--wt-muted);
+}
+
+.mine-rail-prog-line b {
+  color: var(--wt-text);
+  font-weight: 600;
+}
+
+.wrx.fased-mine-root .mine-rail-stats-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px 10px;
+  margin: 0;
+}
+
+.wrx.fased-mine-root .mine-rail-stats-grid > div {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 3px;
+  padding: 0;
+  border: 0;
+  min-width: 0;
+}
+
+.wrx.fased-mine-root .mine-rail-stats-grid dt {
+  font-size: 11px;
+  color: var(--wt-muted);
+  text-align: left;
+}
+
+.wrx.fased-mine-root .mine-rail-stats-grid dd {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 650;
+  color: var(--wt-text);
+  line-height: 1.25;
+  text-align: left;
+}
+
+.mine-rail-stats-grid dd small {
+  margin-left: 3px;
+  font-size: 10.5px;
+  font-weight: 500;
+  color: var(--wt-muted);
+}
+
+.mine-rail-claim-vals {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+:root.wt button.mine-rail-claim-btn {
+  width: 100%;
+  height: 36px;
+  border: 0;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--wt-coral) 28%, var(--wt-surface));
+  color: var(--wt-text);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+:root.wt button.mine-rail-claim-btn:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--wt-coral) 40%, var(--wt-surface));
+}
+
+:root.wt button.mine-rail-claim-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+:root.wt button.mine-rail-stake-btn {
+  width: 100%;
+  height: 36px;
+  border: 0;
+  border-radius: 8px;
+  background: var(--wt-surface);
+  color: var(--wt-text);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+:root.wt button.mine-rail-stake-btn:hover {
+  background: var(--wt-raised-2);
+}
+
+/* Left Rail Bottom Distribution */
+.mine-rail-pulse {
+  margin-top: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--wt-border);
+}
+
+.mine-rail-pulse-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 12px;
+  color: var(--wt-muted);
+}
+
+:root.wt button.mine-rail-apply-btn,
+:root.wt button.rmc-sentiment-apply,
+:root.wt button.rmc-pulse-apply {
+  padding: 3px 9px;
+  border: 0;
+  border-radius: 6px;
+  background: var(--wt-raised);
+  color: var(--wt-text-2);
   font-size: 11px;
   font-weight: 600;
   cursor: pointer;
 }
 
-:root.wt button.mine-link-btn:hover {
-  text-decoration: underline;
-}
-
-.mine-progress-stack {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.mine-prog-row {
-  display: flex;
-  justify-content: space-between;
-  gap: 6px;
-  font-size: 11px;
-  color: var(--wt-muted);
-}
-
-.mine-prog-track {
-  height: 5px;
-  border-radius: 99px;
-  background: var(--wt-raised);
-  overflow: hidden;
-}
-
-.mine-prog-fill {
-  height: 100%;
-  border-radius: 99px;
-  background: var(--wt-cyan);
-}
-
-.mine-kv-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 8px;
-}
-
-.mine-kv-item {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  padding: 6px 8px;
-  border-radius: var(--radius-xs);
-  background: var(--wt-raised);
-  min-width: 0;
-}
-
-.mine-kv-item span {
-  font-size: 10px;
-  color: var(--wt-muted);
-}
-
-.mine-kv-item strong {
-  font-size: 12px;
-  font-weight: 600;
+:root.wt button.mine-rail-apply-btn:hover,
+:root.wt button.rmc-sentiment-apply:hover,
+:root.wt button.rmc-pulse-apply:hover {
+  background: var(--wt-raised-2);
   color: var(--wt-text);
-  overflow: hidden;
-  text-overflow: ellipsis;
 }
 
-.mine-kv-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  font-size: 12px;
-  color: var(--wt-text-2);
-}
-
-.mine-pos-actions {
-  display: flex;
-  gap: 6px;
-}
-
-.mine-pos-actions > button {
-  flex: 1 1 0;
-}
-
-/* Live Crowd 50-bar Distribution Gauge */
-.mine-dist-gauge {
+.mine-dist-meter {
   position: relative;
+  height: 54px;
+  padding: 4px 0 0;
+}
+
+.mine-dist-bars {
   display: grid;
   grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 3px;
-  height: 58px;
-  padding: 4px 2px;
-  border-radius: var(--radius-xs);
-  background: var(--wt-raised);
+  height: 100%;
   align-items: end;
 }
 
@@ -444,6 +527,11 @@
   align-items: end;
   gap: 1px;
   height: 100%;
+  opacity: 0.72;
+}
+
+.mine-dist-group.is-current {
+  opacity: 1;
 }
 
 .mine-dist-group i {
@@ -455,270 +543,786 @@
 
 .mine-dist-needle {
   position: absolute;
-  top: 2px;
-  bottom: 2px;
-  width: 2px;
+  top: 0;
+  bottom: 0;
+  width: 1.5px;
   background: var(--wt-text);
   pointer-events: none;
 }
 
-.mine-dist-foot {
+.mine-dist-axis {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  text-align: center;
+  gap: 2px;
+}
+
+.mine-dist-tick {
   display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1px;
+  font-size: 10px;
+}
+
+.mine-dist-tick small {
+  color: var(--wt-muted);
+  font-size: 10px;
+}
+
+.mine-dist-tick.is-current small {
+  color: var(--wt-text);
+  font-weight: 600;
+}
+
+.mine-rail-pulse-foot {
+  display: flex;
+  align-items: center;
   justify-content: space-between;
+  font-size: 11.5px;
+}
+
+.mine-rail-skew {
+  font-weight: 600;
+}
+
+.mine-rail-skew.is-bullish {
+  color: var(--wt-ok);
+}
+
+.mine-rail-skew.is-bearish {
+  color: var(--wt-danger);
+}
+
+.mine-rail-skew.is-balanced {
+  color: var(--wt-muted);
+}
+
+/* =========================================================
+   CENTER COLUMN — Market Chart + Round Card
+   ========================================================= */
+.mine-center-col {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.mine-chart-card {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  border-radius: 10px;
+  background: var(--wt-surface);
+  overflow: visible;
+}
+
+.rmc-tv-topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 40px;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--wt-border);
+}
+
+.rmc-tv-tools {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.rmc-dd-wrap {
+  position: relative;
+}
+
+:root.wt button.rmc-dd-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 28px;
+  padding: 0 9px;
+  border: 0;
+  border-radius: 6px;
+  background: var(--wt-raised);
+  color: var(--wt-text-2);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+:root.wt button.rmc-dd-trigger:hover,
+:root.wt button.rmc-dd-trigger.is-open {
+  background: var(--wt-raised-2);
+  color: var(--wt-text);
+}
+
+:root.wt button.rmc-reset-btn {
+  padding: 0 8px;
+}
+
+.rmc-dd-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  border-radius: 99px;
+  background: color-mix(in srgb, var(--wt-ok-fill) 22%, transparent);
+  color: var(--wt-ok);
+  font-style: normal;
+  font-size: 10.5px;
+  font-weight: 700;
+}
+
+.rmc-dd-caret {
+  font-style: normal;
   font-size: 10px;
   color: var(--wt-muted);
 }
 
-/* Center Column */
-.mine-center-col {
+.rmc-dd-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  z-index: 30;
   display: flex;
   flex-direction: column;
+  gap: 2px;
+  min-width: 168px;
+  padding: 5px;
+  border-radius: 8px;
+  background: var(--wt-raised);
+  box-shadow: var(--wt-shadow);
+}
+
+.rmc-dd-time {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  min-width: 156px;
+  gap: 3px;
+}
+
+:root.wt .rmc-dd-menu button {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--wt-text-2);
+  font-size: 12px;
+  font-weight: 500;
+  text-align: left;
+  cursor: pointer;
+}
+
+:root.wt .rmc-dd-time button {
+  justify-content: center;
+}
+
+:root.wt .rmc-dd-menu button:hover,
+:root.wt .rmc-dd-menu button.is-selected {
+  background: var(--wt-raised-2);
+  color: var(--wt-text);
+}
+
+.rmc-dd-check {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  border: 1px solid var(--wt-border-strong);
+  border-radius: 3px;
+  font-size: 10px;
+  flex: none;
+}
+
+.rmc-tv-head-right {
+  display: flex;
+  align-items: center;
   gap: 10px;
+}
+
+.rmc-price {
+  font-size: 16px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: var(--wt-text);
+}
+
+.rmc-live {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11.5px;
+  color: var(--wt-muted);
+}
+
+.rmc-live i {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--wt-ok-fill);
+}
+
+/* TradingView Canvas + Overlays */
+.rmc-tv-wrap {
+  position: relative;
+  width: 100%;
   min-width: 0;
 }
 
-.mine-chart-card,
-.mine-records-panel {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
+.rmc-tv-canvas {
+  width: 100%;
+  height: 360px;
   min-width: 0;
 }
 
-.mine-chart-toolbar {
+.rmc-tv-ohlc {
+  position: absolute;
+  top: 8px;
+  left: 12px;
+  z-index: 4;
   display: flex;
   flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+  color: var(--wt-muted);
+  pointer-events: none;
+}
+
+.rmc-tv-ohlc em {
+  font-style: normal;
+  color: var(--wt-text-2);
+  font-weight: 500;
+}
+
+.rmc-vol-stat em {
+  color: var(--wt-cyan-text);
+}
+
+.rmc-ind-tag {
+  font-weight: 600;
+}
+
+.rmc-tv-bottom-pills {
+  position: absolute;
+  left: 12px;
+  bottom: 34px;
+  z-index: 4;
+  pointer-events: none;
+}
+
+.rmc-planned-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: 5px;
+  background: color-mix(in srgb, var(--wt-raised) 86%, transparent);
+  color: var(--wt-warn);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.rmc-planned-pill i,
+.wrx.fased-mine-root .retail-market-chart .rmc-planned-pill i {
+  font-style: normal;
+  color: var(--wt-warn);
+}
+
+.rmc-tv-countdown {
+  position: absolute;
+  right: 68px;
+  bottom: 34px;
+  z-index: 4;
+  display: inline-flex;
+  align-items: baseline;
+  gap: 4px;
+  padding: 2px 7px;
+  border-radius: 5px;
+  background: color-mix(in srgb, var(--wt-bg) 78%, transparent);
+  font-size: 10.5px;
+  pointer-events: none;
+}
+
+.rmc-tv-countdown small {
+  color: var(--wt-muted);
+  font-weight: 600;
+}
+
+.rmc-tv-countdown b {
+  color: var(--wt-ok);
+  font-weight: 700;
+}
+
+/* Pulse View inside Chart */
+.rmc-pulse {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px;
+  min-height: 360px;
+}
+
+.rmc-pulse-head {
+  display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
 }
 
-.mine-chart-title {
+.rmc-pulse-badges {
   display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  gap: 8px;
-  font-size: 13px;
+  align-items: center;
+  gap: 10px;
+  font-size: 11.5px;
 }
 
-.mine-ind-readout {
+.rmc-regime {
+  font-weight: 600;
+}
+
+.rmc-regime.is-bullish {
+  color: var(--wt-ok);
+}
+
+.rmc-regime.is-bearish {
+  color: var(--wt-danger);
+}
+
+.rmc-regime.is-balanced {
+  color: var(--wt-muted);
+}
+
+.rmc-edge-legend {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--wt-muted);
+}
+
+.rmc-edge-legend i {
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+}
+
+.rmc-edge-legend i.is-hit {
+  background: var(--wt-ok-fill);
+}
+
+.rmc-edge-legend i.is-curve {
+  background: var(--wt-text-2);
+  opacity: 0.45;
+}
+
+.rmc-meter-stage {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 210px;
+  display: flex;
+  align-items: flex-end;
+  padding-top: 26px;
+}
+
+.rmc-meter-grid {
+  position: absolute;
+  inset: 24px 0 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  pointer-events: none;
+}
+
+.rmc-meter-grid span {
+  border-top: 1px dashed var(--wt-border);
+}
+
+.rmc-meter-marker {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  pointer-events: none;
+  z-index: 3;
+}
+
+.rmc-meter-tag {
   padding: 2px 6px;
   border-radius: 4px;
-  background: var(--wt-raised);
-  color: var(--wt-cyan-text);
-  font-size: 11px;
+  background: var(--wt-raised-2);
+  color: var(--wt-text);
+  font-size: 10.5px;
+  font-weight: 600;
+  white-space: nowrap;
 }
 
-.mine-chart-controls {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
+.rmc-meter-line {
+  flex: 1 1 auto;
+  width: 1.5px;
+  background: var(--wt-text);
+  opacity: 0.65;
 }
 
-.mine-chip-group,
-.mine-indicator-row {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
-}
-
-.mine-tv-host {
-  width: 100%;
-  height: 290px;
-  min-width: 0;
-  border-radius: var(--radius-xs);
-  overflow: hidden;
-  background: var(--wt-surface);
-}
-
-.mine-pulse-view {
+.rmc-meter-bars {
   display: grid;
   grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 8px;
-  height: 290px;
-  padding: 16px;
-  background: var(--wt-raised);
-  border-radius: var(--radius-xs);
+  width: 100%;
+  height: 190px;
+  align-items: end;
 }
 
-.mine-pulse-col,
-.mine-strat-col {
+.rmc-meter-group {
   display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 4px;
-  min-width: 0;
+  align-items: end;
+  gap: 2px;
+  height: 100%;
 }
 
-.mine-pulse-track {
+.rmc-meter-slot {
+  position: relative;
+  flex: 1 1 0;
+  height: 100%;
   display: flex;
   align-items: flex-end;
-  width: 100%;
-  flex: 1 1 auto;
-  min-height: 76px;
-  border-radius: 4px;
-  background: var(--wt-surface);
-  overflow: hidden;
 }
 
-.mine-pulse-fill {
-  width: 100%;
-  border-radius: 4px 4px 0 0;
-}
-
-.mine-technicals-view {
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
-  gap: 12px;
-  min-height: 200px;
-  padding: 12px;
-  border-radius: var(--radius-xs);
-  background: var(--wt-raised);
-}
-
-.mine-tech-grid {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 8px;
-}
-
-.mine-tech-card {
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
-  padding: 10px;
-  border-radius: var(--radius-xs);
-  background: var(--wt-surface);
-}
-
-.mine-tech-card span,
-.mine-tech-card small {
-  font-size: 11px;
-  color: var(--wt-muted);
-}
-
-.mine-tech-card strong {
-  font-size: 16px;
-  color: var(--wt-text);
-}
-
-.mine-streak-foot {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
-.mine-section-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-}
-
-.mine-section-head h2 {
-  margin: 0;
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--wt-text);
-}
-
-.mine-muted-note {
-  font-size: 11px;
-  color: var(--wt-muted);
-}
-
-.mine-streak-grid {
-  display: grid;
-  grid-template-columns: repeat(12, minmax(0, 1fr));
-  gap: 4px;
-}
-
-.mine-streak-chip {
-  position: relative;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 1px;
-  padding: 5px 2px 6px;
-  border-radius: 5px;
-  background: var(--wt-raised);
-  color: var(--wt-text);
-  font-size: 11px;
-  font-weight: 600;
-  overflow: hidden;
-  min-width: 0;
-}
-
-.mine-streak-chip small {
-  font-size: 9px;
-  font-weight: 500;
-  color: var(--wt-muted);
-}
-
-.mine-streak-chip::after {
-  content: "";
+.rmc-meter-ghost {
   position: absolute;
   left: 0;
   right: 0;
   bottom: 0;
-  height: 2px;
-  background: var(--wt-muted);
+  background: color-mix(in srgb, var(--wt-text) 16%, transparent);
+  border-radius: 1px 1px 0 0;
 }
 
-.mine-streak-chip.range-0::after {
-  background: var(--wt-range-a);
+.rmc-meter-fill {
+  position: relative;
+  width: 100%;
+  border-radius: 1px 1px 0 0;
+  z-index: 1;
 }
 
-.mine-streak-chip.range-1::after {
-  background: var(--wt-range-b);
+.rmc-meter-axis {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 8px;
+  border-top: 1px solid var(--wt-border);
+  padding-top: 8px;
 }
 
-.mine-streak-chip.range-2::after {
-  background: var(--wt-range-c);
+.rmc-meter-col {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 11px;
 }
 
-.mine-streak-chip.range-3::after {
-  background: var(--wt-range-d);
+.rmc-meter-col-top {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
 }
 
-.mine-streak-chip.range-4::after {
-  background: var(--wt-range-e);
+.rmc-pulse-pct em {
+  font-style: normal;
+  font-size: 10px;
+  color: var(--wt-muted);
 }
 
-/* Active sessions strip & Claims */
-.mine-active-sessions-strip {
+.rmc-pulse-pct em.is-pos {
+  color: var(--wt-ok);
+}
+
+.rmc-pulse-pct em.is-neg {
+  color: var(--wt-danger);
+}
+
+.rmc-meter-col small {
+  color: var(--wt-muted);
+  font-size: 10px;
+}
+
+/* Below-Chart Sentiment Footer — 1:1 WEN 2-row strip */
+.rmc-sentiment-footer {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px 12px;
+  border-top: 1px solid var(--wt-border);
+}
+
+.rmc-sentiment-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.rmc-sentiment-tags {
+  display: inline-flex;
+  align-items: center;
+  flex: none;
+}
+
+.rmc-regime-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 6px;
+  background: var(--wt-raised);
+}
+
+.rmc-inline-meter {
+  position: relative;
+  width: 138px;
+  height: 22px;
+  flex: none;
+}
+
+.rmc-inline-bars {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 2px;
+  height: 100%;
+  align-items: end;
+}
+
+.rmc-inline-group {
+  display: flex;
+  align-items: end;
+  gap: 1px;
+  height: 100%;
+  opacity: 0.72;
+}
+
+.rmc-inline-group.is-current {
+  opacity: 1;
+}
+
+.rmc-inline-group i {
+  display: block;
+  flex: 1 1 0;
+  border-radius: 1px 1px 0 0;
+}
+
+.rmc-inline-needle {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 1.5px;
+  background: var(--wt-text);
+  pointer-events: none;
+}
+
+.rmc-inline-stats {
   display: flex;
   flex-wrap: wrap;
-  gap: 6px;
+  align-items: center;
+  gap: 8px;
+  font-size: 11.5px;
+  color: var(--wt-muted);
+  margin-right: auto;
 }
 
-.mine-active-sess-pill {
+.rmc-inline-stats span.is-current {
+  color: var(--wt-text);
+  font-weight: 600;
+}
+
+.rmc-streak-strip {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.rmc-streak-cells {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  overflow-x: auto;
+  scrollbar-width: none;
+  min-width: 0;
+}
+
+.rmc-streak-cells::-webkit-scrollbar {
+  display: none;
+}
+
+:root.wt button.rmc-streak-cell {
+  position: relative;
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 23px;
+  padding: 0;
+  border: 0;
+  border-radius: 5px;
+  background: var(--wt-raised);
+  font-size: 11px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+:root.wt button.rmc-streak-cell:hover,
+:root.wt button.rmc-streak-cell.is-selected {
+  background: var(--wt-raised-2);
+}
+
+:root.wt button.rmc-streak-cell.is-user::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: var(--wt-warn-fill);
+}
+
+.rmc-streak-tip {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  transform: translateX(-50%);
+  z-index: 20;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  border-radius: 6px;
+  background: var(--wt-raised-2);
+  box-shadow: var(--wt-shadow);
+  font-size: 11px;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+.rmc-muted {
+  color: var(--wt-muted);
+}
+
+:root.wt button.rmc-streak-clear {
+  flex: none;
+  padding: 2px 7px;
+  border: 0;
+  border-radius: 5px;
+  background: var(--wt-raised);
+  color: var(--wt-text-2);
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+/* =========================================================
+   BOTTOM CENTER — Round Card (1:1 WEN)
+   ========================================================= */
+.mine-records-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px;
+  border-radius: 10px;
+  background: var(--wt-surface);
+  min-width: 0;
+}
+
+.mine-round-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  padding: 6px 10px;
-  border-radius: var(--radius-xs);
-  background: var(--wt-raised);
-  font-size: 11px;
 }
 
-.mine-active-sess-pill > div {
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
+.mine-round-head h2 {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 650;
+  color: var(--wt-text);
 }
 
-.mine-sess-mini-actions,
-.mine-row-actions,
-.mine-composer-tools {
+.mine-round-head-pills {
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: 6px;
 }
 
+:root.wt button.mine-round-win-pill {
+  padding: 3px 8px;
+  border: 0;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--wt-ok-fill) 16%, transparent);
+  color: var(--wt-ok);
+  font-size: 11px;
+  font-weight: 650;
+  cursor: pointer;
+}
+
+:root.wt button.mine-round-win-pill:hover {
+  background: color-mix(in srgb, var(--wt-ok-fill) 26%, transparent);
+}
+
+.mine-round-slot-pill {
+  padding: 3px 8px;
+  border-radius: 6px;
+  background: var(--wt-raised);
+  color: var(--wt-text-2);
+  font-size: 11.5px;
+  font-weight: 600;
+}
+
+.mine-round-tabs button {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.mine-tab-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 5px;
+  border-radius: 99px;
+  background: var(--wt-raised);
+  color: var(--wt-text-2);
+  font-style: normal;
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.mine-tab-badge.is-alert {
+  background: color-mix(in srgb, var(--wt-coral) 22%, transparent);
+  color: var(--wt-coral);
+}
+
+.mine-empty-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 12px 0 4px;
+  font-size: 12.5px;
+  color: var(--wt-muted);
+}
+
+/* Claims Tab — 1:1 WEN unified summary card */
 .mine-claims-wrap,
 .mine-proto-wrap {
   display: flex;
@@ -726,55 +1330,287 @@
   gap: 10px;
 }
 
-.mine-claims-kpis {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 8px;
-}
-
-.mine-vesting-bar-wrap {
+.mine-claims-toolbar {
   display: flex;
-  flex-direction: column;
+  align-items: center;
+  justify-content: flex-end;
   gap: 6px;
-  padding: 8px 10px;
-  border-radius: var(--radius-xs);
+}
+
+.mine-claims-round-tag {
+  padding: 4px 9px;
+  border-radius: 6px;
   background: var(--wt-raised);
-}
-
-.mine-deploy-details {
-  margin-top: 8px;
-  font-size: 12px;
-}
-
-.mine-deploy-details summary {
-  cursor: pointer;
   color: var(--wt-muted);
+  font-size: 11.5px;
   font-weight: 600;
 }
 
-.mine-crowd-bar {
+:root.wt button.mine-claims-tool-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 9px;
+  border: 0;
+  border-radius: 6px;
+  background: var(--wt-raised);
+  color: var(--wt-text-2);
+  font-size: 11.5px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+:root.wt button.mine-claims-tool-btn:hover {
+  background: var(--wt-raised-2);
+  color: var(--wt-text);
+}
+
+.mine-claims-summary {
   display: flex;
-  width: 90px;
-  height: 7px;
-  border-radius: 99px;
-  overflow: hidden;
+  flex-direction: column;
+  gap: 12px;
+  padding: 14px;
+  border-radius: 10px;
   background: var(--wt-raised);
 }
 
-.mine-crowd-bar i {
-  display: block;
+.wrx.fased-mine-root .mine-claims-metrics {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  margin: 0;
+}
+
+.wrx.fased-mine-root .mine-claims-metrics > div {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  padding: 0;
+  border: 0;
+}
+
+.wrx.fased-mine-root .mine-claims-metrics dt {
+  font-size: 11px;
+  color: var(--wt-muted);
+  text-align: left;
+}
+
+.wrx.fased-mine-root .mine-claims-metrics dd {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 650;
+  color: var(--wt-text);
+  text-align: left;
+}
+
+.mine-claims-cta {
+  width: 100%;
+  height: 40px;
+}
+
+.mine-claims-caption {
+  margin: 0;
+  font-size: 11.5px;
+  color: var(--wt-muted);
+}
+
+.mine-claims-staking-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 10px 14px;
+  border-radius: 10px;
+  background: var(--wt-raised);
+  font-size: 12.5px;
+  color: var(--wt-text-2);
+}
+
+.mine-claims-staking-row strong {
+  color: var(--wt-text);
+}
+
+:root.wt button.mine-claims-btc-btn {
+  padding: 5px 12px;
+  border: 0;
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--wt-coral) 20%, var(--wt-surface));
+  color: var(--wt-coral);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+:root.wt button.mine-claims-btc-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.mine-proto-kpis {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.mine-proto-kpi {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--wt-raised);
+}
+
+.mine-proto-kpi span {
+  font-size: 10.5px;
+  color: var(--wt-muted);
+}
+
+.mine-proto-kpi strong {
+  font-size: 13.5px;
+  font-weight: 650;
+  color: var(--wt-text);
+}
+
+/* =========================================================
+   RIGHT PANEL — Composer (1:1 WEN sticky tabs + sticky foot)
+   ========================================================= */
+.mine-composer {
+  display: flex;
+  flex-direction: column;
+  padding: 0;
+  border-radius: 10px;
+  background: var(--wt-surface);
+  overflow: hidden;
   height: 100%;
 }
 
-/* 80-bar WEN Allocation Curve */
+.mine-composer-tabs {
+  flex: none;
+  padding: 8px 14px 0;
+}
+
+.mine-composer-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  scrollbar-color: var(--wt-raised-2) transparent;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px 14px;
+}
+
+.mine-composer-sub {
+  gap: 12px;
+}
+
+.mine-sec-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+
+.mine-sec-title-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.mine-sec-title {
+  font-size: 13px;
+  font-weight: 650;
+  color: var(--wt-text);
+}
+
+:root.wt button.mine-inline-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--wt-muted);
+  cursor: pointer;
+}
+
+:root.wt button.mine-inline-icon:hover {
+  color: var(--wt-text);
+  background: var(--wt-raised);
+}
+
+.mine-alloc-per-round-pill {
+  padding: 2px 7px;
+  border-radius: 5px;
+  background: var(--wt-raised);
+  color: var(--wt-text-2);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+/* 6-Preset Tray */
+.mine-presets-grid {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 3px;
+  padding: 4px;
+  border-radius: 8px;
+  background: var(--wt-raised);
+}
+
+:root.wt button.mine-preset-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  min-width: 0;
+  min-height: 48px;
+  padding: 5px 2px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--wt-muted);
+  font-size: 9.5px;
+  font-weight: 600;
+  line-height: 1.15;
+  text-align: center;
+  cursor: pointer;
+}
+
+:root.wt button.mine-preset-btn:hover {
+  color: var(--wt-text);
+  background: var(--wt-surface);
+}
+
+:root.wt button.mine-preset-btn[aria-pressed="true"] {
+  background: var(--wt-raised-2);
+  color: var(--wt-text);
+}
+
+.mine-preset-btn svg {
+  width: 22px;
+  height: 14px;
+  flex: none;
+}
+
+/* 80-Bar Allocation Curve (112px + vertical top-to-bottom fade mask) */
 .mine-allocation-chart {
+  flex: none;
   display: grid;
   grid-template-columns: repeat(5, minmax(0, 1fr));
-  gap: 6px;
-  height: 146px;
-  padding: 18px 4px 0;
+  gap: 4px;
+  height: 112px;
+  min-height: 112px;
+  padding: 16px 2px 0;
   align-items: end;
-  border-bottom: 1px solid var(--wt-border);
   user-select: none;
   touch-action: none;
 }
@@ -790,15 +1626,15 @@
   align-items: stretch;
   justify-content: flex-end;
   gap: 4px;
-  height: 100%;
+  height: 96px;
   min-width: 0;
 }
 
 .mine-bar:not(:last-child)::after {
   content: "";
   position: absolute;
-  top: 2px;
-  right: -3.5px;
+  top: 0;
+  right: -2.5px;
   bottom: 0;
   width: 1px;
   background: var(--wt-border);
@@ -808,11 +1644,11 @@
 .mine-bound-tick {
   position: absolute;
   top: -15px;
-  right: -3px;
+  right: -2px;
   transform: translateX(50%);
   font-style: normal;
-  font-size: 9px;
-  font-weight: 600;
+  font-size: 9.5px;
+  font-weight: 500;
   color: var(--wt-muted);
   white-space: nowrap;
   pointer-events: none;
@@ -823,8 +1659,18 @@
   align-items: end;
   gap: 1px;
   width: 100%;
-  height: calc(100% - 18px);
-  min-height: 0;
+  height: 96px;
+  min-height: 96px;
+  -webkit-mask-image: linear-gradient(
+    180deg,
+    var(--wt-text) 0%,
+    color-mix(in srgb, var(--wt-text) 46%, transparent) 100%
+  );
+  mask-image: linear-gradient(
+    180deg,
+    var(--wt-text) 0%,
+    color-mix(in srgb, var(--wt-text) 46%, transparent) 100%
+  );
 }
 
 .mine-bin-group i {
@@ -850,44 +1696,422 @@
   text-align: center;
 }
 
+/* Flat Borderless 5-Column A-E Strip (1:1 WEN) */
 .mine-bucket-strip {
   display: grid;
   grid-template-columns: repeat(5, minmax(0, 1fr));
-  gap: 4px;
+  gap: 2px;
 }
 
-.mine-bucket-cell {
+:root.wt button.mine-bucket-cell {
   display: flex;
   flex-direction: column;
   align-items: center;
   gap: 2px;
-  padding: 6px 4px;
+  padding: 4px 2px;
   border: 0;
-  border-radius: var(--radius-xs);
-  background: var(--wt-raised);
+  border-radius: 6px;
+  background: transparent;
   color: var(--wt-text);
   cursor: pointer;
   min-width: 0;
 }
 
-.mine-bucket-cell:hover,
-.mine-bucket-cell.is-selected {
-  background: var(--wt-raised-2);
+:root.wt button.mine-bucket-cell:hover,
+:root.wt button.mine-bucket-cell.is-selected {
+  background: var(--wt-raised);
 }
 
-.mine-bucket-cell span {
+.mine-bucket-code {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--wt-text-2);
+}
+
+.mine-bucket-pct {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--wt-text);
+}
+
+.mine-bucket-sol {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 10.5px;
+  color: var(--wt-muted);
+}
+
+/* Rounds + Start + Schedule Summary */
+.mine-rounds-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  padding-top: 2px;
+}
+
+.mine-rounds-chips {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.mine-edit-sched-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.mine-start-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+
+.mine-start-left {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.mine-start-clock {
+  font-size: 11.5px;
+  color: var(--wt-muted);
+}
+
+.mine-sched-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--wt-raised);
+  font-size: 12px;
+}
+
+.mine-sched-bar strong {
+  color: var(--wt-text);
+  font-weight: 600;
+}
+
+.mine-sched-bar span {
+  color: var(--wt-muted);
+}
+
+/* Deposit Section */
+.mine-deposit-sec {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.mine-deposit-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 12px;
+}
+
+.mine-deposit-head label {
+  color: var(--wt-muted);
+  font-weight: 500;
+}
+
+:root.wt button.mine-bal-btn {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--wt-muted);
+  font-size: 11.5px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+:root.wt button.mine-bal-btn:hover:not(:disabled) {
+  color: var(--wt-text);
+}
+
+.mine-amount-box {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 12px;
+  border-radius: 8px;
+  background: var(--wt-raised);
+}
+
+.mine-amount-box:focus-within {
+  box-shadow: 0 0 0 1.5px var(--wt-border-strong);
+}
+
+.mine-amount-box .mine-amount-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 30px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--wt-text);
+  font-size: 22px;
+  font-weight: 650;
+  letter-spacing: -0.02em;
+  outline: none;
+}
+
+.mine-amount-unit {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--wt-text);
+  flex: none;
+}
+
+.mine-quick-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 4px;
+}
+
+.mine-split-line {
+  font-size: 12px;
+  font-weight: 650;
+  color: var(--wt-text);
+}
+
+.mine-skip-warn {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 9px 10px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--wt-warn-fill) 12%, var(--wt-raised));
+  color: var(--wt-warn);
+  font-size: 11.5px;
+}
+
+:root.wt button.mine-skip-fix-btn {
+  padding: 3px 8px;
+  border: 0;
+  border-radius: 5px;
+  background: var(--wt-surface);
+  color: var(--wt-text);
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+/* Sticky Composer Footer */
+.mine-composer-foot {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 14px 12px;
+  border-top: 1px solid var(--wt-border);
+  background: var(--wt-surface);
+}
+
+.mine-foot-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  font-size: 11.5px;
+  color: var(--wt-muted);
+}
+
+.mine-foot-meta strong {
+  color: var(--wt-text);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.mine-gate-bar {
+  height: 3px;
+  border-radius: 99px;
+  background: var(--wt-raised);
+  overflow: hidden;
+}
+
+.mine-gate-bar i {
+  display: block;
+  height: 100%;
+  border-radius: 99px;
+  background: var(--wt-coral);
+}
+
+:root.wt button.mine-cta-btn {
+  width: 100%;
+  height: 46px;
+  border-radius: 9px;
+  font-size: 14px;
+  font-weight: 650;
+}
+
+/* Sticky Bottom Telemetry Bar (1:1 WEN) */
+.mine-telemetry-bar {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  height: 30px;
+  padding: 0 12px;
+  border-top: 1px solid var(--wt-border);
+  background: var(--wt-bg);
   font-size: 11px;
   color: var(--wt-muted);
 }
 
-.mine-bucket-cell strong {
-  font-size: 13px;
+.mine-telemetry-left,
+.mine-telemetry-right {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.mine-telemetry-live {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--wt-ok);
   font-weight: 600;
 }
 
-.mine-bucket-cell small {
-  font-size: 10px;
+.mine-telemetry-live i {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--wt-ok-fill);
+}
+
+:root.wt button.mine-telemetry-link {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--wt-muted);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+:root.wt button.mine-telemetry-link:hover {
+  color: var(--wt-text);
+}
+
+/* Shared Table, Chips, Subpages & Modals */
+.mine-subpage-scroll {
+  padding: 12px 16px 20px;
+}
+
+.mine-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.mine-section-head h2 {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--wt-text);
+}
+
+.mine-muted-note {
+  font-size: 11.5px;
+  color: var(--wt-muted);
+}
+
+:root.wt button.mine-link-btn {
+  padding: 0;
+  border: 0;
+  background: transparent;
   color: var(--wt-cyan-text);
+  font-size: 11.5px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+:root.wt button.mine-link-btn:hover {
+  text-decoration: underline;
+}
+
+.mine-prog-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--wt-muted);
+}
+
+.mine-prog-track {
+  height: 5px;
+  border-radius: 99px;
+  background: var(--wt-surface);
+  overflow: hidden;
+}
+
+.mine-prog-fill {
+  height: 100%;
+  border-radius: 99px;
+  background: var(--wt-cyan);
+}
+
+.mine-vesting-bar-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--wt-raised);
+}
+
+.mine-kv-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.mine-kv-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--wt-raised);
+  min-width: 0;
+}
+
+.mine-kv-item span {
+  font-size: 10.5px;
+  color: var(--wt-muted);
+}
+
+.mine-kv-item strong {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--wt-text);
+}
+
+.mine-crowd-bar {
+  display: flex;
+  width: 90px;
+  height: 7px;
+  border-radius: 99px;
+  overflow: hidden;
+  background: var(--wt-raised);
+}
+
+.mine-crowd-bar i {
+  display: block;
+  height: 100%;
 }
 
 .mine-table-scroll {
@@ -921,57 +2145,10 @@
   text-align: left;
 }
 
-/* Right Composer */
-.mine-composer,
-.mine-composer-sub {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  min-width: 0;
-}
-
-.mine-presets-grid {
-  display: grid;
-  grid-template-columns: repeat(6, minmax(0, 1fr));
-  gap: 4px;
-  padding: 4px;
-  border-radius: 7px;
-  background: var(--wt-raised);
-}
-
-:root.wt button.mine-preset-btn {
-  display: flex;
-  flex-direction: column;
+.mine-row-actions {
+  display: inline-flex;
   align-items: center;
-  justify-content: center;
-  gap: 4px;
-  min-width: 0;
-  min-height: 50px;
-  padding: 6px 2px;
-  border: 0;
-  border-radius: 5px;
-  background: transparent;
-  color: var(--wt-muted);
-  font-size: 10px;
-  font-weight: 600;
-  line-height: 1.15;
-  cursor: pointer;
-}
-
-:root.wt button.mine-preset-btn:hover {
-  color: var(--wt-text);
-  background: var(--wt-surface);
-}
-
-:root.wt button.mine-preset-btn[aria-pressed="true"] {
-  background: var(--wt-raised-2);
-  color: var(--wt-text);
-}
-
-.mine-preset-btn svg {
-  width: 22px;
-  height: 14px;
-  flex: none;
+  gap: 6px;
 }
 
 .mine-field {
@@ -986,18 +2163,6 @@
   color: var(--wt-muted);
 }
 
-.mine-amount-input {
-  width: 100%;
-  height: 38px;
-  padding: 6px 10px;
-  border: 0;
-  border-radius: var(--radius-xs);
-  background: var(--wt-raised);
-  color: var(--wt-text);
-  font-size: 17px;
-  font-weight: 600;
-}
-
 .mine-quick-chips {
   display: flex;
   flex-wrap: wrap;
@@ -1008,7 +2173,7 @@
   min-height: 26px;
   padding: 3px 8px;
   border: 0;
-  border-radius: 5px;
+  border-radius: 6px;
   background: var(--wt-raised);
   color: var(--wt-muted);
   font-size: 11px;
@@ -1033,19 +2198,11 @@
 
 .mine-gate-note {
   padding: 8px 10px;
-  border-radius: var(--radius-xs);
+  border-radius: 8px;
   background: var(--wt-raised);
   color: var(--wt-warn);
   font-size: 11px;
   line-height: 1.4;
-}
-
-.mine-composer-footer {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  padding-top: 8px;
-  border-top: 1px solid var(--wt-border);
 }
 
 .mine-secondary-actions {
@@ -1056,6 +2213,27 @@
 
 .mine-secondary-actions > button {
   flex: 1 1 0;
+}
+
+/* Allocation Slider Modal */
+.mine-alloc-slider-row {
+  display: grid;
+  grid-template-columns: 112px minmax(0, 1fr) 40px;
+  align-items: center;
+  gap: 10px;
+}
+
+.mine-alloc-slider-label {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+}
+
+.mine-alloc-slider-pct {
+  text-align: right;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--wt-text);
 }
 
 /* Subpages (#mine/assets, strategies, portfolio, stake) */
@@ -1086,6 +2264,18 @@
 .mine-kpi-strip {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.mine-benchmark-strip {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(135px, 1fr));
+  gap: 8px;
+}
+
+.mine-yield-strip {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 8px;
 }
 
@@ -1162,6 +2352,30 @@
   gap: 6px;
 }
 
+.mine-strat-col {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+
+.mine-pulse-track {
+  display: flex;
+  align-items: flex-end;
+  width: 100%;
+  flex: 1 1 auto;
+  min-height: 76px;
+  border-radius: 4px;
+  background: var(--wt-surface);
+  overflow: hidden;
+}
+
+.mine-pulse-fill {
+  width: 100%;
+  border-radius: 4px 4px 0 0;
+}
+
 .mine-strat-actions {
   display: flex;
   flex-wrap: wrap;
@@ -1173,6 +2387,15 @@
   grid-template-columns: minmax(0, 1fr) 360px;
   gap: 10px;
   align-items: start;
+}
+
+/* Technicals view */
+.mine-technicals-view {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-height: 360px;
+  padding: 14px;
 }
 
 /* Schedule Grid Modal */
@@ -1240,6 +2463,7 @@
   display: flex;
   flex-direction: column;
   gap: 10px;
+  padding: 16px 20px 20px;
 }
 
 .mine-modal-input {
@@ -1247,10 +2471,10 @@
   min-height: 36px;
   padding: 6px 10px;
   border: 0;
-  border-radius: var(--radius-xs);
+  border-radius: 7px;
   background: var(--wt-raised);
   color: var(--wt-text);
-  font-size: 13px;
+  font-size: 14px;
 }
 
 .mine-modal-actions {
@@ -1260,24 +2484,13 @@
   margin-top: 4px;
 }
 
-.mine-tasks-pill {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-}
-
-.mine-tasks-drawer {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
 .mine-tasks-drawer-head {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
+  padding-top: 6px;
 }
 
 .mine-tasks-drawer-head strong {
@@ -1318,9 +2531,32 @@
   gap: 8px;
 }
 
+.is-pos {
+  color: var(--wt-ok);
+}
+
+.is-neg {
+  color: var(--wt-danger);
+}
+
+/* Responsive Breakpoints */
 @media (max-width: 1200px) {
+  .mine-shell.is-mine-terminal {
+    height: auto;
+    overflow: visible;
+  }
+
   .mine-grid-3col {
     grid-template-columns: minmax(0, 1fr) 334px;
+    overflow: visible;
+  }
+
+  .mine-left-rail,
+  .mine-center-col,
+  .mine-composer,
+  .mine-composer-body {
+    overflow: visible;
+    height: auto;
   }
 
   .mine-left-rail {
@@ -1340,32 +2576,36 @@
   }
 
   .mine-kpi-strip,
-  .mine-claims-kpis,
+  .mine-proto-kpis,
   .mine-yield-strip {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
 
 @media (max-width: 760px) {
-  .mine-streak-grid {
-    grid-template-columns: repeat(6, minmax(0, 1fr));
+  .rmc-tv-canvas {
+    height: 270px;
   }
 
   .mine-presets-grid {
     grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 
-  .mine-wallet-select {
-    max-width: 100%;
-    min-height: 44px;
+  .mine-sched-grid {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+
+  .mine-modal-input,
+  .mine-amount-box .mine-amount-input {
+    font-size: 16px;
+  }
+
+  .mine-automate-grid {
+    grid-template-columns: minmax(0, 1fr);
   }
 
   :root.wt button.mine-chip {
-    min-height: 36px;
+    min-height: 34px;
     padding: 4px 10px;
-  }
-
-  .mine-sched-grid {
-    grid-template-columns: repeat(4, minmax(0, 1fr));
   }
 }
