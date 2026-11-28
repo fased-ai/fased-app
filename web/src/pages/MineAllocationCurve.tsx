@@ -162,6 +162,7 @@ export interface MineAllocationCurveProps {
   weightsBps: readonly number[];
   innerBps?: number;
   outerBps?: number;
+  hideLabels?: boolean;
   onRebalance?: (rangeIndex: number, weightBps: number) => void;
 }
 
@@ -169,6 +170,7 @@ export function MineAllocationCurve({
   weightsBps,
   innerBps = 5,
   outerBps = 20,
+  hideLabels = false,
   onRebalance,
 }: MineAllocationCurveProps) {
   const boundaryTicks = formatBoundaryTicks(innerBps, outerBps);
@@ -294,7 +296,9 @@ export function MineAllocationCurve({
               {boundaryTicks[index]}
             </em>
           )}
-          <span className="mine-bar-code">{RANGE_LABELS[index]}</span>
+          {!hideLabels && (
+            <span className="mine-bar-code">{RANGE_LABELS[index]}</span>
+          )}
         </div>
       ))}
     </div>

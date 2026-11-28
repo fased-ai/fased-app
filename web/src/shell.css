@@ -1098,8 +1098,25 @@
   align-items: center;
   gap: 8px;
 }
-.wt .workspace-shell:has(.agent-page:not([hidden]) .agent-chat) .shell-footer {
+.wt .workspace-shell:has(.agent-page:not([hidden]) .agent-chat) .shell-footer,
+.wt .workspace-shell:has(.fased-mine-root.is-mine-terminal) .shell-footer {
   display: none;
+}
+@media (min-width: 751px) and (min-height: 500px) {
+  .wt .workspace-shell:has(.fased-mine-root.is-mine-terminal) {
+    height: 100dvh;
+    min-height: 0;
+    overflow: hidden;
+  }
+  .wt .shell-body:has(.fased-mine-root.is-mine-terminal),
+  .wt .main-content:has(.fased-mine-root.is-mine-terminal) {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-height: 0;
+    overflow: hidden;
+    padding: 0;
+  }
 }
 .wt * {
   scrollbar-width: thin;
