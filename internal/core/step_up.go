@@ -307,11 +307,13 @@ func (h *HTTPHandler) ownerPasswordAPI(w http.ResponseWriter, r *http.Request) {
 	h.clearStepUpForSession(token)
 	h.closeStreamsExceptSessionHash(tokenHash(token))
 	// Mirror independent Argon2id owner verifier into fased-signer whenever custody backend is reachable.
-	if cs, cErr := h.store.custodyBackend(); cErr == nil && cs != nil {
-		if has, hErr := cs.HasOwnerAuth(r.Context()); hErr == nil && !has {
-			if cfgErr := cs.ConfigureOwnerAuth(r.Context(), req.Password); cfgErr != nil && !errors.Is(cfgErr, custody.ErrOwnerAuthRequired) {
-				writeError(w, 500, "failed to enroll signer owner authorization")
-				return
+	if validPassword(req.Password) {
+		if cs, cErr := h.store.custodyBackend(); cErr == nil && cs != nil {
+			if has, hErr := cs.HasOwnerAuth(r.Context()); hErr == nil && !has {
+				if cfgErr := cs.ConfigureOwnerAuth(r.Context(), req.Password); cfgErr != nil && !errors.Is(cfgErr, custody.ErrOwnerAuthRequired) {
+					writeError(w, 500, "failed to enroll signer owner authorization")
+					return
+				}
 			}
 		}
 	}
@@ -376,21 +378,20 @@ func (h *HTTPHandler) stepUpAPI(w http.ResponseWriter, r *http.Request) {
 	}
 	var signerProof string
 	if cs, cErr := h.store.custodyBackend(); cErr == nil && cs != nil {
-		proof, _, aErr := cs.AuthorizeOwnerActionBound(r.Context(), req.Password, act, wid, cleanBinding)
-		if aErr != nil {
-			if errors.Is(aErr, custody.ErrWrongPassword) {
-				writeAuthCodeError(w, 403, "incorrect signer owner password", "wrong_password")
-				return
+		if hasSignerAuth, hErr := cs.HasOwnerAuth(r.Context()); hErr == nil && hasSignerAuth {
+			proof, _, aErr := cs.AuthorizeOwnerActionBound(r.Context(), req.Password, act, wid, cleanBinding)
+			if aErr != nil {
+				if errors.Is(aErr, custody.ErrWrongPassword) {
+					writeAuthCodeError(w, 403, "incorrect signer owner password", "wrong_password")
+					return
+				}
+				if !errors.Is(aErr, custody.ErrOwnerAuthRequired) {
+					writeError(w, 500, "failed to obtain signer owner authorization")
+					return
+				}
+			} else {
+				signerProof = proof
 			}
-			// If signer owner auth is not yet enrolled (e.g. legacy Stage 4 mainnet-capped route or
-			// external signer awaiting owner-socket enrollment), omit signerProof so fased-signer
-			// still fails closed for custody actions while non-custody step-up routes succeed.
-			if !errors.Is(aErr, custody.ErrOwnerAuthRequired) {
-				writeError(w, 500, "failed to obtain signer owner authorization")
-				return
-			}
-		} else {
-			signerProof = proof
 		}
 	}
 	stepTok, exp, err := h.issueStepUpTokenBound(token, act, wid, cleanBinding, signerProof)

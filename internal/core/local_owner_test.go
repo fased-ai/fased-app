@@ -567,14 +567,14 @@ func TestLocalWalletUnlockPasswordFlow(t *testing.T) {
 		t.Fatal(err)
 	}
 	h3.loopbackPeerUID = func(_, _ *net.TCPAddr) (int, bool, error) { return os.Getuid(), true, nil }
-	w3 := callUnlock(h3, "correct-horse-battery-staple")
+	w3 := callUnlock(h3, "abc123")
 	if w3.Code != http.StatusOK || !strings.Contains(w3.Body.String(), "sessionToken") {
-		t.Fatalf("expected 200 session under --require-owner-auth, got %d: %s", w3.Code, w3.Body.String())
+		t.Fatalf("expected 200 session with 6-char Local password under --require-owner-auth, got %d: %s", w3.Code, w3.Body.String())
 	}
 	if hasPW, _ := s3.hasPassword(t.Context()); !hasPW {
 		t.Fatal("expected core owner password to be set after unlock-password")
 	}
-	if _, err := s3.Login(t.Context(), "correct-horse-battery-staple"); err != nil {
-		t.Fatalf("expected normal Login to succeed after Case 3 unlock: %v", err)
+	if _, err := s3.Login(t.Context(), "abc123"); err != nil {
+		t.Fatalf("expected normal Login to succeed after 6-char Case 3 unlock: %v", err)
 	}
 }

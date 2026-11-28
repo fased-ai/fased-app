@@ -277,8 +277,8 @@ func (h *HTTPHandler) localOwnerAPI(w http.ResponseWriter, r *http.Request) {
 			writeError(w, 403, "Local wallet unlock not required.")
 			return
 		}
-		if !validPassword(request.Password) {
-			writeError(w, 400, "use a password of at least 12 characters and at most 1024 bytes")
+		if !validLocalPassword(request.Password) {
+			writeError(w, 400, "use a password of at least 6 characters and at most 1024 bytes")
 			return
 		}
 		cs, cErr := h.store.custodyBackend()
@@ -298,7 +298,7 @@ func (h *HTTPHandler) localOwnerAPI(w http.ResponseWriter, r *http.Request) {
 				writeError(w, 401, "Incorrect owner password.")
 				return
 			}
-		} else {
+		} else if validPassword(request.Password) {
 			if cfgErr := cs.ConfigureOwnerAuth(r.Context(), request.Password); cfgErr != nil && !errors.Is(cfgErr, custody.ErrOwnerAuthRequired) {
 				writeError(w, 500, "failed to enroll signer owner authorization")
 				return

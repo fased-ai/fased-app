@@ -12,6 +12,7 @@ import (
 	"sync"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/fased-ai/fased-app/internal/auth"
 	"github.com/fased-ai/fased-app/internal/vault"
@@ -43,6 +44,10 @@ func passwordHash(password string, salt []byte) []byte {
 
 func validPassword(password string) bool {
 	return auth.ValidPassword(password)
+}
+
+func validLocalPassword(password string) bool {
+	return utf8.ValidString(password) && utf8.RuneCountInString(strings.TrimSpace(password)) >= 6 && len(password) <= 1024
 }
 
 func (s *Store) compareAndSetUnclaimedCode(ctx context.Context, previous, next string, expires int64) (bool, error) {
@@ -177,8 +182,8 @@ func (s *Store) SetLocalOwnerPassword(ctx context.Context, password string) erro
 }
 
 func (s *Store) setLocalOwnerPasswordKeeping(ctx context.Context, password, keepTokenHash string) error {
-	if !validPassword(password) {
-		return errors.New("use a password of at least 12 characters and at most 1024 bytes")
+	if !validLocalPassword(password) {
+		return errors.New("use a password of at least 6 characters and at most 1024 bytes")
 	}
 	s.authMu.Lock()
 	defer s.authMu.Unlock()

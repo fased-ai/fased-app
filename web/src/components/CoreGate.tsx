@@ -365,7 +365,7 @@ export function CoreGate({ children }: { children: ReactNode }) {
           <img src={logo} alt="" width="28" height="28" />
           <strong>Fased</strong>
         </div>
-        {!minimalLocalGate && <InstanceSummary />}
+        {!minimalLocalGate && <InstanceSummary compact />}
         {core.mode === "loading" ? (
           <div className="empty-state" role="status">
             <ShieldCheck size={28} />
@@ -440,7 +440,7 @@ export function CoreGate({ children }: { children: ReactNode }) {
                       : "new-password"
                   }
                   required
-                  minLength={12}
+                  minLength={6}
                   maxLength={1024}
                   value={password}
                   onChange={(e) => {
@@ -458,7 +458,7 @@ export function CoreGate({ children }: { children: ReactNode }) {
                       type="password"
                       autoComplete="new-password"
                       required
-                      minLength={12}
+                      minLength={6}
                       maxLength={1024}
                       value={confirmPassword}
                       onChange={(e) => {

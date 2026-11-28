@@ -23,7 +23,7 @@ function transportLabel(transport?: string): string {
   }
 }
 
-export function InstanceSummary() {
+export function InstanceSummary({ compact = false }: { compact?: boolean }) {
   const { t: uiText } = useUI();
   const core = useCore();
   const [detailsOpen, setDetailsOpen] = useState(false);
@@ -31,6 +31,29 @@ export function InstanceSummary() {
   if (!info) return null;
   const transportTag =
     info.location === "remote" ? transportLabel(info.remoteTransport) : "";
+  const originText =
+    location.hostname === "wails" || location.hostname === "wails.localhost"
+      ? uiText("Desktop connection")
+      : location.origin;
+  if (compact) {
+    return (
+      <div className="instance-pill-line">
+        {info.location === "local" ? (
+          <Monitor size={14} />
+        ) : (
+          <Server size={14} />
+        )}
+        <span>
+          {info.location === "local" ? uiText("Local") : uiText("Remote")}
+        </span>
+        {transportTag && (
+          <span className="transport-tag">· {transportTag}</span>
+        )}
+        <span className="dot" />
+        <span className="instance-origin">{originText}</span>
+      </div>
+    );
+  }
   return (
     <>
       <dl className="instance-facts">
