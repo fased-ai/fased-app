@@ -2463,6 +2463,7 @@
   display: flex;
   flex-direction: column;
   gap: 10px;
+  padding: 16px 20px 20px;
 }
 
 .mine-modal-input {
@@ -2473,7 +2474,7 @@
   border-radius: 7px;
   background: var(--wt-raised);
   color: var(--wt-text);
-  font-size: 13px;
+  font-size: 14px;
 }
 
 .mine-modal-actions {
@@ -2592,6 +2593,15 @@
 
   .mine-sched-grid {
     grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+
+  .mine-modal-input,
+  .mine-amount-box .mine-amount-input {
+    font-size: 16px;
+  }
+
+  .mine-automate-grid {
+    grid-template-columns: minmax(0, 1fr);
   }
 
   :root.wt button.mine-chip {
