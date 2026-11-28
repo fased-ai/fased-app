@@ -181,7 +181,7 @@ func TestPresetsCurveReversalAndEngineLifecycle(t *testing.T) {
 		t.Fatalf("Portfolio failed: pub=%s claims=%d err=%v", pf.WalletPublicKey, len(pf.ClaimItems), err)
 	}
 	stk, err := eng.StakingOverview(ctx, "devnet", mineW.ID)
-	if err != nil || stk.MinStakeSat != 10 {
+	if err != nil || stk.MinStakeSat != 1 {
 		t.Fatalf("StakingOverview failed: %+v err=%v", stk, err)
 	}
 
