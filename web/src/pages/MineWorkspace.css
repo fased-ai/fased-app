@@ -289,25 +289,37 @@
   background: var(--wt-raised);
 }
 
-.mine-rail-price-dl {
+.wrx.fased-mine-root .mine-rail-price-dl {
+  display: block;
   margin: 0;
 }
 
-.mine-rail-price-dl dt {
+.wrx.fased-mine-root .mine-rail-price-dl > div {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  padding: 0;
+  border: 0;
+}
+
+.wrx.fased-mine-root .mine-rail-price-dl dt {
   font-size: 10.5px;
   font-weight: 600;
   letter-spacing: 0.04em;
   color: var(--wt-muted);
-  margin-bottom: 2px;
+  text-align: left;
+  margin: 0;
 }
 
-.mine-rail-price-dl dd {
+.wrx.fased-mine-root .mine-rail-price-dl dd {
   margin: 0;
   font-size: 24px;
   font-weight: 700;
   letter-spacing: -0.025em;
   line-height: 1.15;
   color: var(--wt-text);
+  text-align: left;
 }
 
 .mine-rail-status-row {
@@ -376,31 +388,36 @@
   font-weight: 600;
 }
 
-.mine-rail-stats-grid {
+.wrx.fased-mine-root .mine-rail-stats-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 12px 10px;
   margin: 0;
 }
 
-.mine-rail-stats-grid > div {
+.wrx.fased-mine-root .mine-rail-stats-grid > div {
   display: flex;
   flex-direction: column;
+  align-items: flex-start;
   gap: 3px;
+  padding: 0;
+  border: 0;
   min-width: 0;
 }
 
-.mine-rail-stats-grid dt {
+.wrx.fased-mine-root .mine-rail-stats-grid dt {
   font-size: 11px;
   color: var(--wt-muted);
+  text-align: left;
 }
 
-.mine-rail-stats-grid dd {
+.wrx.fased-mine-root .mine-rail-stats-grid dd {
   margin: 0;
   font-size: 15px;
   font-weight: 650;
   color: var(--wt-text);
   line-height: 1.25;
+  text-align: left;
 }
 
 .mine-rail-stats-grid dd small {
@@ -1357,29 +1374,34 @@
   background: var(--wt-raised);
 }
 
-.mine-claims-metrics {
+.wrx.fased-mine-root .mine-claims-metrics {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 12px;
   margin: 0;
 }
 
-.mine-claims-metrics > div {
+.wrx.fased-mine-root .mine-claims-metrics > div {
   display: flex;
   flex-direction: column;
+  align-items: flex-start;
   gap: 4px;
+  padding: 0;
+  border: 0;
 }
 
-.mine-claims-metrics dt {
+.wrx.fased-mine-root .mine-claims-metrics dt {
   font-size: 11px;
   color: var(--wt-muted);
+  text-align: left;
 }
 
-.mine-claims-metrics dd {
+.wrx.fased-mine-root .mine-claims-metrics dd {
   margin: 0;
   font-size: 15px;
   font-weight: 650;
   color: var(--wt-text);
+  text-align: left;
 }
 
 .mine-claims-cta {
@@ -1581,10 +1603,12 @@
 
 /* 80-Bar Allocation Curve (112px + vertical top-to-bottom fade mask) */
 .mine-allocation-chart {
+  flex: none;
   display: grid;
   grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 4px;
   height: 112px;
+  min-height: 112px;
   padding: 16px 2px 0;
   align-items: end;
   user-select: none;
@@ -1602,7 +1626,7 @@
   align-items: stretch;
   justify-content: flex-end;
   gap: 4px;
-  height: 100%;
+  height: 96px;
   min-width: 0;
 }
 
@@ -1635,8 +1659,8 @@
   align-items: end;
   gap: 1px;
   width: 100%;
-  height: 100%;
-  min-height: 0;
+  height: 96px;
+  min-height: 96px;
   -webkit-mask-image: linear-gradient(
     180deg,
     var(--wt-text) 0%,

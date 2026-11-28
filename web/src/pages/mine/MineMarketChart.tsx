@@ -896,6 +896,8 @@ export function MineMarketChart({
         const volSeries = chart.addSeries(HistogramSeries, {
           priceFormat: { type: "volume" },
           priceScaleId: "vol",
+          lastValueVisible: false,
+          priceLineVisible: false,
         });
         chart.priceScale("vol").applyOptions({
           scaleMargins: { top: 0.82, bottom: 0 },
