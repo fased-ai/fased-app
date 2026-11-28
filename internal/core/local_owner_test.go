@@ -526,4 +526,55 @@ func TestLocalWalletUnlockPasswordFlow(t *testing.T) {
 	if _, err := s2.Login(t.Context(), "existing-signer-secret-99"); err != nil {
 		t.Fatalf("expected normal Login to succeed after sync: %v", err)
 	}
+
+	// Case 3: Out-of-process fased-signer running with --require-owner-auth and no signer owner password yet
+	// returns ErrOwnerAuthRequired over app.sock; unlock-password must tolerate it and enroll the Core password cleanly.
+	signerDir := t.TempDir()
+	signerSvc, err := custody.NewService(custody.Config{
+		DataDir:          signerDir,
+		FixtureMode:      true,
+		FastKDF:          true,
+		RequireOwnerAuth: true,
+	})
+	if err != nil {
+		t.Fatalf("custody.NewService: %v", err)
+	}
+	t.Cleanup(func() { _ = signerSvc.Close() })
+	sockPath := filepath.Join(signerDir, "app.sock")
+	sockSrv, err := custody.StartSocketServerAt(signerSvc, sockPath, os.Getuid(), 0o600)
+	if err != nil {
+		t.Fatalf("StartSocketServerAt: %v", err)
+	}
+	t.Cleanup(func() { _ = sockSrv.Close(t.Context()) })
+	s3, err := OpenStore(fixtureDir(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = s3.Close() })
+	s3.ConfigureCustodySocket(sockPath)
+	cust3, err := s3.custodyBackend()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := cust3.CreateNativeWallet(t.Context(), "Miner", custody.RoleMining, "https://api.devnet.solana.com"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s3.localOwnerSession(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	h3, err := NewHTTPHandler(s3, "http://127.0.0.1:7332", "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h3.loopbackPeerUID = func(_, _ *net.TCPAddr) (int, bool, error) { return os.Getuid(), true, nil }
+	w3 := callUnlock(h3, "correct-horse-battery-staple")
+	if w3.Code != http.StatusOK || !strings.Contains(w3.Body.String(), "sessionToken") {
+		t.Fatalf("expected 200 session under --require-owner-auth, got %d: %s", w3.Code, w3.Body.String())
+	}
+	if hasPW, _ := s3.hasPassword(t.Context()); !hasPW {
+		t.Fatal("expected core owner password to be set after unlock-password")
+	}
+	if _, err := s3.Login(t.Context(), "correct-horse-battery-staple"); err != nil {
+		t.Fatalf("expected normal Login to succeed after Case 3 unlock: %v", err)
+	}
 }

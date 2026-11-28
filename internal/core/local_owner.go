@@ -11,6 +11,8 @@ import (
 	"runtime"
 	"strings"
 	"time"
+
+	"github.com/fased-ai/fased-app/internal/custody"
 )
 
 // Local authorization comes only from the existing owner-only OS socket, never
@@ -297,7 +299,7 @@ func (h *HTTPHandler) localOwnerAPI(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		} else {
-			if cfgErr := cs.ConfigureOwnerAuth(r.Context(), request.Password); cfgErr != nil {
+			if cfgErr := cs.ConfigureOwnerAuth(r.Context(), request.Password); cfgErr != nil && !errors.Is(cfgErr, custody.ErrOwnerAuthRequired) {
 				writeError(w, 500, "failed to enroll signer owner authorization")
 				return
 			}
