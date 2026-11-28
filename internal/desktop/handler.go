@@ -537,9 +537,9 @@ func allowed(method, route string) bool {
 		rel := strings.TrimPrefix(route, "/api/v1/mining")
 		rel = strings.TrimPrefix(rel, "/")
 		switch rel {
-		case "", "status", "round", "presets", "history", "candles", "protocol-stats", "leaderboard", "portfolio", "staking":
+		case "", "status", "round", "presets", "history", "candles", "protocol-stats", "leaderboard", "portfolio", "staking", "manifest", "self-keeper":
 			return method == http.MethodGet
-		case "preview", "commit", "reveal", "claim", "claim-all", "stake", "activate-stake", "unstake", "claim-staking", "strategies/simulate":
+		case "preview", "commit", "reveal", "claim", "claim-all", "stake", "activate-stake", "unstake", "claim-staking", "strategies/simulate", "manifest/sync", "self-keeper/sweep":
 			return method == http.MethodPost
 		case "strategies":
 			return method == http.MethodGet || method == http.MethodPost

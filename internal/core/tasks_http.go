@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"net/http"
 	"strconv"
 	"strings"
@@ -20,9 +21,11 @@ import (
 )
 
 var (
-	tasksEngineMu     sync.RWMutex
-	tasksEngines      = map[*Store]*tasks.Engine{}
-	taskBridgeStarted sync.Map
+	tasksEngineMu      sync.RWMutex
+	tasksEngines       = map[*Store]*tasks.Engine{}
+	taskBridgeStarted  sync.Map
+	miningTaskSlotMu   sync.Mutex
+	miningTaskLastSlot = map[string]uint64{}
 )
 
 func init() {
@@ -282,24 +285,153 @@ func (s *Store) runTaskDomain(ctx context.Context, task tasks.Task, input tasks.
 		if err != nil {
 			return tasks.RunOutput{Status: "failed", DecisionSummary: err.Error()}, err
 		}
-		round := mEng.CurrentRound(ctx, nonEmpty(task.ExecutionBinding.Cluster, "devnet"))
+		cluster := nonEmpty(task.ExecutionBinding.Cluster, "devnet")
+		round := mEng.CurrentRound(ctx, cluster)
 		walletID := strings.TrimPrefix(strings.TrimSpace(task.ExecutionBinding.WalletHandle), "@wallet:")
-		strategyID := nonEmpty(task.Attachments.StrategyID, "wide")
-		if strategyID == "auto-claim" && walletID != "" && task.ApprovalPolicy != tasks.ApprovalManual {
-			if _, led, cErr := mEng.SubmitClaim(ctx, wenlv1x.ClaimRequest{
-				WalletID:   walletID,
-				RoundSlot:  round.RoundSlot,
-				Autonomous: true,
-				TaskID:     task.ID,
-			}); cErr == nil && led != nil {
-				return tasks.RunOutput{
-					Status:          "completed",
-					ActionTaken:     "mining_auto_claim",
-					DecisionSummary: fmt.Sprintf("Auto-claimed LV1X round %d rewards (tx=%s)", round.RoundSlot, led.TxSignature),
-				}, nil
+		strategyID := strings.ToLower(strings.TrimSpace(nonEmpty(task.Attachments.StrategyID, "wide")))
+
+		if strategyID == "yield-sweep" {
+			skSt, sErr := mEng.TriggerSelfKeeperSweep(ctx)
+			if sErr != nil {
+				return tasks.RunOutput{Status: "failed", DecisionSummary: sErr.Error()}, sErr
+			}
+			b, _ := json.Marshal(skSt)
+			return tasks.RunOutput{
+				Status:          "completed",
+				ActionTaken:     "mining_yield_sweep",
+				DecisionSummary: fmt.Sprintf("Self-Keeper yield sweep (%s): %s", skSt.Cluster, nonEmpty(skSt.LastSweepSummary, "idle")),
+				SignalEmitted:   skSt.LastSweepSummary != "" && skSt.LastSweepSummary != "idle",
+				ResultJSON:      string(b),
+			}, nil
+		}
+
+		if strategyID == "auto-claim" {
+			skSt, _ := mEng.TriggerSelfKeeperSweep(ctx)
+			if walletID != "" && task.ApprovalPolicy != tasks.ApprovalManual {
+				if claimed, cErr := mEng.SubmitClaimAll(ctx, wenlv1x.ClaimAllRequest{
+					WalletID: walletID,
+					Cluster:  cluster,
+					Assets:   []string{"sol", "sat", "btc"},
+				}); cErr == nil && len(claimed) > 0 {
+					return tasks.RunOutput{
+						Status:          "completed",
+						ActionTaken:     "mining_auto_claim",
+						DecisionSummary: fmt.Sprintf("Auto-claimed %d LV1X reward txs (%s)", len(claimed), nonEmpty(skSt.LastSweepSummary, "settled")),
+						SignalEmitted:   true,
+					}, nil
+				}
+			}
+			b, _ := json.Marshal(skSt)
+			return tasks.RunOutput{
+				Status:          "completed",
+				ActionTaken:     "mining_auto_claim_check",
+				DecisionSummary: fmt.Sprintf("Auto-claim sweep (%s): %s", cluster, nonEmpty(skSt.LastSweepSummary, "none claimable")),
+				ResultJSON:      string(b),
+			}, nil
+		}
+
+		// Estimate realized 10m BTC volatility in bps from recent candles.
+		volBps := 10
+		if cResp, cErr := mEng.GetCandles(ctx, "10m", 12); cErr == nil && len(cResp.Candles) >= 3 {
+			var sumAbs float64
+			for _, bar := range cResp.Candles {
+				if bar.Open > 0 {
+					sumAbs += math.Abs((bar.Close - bar.Open) / bar.Open * 10000.0)
+				}
+			}
+			if avg := int(math.Round(sumAbs / float64(len(cResp.Candles)))); avg > 0 {
+				volBps = avg
 			}
 		}
-		dec := wenlv1x.EvaluateTrendDecision(strategyID, task.Constraints.StopOnReversal, round.MoveBps, 10, round, 0.02)
+
+		// Macro/News risk veto via WorldIntel when running adaptive strategies.
+		if strategyID == "adaptive-trend" || strategyID == "fasedscript-miner" {
+			if wi, wErr := s.worldIntelService(); wErr == nil && wi != nil {
+				if evs, lErr := wi.ListEvents(ctx, worldintel.EventFilter{MinUrgency: 0.85, Limit: 6}); lErr == nil {
+					for _, ev := range evs {
+						sent := strings.ToLower(strings.TrimSpace(ev.Sentiment))
+						if (sent == "bearish" || sent == "negative" || sent == "risk_off") && task.Constraints.StopOnReversal {
+							return tasks.RunOutput{
+								Status:          "completed",
+								ActionTaken:     "mining_risk_veto",
+								DecisionSummary: fmt.Sprintf("WorldIntel risk veto active (%s, urgency=%.2f, sentiment=%s)", ev.Title, ev.Urgency, ev.Sentiment),
+								SignalEmitted:   true,
+								ThresholdHit:    true,
+							}, nil
+						}
+					}
+				}
+			}
+		}
+
+		baseSOL := 0.02
+		if task.Constraints.MaxSpendLamports > 0 {
+			baseSOL = math.Max(0.01, float64(task.Constraints.MaxSpendLamports)/1e9)
+		} else if task.Constraints.MaxSpendUSD > 0 {
+			baseSOL = math.Max(0.01, task.Constraints.MaxSpendUSD/250.0)
+		}
+
+		var dec wenlv1x.TrendDecision
+		switch strategyID {
+		case "contrarian-ev":
+			bestIdx := uint8(2)
+			bestEV := -1.0
+			for _, bk := range round.Buckets {
+				if bk.EVMultiple > bestEV {
+					bestEV = bk.EVMultiple
+					bestIdx = bk.Index
+				}
+			}
+			if bestEV < 1.15 {
+				return tasks.RunOutput{
+					Status:          "completed",
+					ActionTaken:     "mining_ev_skip",
+					DecisionSummary: fmt.Sprintf("Contrarian-EV skipped slot %d (max EV=%.2fx < 1.15x)", round.RoundSlot, bestEV),
+				}, nil
+			}
+			dec = wenlv1x.TrendDecision{
+				Action:          "commit",
+				SelectedPreset:  "wide",
+				SelectedBucket:  bestIdx,
+				TrendRegime:     "contrarian",
+				Reason:          fmt.Sprintf("Contrarian-EV selected bucket %s (EV=%.2fx)", wenlv1x.BucketCodes[bestIdx], bestEV),
+				RecommendedSOL:  baseSOL,
+				SignalTriggered: true,
+			}
+		case "det-band":
+			preset := "wide"
+			bucket := uint8(2)
+			switch {
+			case volBps <= 8 && round.MoveBps > -10 && round.MoveBps < 10:
+				preset = "center"
+				bucket = 2
+			case round.MoveBps >= 10:
+				preset = "trend-up"
+				bucket = 3
+			case round.MoveBps <= -10:
+				preset = "trend-down"
+				bucket = 1
+			case volBps >= 28:
+				preset = "tails"
+				bucket = 0
+			}
+			dec = wenlv1x.TrendDecision{
+				Action:          "commit",
+				SelectedPreset:  preset,
+				SelectedBucket:  bucket,
+				TrendRegime:     fmt.Sprintf("det-band(vol=%dbps)", volBps),
+				Reason:          fmt.Sprintf("Det-Band chose %s (move=%dbps, vol=%dbps)", preset, round.MoveBps, volBps),
+				RecommendedSOL:  baseSOL,
+				SignalTriggered: true,
+			}
+		default:
+			evalStrat := strategyID
+			if strategyID == "adaptive-trend" || strategyID == "fasedscript-miner" {
+				evalStrat = "wide"
+			}
+			dec = wenlv1x.EvaluateTrendDecision(evalStrat, task.Constraints.StopOnReversal, round.MoveBps, volBps, round, baseSOL)
+		}
+
 		if dec.Action == "pause" {
 			b, _ := json.Marshal(dec)
 			return tasks.RunOutput{
@@ -312,14 +444,40 @@ func (s *Store) runTaskDomain(ctx context.Context, task tasks.Task, input tasks.
 			}, nil
 		}
 		if walletID != "" && task.ApprovalPolicy == tasks.ApprovalAuto {
-			if _, led, cErr := mEng.SubmitCommit(ctx, wenlv1x.CommitRequest{
+			slotKey := task.ID + ":" + cluster
+			miningTaskSlotMu.Lock()
+			alreadyCommitted := miningTaskLastSlot[slotKey] == round.RoundSlot
+			if !alreadyCommitted {
+				miningTaskLastSlot[slotKey] = round.RoundSlot
+			}
+			miningTaskSlotMu.Unlock()
+			if alreadyCommitted {
+				return tasks.RunOutput{
+					Status:          "completed",
+					ActionTaken:     "mining_slot_already_committed",
+					DecisionSummary: fmt.Sprintf("Skipped duplicate commit for slot %d (%s)", round.RoundSlot, cluster),
+				}, nil
+			}
+			selCopy := dec.SelectedBucket
+			_, led, cErr := mEng.SubmitCommit(ctx, wenlv1x.CommitRequest{
 				WalletID:   walletID,
-				Cluster:    nonEmpty(task.ExecutionBinding.Cluster, "devnet"),
+				Cluster:    cluster,
 				AmountSOL:  dec.RecommendedSOL,
+				Selection:  &selCopy,
 				StrategyID: dec.SelectedPreset,
 				Autonomous: true,
 				TaskID:     task.ID,
-			}); cErr == nil && led != nil {
+			})
+			if cErr != nil || led == nil {
+				miningTaskSlotMu.Lock()
+				if miningTaskLastSlot[slotKey] == round.RoundSlot {
+					delete(miningTaskLastSlot, slotKey)
+				}
+				miningTaskSlotMu.Unlock()
+				if cErr != nil {
+					return tasks.RunOutput{Status: "failed", DecisionSummary: cErr.Error()}, cErr
+				}
+			} else {
 				b, _ := json.Marshal(dec)
 				return tasks.RunOutput{
 					Status:          "completed",

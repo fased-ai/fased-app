@@ -905,6 +905,10 @@ func TestNativeLV1XMiningRoutes(t *testing.T) {
 		{http.MethodPost, "http://wails.localhost/api/v1/mining/sessions/msess-1/close", true},
 		{http.MethodGet, "http://wails.localhost/api/v1/mining/policy?walletId=w1", true},
 		{http.MethodPut, "http://wails.localhost/api/v1/mining/policy", true},
+		{http.MethodGet, "http://wails.localhost/api/v1/mining/manifest", true},
+		{http.MethodPost, "http://wails.localhost/api/v1/mining/manifest/sync", true},
+		{http.MethodGet, "http://wails.localhost/api/v1/mining/self-keeper", true},
+		{http.MethodPost, "http://wails.localhost/api/v1/mining/self-keeper/sweep", true},
 		{http.MethodDelete, "http://wails.localhost/api/v1/mining/sessions/msess-1/close", false},
 	}
 	for _, tc := range cases {

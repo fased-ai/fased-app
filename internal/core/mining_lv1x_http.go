@@ -255,6 +255,15 @@ func (s *Store) wenLV1XEngine() (*wenlv1x.Engine, error) {
 	return eng, nil
 }
 
+func (s *Store) startWENLV1XSelfKeeper(ctx context.Context) {
+	if s == nil || s.dir == "" || s.fixture != nil || !s.rpcAdmission {
+		return
+	}
+	if eng, err := s.wenLV1XEngine(); err == nil && eng != nil {
+		eng.Start(ctx)
+	}
+}
+
 func writeMiningErr(w http.ResponseWriter, err error) {
 	code := http.StatusBadRequest
 	if errors.Is(err, custody.ErrPolicyDenied) || errors.Is(err, custody.ErrRoleDenied) {
@@ -303,6 +312,50 @@ func (h *HTTPHandler) miningLV1XAPI(w http.ResponseWriter, r *http.Request, toke
 			return
 		}
 		writeJSON(w, 200, map[string]any{"presets": wenlv1x.BuiltInPresets()})
+
+	case rel == "manifest":
+		if r.Method != http.MethodGet {
+			writeError(w, 405, "method not allowed")
+			return
+		}
+		writeJSON(w, 200, eng.GetManifestStatus(ctx))
+
+	case rel == "manifest/sync":
+		if r.Method != http.MethodPost {
+			writeError(w, 405, "method not allowed")
+			return
+		}
+		if !h.v2Mutation(w, r, token, true) {
+			return
+		}
+		st, sErr := eng.SyncManifest(ctx)
+		errStr := ""
+		if sErr != nil {
+			errStr = sErr.Error()
+		}
+		writeJSON(w, 200, map[string]any{"manifest": st, "synced": sErr == nil, "error": errStr})
+
+	case rel == "self-keeper":
+		if r.Method != http.MethodGet {
+			writeError(w, 405, "method not allowed")
+			return
+		}
+		writeJSON(w, 200, eng.SelfKeeperStatus(ctx))
+
+	case rel == "self-keeper/sweep":
+		if r.Method != http.MethodPost {
+			writeError(w, 405, "method not allowed")
+			return
+		}
+		if !h.v2Mutation(w, r, token, true) {
+			return
+		}
+		st, sErr := eng.TriggerSelfKeeperSweep(ctx)
+		if sErr != nil {
+			writeMiningErr(w, sErr)
+			return
+		}
+		writeJSON(w, 200, st)
 
 	case rel == "candles":
 		if r.Method != http.MethodGet {
@@ -758,7 +811,13 @@ func (h *HTTPHandler) miningLV1XAPI(w http.ResponseWriter, r *http.Request, toke
 				nextPol.AutoApproveMaxUSD = in.AutoApproveMaxUSD
 			}
 			nextPol.Operations = custody.AllMiningOperations()
-			prog := nonEmpty(in.Mining.ProgramID, custody.EffectiveDevnetProgramID())
+			progFallback := custody.EffectiveDevnetProgramID()
+			if strings.EqualFold(strings.TrimSpace(in.Mining.Cluster), "mainnet-beta") {
+				if mp := strings.TrimSpace(eng.GetManifestStatus(ctx).MainnetProgramID); mp != "" {
+					progFallback = mp
+				}
+			}
+			prog := nonEmpty(in.Mining.ProgramID, progFallback)
 			nextPol.Programs = []string{custody.SolanaSystemProgram, custody.SolanaComputeBudget, custody.SolanaTokenProgram, custody.SolanaATAProgram, prog}
 			if in.MaxPerTxLamports > 0 {
 				nextPol.SOLCap.MaxPerTxRaw = in.MaxPerTxLamports

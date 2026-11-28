@@ -6,6 +6,10 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/fased-ai/fased-app/internal/custody"
+	"github.com/fased-ai/fased-app/internal/onchain"
+	"github.com/fased-ai/fased-app/internal/tasks"
 )
 
 func TestLV1XMiningCoreRoutesAndMainnetGate(t *testing.T) {
@@ -58,11 +62,17 @@ func TestLV1XMiningCoreRoutesAndMainnetGate(t *testing.T) {
 		{"/api/v1/mining/portfolio?cluster=devnet", `"cluster":"devnet"`},
 		{"/api/v1/mining/staking?cluster=devnet", `"minStakeSat":1`},
 		{"/api/v1/mining/strategies", `"presets"`},
+		{"/api/v1/mining/manifest", `"devnetProgramId"`},
+		{"/api/v1/mining/self-keeper", `"cluster":"devnet"`},
 	} {
 		resp := stage4Req(h, http.MethodGet, srv.URL, tc.path, "", token, "", "")
 		if resp.Code != http.StatusOK || !strings.Contains(resp.Body.String(), tc.want) {
 			t.Fatalf("GET %s failed (%d): %s", tc.path, resp.Code, resp.Body.String())
 		}
+	}
+	sweepResp := stage4Req(h, http.MethodPost, srv.URL, "/api/v1/mining/self-keeper/sweep", "{}", token, srv.URL, csrf)
+	if sweepResp.Code != http.StatusOK || !strings.Contains(sweepResp.Body.String(), `"lastSweepSummary"`) {
+		t.Fatalf("POST /api/v1/mining/self-keeper/sweep failed (%d): %s", sweepResp.Code, sweepResp.Body.String())
 	}
 
 	saveStrat := stage4Req(h, http.MethodPost, srv.URL, "/api/v1/mining/strategies", `{"name":"Custom Wing","bucketsBps":[1500,2000,3000,2000,1500]}`, token, srv.URL, csrf)
@@ -86,5 +96,86 @@ func TestLV1XMiningCoreRoutesAndMainnetGate(t *testing.T) {
 		if polNoStep.Code != http.StatusForbidden {
 			t.Fatalf("expected 403 on policy update without owner step-up, got %d: %s", polNoStep.Code, polNoStep.Body.String())
 		}
+	}
+}
+
+func TestGoalMiningStrategiesAndIdempotentSlotGuard(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	s := fixtureStore(t)
+
+	cust, err := s.custodyBackend()
+	if err != nil || cust == nil {
+		t.Fatalf("custodyBackend: %v", err)
+	}
+	w, err := cust.CreateNativeWallet(ctx, "Task Miner", custody.RoleMining, "https://api.devnet.solana.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	w, err = cust.UpdatePolicy(ctx, w.ID, custody.WalletPolicy{
+		Role:              custody.RoleMining,
+		ApprovalMode:      custody.ApprovalBoundedAuto,
+		AutoApproveMaxUSD: 50.0,
+		Operations:        custody.AllMiningOperations(),
+		Programs:          []string{custody.SolanaSystemProgram, custody.SolanaComputeBudget, custody.SolanaTokenProgram, custody.SolanaATAProgram, onchain.LV1XDevnetProgramID},
+		SOLCap: custody.AssetCap{
+			Asset:       "solana:native",
+			Symbol:      "SOL",
+			Decimals:    9,
+			MaxPerTxRaw: 50_000_000,
+			MaxDailyRaw: 200_000_000,
+		},
+		Mining: &custody.MiningPolicy{
+			Cluster:               "devnet",
+			ProgramID:             onchain.LV1XDevnetProgramID,
+			LedgerID:              onchain.LV1XDevnetLedgerID,
+			ExpectedELFSHA256:     onchain.LV1XDevnetELFSHA256,
+			MaxSOLPerRoundLamport: 50_000_000,
+			MaxDailySOLLamports:   200_000_000,
+			AllowedStrategies:     []string{"wide", "center", "trend-up", "trend-down", "tails"},
+			AutoClaim:             true,
+		},
+	}, true, w.Policy.PolicyHash, "owner")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// 1. yield-sweep executes Self-Keeper sweep cleanly.
+	yOut, err := s.runTaskDomain(ctx, tasks.Task{
+		ID:          "tsk-yield-1",
+		GoalDomain:  tasks.GoalMining,
+		Attachments: tasks.TaskAttachments{StrategyID: "yield-sweep"},
+	}, tasks.RunInput{TriggerSource: "schedule"})
+	if err != nil || yOut.ActionTaken != "mining_yield_sweep" {
+		t.Fatalf("yield-sweep failed: out=%+v err=%v", yOut, err)
+	}
+
+	// 2. det-band adapts regime and idempotent per-slot guard skips duplicate commit on same round slot.
+	detTask := tasks.Task{
+		ID:               "tsk-det-1",
+		GoalDomain:       tasks.GoalMining,
+		ApprovalPolicy:   tasks.ApprovalAuto,
+		Attachments:      tasks.TaskAttachments{StrategyID: "det-band"},
+		ExecutionBinding: tasks.ExecutionBinding{Cluster: "devnet", WalletHandle: "@wallet:" + w.ID},
+	}
+	d1, err := s.runTaskDomain(ctx, detTask, tasks.RunInput{TriggerSource: "event:mining.round.opened"})
+	if err != nil || d1.ActionTaken != "mining_auto_commit" {
+		t.Fatalf("det-band first commit failed: out=%+v err=%v", d1, err)
+	}
+	d2, err := s.runTaskDomain(ctx, detTask, tasks.RunInput{TriggerSource: "event:mining.round.opened"})
+	if err != nil || d2.ActionTaken != "mining_slot_already_committed" {
+		t.Fatalf("expected idempotent slot guard on duplicate run, got out=%+v err=%v", d2, err)
+	}
+
+	// 3. contrarian-ev selects the +EV bucket (>= 1.15x) from fixture crowd skew.
+	cOut, err := s.runTaskDomain(ctx, tasks.Task{
+		ID:               "tsk-ev-1",
+		GoalDomain:       tasks.GoalMining,
+		ApprovalPolicy:   tasks.ApprovalAuto,
+		Attachments:      tasks.TaskAttachments{StrategyID: "contrarian-ev"},
+		ExecutionBinding: tasks.ExecutionBinding{Cluster: "devnet", WalletHandle: "@wallet:" + w.ID},
+	}, tasks.RunInput{TriggerSource: "schedule"})
+	if err != nil || cOut.ActionTaken != "mining_auto_commit" || !strings.Contains(cOut.DecisionSummary, "Contrarian-EV selected bucket") {
+		t.Fatalf("expected contrarian-ev commit on +EV bucket, got out=%+v err=%v", cOut, err)
 	}
 }

@@ -190,6 +190,9 @@ func startModesWithTaskSecrets(ctx context.Context, dir, listen, publicOrigin st
 	server.agentFixture = fixture
 	server.startAgentTasks()
 	server.Store.startTasksEngine(serverCtx)
+	if !fixture {
+		server.Store.startWENLV1XSelfKeeper(serverCtx)
+	}
 	failed = false
 	return server, nil
 }
