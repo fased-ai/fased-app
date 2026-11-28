@@ -1,6 +1,10 @@
 import { useState } from "react";
 import { Check, Copy, ExternalLink } from "../../icons";
-import type { LeaderboardResponse, ProtocolStats } from "../../mining-lv1x";
+import type {
+  LeaderboardResponse,
+  PortfolioResponse,
+  ProtocolStats,
+} from "../../mining-lv1x";
 
 const SPECTRUM = [
   "#E0566F",
@@ -16,6 +20,7 @@ type MinerFilter = "winners" | "active" | "missed";
 interface MineAssetsPageProps {
   leaderboard: LeaderboardResponse | null;
   stats: ProtocolStats | null;
+  portfolio?: PortfolioResponse | null;
   windowChoice: "24h" | "7d" | "30d" | "all";
   onWindowChange: (w: "24h" | "7d" | "30d" | "all") => void;
 }
@@ -23,6 +28,7 @@ interface MineAssetsPageProps {
 export function MineAssetsPage({
   leaderboard,
   stats,
+  portfolio,
   windowChoice,
   onWindowChange,
 }: MineAssetsPageProps) {
@@ -206,6 +212,56 @@ export function MineAssetsPage({
                 );
               })}
             </svg>
+          </div>
+
+          <div
+            className="wt-wpanel mine-subpanel"
+            aria-label="Personal vs Crowd Benchmark"
+          >
+            <div className="mine-section-head">
+              <h2>Personal vs. Crowd Benchmark</h2>
+              <span className="mine-muted-note">
+                {portfolio?.claimItems?.length ?? 0} pending claims
+              </span>
+            </div>
+            <div className="mine-benchmark-strip">
+              <div className="wt-kpi-box">
+                <span>Your Commits</span>
+                <strong>{portfolio?.history?.length ?? 0}</strong>
+              </div>
+              <div className="wt-kpi-box">
+                <span>SOL Ready</span>
+                <strong>{(portfolio?.claimableSol ?? 0).toFixed(3)} SOL</strong>
+              </div>
+              <div className="wt-kpi-box">
+                <span>Vested SAT</span>
+                <strong>{(portfolio?.vestedSat ?? 0).toFixed(1)} SAT</strong>
+              </div>
+              <div className="wt-kpi-box">
+                <span>cbBTC Ready</span>
+                <strong>{(portfolio?.claimableBtc ?? 0).toFixed(6)} BTC</strong>
+              </div>
+              <div className="wt-kpi-box">
+                <span>Wallet SOL</span>
+                <strong>
+                  {(portfolio?.solBalanceSol ?? 0).toFixed(3)} SOL
+                </strong>
+              </div>
+              <div className="wt-kpi-box">
+                <span>Wallet SAT</span>
+                <strong>{(portfolio?.satBalance ?? 0).toFixed(1)} SAT</strong>
+              </div>
+              <div className="wt-kpi-box">
+                <span>Active Sessions</span>
+                <strong>
+                  {
+                    (portfolio?.sessions ?? []).filter(
+                      (s) => s.status === "active",
+                    ).length
+                  }
+                </strong>
+              </div>
+            </div>
           </div>
         </div>
       )}

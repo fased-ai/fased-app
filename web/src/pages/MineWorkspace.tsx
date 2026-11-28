@@ -1259,6 +1259,7 @@ export function MineWorkspace() {
               round={round}
               streak={status?.streak ?? []}
               crowdWeights={crowdWeightsBps}
+              userWeightsBps={weightsBps}
               onApplyPresetFromTechnicals={(w) => {
                 setPresetId("custom");
                 setWeightsBps(w);
@@ -1314,6 +1315,10 @@ export function MineWorkspace() {
             selectedBucket={selectedBucket}
             round={round}
             roundsCount={roundsCount}
+            startMode={scheduleDraft.startMode}
+            onStartModeChange={(m) =>
+              setScheduleDraft((d) => ({ ...d, startMode: m }))
+            }
             onQuickRounds={(n) => {
               setRoundsCount(n);
               if (n > 1 && mode === "manual") setMode("semi_auto");
@@ -1362,6 +1367,7 @@ export function MineWorkspace() {
         <MineAssetsPage
           leaderboard={leaderboard}
           stats={protoStats}
+          portfolio={portfolio}
           windowChoice={lbWindow}
           onWindowChange={setLbWindow}
         />
@@ -1410,6 +1416,8 @@ export function MineWorkspace() {
       {subRoute === "stake" && (
         <MineStakePage
           staking={staking}
+          rounds={leaderboard?.rounds ?? []}
+          btcUsd={round?.markPriceUsd}
           selectedWalletId={selectedWalletId}
           mainnetLocked={mainnetLocked}
           busy={busy}

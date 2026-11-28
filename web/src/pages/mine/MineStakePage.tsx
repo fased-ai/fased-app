@@ -1,8 +1,13 @@
 import { useState } from "react";
-import type { StakingOverviewResponse } from "../../mining-lv1x";
+import type {
+  LeaderboardRound,
+  StakingOverviewResponse,
+} from "../../mining-lv1x";
 
 interface MineStakePageProps {
   staking: StakingOverviewResponse | null;
+  rounds?: LeaderboardRound[];
+  btcUsd?: number;
   selectedWalletId: string;
   mainnetLocked: boolean;
   busy: boolean;
@@ -14,6 +19,8 @@ interface MineStakePageProps {
 
 export function MineStakePage({
   staking,
+  rounds = [],
+  btcUsd = 94250,
   selectedWalletId,
   mainnetLocked,
   busy,
@@ -47,6 +54,27 @@ export function MineStakePage({
         : "0.00";
 
   const sourceMax = mode === "stake" ? walletSat : userActive + userPending;
+  const nowSec = Math.floor(Date.now() / 1000);
+  const remStreamSec =
+    (staking?.streamEndTs ?? 0) > nowSec
+      ? (staking?.streamEndTs ?? 0) - nowSec
+      : 86400;
+  const dailyPoolBtc =
+    (staking?.streamRemainingBtc ?? 0) > 0
+      ? ((staking?.streamRemainingBtc ?? 0) * 86400) /
+        Math.max(3600, remStreamSec)
+      : 0;
+  const btcPer1kWensat =
+    poolActive > 0 ? (dailyPoolBtc / poolActive) * 1000 : 0;
+  const estUser24hBtc =
+    poolActive > 0 && userActive > 0
+      ? dailyPoolBtc * (userActive / poolActive)
+      : 0;
+  const estAnnualUsdPerSat = btcPer1kWensat * 365 * btcUsd;
+  const estApyPct =
+    poolActive > 0 && estAnnualUsdPerSat > 0
+      ? Math.min(999, (estAnnualUsdPerSat / 100) * 100)
+      : 0;
 
   return (
     <div className="mine-subpage" aria-label="WENSAT Staking and cbBTC Yield">
@@ -74,6 +102,21 @@ export function MineStakePage({
         <div className="wt-kpi-box">
           <span>BTC Stream Remaining</span>
           <strong>{(staking?.streamRemainingBtc ?? 0).toFixed(6)} BTC</strong>
+        </div>
+      </div>
+
+      <div className="mine-yield-strip" aria-label="BTC Yield Metrics">
+        <div className="wt-kpi-box">
+          <span>BTC Yield / 1k SAT (24h)</span>
+          <strong>{btcPer1kWensat.toFixed(6)} cbBTC</strong>
+        </div>
+        <div className="wt-kpi-box">
+          <span>Est. Your 24h cbBTC</span>
+          <strong>{estUser24hBtc.toFixed(6)} cbBTC</strong>
+        </div>
+        <div className="wt-kpi-box">
+          <span>Est. Stream APY Index</span>
+          <strong>{estApyPct > 0 ? `${estApyPct.toFixed(1)}%` : "—"}</strong>
         </div>
       </div>
 
@@ -204,6 +247,39 @@ export function MineStakePage({
           </button>
         </div>
       </div>
+
+      {rounds.length > 0 && (
+        <div className="wt-wpanel mine-subpanel">
+          <div className="mine-section-head">
+            <h2>Recent Staker Inflow Rounds</h2>
+            <span className="mine-muted-note">13% staker fee share</span>
+          </div>
+          <div className="mine-table-scroll">
+            <table className="mine-table" aria-label="Recent staker flows">
+              <thead>
+                <tr>
+                  <th>Round</th>
+                  <th>Winning</th>
+                  <th>Pool SOL</th>
+                  <th>Miners</th>
+                  <th>Est. Staker Share SOL</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rounds.slice(0, 8).map((r) => (
+                  <tr key={r.roundSlot}>
+                    <td>#{r.roundSlot}</td>
+                    <td>{r.code}</td>
+                    <td>{r.poolSol.toFixed(3)} SOL</td>
+                    <td>{r.minerCount}</td>
+                    <td>{(r.poolSol * 0.013).toFixed(4)} SOL</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

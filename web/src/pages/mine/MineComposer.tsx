@@ -36,6 +36,8 @@ interface MineComposerProps {
   selectedBucket: number | null;
   round?: RoundTelemetry;
   roundsCount: number;
+  startMode: "now" | "next" | "plus2";
+  onStartModeChange: (m: "now" | "next" | "plus2") => void;
   onQuickRounds: (n: number) => void;
   onOpenScheduleGrid: () => void;
   amountStr: string;
@@ -93,6 +95,8 @@ export function MineComposer({
   selectedBucket,
   round,
   roundsCount,
+  startMode,
+  onStartModeChange,
   onQuickRounds,
   onOpenScheduleGrid,
   amountStr,
@@ -231,7 +235,9 @@ export function MineComposer({
           >
             {RANGE_LABELS.map((code, i) => {
               const bucket = round?.buckets?.[i];
-              const pct = ((weightsBps[i] ?? 0) / 100).toFixed(0);
+              const pctNum = (weightsBps[i] ?? 0) / 100;
+              const pct = pctNum.toFixed(0);
+              const bucketSol = (parsedAmount * pctNum) / 100;
               return (
                 <button
                   key={code}
@@ -242,6 +248,16 @@ export function MineComposer({
                 >
                   <span>{code}</span>
                   <strong>{pct}%</strong>
+                  <small className="mine-bucket-sol">
+                    {bucketSol.toFixed(3)}{" "}
+                    <img
+                      src="/wen/sol-icon.svg"
+                      alt=""
+                      width={10}
+                      height={10}
+                      aria-hidden="true"
+                    />
+                  </small>
                   <small>
                     {bucket ? `${bucket.evMultiple.toFixed(2)}×` : "—"}
                   </small>
@@ -271,6 +287,30 @@ export function MineComposer({
               >
                 Edit
               </button>
+            </div>
+            <div
+              className="mine-start-row"
+              role="group"
+              aria-label="Target start round"
+            >
+              <span className="mine-muted-note">Start</span>
+              {(
+                [
+                  ["now", "Now"],
+                  ["next", "Next"],
+                  ["plus2", "+2"],
+                ] as const
+              ).map(([k, lbl]) => (
+                <button
+                  key={k}
+                  type="button"
+                  className="mine-chip"
+                  aria-pressed={startMode === k}
+                  onClick={() => onStartModeChange(k)}
+                >
+                  {lbl}
+                </button>
+              ))}
             </div>
           </div>
 

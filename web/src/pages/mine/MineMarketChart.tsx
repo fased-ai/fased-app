@@ -16,6 +16,8 @@ import {
   type UTCTimestamp,
 } from "lightweight-charts";
 import type { CandleBar, RoundTelemetry, StreakEntry } from "../../mining-lv1x";
+import { RotateCcw } from "../../icons";
+import { MineTechnicalsView } from "./MineTechnicalsView";
 
 export type ChartInterval = "10s" | "1m" | "5m" | "10m" | "1h" | "1d";
 export type ChartStyleMode =
@@ -37,6 +39,7 @@ interface MineMarketChartProps {
   round?: RoundTelemetry;
   streak: StreakEntry[];
   crowdWeights: number[];
+  userWeightsBps?: number[];
   onApplyPresetFromTechnicals?: (weightsBps: number[]) => void;
 }
 
@@ -202,10 +205,15 @@ export function MineMarketChart({
   round,
   streak,
   crowdWeights,
+  userWeightsBps,
   onApplyPresetFromTechnicals,
 }: MineMarketChartProps) {
   const hostRef = useRef<HTMLDivElement | null>(null);
+  const topbarRef = useRef<HTMLDivElement | null>(null);
   const [styleMode, setStyleMode] = useState<ChartStyleMode>("candles");
+  const [openMenu, setOpenMenu] = useState<
+    "interval" | "style" | "indicators" | null
+  >(null);
   const [showRanges, setShowRanges] = useState(true);
   const [showVolume, setShowVolume] = useState(true);
   const [showEmaCross, setShowEmaCross] = useState(false);
@@ -214,6 +222,24 @@ export function MineMarketChart({
   const [showAtr, setShowAtr] = useState(false);
   const [showRsi, setShowRsi] = useState(false);
   const [themeTick, setThemeTick] = useState(0);
+
+  useEffect(() => {
+    if (!openMenu) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setOpenMenu(null);
+    };
+    const onPointerDown = (e: PointerEvent) => {
+      if (topbarRef.current && !topbarRef.current.contains(e.target as Node)) {
+        setOpenMenu(null);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    window.addEventListener("pointerdown", onPointerDown);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      window.removeEventListener("pointerdown", onPointerDown);
+    };
+  }, [openMenu]);
 
   useEffect(() => {
     const obs = new MutationObserver(() => setThemeTick((v) => v + 1));
@@ -470,23 +496,221 @@ export function MineMarketChart({
   const openUsd = round?.openPriceUsd ?? lastBar?.open ?? 94250;
   const markUsd = round?.markPriceUsd ?? lastBar?.close ?? 94265;
   const moveBps = round?.moveBps ?? 0;
+  const activeStyleLabel =
+    CHART_MODES.find((m) => m.id === styleMode)?.label ?? "Candles";
+  const indicatorList: Array<{
+    key: string;
+    label: string;
+    active: boolean;
+    toggle: () => void;
+  }> = [
+    {
+      key: "ranges",
+      label: "Ranges",
+      active: showRanges,
+      toggle: () => setShowRanges((v) => !v),
+    },
+    {
+      key: "volume",
+      label: "Volume",
+      active: showVolume,
+      toggle: () => setShowVolume((v) => !v),
+    },
+    {
+      key: "ema",
+      label: "EMA 9/21",
+      active: showEmaCross,
+      toggle: () => setShowEmaCross((v) => !v),
+    },
+    {
+      key: "bb",
+      label: "Bollinger",
+      active: showBollinger,
+      toggle: () => setShowBollinger((v) => !v),
+    },
+    {
+      key: "vwap",
+      label: "VWAP",
+      active: showVwap,
+      toggle: () => setShowVwap((v) => !v),
+    },
+    {
+      key: "atr",
+      label: "ATR 10m",
+      active: showAtr,
+      toggle: () => setShowAtr((v) => !v),
+    },
+    {
+      key: "rsi",
+      label: "RSI (14)",
+      active: showRsi,
+      toggle: () => setShowRsi((v) => !v),
+    },
+  ];
+  const activeIndicatorCount = indicatorList.filter((i) => i.active).length;
+
+  const pulseWeights =
+    userWeightsBps && userWeightsBps.length === 5
+      ? userWeightsBps
+      : [2000, 2000, 2000, 2000, 2000];
+  const winIdx =
+    moveBps < -(round?.outerBps ?? 20)
+      ? 0
+      : moveBps < -(round?.innerBps ?? 5)
+        ? 1
+        : moveBps < (round?.innerBps ?? 5)
+          ? 2
+          : moveBps < (round?.outerBps ?? 20)
+            ? 3
+            : 4;
+  const pulseNeedlePct = ((winIdx + 0.5) / 5) * 100;
 
   return (
-    <div className="wt-wpanel mine-chart-card">
-      <div className="mine-chart-toolbar">
-        <div className="mine-chart-title">
-          <strong>BTC / USD</strong>
-          <span>
-            ${markUsd.toLocaleString("en-US", { maximumFractionDigits: 2 })}
-          </span>
-          <span className={moveBps >= 0 ? "is-pos" : "is-neg"}>
-            {moveBps >= 0 ? "+" : ""}
-            {moveBps} bps
-          </span>
-          <span className="mine-muted-note">
-            Open $
-            {openUsd.toLocaleString("en-US", { maximumFractionDigits: 2 })}
-          </span>
+    <div className="wt-wpanel retail-market-chart mine-chart-card">
+      <div className="rmc-tv-topbar" ref={topbarRef}>
+        <div className="rmc-tv-tools">
+          <div className="rmc-dd-wrap">
+            <button
+              type="button"
+              className={`rmc-dd-trigger${openMenu === "interval" ? " is-open" : ""}`}
+              aria-label="Chart timeframe"
+              aria-expanded={openMenu === "interval"}
+              onClick={() =>
+                setOpenMenu((v) => (v === "interval" ? null : "interval"))
+              }
+            >
+              <span>{interval}</span>
+              <i className="rmc-dd-caret" aria-hidden="true">
+                ▾
+              </i>
+            </button>
+            {openMenu === "interval" && (
+              <div
+                className="rmc-dd-menu rmc-dd-time"
+                role="group"
+                aria-label="Chart timeframe options"
+              >
+                {INTERVALS.map((iv) => (
+                  <button
+                    key={iv}
+                    type="button"
+                    className={interval === iv ? "is-selected" : ""}
+                    aria-pressed={interval === iv}
+                    onClick={() => {
+                      onIntervalChange(iv);
+                      setOpenMenu(null);
+                    }}
+                  >
+                    {iv}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+
+          <div className="rmc-dd-wrap">
+            <button
+              type="button"
+              className={`rmc-dd-trigger${openMenu === "style" ? " is-open" : ""}`}
+              aria-label="Chart style"
+              aria-expanded={openMenu === "style"}
+              onClick={() =>
+                setOpenMenu((v) => (v === "style" ? null : "style"))
+              }
+            >
+              <span>{activeStyleLabel}</span>
+              <i className="rmc-dd-caret" aria-hidden="true">
+                ▾
+              </i>
+            </button>
+            {openMenu === "style" && (
+              <div
+                className="rmc-dd-menu"
+                role="group"
+                aria-label="Chart style options"
+              >
+                {CHART_MODES.map((m) => (
+                  <button
+                    key={m.id}
+                    type="button"
+                    className={`rmc-dd-item${styleMode === m.id ? " is-selected" : ""}`}
+                    aria-pressed={styleMode === m.id}
+                    onClick={() => {
+                      setStyleMode(m.id);
+                      setOpenMenu(null);
+                    }}
+                  >
+                    <span className="rmc-dd-label">{m.label}</span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+
+          <div className="rmc-dd-wrap">
+            <button
+              type="button"
+              className={`rmc-dd-trigger${activeIndicatorCount > 0 ? " has-active" : ""}${openMenu === "indicators" ? " is-open" : ""}`}
+              aria-label="Chart indicators"
+              aria-expanded={openMenu === "indicators"}
+              onClick={() =>
+                setOpenMenu((v) => (v === "indicators" ? null : "indicators"))
+              }
+            >
+              <span>Indicators</span>
+              {activeIndicatorCount > 0 && (
+                <i className="rmc-dd-badge">{activeIndicatorCount}</i>
+              )}
+              <i className="rmc-dd-caret" aria-hidden="true">
+                ▾
+              </i>
+            </button>
+            {openMenu === "indicators" && (
+              <div
+                className="rmc-dd-menu"
+                role="group"
+                aria-label="Chart indicator toggles"
+              >
+                {indicatorList.map((ind) => (
+                  <button
+                    key={ind.key}
+                    type="button"
+                    className={`rmc-dd-item${ind.active ? " is-selected" : ""}`}
+                    aria-pressed={ind.active}
+                    onClick={ind.toggle}
+                  >
+                    <span className="rmc-dd-check">
+                      {ind.active ? "✓" : ""}
+                    </span>
+                    <span className="rmc-dd-label">{ind.label}</span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+
+          <button
+            type="button"
+            className="rmc-dd-trigger rmc-reset-btn"
+            aria-label="Reset chart"
+            title="Reset chart defaults"
+            onClick={() => {
+              setStyleMode("candles");
+              setShowRanges(true);
+              setShowVolume(true);
+              setShowEmaCross(false);
+              setShowBollinger(false);
+              setShowVwap(false);
+              setShowAtr(false);
+              setShowRsi(false);
+              setOpenMenu(null);
+            }}
+          >
+            <RotateCcw size={13} aria-hidden="true" />
+          </button>
+        </div>
+
+        <div className="rmc-tv-head-right">
           {showAtr && atrBps !== null && (
             <span className="mine-ind-readout">
               ATR {atrBps.toFixed(1)} bps
@@ -495,185 +719,138 @@ export function MineMarketChart({
           {showRsi && rsi14 !== null && (
             <span className="mine-ind-readout">RSI(14) {rsi14.toFixed(1)}</span>
           )}
-        </div>
-
-        <div className="mine-chart-controls">
-          <div
-            className="mine-chip-group"
-            role="group"
-            aria-label="Chart timeframe"
-          >
-            {INTERVALS.map((iv) => (
-              <button
-                key={iv}
-                type="button"
-                className="mine-chip"
-                aria-pressed={interval === iv}
-                onClick={() => onIntervalChange(iv)}
-              >
-                {iv}
-              </button>
-            ))}
+          <div className="rmc-quote">
+            <span className="rmc-price">
+              ${markUsd.toLocaleString("en-US", { maximumFractionDigits: 2 })}
+            </span>
+            <span className={moveBps >= 0 ? "rmc-positive" : "rmc-negative"}>
+              {moveBps >= 0 ? "+" : ""}
+              {moveBps} bps
+            </span>
           </div>
-          <div
-            className="mine-chip-group"
-            role="group"
-            aria-label="Chart style"
-          >
-            {CHART_MODES.map((m) => (
-              <button
-                key={m.id}
-                type="button"
-                className="mine-chip"
-                aria-pressed={styleMode === m.id}
-                onClick={() => setStyleMode(m.id)}
-              >
-                {m.label}
-              </button>
-            ))}
-          </div>
+          <span className="rmc-live">
+            <i aria-hidden="true" />
+            <span>
+              Open $
+              {openUsd.toLocaleString("en-US", { maximumFractionDigits: 0 })}
+            </span>
+          </span>
         </div>
-      </div>
-
-      <div
-        className="mine-indicator-row"
-        role="group"
-        aria-label="Chart indicators"
-      >
-        <button
-          type="button"
-          className="mine-chip"
-          aria-pressed={showRanges}
-          onClick={() => setShowRanges((v) => !v)}
-        >
-          Ranges
-        </button>
-        <button
-          type="button"
-          className="mine-chip"
-          aria-pressed={showVolume}
-          onClick={() => setShowVolume((v) => !v)}
-        >
-          Volume
-        </button>
-        <button
-          type="button"
-          className="mine-chip"
-          aria-pressed={showEmaCross}
-          onClick={() => setShowEmaCross((v) => !v)}
-        >
-          EMA 9/21
-        </button>
-        <button
-          type="button"
-          className="mine-chip"
-          aria-pressed={showBollinger}
-          onClick={() => setShowBollinger((v) => !v)}
-        >
-          Bollinger
-        </button>
-        <button
-          type="button"
-          className="mine-chip"
-          aria-pressed={showVwap}
-          onClick={() => setShowVwap((v) => !v)}
-        >
-          VWAP
-        </button>
-        <button
-          type="button"
-          className="mine-chip"
-          aria-pressed={showAtr}
-          onClick={() => setShowAtr((v) => !v)}
-        >
-          ATR 10m
-        </button>
-        <button
-          type="button"
-          className="mine-chip"
-          aria-pressed={showRsi}
-          onClick={() => setShowRsi((v) => !v)}
-        >
-          RSI 14
-        </button>
       </div>
 
       {styleMode === "pulse" ? (
-        <div className="mine-pulse-view" aria-label="Range pulse histogram">
-          {["A", "B", "C", "D", "E"].map((code, i) => {
-            const pct = (crowdWeights[i] ?? 2000) / 100;
-            const b = round?.buckets?.[i];
-            return (
-              <div key={code} className="mine-pulse-col">
-                <div className="mine-pulse-track">
+        <div className="rmc-pulse" aria-label="Range pulse histogram">
+          <div className="rmc-pulse-head">
+            <div className="rmc-pulse-badges">
+              <span
+                className={`rmc-regime ${moveBps > 5 ? "is-bullish" : moveBps < -5 ? "is-bearish" : "is-balanced"}`}
+              >
+                {moveBps > 5
+                  ? "Bullish"
+                  : moveBps < -5
+                    ? "Bearish"
+                    : "Balanced"}
+              </span>
+              <span className="rmc-edge-legend">
+                <i className="is-hit" aria-hidden="true" />
+                <span>Crowd %</span>
+                <i className="is-curve" aria-hidden="true" />
+                <span>Your curve %</span>
+              </span>
+            </div>
+            {onApplyPresetFromTechnicals && (
+              <button
+                type="button"
+                className="rmc-pulse-apply"
+                onClick={() => onApplyPresetFromTechnicals(crowdWeights)}
+              >
+                Apply Crowd Curve
+              </button>
+            )}
+          </div>
+          <div className="rmc-meter-stage">
+            <div className="rmc-meter-grid" aria-hidden="true">
+              <span />
+              <span />
+              <span />
+            </div>
+            <div
+              className="rmc-meter-marker"
+              style={{ left: `${pulseNeedlePct}%` }}
+            >
+              <span className="rmc-meter-tag">
+                {moveBps >= 0 ? "+" : ""}
+                {moveBps} bps
+              </span>
+              <span className="rmc-meter-line" />
+            </div>
+            <div className="rmc-meter-bars">
+              {["A", "B", "C", "D", "E"].map((code, rIdx) => {
+                const crowdPct = (crowdWeights[rIdx] ?? 2000) / 100;
+                const userPct = (pulseWeights[rIdx] ?? 2000) / 100;
+                const fillH = Math.min(100, Math.max(6, crowdPct * 2.2));
+                const ghostH = Math.min(100, Math.max(4, userPct * 2.2));
+                return (
                   <div
-                    className="mine-pulse-fill"
-                    style={{
-                      height: `${Math.max(4, pct)}%`,
-                      background: RANGE_COLORS[i],
-                    }}
-                  />
-                </div>
-                <strong>{code}</strong>
-                <small>
-                  {pct.toFixed(0)}% · {b ? `${b.evMultiple.toFixed(2)}×` : "—"}
-                </small>
-              </div>
-            );
-          })}
-        </div>
-      ) : styleMode === "technicals" ? (
-        <div
-          className="mine-technicals-view"
-          aria-label="Technical indicators summary"
-        >
-          <div className="mine-tech-grid">
-            <div className="mine-tech-card">
-              <span>RSI (14)</span>
-              <strong>{rsi14 !== null ? rsi14.toFixed(1) : "52.0"}</strong>
-              <small>
-                {(rsi14 ?? 50) > 60
-                  ? "Bullish bias"
-                  : (rsi14 ?? 50) < 40
-                    ? "Bearish bias"
-                    : "Neutral range"}
-              </small>
-            </div>
-            <div className="mine-tech-card">
-              <span>ATR 10m (bps)</span>
-              <strong>{atrBps !== null ? atrBps.toFixed(1) : "11.4"}</strong>
-              <small>
-                {(atrBps ?? 11) > 18 ? "Expansion tails" : "Mean reversion"}
-              </small>
-            </div>
-            <div className="mine-tech-card">
-              <span>Round Drift</span>
-              <strong>{moveBps >= 0 ? `+${moveBps}` : moveBps} bps</strong>
-              <small>
-                ±{round?.innerBps ?? 5} / ±{round?.outerBps ?? 20} bps
-              </small>
+                    key={code}
+                    className={`rmc-meter-group${rIdx === winIdx ? " is-current" : ""}`}
+                  >
+                    {Array.from({ length: 16 }, (_, sIdx) => {
+                      const taper =
+                        0.82 + 0.3 * Math.sin(((sIdx + 0.5) / 16) * Math.PI);
+                      return (
+                        <div key={sIdx} className="rmc-meter-slot">
+                          <span
+                            className="rmc-meter-ghost"
+                            style={{
+                              height: `${Math.min(100, ghostH * taper)}%`,
+                            }}
+                          />
+                          <i
+                            className="rmc-meter-fill has-fill"
+                            style={{
+                              height: `${Math.min(100, fillH * taper)}%`,
+                              background: RANGE_COLORS[rIdx],
+                            }}
+                          />
+                        </div>
+                      );
+                    })}
+                  </div>
+                );
+              })}
             </div>
           </div>
-          {onApplyPresetFromTechnicals && (
-            <button
-              type="button"
-              className="wt-btn-soft"
-              onClick={() => {
-                const suggested =
-                  (atrBps ?? 11) > 18
-                    ? [4000, 1000, 0, 1000, 4000]
-                    : (rsi14 ?? 50) > 58
-                      ? [500, 1000, 1500, 4500, 2500]
-                      : (rsi14 ?? 50) < 42
-                        ? [2500, 4500, 1500, 1000, 500]
-                        : [500, 1500, 6000, 1500, 500];
-                onApplyPresetFromTechnicals(suggested);
-              }}
-            >
-              Apply Technical Curve Bias
-            </button>
-          )}
+          <div className="rmc-meter-axis">
+            {["A", "B", "C", "D", "E"].map((code, idx) => {
+              const b = round?.buckets?.[idx];
+              const crowdPct = (crowdWeights[idx] ?? 2000) / 100;
+              return (
+                <div
+                  key={code}
+                  className={`rmc-meter-col${idx === winIdx ? " is-current" : ""}`}
+                >
+                  <div className="rmc-meter-col-top">
+                    <strong style={{ color: RANGE_COLORS[idx] }}>{code}</strong>
+                    <span className="rmc-pulse-pct">
+                      {crowdPct.toFixed(0)}%{" "}
+                      <em>{b ? `${b.evMultiple.toFixed(2)}×` : "—"}</em>
+                    </span>
+                  </div>
+                  <small>
+                    Your {((pulseWeights[idx] ?? 2000) / 100).toFixed(0)}%
+                  </small>
+                </div>
+              );
+            })}
+          </div>
         </div>
+      ) : styleMode === "technicals" ? (
+        <MineTechnicalsView
+          bars={prepared}
+          intervalLabel={interval}
+          onApplyCurve={onApplyPresetFromTechnicals}
+        />
       ) : (
         <div
           ref={hostRef}

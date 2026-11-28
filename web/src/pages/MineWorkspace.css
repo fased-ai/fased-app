@@ -166,6 +166,92 @@
   min-width: 0;
 }
 
+.mine-rail-unified {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  padding: 0;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.mine-rail-sec {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 14px;
+  min-width: 0;
+}
+
+.mine-rail-sec + .mine-rail-sec {
+  border-top: 1px solid var(--wt-border);
+}
+
+.mine-rail-price {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.mine-rail-price strong {
+  font-size: 22px;
+  font-weight: 650;
+  letter-spacing: -0.025em;
+  color: var(--wt-text);
+}
+
+.mine-rail-dl {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px 8px;
+  margin: 0;
+}
+
+.mine-rail-dl > div {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.mine-rail-dl dt {
+  font-size: 11px;
+  color: var(--wt-muted);
+}
+
+.mine-rail-dl dd {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--wt-text);
+}
+
+.mine-start-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 4px;
+}
+
+.mine-bucket-sol {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  color: var(--wt-text-2);
+  font-size: 10px;
+}
+
+.mine-benchmark-strip {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(135px, 1fr));
+  gap: 8px;
+}
+
+.mine-yield-strip {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
 .mine-left-rail {
   display: flex;
   flex-direction: column;
@@ -1254,7 +1340,8 @@
   }
 
   .mine-kpi-strip,
-  .mine-claims-kpis {
+  .mine-claims-kpis,
+  .mine-yield-strip {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }

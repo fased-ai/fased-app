@@ -10,9 +10,11 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/fased-ai/fased-app/internal/custody"
 	"github.com/fased-ai/fased-app/internal/signer"
 )
 
@@ -424,5 +426,104 @@ func TestRemoteProxyTrustAndLocalNonceHardening(t *testing.T) {
 	badReq.Header.Set("X-Fased-Local-Nonce", "wrong-nonce")
 	if h.validLocalNonce(badReq) {
 		t.Fatal("wrong local bootstrap nonce was accepted")
+	}
+}
+
+func TestLocalWalletUnlockPasswordFlow(t *testing.T) {
+	t.Parallel()
+	newUnlockHandler := func(t *testing.T) (*Store, *HTTPHandler, custody.Backend) {
+		t.Helper()
+		dir := fixtureDir(t)
+		s, err := OpenStore(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = s.Close() })
+		cust, err := s.custodyBackend()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := cust.CreateNativeWallet(t.Context(), "Miner", custody.RoleMining, "https://api.devnet.solana.com"); err != nil {
+			t.Fatal(err)
+		}
+		// Mark instance claimed with localOwnerSalt (matching desktop/local launch with native wallet).
+		if _, err := s.localOwnerSession(t.Context()); err != nil {
+			t.Fatal(err)
+		}
+		h, err := NewHTTPHandler(s, "http://127.0.0.1:7332", "", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		h.loopbackPeerUID = func(_, _ *net.TCPAddr) (int, bool, error) { return os.Getuid(), true, nil }
+		return s, h, cust
+	}
+	readAuthState := func(t *testing.T, h *HTTPHandler) map[string]any {
+		t.Helper()
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "http://127.0.0.1:7332/api/v1/auth/state", nil))
+		if w.Code != http.StatusOK {
+			t.Fatalf("auth/state status=%d body=%s", w.Code, w.Body.String())
+		}
+		var out map[string]any
+		if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil {
+			t.Fatal(err)
+		}
+		return out
+	}
+
+	callUnlock := func(h *HTTPHandler, password string) *httptest.ResponseRecorder {
+		body, _ := json.Marshal(map[string]string{"action": "unlock-password", "password": password})
+		r := httptest.NewRequest(http.MethodPost, "http://127.0.0.1:7332/api/v1/auth/local", bytes.NewReader(body))
+		r.Host = "127.0.0.1:7332"
+		r.Header.Set("Content-Type", "application/json")
+		r.Header.Set("Origin", "http://127.0.0.1:7332")
+		r.Header.Set("X-Fased-Local", "1")
+		r.Header.Set("Sec-Fetch-Site", "same-origin")
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, r)
+		return w
+	}
+
+	// Case 1: Native wallet present, neither core nor signer has password yet -> first unlock sets both & returns session.
+	s1, h1, cust1 := newUnlockHandler(t)
+	st1 := readAuthState(t, h1)
+	if st1["localAutoEnter"] != false || st1["localPasswordRequired"] != true || st1["signerPasswordConfigured"] != false {
+		t.Fatalf("unexpected auth state before unlock: %#v", st1)
+	}
+	if w := callUnlock(h1, "short"); w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for short password, got %d: %s", w.Code, w.Body.String())
+	}
+	w1 := callUnlock(h1, "correct-horse-battery-staple")
+	if w1.Code != http.StatusOK {
+		t.Fatalf("unlock-password setup failed: %d %s", w1.Code, w1.Body.String())
+	}
+	if has, _ := cust1.HasOwnerAuth(t.Context()); !has {
+		t.Fatal("expected signer owner auth to be enrolled after first unlock")
+	}
+	if hasPW, _ := s1.hasPassword(t.Context()); !hasPW {
+		t.Fatal("expected core owner password to be set after first unlock")
+	}
+	if wDup := callUnlock(h1, "correct-horse-battery-staple"); wDup.Code != http.StatusConflict {
+		t.Fatalf("expected 409 once password is already configured, got %d", wDup.Code)
+	}
+
+	// Case 2: Signer already has an owner password, core does not -> wrong password rejected (401), matching password unlocks.
+	s2, h2, cust2 := newUnlockHandler(t)
+	if err := cust2.ConfigureOwnerAuth(t.Context(), "existing-signer-secret-99"); err != nil {
+		t.Fatal(err)
+	}
+	st2 := readAuthState(t, h2)
+	if st2["localPasswordRequired"] != true || st2["signerPasswordConfigured"] != true {
+		t.Fatalf("expected signerPasswordConfigured=true, got %#v", st2)
+	}
+	if wBad := callUnlock(h2, "wrong-password-1234"); wBad.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401 on wrong signer password, got %d: %s", wBad.Code, wBad.Body.String())
+	}
+	wGood := callUnlock(h2, "existing-signer-secret-99")
+	if wGood.Code != http.StatusOK || !strings.Contains(wGood.Body.String(), "sessionToken") {
+		t.Fatalf("expected 200 session on matching signer password, got %d: %s", wGood.Code, wGood.Body.String())
+	}
+	if _, err := s2.Login(t.Context(), "existing-signer-secret-99"); err != nil {
+		t.Fatalf("expected normal Login to succeed after sync: %v", err)
 	}
 }

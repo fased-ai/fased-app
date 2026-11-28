@@ -82,237 +82,250 @@ export function MineLeftRail({
       className="mine-left-rail"
       aria-label="Protocol and position sidebar"
     >
-      <div className="wt-wpanel mine-rail-card">
-        <div className="mine-asset-row">
-          <button
-            type="button"
-            className="mine-asset-btn"
-            onClick={onOpenMarkets}
-          >
-            <img
-              src="/wen/sat-icon-small.svg"
-              alt=""
-              width={22}
-              height={22}
-              className="mine-asset-icon"
-              aria-hidden="true"
-            />
-            <span className="mine-asset-copy">
-              <strong>WEN Satcoin</strong>
-              <small>BTC/USD · 10m</small>
-            </span>
-            <Grid2x2 size={14} aria-hidden="true" />
-          </button>
-          <button
-            type="button"
-            className="icon-btn"
-            aria-label="Mining rules"
-            title="Rules"
-            onClick={onOpenRules}
-          >
-            <BookOpen size={14} aria-hidden="true" />
-          </button>
-        </div>
-
-        <div className="mine-phase-head">
-          <span className="mine-phase-pill">
-            {stats?.phaseName ?? "Bootstrap"}
-          </span>
-          <span className="mine-muted-note">
-            {stats ? `${stats.boostMultiplier}× boost` : "8× boost"}
-          </span>
-          <button
-            type="button"
-            className="mine-link-btn"
-            onClick={() => onNavigateSub("assets")}
-          >
-            Analytics →
-          </button>
-        </div>
-
-        {stats?.phase === 0 && (
-          <div className="mine-progress-stack">
-            <div className="mine-prog-row">
-              <span>LP SOL</span>
-              <span>
-                {formatCompactNum(stats.lpSol, 2)} /{" "}
-                {formatCompactNum(stats.lpSolMin, 0)}
-              </span>
-            </div>
-            <div className="mine-prog-track">
-              <div
-                className="mine-prog-fill"
-                style={{ width: `${lpSolPct.toFixed(1)}%` }}
+      <div className="wt-wpanel mine-rail-unified">
+        <div className="mine-rail-sec">
+          <div className="mine-asset-row">
+            <button
+              type="button"
+              className="mine-asset-btn"
+              onClick={onOpenMarkets}
+            >
+              <img
+                src="/wen/sat-icon-small.svg"
+                alt=""
+                width={22}
+                height={22}
+                className="mine-asset-icon"
+                aria-hidden="true"
               />
-            </div>
-            <div className="mine-prog-row">
-              <span>LP SAT</span>
-              <span>
-                {formatCompactNum(stats.lpSat, 0)} /{" "}
-                {formatCompactNum(stats.lpSatMin, 0)}
+              <span className="mine-asset-copy">
+                <strong>WEN Satcoin</strong>
+                <small>BTC/USD · 10m</small>
               </span>
-            </div>
-            <div className="mine-prog-track">
-              <div
-                className="mine-prog-fill"
-                style={{ width: `${lpSatPct.toFixed(1)}%` }}
-              />
-            </div>
-            <div className="mine-prog-row">
-              <span>Boost SAT</span>
-              <span>
-                {formatCompactNum(stats.boostAwardedSat, 0)} /{" "}
-                {formatCompactNum(stats.boostBudgetSat, 0)} (
-                {boostPct.toFixed(0)}%)
-              </span>
-            </div>
+              <Grid2x2 size={14} aria-hidden="true" />
+            </button>
+            <button
+              type="button"
+              className="icon-btn"
+              aria-label="Mining rules"
+              title="Rules"
+              onClick={onOpenRules}
+            >
+              <BookOpen size={14} aria-hidden="true" />
+            </button>
           </div>
-        )}
-      </div>
 
-      <div className="wt-wpanel mine-rail-card">
-        <div className="mine-section-head">
-          <h2>Global Protocol</h2>
-          <span className="mine-muted-note">{stats?.cluster ?? "devnet"}</span>
-        </div>
-        <div className="mine-kv-grid">
-          <div className="mine-kv-item">
-            <span>Minted</span>
-            <strong>{formatCompactNum(stats?.mintedSat ?? 0, 0)} / 30M</strong>
-          </div>
-          <div className="mine-kv-item">
-            <span>BTC Treasury</span>
+          <div className="mine-rail-price">
             <strong>
-              {formatCompactNum(stats?.btcTreasurySat ?? 0, 0)} sats
+              $
+              {(round?.markPriceUsd ?? 94265).toLocaleString("en-US", {
+                maximumFractionDigits: 2,
+              })}
             </strong>
-          </div>
-          <div className="mine-kv-item">
-            <span>Total Staked</span>
-            <strong>{(stats?.stakedPct ?? 0).toFixed(1)}%</strong>
-          </div>
-          <div className="mine-kv-item">
-            <span>24H Volume</span>
-            <strong>{formatCompactNum(stats?.volume24hSol ?? 0, 2)} SOL</strong>
-          </div>
-          {stats?.feeSplit && stats.feeSplit.length === 4 && (
-            <div className="mine-kv-item">
-              <span>Fee Split</span>
-              <strong>{stats.feeSplit.join("/")}</strong>
-            </div>
-          )}
-          {(stats?.lpBurnedSol ?? 0) > 0 && (
-            <div className="mine-kv-item">
-              <span>LP Burned</span>
-              <strong>
-                {formatCompactNum(stats?.lpBurnedSol ?? 0, 2)} SOL
-              </strong>
-            </div>
-          )}
-        </div>
-      </div>
-
-      <div className="wt-wpanel mine-rail-card">
-        <div className="mine-section-head">
-          <h2>Your Position</h2>
-          <button
-            type="button"
-            className="mine-link-btn"
-            onClick={() => onNavigateSub("stake")}
-          >
-            Stake →
-          </button>
-        </div>
-        <div className="mine-kv-grid">
-          <div className="mine-kv-item">
-            <span>Wallet SAT</span>
-            <strong>{formatCompactNum(portfolio?.satBalance ?? 0, 2)}</strong>
-          </div>
-          <div className="mine-kv-item">
-            <span>Claim SOL</span>
-            <strong>{(portfolio?.claimableSol ?? 0).toFixed(3)}</strong>
-          </div>
-          <div className="mine-kv-item">
-            <span>Claim SAT</span>
-            <strong>{formatCompactNum(portfolio?.claimableSat ?? 0, 1)}</strong>
-          </div>
-          <div className="mine-kv-item">
-            <span>Claim cbBTC</span>
-            <strong>{(portfolio?.claimableBtc ?? 0).toFixed(6)}</strong>
-          </div>
-        </div>
-        <div className="mine-pos-actions">
-          <button
-            type="button"
-            className="wt-btn-soft"
-            disabled={!selectedWalletId && totalClaimableUsdEst <= 0}
-            onClick={onOpenClaim}
-          >
-            Claim Rewards
-          </button>
-          <button
-            type="button"
-            className="wt-btn-soft"
-            onClick={() => onNavigateSub("portfolio")}
-          >
-            Portfolio
-          </button>
-        </div>
-      </div>
-
-      <div className="wt-wpanel mine-rail-card">
-        <div className="mine-section-head">
-          <h2>Distribution</h2>
-          <button
-            type="button"
-            className="mine-link-btn"
-            onClick={() => onApplyCrowd(crowdWeights)}
-          >
-            Apply
-          </button>
-        </div>
-        <div
-          className="mine-dist-gauge"
-          role="img"
-          aria-label="Live crowd stake distribution across A to E"
-        >
-          {RANGE_LABELS.map((code, rIdx) => {
-            const share = buckets[rIdx]?.crowdShare ?? 0.2;
-            const normH = Math.min(100, Math.max(8, share * 260));
-            return (
-              <div
-                key={code}
-                className="mine-dist-group"
-                title={`${code} ${RANGE_NAMES[rIdx]} · ${(share * 100).toFixed(1)}%`}
-              >
-                {Array.from({ length: 10 }, (_, bIdx) => {
-                  const taper =
-                    0.8 + 0.35 * Math.sin(((bIdx + 0.5) / 10) * Math.PI);
-                  const h = Math.min(100, normH * taper);
-                  return (
-                    <i
-                      key={bIdx}
-                      style={{
-                        height: `${h}%`,
-                        background: SPECTRUM[rIdx],
-                      }}
-                    />
-                  );
-                })}
-              </div>
-            );
-          })}
-          <span
-            className="mine-dist-needle"
-            style={{ left: `${needlePct}%` }}
-            title={`Mark ${moveBps >= 0 ? "+" : ""}${moveBps} bps (${RANGE_LABELS[winIdx]})`}
-          />
-        </div>
-        <div className="mine-dist-foot">
-          {RANGE_LABELS.map((code, idx) => (
-            <span key={code}>
-              {code} {((buckets[idx]?.crowdShare ?? 0.2) * 100).toFixed(0)}%
+            <span className={moveBps >= 0 ? "is-pos" : "is-neg"}>
+              {moveBps >= 0 ? "+" : ""}
+              {moveBps} bps
             </span>
-          ))}
+          </div>
+
+          <div className="mine-phase-head">
+            <span className="mine-phase-pill">
+              {stats?.phaseName ?? "Bootstrap"}
+            </span>
+            <span className="mine-muted-note">
+              {stats ? `${stats.boostMultiplier}× boost` : "24× boost"}
+            </span>
+            <button
+              type="button"
+              className="mine-link-btn"
+              onClick={() => onNavigateSub("assets")}
+            >
+              Analytics →
+            </button>
+          </div>
+
+          {stats?.phase === 0 && (
+            <div className="mine-progress-stack">
+              <div className="mine-prog-row">
+                <span>LP SOL</span>
+                <span>
+                  {formatCompactNum(stats.lpSol, 2)} /{" "}
+                  {formatCompactNum(stats.lpSolMin, 0)}
+                </span>
+              </div>
+              <div className="mine-prog-track">
+                <div
+                  className="mine-prog-fill"
+                  style={{ width: `${lpSolPct.toFixed(1)}%` }}
+                />
+              </div>
+              <div className="mine-prog-row">
+                <span>LP SAT</span>
+                <span>
+                  {formatCompactNum(stats.lpSat, 0)} /{" "}
+                  {formatCompactNum(stats.lpSatMin, 0)}
+                </span>
+              </div>
+              <div className="mine-prog-track">
+                <div
+                  className="mine-prog-fill"
+                  style={{ width: `${lpSatPct.toFixed(1)}%` }}
+                />
+              </div>
+              <div className="mine-prog-row">
+                <span>Boost SAT</span>
+                <span>
+                  {formatCompactNum(stats.boostAwardedSat, 0)} /{" "}
+                  {formatCompactNum(stats.boostBudgetSat, 0)} (
+                  {boostPct.toFixed(0)}%)
+                </span>
+              </div>
+            </div>
+          )}
+        </div>
+
+        <div className="mine-rail-sec">
+          <div className="mine-section-head">
+            <h2>Global Protocol</h2>
+            <span className="mine-muted-note">
+              {stats?.cluster ?? "devnet"}
+            </span>
+          </div>
+          <dl className="mine-rail-dl">
+            <div>
+              <dt>Minted</dt>
+              <dd>{formatCompactNum(stats?.mintedSat ?? 0, 0)} / 30M</dd>
+            </div>
+            <div>
+              <dt>BTC Distributed</dt>
+              <dd>{formatCompactNum(stats?.btcTreasurySat ?? 0, 0)} sats</dd>
+            </div>
+            <div>
+              <dt>Total Staked</dt>
+              <dd>{(stats?.stakedPct ?? 0).toFixed(1)}%</dd>
+            </div>
+            <div>
+              <dt>24H Volume</dt>
+              <dd>{formatCompactNum(stats?.volume24hSol ?? 0, 2)} SOL</dd>
+            </div>
+            {stats?.feeSplit && stats.feeSplit.length === 4 && (
+              <div>
+                <dt>Fee Split</dt>
+                <dd>{stats.feeSplit.join("/")}</dd>
+              </div>
+            )}
+            {(stats?.lpBurnedSol ?? 0) > 0 && (
+              <div>
+                <dt>LP Burned</dt>
+                <dd>{formatCompactNum(stats?.lpBurnedSol ?? 0, 2)} SOL</dd>
+              </div>
+            )}
+          </dl>
+        </div>
+
+        <div className="mine-rail-sec">
+          <div className="mine-section-head">
+            <h2>Your Position</h2>
+            <button
+              type="button"
+              className="mine-link-btn"
+              onClick={() => onNavigateSub("stake")}
+            >
+              Stake →
+            </button>
+          </div>
+          <dl className="mine-rail-dl">
+            <div>
+              <dt>Wallet SAT</dt>
+              <dd>{formatCompactNum(portfolio?.satBalance ?? 0, 2)}</dd>
+            </div>
+            <div>
+              <dt>Claim SOL</dt>
+              <dd>{(portfolio?.claimableSol ?? 0).toFixed(3)}</dd>
+            </div>
+            <div>
+              <dt>Claim SAT</dt>
+              <dd>{formatCompactNum(portfolio?.claimableSat ?? 0, 1)}</dd>
+            </div>
+            <div>
+              <dt>Claim cbBTC</dt>
+              <dd>{(portfolio?.claimableBtc ?? 0).toFixed(6)}</dd>
+            </div>
+          </dl>
+          <div className="mine-pos-actions">
+            <button
+              type="button"
+              className="wt-btn-soft"
+              disabled={!selectedWalletId && totalClaimableUsdEst <= 0}
+              onClick={onOpenClaim}
+            >
+              Claim Rewards
+            </button>
+            <button
+              type="button"
+              className="wt-btn-soft"
+              onClick={() => onNavigateSub("portfolio")}
+            >
+              Portfolio
+            </button>
+          </div>
+        </div>
+
+        <div className="mine-rail-sec">
+          <div className="mine-section-head">
+            <h2>Distribution</h2>
+            <button
+              type="button"
+              className="mine-link-btn"
+              onClick={() => onApplyCrowd(crowdWeights)}
+            >
+              Apply
+            </button>
+          </div>
+          <div
+            className="mine-dist-gauge"
+            role="img"
+            aria-label="Live crowd stake distribution across A to E"
+          >
+            {RANGE_LABELS.map((code, rIdx) => {
+              const share = buckets[rIdx]?.crowdShare ?? 0.2;
+              const normH = Math.min(100, Math.max(8, share * 260));
+              return (
+                <div
+                  key={code}
+                  className="mine-dist-group"
+                  title={`${code} ${RANGE_NAMES[rIdx]} · ${(share * 100).toFixed(1)}%`}
+                >
+                  {Array.from({ length: 10 }, (_, bIdx) => {
+                    const taper =
+                      0.8 + 0.35 * Math.sin(((bIdx + 0.5) / 10) * Math.PI);
+                    const h = Math.min(100, normH * taper);
+                    return (
+                      <i
+                        key={bIdx}
+                        style={{
+                          height: `${h}%`,
+                          background: SPECTRUM[rIdx],
+                        }}
+                      />
+                    );
+                  })}
+                </div>
+              );
+            })}
+            <span
+              className="mine-dist-needle"
+              style={{ left: `${needlePct}%` }}
+              title={`Mark ${moveBps >= 0 ? "+" : ""}${moveBps} bps (${RANGE_LABELS[winIdx]})`}
+            />
+          </div>
+          <div className="mine-dist-foot">
+            {RANGE_LABELS.map((code, idx) => (
+              <span key={code}>
+                {code} {((buckets[idx]?.crowdShare ?? 0.2) * 100).toFixed(0)}%
+              </span>
+            ))}
+          </div>
         </div>
       </div>
     </aside>

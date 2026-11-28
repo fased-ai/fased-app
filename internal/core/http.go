@@ -264,6 +264,14 @@ func (h *HTTPHandler) api(w http.ResponseWriter, r *http.Request) {
 			hasNativeWallet := h.store.hasNativeSigningWallet(r.Context())
 			result["passwordAvailable"] = passwordAvailable
 			result["localAutoEnter"] = !h.requirePassword && !passwordAvailable && !hasNativeWallet && (h.localPeerVerifiable() || r.Context().Value(privateIPCKey{}) == true)
+			if !passwordAvailable && hasNativeWallet {
+				result["localPasswordRequired"] = true
+				hasSignerAuth := false
+				if cs, cErr := h.store.custodyBackend(); cErr == nil && cs != nil {
+					hasSignerAuth, _ = cs.HasOwnerAuth(r.Context())
+				}
+				result["signerPasswordConfigured"] = hasSignerAuth
+			}
 		}
 		if h.instanceLocation == "remote" || h.publicHost != "" || h.remoteIngress {
 			hasPW, pwErr := h.store.hasPassword(r.Context())
