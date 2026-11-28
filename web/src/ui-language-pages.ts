@@ -7118,35 +7118,16 @@ export const pageCopy = {
     "传统主机签名器",
     "레거시 호스트 서명기",
   ],
-  "Unlock Local Fased": [
-    "Разблокировать локальный Fased",
-    "Desbloquear Fased local",
-    "解锁本地 Fased",
-    "로컬 Fased 잠금 해제",
+  "Set owner password": [
+    "Задать пароль владельца",
+    "Establecer contraseña de propietario",
+    "设置所有者密码",
+    "소유자 비밀번호 설정",
   ],
-  "Set Local Owner Password": [
-    "Задать пароль локального владельца",
-    "Establecer contraseña local de propietario",
-    "设置本地所有者密码",
-    "로컬 소유자 비밀번호 설정",
-  ],
-  "A local signing wallet is active on this computer. Enter your owner password to unlock.":
-    [
-      "На этом компьютере активен локальный кошелёк подписи. Введите пароль владельца для разблокировки.",
-      "Hay una billetera local de firma activa en este equipo. Ingrese su contraseña de propietario para desbloquear.",
-      "此计算机上已启用本地签名钱包。请输入所有者密码解锁。",
-      "이 컴퓨터에 로컬 서명 지갑이 활성화되어 있습니다. 잠금을 해제하려면 소유자 비밀번호를 입력하세요.",
-    ],
-  "Unlock Local": [
-    "Разблокировать",
-    "Desbloquear local",
-    "解锁本地实例",
-    "로컬 잠금 해제",
-  ],
-  "Set Password & Open": [
-    "Сохранить пароль и открыть",
-    "Establecer contraseña y abrir",
-    "设置密码并打开",
-    "비밀번호 설정 후 열기",
+  "Set password & sign in": [
+    "Сохранить пароль и войти",
+    "Establecer contraseña e iniciar sesión",
+    "设置密码并登录",
+    "비밀번호 설정 후 로그인",
   ],
 } satisfies Record<string, [string, string, string, string]>;

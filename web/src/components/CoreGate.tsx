@@ -424,14 +424,9 @@ export function CoreGate({ children }: { children: ReactNode }) {
               <div className="settings-body">
                 <h1>
                   {core.signerPasswordConfigured
-                    ? uiText("Unlock Local Fased")
-                    : uiText("Set Local Owner Password")}
+                    ? uiText("Sign in")
+                    : uiText("Set owner password")}
                 </h1>
-                <p role="status">
-                  {uiText(
-                    "A local signing wallet is active on this computer. Enter your owner password to unlock.",
-                  )}
-                </p>
                 <label htmlFor="local-owner-password">
                   {uiText("Owner password")}
                 </label>
@@ -482,8 +477,8 @@ export function CoreGate({ children }: { children: ReactNode }) {
                   {core.saving
                     ? uiText("Checking…")
                     : core.signerPasswordConfigured
-                      ? uiText("Unlock Local")
-                      : uiText("Set Password & Open")}
+                      ? uiText("Sign in")
+                      : uiText("Set password & sign in")}
                   <ArrowRight size={15} />
                 </button>
               </div>
@@ -710,9 +705,12 @@ export function CoreGate({ children }: { children: ReactNode }) {
             </div>
           </form>
         )}
-        {core.mode !== "loading" && !minimalLocalGate && !autoEnteringLocal && (
-          <RemoteConnection expanded={native && core.mode === "error"} />
-        )}
+        {core.mode !== "loading" &&
+          !minimalLocalGate &&
+          !autoEnteringLocal &&
+          (!core.localAccess || (native && core.mode === "error")) && (
+            <RemoteConnection expanded={native && core.mode === "error"} />
+          )}
       </section>
     </main>
   );
