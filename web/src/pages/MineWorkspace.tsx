@@ -889,12 +889,12 @@ export function MineWorkspace() {
         stepUpToken,
       );
       setAutomateOpen(false);
-      setAutomationModalOpen(true);
       setStepUpPending(null);
       setStepUpPassword("");
       setStepUpPasswordConfirm("");
       setNotice(`Created mining task: ${created.name}`);
       await loadState();
+      setAutomationModalOpen(true);
     } catch (err) {
       maybeHandleStepUp(
         err,
@@ -1624,12 +1624,10 @@ export function MineWorkspace() {
                   · {manifest?.status || selfKeeper?.manifestStatus || "pinned"}
                 </span>
               </div>
-              {selfKeeper?.lastSweepSummary && (
-                <div className="wt-hairline-row">
-                  <span>Last Run</span>
-                  <span>{selfKeeper.lastSweepSummary}</span>
-                </div>
-              )}
+              <div className="wt-hairline-row">
+                <span>Last Run</span>
+                <span>{selfKeeper?.lastSweepSummary || "—"}</span>
+              </div>
             </div>
 
             <div className="mine-tasks-drawer-head">
