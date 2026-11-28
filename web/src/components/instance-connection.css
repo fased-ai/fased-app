@@ -137,6 +137,24 @@
   font-size: 13px;
   color: var(--wt-muted);
 }
+.instance-pill-line {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 7px;
+  padding: 6px 0 14px;
+  border-bottom: 1px solid var(--wt-border);
+  font-size: 13px;
+  color: var(--wt-text);
+  min-width: 0;
+}
+.instance-pill-line .instance-origin {
+  margin-left: auto;
+  color: var(--wt-muted);
+  font-size: 12px;
+  font-family: ui-monospace, monospace;
+  overflow-wrap: anywhere;
+}
 
 .wt .settings-workspace {
   align-items: start;
