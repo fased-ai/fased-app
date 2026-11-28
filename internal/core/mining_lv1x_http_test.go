@@ -2,7 +2,10 @@ package core
 
 import (
 	"context"
+	"errors"
 	"net/http"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -177,5 +180,38 @@ func TestGoalMiningStrategiesAndIdempotentSlotGuard(t *testing.T) {
 	}, tasks.RunInput{TriggerSource: "schedule"})
 	if err != nil || cOut.ActionTaken != "mining_auto_commit" || !strings.Contains(cOut.DecisionSummary, "Contrarian-EV selected bucket") {
 		t.Fatalf("expected contrarian-ev commit on +EV bucket, got out=%+v err=%v", cOut, err)
+	}
+}
+
+func TestLV1XSelfKeeperDefersCustodyVaultInitOnEmptyStore(t *testing.T) {
+	t.Parallel()
+	dir := fixtureDir(t)
+	srv, err := Start(t.Context(), dir, "127.0.0.1:0", "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer srv.Close(context.Background())
+
+	vaultPath := filepath.Join(dir, "signer-vault", "custody.sqlite")
+	if _, statErr := os.Stat(vaultPath); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("expected empty Start not to create %s eagerly, got err=%v", vaultPath, statErr)
+	}
+	if srv.Store.hasNativeSigningWallet(t.Context()) {
+		t.Fatal("expected hasNativeSigningWallet=false on empty store before wallet creation")
+	}
+	cust, cErr := srv.Store.custodyBackend()
+	if cErr != nil || cust == nil {
+		t.Fatalf("custodyBackend failed: %v", cErr)
+	}
+	if _, wErr := cust.CreateNativeWallet(t.Context(), "Keeper Deferred", custody.RoleMining, "https://api.devnet.solana.com"); wErr != nil {
+		t.Fatal(wErr)
+	}
+	srv.Store.startWENLV1XSelfKeeper(t.Context())
+	eng, eErr := srv.Store.wenLV1XEngine()
+	if eErr != nil || eng == nil {
+		t.Fatalf("wenLV1XEngine failed: %v", eErr)
+	}
+	if sk := eng.SelfKeeperStatus(t.Context()); !sk.Running {
+		t.Fatalf("expected SelfKeeper Running=true once custody state exists, got %+v", sk)
 	}
 }

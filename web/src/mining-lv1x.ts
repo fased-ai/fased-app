@@ -159,6 +159,10 @@ export interface ProtocolStats {
   vestingDurationSec: number;
   graduatedAt: number;
   roundIntervalSec: number;
+  lpBurnedSol?: number;
+  treasuryBtcSolPending?: number;
+  treasuryLpSolPending?: number;
+  feeSplit?: number[];
   source: string;
   observedAt: number;
 }
@@ -208,6 +212,7 @@ export interface ClaimableRoundItem {
   shardId: number;
   page: number;
   entryRow: number;
+  nonce?: number;
   entriesMask: number;
   selection: number;
   selectionCode: string;
@@ -216,6 +221,9 @@ export interface ClaimableRoundItem {
   vestedSatAtoms: string;
   btcAtoms: string;
   solClaimed: boolean;
+  solEscape?: boolean;
+  revealed?: boolean;
+  nonceClosed?: boolean;
   btcClaimed: boolean;
   stakedSol: number;
 }
@@ -335,6 +343,7 @@ export interface CommitRequest {
   amountSol: number;
   selection?: number;
   strategyId?: string;
+  bucketWeightsBps?: number[];
   curve?: number[];
   shardId?: number;
   autonomous?: boolean;
@@ -361,7 +370,57 @@ export interface ClaimRequest {
   shardId?: number;
   page?: number;
   entryRow?: number;
+  entriesMask?: number;
+  batch?: boolean;
+  solEscape?: boolean;
   createAta?: boolean;
+}
+
+export interface CloseNonceRequest {
+  walletId: string;
+  cluster?: string;
+  roundSlot: number;
+  nonce?: number;
+}
+
+export interface ManifestStatus {
+  pinned: boolean;
+  keyId?: string;
+  sequence: number;
+  status?: string;
+  compatible: boolean;
+  compatibilityError?: string;
+  issuedAt?: number;
+  expiresAt?: number;
+  verifiedAt?: number;
+  lastSyncAt?: number;
+  lastSyncError?: string;
+  mainnetStatus?: string;
+  mainnetProgramId?: string;
+  devnetProgramId: string;
+}
+
+export interface SelfKeeperStatus {
+  running: boolean;
+  cluster: string;
+  walletId?: string;
+  walletPublicKey?: string;
+  autoClaim: boolean;
+  autoStakeWensat: boolean;
+  allowFallbackCrank: boolean;
+  nextRevealAt?: number;
+  activeRoundCommits: number;
+  pendingClaimsCount: number;
+  lastSweepAt?: number;
+  lastSweepSummary?: string;
+  fallbackGasUsedLamports: string;
+  manifestSequence: number;
+  manifestStatus?: string;
+  manifestVerifiedAt?: number;
+  manifestCompatible: boolean;
+  manifestError?: string;
+  lastManifestSyncAt?: number;
+  lastError?: string;
 }
 
 export interface StakeActionRequest {
@@ -380,6 +439,8 @@ export interface MiningPolicyInput {
   maxDailySolLamports: string;
   allowedStrategies: string[];
   autoClaim: boolean;
+  autoStakeWensat?: boolean;
+  allowFallbackCrank?: boolean;
   allowMainnet?: boolean;
 }
 
@@ -742,6 +803,44 @@ export async function requestMiningStepUpToken(
     bindingDigest,
   );
   return res.stepUpToken;
+}
+
+export async function fetchMiningManifest(
+  core: CoreReq,
+): Promise<ManifestStatus> {
+  return core.request<ManifestStatus>("mining/manifest");
+}
+
+export async function syncMiningManifest(
+  core: CoreReq,
+): Promise<{ manifest: ManifestStatus; synced: boolean; error: string }> {
+  return core.request("mining/manifest/sync", "POST", {});
+}
+
+export async function fetchSelfKeeperStatus(
+  core: CoreReq,
+): Promise<SelfKeeperStatus> {
+  return core.request<SelfKeeperStatus>("mining/self-keeper");
+}
+
+export async function triggerSelfKeeperSweep(
+  core: CoreReq,
+): Promise<SelfKeeperStatus> {
+  return core.request<SelfKeeperStatus>("mining/self-keeper/sweep", "POST", {});
+}
+
+export async function submitMiningCloseNonce(
+  core: CoreReq,
+  req: CloseNonceRequest,
+  stepUpToken?: string,
+): Promise<{ review: unknown; ledger: unknown }> {
+  return core.request(
+    "mining/close-nonce",
+    "POST",
+    req,
+    undefined,
+    stepUpHeaders(stepUpToken),
+  );
 }
 
 export const DEFAULT_PRESETS: StrategyPreset[] = [

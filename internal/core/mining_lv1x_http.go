@@ -6,6 +6,8 @@ import (
 	"errors"
 	"math"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -21,6 +23,7 @@ import (
 var (
 	wenLV1XMu          sync.RWMutex
 	wenLV1XEngines     = map[*Store]*wenlv1x.Engine{}
+	wenLV1XKeeperCtx   = map[*Store]context.Context{}
 	miningReviewMu     sync.Mutex
 	miningReviewByTxDg = map[string]string{}
 )
@@ -102,6 +105,7 @@ func init() {
 		wenLV1XMu.Lock()
 		eng := wenLV1XEngines[s]
 		delete(wenLV1XEngines, s)
+		delete(wenLV1XKeeperCtx, s)
 		wenLV1XMu.Unlock()
 		if eng != nil {
 			_ = eng.Close()
@@ -228,6 +232,24 @@ func aggregate1mTo10m(bars []marketdata.Candle, limit int) []wenlv1x.CandleBar {
 	return out
 }
 
+func (s *Store) hasCustodyState() bool {
+	if s == nil {
+		return false
+	}
+	s.custodyMu.Lock()
+	sockPath := strings.TrimSpace(s.custodySocketPath)
+	loaded := s.custodySvc != nil || s.custodyClient != nil
+	s.custodyMu.Unlock()
+	if loaded || sockPath != "" {
+		return true
+	}
+	if s.dir == "" {
+		return false
+	}
+	_, err := os.Stat(filepath.Join(s.dir, "signer-vault", "custody.sqlite"))
+	return err == nil
+}
+
 func (s *Store) wenLV1XEngine() (*wenlv1x.Engine, error) {
 	if s == nil {
 		return nil, errors.New("workspace store unavailable")
@@ -238,8 +260,8 @@ func (s *Store) wenLV1XEngine() (*wenlv1x.Engine, error) {
 	cust, _ := s.custodyBackend()
 	candleFn := s.wenLV1XCandleProvider()
 	wenLV1XMu.Lock()
-	defer wenLV1XMu.Unlock()
 	if existing := wenLV1XEngines[s]; existing != nil {
+		wenLV1XMu.Unlock()
 		return existing, nil
 	}
 	eng, err := wenlv1x.NewEngine(wenlv1x.Config{
@@ -249,9 +271,15 @@ func (s *Store) wenLV1XEngine() (*wenlv1x.Engine, error) {
 		FixtureMode:    s.fixture != nil || !s.rpcAdmission,
 	})
 	if err != nil {
+		wenLV1XMu.Unlock()
 		return nil, err
 	}
 	wenLV1XEngines[s] = eng
+	keeperCtx := wenLV1XKeeperCtx[s]
+	wenLV1XMu.Unlock()
+	if keeperCtx != nil {
+		eng.Start(keeperCtx)
+	}
 	return eng, nil
 }
 
@@ -259,9 +287,13 @@ func (s *Store) startWENLV1XSelfKeeper(ctx context.Context) {
 	if s == nil || s.dir == "" || s.fixture != nil || !s.rpcAdmission {
 		return
 	}
-	if eng, err := s.wenLV1XEngine(); err == nil && eng != nil {
-		eng.Start(ctx)
+	wenLV1XMu.Lock()
+	wenLV1XKeeperCtx[s] = ctx
+	wenLV1XMu.Unlock()
+	if !s.hasCustodyState() {
+		return
 	}
+	_, _ = s.wenLV1XEngine()
 }
 
 func writeMiningErr(w http.ResponseWriter, err error) {
